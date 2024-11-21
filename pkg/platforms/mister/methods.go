@@ -43,6 +43,25 @@ func Setup(tr *Tracker) error {
 	}
 	_ = ff.Close()
 
+	vplayFile, err := os.Create(vplayFilePath)
+	if err != nil {
+		log.Error().Msgf("error creating vplay.sh file: %s", err)
+		return err
+	}
+
+	_, err = vplayFile.WriteString(vplayContent)
+	if err != nil {
+		log.Error().Msgf("error writing to vplay.sh file: %s", err)
+		return err
+	}
+	_ = vplayFile.Close()
+
+	err = os.Chmod(vplayFilePath, 0755)
+	if err != nil {
+		log.Error().Msgf("error setting executable permissions for vplay.sh: %s", err)
+		return err
+	}
+
 	// attempt arcadedb update
 	go func() {
 		haveInternet := utils.WaitForInternet(30)

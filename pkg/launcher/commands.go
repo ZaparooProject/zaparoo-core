@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -51,6 +52,7 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	"mister.core":   forwardCmd,
 	"mister.script": forwardCmd,
 	"mister.mgl":    forwardCmd,
+	"mister.video":  cmdMisterVideo,
 
 	"http.get":  cmdHttpGet,
 	"http.post": cmdHttpPost,
@@ -190,3 +192,24 @@ func LaunchToken(
 		CurrentIndex:  currentIndex,
 	}), true
 }
+
+func cmdMisterVideo(pl platforms.Platform, env platforms.CmdEnv) error {
+    if len(env.Args) == 0 {
+        return fmt.Errorf("URL argument missing for mister.video command")
+    }
+
+    videoURL := env.Args
+    log.Info().Msgf("Playing video from URL: %s", videoURL)
+
+    cmd := exec.Command("tmp/tapto/vplay.sh", videoURL)
+
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        return fmt.Errorf("error playing video: %v\nOutput: %s", err, output)
+    }
+
+    log.Info().Msg("Video playing successfully")
+    return nil
+}
+
+

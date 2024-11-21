@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+    	"os/exec"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wizzomafizzo/tapto/pkg/config"
@@ -124,6 +125,39 @@ func connectReaders(
 
 	return nil
 }
+
+func stopMPlayer() {
+    psCmd := exec.Command("sh", "-c", "ps aux | grep mplayer | grep -v grep")
+    output, err := psCmd.Output()
+    if err != nil {
+        log.Info().Msgf("mplayer processes not detected.")
+        return
+    }
+
+    lines := strings.Split(string(output), "\n")
+    for _, line := range lines {
+        if line == "" {
+            continue
+        }
+
+        log.Debug().Msgf("Processing line: %s", line)
+
+        fields := strings.Fields(line)
+        if len(fields) < 2 {
+            log.Warn().Msgf("Unexpected line format: %s", line)
+            continue
+        }
+
+        pid := fields[0]
+        log.Info().Msgf("Killing mplayer process with PID: %s", pid)
+
+        killCmd := exec.Command("kill", "-9", pid)
+        if err := killCmd.Run(); err != nil {
+            log.Error().Msgf("Failed to kill process %s: %v", pid, err)
+        }
+    }
+}
+
 
 func readerManager(
 	pl platforms.Platform,
@@ -270,6 +304,7 @@ func readerManager(
 		} else {
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})
+			stopMPlayer()
 			if shouldExit(cfg, pl, st) {
 				startTimedExit()
 			}
