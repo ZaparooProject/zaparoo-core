@@ -92,6 +92,8 @@ type Instance struct {
 
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	cfgPath := os.Getenv(CfgEnv)
+	log.Info().Msgf("env config path: %s", cfgPath)
+
 	if cfgPath == "" {
 		cfgPath = filepath.Join(configDir, CfgFile)
 	}
@@ -125,12 +127,6 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	return &cfg, nil
 }
 
-func (c *Instance) LogValues() {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	log.Info().Any("config", c.vals).Msg("config values")
-}
-
 func (c *Instance) Load() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -153,11 +149,10 @@ func (c *Instance) Load() error {
 	if err != nil {
 		return err
 	}
-	log.Debug().Any("config", newVals).Msg("loaded new config values")
 
 	c.vals = newVals
 
-	log.Debug().Any("config", newVals).Msg("second new config values")
+	log.Info().Any("config", c.vals).Msg("loaded config")
 
 	return nil
 }

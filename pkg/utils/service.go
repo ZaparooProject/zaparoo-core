@@ -252,7 +252,7 @@ func (s *Service) Start() error {
 	cmd.Env = env
 
 	// point new binary to existing config file
-	configPath := filepath.Join(filepath.Dir(binPath), config.CfgFile)
+	configPath := filepath.Join(s.pl.ConfigDir(), config.CfgFile)
 
 	if _, err := os.Stat(configPath); err == nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", config.CfgEnv, configPath))

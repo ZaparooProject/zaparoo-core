@@ -223,8 +223,6 @@ func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (func() error, error) {
-	cfg.LogValues()
-
 	dirs := []string{pl.DataDir(), pl.TempDir()}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
