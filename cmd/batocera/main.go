@@ -24,6 +24,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"os"
 
 	"github.com/rs/zerolog/log"
@@ -48,18 +49,7 @@ func main() {
 
 	pl := &batocera.Platform{}
 
-	cfg, err := config.NewConfig(pl.ConfigDir(), config.BaseDefaults)
-	if err != nil {
-		log.Error().Msgf("error loading user config: %s", err)
-		fmt.Println("Error loading config:", err)
-		os.Exit(1)
-	}
-
-	err = utils.InitLogging(cfg, pl)
-	if err != nil {
-		fmt.Println("Error initializing logging:", err)
-		os.Exit(1)
-	}
+	cfg := cli.Setup(pl, config.BaseDefaults)
 
 	fmt.Println("Zaparoo Core v" + config.Version)
 

@@ -153,8 +153,11 @@ func (c *Instance) Load() error {
 	if err != nil {
 		return err
 	}
+	log.Debug().Any("config", newVals).Msg("loaded new config values")
 
 	c.vals = newVals
+
+	log.Debug().Any("config", newVals).Msg("second new config values")
 
 	return nil
 }

@@ -12,7 +12,7 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-func InitLogging(cfg *config.Instance, pl platforms.Platform) error {
+func InitLogging(pl platforms.Platform) error {
 	err := os.MkdirAll(pl.LogDir(), 0755)
 	if err != nil {
 		return err
@@ -29,12 +29,6 @@ func InitLogging(cfg *config.Instance, pl platforms.Platform) error {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
 	log.Logger = log.Output(io.MultiWriter(BaseLogWriters...))
-
-	if cfg.DebugLogging() {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	} else {
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	}
 
 	return nil
 }

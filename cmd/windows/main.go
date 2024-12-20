@@ -24,6 +24,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"os"
 	"path/filepath"
@@ -59,19 +60,7 @@ func main() {
 		}
 	}
 
-	cfg, err := config.NewConfig(pl.ConfigDir(), defaults)
-
-	// TODO: enable console logging
-	if err != nil {
-		fmt.Println("Error loading config:", err)
-		os.Exit(1)
-	}
-
-	err = utils.InitLogging(cfg, pl)
-	if err != nil {
-		fmt.Println("Error initializing logging:", err)
-		os.Exit(1)
-	}
+	cfg := cli.Setup(pl, defaults)
 
 	fmt.Println("Zaparoo v" + config.Version)
 
