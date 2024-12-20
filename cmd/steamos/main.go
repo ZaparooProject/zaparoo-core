@@ -26,8 +26,10 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/steamos"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 	"os"
@@ -89,7 +91,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg := cli.Setup(pl, config.BaseDefaults)
+	defaults := config.BaseDefaults
+	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
+	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
+		migrated, err := migrate.IniToToml(iniPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("error migrating ini to toml")
+		} else {
+			defaults = migrated
+		}
+	}
+
+	cfg := cli.Setup(pl, defaults)
 
 	flags.Post(cfg)
 

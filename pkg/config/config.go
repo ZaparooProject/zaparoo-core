@@ -90,10 +90,10 @@ type Instance struct {
 	vals    Values
 }
 
-func NewConfig(logDir string, defaults Values) (*Instance, error) {
+func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	cfgPath := os.Getenv(CfgEnv)
 	if cfgPath == "" {
-		cfgPath = filepath.Join(logDir, CfgFile)
+		cfgPath = filepath.Join(configDir, CfgFile)
 	}
 
 	cfg := Instance{

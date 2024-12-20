@@ -24,7 +24,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"os"
+	"path/filepath"
 
 	"github.com/rs/zerolog/log"
 
@@ -46,7 +48,19 @@ func main() {
 
 	pl := &windows.Platform{}
 
-	cfg, err := config.NewConfig(pl.ConfigDir(), config.BaseDefaults)
+	defaults := config.BaseDefaults
+	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
+	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
+		migrated, err := migrate.IniToToml(iniPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("error migrating ini to toml")
+		} else {
+			defaults = migrated
+		}
+	}
+
+	cfg, err := config.NewConfig(pl.ConfigDir(), defaults)
+
 	// TODO: enable console logging
 	if err != nil {
 		fmt.Println("Error loading config:", err)

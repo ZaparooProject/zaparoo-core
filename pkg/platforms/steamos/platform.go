@@ -91,7 +91,7 @@ func (p *Platform) LogDir() string {
 }
 
 func (p *Platform) ConfigDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
 func (p *Platform) TempDir() string {

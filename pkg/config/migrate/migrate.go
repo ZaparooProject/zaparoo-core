@@ -5,11 +5,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/ini.v1"
+	"os"
 	"strconv"
 	"strings"
 )
 
-func iniToToml(iniPath string) (config.Values, error) {
+func IniToToml(iniPath string) (config.Values, error) {
 	log.Info().Msgf("migrating config from ini to toml: %s", iniPath)
 
 	// allow_commands is being purposely ignored and must be explicitly enabled
@@ -30,7 +31,7 @@ func iniToToml(iniPath string) (config.Values, error) {
 
 	// readers
 	for _, r := range iniVals.TapTo.Reader {
-		ps := strings.SplitN(r, ":", 1)
+		ps := strings.SplitN(r, ":", 2)
 		if len(ps) != 2 {
 			log.Warn().Msgf("invalid reader: %s", r)
 			continue
@@ -48,7 +49,7 @@ func iniToToml(iniPath string) (config.Values, error) {
 	// connection string
 	conStr := iniVals.TapTo.ConnectionString
 	if conStr != "" {
-		ps := strings.SplitN(conStr, ":", 1)
+		ps := strings.SplitN(conStr, ":", 2)
 		if len(ps) != 2 {
 			log.Warn().Msgf("invalid connection string: %s", conStr)
 		} else {
@@ -89,7 +90,7 @@ func iniToToml(iniPath string) (config.Values, error) {
 
 	// systems - set core
 	for _, v := range iniVals.Systems.SetCore {
-		ps := strings.SplitN(v, ":", 1)
+		ps := strings.SplitN(v, ":", 2)
 		if len(ps) != 2 {
 			log.Warn().Msgf("invalid set core: %s", v)
 			continue
@@ -121,4 +122,18 @@ func iniToToml(iniPath string) (config.Values, error) {
 	vals.Api.AllowLaunch = iniVals.Api.AllowLaunch
 
 	return vals, nil
+}
+
+func Required(oldIni string, newToml string) bool {
+	iniExists := false
+	if _, err := os.Stat(oldIni); err == nil {
+		iniExists = true
+	}
+
+	tomlExists := false
+	if _, err := os.Stat(newToml); err == nil {
+		tomlExists = true
+	}
+
+	return iniExists && !tomlExists
 }
