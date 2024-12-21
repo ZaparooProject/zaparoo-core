@@ -41,7 +41,11 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) Setup(_ *config.Instance, _ chan<- models.Notification) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
+	return nil
+}
+
+func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
 	return nil
 }
 

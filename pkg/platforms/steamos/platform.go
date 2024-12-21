@@ -58,8 +58,12 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) Setup(_ *config.Instance, _ chan<- models.Notification) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
 	return os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
+}
+
+func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
+	return nil
 }
 
 func (p *Platform) Stop() error {

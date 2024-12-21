@@ -84,7 +84,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) error {
+func (p *Platform) StartPre(cfg *config.Instance) error {
 	err := os.MkdirAll(TempDir, 0755)
 	if err != nil {
 		return err
@@ -124,14 +124,6 @@ func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) er
 		return err
 	}
 	p.gpd = gpd
-
-	tr, stopTr, err := StartTracker(*UserConfigToMrext(cfg), ns)
-	if err != nil {
-		return err
-	}
-
-	p.tr = tr
-	p.stopTr = stopTr
 
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
@@ -176,6 +168,18 @@ func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) er
 
 		"ini": CmdIni, // DEPRECATED
 	}
+
+	return nil
+}
+
+func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
+	tr, stopTr, err := StartTracker(*UserConfigToMrext(cfg), ns)
+	if err != nil {
+		return err
+	}
+
+	p.tr = tr
+	p.stopTr = stopTr
 
 	return nil
 }

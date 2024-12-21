@@ -7,7 +7,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -25,8 +24,7 @@ func InitLogging(pl platforms.Platform) error {
 	}}
 
 	// TODO: need some way to enable console logging per platform
-
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	// zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
 	log.Logger = log.Output(io.MultiWriter(BaseLogWriters...))
 

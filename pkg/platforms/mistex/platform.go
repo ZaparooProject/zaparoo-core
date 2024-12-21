@@ -45,7 +45,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
 	err := os.MkdirAll(mister.TempDir, 0755)
 	if err != nil {
 		return err
@@ -73,6 +73,15 @@ func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) er
 	}
 	p.gpd = gpd
 
+	err = mister.Setup(p.tr)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
 	tr, stopTr, err := mister.StartTracker(*mister.UserConfigToMrext(cfg), ns)
 	if err != nil {
 		return err
@@ -80,11 +89,6 @@ func (p *Platform) Setup(cfg *config.Instance, ns chan<- models.Notification) er
 
 	p.tr = tr
 	p.stopTr = stopTr
-
-	err = mister.Setup(p.tr)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }

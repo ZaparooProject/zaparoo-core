@@ -238,32 +238,40 @@ func Start(
 	lsq := make(chan *tokens.Token)
 	plq := make(chan *playlists.Playlist)
 
-	log.Debug().Msg("running platform setup")
-	err := pl.Setup(cfg, st.Notifications)
+	log.Info().Msg("running platform pre start")
+	err := pl.StartPre(cfg)
 	if err != nil {
-		log.Error().Msgf("error setting up platform: %s", err)
+		log.Error().Err(err).Msg("platform start pre error")
 		return nil, err
 	}
 
-	log.Debug().Msg("opening database")
+	log.Info().Msg("opening database")
 	db, err := database.Open(pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening database")
 		return nil, err
 	}
 
-	log.Debug().Msg("starting API service")
+	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 
 	if !pl.LaunchingEnabled() {
+		log.Warn().Msg("launching disabled")
 		st.DisableLauncher()
 	}
 
-	log.Debug().Msg("starting reader manager")
+	log.Info().Msg("starting reader manager")
 	go readerManager(pl, cfg, st, itq, lsq)
 
-	log.Debug().Msg("starting token queue manager")
+	log.Info().Msg("starting token queue manager")
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
+
+	log.Info().Msg("running platform post start")
+	err = pl.StartPost(cfg, st.Notifications)
+	if err != nil {
+		log.Error().Err(err).Msg("platform start pre error")
+		return nil, err
+	}
 
 	return func() error {
 		err = pl.Stop()

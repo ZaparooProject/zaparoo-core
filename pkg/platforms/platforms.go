@@ -50,11 +50,16 @@ type Launcher struct {
 }
 
 type Platform interface {
-	// Unique ID of the platform.
+	// Id returns the unique ID of this platform.
 	Id() string
-	// Any initial setup required before daemon is fully started.
-	Setup(*config.Instance, chan<- models.Notification) error
-	// TODO: what is this?
+	// StartPre runs any necessary platform setup functions before the main
+	// service has started running.
+	StartPre(*config.Instance) error
+	// StartPost runs any necessary platform setup function after the main
+	// service has started running.
+	StartPost(*config.Instance, chan<- models.Notification) error
+	// Stop runs any necessary cleanup function before the rest of the service
+	// starts shutting down.
 	Stop() error
 	// Run immediately after a successful scan, before it is processed for launching.
 	AfterScanHook(tokens.Token) error
@@ -75,7 +80,6 @@ type Platform interface {
 	// TempDir return the path for storing temporary files. It may be called
 	// multiple times and must return the same path for the service lifetime.
 	TempDir() string
-
 	// Convert a path to a normalized form for the platform, the shortest
 	// possible path that can interpreted and lanched by Zaparoo Core. For writing
 	// to tokens.

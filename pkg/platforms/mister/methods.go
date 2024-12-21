@@ -51,7 +51,7 @@ func Setup(tr *Tracker) error {
 	go func() {
 		haveInternet := utils.WaitForInternet(30)
 		if !haveInternet {
-			log.Info().Msg("no internet connection, skipping network tasks")
+			log.Warn().Msg("no internet connection, skipping network tasks")
 			return
 		}
 
