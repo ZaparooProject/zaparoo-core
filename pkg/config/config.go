@@ -21,13 +21,17 @@ const (
 )
 
 type Values struct {
-	AudioFeedback bool      `toml:"audio_feedback,omitempty"`
-	DebugLogging  bool      `toml:"debug_logging"`
-	Readers       Readers   `toml:"readers,omitempty"`
-	Systems       Systems   `toml:"systems,omitempty"`
-	Launchers     Launchers `toml:"launchers,omitempty"`
-	ZapScript     ZapScript `toml:"zapscript,omitempty"`
-	Api           Api       `toml:"api,omitempty"`
+	DebugLogging bool      `toml:"debug_logging"`
+	Audio        Audio     `toml:"audio,omitempty"`
+	Readers      Readers   `toml:"readers,omitempty"`
+	Systems      Systems   `toml:"systems,omitempty"`
+	Launchers    Launchers `toml:"launchers,omitempty"`
+	ZapScript    ZapScript `toml:"zapscript,omitempty"`
+	Api          Api       `toml:"api,omitempty"`
+}
+
+type Audio struct {
+	ScanFeedback bool `toml:"scan_feedback,omitempty"`
 }
 
 type Readers struct {
@@ -71,7 +75,9 @@ type Api struct {
 }
 
 var BaseDefaults = Values{
-	AudioFeedback: true,
+	Audio: Audio{
+		ScanFeedback: true,
+	},
 	Readers: Readers{
 		AutoDetect: true,
 		Scan: ReadersScan{
@@ -179,13 +185,13 @@ func (c *Instance) Save() error {
 func (c *Instance) AudioFeedback() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.AudioFeedback
+	return c.vals.Audio.ScanFeedback
 }
 
 func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vals.AudioFeedback = enabled
+	c.vals.Audio.ScanFeedback = enabled
 }
 
 func (c *Instance) DebugLogging() bool {

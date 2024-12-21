@@ -64,7 +64,7 @@ func IniToToml(iniPath string) (config.Values, error) {
 	}
 
 	// disable sounds
-	vals.AudioFeedback = !iniVals.TapTo.DisableSounds
+	vals.Audio.ScanFeedback = !iniVals.TapTo.DisableSounds
 
 	// probe device
 	vals.Readers.AutoDetect = iniVals.TapTo.ProbeDevice
