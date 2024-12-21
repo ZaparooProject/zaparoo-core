@@ -19,7 +19,7 @@ func shouldExit(
 	pl platforms.Platform,
 	st *state.State,
 ) bool {
-	if !cfg.CartModeEnabled() {
+	if !cfg.HoldModeEnabled() {
 		return false
 	}
 

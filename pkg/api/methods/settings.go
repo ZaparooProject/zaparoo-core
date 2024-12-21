@@ -122,7 +122,7 @@ func HandleSettingsReadersScanUpdate(env requests.RequestEnv) (any, error) {
 		log.Info().Str("mode", *params.Mode).Msg("update")
 		if *params.Mode == "" {
 			return nil, ErrInvalidParams
-		} else if *params.Mode == config.ScanModeTap || *params.Mode == config.ScanModeCart {
+		} else if *params.Mode == config.ScanModeTap || *params.Mode == config.ScanModeHold {
 			env.Config.SetScanMode(*params.Mode)
 		} else {
 			return nil, ErrInvalidParams

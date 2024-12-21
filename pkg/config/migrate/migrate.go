@@ -71,7 +71,7 @@ func IniToToml(iniPath string) (config.Values, error) {
 
 	// exit game mode
 	if iniVals.TapTo.ExitGame {
-		vals.Readers.Scan.Mode = config.ScanModeCart
+		vals.Readers.Scan.Mode = config.ScanModeHold
 	} else {
 		vals.Readers.Scan.Mode = config.ScanModeTap
 	}
