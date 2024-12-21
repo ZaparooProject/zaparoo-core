@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"net"
@@ -38,7 +39,9 @@ func StartSocketServer(
 
 			conn, err := socket.Accept()
 			if err != nil {
-				log.Error().Msgf("error accepting connection: %s", err)
+				if !errors.Is(err, net.ErrClosed) {
+					log.Error().Msgf("error accepting connection: %s", err)
+				}
 				return
 			}
 
