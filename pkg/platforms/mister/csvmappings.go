@@ -46,7 +46,7 @@ func LoadCsvMappings() (map[string]string, map[string]string, error) {
 	texts := make(map[string]string)
 
 	if _, err := os.Stat(LegacyMappingsPath); errors.Is(err, os.ErrNotExist) {
-		log.Info().Msg("no database file found, skipping")
+		log.Debug().Msg("no legacy mappings file found, skipping processing")
 		return nil, nil, nil
 	}
 
@@ -160,9 +160,11 @@ func StartCsvMappingsWatcher(
 		}
 	}()
 
-	err = dbWatcher.Add(LegacyMappingsPath)
-	if err != nil {
-		log.Error().Msgf("error watching database: %s", err)
+	if _, err := os.Stat(LegacyMappingsPath); err == nil {
+		err = dbWatcher.Add(LegacyMappingsPath)
+		if err != nil {
+			log.Error().Msgf("error watching database: %s", err)
+		}
 	}
 
 	return closeDbWatcher, nil
