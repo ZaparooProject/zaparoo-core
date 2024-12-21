@@ -80,7 +80,7 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	flag.Parse()
 
 	if *f.Version {
-		fmt.Printf("Zaparoo v%s (%s)\n", config.Version, pl.Id())
+		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.Id())
 		os.Exit(0)
 	}
 }

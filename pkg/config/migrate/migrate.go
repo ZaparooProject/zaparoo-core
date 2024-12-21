@@ -3,7 +3,6 @@ package migrate
 import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
-	"github.com/rs/zerolog/log"
 	"gopkg.in/ini.v1"
 	"os"
 	"strconv"
@@ -11,8 +10,6 @@ import (
 )
 
 func IniToToml(iniPath string) (config.Values, error) {
-	log.Info().Msgf("migrating config from ini to toml: %s", iniPath)
-
 	// allow_commands is being purposely ignored and must be explicitly enabled
 	// by the user after migration
 
@@ -33,7 +30,6 @@ func IniToToml(iniPath string) (config.Values, error) {
 	for _, r := range iniVals.TapTo.Reader {
 		ps := strings.SplitN(r, ":", 2)
 		if len(ps) != 2 {
-			log.Warn().Msgf("invalid reader: %s", r)
 			continue
 		}
 
@@ -51,8 +47,6 @@ func IniToToml(iniPath string) (config.Values, error) {
 	if conStr != "" {
 		ps := strings.SplitN(conStr, ":", 2)
 		if len(ps) != 2 {
-			log.Warn().Msgf("invalid connection string: %s", conStr)
-		} else {
 			vals.Readers.Connect = append(
 				vals.Readers.Connect,
 				config.ReadersConnect{
@@ -92,7 +86,6 @@ func IniToToml(iniPath string) (config.Values, error) {
 	for _, v := range iniVals.Systems.SetCore {
 		ps := strings.SplitN(v, ":", 2)
 		if len(ps) != 2 {
-			log.Warn().Msgf("invalid set core: %s", v)
 			continue
 		}
 
@@ -110,16 +103,14 @@ func IniToToml(iniPath string) (config.Values, error) {
 
 	// api - port
 	port, err := strconv.Atoi(iniVals.Api.Port)
-	if err != nil {
-		log.Warn().Msgf("invalid api port: %s", iniVals.Api.Port)
-	} else {
-		if port != vals.Api.Port {
-			vals.Api.Port = port
+	if err == nil {
+		if port != vals.Service.ApiPort {
+			vals.Service.ApiPort = port
 		}
 	}
 
 	// api - allow launch
-	vals.Api.AllowLaunch = iniVals.Api.AllowLaunch
+	vals.Service.AllowLaunch = iniVals.Api.AllowLaunch
 
 	return vals, nil
 }

@@ -362,7 +362,7 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, stdscr *gon
 			statusText = "Service:        NOT RUNNING"
 		}
 
-		printCenter(0, "Zaparoo Core v"+config.Version+" ("+pl.Id()+")")
+		printCenter(0, "Zaparoo Core v"+config.AppVersion+" ("+pl.Id()+")")
 
 		clearLine(1)
 		printCenter(1, "Visit zaparoo.org for guides and help!")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"github.com/BurntSushi/toml"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"os"
@@ -14,20 +15,22 @@ import (
 )
 
 const (
-	CfgEnv       = "ZAPAROO_CFG"
-	AppEnv       = "ZAPAROO_APP"
-	ScanModeTap  = "tap"
-	ScanModeHold = "hold"
+	SchemaVersion = 1
+	CfgEnv        = "ZAPAROO_CFG"
+	AppEnv        = "ZAPAROO_APP"
+	ScanModeTap   = "tap"
+	ScanModeHold  = "hold"
 )
 
 type Values struct {
+	ConfigSchema int       `toml:"config_schema"`
 	DebugLogging bool      `toml:"debug_logging"`
 	Audio        Audio     `toml:"audio,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
-	Api          Api       `toml:"api,omitempty"`
+	Service      Service   `toml:"service,omitempty"`
 }
 
 type Audio struct {
@@ -69,12 +72,14 @@ type ZapScript struct {
 	AllowShell []string `toml:"allow_shell,omitempty"`
 }
 
-type Api struct {
-	Port        int      `toml:"port"`
+type Service struct {
+	ApiPort     int      `toml:"api_port"`
+	DeviceId    string   `toml:"device_id"`
 	AllowLaunch []string `toml:"allow_launch,omitempty"`
 }
 
 var BaseDefaults = Values{
+	ConfigSchema: SchemaVersion,
 	Audio: Audio{
 		ScanFeedback: true,
 	},
@@ -84,8 +89,8 @@ var BaseDefaults = Values{
 			Mode: ScanModeTap,
 		},
 	},
-	Api: Api{
-		Port: 7497,
+	Service: Service{
+		ApiPort: 7497,
 	},
 }
 
@@ -174,6 +179,17 @@ func (c *Instance) Save() error {
 	buf := new(bytes.Buffer)
 	enc := toml.NewEncoder(buf)
 	enc.Indent = ""
+
+	// set current schema version
+	c.vals.ConfigSchema = SchemaVersion
+
+	// generate a device id if one doesn't exist
+	if c.vals.Service.DeviceId == "" {
+		newId := uuid.New().String()
+		c.vals.Service.DeviceId = newId
+		log.Info().Msgf("generated new device id: %s", newId)
+	}
+
 	err := enc.Encode(c.vals)
 	if err != nil {
 		return err
@@ -309,7 +325,7 @@ func (c *Instance) IsLauncherFileAllowed(path string) bool {
 func (c *Instance) ApiPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Api.Port
+	return c.vals.Service.ApiPort
 }
 
 func (c *Instance) IsShellCmdAllowed(cmd string) bool {

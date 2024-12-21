@@ -35,7 +35,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) StartPre(_ chan<- models.Notification) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 

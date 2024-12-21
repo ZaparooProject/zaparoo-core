@@ -109,7 +109,8 @@ func main() {
 	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			log.Warn().Err(err).Msg("error migrating ini to toml")
+			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
+			os.Exit(1)
 		} else {
 			defaults = migrated
 		}
@@ -132,7 +133,7 @@ func main() {
 
 	flags.Post(cfg)
 
-	fmt.Println("Zaparoo v" + config.Version)
+	fmt.Println("Zaparoo v" + config.AppVersion)
 
 	added, err := tryAddToStartup()
 	if err != nil {

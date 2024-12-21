@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	if *versionOpt {
-		fmt.Println("Zaparoo Core v" + config.Version + " (batocera)")
+		fmt.Println("Zaparoo Core v" + config.AppVersion + " (batocera)")
 		os.Exit(0)
 	}
 
@@ -51,7 +51,7 @@ func main() {
 
 	cfg := cli.Setup(pl, config.BaseDefaults)
 
-	fmt.Println("Zaparoo Core v" + config.Version)
+	fmt.Println("Zaparoo Core v" + config.AppVersion)
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
