@@ -1,10 +1,9 @@
 package config
 
 import (
-	"bytes"
 	"errors"
-	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"os"
@@ -45,7 +44,7 @@ type Readers struct {
 
 type ReadersScan struct {
 	Mode         string   `toml:"mode"`
-	ExitDelay    float32  `toml:"exit_delay,omitzero"`
+	ExitDelay    float32  `toml:"exit_delay,omitempty"`
 	IgnoreSystem []string `toml:"ignore_system,omitempty"`
 }
 
@@ -156,7 +155,7 @@ func (c *Instance) Load() error {
 	}
 
 	var newVals Values
-	_, err = toml.Decode(string(data), &newVals)
+	err = toml.Unmarshal(data, &newVals)
 	if err != nil {
 		return err
 	}
@@ -176,10 +175,6 @@ func (c *Instance) Save() error {
 		return errors.New("config path not set")
 	}
 
-	buf := new(bytes.Buffer)
-	enc := toml.NewEncoder(buf)
-	enc.Indent = ""
-
 	// set current schema version
 	c.vals.ConfigSchema = SchemaVersion
 
@@ -190,12 +185,12 @@ func (c *Instance) Save() error {
 		log.Info().Msgf("generated new device id: %s", newId)
 	}
 
-	err := enc.Encode(c.vals)
+	data, err := toml.Marshal(&c.vals)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(c.cfgPath, buf.Bytes(), 0644)
+	return os.WriteFile(c.cfgPath, data, 0644)
 }
 
 func (c *Instance) AudioFeedback() bool {

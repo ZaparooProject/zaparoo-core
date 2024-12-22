@@ -1,5 +1,4 @@
-# glibc in this version matches mister
-FROM arm32v7/debian:bullseye-backports
+FROM arm32v7/debian:bookworm-backports
 
 RUN apt-get update -y && apt-get upgrade -y
 
@@ -11,7 +10,7 @@ RUN apt-get install -y ca-certificates openssl && \
 
 # install go and app dependencies
 RUN apt-get install build-essential git curl wget ncurses-dev -y && \
-    apt-get install golang-doc/bullseye-backports golang-go/bullseye-backports golang-src/bullseye-backports golang/bullseye-backports -y
+    apt-get install golang-doc/bookworm-backports golang-go/bookworm-backports golang-src/bookworm-backports golang/bookworm-backports -y
 RUN mkdir /internal
 
 # install pcsc-lite and ccid dependencies
