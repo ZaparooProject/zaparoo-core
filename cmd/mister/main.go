@@ -114,7 +114,7 @@ func main() {
 		}
 	}
 
-	cfg := cli.Setup(pl, defaults)
+	cfg := cli.Setup(pl, defaults, nil)
 
 	svc, err := utils.NewService(utils.ServiceArgs{
 		Entry: func() (func() error, error) {

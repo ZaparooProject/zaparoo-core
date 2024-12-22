@@ -11,22 +11,23 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-func InitLogging(pl platforms.Platform) error {
+func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	err := os.MkdirAll(pl.LogDir(), 0755)
 	if err != nil {
 		return err
 	}
 
-	var BaseLogWriters = []io.Writer{&lumberjack.Logger{
+	var logWriters = []io.Writer{&lumberjack.Logger{
 		Filename:   filepath.Join(pl.LogDir(), config.LogFile),
 		MaxSize:    1,
 		MaxBackups: 2,
 	}}
 
-	// TODO: need some way to enable console logging per platform
-	// zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	if len(writers) > 0 {
+		logWriters = append(logWriters, writers...)
+	}
 
-	log.Logger = log.Output(io.MultiWriter(BaseLogWriters...))
+	log.Logger = log.Output(io.MultiWriter(logWriters...))
 
 	return nil
 }

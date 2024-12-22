@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/rs/zerolog"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -60,7 +62,11 @@ func main() {
 		}
 	}
 
-	cfg := cli.Setup(pl, defaults)
+	cfg := cli.Setup(
+		pl,
+		defaults,
+		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
+	)
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 

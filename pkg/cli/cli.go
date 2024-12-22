@@ -13,6 +13,7 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"io"
 	"os"
 	"strings"
 )
@@ -284,8 +285,8 @@ func (f *Flags) Post(cfg *config.Instance) {
 }
 
 // Setup initializes the user config and logging. Returns a user config object.
-func Setup(pl platforms.Platform, defaultConfig config.Values) *config.Instance {
-	err := utils.InitLogging(pl)
+func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writer) *config.Instance {
+	err := utils.InitLogging(pl, writers)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logging: %v\n", err)
 		os.Exit(1)

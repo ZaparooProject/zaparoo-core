@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -103,7 +104,11 @@ func main() {
 		}
 	}
 
-	cfg := cli.Setup(pl, defaults)
+	cfg := cli.Setup(
+		pl,
+		defaults,
+		[]io.Writer{os.Stderr},
+	)
 
 	flags.Post(cfg)
 

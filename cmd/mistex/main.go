@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mistex"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,7 +117,11 @@ func main() {
 		}
 	}
 
-	cfg := cli.Setup(pl, defaults)
+	cfg := cli.Setup(
+		pl,
+		defaults,
+		[]io.Writer{os.Stderr},
+	)
 
 	svc, err := utils.NewService(utils.ServiceArgs{
 		Entry: func() (func() error, error) {

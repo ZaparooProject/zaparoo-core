@@ -25,6 +25,8 @@ import (
 	"flag"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/rs/zerolog"
+	"io"
 	"os"
 
 	"github.com/rs/zerolog/log"
@@ -47,7 +49,11 @@ func main() {
 
 	pl := &mac.Platform{}
 
-	cfg := cli.Setup(pl, config.BaseDefaults)
+	cfg := cli.Setup(
+		pl,
+		config.BaseDefaults,
+		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
+	)
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 
