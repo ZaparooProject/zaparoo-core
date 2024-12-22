@@ -29,7 +29,7 @@ func LocalClient(
 	u := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   "/",
+		Path:   "/api/v1.0",
 	}
 
 	id, err := uuid.NewUUID()
