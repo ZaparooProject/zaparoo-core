@@ -5,6 +5,10 @@ env:
   GOPROXY: https://goproxy.io,direct
   CGO_ENABLED: 1
   CGO_LDFLAGS: -lpcsclite -lnfc -lusb -lcurses
+  UID:
+    sh: id -u
+  GID:
+    sh: id -g
 
 dotenv: [".env"]
 
@@ -18,35 +22,35 @@ tasks:
       IMAGE_NAME: zaparoo/mister-build
       DOCKERFILE: "./scripts/mister/build"
     cmds:
-      - docker build --platform linux/arm/v7 -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/arm/v7 --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-image-mistex:
     vars:
       IMAGE_NAME: zaparoo/mistex-build
       DOCKERFILE: "./scripts/linux_arm64/build"
     cmds:
-      - docker build --platform linux/arm/v8 -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/arm/v8 --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-image-batocera-arm64:
     vars:
       IMAGE_NAME: zaparoo/batocera-arm64-build
       DOCKERFILE: "./scripts/linux_arm64/build"
     cmds:
-      - docker build --platform linux/arm/v8 -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/arm/v8 --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-image-batocera-amd64:
     vars:
       IMAGE_NAME: zaparoo/batocera-amd64-build
       DOCKERFILE: "./scripts/linux_amd64/build"
     cmds:
-      - docker build --platform linux/amd64 -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/amd64 --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-image-steamos-amd64:
     vars:
       IMAGE_NAME: zaparoo/steamos-amd64-build
       DOCKERFILE: "./scripts/linux_amd64/build"
     cmds:
-      - docker build --platform linux/amd64 -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/amd64 --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-mister:
     vars:
@@ -57,7 +61,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/arm/v7 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 {{.IMAGE_NAME}} build.sh
+      - docker run --rm --platform linux/arm/v7 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.IMAGE_NAME}} build.sh
       - rm -f {{.BUILD_DIR}}/zaparoo-mister_arm.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-mister_arm.zip {{.BUILD_DIR}}/zaparoo.sh
 
@@ -70,7 +74,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/arm/v7 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 -ti {{.IMAGE_NAME}} /bin/bash
+      - docker run --rm --platform linux/arm/v7 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build -ti {{.IMAGE_NAME}} /bin/bash
 
   build-mistex:
     vars:
@@ -81,7 +85,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/arm/v8 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 {{.IMAGE_NAME}} bash -c "PLATFORM=mistex APP_BIN=zaparoo.sh task build"
+      - docker run --rm --platform linux/arm/v8 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.IMAGE_NAME}} bash -c "PLATFORM=mistex APP_BIN=zaparoo.sh task build"
       - rm -f {{.BUILD_DIR}}/zaparoo-mistex_arm64.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-mistex_arm64.zip {{.BUILD_DIR}}/zaparoo.sh
 
@@ -94,7 +98,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/arm/v8 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 {{.IMAGE_NAME}} bash -c "PLATFORM=batocera APP_BIN=zaparoo task build"
+      - docker run --rm --platform linux/arm/v8 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.IMAGE_NAME}} bash -c "PLATFORM=batocera APP_BIN=zaparoo task build"
       - rm -f {{.BUILD_DIR}}/zaparoo-batocera_arm64.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-batocera_arm64.zip {{.BUILD_DIR}}/zaparoo
 
@@ -107,7 +111,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/amd64 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 {{.IMAGE_NAME}} bash -c "PLATFORM=batocera APP_BIN=zaparoo task build"
+      - docker run --rm --platform linux/amd64 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.IMAGE_NAME}} bash -c "PLATFORM=batocera APP_BIN=zaparoo task build"
       - rm -f {{.BUILD_DIR}}/zaparoo-batocera_amd64.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-batocera_amd64.zip {{.BUILD_DIR}}/zaparoo
 
@@ -120,7 +124,7 @@ tasks:
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - docker run --rm --platform linux/amd64 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build --user 1000:1000 {{.IMAGE_NAME}} bash -c "PLATFORM=steamos APP_BIN=zaparoo task build"
+      - docker run --rm --platform linux/amd64 -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.IMAGE_NAME}} bash -c "PLATFORM=steamos APP_BIN=zaparoo task build"
       - rm -f {{.BUILD_DIR}}/zaparoo-steamos_amd64.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-steamos_amd64.zip {{.BUILD_DIR}}/zaparoo
 

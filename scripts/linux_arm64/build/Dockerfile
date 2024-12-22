@@ -51,7 +51,8 @@ RUN cd /internal/libnfc && \
 RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
 # drop permissions on output files
-RUN useradd -m -u 1000 build
+ARG UID=1000 GID=1000
+RUN groupadd -g $GID build && useradd -m -u $UID -g $GID build
 USER build
 
 WORKDIR /build
