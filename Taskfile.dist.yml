@@ -128,27 +128,60 @@ tasks:
       - rm -f {{.BUILD_DIR}}/zaparoo-steamos_amd64.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-steamos_amd64.zip {{.BUILD_DIR}}/zaparoo
 
-  build-windows:
+  build-basic:
+    internal: true
     vars:
-      BUILD_DIR: "./_build/windows_{{.ARCH}}"
+      BUILD_NAME: "{{if .ARCHLESS}}{{.PLATFORM}}{{else}}{{.PLATFORM}}_{{.BUILD_ARCH}}{{end}}"
+      BUILD_DIR: "./_build/{{.BUILD_NAME}}"
     env:
-      GOOS: windows
-      PLATFORM: windows
-      APP_BIN: Zaparoo.exe
-      CGO_ENABLED: 0
+      GOARCH: "{{default .ARCH .BUILD_ARCH}}"
+      GOOS: '{{default "windows" .BUILD_OS}}'
     cmds:
-      - go build -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
+      - go build -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
+      - rm -f {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip
+      - zip -j {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip {{.BUILD_DIR}}/{{.APP_BIN}}
 
-  build-mac:
-    vars:
-      BUILD_DIR: "./_build/mac_{{.ARCH}}"
-    env:
-      GOOS: darwin
-      PLATFORM: mac
-      APP_BIN: zaparoo
-      CGO_ENABLED: 0
+  build-windows-arm64:
     cmds:
-      - go build -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
+      - task: build-basic
+        vars:
+          BUILD_OS: windows
+          BUILD_ARCH: arm64
+          GOOS: windows
+          PLATFORM: windows
+          APP_BIN: Zaparoo.exe
+          CGO_ENABLED: 0
+
+  build-windows-amd64:
+    cmds:
+      - task: build-basic
+        vars:
+          BUILD_OS: windows
+          BUILD_ARCH: amd64
+          GOOS: windows
+          PLATFORM: windows
+          APP_BIN: Zaparoo.exe
+          CGO_ENABLED: 0
+
+  build-mac-arm64:
+    cmds:
+      - task: build-basic
+        vars:
+          BUILD_OS: darwin
+          BUILD_ARCH: arm64
+          PLATFORM: mac
+          APP_BIN: zaparoo
+          CGO_ENABLED: 0
+
+  build-mac-amd64:
+    cmds:
+      - task: build-basic
+        vars:
+          BUILD_OS: darwin
+          BUILD_ARCH: amd64
+          PLATFORM: mac
+          APP_BIN: zaparoo
+          CGO_ENABLED: 0
 
   deploy-mister:
     cmds:

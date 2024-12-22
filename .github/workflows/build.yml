@@ -1,0 +1,27 @@
+on: 
+  push:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - windows
+          - mac
+        arch:
+          - amd64
+          - arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add QEMU for cross-compile support
+        run: docker run --privileged --rm tonistiigi/binfmt --install all
+      - name: Build
+        run: task build-${{matrix.platform}}-${{matrix.arch}}
