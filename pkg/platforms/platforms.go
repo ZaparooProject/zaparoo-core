@@ -8,6 +8,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 )
 
+const (
+	AssetsDir   = "assets"
+	MappingsDir = "mappings"
+)
+
 type CmdEnv struct {
 	Cmd           string
 	Args          string

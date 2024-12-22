@@ -95,6 +95,11 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 		return err
 	}
 
+	err = os.MkdirAll(filepath.Join(p.DataDir(), platforms.AssetsDir), 0755)
+	if err != nil {
+		return err
+	}
+
 	// migrate old config folder db
 	oldTaptoDbPath := "/media/fat/Scripts/.config/tapto/tapto.db"
 	newTaptoDbPath := filepath.Join(p.DataDir(), config.TapToDbFile)
