@@ -12,9 +12,20 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings request")
 
 	resp := models.SettingsResponse{
-		AudioFeedback:   env.Config.AudioFeedback(),
-		DebugLogging:    env.Config.DebugLogging(),
-		LaunchingActive: !env.State.IsLauncherDisabled(),
+		LaunchingActive:         !env.State.IsLauncherDisabled(),
+		DebugLogging:            env.Config.DebugLogging(),
+		AudioScanFeedback:       env.Config.AudioFeedback(),
+		ReadersAutoDetect:       env.Config.Readers().AutoDetect,
+		ReadersScanMode:         env.Config.ReadersScan().Mode,
+		ReadersScanExitDelay:    env.Config.ReadersScan().ExitDelay,
+		ReadersScanIgnoreSystem: make([]string, 0),
+	}
+
+	for _, s := range env.Config.ReadersScan().IgnoreSystem {
+		resp.ReadersScanIgnoreSystem = append(
+			resp.ReadersScanIgnoreSystem,
+			s,
+		)
 	}
 
 	return resp, nil
@@ -33,16 +44,6 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	if params.AudioFeedback != nil {
-		log.Info().Bool("audioFeedback", *params.AudioFeedback).Msg("update")
-		env.Config.SetAudioFeedback(*params.AudioFeedback)
-	}
-
-	if params.DebugLogging != nil {
-		log.Info().Bool("debugLogging", *params.DebugLogging).Msg("update")
-		env.Config.SetDebugLogging(*params.DebugLogging)
-	}
-
 	if params.LaunchingActive != nil {
 		log.Info().Bool("launchingActive", *params.LaunchingActive).Msg("update")
 		if *params.LaunchingActive {
@@ -52,91 +53,40 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		}
 	}
 
-	return nil, env.Config.Save()
-}
-
-func HandleSettingsReaders(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received settings request")
-
-	resp := models.SettingsReaders{
-		AutoDetect: env.Config.Readers().AutoDetect,
+	if params.DebugLogging != nil {
+		log.Info().Bool("debugLogging", *params.DebugLogging).Msg("update")
+		env.Config.SetDebugLogging(*params.DebugLogging)
 	}
 
-	return resp, nil
-}
-
-func HandleSettingsReadersUpdate(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received settings update request")
-
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
+	if params.AudioScanFeedback != nil {
+		log.Info().Bool("audioScanFeedback", *params.AudioScanFeedback).Msg("update")
+		env.Config.SetAudioFeedback(*params.AudioScanFeedback)
 	}
 
-	var params models.UpdateSettingsReadersParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if params.ReadersAutoDetect != nil {
+		log.Info().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("update")
+		env.Config.SetAutoConnect(*params.ReadersAutoDetect)
 	}
 
-	if params.AutoDetect != nil {
-		log.Info().Bool("autoDetect", *params.AutoDetect).Msg("update")
-		env.Config.SetAutoConnect(*params.AutoDetect)
-	}
-
-	return nil, env.Config.Save()
-}
-
-func HandleSettingsReadersScan(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received settings request")
-
-	rs := env.Config.ReadersScan()
-
-	resp := models.SettingsReadersScan{
-		Mode:         rs.Mode,
-		ExitDelay:    rs.ExitDelay,
-		IgnoreSystem: make([]string, 0),
-	}
-
-	resp.IgnoreSystem = append(
-		resp.IgnoreSystem,
-		rs.IgnoreSystem...,
-	)
-
-	return resp, nil
-}
-
-func HandleSettingsReadersScanUpdate(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received settings update request")
-
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
-	var params models.UpdateSettingsReadersScanParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
-	}
-
-	if params.Mode != nil {
-		log.Info().Str("mode", *params.Mode).Msg("update")
-		if *params.Mode == "" {
-			return nil, ErrInvalidParams
-		} else if *params.Mode == config.ScanModeTap || *params.Mode == config.ScanModeHold {
-			env.Config.SetScanMode(*params.Mode)
+	if params.ReadersScanMode != nil {
+		log.Info().Str("readersScanMode", *params.ReadersScanMode).Msg("update")
+		if *params.ReadersScanMode == "" {
+			env.Config.SetScanMode(config.ScanModeTap)
+		} else if *params.ReadersScanMode == config.ScanModeTap || *params.ReadersScanMode == config.ScanModeHold {
+			env.Config.SetScanMode(*params.ReadersScanMode)
 		} else {
 			return nil, ErrInvalidParams
 		}
 	}
 
-	if params.ExitDelay != nil {
-		log.Info().Float32("exitDelay", *params.ExitDelay).Msg("update")
-		env.Config.SetScanExitDelay(*params.ExitDelay)
+	if params.ReadersScanExitDelay != nil {
+		log.Info().Float32("readersScanExitDelay", *params.ReadersScanExitDelay).Msg("update")
+		env.Config.SetScanExitDelay(*params.ReadersScanExitDelay)
 	}
 
-	if params.IgnoreSystem != nil {
-		log.Info().Strs("ignoreSystem", *params.IgnoreSystem).Msg("update")
-		env.Config.SetScanIgnoreSystem(*params.IgnoreSystem)
+	if params.ReadersScanIgnoreSystem != nil {
+		log.Info().Strs("readsScanIgnoreSystem", *params.ReadersScanIgnoreSystem).Msg("update")
+		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
 	}
 
 	return nil, env.Config.Save()

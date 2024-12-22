@@ -25,19 +25,13 @@ type IndexStatusResponse struct {
 }
 
 type SettingsResponse struct {
-	AudioFeedback   bool `json:"audioFeedback"`
-	DebugLogging    bool `json:"debugLogging"`
-	LaunchingActive bool `json:"launchingActive"`
-}
-
-type SettingsReaders struct {
-	AutoDetect bool `json:"autoDetect"`
-}
-
-type SettingsReadersScan struct {
-	Mode         string   `json:"mode"`
-	ExitDelay    float32  `json:"exitDelay"`
-	IgnoreSystem []string `json:"ignoreSystem"`
+	LaunchingActive         bool     `json:"launchingActive"`
+	DebugLogging            bool     `json:"debugLogging"`
+	AudioScanFeedback       bool     `json:"audioScanFeedback"`
+	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
+	ReadersScanMode         string   `json:"readersScanMode"`
+	ReadersScanExitDelay    float32  `json:"readersScanExitDelay"`
+	ReadersScanIgnoreSystem []string `json:"readersScanIgnoreSystems"`
 }
 
 type System struct {
