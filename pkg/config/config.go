@@ -63,18 +63,18 @@ type SystemsDefault struct {
 }
 
 type Launchers struct {
-	IndexRoot []string `toml:"index_root,omitempty"`
-	AllowFile []string `toml:"allow_file,omitempty"`
+	IndexRoot []string `toml:"index_root,omitempty,multiline"`
+	AllowFile []string `toml:"allow_file,omitempty,multiline"`
 }
 
 type ZapScript struct {
-	AllowShell []string `toml:"allow_shell,omitempty"`
+	AllowShell []string `toml:"allow_shell,omitempty,multiline"`
 }
 
 type Service struct {
 	ApiPort     int      `toml:"api_port"`
 	DeviceId    string   `toml:"device_id"`
-	AllowLaunch []string `toml:"allow_launch,omitempty"`
+	AllowLaunch []string `toml:"allow_launch,omitempty,multiline"`
 }
 
 var BaseDefaults = Values{
