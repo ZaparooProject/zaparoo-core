@@ -34,9 +34,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/launcher"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript"
 	"github.com/rs/zerolog/log"
 )
 
@@ -72,7 +72,7 @@ func launchToken(
 	cmds := strings.Split(text, "||")
 
 	for i, cmd := range cmds {
-		err, softwareSwap := launcher.LaunchToken(
+		err, softwareSwap := zapscript.LaunchToken(
 			platform,
 			cfg,
 			plsc,
