@@ -160,6 +160,15 @@ func (c *Instance) Load() error {
 		return err
 	}
 
+	if newVals.ConfigSchema != SchemaVersion {
+		log.Error().Msgf(
+			"schema version mismatch: got %d, expecting %d",
+			newVals.ConfigSchema,
+			SchemaVersion,
+		)
+		return errors.New("schema version mismatch")
+	}
+
 	c.vals = newVals
 
 	log.Info().Any("config", c.vals).Msg("loaded config")
