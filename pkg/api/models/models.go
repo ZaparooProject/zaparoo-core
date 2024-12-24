@@ -25,6 +25,7 @@ const (
 	MethodMappingsNew    = "mappings.new"
 	MethodMappingsDelete = "mappings.delete"
 	MethodMappingsUpdate = "mappings.update"
+	MethodMappingsReload = "mappings.reload"
 	MethodReadersWrite   = "readers.write"
 	MethodStatus         = "status"
 	MethodVersion        = "version"

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -211,6 +213,19 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	err = env.Database.UpdateMapping(strconv.Itoa(params.Id), newMapping)
 	if err != nil {
 		return nil, err
+	}
+
+	return nil, nil
+}
+
+func HandleReloadMappings(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received reload mappings request")
+
+	mapDir := filepath.Join(env.Platform.DataDir(), platforms.MappingsDir)
+	err := env.Config.LoadMappings(mapDir)
+	if err != nil {
+		log.Error().Err(err).Msg("error loading mappings")
+		return nil, errors.New("error loading mappings")
 	}
 
 	return nil, nil
