@@ -30,6 +30,7 @@ type Values struct {
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Service      Service   `toml:"service,omitempty"`
+	Mappings     Mappings  `toml:"mappings,omitempty"`
 }
 
 type Audio struct {
@@ -75,6 +76,16 @@ type Service struct {
 	ApiPort     int      `toml:"api_port"`
 	DeviceId    string   `toml:"device_id"`
 	AllowLaunch []string `toml:"allow_launch,omitempty,multiline"`
+}
+
+type MappingsEntry struct {
+	TokenKey     string `toml:"token_key,omitempty"`
+	MatchPattern string `toml:"match_pattern"`
+	ZapScript    string `toml:"zapscript"`
+}
+
+type Mappings struct {
+	Entry []MappingsEntry `toml:"entry,omitempty"`
 }
 
 var BaseDefaults = Values{
@@ -345,4 +356,61 @@ func (c *Instance) IsShellCmdAllowed(cmd string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Instance) LoadMappings(mappingsDir string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	_, err := os.Stat(mappingsDir)
+	if err != nil {
+		return err
+	}
+
+	mapFiles, err := os.ReadDir(mappingsDir)
+	if err != nil {
+		return err
+	}
+
+	filesCounts := 0
+	mappingsCount := 0
+
+	for _, mapFile := range mapFiles {
+		if mapFile.IsDir() {
+			continue
+		}
+
+		if filepath.Ext(mapFile.Name()) != ".toml" {
+			continue
+		}
+
+		mapPath := filepath.Join(mappingsDir, mapFile.Name())
+		log.Debug().Msgf("loading mapping file: %s", mapPath)
+
+		data, err := os.ReadFile(mapPath)
+		if err != nil {
+			return err
+		}
+
+		var newVals Values
+		err = toml.Unmarshal(data, &newVals)
+		if err != nil {
+			return err
+		}
+
+		c.vals.Mappings.Entry = append(c.vals.Mappings.Entry, newVals.Mappings.Entry...)
+
+		filesCounts++
+		mappingsCount += len(newVals.Mappings.Entry)
+	}
+
+	log.Info().Msgf("loaded %d mapping files, %d mappings", filesCounts, mappingsCount)
+
+	return nil
+}
+
+func (c *Instance) Mappings() []MappingsEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Mappings.Entry
 }

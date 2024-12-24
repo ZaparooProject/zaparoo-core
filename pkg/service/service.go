@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -223,7 +224,11 @@ func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (func() error, error) {
-	dirs := []string{pl.DataDir(), pl.TempDir()}
+	dirs := []string{
+		pl.DataDir(),
+		pl.TempDir(),
+		filepath.Join(pl.DataDir(), platforms.MappingsDir),
+	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
 		if err != nil {
@@ -245,10 +250,17 @@ func Start(
 		return nil, err
 	}
 
-	log.Info().Msg("opening database")
+	log.Info().Msg("opening user database")
 	db, err := database.Open(pl)
 	if err != nil {
-		log.Error().Err(err).Msgf("error opening database")
+		log.Error().Err(err).Msgf("error opening user database")
+		return nil, err
+	}
+
+	log.Info().Msg("loading mapping files")
+	err = cfg.LoadMappings(filepath.Join(pl.DataDir(), platforms.MappingsDir))
+	if err != nil {
+		log.Error().Err(err).Msgf("error loading mapping files")
 		return nil, err
 	}
 
@@ -256,27 +268,27 @@ func Start(
 	go api.Start(pl, cfg, st, itq, db, ns)
 
 	if !pl.LaunchingEnabled() {
-		log.Warn().Msg("launching disabled")
+		log.Warn().Msg("launching disabled by user")
 		st.DisableLauncher()
 	}
 
 	log.Info().Msg("starting reader manager")
 	go readerManager(pl, cfg, st, itq, lsq)
 
-	log.Info().Msg("starting token queue manager")
+	log.Info().Msg("starting input token queue manager")
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
 
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(cfg, st.Notifications)
 	if err != nil {
-		log.Error().Err(err).Msg("platform start pre error")
+		log.Error().Err(err).Msg("platform post start error")
 		return nil, err
 	}
 
 	return func() error {
 		err = pl.Stop()
 		if err != nil {
-			log.Warn().Msgf("error stopping pl: %s", err)
+			log.Warn().Msgf("error stopping platform: %s", err)
 		}
 		st.StopService()
 		close(plq)
