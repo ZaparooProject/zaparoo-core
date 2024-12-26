@@ -15,11 +15,15 @@ import (
 	"github.com/rs/zerolog/log"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 type Flags struct {
 	Write        *string
+	Read         *bool
+	Run          *string
 	Launch       *string
 	Api          *string
 	Clients      *bool
@@ -35,38 +39,48 @@ func SetupFlags() *Flags {
 		Write: flag.String(
 			"write",
 			"",
-			"write text to tag using connected reader",
+			"write value to next scanned token",
+		),
+		Read: flag.Bool(
+			"read",
+			false,
+			"print next scanned token without running",
+		),
+		Run: flag.String(
+			"run",
+			"",
+			"run value directly as ZapScript",
 		),
 		Launch: flag.String(
 			"launch",
 			"",
-			"launch text as if it were a scanned token",
+			"alias of run (DEPRECATED)",
 		),
 		Api: flag.String(
 			"api",
 			"",
 			"send method and params to API and print response",
 		),
-		Clients: flag.Bool(
-			"clients",
-			false,
-			"list all registered API clients and secrets",
-		),
-		NewClient: flag.String(
-			"new-client",
-			"",
-			"register new API client with given display name",
-		),
-		DeleteClient: flag.String(
-			"delete-client",
-			"",
-			"revoke access to API for given client ID",
-		),
-		Qr: flag.Bool(
-			"qr",
-			false,
-			"output a connection QR code along with client details",
-		),
+		//Clients: flag.Bool(
+		//	"clients",
+		//	false,
+		//	"list all registered API clients and secrets",
+		//),
+		//NewClient: flag.String(
+		//	"new-client",
+		//	"",
+		//	"register new API client with given display name",
+		//),
+		//DeleteClient: flag.String(
+		//	"delete-client",
+		//	"",
+		//	"revoke access to API for given client ID",
+		//),
+		//Qr: flag.Bool(
+		//	"qr",
+		//	false,
+		//	"output a connection QR code along with client details",
+		//),
 		Version: flag.Bool(
 			"version",
 			false,
@@ -112,9 +126,55 @@ func (f *Flags) Post(cfg *config.Instance) {
 		} else {
 			os.Exit(0)
 		}
-	} else if *f.Launch != "" {
+	} else if *f.Read {
+		enableRun := func() {
+			_, err := client.LocalClient(
+				cfg,
+				models.MethodSettingsUpdate,
+				"{\"launchingActive\":true}",
+			)
+			if err != nil {
+				log.Error().Err(err).Msg("error re-enabling run")
+				_, _ = fmt.Fprintf(os.Stderr, "Error re-enabling run: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		_, err := client.LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"launchingActive\":false}",
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("error disabling run")
+			_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
+			os.Exit(1)
+		}
+
+		// cleanup after ctrl-c
+		sigs := make(chan os.Signal, 1)
+		defer close(sigs)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			enableRun()
+			os.Exit(0)
+		}()
+
+		resp, err := client.WaitNotification(cfg, models.TokensActive)
+		if err != nil {
+			log.Error().Err(err).Msg("error waiting for notification")
+			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
+			enableRun()
+			os.Exit(1)
+		}
+
+		enableRun()
+		fmt.Println(resp)
+		os.Exit(0)
+	} else if *f.Run != "" || *f.Launch != "" {
 		data, err := json.Marshal(&models.LaunchParams{
-			Text: f.Launch,
+			Text: f.Run,
 		})
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)

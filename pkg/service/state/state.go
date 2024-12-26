@@ -86,28 +86,14 @@ func (s *State) ShouldStopService() bool {
 
 func (s *State) DisableLauncher() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.disableLauncher = true
-	if err := s.platform.SetLaunching(false); err != nil {
-		log.Error().Msgf("cannot create disable launch file: %s", err)
-	}
-	s.Notifications <- models.Notification{
-		Method: models.TokensLaunching,
-		Params: false,
-	}
-	s.mu.Unlock()
 }
 
 func (s *State) EnableLauncher() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.disableLauncher = false
-	if err := s.platform.SetLaunching(true); err != nil {
-		log.Error().Msgf("cannot remove disable launch file: %s", err)
-	}
-	s.Notifications <- models.Notification{
-		Method: models.TokensLaunching,
-		Params: true,
-	}
-	s.mu.Unlock()
 }
 
 func (s *State) IsLauncherDisabled() bool {
