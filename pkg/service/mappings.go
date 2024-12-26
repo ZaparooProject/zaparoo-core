@@ -121,6 +121,8 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 			dbm.Match = database.MatchTypeExact
 			dbm.Pattern = m.MatchPattern
 		}
+
+		mappings = append(mappings, dbm)
 	}
 
 	return mappings
