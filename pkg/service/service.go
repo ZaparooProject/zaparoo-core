@@ -59,7 +59,7 @@ func launchToken(
 ) error {
 	text := token.Text
 
-	mappingText, mapped := getMapping(db, platform, token)
+	mappingText, mapped := getMapping(cfg, db, platform, token)
 	if mapped {
 		log.Info().Msgf("found mapping: %s", mappingText)
 		text = mappingText
