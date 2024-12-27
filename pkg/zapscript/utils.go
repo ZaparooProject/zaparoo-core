@@ -12,7 +12,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-func cmdDelay(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) error {
 	log.Info().Msgf("delaying for: %s", env.Args)
 
 	amount, err := strconv.Atoi(env.Args)
@@ -25,18 +25,39 @@ func cmdDelay(pl platforms.Platform, env platforms.CmdEnv) error {
 	return nil
 }
 
-func cmdExecute(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
 	if !env.Cfg.IsExecuteAllowed(env.Args) {
 		return fmt.Errorf("execute not allowed: %s", env.Args)
 	}
 
-	// TODO: needs to detect stuff like quotes
-	ps := strings.Split(env.Args, " ")
-	cmd := ps[0]
-	var args []string
-	if len(ps) > 1 {
-		args = ps[1:]
+	sb := &strings.Builder{}
+	quoted := false
+	var tokenArgs []string
+	for _, r := range env.Args {
+		if r == '"' {
+			quoted = !quoted
+			sb.WriteRune(r)
+		} else if !quoted && r == ' ' {
+			tokenArgs = append(tokenArgs, sb.String())
+			sb.Reset()
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	if sb.Len() > 0 {
+		tokenArgs = append(tokenArgs, sb.String())
 	}
 
-	return exec.Command(cmd, args...).Run()
+	if len(tokenArgs) == 0 {
+		return fmt.Errorf("execute command is empty")
+	}
+
+	cmd := tokenArgs[0]
+	var cmdArgs []string
+
+	if len(tokenArgs) > 1 {
+		cmdArgs = tokenArgs[1:]
+	}
+
+	return exec.Command(cmd, cmdArgs...).Run()
 }
