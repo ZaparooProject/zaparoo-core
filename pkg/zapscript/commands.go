@@ -21,7 +21,6 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package zapscript
 
 import (
-	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
@@ -190,10 +189,6 @@ func LaunchToken(
 
 		if f, ok := commandMappings[cmd]; ok {
 			log.Info().Msgf("launching command: %s", cmd)
-
-			if cmd == "execute" && !cfg.IsExecuteAllowed(args) {
-				return errors.New("execute not allowed"), false
-			}
 
 			softwareChange := slices.Contains(softwareChangeCommands, cmd)
 			if softwareChange {
