@@ -346,12 +346,24 @@ func (c *Instance) ApiPort() int {
 func (c *Instance) IsExecuteAllowed(cmd string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, allowed := range c.vals.ZapScript.AllowExecute {
+	for i, allowed := range c.vals.ZapScript.AllowExecute {
+		if len(allowed) == 0 {
+			log.Warn().Msgf("empty allow execute entry %d", i)
+			continue
+		}
+
+		// anything is allowed
 		if allowed == "*" {
 			return true
 		}
 
-		// TODO: wildcard argument support
+		// execute has a wildcard argument
+		if allowed[len(allowed)-1] == '*' &&
+			strings.HasPrefix(cmd, allowed[:len(allowed)-1]) {
+			return true
+		}
+
+		// execute matches exactly
 		if allowed == cmd {
 			return true
 		}
