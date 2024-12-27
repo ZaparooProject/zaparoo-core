@@ -1,14 +1,17 @@
 package methods
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"golang.org/x/text/unicode/norm"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
@@ -22,8 +25,8 @@ var (
 	ErrNotAllowed    = errors.New("not allowed")
 )
 
-func HandleLaunch(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received launch request")
+func HandleRun(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received run request")
 
 	if len(env.Params) == 0 {
 		return nil, ErrMissingParams
@@ -31,10 +34,10 @@ func HandleLaunch(env requests.RequestEnv) (any, error) {
 
 	var t tokens.Token
 
-	var params models.LaunchParams
+	var params models.RunParams
 	err := json.Unmarshal(env.Params, &params)
 	if err == nil {
-		log.Debug().Msgf("unmarshalled launch params: %+v", params)
+		log.Debug().Msgf("unmarshalled run params: %+v", params)
 
 		if params.Type != nil {
 			t.Type = *params.Type
@@ -43,7 +46,6 @@ func HandleLaunch(env requests.RequestEnv) (any, error) {
 		hasArg := false
 
 		if params.UID != nil {
-			// TODO: validate uid format (hex) and tidy
 			t.UID = *params.UID
 			hasArg = true
 		}
@@ -54,8 +56,13 @@ func HandleLaunch(env requests.RequestEnv) (any, error) {
 		}
 
 		if params.Data != nil {
-			// TODO: validate hex format
-			t.Data = *params.Data
+			t.Data = strings.ToLower(*params.Data)
+			t.Data = strings.ReplaceAll(t.Data, " ", "")
+
+			if _, err := hex.DecodeString(t.Data); err != nil {
+				return nil, ErrInvalidParams
+			}
+
 			hasArg = true
 		}
 
@@ -63,7 +70,7 @@ func HandleLaunch(env requests.RequestEnv) (any, error) {
 			return nil, ErrInvalidParams
 		}
 	} else {
-		log.Debug().Msgf("could not unmarshal launch params, trying string: %s", env.Params)
+		log.Debug().Msgf("could not unmarshal run params, trying string: %s", env.Params)
 
 		var text string
 		err := json.Unmarshal(env.Params, &text)
@@ -88,13 +95,13 @@ func HandleLaunch(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-// TODO: this is still insecure
-func HandleLaunchBasic(
+func HandleRunRest(
+	cfg *config.Instance,
 	st *state.State,
 	itq chan<- tokens.Token,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Msg("received basic launch request")
+		log.Info().Msg("received REST run request")
 
 		text := chi.URLParam(r, "*")
 		text, err := url.QueryUnescape(text)
@@ -104,7 +111,12 @@ func HandleLaunchBasic(
 			return
 		}
 
-		log.Info().Msgf("launching basic token: %s", text)
+		if !cfg.IsRunAllowed(text) {
+			log.Error().Msgf("run not allowed: %s", text)
+			http.Error(w, "run not allowed", http.StatusForbidden)
+		}
+
+		log.Info().Msgf("running token: %s", text)
 
 		t := tokens.Token{
 			Text:     norm.NFC.String(text),

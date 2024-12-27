@@ -73,9 +73,9 @@ type ZapScript struct {
 }
 
 type Service struct {
-	ApiPort     int      `toml:"api_port"`
-	DeviceId    string   `toml:"device_id"`
-	AllowLaunch []string `toml:"allow_launch,omitempty,multiline"`
+	ApiPort  int      `toml:"api_port"`
+	DeviceId string   `toml:"device_id"`
+	AllowRun []string `toml:"allow_run,omitempty,multiline"`
 }
 
 type MappingsEntry struct {
@@ -413,4 +413,20 @@ func (c *Instance) Mappings() []MappingsEntry {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Mappings.Entry
+}
+
+func (c *Instance) IsRunAllowed(s string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, allowed := range c.vals.Service.AllowRun {
+		if allowed == "*" {
+			return true
+		}
+
+		if allowed == s {
+			return true
+		}
+	}
+
+	return false
 }

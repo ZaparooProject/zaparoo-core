@@ -10,7 +10,8 @@ const (
 	MediaStopped         = "media.stopped"
 	MediaStarted         = "media.started"
 	MediaIndexing        = "media.indexing"
-	MethodLaunch         = "launch"
+	MethodLaunch         = "launch" // DEPRECATED
+	MethodRun            = "run"
 	MethodStop           = "stop"
 	MethodMediaIndex     = "media.index"
 	MethodMediaSearch    = "media.search"
@@ -27,7 +28,7 @@ const (
 	MethodMappingsUpdate = "mappings.update"
 	MethodMappingsReload = "mappings.reload"
 	MethodReadersWrite   = "readers.write"
-	MethodStatus         = "status"
+	MethodStatus         = "status" // DEPRECATED
 	MethodVersion        = "version"
 )
 

@@ -173,7 +173,7 @@ func (f *Flags) Post(cfg *config.Instance) {
 		fmt.Println(resp)
 		os.Exit(0)
 	} else if *f.Run != "" || *f.Launch != "" {
-		data, err := json.Marshal(&models.LaunchParams{
+		data, err := json.Marshal(&models.RunParams{
 			Text: f.Run,
 		})
 		if err != nil {
@@ -181,10 +181,10 @@ func (f *Flags) Post(cfg *config.Instance) {
 			os.Exit(1)
 		}
 
-		_, err = client.LocalClient(cfg, models.MethodLaunch, string(data))
+		_, err = client.LocalClient(cfg, models.MethodRun, string(data))
 		if err != nil {
-			log.Error().Err(err).Msg("error launching")
-			_, _ = fmt.Fprintf(os.Stderr, "Error launching: %v\n", err)
+			log.Error().Err(err).Msg("error running")
+			_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
 			os.Exit(1)
 		} else {
 			os.Exit(0)

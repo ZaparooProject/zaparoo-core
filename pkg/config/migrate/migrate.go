@@ -110,7 +110,7 @@ func IniToToml(iniPath string) (config.Values, error) {
 	}
 
 	// api - allow launch
-	vals.Service.AllowLaunch = iniVals.Api.AllowLaunch
+	vals.Service.AllowRun = iniVals.Api.AllowLaunch
 
 	return vals, nil
 }

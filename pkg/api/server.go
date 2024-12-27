@@ -26,16 +26,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// TODO: should there be a TTL for request timestamps? what about offline misters?
 // TODO: can we safely allow launch basic unrestricted for local accounts?
 // TODO: should api launches from localhost require allowlist?
-// TODO: download log file no longer works, need an alternative
 
 const RequestTimeout = 30 * time.Second
 
 var methodMap = map[string]func(requests.RequestEnv) (any, error){
-	// launching
-	models.MethodLaunch: methods.HandleLaunch,
+	// running
+	models.MethodLaunch: methods.HandleRun, // DEPRECATED
+	models.MethodRun:    methods.HandleRun,
 	models.MethodStop:   methods.HandleStop,
 	// media
 	models.MethodMediaIndex:  methods.HandleIndexMedia,
@@ -277,8 +276,9 @@ func Start(
 		log.Error().Err(err).Msg("message does not match known types")
 	})
 
-	// TODO: use allow list
-	r.Get("/l/*", methods.HandleLaunchBasic(st, itq))
+	r.Get("/l/*", methods.HandleRunRest(cfg, st, itq)) // DEPRECATED
+	r.Get("/r/*", methods.HandleRunRest(cfg, st, itq))
+	r.Get("/run/*", methods.HandleRunRest(cfg, st, itq))
 
 	err := http.ListenAndServe(":"+strconv.Itoa(cfg.ApiPort()), r)
 	if err != nil {
