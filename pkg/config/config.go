@@ -69,7 +69,7 @@ type Launchers struct {
 }
 
 type ZapScript struct {
-	AllowShell []string `toml:"allow_shell,omitempty,multiline"`
+	AllowExecute []string `toml:"allow_execute,omitempty,multiline"`
 }
 
 type Service struct {
@@ -343,14 +343,15 @@ func (c *Instance) ApiPort() int {
 	return c.vals.Service.ApiPort
 }
 
-func (c *Instance) IsShellCmdAllowed(cmd string) bool {
+func (c *Instance) IsExecuteAllowed(cmd string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, allowed := range c.vals.ZapScript.AllowShell {
+	for _, allowed := range c.vals.ZapScript.AllowExecute {
 		if allowed == "*" {
 			return true
 		}
 
+		// TODO: wildcard argument support
 		if allowed == cmd {
 			return true
 		}

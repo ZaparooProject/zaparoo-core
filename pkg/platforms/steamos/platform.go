@@ -155,10 +155,6 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	return launchers[0].Launch(cfg, path)
 }
 
-func (p *Platform) Shell(cmd string) error {
-	return exec.Command("bash", "-c", cmd).Start()
-}
-
 func (p *Platform) KeyboardInput(_ string) error {
 	return nil
 }

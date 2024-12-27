@@ -2,7 +2,9 @@ package zapscript
 
 import (
 	"fmt"
+	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -23,10 +25,18 @@ func cmdDelay(pl platforms.Platform, env platforms.CmdEnv) error {
 	return nil
 }
 
-func cmdShell(pl platforms.Platform, env platforms.CmdEnv) error {
-	if !env.Manual {
-		return fmt.Errorf("shell commands must be manually run")
+func cmdExecute(pl platforms.Platform, env platforms.CmdEnv) error {
+	if !env.Cfg.IsExecuteAllowed(env.Args) {
+		return fmt.Errorf("execute not allowed: %s", env.Args)
 	}
 
-	return pl.Shell(env.Args)
+	// TODO: needs to detect stuff like quotes
+	ps := strings.Split(env.Args, " ")
+	cmd := ps[0]
+	var args []string
+	if len(ps) > 1 {
+		args = ps[1:]
+	}
+
+	return exec.Command(cmd, args...).Run()
 }

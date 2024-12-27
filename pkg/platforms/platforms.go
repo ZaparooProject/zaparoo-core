@@ -111,7 +111,6 @@ type Platform interface {
 	// Launch a file by path.
 	LaunchFile(*config.Instance, string) error
 	// Launch a shell command.
-	Shell(string) error
 	KeyboardInput(string) error // DEPRECATED
 	KeyboardPress(string) error
 	GamepadPress(string) error

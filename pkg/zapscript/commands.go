@@ -51,8 +51,8 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	"playlist.next":     cmdPlaylistNext,
 	"playlist.previous": cmdPlaylistPrevious,
 
-	"shell": cmdShell,
-	"delay": cmdDelay,
+	"execute": cmdExecute,
+	"delay":   cmdDelay,
 
 	"mister.ini":    forwardCmd,
 	"mister.core":   forwardCmd,
@@ -72,7 +72,8 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	"coinp1":    cmdCoinP1,  // DEPRECATED
 	"coinp2":    cmdCoinP2,  // DEPRECATED
 	"random":    cmdRandom,  // DEPRECATED
-	"command":   cmdShell,   // DEPRECATED
+	"shell":     cmdExecute, // DEPRECATED
+	"command":   cmdExecute, // DEPRECATED
 	"ini":       forwardCmd, // DEPRECATED
 	"system":    cmdSystem,  // DEPRECATED
 	"get":       cmdHttpGet, // DEPRECATED
@@ -190,8 +191,8 @@ func LaunchToken(
 		if f, ok := commandMappings[cmd]; ok {
 			log.Info().Msgf("launching command: %s", cmd)
 
-			if cmd == "shell" && !cfg.IsShellCmdAllowed(args) {
-				return errors.New("shell command not allowed"), false
+			if cmd == "execute" && !cfg.IsExecuteAllowed(args) {
+				return errors.New("execute not allowed"), false
 			}
 
 			softwareChange := slices.Contains(softwareChangeCommands, cmd)

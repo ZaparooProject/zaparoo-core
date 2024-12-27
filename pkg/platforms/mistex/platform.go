@@ -8,7 +8,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -223,15 +222,6 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	return mm.LaunchGenericFile(mister.UserConfigToMrext(cfg), path)
-}
-
-func (p *Platform) Shell(cmd string) error {
-	command := exec.Command("bash", "-c", cmd)
-	err := command.Start()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (p *Platform) KeyboardInput(input string) error {

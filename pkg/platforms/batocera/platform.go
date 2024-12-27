@@ -162,10 +162,6 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	return errors.New("launcher not found")
 }
 
-func (p *Platform) Shell(cmd string) error {
-	return nil
-}
-
 func (p *Platform) KeyboardInput(input string) error {
 	return nil
 }
