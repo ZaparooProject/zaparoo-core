@@ -275,20 +275,6 @@ func (p *Platform) KillLauncher() error {
 	return nil
 }
 
-func (p *Platform) LaunchingEnabled() bool {
-	_, err := os.Stat(DisableLaunchFile)
-	return err != nil
-}
-
-func (p *Platform) SetLaunching(disabled bool) error {
-	if disabled {
-		return os.Remove(DisableLaunchFile)
-	} else {
-		_, err := os.Create(DisableLaunchFile)
-		return err
-	}
-}
-
 func (p *Platform) GetActiveLauncher() string {
 	core := GetActiveCoreName()
 

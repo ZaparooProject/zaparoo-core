@@ -18,6 +18,6 @@ type Token struct {
 	Text     string
 	Data     string
 	ScanTime time.Time
-	Remote   bool
+	Remote   bool // TODO: wtf does this even do now
 	Source   string
 }

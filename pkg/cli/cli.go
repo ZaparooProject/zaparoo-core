@@ -131,7 +131,7 @@ func (f *Flags) Post(cfg *config.Instance) {
 			_, err := client.LocalClient(
 				cfg,
 				models.MethodSettingsUpdate,
-				"{\"launchingActive\":true}",
+				"{\"runZapScript\":true}",
 			)
 			if err != nil {
 				log.Error().Err(err).Msg("error re-enabling run")
@@ -143,7 +143,7 @@ func (f *Flags) Post(cfg *config.Instance) {
 		_, err := client.LocalClient(
 			cfg,
 			models.MethodSettingsUpdate,
-			"{\"launchingActive\":false}",
+			"{\"runZapScript\":false}",
 		)
 		if err != nil {
 			log.Error().Err(err).Msg("error disabling run")

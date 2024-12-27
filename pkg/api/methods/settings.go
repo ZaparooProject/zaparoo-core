@@ -12,7 +12,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings request")
 
 	resp := models.SettingsResponse{
-		LaunchingActive:         !env.State.IsLauncherDisabled(),
+		RunZapScript:            env.State.CanRunZapScript(),
 		DebugLogging:            env.Config.DebugLogging(),
 		AudioScanFeedback:       env.Config.AudioFeedback(),
 		ReadersAutoDetect:       env.Config.Readers().AutoDetect,
@@ -44,12 +44,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	if params.LaunchingActive != nil {
-		log.Info().Bool("launchingActive", *params.LaunchingActive).Msg("update")
-		if *params.LaunchingActive {
-			env.State.EnableLauncher()
+	if params.RunZapScript != nil {
+		log.Info().Bool("runZapScript", *params.RunZapScript).Msg("update")
+		if *params.RunZapScript {
+			env.State.SetRunZapScript(true)
 		} else {
-			env.State.DisableLauncher()
+			env.State.SetRunZapScript(false)
 		}
 	}
 

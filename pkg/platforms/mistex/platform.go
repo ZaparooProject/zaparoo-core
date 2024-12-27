@@ -178,20 +178,6 @@ func (p *Platform) KillLauncher() error {
 	return LaunchMenu()
 }
 
-func (p *Platform) LaunchingEnabled() bool {
-	_, err := os.Stat(mister.DisableLaunchFile)
-	return err != nil
-}
-
-func (p *Platform) SetLaunching(disabled bool) error {
-	if disabled {
-		return os.Remove(mister.DisableLaunchFile)
-	} else {
-		_, err := os.Create(mister.DisableLaunchFile)
-		return err
-	}
-}
-
 func (p *Platform) GetActiveLauncher() string {
 	core := mister.GetActiveCoreName()
 

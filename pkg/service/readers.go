@@ -28,7 +28,7 @@ func shouldExit(
 		return false
 	}
 
-	if st.GetLastScanned().Remote || st.IsLauncherDisabled() {
+	if st.GetLastScanned().Remote {
 		return false
 	}
 
@@ -237,31 +237,35 @@ func readerManager(
 		if scan != nil {
 			log.Info().Msgf("new token scanned: %v", scan)
 			st.SetActiveCard(*scan)
-			if !st.IsLauncherDisabled() {
-				if exitTimer != nil {
-					stopped := exitTimer.Stop()
-					if stopped && utils.TokensEqual(scan, st.GetSoftwareToken()) {
-						log.Info().Msg("same token reinserted, cancelling exit")
-						continue
-					} else if stopped {
-						log.Info().Msg("new token inserted, restarting exit timer")
-						startTimedExit()
-					}
-				}
 
-				wt := st.GetWroteToken()
-				if wt != nil && utils.TokensEqual(scan, wt) {
-					log.Info().Msg("skipping launching just written token")
-					st.SetWroteToken(nil)
-					continue
-				} else {
-					st.SetWroteToken(nil)
-				}
-
-				log.Info().Msgf("sending token: %v", scan)
-				pl.PlaySuccessSound(cfg)
-				itq <- *scan
+			if !st.CanRunZapScript() {
+				log.Debug().Msg("skipping token, run ZapScript disabled")
+				continue
 			}
+
+			if exitTimer != nil {
+				stopped := exitTimer.Stop()
+				if stopped && utils.TokensEqual(scan, st.GetSoftwareToken()) {
+					log.Info().Msg("same token reinserted, cancelling exit")
+					continue
+				} else if stopped {
+					log.Info().Msg("new token inserted, restarting exit timer")
+					startTimedExit()
+				}
+			}
+
+			wt := st.GetWroteToken()
+			if wt != nil && utils.TokensEqual(scan, wt) {
+				log.Info().Msg("skipping launching just written token")
+				st.SetWroteToken(nil)
+				continue
+			} else {
+				st.SetWroteToken(nil)
+			}
+
+			log.Info().Msgf("sending token: %v", scan)
+			pl.PlaySuccessSound(cfg)
+			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})

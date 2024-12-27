@@ -186,7 +186,7 @@ func processTokenQueue(
 				Data: t.Data,
 			}
 
-			if st.IsLauncherDisabled() {
+			if st.CanRunZapScript() {
 				err = db.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
@@ -266,11 +266,6 @@ func Start(
 
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
-
-	if !pl.LaunchingEnabled() {
-		log.Warn().Msg("launching disabled by user")
-		st.DisableLauncher()
-	}
 
 	log.Info().Msg("starting reader manager")
 	go readerManager(pl, cfg, st, itq, lsq)

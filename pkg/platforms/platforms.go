@@ -37,6 +37,7 @@ type Launcher struct {
 	SystemId string
 	// Folders to scan for files, relative to the root folders of the platform.
 	// TODO: Support absolute paths?
+	// TODO: rename RootDirs
 	Folders []string
 	// Extensions to match for files during a standard scan.
 	Extensions []string
@@ -91,8 +92,6 @@ type Platform interface {
 	NormalizePath(*config.Instance, string) string
 	// Kill the currently running launcher process if possible.
 	KillLauncher() error
-	LaunchingEnabled() bool  // TODO: remove? should be mister only?
-	SetLaunching(bool) error // TODO: remove? should be mister only?
 	// Return the ID of the currently active launcher. Empty string if none.
 	GetActiveLauncher() string
 	// Play a sound effect for error feedback.

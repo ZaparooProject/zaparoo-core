@@ -98,14 +98,6 @@ func (p *Platform) KillLauncher() error {
 	return nil
 }
 
-func (p *Platform) LaunchingEnabled() bool {
-	return true
-}
-
-func (p *Platform) SetLaunching(disabled bool) error {
-	return nil
-}
-
 func (p *Platform) GetActiveLauncher() string {
 	return ""
 }

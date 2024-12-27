@@ -12,21 +12,22 @@ import (
 )
 
 type State struct {
-	mu              sync.RWMutex
-	activeCard      tokens.Token // TODO: rename activeToken
-	lastScanned     tokens.Token
-	stopService     bool // TODO: make a channel outside state
-	disableLauncher bool
-	platform        platforms.Platform
-	readers         map[string]readers.Reader
-	softwareToken   *tokens.Token
-	wroteToken      *tokens.Token
-	Notifications   chan<- models.Notification
+	mu            sync.RWMutex
+	runZapScript  bool
+	activeToken   tokens.Token // TODO: make a pointer
+	lastScanned   tokens.Token // TODO: make a pointer
+	stopService   bool         // TODO: make a context?
+	platform      platforms.Platform
+	readers       map[string]readers.Reader
+	softwareToken *tokens.Token
+	wroteToken    *tokens.Token
+	Notifications chan<- models.Notification // TODO: move outside state
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
 	ns := make(chan models.Notification)
 	return &State{
+		runZapScript:  true,
 		platform:      platform,
 		readers:       make(map[string]readers.Reader),
 		Notifications: ns,
@@ -36,14 +37,14 @@ func NewState(platform platforms.Platform) (*State, <-chan models.Notification) 
 func (s *State) SetActiveCard(card tokens.Token) {
 	s.mu.Lock()
 
-	if utils.TokensEqual(&s.activeCard, &card) {
+	if utils.TokensEqual(&s.activeToken, &card) {
 		// ignore duplicate scans
 		s.mu.Unlock()
 		return
 	}
 
-	s.activeCard = card
-	if !s.activeCard.ScanTime.IsZero() {
+	s.activeToken = card
+	if !s.activeToken.ScanTime.IsZero() {
 		s.lastScanned = card
 	}
 
@@ -63,7 +64,7 @@ func (s *State) SetActiveCard(card tokens.Token) {
 func (s *State) GetActiveCard() tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.activeCard
+	return s.activeToken
 }
 
 func (s *State) GetLastScanned() tokens.Token {
@@ -84,22 +85,16 @@ func (s *State) ShouldStopService() bool {
 	return s.stopService
 }
 
-func (s *State) DisableLauncher() {
+func (s *State) SetRunZapScript(run bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.disableLauncher = true
+	s.runZapScript = run
 }
 
-func (s *State) EnableLauncher() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.disableLauncher = false
-}
-
-func (s *State) IsLauncherDisabled() bool {
+func (s *State) CanRunZapScript() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.disableLauncher
+	return s.runZapScript
 }
 
 func (s *State) GetReader(device string) (readers.Reader, bool) {

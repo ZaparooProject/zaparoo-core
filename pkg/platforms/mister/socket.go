@@ -75,18 +75,16 @@ func StartSocketServer(
 							"%d,%s,%t,%s",
 							lastScanned.ScanTime.Unix(),
 							lastScanned.UID,
-							pl.LaunchingEnabled(),
+							true,
 							lastScanned.Text,
 						)
 					} else {
-						payload = fmt.Sprintf("0,,%t,", pl.LaunchingEnabled())
+						payload = fmt.Sprintf("0,,%t,", true)
 					}
 				case "disable":
-					pl.SetLaunching(false)
-					log.Info().Msg("launcher disabled")
+					log.Info().Msg("DEPRECATED: use API instead")
 				case "enable":
-					pl.SetLaunching(true)
-					log.Info().Msg("launcher enabled")
+					log.Info().Msg("DEPRECATED: use API instead")
 				case "connection":
 					connected, rt := false, ""
 					rs := getReaders()

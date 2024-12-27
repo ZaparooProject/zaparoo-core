@@ -25,7 +25,7 @@ type IndexStatusResponse struct {
 }
 
 type SettingsResponse struct {
-	LaunchingActive         bool     `json:"launchingActive"`
+	RunZapScript            bool     `json:"runZapScript"`
 	DebugLogging            bool     `json:"debugLogging"`
 	AudioScanFeedback       bool     `json:"audioScanFeedback"`
 	ReadersAutoDetect       bool     `json:"readersAutoDetect"`

@@ -41,10 +41,8 @@ func newStatus(
 		}
 	}
 
-	launcherDisabled := st.IsLauncherDisabled()
-
 	return models.StatusResponse{
-		Launching: !launcherDisabled,
+		Launching: st.CanRunZapScript(),
 		Readers:   readers,
 		Reader: models.ReaderStatusResponse{
 			Connected: readerConnected,
