@@ -5,7 +5,7 @@ import "github.com/google/uuid"
 const (
 	ReadersConnected     = "readers.connected"
 	ReadersDisconnected  = "readers.disconnected"
-	TokensLaunching      = "tokens.launching"
+	TokensRunning        = "tokens.running"
 	TokensActive         = "tokens.active"
 	MediaStopped         = "media.stopped"
 	MediaStarted         = "media.started"
