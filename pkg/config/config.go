@@ -8,8 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
+	"regexp"
 	"sync"
 )
 
@@ -64,18 +63,21 @@ type SystemsDefault struct {
 }
 
 type Launchers struct {
-	IndexRoot []string `toml:"index_root,omitempty,multiline"`
-	AllowFile []string `toml:"allow_file,omitempty,multiline"`
+	IndexRoot   []string `toml:"index_root,omitempty,multiline"`
+	AllowFile   []string `toml:"allow_file,omitempty,multiline"`
+	allowFileRe []*regexp.Regexp
 }
 
 type ZapScript struct {
-	AllowExecute []string `toml:"allow_execute,omitempty,multiline"`
+	AllowExecute   []string `toml:"allow_execute,omitempty,multiline"`
+	allowExecuteRe []*regexp.Regexp
 }
 
 type Service struct {
-	ApiPort  int      `toml:"api_port"`
-	DeviceId string   `toml:"device_id"`
-	AllowRun []string `toml:"allow_run,omitempty,multiline"`
+	ApiPort    int      `toml:"api_port"`
+	DeviceId   string   `toml:"device_id"`
+	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
+	allowRunRe []*regexp.Regexp
 }
 
 type MappingsEntry struct {
@@ -181,6 +183,39 @@ func (c *Instance) Load() error {
 	}
 
 	c.vals = newVals
+
+	// prepare allow files regexes
+	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))
+	for i, allowFile := range c.vals.Launchers.AllowFile {
+		re, err := regexp.Compile(allowFile)
+		if err != nil {
+			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
+			continue
+		}
+		c.vals.Launchers.allowFileRe[i] = re
+	}
+
+	// prepare allow executes regexes
+	c.vals.ZapScript.allowExecuteRe = make([]*regexp.Regexp, len(c.vals.ZapScript.AllowExecute))
+	for i, allowExecute := range c.vals.ZapScript.AllowExecute {
+		re, err := regexp.Compile(allowExecute)
+		if err != nil {
+			log.Warn().Msgf("invalid allow execute regex: %s", allowExecute)
+			continue
+		}
+		c.vals.ZapScript.allowExecuteRe[i] = re
+	}
+
+	// prepare allow runs regexes
+	c.vals.Service.allowRunRe = make([]*regexp.Regexp, len(c.vals.Service.AllowRun))
+	for i, allowRun := range c.vals.Service.AllowRun {
+		re, err := regexp.Compile(allowRun)
+		if err != nil {
+			log.Warn().Msgf("invalid allow run regex: %s", allowRun)
+			continue
+		}
+		c.vals.Service.allowRunRe[i] = re
+	}
 
 	log.Info().Any("config", c.vals).Msg("loaded config")
 
@@ -314,27 +349,25 @@ func (c *Instance) IndexRoots() []string {
 	return c.vals.Launchers.IndexRoot
 }
 
-func (c *Instance) IsLauncherFileAllowed(path string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, allowed := range c.vals.Launchers.AllowFile {
-		if allowed == "*" {
-			return true
-		}
+func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
+	if s == "" {
+		return false
+	}
 
-		// TODO: case insensitive on mister? platform option?
-		if runtime.GOOS == "windows" {
-			// do a case-insensitive comparison on windows
-			allowed = strings.ToLower(allowed)
-			path = strings.ToLower(path)
-		}
-
-		// convert all slashes to OS preferred
-		if filepath.FromSlash(allowed) == filepath.FromSlash(path) {
+	for i, _ := range allow {
+		if allowRe[i] != nil &&
+			allowRe[i].MatchString(s) {
 			return true
 		}
 	}
+
 	return false
+}
+
+func (c *Instance) IsLauncherFileAllowed(s string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return checkAllow(c.vals.Launchers.AllowFile, c.vals.Launchers.allowFileRe, s)
 }
 
 func (c *Instance) ApiPort() int {
@@ -343,32 +376,10 @@ func (c *Instance) ApiPort() int {
 	return c.vals.Service.ApiPort
 }
 
-func (c *Instance) IsExecuteAllowed(cmd string) bool {
+func (c *Instance) IsExecuteAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for i, allowed := range c.vals.ZapScript.AllowExecute {
-		if len(allowed) == 0 {
-			log.Warn().Msgf("empty allow execute entry %d", i)
-			continue
-		}
-
-		// anything is allowed
-		if allowed == "*" {
-			return true
-		}
-
-		// execute has a wildcard argument
-		if allowed[len(allowed)-1] == '*' &&
-			strings.HasPrefix(cmd, allowed[:len(allowed)-1]) {
-			return true
-		}
-
-		// execute matches exactly
-		if allowed == cmd {
-			return true
-		}
-	}
-	return false
+	return checkAllow(c.vals.ZapScript.AllowExecute, c.vals.ZapScript.allowExecuteRe, s)
 }
 
 func (c *Instance) LoadMappings(mappingsDir string) error {
@@ -431,15 +442,5 @@ func (c *Instance) Mappings() []MappingsEntry {
 func (c *Instance) IsRunAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, allowed := range c.vals.Service.AllowRun {
-		if allowed == "*" {
-			return true
-		}
-
-		if allowed == s {
-			return true
-		}
-	}
-
-	return false
+	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
 }

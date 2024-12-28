@@ -113,7 +113,8 @@ func HandleRunRest(
 
 		if !cfg.IsRunAllowed(text) {
 			log.Error().Msgf("run not allowed: %s", text)
-			http.Error(w, "run not allowed", http.StatusForbidden)
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
 		}
 
 		log.Info().Msgf("running token: %s", text)

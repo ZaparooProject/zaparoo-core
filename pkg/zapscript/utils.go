@@ -30,6 +30,9 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
 		return fmt.Errorf("execute not allowed: %s", env.Args)
 	}
 
+	// very basic support for treating quoted strings as a single field
+	// probably needs to be expanded to include single quotes and
+	// escaped characters
 	sb := &strings.Builder{}
 	quoted := false
 	var tokenArgs []string
