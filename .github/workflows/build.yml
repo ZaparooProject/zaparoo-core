@@ -25,6 +25,20 @@ jobs:
             arch: arm64
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Go packages and build output
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-go
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go
+                    env:
+          key: ${{ runner.os }}-build-${{ env.cache-name }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-
       - name: Install Task
         uses: arduino/setup-task@v2
         with:
