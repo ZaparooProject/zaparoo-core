@@ -20,7 +20,7 @@ tasks:
   build-docker-image:
     internal: true
     cmds:
-      - docker build --platform linux/{{.ARCH}} --build-arg UID=$UID --build-arg GID=$GID -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - docker build --platform linux/{{.ARCH}} --build-arg UID=$UID --build-arg GID=$GID {{default "" .CACHE_ARGS}} -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
   build-image-mister:
     cmds:

@@ -33,5 +33,10 @@ jobs:
       - name: Add QEMU for cross-compile support
         run: docker run --privileged --rm tonistiigi/binfmt --install all
         if: matrix.arch != 'amd64' && matrix.platform != 'windows' && matrix.platform != 'mac'
+      - name: Expose GitHub Runtime
+        uses: crazy-max/ghaction-github-runtime@v3
+      - name: Add cache override
+        run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY} --cache-from type=gha\" > .env
+        if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
         run: task build-${{matrix.platform}}-${{matrix.arch}}

@@ -57,4 +57,6 @@ USER build
 
 WORKDIR /build
 
+COPY --from=golang:1.23 /usr/local/go/ /usr/local/go/
+ENV PATH="/usr/local/go/bin:${PATH}"
 RUN git config --global --add safe.directory /build
