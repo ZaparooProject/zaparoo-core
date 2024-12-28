@@ -33,6 +33,12 @@ jobs:
       - name: Add QEMU for cross-compile support
         run: docker run --privileged --rm tonistiigi/binfmt --install all
         if: matrix.arch != 'amd64' && matrix.platform != 'windows' && matrix.platform != 'mac'
+      - name: Set up Docker CLI
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64,linux/arm
+          use: true
+          install: true
       - name: Expose GitHub Runtime
         uses: crazy-max/ghaction-github-runtime@v3
       - name: Add cache override
