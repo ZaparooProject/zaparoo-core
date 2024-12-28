@@ -23,5 +23,6 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Add QEMU for cross-compile support
         run: docker run --privileged --rm tonistiigi/binfmt --install all
+        if: matrix.arch != 'amd64' && matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
         run: task build-${{matrix.platform}}-${{matrix.arch}}
