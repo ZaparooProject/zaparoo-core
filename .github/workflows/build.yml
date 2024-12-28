@@ -12,9 +12,17 @@ jobs:
         platform:
           - windows
           - mac
+          - batocera
         arch:
           - amd64
           - arm64
+        include:
+          - platform: steamos
+            arch: amd64
+          - platform: mister
+            arch: arm
+          - platform: mistex
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
       - name: Install Task
