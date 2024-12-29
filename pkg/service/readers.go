@@ -238,7 +238,7 @@ func readerManager(
 			log.Info().Msgf("new token scanned: %v", scan)
 			st.SetActiveCard(*scan)
 
-			if !st.CanRunZapScript() {
+			if !st.RunZapScriptEnabled() {
 				log.Debug().Msg("skipping token, run ZapScript disabled")
 				continue
 			}

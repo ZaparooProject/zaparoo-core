@@ -126,10 +126,8 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("file not found: %s", path)
 }
 
-/**
- * Will launch a command related to the token, and if it is a software that will
- * change the currently loaded software will also return a boolean set to true
- */
+// LaunchToken parses and runs a single ZapScript command. Returns true if
+// the command launched media.
 func LaunchToken(
 	pl platforms.Platform,
 	cfg *config.Instance,

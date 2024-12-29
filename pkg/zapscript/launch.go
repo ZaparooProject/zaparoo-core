@@ -224,8 +224,30 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) error {
 
 	// search if the path contains no / or file extensions
 	if !strings.Contains(path, "/") && filepath.Ext(path) == "" {
-		// TODO: passthrough advanced args
-		return cmdSearch(pl, env)
+		if strings.Contains(path, "*") {
+			// treat as a search
+			// TODO: passthrough advanced args
+			return cmdSearch(pl, env)
+		} else {
+			log.Info().Msgf("searching in %s: %s", system.Id, path)
+			// treat as a direct title launch
+			res, err := gamesdb.SearchNamesExact(
+				pl,
+				[]gamesdb.System{*system},
+				path,
+			)
+
+			if err != nil {
+				return err
+			} else if len(res) == 0 {
+				return fmt.Errorf("no results found for: %s", path)
+			}
+
+			log.Info().Msgf("found result: %s", res[0].Path)
+
+			game := res[0]
+			return launch(game.Path)
+		}
 	}
 
 	return fmt.Errorf("file not found: %s", env.Args)

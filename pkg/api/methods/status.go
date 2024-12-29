@@ -42,7 +42,7 @@ func newStatus(
 	}
 
 	return models.StatusResponse{
-		Launching: st.CanRunZapScript(),
+		Launching: st.RunZapScriptEnabled(),
 		Readers:   readers,
 		Reader: models.ReaderStatusResponse{
 			Connected: readerConnected,

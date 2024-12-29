@@ -12,7 +12,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings request")
 
 	resp := models.SettingsResponse{
-		RunZapScript:            env.State.CanRunZapScript(),
+		RunZapScript:            env.State.RunZapScriptEnabled(),
 		DebugLogging:            env.Config.DebugLogging(),
 		AudioScanFeedback:       env.Config.AudioFeedback(),
 		ReadersAutoDetect:       env.Config.Readers().AutoDetect,

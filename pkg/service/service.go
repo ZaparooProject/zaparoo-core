@@ -66,10 +66,10 @@ func launchToken(
 	}
 
 	if text == "" {
-		return fmt.Errorf("no text NDEF found in card or mappings")
+		return fmt.Errorf("no ZapScript in token")
 	}
 
-	log.Info().Msgf("launching with text: %s", text)
+	log.Info().Msgf("launching ZapScript: %s", text)
 	cmds := strings.Split(text, "||")
 
 	for i, cmd := range cmds {
@@ -186,7 +186,8 @@ func processTokenQueue(
 				Data: t.Data,
 			}
 
-			if st.CanRunZapScript() {
+			if !st.RunZapScriptEnabled() {
+				log.Debug().Msg("ZapScript disabled, skipping run")
 				err = db.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")

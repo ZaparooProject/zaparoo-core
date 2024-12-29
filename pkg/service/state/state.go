@@ -91,7 +91,7 @@ func (s *State) SetRunZapScript(run bool) {
 	s.runZapScript = run
 }
 
-func (s *State) CanRunZapScript() bool {
+func (s *State) RunZapScriptEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.runZapScript
