@@ -71,7 +71,7 @@ tasks:
       IMG_GOCACHE: /home/build/go
     cmds:
       - mkdir -p {{.BUILDCACHE}} {{.GOCACHE}}
-      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}
+      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build -e PLATFORM={{.PLATFORM}} -e APP_BIN={{.APP_BIN}} {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}
 
   build-docker:
     internal: true
@@ -86,6 +86,7 @@ tasks:
           BUILD_DIR: "{{.BUILD_DIR}}"
           DOCKER_ARCH: "{{.DOCKER_ARCH}}"
           PLATFORM: "{{.PLATFORM}}"
+          APP_BIN: "{{.APP_BIN}}"
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
       - rm -f {{.ZIP_FULLPATH}}
@@ -143,7 +144,6 @@ tasks:
           DOCKER_ARCH: arm64/v8
           IMAGE_NAME: zaparoo/batocera-arm64-build
           APP_BIN: zaparoo
-          EXTRA_DOCKER_ARGS: -e PLATFORM=batocera -e APP_BIN=zaparoo
 
   build-batocera-amd64:
     cmds:
@@ -155,7 +155,6 @@ tasks:
           DOCKER_ARCH: amd64
           IMAGE_NAME: zaparoo/batocera-amd64-build
           APP_BIN: zaparoo
-          EXTRA_DOCKER_ARGS: -e PLATFORM=batocera -e APP_BIN=zaparoo
 
   build-steamos-amd64:
     cmds:
@@ -167,7 +166,6 @@ tasks:
           DOCKER_ARCH: amd64
           IMAGE_NAME: zaparoo/steamos-amd64-build
           APP_BIN: zaparoo
-          EXTRA_DOCKER_ARGS: -e PLATFORM=steamos -e APP_BIN=zaparoo
 
   build-basic:
     internal: true
