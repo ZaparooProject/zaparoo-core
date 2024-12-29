@@ -33,10 +33,9 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go
-                    env:
-          key: ${{ runner.os }}-build-${{ env.cache-name }}
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{hashFiles('go.sum')}}
           restore-keys: |
-            ${{ runner.os }}-build-${{ env.cache-name }}
+            ${{ runner.os }}-build-${{ env.cache-name }}-
             ${{ runner.os }}-build-
             ${{ runner.os }}-
       - name: Install Task
