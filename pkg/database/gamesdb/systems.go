@@ -57,8 +57,10 @@ func AllSystems() []System {
 	return systems
 }
 
+// Consoles
 const (
-	// Consoles
+	System3DO               = "3DO"
+	System3DS               = "3DS"
 	SystemAdventureVision   = "AdventureVision"
 	SystemArcadia           = "Arcadia"
 	SystemAstrocade         = "Astrocade"
@@ -66,34 +68,51 @@ const (
 	SystemAtari5200         = "Atari5200"
 	SystemAtari7800         = "Atari7800"
 	SystemAtariLynx         = "AtariLynx"
+	SystemAtariXEGS         = "AtariXEGS"
 	SystemCasioPV1000       = "CasioPV1000"
+	SystemCDI               = "CDI"
 	SystemChannelF          = "ChannelF"
 	SystemColecoVision      = "ColecoVision"
 	SystemCreatiVision      = "CreatiVision"
+	SystemDreamcast         = "Dreamcast"
 	SystemFDS               = "FDS"
 	SystemGamate            = "Gamate"
 	SystemGameboy           = "Gameboy"
 	SystemGameboyColor      = "GameboyColor"
 	SystemGameboy2P         = "Gameboy2P"
+	SystemGameCube          = "GameCube"
 	SystemGameGear          = "GameGear"
 	SystemGameNWatch        = "GameNWatch"
+	SystemGameCom           = "GameCom"
 	SystemGBA               = "GBA"
 	SystemGBA2P             = "GBA2P"
 	SystemGenesis           = "Genesis"
 	SystemIntellivision     = "Intellivision"
+	SystemJaguar            = "Jaguar"
+	SystemJaguarCD          = "JaguarCD"
 	SystemMasterSystem      = "MasterSystem"
 	SystemMegaCD            = "MegaCD"
 	SystemMegaDuck          = "MegaDuck"
+	SystemNDS               = "NDS"
 	SystemNeoGeo            = "NeoGeo"
 	SystemNeoGeoCD          = "NeoGeoCD"
+	SystemNeoGeoPocket      = "NeoGeoPocket"
+	SystemNeoGeoPocketColor = "NeoGeoPocketColor"
 	SystemNES               = "NES"
 	SystemNESMusic          = "NESMusic"
 	SystemNintendo64        = "Nintendo64"
 	SystemOdyssey2          = "Odyssey2"
+	SystemOuya              = "Ouya"
 	SystemPocketChallengeV2 = "PocketChallengeV2"
 	SystemPokemonMini       = "PokemonMini"
 	SystemPSX               = "PSX"
+	SystemPS2               = "PS2"
+	SystemPS3               = "PS3"
+	SystemPS4               = "PS4"
+	SystemPS5               = "PS5"
+	SystemPSP               = "PSP"
 	SystemSega32X           = "Sega32X"
+	SystemSeriesXS          = "SeriesXS"
 	SystemSG1000            = "SG1000"
 	SystemSuperGameboy      = "SuperGameboy"
 	SystemSuperVision       = "SuperVision"
@@ -101,13 +120,24 @@ const (
 	SystemSNES              = "SNES"
 	SystemSNESMusic         = "SNESMusic"
 	SystemSuperGrafx        = "SuperGrafx"
+	SystemSwitch            = "Switch"
 	SystemTurboGrafx16      = "TurboGrafx16"
 	SystemTurboGrafx16CD    = "TurboGrafx16CD"
 	SystemVC4000            = "VC4000"
 	SystemVectrex           = "Vectrex"
+	SystemVirtualBoy        = "VirtualBoy"
+	SystemVita              = "Vita"
+	SystemWii               = "Wii"
+	SystemWiiU              = "WiiU"
 	SystemWonderSwan        = "WonderSwan"
 	SystemWonderSwanColor   = "WonderSwanColor"
-	// Computers
+	SystemXbox              = "Xbox"
+	SystemXbox360           = "Xbox360"
+	SystemXboxOne           = "XboxOne"
+)
+
+// Computers
+const (
 	SystemAcornAtom      = "AcornAtom"
 	SystemAcornElectron  = "AcornElectron"
 	SystemAliceMC10      = "AliceMC10"
@@ -133,6 +163,7 @@ const (
 	SystemLaser          = "Laser"
 	SystemLynx48         = "Lynx48"
 	SystemMacPlus        = "MacPlus"
+	SystemMacOS          = "MacOS"
 	SystemMSX            = "MSX"
 	SystemMultiComp      = "MultiComp"
 	SystemOrao           = "Orao"
@@ -160,15 +191,26 @@ const (
 	SystemZX81           = "ZX81"
 	SystemZXSpectrum     = "ZXSpectrum"
 	SystemZXNext         = "ZXNext"
-	// Other
+)
+
+// Other
+const (
+	SystemAndroid = "Android"
 	SystemArcade  = "Arcade"
 	SystemArduboy = "Arduboy"
 	SystemChip8   = "Chip8"
+	SystemIOS     = "iOS"
 	SystemVideo   = "Video"
 )
 
 var Systems = map[string]System{
 	// Consoles
+	System3DO: {
+		Id: System3DO,
+	},
+	System3DS: {
+		Id: System3DS,
+	},
 	SystemAdventureVision: {
 		Id:      SystemAdventureVision,
 		Aliases: []string{"AVision"},
@@ -191,9 +233,16 @@ var Systems = map[string]System{
 	SystemAtariLynx: {
 		Id: SystemAtariLynx,
 	},
+	SystemAtariXEGS: {
+		Id: SystemAtariXEGS,
+	},
 	SystemCasioPV1000: {
 		Id:      SystemCasioPV1000,
 		Aliases: []string{"Casio_PV-1000"},
+	},
+	SystemCDI: {
+		Id:      SystemCDI,
+		Aliases: []string{"CD-i"},
 	},
 	SystemChannelF: {
 		Id: SystemChannelF,
@@ -204,6 +253,9 @@ var Systems = map[string]System{
 	},
 	SystemCreatiVision: {
 		Id: SystemCreatiVision,
+	},
+	SystemDreamcast: {
+		Id: SystemDreamcast,
 	},
 	SystemFDS: {
 		Id:      SystemFDS,
@@ -224,12 +276,18 @@ var Systems = map[string]System{
 		// TODO: Split 2P core into GB and GBC?
 		Id: SystemGameboy2P,
 	},
+	SystemGameCube: {
+		Id: SystemGameCube,
+	},
 	SystemGameGear: {
 		Id:      SystemGameGear,
 		Aliases: []string{"GG"},
 	},
 	SystemGameNWatch: {
 		Id: SystemGameNWatch,
+	},
+	SystemGameCom: {
+		Id: SystemGameCom,
 	},
 	SystemGBA: {
 		Id:      SystemGBA,
@@ -245,7 +303,12 @@ var Systems = map[string]System{
 	SystemIntellivision: {
 		Id: SystemIntellivision,
 	},
-	// TODO: Jaguar
+	SystemJaguar: {
+		Id: SystemJaguar,
+	},
+	SystemJaguarCD: {
+		Id: SystemJaguarCD,
+	},
 	SystemMasterSystem: {
 		Id:      SystemMasterSystem,
 		Aliases: []string{"SMS"},
@@ -257,11 +320,21 @@ var Systems = map[string]System{
 	SystemMegaDuck: {
 		Id: SystemMegaDuck,
 	},
+	SystemNDS: {
+		Id:      SystemNDS,
+		Aliases: []string{"NintendoDS"},
+	},
 	SystemNeoGeo: {
 		Id: SystemNeoGeo,
 	},
 	SystemNeoGeoCD: {
 		Id: SystemNeoGeoCD,
+	},
+	SystemNeoGeoPocket: {
+		Id: SystemNeoGeoPocket,
+	},
+	SystemNeoGeoPocketColor: {
+		Id: SystemNeoGeoPocketColor,
 	},
 	SystemNES: {
 		Id: SystemNES,
@@ -276,6 +349,9 @@ var Systems = map[string]System{
 	SystemOdyssey2: {
 		Id: SystemOdyssey2,
 	},
+	SystemOuya: {
+		Id: SystemOuya,
+	},
 	SystemPocketChallengeV2: {
 		Id: SystemPocketChallengeV2,
 	},
@@ -286,9 +362,33 @@ var Systems = map[string]System{
 		Id:      SystemPSX,
 		Aliases: []string{"Playstation", "PS1"},
 	},
+	SystemPS2: {
+		Id:      SystemPS2,
+		Aliases: []string{"Playstation2"},
+	},
+	SystemPS3: {
+		Id:      SystemPS3,
+		Aliases: []string{"Playstation3"},
+	},
+	SystemPS4: {
+		Id:      SystemPS4,
+		Aliases: []string{"Playstation4"},
+	},
+	SystemPS5: {
+		Id:      SystemPS5,
+		Aliases: []string{"Playstation5"},
+	},
+	SystemPSP: {
+		Id:      SystemPSP,
+		Aliases: []string{"PlaystationPortable"},
+	},
 	SystemSega32X: {
 		Id:      SystemSega32X,
 		Aliases: []string{"S32X", "32X"},
+	},
+	SystemSeriesXS: {
+		Id:      SystemSeriesXS,
+		Aliases: []string{"SeriesX", "SeriesS"},
 	},
 	SystemSG1000: {
 		Id: SystemSG1000,
@@ -313,6 +413,10 @@ var Systems = map[string]System{
 	SystemSuperGrafx: {
 		Id: SystemSuperGrafx,
 	},
+	SystemSwitch: {
+		Id:      SystemSwitch,
+		Aliases: []string{"NintendoSwitch"},
+	},
 	SystemTurboGrafx16: {
 		Id:      SystemTurboGrafx16,
 		Aliases: []string{"TGFX16", "PCEngine"},
@@ -327,11 +431,35 @@ var Systems = map[string]System{
 	SystemVectrex: {
 		Id: SystemVectrex,
 	},
+	SystemVirtualBoy: {
+		Id: SystemVirtualBoy,
+	},
+	SystemVita: {
+		Id:      SystemVita,
+		Aliases: []string{"PSVita"},
+	},
+	SystemWii: {
+		Id:      SystemWii,
+		Aliases: []string{"NintendoWii"},
+	},
+	SystemWiiU: {
+		Id:      SystemWiiU,
+		Aliases: []string{"NintendoWiiU"},
+	},
 	SystemWonderSwan: {
 		Id: SystemWonderSwan,
 	},
 	SystemWonderSwanColor: {
 		Id: SystemWonderSwanColor,
+	},
+	SystemXbox: {
+		Id: SystemXbox,
+	},
+	SystemXbox360: {
+		Id: SystemXbox360,
+	},
+	SystemXboxOne: {
+		Id: SystemXboxOne,
 	},
 	// Computers
 	SystemAcornAtom: {
@@ -415,6 +543,9 @@ var Systems = map[string]System{
 	},
 	SystemMacPlus: {
 		Id: SystemMacPlus,
+	},
+	SystemMacOS: {
+		Id: SystemMacOS,
 	},
 	SystemMSX: {
 		Id: SystemMSX,
@@ -503,6 +634,9 @@ var Systems = map[string]System{
 		Id: SystemZXNext,
 	},
 	// Other
+	SystemAndroid: {
+		Id: SystemAndroid,
+	},
 	SystemArcade: {
 		Id: SystemArcade,
 	},
@@ -511,6 +645,9 @@ var Systems = map[string]System{
 	},
 	SystemChip8: {
 		Id: SystemChip8,
+	},
+	SystemIOS: {
+		Id: SystemIOS,
 	},
 	SystemVideo: {
 		Id: SystemVideo,
