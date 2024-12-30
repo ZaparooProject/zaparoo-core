@@ -65,7 +65,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersAutoDetect != nil {
 		log.Info().Bool("readersAutoDetect", *params.ReadersAutoDetect).Msg("update")
-		env.Config.SetAutoConnect(*params.ReadersAutoDetect)
+		env.Config.SetAutoDetect(*params.ReadersAutoDetect)
 	}
 
 	if params.ReadersScanMode != nil {

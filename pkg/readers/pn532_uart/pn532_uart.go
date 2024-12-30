@@ -300,21 +300,22 @@ func (r *Pn532UartReader) Detect(connected []string) string {
 
 		// try to open the device
 		port, err := connect(name)
+		if port != nil {
+			err := port.Close()
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to close serial port")
+			}
+		}
+
 		if err != nil {
 			log.Debug().Err(err).Msgf("failed to open detected serial port, blocklisting: %s", name)
-			_ = port.Close()
 			serialCacheMu.Lock()
 			serialBlockList = append(serialBlockList, name)
 			serialCacheMu.Unlock()
 			continue
-		} else {
-			err = port.Close()
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to close serial port")
-			}
-
-			return device
 		}
+
+		return device
 	}
 
 	return ""

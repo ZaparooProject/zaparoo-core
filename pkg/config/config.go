@@ -325,7 +325,13 @@ func (c *Instance) Readers() Readers {
 	return c.vals.Readers
 }
 
-func (c *Instance) SetAutoConnect(enabled bool) {
+func (c *Instance) AutoDetect() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Readers.AutoDetect
+}
+
+func (c *Instance) SetAutoDetect(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Readers.AutoDetect = enabled

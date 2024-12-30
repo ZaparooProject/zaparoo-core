@@ -87,22 +87,28 @@ func connectReaders(
 	}
 
 	// auto-detect readers
-	for _, r := range pl.SupportedReaders(cfg) {
-		detect := r.Detect(st.ListReaders())
-		if detect != "" {
-			err := r.Open(detect, iq)
-			if err != nil {
-				log.Error().Msgf("error opening detected reader %s: %s", detect, err)
+	if cfg.AutoDetect() {
+		for _, r := range pl.SupportedReaders(cfg) {
+			detect := r.Detect(st.ListReaders())
+			if detect != "" {
+				err := r.Open(detect, iq)
+				if err != nil {
+					log.Error().Msgf("error opening detected reader %s: %s", detect, err)
+				}
 			}
-		}
 
-		if r.Connected() {
-			st.SetReader(detect, r)
-		} else {
-			_ = r.Close()
+			if r.Connected() {
+				st.SetReader(detect, r)
+			} else {
+				err := r.Close()
+				if err != nil {
+					log.Debug().Msg("error closing reader")
+				}
+			}
 		}
 	}
 
+	// list readers for update hook
 	ids := st.ListReaders()
 	rsm := make(map[string]*readers.Reader)
 	for _, id := range ids {
@@ -111,7 +117,6 @@ func connectReaders(
 			rsm[id] = &r
 		}
 	}
-
 	err := pl.ReadersUpdateHook(rsm)
 	if err != nil {
 		return err
