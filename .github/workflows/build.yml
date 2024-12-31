@@ -52,8 +52,10 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm
           use: true
           install: true
+        if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Expose GitHub Runtime
         uses: crazy-max/ghaction-github-runtime@v3
+        if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Add cache override
         run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=${{matrix.platform}}-${{matrix.arch}} --cache-from type=gha,scope=${{matrix.platform}}-${{matrix.arch}}\" > .env
         if: matrix.platform != 'windows' && matrix.platform != 'mac'
