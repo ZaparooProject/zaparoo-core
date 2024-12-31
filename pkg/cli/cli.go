@@ -10,7 +10,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/google/uuid"
-	"github.com/mdp/qrterminal/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"io"
@@ -209,139 +208,139 @@ func (f *Flags) Post(cfg *config.Instance) {
 	}
 
 	// clients
-	if *f.Clients {
-		resp, err := client.LocalClient(cfg, models.MethodClients, "")
-		if err != nil {
-			log.Error().Err(err).Msg("error calling API")
-			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-			os.Exit(1)
-		}
-
-		var clients []models.ClientResponse
-		err = json.Unmarshal([]byte(resp), &clients)
-		if err != nil {
-			log.Error().Err(err).Msg("error decoding API response")
-			_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
-		}
-
-		for _, c := range clients {
-			fmt.Println("---")
-			if c.Name != "" {
-				fmt.Printf("- Name:   %s\n", c.Name)
-			}
-			if c.Address != "" {
-				fmt.Printf("- Address: %s\n", c.Address)
-			}
-			fmt.Printf("- ID:     %s\n", c.Id)
-			fmt.Printf("- Secret: %s\n", c.Secret)
-
-			if *f.Qr {
-				ip, err := utils.GetLocalIp()
-				if err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
-					os.Exit(1)
-				}
-
-				cq := ConnQr{
-					Id:      c.Id,
-					Secret:  c.Secret,
-					Address: ip.String(),
-				}
-				respQr, err := json.Marshal(cq)
-				if err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
-					os.Exit(1)
-				}
-
-				qrterminal.Generate(
-					string(respQr),
-					qrterminal.L,
-					os.Stdout,
-				)
-			}
-		}
-
-		os.Exit(0)
-	} else if *f.NewClient != "" {
-		data, err := json.Marshal(&models.NewClientParams{
-			Name: *f.NewClient,
-		})
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
-			os.Exit(1)
-		}
-
-		resp, err := client.LocalClient(
-			cfg,
-			models.MethodClientsNew,
-			string(data),
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error calling API")
-			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-			os.Exit(1)
-		}
-
-		var c models.ClientResponse
-		err = json.Unmarshal([]byte(resp), &c)
-		if err != nil {
-			log.Error().Err(err).Msg("error decoding API response")
-			_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
-		}
-
-		fmt.Println("New client registered:")
-		fmt.Printf("- ID:     %s\n", c.Id)
-		fmt.Printf("- Name:   %s\n", c.Name)
-		fmt.Printf("- Secret: %s\n", c.Secret)
-
-		if *f.Qr {
-			ip, err := utils.GetLocalIp()
-			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
-				os.Exit(1)
-			}
-
-			cq := ConnQr{
-				Id:      c.Id,
-				Secret:  c.Secret,
-				Address: ip.String(),
-			}
-			respQr, err := json.Marshal(cq)
-			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
-				os.Exit(1)
-			}
-
-			qrterminal.Generate(
-				string(respQr),
-				qrterminal.L,
-				os.Stdout,
-			)
-		}
-
-		os.Exit(0)
-	} else if *f.DeleteClient != "" {
-		data, err := json.Marshal(&models.DeleteClientParams{
-			Id: *f.DeleteClient,
-		})
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
-			os.Exit(1)
-		}
-
-		_, err = client.LocalClient(
-			cfg,
-			models.MethodClientsDelete,
-			string(data),
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error calling API")
-			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
+	//if *f.Clients {
+	//	resp, err := client.LocalClient(cfg, models.MethodClients, "")
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("error calling API")
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
+	//		os.Exit(1)
+	//	}
+	//
+	//	var clients []models.ClientResponse
+	//	err = json.Unmarshal([]byte(resp), &clients)
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("error decoding API response")
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
+	//	}
+	//
+	//	for _, c := range clients {
+	//		fmt.Println("---")
+	//		if c.Name != "" {
+	//			fmt.Printf("- Name:   %s\n", c.Name)
+	//		}
+	//		if c.Address != "" {
+	//			fmt.Printf("- Address: %s\n", c.Address)
+	//		}
+	//		fmt.Printf("- ID:     %s\n", c.Id)
+	//		fmt.Printf("- Secret: %s\n", c.Secret)
+	//
+	//		if *f.Qr {
+	//			ip, err := utils.GetLocalIp()
+	//			if err != nil {
+	//				_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
+	//				os.Exit(1)
+	//			}
+	//
+	//			cq := ConnQr{
+	//				Id:      c.Id,
+	//				Secret:  c.Secret,
+	//				Address: ip.String(),
+	//			}
+	//			respQr, err := json.Marshal(cq)
+	//			if err != nil {
+	//				_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
+	//				os.Exit(1)
+	//			}
+	//
+	//			qrterminal.Generate(
+	//				string(respQr),
+	//				qrterminal.L,
+	//				os.Stdout,
+	//			)
+	//		}
+	//	}
+	//
+	//	os.Exit(0)
+	//} else if *f.NewClient != "" {
+	//	data, err := json.Marshal(&models.NewClientParams{
+	//		Name: *f.NewClient,
+	//	})
+	//	if err != nil {
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+	//		os.Exit(1)
+	//	}
+	//
+	//	resp, err := client.LocalClient(
+	//		cfg,
+	//		models.MethodClientsNew,
+	//		string(data),
+	//	)
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("error calling API")
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
+	//		os.Exit(1)
+	//	}
+	//
+	//	var c models.ClientResponse
+	//	err = json.Unmarshal([]byte(resp), &c)
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("error decoding API response")
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
+	//	}
+	//
+	//	fmt.Println("New client registered:")
+	//	fmt.Printf("- ID:     %s\n", c.Id)
+	//	fmt.Printf("- Name:   %s\n", c.Name)
+	//	fmt.Printf("- Secret: %s\n", c.Secret)
+	//
+	//	if *f.Qr {
+	//		ip, err := utils.GetLocalIp()
+	//		if err != nil {
+	//			_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
+	//			os.Exit(1)
+	//		}
+	//
+	//		cq := ConnQr{
+	//			Id:      c.Id,
+	//			Secret:  c.Secret,
+	//			Address: ip.String(),
+	//		}
+	//		respQr, err := json.Marshal(cq)
+	//		if err != nil {
+	//			_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
+	//			os.Exit(1)
+	//		}
+	//
+	//		qrterminal.Generate(
+	//			string(respQr),
+	//			qrterminal.L,
+	//			os.Stdout,
+	//		)
+	//	}
+	//
+	//	os.Exit(0)
+	//} else if *f.DeleteClient != "" {
+	//	data, err := json.Marshal(&models.DeleteClientParams{
+	//		Id: *f.DeleteClient,
+	//	})
+	//	if err != nil {
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+	//		os.Exit(1)
+	//	}
+	//
+	//	_, err = client.LocalClient(
+	//		cfg,
+	//		models.MethodClientsDelete,
+	//		string(data),
+	//	)
+	//	if err != nil {
+	//		log.Error().Err(err).Msg("error calling API")
+	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
+	//		os.Exit(1)
+	//	}
+	//
+	//	os.Exit(0)
+	//}
 }
 
 // Setup initializes the user config and logging. Returns a user config object.

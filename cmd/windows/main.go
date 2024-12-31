@@ -22,14 +22,15 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/rs/zerolog"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/rs/zerolog/log"
 
@@ -41,22 +42,26 @@ import (
 )
 
 func main() {
-	versionOpt := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *versionOpt {
-		fmt.Println("Zaparoo Core v" + config.AppVersion + " (windows)")
-		os.Exit(0)
-	}
+	sigs := make(chan os.Signal, 1)
+	doStop := make(chan bool, 1)
+	stopped := make(chan bool, 1)
+	defer close(sigs)
+	defer close(doStop)
+	defer close(stopped)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	pl := &windows.Platform{}
+	flags := cli.SetupFlags()
+
+	flags.Pre(pl)
 
 	defaults := config.BaseDefaults
 	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			log.Warn().Err(err).Msg("error migrating ini to toml")
+			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
+			os.Exit(1)
 		} else {
 			defaults = migrated
 		}
@@ -68,7 +73,7 @@ func main() {
 		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
 	)
 
-	fmt.Println("Zaparoo v" + config.AppVersion)
+	flags.Post(cfg)
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
@@ -77,6 +82,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	go func() {
+		// just wait for either of these
+		select {
+		case <-sigs:
+			break
+		case <-doStop:
+			break
+		}
+
+		err := stopSvc()
+		if err != nil {
+			log.Error().Msgf("error stopping service: %s", err)
+			os.Exit(1)
+		}
+
+		stopped <- true
+	}()
+
 	ip, err := utils.GetLocalIp()
 	if err != nil {
 		fmt.Println("Device address: Unknown")
@@ -84,15 +107,10 @@ func main() {
 		fmt.Println("Device address:", ip.String())
 	}
 
-	fmt.Println("Press Enter to exit")
+	fmt.Println("Press any key to exit")
 	_, _ = fmt.Scanln()
-
-	err = stopSvc()
-	if err != nil {
-		log.Error().Msgf("error stopping service: %s", err)
-		fmt.Println("Error stopping service:", err)
-		os.Exit(1)
-	}
+	doStop <- true
+	<-stopped
 
 	os.Exit(0)
 }
