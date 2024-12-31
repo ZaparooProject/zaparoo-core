@@ -1,11 +1,25 @@
-on: 
+on:
   push:
-    branches:
-      - '*'
+    tags:
+      - "v*"
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          gh release create "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              --title="${tag#v}" \
+              --generate-notes
+      
   build:
     runs-on: ubuntu-latest
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -61,3 +75,9 @@ jobs:
         if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
         run: task build-${{matrix.platform}}-${{matrix.arch}}
+      - name: Add release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          gh release upload "$tag" _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}.zip
