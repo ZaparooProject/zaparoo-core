@@ -55,7 +55,7 @@ jobs:
       - name: Expose GitHub Runtime
         uses: crazy-max/ghaction-github-runtime@v3
       - name: Add cache override
-        run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY} --cache-from type=gha\" > .env
+        run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=${{matrix.platform}}-${{matrix.arch}} --cache-from type=gha,scope=${{matrix.platform}}-${{matrix.arch}}\" > .env
         if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
         run: task build-${{matrix.platform}}-${{matrix.arch}}
