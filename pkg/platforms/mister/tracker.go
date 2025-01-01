@@ -221,7 +221,7 @@ func (tr *Tracker) stopGame() {
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
 	tr.ns <- models.Notification{
-		Method: models.MediaStopped,
+		Method: models.NotificationStopped,
 	}
 }
 
@@ -281,7 +281,7 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystemName = system.Name
 
 		tr.ns <- models.Notification{
-			Method: models.MediaStarted,
+			Method: models.NotificationStarted,
 			Params: models.MediaStartedParams{
 				SystemId:   system.Id,
 				SystemName: system.Name,

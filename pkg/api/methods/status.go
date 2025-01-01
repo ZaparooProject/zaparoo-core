@@ -63,19 +63,18 @@ func newStatus(
 			ScanTime: last.ScanTime,
 		},
 		GamesIndex: models.IndexResponse{
-			Exists:      IndexInstance.Exists(pl),
-			Indexing:    IndexInstance.Indexing,
-			TotalSteps:  IndexInstance.TotalSteps,
-			CurrentStep: IndexInstance.CurrentStep,
-			CurrentDesc: IndexInstance.CurrentDesc,
-			TotalFiles:  IndexInstance.TotalFiles,
+			Exists:             IndexInstance.Exists(pl),
+			Indexing:           IndexInstance.Indexing,
+			TotalSteps:         &IndexInstance.TotalSteps,
+			CurrentStep:        &IndexInstance.CurrentStep,
+			CurrentStepDisplay: &IndexInstance.CurrentDesc,
+			TotalFiles:         &IndexInstance.TotalFiles,
 		},
 		Playing: models.PlayingResponse{
-			System:     pl.ActiveSystem(),
+			SystemId:   pl.ActiveSystem(),
 			SystemName: pl.ActiveSystem(),
-			Game:       pl.ActiveGame(),
-			GameName:   pl.ActiveGameName(),
-			GamePath:   pl.NormalizePath(cfg, pl.ActiveGamePath()),
+			MediaName:  pl.ActiveGameName(),
+			MediaPath:  pl.NormalizePath(cfg, pl.ActiveGamePath()),
 		},
 	}
 }

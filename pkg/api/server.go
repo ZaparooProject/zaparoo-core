@@ -37,6 +37,7 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	models.MethodRun:    methods.HandleRun,
 	models.MethodStop:   methods.HandleStop,
 	// media
+	models.MethodMedia:       methods.HandleMedia,
 	models.MethodMediaIndex:  methods.HandleIndexMedia,
 	models.MethodMediaSearch: methods.HandleGames,
 	// settings

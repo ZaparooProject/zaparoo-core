@@ -49,7 +49,7 @@ func (s *Index) GenerateIndex(
 
 	log.Info().Msg("generating media index")
 	ns <- models.Notification{
-		Method: models.MediaIndexing,
+		Method: models.NotificationMediaIndexing,
 		Params: models.IndexStatusResponse{
 			Exists:      false,
 			Indexing:    true,
@@ -86,7 +86,7 @@ func (s *Index) GenerateIndex(
 			}
 			log.Debug().Msgf("indexing status: %v", s)
 			ns <- models.Notification{
-				Method: models.MediaIndexing,
+				Method: models.NotificationMediaIndexing,
 				Params: models.IndexStatusResponse{
 					Exists:      true,
 					Indexing:    true,
@@ -109,7 +109,7 @@ func (s *Index) GenerateIndex(
 
 		log.Info().Msg("finished generating media index")
 		ns <- models.Notification{
-			Method: models.MediaIndexing,
+			Method: models.NotificationMediaIndexing,
 			Params: models.IndexStatusResponse{
 				Exists:      true,
 				Indexing:    false,
@@ -239,4 +239,38 @@ func HandleGames(env requests.RequestEnv) (any, error) {
 		Results: results,
 		Total:   total,
 	}, nil
+}
+
+func HandleMedia(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received media request")
+
+	resp := models.MediaResponse{
+		Active: make([]models.PlayingResponse, 0),
+	}
+
+	if env.Platform.ActiveGamePath() != "" {
+		system, err := assets.GetSystemMetadata(env.Platform.ActiveSystem())
+		if err != nil {
+			return nil, errors.New("error getting system metadata: " + err.Error())
+		}
+
+		resp.Active = append(resp.Active, models.PlayingResponse{
+			SystemId:   system.Id,
+			SystemName: system.Name,
+			MediaName:  env.Platform.ActiveGameName(),
+			MediaPath:  env.Platform.NormalizePath(env.Config, env.Platform.ActiveGamePath()),
+		})
+	}
+
+	resp.Database.Exists = IndexInstance.Exists(env.Platform)
+	resp.Database.Indexing = IndexInstance.Indexing
+
+	if resp.Database.Indexing {
+		resp.Database.TotalSteps = &IndexInstance.TotalSteps
+		resp.Database.CurrentStep = &IndexInstance.CurrentStep
+		resp.Database.CurrentStepDisplay = &IndexInstance.CurrentDesc
+		resp.Database.TotalFiles = &IndexInstance.TotalFiles
+	}
+
+	return resp, nil
 }

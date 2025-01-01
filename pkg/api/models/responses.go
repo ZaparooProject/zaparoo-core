@@ -81,12 +81,12 @@ type TokenResponse struct {
 }
 
 type IndexResponse struct {
-	Exists      bool   `json:"exists"`
-	Indexing    bool   `json:"indexing"`
-	TotalSteps  int    `json:"totalSteps"`
-	CurrentStep int    `json:"currentStep"`
-	CurrentDesc string `json:"currentDesc"`
-	TotalFiles  int    `json:"totalFiles"`
+	Exists             bool    `json:"exists"`
+	Indexing           bool    `json:"indexing"`
+	TotalSteps         *int    `json:"totalSteps,omitempty"`
+	CurrentStep        *int    `json:"currentStep,omitempty"`
+	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
+	TotalFiles         *int    `json:"totalFiles,omitempty"`
 }
 
 // TODO: legacy, remove in v2
@@ -103,11 +103,10 @@ type ReaderResponse struct {
 }
 
 type PlayingResponse struct {
-	System     string `json:"system"`
+	SystemId   string `json:"systemId"`
 	SystemName string `json:"systemName"`
-	Game       string `json:"game"`
-	GameName   string `json:"gameName"`
-	GamePath   string `json:"gamePath"`
+	MediaPath  string `json:"mediaPath"`
+	MediaName  string `json:"mediaName"`
 }
 
 type StatusResponse struct {
@@ -123,4 +122,9 @@ type StatusResponse struct {
 type VersionResponse struct {
 	Version  string `json:"version"`
 	Platform string `json:"platform"`
+}
+
+type MediaResponse struct {
+	Database IndexResponse     `json:"database"`
+	Active   []PlayingResponse `json:"active"`
 }
