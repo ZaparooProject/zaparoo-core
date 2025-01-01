@@ -66,8 +66,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/txn2/txeh v1.4.0 h1:0tdvpA4HGJrj8X3kmrU6o/JFStI009nKxwDpMK5CnRU=
 github.com/txn2/txeh v1.4.0/go.mod h1:Mgq0hY184zCrDBLgvkIp+9NYGHoYbJcu4xKqUcx1shc=
-github.com/wizzomafizzo/mrext v0.1.1 h1:IZ/YPT53t0B2b48Ml3S9R1GQZKhVhT55PB/MuXJ5434=
-github.com/wizzomafizzo/mrext v0.1.1/go.mod h1:pWjoPIzJIXlDfEmdf++eUqsZKrEsYVkOHy39s/H7WLA=
+github.com/wizzomafizzo/mrext v0.1.2 h1:dSuf4csNdR6WcRCLY5AZZOZ+Iz68spODK5dWdC9AYWc=
+github.com/wizzomafizzo/mrext v0.1.2/go.mod h1:pWjoPIzJIXlDfEmdf++eUqsZKrEsYVkOHy39s/H7WLA=
 go.bug.st/serial v1.6.2 h1:kn9LRX3sdm+WxWKufMlIRndwGfPWsH1/9lCWXQCasq8=
 go.bug.st/serial v1.6.2/go.mod h1:UABfsluHAiaNI+La2iESysd9Vetq7VRdpxvjx7CmmOE=
 go.etcd.io/bbolt v1.3.9 h1:8x7aARPEXiXbHmtUwAIv7eV2fQFHrLLavdiJ3uzJXoI=

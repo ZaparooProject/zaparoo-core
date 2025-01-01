@@ -46,7 +46,7 @@ require (
 	github.com/olahol/melody v1.2.1
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/rs/zerolog v1.31.0
-	github.com/wizzomafizzo/mrext v0.1.1
+	github.com/wizzomafizzo/mrext v0.1.2
 	go.bug.st/serial v1.6.2
 	go.etcd.io/bbolt v1.3.9
 	golang.org/x/sync v0.10.0
