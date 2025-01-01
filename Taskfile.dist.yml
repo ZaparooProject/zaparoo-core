@@ -224,13 +224,13 @@ tasks:
 
   deploy-mister:
     cmds:
-      - task: build-mister
+      - task: build-mister-arm
       - scp _build/mister_arm/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart
 
   deploy-mistex:
     cmds:
-      - task: build-mistex
+      - task: build-mistex-arm64
       - scp _build/mistex_arm64/zaparoo.sh root@${MISTEX_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTEX_IP} /media/fat/Scripts/zaparoo.sh -service restart
 
