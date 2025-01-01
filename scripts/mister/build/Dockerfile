@@ -55,7 +55,7 @@ RUN chmod +x /usr/local/bin/build.sh
 
 # drop permissions on output files
 ARG UID=1000 GID=1000
-RUN groupadd -g $GID build && useradd -m -u $UID -g $GID build
+RUN groupadd -f -g $GID build && useradd -m -u $UID -g $GID build
 USER build
 
 WORKDIR /build
