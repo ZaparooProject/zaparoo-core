@@ -191,14 +191,14 @@ func Start(
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := m.HandleRequest(w, r)
 		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v1")
+			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := m.HandleRequest(w, r)
 		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v1.0")
+			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
 
