@@ -39,17 +39,19 @@ func PathIsLauncher(
 	// check root folder if it's not a generic launcher
 	if len(l.Folders) > 0 {
 		inRoot := false
-		for _, folder := range pl.RootDirs(cfg) {
-			if strings.HasPrefix(lp, strings.ToLower(folder)) {
-				inRoot = true
-				break
+		for _, root := range pl.RootDirs(cfg) {
+			for _, folder := range l.Folders {
+				if strings.HasPrefix(lp, strings.ToLower(filepath.Join(root, folder))) {
+					log.Debug().Msgf("path is in root folder: %s", folder)
+					inRoot = true
+					break
+				}
 			}
 		}
 
 		if !inRoot {
 			return false
-		} else if path[len(path)-1] == filepath.Separator {
-			// skip extension check if it's a folder
+		} else if filepath.Ext(lp) == "" {
 			return true
 		}
 	}
@@ -61,7 +63,12 @@ func PathIsLauncher(
 		}
 	}
 
-	return false
+	// finally, launcher's test func
+	if l.Test != nil {
+		return l.Test(cfg, lp)
+	} else {
+		return false
+	}
 }
 
 // MatchSystemFile returns true if a given path is for a given system.

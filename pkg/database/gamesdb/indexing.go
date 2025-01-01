@@ -17,7 +17,7 @@ type PathResult struct {
 	Path   string
 }
 
-// Case-insensitively find a file/folder at a path.
+// FindPath case-insensitively finds a file/folder at a path.
 func FindPath(path string) (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil

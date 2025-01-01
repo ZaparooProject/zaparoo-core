@@ -43,6 +43,9 @@ type Launcher struct {
 	Extensions []string
 	// Accepted schemes for URI-style launches.
 	Schemes []string
+	// Test function returns true if file looks supported by this launcher.
+	// It's checked after all standard extension and folder checks.
+	Test func(*config.Instance, string) bool
 	// Launch function, takes a direct as possible path/ID media file.
 	Launch func(*config.Instance, string) error
 	// Kill function kills the current active launcher, if possible.

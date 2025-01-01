@@ -83,7 +83,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) StartPre(cfg *config.Instance) error {
+func (p *Platform) StartPre(_ *config.Instance) error {
 	err := os.MkdirAll(TempDir, 0755)
 	if err != nil {
 		return err
@@ -432,7 +432,12 @@ func readRomsets(filepath string) ([]Romset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close file")
+		}
+	}(f)
 
 	var romsets Romsets
 	if err := xml.NewDecoder(f).Decode(&romsets); err != nil {
@@ -443,20 +448,28 @@ func readRomsets(filepath string) ([]Romset, error) {
 }
 
 func (p *Platform) Launchers() []platforms.Launcher {
+	aGamesPath := "listings/games.txt"
+	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
 		Id:         gamesdb.SystemAmiga,
 		SystemId:   gamesdb.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
-		Launch:     launch,
+		Test: func(cfg *config.Instance, path string) bool {
+			if strings.Contains(path, aGamesPath) || strings.Contains(path, aDemosPath) {
+				return true
+			} else {
+				return false
+			}
+		},
+		Launch: launch,
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			log.Info().Msg("starting amigavision scan")
-			aGamesPath := "listings/games.txt"
-			aDemosPath := "listings/demos.txt"
+
 			var fullPaths []string
 
 			s, err := gamesdb.GetSystem(gamesdb.SystemAmiga)
@@ -505,7 +518,16 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		SystemId:   gamesdb.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
-		Launch:     launch,
+		Test: func(cfg *config.Instance, path string) bool {
+			if filepath.Ext(path) == ".zip" {
+				return true
+			} else if filepath.Ext(path) == "" {
+				return true
+			} else {
+				return false
+			}
+		},
+		Launch: launch,
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
