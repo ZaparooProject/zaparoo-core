@@ -50,8 +50,6 @@ func PathIsLauncher(
 
 		if !inRoot {
 			return false
-		} else if filepath.Ext(lp) == "" {
-			return true
 		}
 	}
 
