@@ -42,7 +42,6 @@ func PathIsLauncher(
 		for _, root := range pl.RootDirs(cfg) {
 			for _, folder := range l.Folders {
 				if strings.HasPrefix(lp, strings.ToLower(filepath.Join(root, folder))) {
-					log.Debug().Msgf("path is in root folder: %s", folder)
 					inRoot = true
 					break
 				}

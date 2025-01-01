@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 	"golang.org/x/sync/errgroup"
@@ -68,6 +69,7 @@ func open(platform platforms.Platform, options *bolt.Options) (*bolt.DB, error) 
 // Open the gamesdb with default options for generating names index.
 func openForGenerate(platform platforms.Platform) (*bolt.DB, error) {
 	return open(platform, &bolt.Options{
+		Timeout:        1 * time.Second,
 		NoSync:         true,
 		NoFreelistSync: true,
 	})
@@ -239,10 +241,12 @@ func NewNamesIndex(
 		status.Step++
 		update(status)
 
+		// scan using standard folder + extensions
 		for _, path := range systemPaths[k] {
 			pathFiles, err := GetFiles(cfg, platform, k, path)
 			if err != nil {
-				return status.Files, fmt.Errorf("error getting files: %s", err)
+				log.Error().Err(err).Msgf("error getting files for system: %s", systemId)
+				continue
 			}
 			for _, f := range pathFiles {
 				files = append(files, platforms.ScanResult{Path: f})
@@ -256,7 +260,8 @@ func NewNamesIndex(
 				log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
 				files, err = l.Scanner(cfg, systemId, files)
 				if err != nil {
-					return status.Files, err
+					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, systemId)
+					continue
 				}
 			}
 		}
@@ -287,7 +292,8 @@ func NewNamesIndex(
 			log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
 			results, err := l.Scanner(cfg, systemId, []platforms.ScanResult{})
 			if err != nil {
-				return status.Files, err
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, systemId)
+				continue
 			}
 
 			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemId)
@@ -321,7 +327,8 @@ func NewNamesIndex(
 			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.Id)
 			results, err := l.Scanner(cfg, s.Id, []platforms.ScanResult{})
 			if err != nil {
-				return status.Files, err
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.Id)
+				continue
 			}
 
 			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.Id)
