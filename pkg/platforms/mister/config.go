@@ -28,6 +28,9 @@ const (
 func UserConfigToMrext(cfg *config.Instance) *mrextConfig.UserConfig {
 	var setCore []string
 	for _, v := range cfg.SystemDefaults() {
+		if v.Launcher == "" {
+			continue
+		}
 		setCore = append(setCore, v.System+":"+v.Launcher)
 	}
 	return &mrextConfig.UserConfig{
