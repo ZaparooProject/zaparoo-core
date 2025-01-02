@@ -17,6 +17,8 @@ go.work
 .env
 Taskfile.yml
 
+/pkg/assets/_app/dist
+
 /bin
 /_bin
 /_scratch

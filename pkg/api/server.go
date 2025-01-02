@@ -7,8 +7,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"io/fs"
 	"net"
 	"net/http"
 	"strconv"
@@ -25,9 +27,6 @@ import (
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
-
-// TODO: can we safely allow launch basic unrestricted for local accounts?
-// TODO: should api launches from localhost require allowlist?
 
 const RequestTimeout = 30 * time.Second
 
@@ -128,6 +127,17 @@ func sendError(s *melody.Session, id uuid.UUID, code int, message string) error 
 func handleResponse(resp models.ResponseObject) error {
 	log.Debug().Interface("response", resp).Msg("received response")
 	return nil
+}
+
+func handleApp(w http.ResponseWriter, r *http.Request) {
+	appFs, err := fs.Sub(assets.App, "_app/dist")
+	if err != nil {
+		log.Error().Err(err).Msg("error opening app dist")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.StripPrefix("/app", http.FileServer(http.FS(appFs))).ServeHTTP(w, r)
 }
 
 func Start(
@@ -280,6 +290,8 @@ func Start(
 	r.Get("/l/*", methods.HandleRunRest(cfg, st, itq)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, st, itq))
 	r.Get("/run/*", methods.HandleRunRest(cfg, st, itq))
+
+	r.Get("/app/*", handleApp)
 
 	err := http.ListenAndServe(":"+strconv.Itoa(cfg.ApiPort()), r)
 	if err != nil {

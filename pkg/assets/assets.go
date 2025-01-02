@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 )
 
+//go:embed _app
+var App embed.FS
+
 // SuccessSound Breviceps (https://freesound.org/people/Breviceps/sounds/445978/)
 // Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
 //
