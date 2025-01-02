@@ -89,12 +89,6 @@ type IndexResponse struct {
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
 }
 
-// TODO: legacy, remove in v2
-type ReaderStatusResponse struct {
-	Connected bool   `json:"connected"`
-	Type      string `json:"type"`
-}
-
 type ReaderResponse struct {
 	// TODO: type
 	Connected bool   `json:"connected"`
@@ -107,16 +101,6 @@ type PlayingResponse struct {
 	SystemName string `json:"systemName"`
 	MediaPath  string `json:"mediaPath"`
 	MediaName  string `json:"mediaName"`
-}
-
-type StatusResponse struct {
-	Reader      ReaderStatusResponse `json:"reader"` // TODO: remove in v2
-	Readers     []ReaderResponse     `json:"readers"`
-	ActiveToken TokenResponse        `json:"activeToken"`
-	LastToken   TokenResponse        `json:"lastToken"`
-	Launching   bool                 `json:"launching"`
-	GamesIndex  IndexResponse        `json:"gamesIndex"`
-	Playing     PlayingResponse      `json:"playing"`
 }
 
 type VersionResponse struct {

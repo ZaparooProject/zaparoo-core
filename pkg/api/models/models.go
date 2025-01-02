@@ -33,7 +33,6 @@ const (
 	MethodMappingsUpdate = "mappings.update"
 	MethodMappingsReload = "mappings.reload"
 	MethodReadersWrite   = "readers.write"
-	MethodStatus         = "status" // DEPRECATED
 	MethodVersion        = "version"
 )
 
