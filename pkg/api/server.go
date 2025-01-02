@@ -37,7 +37,8 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	models.MethodRun:    methods.HandleRun,
 	models.MethodStop:   methods.HandleStop,
 	// tokens
-	models.MethodTokens: methods.HandleTokens,
+	models.MethodTokens:  methods.HandleTokens,
+	models.MethodHistory: methods.HandleHistory,
 	// media
 	models.MethodMedia:       methods.HandleMedia,
 	models.MethodMediaIndex:  methods.HandleIndexMedia,
@@ -47,8 +48,6 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
 	// systems
 	models.MethodSystems: methods.HandleSystems,
-	// history
-	models.MethodHistory: methods.HandleHistory,
 	// mappings
 	models.MethodMappings:       methods.HandleMappings,
 	models.MethodMappingsNew:    methods.HandleAddMapping,
@@ -58,7 +57,6 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	// readers
 	models.MethodReadersWrite: methods.HandleReaderWrite,
 	// utils
-	models.MethodStatus:  methods.HandleStatus, // TODO: remove, convert to individual methods
 	models.MethodVersion: methods.HandleVersion,
 }
 

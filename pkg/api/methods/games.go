@@ -50,13 +50,9 @@ func (s *Index) GenerateIndex(
 	log.Info().Msg("generating media index")
 	ns <- models.Notification{
 		Method: models.NotificationMediaIndexing,
-		Params: models.IndexStatusResponse{
-			Exists:      false,
-			Indexing:    true,
-			TotalSteps:  0,
-			CurrentStep: 0,
-			CurrentDesc: "",
-			TotalFiles:  0,
+		Params: models.IndexResponse{
+			Exists:   false,
+			Indexing: true,
 		},
 	}
 
@@ -87,13 +83,13 @@ func (s *Index) GenerateIndex(
 			log.Debug().Msgf("indexing status: %v", s)
 			ns <- models.Notification{
 				Method: models.NotificationMediaIndexing,
-				Params: models.IndexStatusResponse{
-					Exists:      true,
-					Indexing:    true,
-					TotalSteps:  s.TotalSteps,
-					CurrentStep: s.CurrentStep,
-					CurrentDesc: s.CurrentDesc,
-					TotalFiles:  s.TotalFiles,
+				Params: models.IndexResponse{
+					Exists:             true,
+					Indexing:           true,
+					TotalSteps:         &s.TotalSteps,
+					CurrentStep:        &s.CurrentStep,
+					CurrentStepDisplay: &s.CurrentDesc,
+					TotalFiles:         &s.TotalFiles,
 				},
 			}
 		})
@@ -110,13 +106,10 @@ func (s *Index) GenerateIndex(
 		log.Info().Msg("finished generating media index")
 		ns <- models.Notification{
 			Method: models.NotificationMediaIndexing,
-			Params: models.IndexStatusResponse{
-				Exists:      true,
-				Indexing:    false,
-				TotalSteps:  0,
-				CurrentStep: 0,
-				CurrentDesc: "",
-				TotalFiles:  total,
+			Params: models.IndexResponse{
+				Exists:     true,
+				Indexing:   false,
+				TotalFiles: &total,
 			},
 		}
 	}()

@@ -15,15 +15,6 @@ type SearchResults struct {
 	Total   int                 `json:"total"`
 }
 
-type IndexStatusResponse struct {
-	Exists      bool   `json:"exists"`
-	Indexing    bool   `json:"indexing"`
-	TotalSteps  int    `json:"totalSteps"`
-	CurrentStep int    `json:"currentStep"`
-	CurrentDesc string `json:"currentDesc"`
-	TotalFiles  int    `json:"totalFiles"`
-}
-
 type SettingsResponse struct {
 	RunZapScript            bool     `json:"runZapScript"`
 	DebugLogging            bool     `json:"debugLogging"`

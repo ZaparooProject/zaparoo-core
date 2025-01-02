@@ -7,6 +7,7 @@ const (
 	NotificationReadersDisconnected = "readers.removed"
 	NotificationRunning             = "running"
 	NotificationTokensAdded         = "tokens.added"
+	NotificationTokensRemoved       = "tokens.removed"
 	NotificationStopped             = "media.stopped"
 	NotificationStarted             = "media.started"
 	NotificationMediaIndexing       = "media.indexing"

@@ -46,18 +46,22 @@ func (s *State) SetActiveCard(card tokens.Token) {
 	s.activeToken = card
 	if !s.activeToken.ScanTime.IsZero() {
 		s.lastScanned = card
+		s.Notifications <- models.Notification{
+			Method: models.NotificationTokensAdded,
+			Params: models.TokenResponse{
+				Type:     card.Type,
+				UID:      card.UID,
+				Text:     card.Text,
+				Data:     card.Data,
+				ScanTime: card.ScanTime,
+			},
+		}
+	} else {
+		s.Notifications <- models.Notification{
+			Method: models.NotificationTokensRemoved,
+		}
 	}
 
-	s.Notifications <- models.Notification{
-		Method: models.NotificationTokensAdded,
-		Params: models.TokenResponse{
-			Type:     card.Type,
-			UID:      card.UID,
-			Text:     card.Text,
-			Data:     card.Data,
-			ScanTime: card.ScanTime,
-		},
-	}
 	s.mu.Unlock()
 }
 
