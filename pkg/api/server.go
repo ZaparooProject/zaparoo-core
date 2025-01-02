@@ -32,10 +32,12 @@ import (
 const RequestTimeout = 30 * time.Second
 
 var methodMap = map[string]func(requests.RequestEnv) (any, error){
-	// running
+	// run
 	models.MethodLaunch: methods.HandleRun, // DEPRECATED
 	models.MethodRun:    methods.HandleRun,
 	models.MethodStop:   methods.HandleStop,
+	// tokens
+	models.MethodTokens: methods.HandleTokens,
 	// media
 	models.MethodMedia:       methods.HandleMedia,
 	models.MethodMediaIndex:  methods.HandleIndexMedia,

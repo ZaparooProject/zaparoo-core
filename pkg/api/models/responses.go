@@ -128,3 +128,8 @@ type MediaResponse struct {
 	Database IndexResponse     `json:"database"`
 	Active   []PlayingResponse `json:"active"`
 }
+
+type TokensResponse struct {
+	Active []TokenResponse `json:"active"`
+	Last   *TokenResponse  `json:"last,omitempty"`
+}

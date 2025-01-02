@@ -7,6 +7,38 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func HandleTokens(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received tokens request")
+
+	resp := models.TokensResponse{
+		Active: make([]models.TokenResponse, 0),
+	}
+
+	active := env.State.GetActiveCard()
+	if !active.ScanTime.IsZero() {
+		resp.Active = append(resp.Active, models.TokenResponse{
+			Type:     active.Type,
+			UID:      active.UID,
+			Text:     active.Text,
+			Data:     active.Data,
+			ScanTime: active.ScanTime,
+		})
+	}
+
+	last := env.State.GetLastScanned()
+	if !last.ScanTime.IsZero() {
+		resp.Last = &models.TokenResponse{
+			Type:     last.Type,
+			UID:      last.UID,
+			Text:     last.Text,
+			Data:     last.Data,
+			ScanTime: last.ScanTime,
+		}
+	}
+
+	return resp, nil
+}
+
 func HandleHistory(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received history request")
 

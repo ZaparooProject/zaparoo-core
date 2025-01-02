@@ -16,6 +16,7 @@ const (
 	MethodLaunch         = "launch" // DEPRECATED
 	MethodRun            = "run"
 	MethodStop           = "stop"
+	MethodTokens         = "tokens"
 	MethodMedia          = "media"
 	MethodMediaIndex     = "media.index"
 	MethodMediaSearch    = "media.search"
