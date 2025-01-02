@@ -2,6 +2,7 @@ package state
 
 import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"sync"
 
@@ -12,16 +13,17 @@ import (
 )
 
 type State struct {
-	mu            sync.RWMutex
-	runZapScript  bool
-	activeToken   tokens.Token // TODO: make a pointer
-	lastScanned   tokens.Token // TODO: make a pointer
-	stopService   bool         // TODO: make a context?
-	platform      platforms.Platform
-	readers       map[string]readers.Reader
-	softwareToken *tokens.Token
-	wroteToken    *tokens.Token
-	Notifications chan<- models.Notification // TODO: move outside state
+	mu             sync.RWMutex
+	runZapScript   bool
+	activeToken    tokens.Token // TODO: make a pointer
+	lastScanned    tokens.Token // TODO: make a pointer
+	stopService    bool         // TODO: make a context?
+	platform       platforms.Platform
+	readers        map[string]readers.Reader
+	softwareToken  *tokens.Token
+	wroteToken     *tokens.Token
+	Notifications  chan<- models.Notification // TODO: move outside state
+	activePlaylist *playlists.Playlist
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
@@ -178,4 +180,16 @@ func (s *State) GetWroteToken() *tokens.Token {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wroteToken
+}
+
+func (s *State) GetActivePlaylist() *playlists.Playlist {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activePlaylist
+}
+
+func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
+	s.mu.Lock()
+	s.activePlaylist = playlist
+	s.mu.Unlock()
 }

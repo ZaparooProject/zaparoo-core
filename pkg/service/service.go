@@ -105,12 +105,12 @@ func processTokenQueue(
 	lsq chan<- *tokens.Token,
 	plq chan *playlists.Playlist,
 ) {
-	var activePlaylist *playlists.Playlist
-
 	for {
 		select {
 		case pls := <-plq:
 			log.Info().Msgf("processing playlist update: %v", pls)
+
+			activePlaylist := st.GetActivePlaylist()
 
 			if pls == nil {
 				if activePlaylist != nil {
@@ -198,7 +198,7 @@ func processTokenQueue(
 			// launch tokens in separate thread
 			go func() {
 				plsc := playlists.PlaylistController{
-					Active: activePlaylist,
+					Active: st.GetActivePlaylist(),
 					Queue:  plq,
 				}
 
@@ -269,7 +269,7 @@ func Start(
 	go api.Start(pl, cfg, st, itq, db, ns)
 
 	log.Info().Msg("starting reader manager")
-	go readerManager(pl, cfg, st, itq, lsq)
+	go readerManager(pl, cfg, st, db, itq, lsq, plq)
 
 	log.Info().Msg("starting input token queue manager")
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -58,8 +59,9 @@ type Systems struct {
 }
 
 type SystemsDefault struct {
-	System   string `toml:"system"`
-	Launcher string `toml:"launcher,omitempty"`
+	System     string `toml:"system"`
+	Launcher   string `toml:"launcher,omitempty"`
+	BeforeExit string `toml:"before_exit,omitempty"`
 }
 
 type Launchers struct {
@@ -449,4 +451,15 @@ func (c *Instance) IsRunAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
+}
+
+func (c *Instance) LookupSystemDefaults(systemId string) (SystemsDefault, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, defaultSystem := range c.vals.Systems.Default {
+		if strings.EqualFold(defaultSystem.System, systemId) {
+			return defaultSystem, true
+		}
+	}
+	return SystemsDefault{}, false
 }

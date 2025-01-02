@@ -3,6 +3,8 @@ package service
 import (
 	"errors"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"strings"
 	"time"
@@ -129,8 +131,10 @@ func readerManager(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
+	db *database.Database,
 	itq chan<- tokens.Token,
 	lsq chan *tokens.Token,
+	plq chan *playlists.Playlist,
 ) {
 	scanQueue := make(chan readers.Scan)
 
@@ -150,6 +154,8 @@ func readerManager(
 	}
 
 	startTimedExit := func() {
+		// TODO: this should be moved to processTokenQueue
+
 		if exitTimer != nil {
 			stopped := exitTimer.Stop()
 			if stopped {
@@ -164,12 +170,49 @@ func readerManager(
 		go func() {
 			<-exitTimer.C
 
-			if pl.GetActiveLauncher() == "" || st.GetSoftwareToken() == nil {
+			if !cfg.HoldModeEnabled() {
+				log.Debug().Msg("exit timer expired, but hold mode disabled")
+				return
+			}
+
+			activeLauncher := pl.GetActiveLauncher()
+			softToken := st.GetSoftwareToken()
+			if activeLauncher == "" || softToken == nil {
 				log.Debug().Msg("no active launcher, not exiting")
 				return
 			}
 
-			log.Info().Msg("exiting software")
+			// run before_exit hook if one exists for system
+			var launcher platforms.Launcher
+			found := false
+			for _, l := range pl.Launchers() {
+				if l.Id == activeLauncher {
+					launcher = l
+					found = true
+					break
+				}
+			}
+			if found {
+				defaults, ok := cfg.LookupSystemDefaults(launcher.SystemId)
+				if ok && defaults.BeforeExit != "" {
+					log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
+					plsc := playlists.PlaylistController{
+						Active: st.GetActivePlaylist(),
+						Queue:  plq,
+					}
+					t := tokens.Token{
+						ScanTime: time.Now(),
+						Text:     defaults.BeforeExit,
+					}
+					err := launchToken(pl, cfg, t, db, lsq, plsc)
+					if err != nil {
+						log.Error().Msgf("error launching on remove script: %s", err)
+					}
+				}
+			}
+
+			// exit the media
+			log.Info().Msg("exiting media")
 			err := pl.KillLauncher()
 			if err != nil {
 				log.Warn().Msgf("error killing launcher: %s", err)
@@ -274,7 +317,6 @@ func readerManager(
 		} else {
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})
-			//stopMPlayer()
 			if shouldExit(cfg, pl, st) {
 				startTimedExit()
 			}
