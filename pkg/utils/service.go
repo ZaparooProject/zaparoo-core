@@ -341,8 +341,10 @@ func (s *Service) ServiceHandler(cmd *string) {
 		os.Exit(0)
 	} else if *cmd == "status" {
 		if s.Running() {
+			fmt.Println("started")
 			os.Exit(0)
 		} else {
+			fmt.Println("stopped")
 			os.Exit(1)
 		}
 	} else if *cmd != "" {
