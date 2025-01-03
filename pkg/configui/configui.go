@@ -16,38 +16,45 @@ import (
 */
 
 func ConfigUi() {
-	pages := tview.NewPages()
 	app := tview.NewApplication()
+	pages := tview.NewPages()
+
 	mainMenu := tview.NewList().
-		AddItem("Debug Logging", "Change the status of debug logging", 'a', nil).
-		AddItem("Audio", "Set audio options ex: feedback", 'b', func() {
+		AddItem("Debug Logging", "Change the status of debug logging", '1', func() {
+
+		}).
+		AddItem("Audio", "Set audio options like the feedback", '2', func() {
 			pages.SwitchToPage("audio")
 		}).
 		AddItem("Quit", "Press to exit", 'q', func() {
 			app.Stop()
-		}).
-		SetBorder(true).
-		SetTitle(" Zaparoo config editor - Main menu ")
+		})
+	mainMenu.SetBorder(true)
+	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
 
 	audioMenu := tview.NewList().
-		AddItem("Scan feedback", "Enable or disable the audio notification on scan", 'a', nil).
-		AddItem("Back", "Go back to main menu", 'q', func() {
-			pages.SwitchToPage("main")
+		AddItem("Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
+
 		}).
-		SetBorder(true).
-		SetTitle(" Zaparoo config editor - Audio menu ")
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	audioMenu.SetBorder(true)
+	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
 
 	pages.AddAndSwitchToPage(
 		"main",
 		mainMenu,
 		true,
 	)
+
 	pages.AddPage(
 		"audio",
 		audioMenu,
 		true,
 		false,
 	)
+
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
 	}
