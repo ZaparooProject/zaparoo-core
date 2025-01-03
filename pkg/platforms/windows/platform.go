@@ -467,7 +467,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		},
 		{
 			Id:            "Generic",
-			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x"},
+			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
 				return exec.Command("cmd", "/c", path).Start()
