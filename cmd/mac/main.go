@@ -22,12 +22,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
-	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/rs/zerolog"
 	"io"
 	"os"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
@@ -39,21 +39,17 @@ import (
 )
 
 func main() {
-	versionOpt := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *versionOpt {
-		fmt.Println("Zaparoo Core v" + config.AppVersion + " (mac)")
-		os.Exit(0)
-	}
-
 	pl := &mac.Platform{}
+	flags := cli.SetupFlags()
+	flags.Pre(pl)
 
 	cfg := cli.Setup(
 		pl,
 		config.BaseDefaults,
 		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
 	)
+
+	flags.Post(cfg)
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 
