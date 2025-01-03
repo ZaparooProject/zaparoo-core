@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
@@ -106,6 +107,7 @@ func main() {
 		fmt.Println("Device address: Unknown")
 	} else {
 		fmt.Println("Device address:", ip.String())
+		fmt.Println("Web App: http://", ip.String(), ":"+strconv.Itoa(cfg.ApiPort())+"/app/")
 	}
 
 	fmt.Println("Press any key to exit")
