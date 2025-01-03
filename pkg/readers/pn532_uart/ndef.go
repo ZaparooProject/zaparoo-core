@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/rs/zerolog/log"
 
 	"github.com/hsanjuan/go-ndef"
 )
@@ -36,6 +37,15 @@ func ParseRecordText(blocks []byte) (string, error) {
 	startIndex := bytes.Index(blocks, NdefStart)
 	if startIndex == -1 {
 		return "", fmt.Errorf("NDEF start not found: %x", blocks)
+	}
+
+	// check if there is another ndef start left, as it can mean we got come
+	// corrupt data at the beginning
+	if len(blocks) > startIndex+8 {
+		nextStart := bytes.Index(blocks[startIndex+4:], NdefStart)
+		if nextStart != -1 {
+			startIndex += nextStart
+		}
 	}
 
 	endIndex := bytes.Index(blocks, NdefEnd)
@@ -51,17 +61,20 @@ func ParseRecordText(blocks []byte) (string, error) {
 		return "", fmt.Errorf("end index out of bounds: %d, %x", endIndex, blocks)
 	}
 
+	log.Debug().Msgf("NDEF start: %d, end: %d", startIndex, endIndex)
+	log.Debug().Msgf("NDEF: %x", blocks[startIndex:endIndex])
+
 	tagText := string(blocks[startIndex+4 : endIndex])
 
 	// TODO: why does this happen here but not in libnfc?
-	cleaned := ""
-	for _, r := range tagText {
-		if r != '\x00' {
-			cleaned += string(r)
-		}
-	}
+	//cleaned := ""
+	//for _, r := range tagText {
+	//	if r != '\x00' {
+	//		cleaned += string(r)
+	//	}
+	//}
 
-	return cleaned, nil
+	return tagText, nil
 }
 
 func BuildMessage(text string) ([]byte, error) {

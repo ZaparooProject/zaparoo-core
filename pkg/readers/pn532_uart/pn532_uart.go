@@ -158,6 +158,8 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 			}
 
 			i := 3
+			retryMax := 3
+			retry := 0
 			data := make([]byte, 0)
 			for {
 				// TODO: this is a random limit i picked, should detect blocks in card
@@ -165,8 +167,18 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 					break
 				}
 
+				if retry >= retryMax {
+					errCount++
+					break
+				}
+
 				res, err := InDataExchange(r.port, []byte{0x30, byte(i)})
-				if err != nil {
+				if errors.Is(err, ErrNoFrameFound) {
+					// sometimes the response just doesn't work, try again
+					log.Warn().Msg("no frame found")
+					retry++
+					continue
+				} else if err != nil {
 					log.Error().Err(err).Msg("failed to run indataexchange")
 					errCount++
 					break
@@ -176,7 +188,10 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 					break
 				} else if res[0] != 0x41 || res[1] != 0x00 {
 					log.Warn().Msgf("unexpected data format: %x", res)
-					break
+					// sometimes we receive the result of the last passive
+					// target command, so just try request again a few times
+					retry++
+					continue
 				} else if bytes.Equal(res[2:], make([]byte, 16)) {
 					break
 				}
@@ -184,7 +199,9 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				data = append(data, res[2:]...)
 				i += 4
 
-				time.Sleep(6 * time.Millisecond) // TODO: needs adjusting to a smaller safe value
+				retry = 0
+
+				time.Sleep(1 * time.Millisecond)
 			}
 
 			log.Debug().Msgf("record bytes: %s", hex.EncodeToString(data))
