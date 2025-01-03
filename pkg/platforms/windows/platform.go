@@ -7,6 +7,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/adrg/xdg"
 	"io"
 	"os"
 	"os/exec"
@@ -42,6 +43,16 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
+	err := os.MkdirAll(filepath.Join(xdg.ConfigHome, config.AppName), 0755)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -70,16 +81,15 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
-	// TODO: this could be AppData instead
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
 func (p *Platform) TempDir() string {
