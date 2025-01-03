@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -189,6 +190,15 @@ func (c *Instance) Load() error {
 	// prepare allow files regexes
 	c.vals.Launchers.allowFileRe = make([]*regexp.Regexp, len(c.vals.Launchers.AllowFile))
 	for i, allowFile := range c.vals.Launchers.AllowFile {
+		if runtime.GOOS == "windows" {
+			// make regex case-insensitive, if not already
+			if !strings.HasPrefix(allowFile, "(?i)") {
+				allowFile = "(?i)" + allowFile
+			}
+			// replace forward slashes with backslashes
+			allowFile = strings.ReplaceAll(allowFile, "/", "\\\\")
+		}
+
 		re, err := regexp.Compile(allowFile)
 		if err != nil {
 			log.Warn().Msgf("invalid allow file regex: %s", allowFile)
