@@ -292,6 +292,10 @@ func Start(
 	r.Get("/run/*", methods.HandleRunRest(cfg, st, itq))
 
 	r.Get("/app/*", handleApp)
+	// redirect to /app/
+	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
 
 	err := http.ListenAndServe(":"+strconv.Itoa(cfg.ApiPort()), r)
 	if err != nil {
