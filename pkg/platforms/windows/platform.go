@@ -132,53 +132,14 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launching file: %s", path)
 
-	launchers := make([]platforms.Launcher, 0)
-	lp := strings.ToLower(path)
-
-	// TODO: move to matchsystemfile
-	for _, l := range p.Launchers() {
-		match := false
-
-		// check for global extensions
-		for _, ext := range l.Extensions {
-			if filepath.Ext(lp) == ext && l.Folders == nil {
-				launchers = append(launchers, l)
-				match = true
-				break
-			}
-		}
-		if match {
-			continue
-		}
-
-		// check for scheme
-		for _, scheme := range l.Schemes {
-			if strings.HasPrefix(lp, scheme+"://") {
-				launchers = append(launchers, l)
-				break
-			}
-		}
-	}
+	launchers := utils.PathToLaunchers(cfg, p, path)
 
 	if len(launchers) == 0 {
-		return errors.New("no launcher found for file")
+		return errors.New("no launcher found")
 	}
 
-	l := launchers[0]
-
-	if l.Launch != nil {
-		if l.AllowListOnly {
-			if cfg.IsLauncherFileAllowed(path) {
-				return l.Launch(cfg, path)
-			} else {
-				return errors.New("file not in allow list: " + path)
-			}
-		}
-
-		return l.Launch(cfg, path)
-	}
-
-	return nil
+	// just pick the first one for now
+	return launchers[0].Launch(cfg, path)
 }
 
 func (p *Platform) KeyboardInput(input string) error {
