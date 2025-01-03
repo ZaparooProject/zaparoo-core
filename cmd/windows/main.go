@@ -56,6 +56,7 @@ func main() {
 	flags.Pre(pl)
 
 	defaults := config.BaseDefaults
+	defaults.DebugLogging = true
 	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
