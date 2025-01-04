@@ -1,7 +1,9 @@
 package configui
 
 import (
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -124,44 +126,42 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	// scanMode := int(0)
-	// if cfg.ReadersScan().Mode == config.ScanModeHold {
-	// 	scanMode = int(1)
-	// }
+	scanMode := int(0)
+	if cfg.ReadersScan().Mode == config.ScanModeHold {
+		scanMode = int(1)
+	}
 
-	scanMenu := tview.NewForm().
-		// AddDropDown("Scan Mode", []string{"Tap", "Hold"}, scanMode, func(option string, optionIndex int) {
-		// 	cfg.SetScanMode(option)
-		// 	pages.RemovePage("scan")
-		// 	pages.AddAndSwitchToPage(
-		// 		"scan",
-		// 		BuildScanModeMenu(cfg, pages, app),
-		// 		true,
-		// 	)
-		// }).
-		AddInputField("Exit Delay", "1", 2, tview.InputFieldInteger, func(value string) {
+	scanModes := []string{"Tap", "Hold"}
+	systems := []string{"", "Nes", "Snes", "Playstation", "Genesis"}
+	exitDelay := cfg.ReadersScan().ExitDelay
+
+	scanMenu := tview.NewForm()
+	scanMenu.AddDropDown("Scan Mode", scanModes, scanMode, func(option string, optionIndex int) {
+		cfg.SetScanMode(option)
+	}).
+		AddInputField("Exit Delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
 			delay, _ := strconv.ParseFloat(value, 32)
 			cfg.SetScanExitDelay(float32(delay))
-			pages.RemovePage("scan")
-			pages.AddAndSwitchToPage(
-				"scan",
-				BuildScanModeMenu(cfg, pages, app),
-				true,
-			)
+		}).
+		AddDropDown("Ignore systems", systems, 0, func(option string, optionIndex int) {
+			currentSystems := cfg.ReadersScan().IgnoreSystem
+			if optionIndex > 0 {
+				if !slices.Contains(currentSystems, option) {
+					newSystems := append(currentSystems, option)
+					cfg.SetScanIgnoreSystem(newSystems)
+				} else {
+					index := slices.Index(currentSystems, option)
+					newSystems := slices.Delete(currentSystems, index, index+1)
+					cfg.SetScanIgnoreSystem(newSystems)
+				}
+				BuildScanModeMenu(cfg, pages, app)
+			}
+		}).
+		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
+		AddButton("Confirm", func() {
+
+			pages.SwitchToPage("readers")
 		})
-	// // AddDropDown("Ignore systems", []string{"Nes", "Snes"}, 0, func(option string, optionIndex int) {
-	// // 	cfg.SetScanIgnoreSystem(append(cfg.ReadersScan().IgnoreSystem, option))
-	// // 	pages.RemovePage("scan")
-	// // 	pages.AddAndSwitchToPage(
-	// // 		"scan",
-	// // 		BuildScanModeMenu(cfg, pages, app),
-	// // 		true,
-	// // 	)
-	// // }).
-	// // AddTextArea("Ignored", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 10, 0, nil).
-	// // AddButton("Back", func() {
-	// // 	pages.SwitchToPage("main")
-	// // })
 	scanMenu.SetTitle(" Zaparoo config editor - Scan mode menu ")
 	pageDefaults("scan", pages, scanMenu)
 	return scanMenu
