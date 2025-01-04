@@ -51,7 +51,7 @@ func connect(name string) (serial.Port, error) {
 		return port, err
 	}
 
-	err = port.SetReadTimeout(100 * time.Millisecond)
+	err = port.SetReadTimeout(50 * time.Millisecond)
 	if err != nil {
 		return port, err
 	}
@@ -157,9 +157,13 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				continue
 			}
 
+			ndefRetryMax := 3
+			ndefRetry := 0
+		ndefRetry:
+
 			i := 3
-			retryMax := 3
-			retry := 0
+			blockRetryMax := 3
+			blockRetry := 0
 			data := make([]byte, 0)
 			for {
 				// TODO: this is a random limit i picked, should detect blocks in card
@@ -167,7 +171,7 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 					break
 				}
 
-				if retry >= retryMax {
+				if blockRetry >= blockRetryMax {
 					errCount++
 					break
 				}
@@ -176,7 +180,7 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				if errors.Is(err, ErrNoFrameFound) {
 					// sometimes the response just doesn't work, try again
 					log.Warn().Msg("no frame found")
-					retry++
+					blockRetry++
 					continue
 				} else if err != nil {
 					log.Error().Err(err).Msg("failed to run indataexchange")
@@ -190,7 +194,7 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 					log.Warn().Msgf("unexpected data format: %x", res)
 					// sometimes we receive the result of the last passive
 					// target command, so just try request again a few times
-					retry++
+					blockRetry++
 					continue
 				} else if bytes.Equal(res[2:], make([]byte, 16)) {
 					break
@@ -199,24 +203,22 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				data = append(data, res[2:]...)
 				i += 4
 
-				retry = 0
-
-				time.Sleep(1 * time.Millisecond)
+				blockRetry = 0
 			}
 
 			log.Debug().Msgf("record bytes: %s", hex.EncodeToString(data))
 
 			tagText, err := ParseRecordText(data)
-			if err != nil {
-				log.Error().Err(err).Msgf("error parsing NDEF record")
-				// TODO: there should be some distinction between a data
-				// transfer error and a legitimate empty/missing NDEF record
+			if err != nil && ndefRetry < ndefRetryMax {
+				log.Error().Err(err).Msgf("no NDEF found, retrying data exchange")
+				ndefRetry++
+				goto ndefRetry
+			} else if err != nil {
+				log.Error().Err(err).Msgf("no NDEF records")
 				tagText = ""
 			}
 
-			if tagText == "" {
-				log.Warn().Msg("no text NDEF found")
-			} else {
+			if tagText != "" {
 				log.Info().Msgf("decoded text NDEF: %s", tagText)
 			}
 

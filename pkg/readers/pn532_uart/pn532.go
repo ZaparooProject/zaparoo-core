@@ -74,7 +74,7 @@ func waitAck(port serial.Port) ([]byte, error) {
 	// the previous command
 
 	tries := 0
-	maxTries := 64 // bytes to scan through
+	maxTries := 32 // bytes to scan through
 
 	buf := make([]byte, 1)
 	ackBuf := make([]byte, 0)

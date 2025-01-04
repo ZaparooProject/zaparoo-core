@@ -33,46 +33,43 @@ import (
 var NdefEnd = []byte{0xFE}
 var NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
 
-func ParseRecordText(blocks []byte) (string, error) {
-	startIndex := bytes.Index(blocks, NdefStart)
+var ErrNoNdef = fmt.Errorf("no NDEF record found")
+
+func ParseRecordText(bs []byte) (string, error) {
+	// sometimes there can be some read corruption and multiple copies of the
+	// NDEF header get pulled in. we just flick through until the last one
+	// TODO: is this going to mess up if there are multiple NDEF records?
+	startIndex := bytes.LastIndex(bs, NdefStart)
 	if startIndex == -1 {
-		return "", fmt.Errorf("NDEF start not found: %x", blocks)
+		return "", ErrNoNdef
 	}
 
 	// check if there is another ndef start left, as it can mean we got come
 	// corrupt data at the beginning
-	if len(blocks) > startIndex+8 {
-		nextStart := bytes.Index(blocks[startIndex+4:], NdefStart)
+	if len(bs) > startIndex+8 {
+		nextStart := bytes.Index(bs[startIndex+4:], NdefStart)
 		if nextStart != -1 {
 			startIndex += nextStart
 		}
 	}
 
-	endIndex := bytes.Index(blocks, NdefEnd)
+	endIndex := bytes.Index(bs, NdefEnd)
 	if endIndex == -1 {
-		return "", fmt.Errorf("NDEF end not found: %x", blocks)
+		return "", fmt.Errorf("NDEF end not found: %x", bs)
 	}
 
-	if startIndex >= endIndex || startIndex+4 >= len(blocks) {
-		return "", fmt.Errorf("start index out of bounds: %d, %x", startIndex, blocks)
+	if startIndex >= endIndex || startIndex+4 >= len(bs) {
+		return "", fmt.Errorf("start index out of bounds: %d, %x", startIndex, bs)
 	}
 
-	if endIndex <= startIndex || endIndex >= len(blocks) {
-		return "", fmt.Errorf("end index out of bounds: %d, %x", endIndex, blocks)
+	if endIndex <= startIndex || endIndex >= len(bs) {
+		return "", fmt.Errorf("end index out of bounds: %d, %x", endIndex, bs)
 	}
 
 	log.Debug().Msgf("NDEF start: %d, end: %d", startIndex, endIndex)
-	log.Debug().Msgf("NDEF: %x", blocks[startIndex:endIndex])
+	log.Debug().Msgf("NDEF: %x", bs[startIndex:endIndex])
 
-	tagText := string(blocks[startIndex+4 : endIndex])
-
-	// TODO: why does this happen here but not in libnfc?
-	//cleaned := ""
-	//for _, r := range tagText {
-	//	if r != '\x00' {
-	//		cleaned += string(r)
-	//	}
-	//}
+	tagText := string(bs[startIndex+4 : endIndex])
 
 	return tagText, nil
 }
