@@ -110,7 +110,7 @@ func main() {
 		[]io.Writer{os.Stderr},
 	)
 
-	flags.Post(cfg)
+	flags.Post(cfg, pl)
 
 	stop, err := service.Start(pl, cfg)
 	if err != nil {

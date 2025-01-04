@@ -136,7 +136,7 @@ func main() {
 	}
 	svc.ServiceHandler(serviceFlag)
 
-	flags.Post(cfg)
+	flags.Post(cfg, pl)
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 

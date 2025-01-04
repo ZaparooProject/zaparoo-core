@@ -74,7 +74,7 @@ func main() {
 		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
 	)
 
-	flags.Post(cfg)
+	flags.Post(cfg, pl)
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
