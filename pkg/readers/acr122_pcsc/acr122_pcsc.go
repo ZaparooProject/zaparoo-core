@@ -7,6 +7,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -74,7 +75,8 @@ func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
 			rls, err := ctx.ListReaders()
 			if err != nil {
 				log.Debug().Msgf("error listing pcsc readers: %s", err)
-				continue
+				r.polling = false
+				break
 			}
 
 			if !utils.Contains(rls, r.name) {
@@ -213,6 +215,10 @@ func (r *Acr122Pcsc) Close() error {
 	return nil
 }
 
+// TODO: this is a hack workaround to stop some log spam, probably the Detect
+// functions on readers should actually return an error instead of ""
+var detectErrorOnce sync.Once
+
 func (r *Acr122Pcsc) Detect(connected []string) string {
 	ctx, err := scard.EstablishContext()
 	if err != nil {
@@ -227,10 +233,11 @@ func (r *Acr122Pcsc) Detect(connected []string) string {
 
 	rs, err := ctx.ListReaders()
 	if err != nil {
-		log.Debug().Err(err).Msg("listing pcsc readers")
+		detectErrorOnce.Do(func() {
+			log.Debug().Err(err).Msg("listing pcsc readers")
+		})
 		return ""
 	}
-	// log.Debug().Msgf("pcsc rs: %v", rs)
 
 	acrs := make([]string, 0)
 	for _, r := range rs {

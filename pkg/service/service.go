@@ -108,15 +108,11 @@ func processTokenQueue(
 	for {
 		select {
 		case pls := <-plq:
-			log.Info().Msgf("processing playlist update: %v", pls)
-
 			activePlaylist := st.GetActivePlaylist()
 
 			if pls == nil {
 				if activePlaylist != nil {
 					log.Info().Msg("clearing active playlist")
-				} else {
-					log.Debug().Msg("no active playlist to clear")
 				}
 				activePlaylist = nil
 				continue
