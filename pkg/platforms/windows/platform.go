@@ -140,16 +140,18 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	log.Info().Msgf("launching file: %s", path)
-
 	launchers := utils.PathToLaunchers(cfg, p, path)
-
 	if len(launchers) == 0 {
 		return errors.New("no launcher found")
 	}
+	launcher := launchers[0]
 
-	// just pick the first one for now
-	return launchers[0].Launch(cfg, path)
+	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
+		return errors.New("file not allowed: " + path)
+	}
+
+	log.Info().Msgf("launching file: %s", path)
+	return launcher.Launch(cfg, path)
 }
 
 func (p *Platform) KeyboardInput(input string) error {

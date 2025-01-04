@@ -112,6 +112,8 @@ type Platform interface {
 	// Launch a system by ID.
 	LaunchSystem(*config.Instance, string) error
 	// Launch a file by path.
+	// TODO: i don't think this needs to exist now launch logic is on the
+	// launcher. better to be one func outside platform
 	LaunchFile(*config.Instance, string) error
 	// Launch a shell command.
 	KeyboardInput(string) error // DEPRECATED

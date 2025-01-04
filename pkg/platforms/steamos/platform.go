@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,7 +41,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
-	"github.com/rs/zerolog/log"
 )
 
 type Platform struct{}
@@ -147,12 +147,18 @@ func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	log.Info().Msgf("launching file: %s", path)
 	launchers := utils.PathToLaunchers(cfg, p, path)
 	if len(launchers) == 0 {
 		return errors.New("no launcher found")
 	}
-	return launchers[0].Launch(cfg, path)
+	launcher := launchers[0]
+
+	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
+		return errors.New("file not allowed: " + path)
+	}
+
+	log.Info().Msgf("launching file: %s", path)
+	return launcher.Launch(cfg, path)
 }
 
 func (p *Platform) KeyboardInput(_ string) error {
