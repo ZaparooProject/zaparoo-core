@@ -17,12 +17,12 @@ import (
 */
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	debugLogging := "Disabled"
+	debugLogging := " "
 	if cfg.DebugLogging() {
-		debugLogging = "Enabled"
+		debugLogging = "X"
 	}
 	mainMenu := tview.NewList().
-		AddItem("Debug Logging - "+debugLogging, "Change the status of debug logging", '1', func() {
+		AddItem("["+debugLogging+"] Debug Logging", "Change the status of debug logging", '1', func() {
 			cfg.SetDebugLogging(!cfg.DebugLogging())
 			pages.RemovePage("main")
 			pages.AddAndSwitchToPage("main", BuildMainMenu(cfg, pages, app), true)
@@ -38,19 +38,101 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	return mainMenu
 }
 
-func ConfigUi(cfg *config.Instance) {
-	app := tview.NewApplication()
-	pages := tview.NewPages()
+/*
+type Audio struct {
+	ScanFeedback bool `toml:"scan_feedback,omitempty"`
+}
+*/
+
+func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	audioFeedback := " "
+	if cfg.AudioFeedback() {
+		audioFeedback = "X"
+	}
 
 	audioMenu := tview.NewList().
-		AddItem("Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
-
+		AddItem("["+audioFeedback+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
+			cfg.SetAudioFeedback(!cfg.AudioFeedback())
+			pages.RemovePage("audio")
+			pages.AddAndSwitchToPage("audio", BuildAudionMenu(cfg, pages, app), true)
 		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
 			pages.SwitchToPage("main")
 		})
 	audioMenu.SetBorder(true)
 	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
+	return audioMenu
+}
+
+/*
+type Readers struct {
+	AutoDetect bool             `toml:"auto_detect"`
+	Scan       ReadersScan      `toml:"scan,omitempty"`
+	Connect    []ReadersConnect `toml:"connect,omitempty"`
+}
+*/
+
+func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	autoDetect := " "
+	if cfg.AutoDetect() {
+		autoDetect = "X"
+	}
+
+	readersMenu := tview.NewList().
+		AddItem("["+autoDetect+"] Auto detect", "Enable or disable the auto detection for readers", '1', func() {
+			cfg.SetAutoDetect(!cfg.AutoDetect())
+			pages.RemovePage("readers")
+			pages.AddAndSwitchToPage("readers", BuildReadersMenu(cfg, pages, app), true)
+		}).
+		AddItem("Scan mode", "Enter scan mode sub menu", '2', func() {
+			pages.SwitchToPage("scan")
+		}).
+		AddItem("Connection strings", "Input each device's connection string", '3', func() {
+			pages.SwitchToPage("connect")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	readersMenu.SetBorder(true)
+	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
+	return readersMenu
+}
+
+/* type ReadersScan struct {
+	Mode         string   `toml:"mode"`
+	ExitDelay    float32  `toml:"exit_delay,omitempty"`
+	IgnoreSystem []string `toml:"ignore_system,omitempty"`
+} */
+
+func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	scanMode := config.ScanModeTap
+	if cfg.ReadersScan().Mode == config.ScanModeHold {
+		scanMode = config.ScanModeHold
+	}
+
+	readersMenu := tview.NewList().
+		AddItem("ScanMode ["+scanMode+"]", "Enable or disable the auto detection for readers", '1', func() {
+			cfg.SetAutoDetect(!cfg.AutoDetect())
+			pages.RemovePage("readers")
+			pages.AddAndSwitchToPage("readers", BuildReadersMenu(cfg, pages, app), true)
+		}).
+		AddItem("Exit delay", "Enter scan mode sub menu", '2', func() {
+			pages.SwitchToPage("scan")
+		}).
+		AddItem("Ignore system", "Input each device's connection string", '3', func() {
+			pages.SwitchToPage("connect")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	readersMenu.SetBorder(true)
+	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
+	return readersMenu
+}
+
+func ConfigUi(cfg *config.Instance) {
+	app := tview.NewApplication()
+	pages := tview.NewPages()
 
 	pages.AddAndSwitchToPage(
 		"main",
@@ -60,7 +142,21 @@ func ConfigUi(cfg *config.Instance) {
 
 	pages.AddPage(
 		"audio",
-		audioMenu,
+		BuildAudionMenu(cfg, pages, app),
+		true,
+		false,
+	)
+
+	pages.AddPage(
+		"readers",
+		BuildReadersMenu(cfg, pages, app),
+		true,
+		false,
+	)
+
+	pages.AddPage(
+		"scan",
+		BuildScanModeMenu(cfg, pages, app),
 		true,
 		false,
 	)
