@@ -49,7 +49,7 @@ func main() {
 		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
 	)
 
-	flags.Post(cfg)
+	flags.Post(cfg, pl)
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 

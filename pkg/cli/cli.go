@@ -115,9 +115,9 @@ type ConnQr struct {
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
-func (f *Flags) Post(cfg *config.Instance) {
+func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
-		configui.ConfigUi(cfg)
+		configui.ConfigUi(cfg, pl)
 		os.Exit(0)
 	}
 	if *f.Write != "" {

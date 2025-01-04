@@ -2,6 +2,8 @@ package configui
 
 import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -130,7 +132,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return readersMenu
 }
 
-func ConfigUi(cfg *config.Instance) {
+func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
@@ -160,6 +162,20 @@ func ConfigUi(cfg *config.Instance) {
 		true,
 		false,
 	)
+
+	if pl.Id() == "mister" {
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+		if err != nil {
+			panic(err)
+		}
+
+		screen, err := tcell.NewTerminfoScreenFromTty(tty)
+		if err != nil {
+			panic(err)
+		}
+
+		app.SetScreen(screen)
+	}
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
