@@ -1,11 +1,26 @@
 package configui
 
 import (
+	"strconv"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
+
+type PrimitiveWithSetBorder interface {
+	tview.Primitive
+	SetBorder(arg bool) *tview.Box
+}
+
+func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
+	widget.SetBorder(true)
+	widget.SetRect(0, 0, 80, 25)
+	pages.RemovePage(name)
+	pages.AddAndSwitchToPage(name, widget, false)
+	return widget
+}
 
 /*
 	DebugLogging bool      `toml:"debug_logging"`
@@ -19,24 +34,27 @@ import (
 */
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	pages.RemovePage("main")
 	debugLogging := " "
 	if cfg.DebugLogging() {
-		debugLogging = "X"
+		debugLogging = "x"
 	}
 	mainMenu := tview.NewList().
 		AddItem("["+debugLogging+"] Debug Logging", "Change the status of debug logging", '1', func() {
 			cfg.SetDebugLogging(!cfg.DebugLogging())
-			pages.RemovePage("main")
-			pages.AddAndSwitchToPage("main", BuildMainMenu(cfg, pages, app), true)
+			BuildMainMenu(cfg, pages, app)
 		}).
 		AddItem("Audio", "Set audio options like the feedback", '2', func() {
 			pages.SwitchToPage("audio")
 		}).
+		AddItem("Readers", "Set nfc readers options", '3', func() {
+			pages.SwitchToPage("readers")
+		}).
 		AddItem("Quit", "Press to exit", 'q', func() {
 			app.Stop()
 		})
-	mainMenu.SetBorder(true)
 	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
+	pageDefaults("main", pages, mainMenu)
 	return mainMenu
 }
 
@@ -55,14 +73,13 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 	audioMenu := tview.NewList().
 		AddItem("["+audioFeedback+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
 			cfg.SetAudioFeedback(!cfg.AudioFeedback())
-			pages.RemovePage("audio")
-			pages.AddAndSwitchToPage("audio", BuildAudionMenu(cfg, pages, app), true)
+			BuildAudionMenu(cfg, pages, app)
 		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
 			pages.SwitchToPage("main")
 		})
-	audioMenu.SetBorder(true)
 	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
+	pageDefaults("audio", pages, audioMenu)
 	return audioMenu
 }
 
@@ -83,8 +100,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	readersMenu := tview.NewList().
 		AddItem("["+autoDetect+"] Auto detect", "Enable or disable the auto detection for readers", '1', func() {
 			cfg.SetAutoDetect(!cfg.AutoDetect())
-			pages.RemovePage("readers")
-			pages.AddAndSwitchToPage("readers", BuildReadersMenu(cfg, pages, app), true)
+			BuildReadersMenu(cfg, pages, app)
 		}).
 		AddItem("Scan mode", "Enter scan mode sub menu", '2', func() {
 			pages.SwitchToPage("scan")
@@ -95,8 +111,8 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		AddItem("Go back", "Go back to main menu", 'b', func() {
 			pages.SwitchToPage("main")
 		})
-	readersMenu.SetBorder(true)
 	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
+	pageDefaults("readers", pages, readersMenu)
 	return readersMenu
 }
 
@@ -106,62 +122,60 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	IgnoreSystem []string `toml:"ignore_system,omitempty"`
 } */
 
-func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	scanMode := config.ScanModeTap
-	if cfg.ReadersScan().Mode == config.ScanModeHold {
-		scanMode = config.ScanModeHold
-	}
+func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	readersMenu := tview.NewList().
-		AddItem("ScanMode ["+scanMode+"]", "Enable or disable the auto detection for readers", '1', func() {
-			cfg.SetAutoDetect(!cfg.AutoDetect())
-			pages.RemovePage("readers")
-			pages.AddAndSwitchToPage("readers", BuildReadersMenu(cfg, pages, app), true)
-		}).
-		AddItem("Exit delay", "Enter scan mode sub menu", '2', func() {
-			pages.SwitchToPage("scan")
-		}).
-		AddItem("Ignore system", "Input each device's connection string", '3', func() {
-			pages.SwitchToPage("connect")
-		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("main")
+	// scanMode := int(0)
+	// if cfg.ReadersScan().Mode == config.ScanModeHold {
+	// 	scanMode = int(1)
+	// }
+
+	scanMenu := tview.NewForm().
+		// AddDropDown("Scan Mode", []string{"Tap", "Hold"}, scanMode, func(option string, optionIndex int) {
+		// 	cfg.SetScanMode(option)
+		// 	pages.RemovePage("scan")
+		// 	pages.AddAndSwitchToPage(
+		// 		"scan",
+		// 		BuildScanModeMenu(cfg, pages, app),
+		// 		true,
+		// 	)
+		// }).
+		AddInputField("Exit Delay", "1", 2, tview.InputFieldInteger, func(value string) {
+			delay, _ := strconv.ParseFloat(value, 32)
+			cfg.SetScanExitDelay(float32(delay))
+			pages.RemovePage("scan")
+			pages.AddAndSwitchToPage(
+				"scan",
+				BuildScanModeMenu(cfg, pages, app),
+				true,
+			)
 		})
-	readersMenu.SetBorder(true)
-	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
-	return readersMenu
+	// // AddDropDown("Ignore systems", []string{"Nes", "Snes"}, 0, func(option string, optionIndex int) {
+	// // 	cfg.SetScanIgnoreSystem(append(cfg.ReadersScan().IgnoreSystem, option))
+	// // 	pages.RemovePage("scan")
+	// // 	pages.AddAndSwitchToPage(
+	// // 		"scan",
+	// // 		BuildScanModeMenu(cfg, pages, app),
+	// // 		true,
+	// // 	)
+	// // }).
+	// // AddTextArea("Ignored", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 10, 0, nil).
+	// // AddButton("Back", func() {
+	// // 	pages.SwitchToPage("main")
+	// // })
+	scanMenu.SetTitle(" Zaparoo config editor - Scan mode menu ")
+	pageDefaults("scan", pages, scanMenu)
+	return scanMenu
 }
 
 func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
-	pages.AddAndSwitchToPage(
-		"main",
-		BuildMainMenu(cfg, pages, app),
-		true,
-	)
-
-	pages.AddPage(
-		"audio",
-		BuildAudionMenu(cfg, pages, app),
-		true,
-		false,
-	)
-
-	pages.AddPage(
-		"readers",
-		BuildReadersMenu(cfg, pages, app),
-		true,
-		false,
-	)
-
-	pages.AddPage(
-		"scan",
-		BuildScanModeMenu(cfg, pages, app),
-		true,
-		false,
-	)
+	BuildMainMenu(cfg, pages, app)
+	BuildAudionMenu(cfg, pages, app)
+	BuildReadersMenu(cfg, pages, app)
+	BuildScanModeMenu(cfg, pages, app)
+	pages.SwitchToPage("main")
 
 	if pl.Id() == "mister" {
 		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
