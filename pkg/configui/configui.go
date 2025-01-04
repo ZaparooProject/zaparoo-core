@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rivo/tview"
 )
 
@@ -15,13 +16,16 @@ import (
 	Mappings     Mappings  `toml:"mappings,omitempty"`
 */
 
-func ConfigUi() {
-	app := tview.NewApplication()
-	pages := tview.NewPages()
-
+func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	debugLogging := "Disabled"
+	if cfg.DebugLogging() {
+		debugLogging = "Enabled"
+	}
 	mainMenu := tview.NewList().
-		AddItem("Debug Logging", "Change the status of debug logging", '1', func() {
-
+		AddItem("Debug Logging - "+debugLogging, "Change the status of debug logging", '1', func() {
+			cfg.SetDebugLogging(!cfg.DebugLogging())
+			pages.RemovePage("main")
+			pages.AddAndSwitchToPage("main", BuildMainMenu(cfg, pages, app), true)
 		}).
 		AddItem("Audio", "Set audio options like the feedback", '2', func() {
 			pages.SwitchToPage("audio")
@@ -31,6 +35,12 @@ func ConfigUi() {
 		})
 	mainMenu.SetBorder(true)
 	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
+	return mainMenu
+}
+
+func ConfigUi(cfg *config.Instance) {
+	app := tview.NewApplication()
+	pages := tview.NewPages()
 
 	audioMenu := tview.NewList().
 		AddItem("Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
@@ -44,7 +54,7 @@ func ConfigUi() {
 
 	pages.AddAndSwitchToPage(
 		"main",
-		mainMenu,
+		BuildMainMenu(cfg, pages, app),
 		true,
 	)
 

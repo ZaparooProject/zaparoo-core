@@ -105,10 +105,6 @@ func (f *Flags) Pre(pl platforms.Platform) {
 		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.Id())
 		os.Exit(0)
 	}
-	if *f.Config {
-		configui.ConfigUi()
-		os.Exit(0)
-	}
 }
 
 type ConnQr struct {
@@ -120,6 +116,10 @@ type ConnQr struct {
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance) {
+	if *f.Config {
+		configui.ConfigUi(cfg)
+		os.Exit(0)
+	}
 	if *f.Write != "" {
 		data, err := json.Marshal(&models.ReaderWriteParams{
 			Text: *f.Write,
