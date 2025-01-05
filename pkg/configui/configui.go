@@ -166,8 +166,12 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	}
 
 	scanModes := []string{"Tap", "Hold"}
-	gamesdb.AllSystems()
-	systems := []string{"", "Nes", "Snes", "Playstation", "Genesis"}
+
+	systems := []string{""}
+	for _, item := range gamesdb.AllSystems() {
+		systems = append(systems, item.Id)
+	}
+
 	exitDelay := cfg.ReadersScan().ExitDelay
 
 	scanMenu := tview.NewForm()
@@ -190,6 +194,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 					cfg.SetScanIgnoreSystem(newSystems)
 				}
 				BuildScanModeMenu(cfg, pages, app)
+				scanMenu.SetFocus(scanMenu.GetFormItemIndex("Ignore systems"))
 			}
 		}).
 		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
