@@ -24,16 +24,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	gc "github.com/rthornton128/goncurses"
-	"github.com/wizzomafizzo/mrext/pkg/curses"
+	// gc "github.com/rthornton128/goncurses"
+	// "github.com/wizzomafizzo/mrext/pkg/curses"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
@@ -133,19 +134,19 @@ func main() {
 
 	// display gui
 	// assume gui is working from this point, don't print to stdout
-	stdscr, err := curses.Setup()
-	if err != nil {
-		log.Error().Err(err).Msg("could not start curses")
-		os.Exit(1)
-	}
-	defer gc.End()
+	// stdscr, err := curses.Setup()
+	// if err != nil {
+	// 	log.Error().Err(err).Msg("could not start curses")
+	// 	os.Exit(1)
+	// }
+	// defer gc.End()
 
-	// offer to add service to MiSTer startup if it's not already there
-	err = tryAddStartup(stdscr)
-	if err != nil {
-		log.Error().Err(err).Msgf("error displaying startup dialog")
-		os.Exit(1)
-	}
+	// // offer to add service to MiSTer startup if it's not already there
+	// err = tryAddStartup(stdscr)
+	// if err != nil {
+	// 	log.Error().Err(err).Msgf("error displaying startup dialog")
+	// 	os.Exit(1)
+	// }
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
@@ -156,7 +157,7 @@ func main() {
 	}
 
 	// display main info gui
-	err = displayServiceInfo(pl, cfg, stdscr, svc)
+	err = displayServiceInfo2(pl, cfg, svc)
 	if err != nil {
 		log.Error().Err(err).Msg("error displaying info dialog")
 	}
