@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -18,7 +19,7 @@ type PrimitiveWithSetBorder interface {
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
 	widget.SetBorder(true)
-	widget.SetRect(0, 0, 80, 25)
+	widget.SetRect(0, 0, 75, 20)
 	pages.RemovePage(name)
 	pages.AddAndSwitchToPage(name, widget, false)
 	return widget
@@ -74,6 +75,7 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 			app.Stop()
 		})
 	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
+	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
 	pageDefaults("main", pages, mainMenu)
 	return mainMenu
 }
@@ -99,6 +101,7 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 			pages.SwitchToPage("main")
 		})
 	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
+	audioMenu.SetSecondaryTextColor(tcell.ColorYellow)
 	pageDefaults("audio", pages, audioMenu)
 	return audioMenu
 }
@@ -163,6 +166,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	}
 
 	scanModes := []string{"Tap", "Hold"}
+	gamesdb.AllSystems()
 	systems := []string{"", "Nes", "Snes", "Playstation", "Genesis"}
 	exitDelay := cfg.ReadersScan().ExitDelay
 
@@ -200,6 +204,12 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
+
+	tview.Styles.BorderColor = tcell.ColorLightYellow
+	tview.Styles.PrimaryTextColor = tcell.ColorWhite
+	tview.Styles.ContrastSecondaryTextColor = tcell.ColorFuchsia
+	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDarkBlue
+	tview.Styles.ContrastBackgroundColor = tcell.ColorFuchsia
 
 	BuildMainMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
