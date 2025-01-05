@@ -11,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ type Tracker struct {
 	Config           *config.UserConfig
 	mu               sync.Mutex
 	ns               chan<- models.Notification
-	pl               *Platform
+	pl               platforms.Platform
 	cfg              *config2.Instance
 	ActiveCore       string
 	ActiveSystem     string
@@ -90,7 +91,7 @@ func generateNameMap() []NameMapping {
 	return nameMap
 }
 
-func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl *Platform, cfg2 *config2.Instance) (*Tracker, error) {
+func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl platforms.Platform, cfg2 *config2.Instance) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
 	nameMap := generateNameMap()
@@ -121,9 +122,8 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.NameMap = nameMap
 }
 
-func (tr *Tracker) LookupCoreName(name string, path string) NameMapping {
-	log.Debug().Msgf("looking up name: %s", name)
-	log.Debug().Msgf("file path: %s", path)
+func (tr *Tracker) LookupCoreName(name string) (NameMapping, bool) {
+	log.Debug().Msgf("looking up core name: %s", name)
 
 	for _, mapping := range tr.NameMap {
 		if len(mapping.CoreName) != len(name) {
@@ -134,25 +134,20 @@ func (tr *Tracker) LookupCoreName(name string, path string) NameMapping {
 			continue
 		} else if mapping.ArcadeName != "" {
 			log.Debug().Msgf("arcade name: %s", mapping.ArcadeName)
-			return mapping
+			return mapping, true
 		}
 
-		sys, err := games.BestSystemMatch(tr.Config, path)
+		_, err := gamesdb.LookupSystem(name)
 		if err != nil {
-			log.Debug().Msgf("error finding system for game %s, %s: %s", name, path, err)
-			continue
-		}
-
-		if sys.Id == "" {
-			log.Debug().Msgf("no system found for game: %s, %s", name, path)
+			log.Error().Msgf("error getting system %s", err)
 			continue
 		}
 
 		log.Info().Msgf("found mapping: %s -> %s", name, mapping.Name)
-		return mapping
+		return mapping, true
 	}
 
-	return NameMapping{}
+	return NameMapping{}, false
 }
 
 func (tr *Tracker) stopCore() bool {
@@ -193,32 +188,31 @@ func (tr *Tracker) LoadCore() {
 		}
 	}
 
-	if coreName != tr.ActiveCore {
-		tr.stopCore()
+	if coreName == tr.ActiveCore {
+		return
+	}
 
-		tr.ActiveCore = coreName
+	tr.stopCore()
+	tr.ActiveCore = coreName
 
-		if coreName == config.MenuCore {
-			log.Debug().Msg("in menu, stopping game")
-			tr.stopGame()
-			return
+	if coreName == config.MenuCore {
+		log.Debug().Msg("in menu, stopping game")
+		tr.stopGame()
+		return
+	}
+
+	// set arcade core details
+	if result, ok := tr.LookupCoreName(coreName); ok && result.ArcadeName != "" {
+		err := mister.SetActiveGame(result.CoreName)
+		if err != nil {
+			log.Warn().Err(err).Msg("error setting active game")
 		}
 
-		result := tr.LookupCoreName(coreName, tr.ActiveGamePath)
-		if result != (NameMapping{}) {
-			if result.ArcadeName != "" {
-				err := mister.SetActiveGame(result.CoreName)
-				if err != nil {
-					log.Warn().Err(err).Msg("error setting active game")
-				}
-
-				tr.ActiveGameId = coreName
-				tr.ActiveGameName = result.ArcadeName
-				tr.ActiveGamePath = "" // TODO: any way to find this?
-				tr.ActiveSystem = ArcadeSystem
-				tr.ActiveSystemName = ArcadeSystem
-			}
-		}
+		tr.ActiveGameId = coreName
+		tr.ActiveGameName = result.ArcadeName
+		tr.ActiveGamePath = "" // no way to find mra path from CORENAME
+		tr.ActiveSystem = ArcadeSystem
+		tr.ActiveSystemName = ArcadeSystem
 	}
 }
 
@@ -243,13 +237,12 @@ func (tr *Tracker) loadGame() {
 		log.Error().Msgf("error getting active game: %s", err)
 		tr.stopGame()
 		return
-	} else if !filepath.IsAbs(activeGame) {
-		// arcade game, ignore handling
-		// TODO: will this work ok long term?
-		return
 	} else if activeGame == "" {
 		log.Debug().Msg("active game is empty, stopping game")
 		tr.stopGame()
+		return
+	} else if !filepath.IsAbs(activeGame) {
+		log.Debug().Msgf("active game is not absolute, assuming arcade: %s", activeGame)
 		return
 	}
 
@@ -463,7 +456,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	return watcher, nil
 }
 
-func StartTracker(cfg config.UserConfig, ns chan<- models.Notification, cfg2 *config2.Instance, pl *Platform) (*Tracker, func() error, error) {
+func StartTracker(cfg config.UserConfig, ns chan<- models.Notification, cfg2 *config2.Instance, pl platforms.Platform) (*Tracker, func() error, error) {
 	tr, err := NewTracker(&cfg, ns, pl, cfg2)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)

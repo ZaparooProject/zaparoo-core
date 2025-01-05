@@ -18,7 +18,13 @@ import (
 )
 
 func launch(cfg *config.Instance, path string) error {
-	return mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+	err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+	if err != nil {
+		return err
+	}
+
+	log.Debug().Msgf("setting active game: %s", path)
+	return mister.SetActiveGame(path)
 }
 
 func launchSinden(
@@ -30,12 +36,20 @@ func launchSinden(
 		if err != nil {
 			return err
 		}
+
 		sn := *s
 		sn.Rbf = "_Sinden/" + rbfName + "_Sinden"
 		sn.SetName = rbfName + "_Sinden"
 		sn.SetNameSameDir = true
+
 		log.Debug().Str("rbf", sn.Rbf).Msgf("launching Sinden: %v", sn)
-		return mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		if err != nil {
+			return err
+		}
+
+		return mister.SetActiveGame(path)
 	}
 }
 
@@ -48,10 +62,18 @@ func launchAltCore(
 		if err != nil {
 			return err
 		}
+
 		sn := *s
 		sn.Rbf = rbfPath
+
 		log.Debug().Str("rbf", sn.Rbf).Msgf("launching alt core: %v", sn)
-		return mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		if err != nil {
+			return err
+		}
+
+		return mister.SetActiveGame(path)
 	}
 }
 

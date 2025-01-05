@@ -81,7 +81,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 }
 
 func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
-	tr, stopTr, err := mister.StartTracker(*mister.UserConfigToMrext(cfg), ns)
+	tr, stopTr, err := mister.StartTracker(*mister.UserConfigToMrext(cfg), ns, cfg, p)
 	if err != nil {
 		return err
 	}
