@@ -136,9 +136,9 @@ func copyLogToSd(pl platforms.Platform) string {
 func uploadLog(pl platforms.Platform, pages *tview.Pages) string {
 
 	logPath := path.Join(pl.LogDir(), config.LogFile)
-
 	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {})
 	pages.RemovePage("export")
+	// fixme: this is not updating, too busy
 	pages.AddPage("temp_upload", modal, true, true)
 	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
 	out, err := exec.Command("bash", "-c", uploadCmd).Output()
@@ -183,7 +183,7 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 	logExport := tview.NewList()
 
 	var statusText string
-	running := true
+	running := service.Running()
 	if running {
 		statusText = "RUNNING"
 	} else {
@@ -221,7 +221,7 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 		}).
 		AddItem("Copy to SD card", "", 'b', func() {
 			pages.RemovePage("export")
-			outcome := "test" // copyLogToSd(pl)
+			outcome := copyLogToSd(pl)
 			modal := genericModal(outcome, "Log copy", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("copy")
 			})
