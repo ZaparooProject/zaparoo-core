@@ -8,6 +8,10 @@ package mister
 import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +41,8 @@ type Tracker struct {
 	Config           *config.UserConfig
 	mu               sync.Mutex
 	ns               chan<- models.Notification
+	pl               *Platform
+	cfg              *config2.Instance
 	ActiveCore       string
 	ActiveSystem     string
 	ActiveSystemName string
@@ -84,7 +90,7 @@ func generateNameMap() []NameMapping {
 	return nameMap
 }
 
-func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification) (*Tracker, error) {
+func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl *Platform, cfg2 *config2.Instance) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
 	nameMap := generateNameMap()
@@ -94,6 +100,8 @@ func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification) (*Tracker
 	return &Tracker{
 		Config:           cfg,
 		ns:               ns,
+		pl:               pl,
+		cfg:              cfg2,
 		ActiveCore:       "",
 		ActiveSystem:     "",
 		ActiveSystemName: "",
@@ -259,15 +267,27 @@ func (tr *Tracker) loadGame() {
 		}
 	}
 
-	system, err := games.BestSystemMatch(tr.Config, path)
-	if err != nil {
-		log.Error().Msgf("error finding system for game: %s", err)
+	if strings.HasSuffix(strings.ToLower(filename), ".ini") {
+		log.Debug().Msgf("ignoring ini file: %s", path)
+		return
+	}
 
-		// temporary(?) workaround to ignore bug where presets loaded from
-		// OSD are written to the recents file as a loaded game
-		if strings.HasSuffix(strings.ToLower(filename), ".ini") {
-			return
-		}
+	launchers := utils2.PathToLaunchers(tr.cfg, tr.pl, path)
+	if len(launchers) == 0 {
+		log.Warn().Msgf("no launchers found for %s", path)
+		return
+	}
+
+	system, err := gamesdb.GetSystem(launchers[0].SystemId)
+	if err != nil {
+		log.Error().Msgf("error getting system %s", err)
+		return
+	}
+
+	meta, err := assets.GetSystemMetadata(system.Id)
+	if err != nil {
+		log.Error().Msgf("error getting system metadata %s", err)
+		return
 	}
 
 	id := fmt.Sprintf("%s/%s", system.Id, filename)
@@ -278,13 +298,13 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveGamePath = path
 
 		tr.ActiveSystem = system.Id
-		tr.ActiveSystemName = system.Name
+		tr.ActiveSystemName = meta.Name
 
 		tr.ns <- models.Notification{
 			Method: models.NotificationStarted,
 			Params: models.MediaStartedParams{
 				SystemId:   system.Id,
-				SystemName: system.Name,
+				SystemName: meta.Name,
 				MediaName:  name,
 				MediaPath:  path,
 			},
@@ -443,8 +463,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	return watcher, nil
 }
 
-func StartTracker(cfg config.UserConfig, ns chan<- models.Notification) (*Tracker, func() error, error) {
-	tr, err := NewTracker(&cfg, ns)
+func StartTracker(cfg config.UserConfig, ns chan<- models.Notification, cfg2 *config2.Instance, pl *Platform) (*Tracker, func() error, error) {
+	tr, err := NewTracker(&cfg, ns, pl, cfg2)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err
