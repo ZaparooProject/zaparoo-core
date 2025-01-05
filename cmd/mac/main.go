@@ -24,10 +24,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/rs/zerolog"
 	"io"
 	"os"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
