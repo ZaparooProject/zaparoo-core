@@ -28,6 +28,7 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	DebugLogging bool      `toml:"debug_logging"`
 	Audio        Audio     `toml:"audio,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
+	Scan       ReadersScan      `toml:"scan,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
@@ -37,12 +38,12 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
 	pages.RemovePage("main")
-	debugLogging := " "
+	debugLogging := "DISABLED"
 	if cfg.DebugLogging() {
-		debugLogging = "x"
+		debugLogging = "ENABLED"
 	}
 	mainMenu := tview.NewList().
-		AddItem("["+debugLogging+"] Debug Logging", "Change the status of debug logging", '1', func() {
+		AddItem("Debug Logging", "Change the status of debug logging currently "+debugLogging, '1', func() {
 			cfg.SetDebugLogging(!cfg.DebugLogging())
 			BuildMainMenu(cfg, pages, app)
 		}).
@@ -52,7 +53,24 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Readers", "Set nfc readers options", '3', func() {
 			pages.SwitchToPage("readers")
 		}).
-		AddItem("Quit", "Press to exit", 'q', func() {
+		AddItem("Scan mode", "Set scanning options", '4', func() {
+			pages.SwitchToPage("scan")
+		}).
+		AddItem("Systems", "Not implemented yet", '5', func() {
+		}).
+		AddItem("Launchers", "Not implemented yet", '6', func() {
+		}).
+		AddItem("ZapScript", "Not implemented yet", '7', func() {
+		}).
+		AddItem("Service", "Not implemented yet", '8', func() {
+		}).
+		AddItem("Mappings", "Not implemented yet", '9', func() {
+		}).
+		AddItem("Save and exit", "Press to save", 's', func() {
+			cfg.Save()
+			app.Stop()
+		}).
+		AddItem("Quit Without saving", "Press to exit", 'q', func() {
 			app.Stop()
 		})
 	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
@@ -88,31 +106,44 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 /*
 type Readers struct {
 	AutoDetect bool             `toml:"auto_detect"`
-	Scan       ReadersScan      `toml:"scan,omitempty"`
 	Connect    []ReadersConnect `toml:"connect,omitempty"`
 }
 */
 
-func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	autoDetect := " "
-	if cfg.AutoDetect() {
-		autoDetect = "X"
+func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+
+	autoDetect := cfg.AutoDetect()
+
+	connectionStrings := []string{}
+	for _, item := range cfg.Readers().Connect {
+		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
 
-	readersMenu := tview.NewList().
-		AddItem("["+autoDetect+"] Auto detect", "Enable or disable the auto detection for readers", '1', func() {
-			cfg.SetAutoDetect(!cfg.AutoDetect())
-			BuildReadersMenu(cfg, pages, app)
-		}).
-		AddItem("Scan mode", "Enter scan mode sub menu", '2', func() {
-			pages.SwitchToPage("scan")
-		}).
-		AddItem("Connection strings", "Input each device's connection string", '3', func() {
-			pages.SwitchToPage("connect")
-		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
+	textArea := tview.NewTextArea().
+		SetLabel("Connection strings (1 per line)").
+		SetText(strings.Join(connectionStrings, "\n"), false).
+		SetSize(5, 40).
+		SetMaxLength(200)
+
+	readersMenu := tview.NewForm()
+	readersMenu.AddCheckbox("Autodetect reader", autoDetect, func(checked bool) {
+		cfg.SetAutoDetect(checked)
+	}).
+		AddFormItem(textArea).
+		AddButton("Confirm", func() {
+			newConnect := []config.ReadersConnect{}
+			connStrings := strings.Split(textArea.GetText(), "\n")
+			for _, item := range connStrings {
+				couple := strings.SplitN(item, ":", 2)
+				if len(couple) == 2 {
+					newConnect = append(newConnect, config.ReadersConnect{Driver: couple[0], Path: couple[1]})
+				}
+			}
+
+			cfg.SetReaderConnections(newConnect)
 			pages.SwitchToPage("main")
 		})
+
 	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
 	pageDefaults("readers", pages, readersMenu)
 	return readersMenu
@@ -159,8 +190,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		}).
 		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
 		AddButton("Confirm", func() {
-
-			pages.SwitchToPage("readers")
+			pages.SwitchToPage("main")
 		})
 	scanMenu.SetTitle(" Zaparoo config editor - Scan mode menu ")
 	pageDefaults("scan", pages, scanMenu)
