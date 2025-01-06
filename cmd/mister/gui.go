@@ -37,57 +37,87 @@ import (
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func tryAddStartup() error {
+func BuildAppAndRetry(
+	builder func(pl platforms.Platform, service *utils.Service) *tview.Application,
+	pl platforms.Platform,
+	service *utils.Service,
+) {
+	appTty := builder(pl, service)
+
+	if err := appTty.Run(); err != nil {
+		appTty = nil
+		appTty2 := builder(pl, service)
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+		if err == nil {
+			screen, err := tcell.NewTerminfoScreenFromTty(tty)
+			if err == nil {
+				appTty2.SetScreen(screen)
+			} else {
+				panic(err)
+			}
+		} else {
+			panic(err)
+		}
+		if err := appTty2.Run(); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *tview.Application {
+	var startup mrextMister.Startup
+	app := tview.NewApplication()
+	// create the main modal
+	modal := tview.NewModal()
+	modal.SetTitle("Install service").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
+		AddButtons([]string{"Yes", "No"}).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Yes" {
+				err := startup.AddService("mrext/" + config.AppName)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
+					os.Exit(1)
+				}
+
+				err = startup.Save()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
+					os.Exit(1)
+				}
+				app.Stop()
+			} else if buttonLabel == "No" {
+				app.Stop()
+			}
+		})
+	return app.SetRoot(modal, true).EnableMouse(true)
+}
+
+func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	var startup mrextMister.Startup
 
 	err := startup.Load()
 	if err != nil {
 		log.Error().Msgf("failed to load startup file: %s", err)
 	}
-	app := tview.NewApplication()
-
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			return err
+			panic(err)
 		}
 
 		err = startup.Save()
 		if err != nil {
-			return err
+			panic(err)
 		}
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		// create the main modal
-		modal := tview.NewModal()
-		modal.SetTitle("Install service").
-			SetBorder(true).
-			SetTitleAlign(tview.AlignCenter)
-		modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
-			AddButtons([]string{"Yes", "No"}).
-			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-				if buttonLabel == "Yes" {
-					err = startup.AddService("mrext/" + config.AppName)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-						os.Exit(1)
-					}
-
-					err = startup.Save()
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
-						os.Exit(1)
-					}
-					app.Stop()
-				} else if buttonLabel == "No" {
-					app.Stop()
-				}
-			})
+		BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
 	}
-
-	return nil
 }
 
 func copyLogToSd(pl platforms.Platform) string {
@@ -151,7 +181,7 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func buildTheUi(pl platforms.Platform, cfg *config.Instance, service *utils.Service) *tview.Application {
+func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Application {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
@@ -233,24 +263,5 @@ func buildTheUi(pl platforms.Platform, cfg *config.Instance, service *utils.Serv
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) {
 	// Asturur > Wizzo
-	appTty := buildTheUi(pl, cfg, service)
-
-	if err := appTty.Run(); err != nil {
-		appTty = nil
-		appTty2 := buildTheUi(pl, cfg, service)
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-		if err == nil {
-			screen, err := tcell.NewTerminfoScreenFromTty(tty)
-			if err == nil {
-				appTty2.SetScreen(screen)
-			} else {
-				panic(err)
-			}
-		} else {
-			panic(err)
-		}
-		if err := appTty2.Run(); err != nil {
-			panic(err)
-		}
-	}
+	BuildAppAndRetry(buildTheUi, pl, service)
 }

@@ -130,11 +130,7 @@ func main() {
 	flags.Post(cfg)
 
 	// offer to add service to MiSTer startup if it's not already there
-	err = tryAddStartup()
-	if err != nil {
-		log.Error().Err(err).Msgf("error displaying startup dialog")
-		os.Exit(1)
-	}
+	tryAddStartup(pl, svc)
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
