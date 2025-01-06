@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
@@ -103,13 +104,14 @@ func copyLogToSd(pl platforms.Platform) string {
 	return outcome
 }
 
-func uploadLog(pl platforms.Platform, pages *tview.Pages) string {
+func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 
 	logPath := path.Join(pl.LogDir(), config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {})
+	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
 	pages.RemovePage("export")
 	// fixme: this is not updating, too busy
 	pages.AddPage("temp_upload", modal, true, true)
+	app.ForceDraw()
 	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
 	out, err := exec.Command("bash", "-c", uploadCmd).Output()
 	pages.RemovePage("temp_upload")
@@ -135,14 +137,17 @@ func modalBuilder(content tview.Primitive, width int, height int) tview.Primitiv
 		AddItem(nil, 0, 1, false)
 }
 
-func genericModal(message string, title string, action func(buttonIndex int, buttonLabel string)) *tview.Modal {
+func genericModal(message string, title string, action func(buttonIndex int, buttonLabel string), withButton bool) *tview.Modal {
 	modal := tview.NewModal()
 	modal.SetTitle(title).
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
-	modal.SetText(message).
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(action)
+	modal.SetText(message)
+	if withButton {
+		modal.AddButtons([]string{"OK"}).
+			SetDoneFunc(action)
+	}
+
 	return modal
 }
 
@@ -183,10 +188,10 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 	logExport.
 		AddItem("Upload to termbin.com", "", 'a', func() {
 			pages.RemovePage("export")
-			outcome := uploadLog(pl, pages)
+			outcome := uploadLog(pl, pages, app)
 			modal := genericModal(outcome, "Log upload", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("upload")
-			})
+			}, true)
 			pages.AddPage("upload", modal, true, true)
 		}).
 		AddItem("Copy to SD card", "", 'b', func() {
@@ -194,7 +199,7 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 			outcome := copyLogToSd(pl)
 			modal := genericModal(outcome, "Log copy", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("copy")
-			})
+			}, true)
 			pages.AddPage("copy", modal, true, true)
 		}).
 		AddItem("Cancel", "", 'q', func() {
@@ -221,22 +226,20 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 			if buttonLabel == "Export log" {
 				widget := modalBuilder(logExport, 42, 8)
 				pages.AddPage("export", widget, true, true)
-				// exportLog(pl, pages)
 			}
 		})
-	// if pl.Id() == "mister" {
-	// 	tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
 
-	// 	screen, err := tcell.NewTerminfoScreenFromTty(tty)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-
-	// 	app.SetScreen(screen)
-	// }
+	tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+	if err == nil {
+		screen, err := tcell.NewTerminfoScreenFromTty(tty)
+		if err == nil {
+			app.SetScreen(screen)
+		} else {
+			panic(err)
+		}
+	} else {
+		panic(err)
+	}
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
