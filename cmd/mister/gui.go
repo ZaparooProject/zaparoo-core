@@ -31,93 +31,59 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	// mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-// func tryAddStartup(stdscr *goncurses.Window) error {
-// 	var startup mrextMister.Startup
+func tryAddStartup() error {
+	var startup mrextMister.Startup
 
-// 	err := startup.Load()
-// 	if err != nil {
-// 		log.Error().Msgf("failed to load startup file: %s", err)
-// 	}
+	err := startup.Load()
+	if err != nil {
+		log.Error().Msgf("failed to load startup file: %s", err)
+	}
+	app := tview.NewApplication()
 
-// 	// migration from tapto name
-// 	if startup.Exists("mrext/tapto") {
-// 		err = startup.Remove("mrext/tapto")
-// 		if err != nil {
-// 			return err
-// 		}
+	// migration from tapto name
+	if startup.Exists("mrext/tapto") {
+		err = startup.Remove("mrext/tapto")
+		if err != nil {
+			return err
+		}
 
-// 		err = startup.Save()
-// 		if err != nil {
-// 			return err
-// 		}
-// 	}
+		err = startup.Save()
+		if err != nil {
+			return err
+		}
+	}
 
-// 	if !startup.Exists("mrext/" + config.AppName) {
-// 		win, err := curses.NewWindow(stdscr, 6, 43, "", -1)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		defer func(win *goncurses.Window) {
-// 			err := win.Delete()
-// 			if err != nil {
-// 				log.Error().Msgf("failed to delete window: %s", err)
-// 			}
-// 		}(win)
+	if !startup.Exists("mrext/" + config.AppName) {
+		// create the main modal
+		modal := tview.NewModal()
+		modal.SetTitle("Install service").
+			SetBorder(true).
+			SetTitleAlign(tview.AlignCenter)
+		modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
+			AddButtons([]string{"Yes", "No"}).
+			SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+				if buttonLabel == "Yes" {
+					err = startup.AddService("mrext/" + config.AppName)
+					if err != nil {
+						return err
+					}
 
-// 		var ch goncurses.Key
-// 		selected := 0
+					err = startup.Save()
+					if err != nil {
+						return err
+					}
+					app.Stop()
+				} else if buttonLabel == "No" {
+					app.Stop()
+				}
+			})
+	}
 
-// 		for {
-// 			win.MovePrint(1, 3, "Add Zaparoo service to MiSTer startup?")
-// 			win.MovePrint(2, 2, "This won't impact MiSTer's performance.")
-// 			curses.DrawActionButtons(win, []string{"Yes", "No"}, selected, 10)
-
-// 			win.NoutRefresh()
-// 			err := goncurses.Update()
-// 			if err != nil {
-// 				return err
-// 			}
-
-// 			ch = win.GetChar()
-
-// 			if ch == goncurses.KEY_LEFT {
-// 				if selected == 0 {
-// 					selected = 1
-// 				} else {
-// 					selected = 0
-// 				}
-// 			} else if ch == goncurses.KEY_RIGHT {
-// 				if selected == 0 {
-// 					selected = 1
-// 				} else {
-// 					selected = 0
-// 				}
-// 			} else if ch == goncurses.KEY_ENTER || ch == 10 || ch == 13 {
-// 				break
-// 			} else if ch == goncurses.KEY_ESC {
-// 				selected = 1
-// 				break
-// 			}
-// 		}
-
-// 		if selected == 0 {
-// 			err = startup.AddService("mrext/" + config.AppName)
-// 			if err != nil {
-// 				return err
-// 			}
-
-// 			err = startup.Save()
-// 			if err != nil {
-// 				return err
-// 			}
-// 		}
-// 	}
-
-// 	return nil
-// }
+	return nil
+}
 
 func copyLogToSd(pl platforms.Platform) string {
 	logPath := path.Join(pl.LogDir(), config.LogFile)
