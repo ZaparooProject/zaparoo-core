@@ -4,8 +4,6 @@ go 1.22.0
 
 toolchain go1.23.4
 
-require github.com/rthornton128/goncurses v0.0.0-20220628231859-fd57939296e5
-
 require golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 
 require gopkg.in/ini.v1 v1.67.0
@@ -32,7 +30,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
-	github.com/rivo/tview v0.0.0-20241227133733-17b7edb88c57 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/term v0.27.0 // indirect
 )
@@ -51,6 +48,7 @@ require (
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/olahol/melody v1.2.1
 	github.com/pelletier/go-toml/v2 v2.2.3
+	github.com/rivo/tview v0.0.0-20241227133733-17b7edb88c57
 	github.com/rs/zerolog v1.31.0
 	github.com/wizzomafizzo/mrext v0.1.2
 	go.bug.st/serial v1.6.2

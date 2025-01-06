@@ -9,7 +9,7 @@ RUN apt-get install -y ca-certificates openssl && \
     update-ca-certificates
 
 # install go and app dependencies
-RUN apt-get install build-essential git curl wget ncurses-dev -y && \
+RUN apt-get install build-essential git curl wget -y && \
     apt-get install golang-doc golang-go golang-src golang -y
 RUN mkdir /internal
 

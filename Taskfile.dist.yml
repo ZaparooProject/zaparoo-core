@@ -4,7 +4,7 @@ env:
   GO111MODULE: on
   GOPROXY: https://goproxy.io,direct
   CGO_ENABLED: 1
-  CGO_LDFLAGS: -lpcsclite -lnfc -lusb -lcurses
+  CGO_LDFLAGS: -lpcsclite -lnfc -lusb
   UID:
     sh: id -u
   GID:
