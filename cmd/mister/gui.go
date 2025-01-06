@@ -151,8 +151,7 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
-
+func buildTheUi(pl platforms.Platform, cfg *config.Instance, service *utils.Service) *tview.Application {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
@@ -229,21 +228,29 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 			}
 		})
 
-	tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-	if err == nil {
-		screen, err := tcell.NewTerminfoScreenFromTty(tty)
+	return app.SetRoot(pages, true).EnableMouse(true)
+}
+
+func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) {
+	// Asturur > Wizzo
+	appTty := buildTheUi(pl, cfg, service)
+
+	if err := appTty.Run(); err != nil {
+		appTty = nil
+		appTty2 := buildTheUi(pl, cfg, service)
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
 		if err == nil {
-			app.SetScreen(screen)
+			screen, err := tcell.NewTerminfoScreenFromTty(tty)
+			if err == nil {
+				appTty2.SetScreen(screen)
+			} else {
+				panic(err)
+			}
 		} else {
 			panic(err)
 		}
-	} else {
-		panic(err)
+		if err := appTty2.Run(); err != nil {
+			panic(err)
+		}
 	}
-
-	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
-
-	return err
 }

@@ -145,8 +145,5 @@ func main() {
 	}
 
 	// display main info gui
-	err = displayServiceInfo(pl, cfg, svc)
-	if err != nil {
-		log.Error().Err(err).Msg("error displaying info dialog")
-	}
+	displayServiceInfo(pl, cfg, svc)
 }
