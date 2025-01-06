@@ -21,6 +21,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -68,12 +70,14 @@ func tryAddStartup() error {
 				if buttonLabel == "Yes" {
 					err = startup.AddService("mrext/" + config.AppName)
 					if err != nil {
-						return err
+						fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
+						os.Exit(1)
 					}
 
 					err = startup.Save()
 					if err != nil {
-						return err
+						fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
+						os.Exit(1)
 					}
 					app.Stop()
 				} else if buttonLabel == "No" {
