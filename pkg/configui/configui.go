@@ -1,6 +1,8 @@
 package configui
 
 import (
+	"errors"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -222,7 +224,9 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	BuildScanModeMenu(cfg, pages, app)
 	pages.SwitchToPage("main")
 
-	if pl.Id() == "mister" {
+	// on mister, when running from scripts menu, /dev/tty is not available
+	if _, err := os.Stat("/dev/tty"); errors.Is(err, os.ErrNotExist) &&
+		pl.Id() == "mister" { // TODO: use a const id for this
 		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
 		if err != nil {
 			panic(err)

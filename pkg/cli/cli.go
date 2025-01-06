@@ -120,6 +120,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 		configui.ConfigUi(cfg, pl)
 		os.Exit(0)
 	}
+
 	if *f.Write != "" {
 		data, err := json.Marshal(&models.ReaderWriteParams{
 			Text: *f.Write,
