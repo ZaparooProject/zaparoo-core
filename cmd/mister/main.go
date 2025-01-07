@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
@@ -100,6 +101,17 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
+		err := exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error running stopping tapto.sh: %v\n", err)
+		}
+		//err = os.Remove("/media/fat/Scripts/tapto.sh")
+		//if err != nil {
+		//	_, _ = fmt.Fprintf(os.Stderr, "Error removing tapto.sh: %v\n", err)
+		//}
 	}
 
 	defaults := config.BaseDefaults
