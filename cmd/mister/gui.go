@@ -43,17 +43,15 @@ func tryAddStartup(stdscr *goncurses.Window) error {
 		log.Error().Msgf("failed to load startup file: %s", err)
 	}
 
+	changed := false
+
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
 			return err
 		}
-
-		err = startup.Save()
-		if err != nil {
-			return err
-		}
+		changed = true
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
@@ -109,7 +107,10 @@ func tryAddStartup(stdscr *goncurses.Window) error {
 			if err != nil {
 				return err
 			}
+			changed = true
+		}
 
+		if changed && len(startup.Entries) > 0 {
 			err = startup.Save()
 			if err != nil {
 				return err

@@ -50,17 +50,15 @@ func addToStartup() error {
 		return err
 	}
 
+	changed := false
+
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
 			return err
 		}
-
-		err = startup.Save()
-		if err != nil {
-			return err
-		}
+		changed = true
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
@@ -68,7 +66,10 @@ func addToStartup() error {
 		if err != nil {
 			return err
 		}
+		changed = true
+	}
 
+	if changed && len(startup.Entries) > 0 {
 		err = startup.Save()
 		if err != nil {
 			return err
@@ -104,14 +105,7 @@ func main() {
 	}
 
 	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
-		err := exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error running stopping tapto.sh: %v\n", err)
-		}
-		//err = os.Remove("/media/fat/Scripts/tapto.sh")
-		//if err != nil {
-		//	_, _ = fmt.Fprintf(os.Stderr, "Error removing tapto.sh: %v\n", err)
-		//}
+		_ = exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
 	}
 
 	defaults := config.BaseDefaults
