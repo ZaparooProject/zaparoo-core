@@ -4,13 +4,8 @@ go 1.22.0
 
 toolchain go1.23.4
 
-<<<<<<< HEAD
-=======
 replace github.com/gdamore/tcell/v2 v2.8.0 => github.com/asturur/tcell/v2 v2.8.2
 
-require github.com/rthornton128/goncurses v0.0.0-20220628231859-fd57939296e5
-
->>>>>>> main
 require golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 
 require gopkg.in/ini.v1 v1.67.0
@@ -31,16 +26,6 @@ require (
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect
-<<<<<<< HEAD
-	github.com/gdamore/encoding v1.0.0 // indirect
-	github.com/gdamore/tcell/v2 v2.7.1 // indirect
-	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.15 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/term v0.27.0 // indirect
-=======
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
@@ -48,7 +33,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/term v0.28.0 // indirect
->>>>>>> main
 )
 
 require (
