@@ -48,6 +48,7 @@ func BuildAppAndRetry(
 		appTty = nil
 		appTty2 := builder(pl, service)
 		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+
 		if err == nil {
 			screen, err := tcell.NewTerminfoScreenFromTty(tty)
 			if err == nil {
@@ -58,6 +59,7 @@ func BuildAppAndRetry(
 		} else {
 			panic(err)
 		}
+
 		if err := appTty2.Run(); err != nil {
 			panic(err)
 		}
@@ -104,16 +106,14 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 		log.Error().Msgf("failed to load startup file: %s", err)
 	}
 
-	changed := false
-
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
 			panic(err)
 		}
-		changed = true
 	}
+
 	if !startup.Exists("mrext/" + config.AppName) {
 		BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
 	}
@@ -234,8 +234,8 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Applicatio
 			pages.RemovePage("export")
 		}).
 		ShowSecondaryText(false)
-		// Coloring will require some effort
-		// SetBackgroundColor(modal.GetBackgroundColor())
+	// Coloring will require some effort
+	// SetBackgroundColor(modal.GetBackgroundColor())
 	logExport.
 		SetBorder(true).
 		SetBorderPadding(1, 1, 1, 1).
