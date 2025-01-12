@@ -4,19 +4,21 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/google/uuid"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"io"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Flags struct {
@@ -30,6 +32,7 @@ type Flags struct {
 	DeleteClient *string
 	Qr           *bool
 	Version      *bool
+	Config       *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -85,6 +88,11 @@ func SetupFlags() *Flags {
 			false,
 			"print version and exit",
 		),
+		Config: flag.Bool(
+			"config",
+			false,
+			"start the text ui to handle zaparoo config",
+		),
 	}
 }
 
@@ -107,7 +115,12 @@ type ConnQr struct {
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
-func (f *Flags) Post(cfg *config.Instance) {
+func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
+	if *f.Config {
+		configui.ConfigUi(cfg, pl)
+		os.Exit(0)
+	}
+
 	if *f.Write != "" {
 		data, err := json.Marshal(&models.ReaderWriteParams{
 			Text: *f.Write,

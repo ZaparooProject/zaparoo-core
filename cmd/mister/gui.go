@@ -81,11 +81,12 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *t
 					fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
 					os.Exit(1)
 				}
-
-				err = startup.Save()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
-					os.Exit(1)
+				if len(startup.Entries) > 0 {
+					err = startup.Save()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
+						os.Exit(1)
+					}
 				}
 				app.Stop()
 			} else if buttonLabel == "No" {
@@ -102,19 +103,17 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	if err != nil {
 		log.Error().Msgf("failed to load startup file: %s", err)
 	}
+
+	changed := false
+
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
 			panic(err)
 		}
-
-		err = startup.Save()
-		if err != nil {
-			panic(err)
-		}
+		changed = true
 	}
-
 	if !startup.Exists("mrext/" + config.AppName) {
 		BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
@@ -145,9 +146,30 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.stopMappingsWatcher = closeMappingsWatcher
 
-	err = Setup(p.tr)
-	if err != nil {
-		return err
+	if _, err := os.Stat(SuccessSoundFile); err != nil {
+		// copy success sound to temp
+		sf, err := os.Create(SuccessSoundFile)
+		if err != nil {
+			log.Error().Msgf("error creating success sound file: %s", err)
+		}
+		_, err = sf.Write(assets.SuccessSound)
+		if err != nil {
+			log.Error().Msgf("error writing success sound file: %s", err)
+		}
+		_ = sf.Close()
+	}
+
+	if _, err := os.Stat(FailSoundFile); err != nil {
+		// copy fail sound to temp
+		ff, err := os.Create(FailSoundFile)
+		if err != nil {
+			log.Error().Msgf("error creating fail sound file: %s", err)
+		}
+		_, err = ff.Write(assets.FailSound)
+		if err != nil {
+			log.Error().Msgf("error writing fail sound file: %s", err)
+		}
+		_ = ff.Close()
 	}
 
 	stopSocket, err := StartSocketServer(
@@ -184,6 +206,34 @@ func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification
 
 	p.tr = tr
 	p.stopTr = stopTr
+
+	// attempt arcadedb update
+	go func() {
+		haveInternet := utils.WaitForInternet(30)
+		if !haveInternet {
+			log.Warn().Msg("no internet connection, skipping network tasks")
+			return
+		}
+
+		arcadeDbUpdated, err := UpdateArcadeDb()
+		if err != nil {
+			log.Error().Msgf("failed to download arcade database: %s", err)
+		}
+
+		if arcadeDbUpdated {
+			log.Info().Msg("arcade database updated")
+			tr.ReloadNameMap()
+		} else {
+			log.Info().Msg("arcade database is up to date")
+		}
+
+		m, err := ReadArcadeDb()
+		if err != nil {
+			log.Error().Msgf("failed to read arcade database: %s", err)
+		} else {
+			log.Info().Msgf("arcade database has %d entries", len(m))
+		}
+	}()
 
 	return nil
 }

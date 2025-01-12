@@ -122,7 +122,7 @@ def create_zaparoo_db(tag: str) -> RepoDb:
                     "size": os.stat("{}/{}".format(SCRATCH_FOLDER, zip_filename)).st_size,
                     "url": "{}/{}".format(DL_URL_PREFIX.format(tag), zip_filename),
                 },
-                "description": "Extracting TapTo release",
+                "description": "Extracting Zaparoo release",
                 "internal_summary": {
                     "files": files,
                     "folders": folders,
@@ -153,7 +153,7 @@ def main():
     os.system("wget {}/{} -O {}/{}".format(DL_URL_PREFIX.format(tag), zip_filename, SCRATCH_FOLDER, zip_filename))
     os.system("unzip {}/{} -d {}".format(SCRATCH_FOLDER, zip_filename, SCRATCH_FOLDER))
 
-    repo_db = create_tapto_db(tag)
+    repo_db = create_zaparoo_db(tag)
     with open("{}/tapto.json".format(REPO_FOLDER), "w") as f:
         f.write(generate_json(repo_db))
 

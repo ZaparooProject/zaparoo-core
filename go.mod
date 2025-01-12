@@ -4,6 +4,13 @@ go 1.22.0
 
 toolchain go1.23.4
 
+<<<<<<< HEAD
+=======
+replace github.com/gdamore/tcell/v2 v2.8.0 => github.com/asturur/tcell/v2 v2.8.2
+
+require github.com/rthornton128/goncurses v0.0.0-20220628231859-fd57939296e5
+
+>>>>>>> main
 require golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 
 require gopkg.in/ini.v1 v1.67.0
@@ -17,13 +24,14 @@ require (
 	github.com/txn2/txeh v1.4.0 // indirect
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/net v0.32.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/tools v0.28.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect
+<<<<<<< HEAD
 	github.com/gdamore/encoding v1.0.0 // indirect
 	github.com/gdamore/tcell/v2 v2.7.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
@@ -32,6 +40,15 @@ require (
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/term v0.27.0 // indirect
+=======
+	github.com/gdamore/encoding v1.0.1 // indirect
+	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
+	golang.org/x/term v0.28.0 // indirect
+>>>>>>> main
 )
 
 require (
@@ -39,6 +56,7 @@ require (
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/clausecker/nfc/v2 v2.1.4
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
+	github.com/gdamore/tcell/v2 v2.8.0
 	github.com/go-chi/chi/v5 v5.0.12
 	github.com/go-chi/cors v1.2.1
 	github.com/gobwas/glob v0.2.3

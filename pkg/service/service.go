@@ -221,6 +221,8 @@ func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
 ) (func() error, error) {
+	log.Info().Msgf("version: %s", config.AppVersion)
+
 	dirs := []string{
 		pl.DataDir(),
 		pl.TempDir(),

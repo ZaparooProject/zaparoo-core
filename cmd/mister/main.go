@@ -25,6 +25,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
@@ -47,17 +48,15 @@ func addToStartup() error {
 		return err
 	}
 
+	changed := false
+
 	// migration from tapto name
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
 			return err
 		}
-
-		err = startup.Save()
-		if err != nil {
-			return err
-		}
+		changed = true
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
@@ -65,7 +64,10 @@ func addToStartup() error {
 		if err != nil {
 			return err
 		}
+		changed = true
+	}
 
+	if changed && len(startup.Entries) > 0 {
 		err = startup.Save()
 		if err != nil {
 			return err
@@ -100,13 +102,16 @@ func main() {
 		os.Exit(0)
 	}
 
+	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
+		_ = exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
+	}
+
 	defaults := config.BaseDefaults
 	iniPath := "/media/fat/Scripts/tapto.ini"
 	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
 		} else {
 			defaults = migrated
 		}
@@ -127,7 +132,7 @@ func main() {
 	}
 	svc.ServiceHandler(serviceFlag)
 
-	flags.Post(cfg)
+	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
 	tryAddStartup(pl, svc)

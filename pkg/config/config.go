@@ -252,10 +252,15 @@ func (c *Instance) Save() error {
 		log.Info().Msgf("generated new device id: %s", newId)
 	}
 
+	tmpMappings := c.vals.Mappings
+	c.vals.Mappings = Mappings{}
+
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
 		return err
 	}
+
+	c.vals.Mappings = tmpMappings
 
 	return os.WriteFile(c.cfgPath, data, 0644)
 }
