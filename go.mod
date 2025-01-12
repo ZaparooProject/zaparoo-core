@@ -4,8 +4,6 @@ go 1.22.0
 
 toolchain go1.23.4
 
-replace github.com/gdamore/tcell/v2 v2.8.0 => github.com/asturur/tcell/v2 v2.8.2
-
 require golang.org/x/exp v0.0.0-20241217172543-b2144cdd0a67
 
 require gopkg.in/ini.v1 v1.67.0
@@ -40,7 +38,7 @@ require (
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/clausecker/nfc/v2 v2.1.4
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
-	github.com/gdamore/tcell/v2 v2.8.0
+	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/go-chi/chi/v5 v5.0.12
 	github.com/go-chi/cors v1.2.1
 	github.com/gobwas/glob v0.2.3
