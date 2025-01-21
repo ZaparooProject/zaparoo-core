@@ -53,6 +53,34 @@ func launchSinden(
 	}
 }
 
+func launchAggGnw(cfg *config.Instance, path string) error {
+	s, err := games.GetSystem("GameNWatch")
+	if err != nil {
+		return err
+	}
+
+	sn := *s
+	sn.Rbf = "_Console/GameAndWatch"
+	sn.Folder = []string{"Game and Watch"}
+	sn.Slots = []games.Slot{
+		{
+			Exts: []string{".gnw"},
+			Mgl: &games.MglParams{
+				Delay:  1,
+				Method: "f",
+				Index:  1,
+			},
+		},
+	}
+
+	err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+	if err != nil {
+		return err
+	}
+
+	return mister.SetActiveGame(path)
+}
+
 func launchAltCore(
 	systemId string,
 	rbfPath string,
@@ -339,6 +367,13 @@ var Launchers = []platforms.Launcher{
 		Folders:    []string{"GameNWatch"},
 		Extensions: []string{".bin"},
 		Launch:     launch,
+	},
+	{
+		Id:         "GameAndWatch",
+		SystemId:   gamesdb.SystemGameNWatch,
+		Folders:    []string{"Game and Watch"},
+		Extensions: []string{".gnw"},
+		Launch:     launchAggGnw,
 	},
 	{
 		Id:         gamesdb.SystemGBA,

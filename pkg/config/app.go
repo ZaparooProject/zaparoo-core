@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	AppVersion  = "2.1.1"
+	AppVersion  = "2.2.0-dev"
 	AppName     = "zaparoo"
 	GamesDbFile = "games.db"
 	TapToDbFile = "tapto.db"
