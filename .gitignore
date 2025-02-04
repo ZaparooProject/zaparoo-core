@@ -27,3 +27,4 @@ Taskfile.yml
 /scripts/mister/build/_build
 
 .DS_Store
+tmp/

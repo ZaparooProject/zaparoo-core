@@ -22,13 +22,14 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"golang.org/x/exp/slices"
 
@@ -138,6 +139,15 @@ func LaunchToken(
 	totalCommands int,
 	currentIndex int,
 ) (error, bool) {
+	newText, err := checkLink(text)
+	if err != nil {
+		log.Error().Err(err).Msgf("error checking link, continuing")
+	} else if newText != "" {
+		log.Info().Msgf("valid zap link, replacing text: %s", newText)
+		text = newText
+	}
+
+	// advanced args
 	namedArgs := make(map[string]string)
 	if i := strings.LastIndex(text, "?"); i != -1 {
 		u, err := url.Parse(text[i:])
