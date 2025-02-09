@@ -139,7 +139,7 @@ func LaunchToken(
 	totalCommands int,
 	currentIndex int,
 ) (error, bool) {
-	newText, err := checkLink(text)
+	newText, err := checkLink(cfg, pl, text)
 	if err != nil {
 		log.Error().Err(err).Msgf("error checking link, continuing")
 	} else if newText != "" {
