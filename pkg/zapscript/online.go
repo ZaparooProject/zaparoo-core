@@ -153,6 +153,10 @@ func installRunMedia(
 	pl platforms.Platform,
 	action ZapLinkAction,
 ) (string, error) {
+	if pl.Id() != "mister" {
+		return "", errors.New("media install only supported for mister")
+	}
+
 	var mp MediaParams
 	err := json.Unmarshal(action.Params, &mp)
 	if err != nil {
