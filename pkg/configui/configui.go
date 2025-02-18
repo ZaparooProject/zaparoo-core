@@ -208,22 +208,10 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return scanMenu
 }
 
-func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
-	app := tview.NewApplication()
-	pages := tview.NewPages()
-
-	tview.Styles.BorderColor = tcell.ColorLightYellow
-	tview.Styles.PrimaryTextColor = tcell.ColorWhite
-	tview.Styles.ContrastSecondaryTextColor = tcell.ColorFuchsia
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	tview.Styles.ContrastBackgroundColor = tcell.ColorFuchsia
-
-	BuildMainMenu(cfg, pages, app)
-	BuildAudionMenu(cfg, pages, app)
-	BuildReadersMenu(cfg, pages, app)
-	BuildScanModeMenu(cfg, pages, app)
-	pages.SwitchToPage("main")
-
+func misterScreenWorkaround(
+	app *tview.Application,
+	pl platforms.Platform,
+) {
 	// on mister, when running from scripts menu, /dev/tty is not available
 	if _, err := os.Stat("/dev/tty"); errors.Is(err, os.ErrNotExist) &&
 		pl.Id() == "mister" { // TODO: use a const id for this
@@ -239,6 +227,29 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 
 		app.SetScreen(screen)
 	}
+}
+
+func setTheme() {
+	tview.Styles.BorderColor = tcell.ColorLightYellow
+	tview.Styles.PrimaryTextColor = tcell.ColorWhite
+	tview.Styles.ContrastSecondaryTextColor = tcell.ColorFuchsia
+	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDarkBlue
+	tview.Styles.ContrastBackgroundColor = tcell.ColorFuchsia
+}
+
+func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
+	app := tview.NewApplication()
+	pages := tview.NewPages()
+
+	setTheme()
+
+	BuildMainMenu(cfg, pages, app)
+	BuildAudionMenu(cfg, pages, app)
+	BuildReadersMenu(cfg, pages, app)
+	BuildScanModeMenu(cfg, pages, app)
+	pages.SwitchToPage("main")
+
+	misterScreenWorkaround(app, pl)
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)

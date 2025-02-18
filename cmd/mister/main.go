@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 
@@ -89,6 +90,16 @@ func main() {
 		false,
 		"add Zaparoo service to MiSTer startup if not already added",
 	)
+	showLoader := flag.Bool(
+		"show-loader",
+		true,
+		"display a generic loading widget",
+	)
+	showLoaderText := flag.String(
+		"show-loader-text",
+		"",
+		"set text shown in loading widget",
+	)
 
 	pl := &mister.Platform{}
 	flags.Pre(pl)
@@ -99,6 +110,9 @@ func main() {
 			_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
 			os.Exit(1)
 		}
+		os.Exit(0)
+	} else if *showLoader {
+		configui.LoaderUI(*showLoaderText)
 		os.Exit(0)
 	}
 
