@@ -2,12 +2,13 @@ package service
 
 import (
 	"errors"
+	"strings"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"strings"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -30,7 +31,7 @@ func shouldExit(
 		return false
 	}
 
-	if st.GetLastScanned().Remote {
+	if st.GetLastScanned().FromAPI {
 		return false
 	}
 

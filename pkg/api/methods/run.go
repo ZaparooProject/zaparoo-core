@@ -4,15 +4,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"golang.org/x/text/unicode/norm"
-	"net/http"
-	"net/url"
-	"strings"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/go-chi/chi/v5"
@@ -86,7 +87,7 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 	}
 
 	t.ScanTime = time.Now()
-	t.Remote = true // TODO: check if this is still necessary after api update
+	t.FromAPI = true // TODO: check if this is still necessary after api update
 
 	// TODO: how do we report back errors? put channel in queue
 	env.State.SetActiveCard(t)
@@ -122,7 +123,7 @@ func HandleRunRest(
 		t := tokens.Token{
 			Text:     norm.NFC.String(text),
 			ScanTime: time.Now(),
-			Remote:   true,
+			FromAPI:  true,
 		}
 
 		st.SetActiveCard(t)

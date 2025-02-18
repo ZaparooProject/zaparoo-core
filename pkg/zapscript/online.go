@@ -26,15 +26,16 @@ var AcceptedMimeTypes = []string{
 
 var MediaSafeList = []string{
 	"https://cdn.zaparoo.com",
+	"https://secure.cdn.zaparoo.com",
 }
 
 const (
-	ZapLinkActionZapScript = "ZAPSCRIPT"
-	ZapLinkActionMedia     = "MEDIA"
+	ZapLinkActionZapScript = "zapscript"
+	ZapLinkActionMedia     = "media"
 )
 
 type ZapLinkAction struct {
-	Action string          `json:"action"`
+	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
 }
 
@@ -117,6 +118,8 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 		return "", errors.New("invalid content type")
 	}
 
+	log.Debug().Msgf("zap link body: %s", string(body))
+
 	var zl ZapLink
 	err = json.Unmarshal(body, &zl)
 	if err != nil {
@@ -129,15 +132,17 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 
 	// just process the first action for now
 	action := zl.Actions[0]
+	method := strings.ToLower(action.Method)
 
-	if strings.EqualFold(action.Action, ZapLinkActionZapScript) {
+	switch method {
+	case ZapLinkActionZapScript:
 		var zsp ZapScriptParams
 		err = json.Unmarshal(action.Params, &zsp)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling zap script params: %w", err)
 		}
 		return zsp.ZapScript, nil
-	} else if strings.EqualFold(action.Action, ZapLinkActionMedia) {
+	case ZapLinkActionMedia:
 		var mp MediaParams
 		err = json.Unmarshal(action.Params, &mp)
 		if err != nil {
@@ -248,7 +253,7 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 		}
 
 		return path, nil
-	} else {
-		return "", fmt.Errorf("unknown action: %s", action.Action)
+	default:
+		return "", fmt.Errorf("unknown action: %s", action.Method)
 	}
 }

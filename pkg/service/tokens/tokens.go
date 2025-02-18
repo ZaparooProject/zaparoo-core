@@ -13,11 +13,12 @@ const (
 )
 
 type Token struct {
-	Type     string
-	UID      string
-	Text     string
-	Data     string
-	ScanTime time.Time
-	Remote   bool // TODO: wtf does this even do now
-	Source   string
+	Type      string
+	UID       string
+	Text      string
+	Data      string
+	ScanTime  time.Time
+	FromAPI   bool
+	Source    string
+	Untrusted bool
 }

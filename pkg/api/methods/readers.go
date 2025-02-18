@@ -3,6 +3,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/rs/zerolog/log"
@@ -29,7 +30,7 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) {
 	rid := rs[0]
 	lt := env.State.GetLastScanned()
 
-	if !lt.ScanTime.IsZero() && !lt.Remote {
+	if !lt.ScanTime.IsZero() && !lt.FromAPI {
 		rid = lt.Source
 	}
 

@@ -23,13 +23,14 @@ package service
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"golang.org/x/exp/slices"
 
@@ -87,7 +88,7 @@ func launchToken(
 			return err
 		}
 
-		if softwareSwap && !token.Remote {
+		if softwareSwap && !token.FromAPI {
 			log.Info().Msgf("current software launched set to: %s", token.UID)
 			lsq <- &token
 		}
