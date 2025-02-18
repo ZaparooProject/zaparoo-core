@@ -26,6 +26,10 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) error {
 }
 
 func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
+	if env.Untrusted {
+		return fmt.Errorf("command cannot be run from a remote source")
+	}
+
 	if !env.Cfg.IsExecuteAllowed(env.Args) {
 		return fmt.Errorf("execute not allowed: %s", env.Args)
 	}

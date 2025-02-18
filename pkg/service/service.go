@@ -79,7 +79,6 @@ func launchToken(
 			cfg,
 			plsc,
 			token,
-			mapped,
 			cmd,
 			len(cmds),
 			i,

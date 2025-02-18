@@ -12,6 +12,9 @@ import (
 
 // DEPRECATED
 func cmdKey(pl platforms.Platform, env platforms.CmdEnv) error {
+	if env.Untrusted {
+		return fmt.Errorf("command cannot be run from a remote source")
+	}
 	return pl.KeyboardInput(env.Args)
 }
 
@@ -70,6 +73,10 @@ func readKeys(keys string) ([]string, error) {
 }
 
 func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
+	if env.Untrusted {
+		return fmt.Errorf("command cannot be run from a remote source")
+	}
+
 	log.Info().Msgf("keyboard input: %s", env.Args)
 
 	// TODO: stuff like adjust delay, only press, etc.
@@ -91,6 +98,10 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
 }
 
 func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) error {
+	if env.Untrusted {
+		return fmt.Errorf("command cannot be run from a remote source")
+	}
+
 	log.Info().Msgf("gamepad input: %s", env.Args)
 
 	names, err := readKeys(env.Args)
@@ -115,7 +126,7 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) error {
 	}
 
 	for i := 0; i < amount; i++ {
-		pl.KeyboardInput(key)
+		_ = pl.KeyboardInput(key)
 		time.Sleep(100 * time.Millisecond)
 	}
 
