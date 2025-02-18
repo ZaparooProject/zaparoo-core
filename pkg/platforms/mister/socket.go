@@ -5,9 +5,10 @@ package mister
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"net"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/rs/zerolog/log"
@@ -97,7 +98,7 @@ func StartSocketServer(
 						rid := rids[0]
 
 						lt := getLastScan()
-						if lt != nil && !lt.ScanTime.IsZero() && !lt.Remote {
+						if lt != nil && !lt.ScanTime.IsZero() && !lt.FromAPI {
 							rid = lt.Source
 						}
 

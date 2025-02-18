@@ -19,10 +19,10 @@ type CmdEnv struct {
 	NamedArgs     map[string]string
 	Cfg           *config.Instance
 	Playlist      playlists.PlaylistController
-	Manual        bool
 	Text          string
 	TotalCommands int
 	CurrentIndex  int
+	Untrusted     bool
 }
 
 type ScanResult struct {

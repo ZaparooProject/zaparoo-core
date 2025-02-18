@@ -22,13 +22,14 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"golang.org/x/exp/slices"
 
@@ -133,11 +134,21 @@ func LaunchToken(
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
 	t tokens.Token,
-	manual bool,
 	text string,
 	totalCommands int,
 	currentIndex int,
 ) (error, bool) {
+	var untrusted bool
+	newText, err := checkLink(cfg, pl, text)
+	if err != nil {
+		log.Error().Err(err).Msgf("error checking link, continuing")
+	} else if newText != "" {
+		log.Info().Msgf("valid zap link, replacing text: %s", newText)
+		text = newText
+		untrusted = true
+	}
+
+	// advanced args
 	namedArgs := make(map[string]string)
 	if i := strings.LastIndex(text, "?"); i != -1 {
 		u, err := url.Parse(text[i:])
@@ -179,10 +190,10 @@ func LaunchToken(
 			NamedArgs:     namedArgs,
 			Cfg:           cfg,
 			Playlist:      plsc,
-			Manual:        manual,
 			Text:          text,
 			TotalCommands: totalCommands,
 			CurrentIndex:  currentIndex,
+			Untrusted:     untrusted,
 		}
 
 		if f, ok := commandMappings[cmd]; ok {
@@ -213,9 +224,9 @@ func LaunchToken(
 		Args:          text,
 		NamedArgs:     namedArgs,
 		Cfg:           cfg,
-		Manual:        manual,
 		Text:          text,
 		TotalCommands: totalCommands,
 		CurrentIndex:  currentIndex,
+		Untrusted:     untrusted,
 	}), true
 }

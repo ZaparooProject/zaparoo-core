@@ -2,12 +2,13 @@ package simple_serial
 
 import (
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -71,7 +72,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 		} else if strings.HasPrefix(ps[i], "removable=") {
 			// TODO: this isn't really what removable means, but it works
 			//		 for now. it will block shell commands though
-			t.Remote = ps[i][10:] == "no"
+			t.FromAPI = ps[i][10:] == "no"
 			hasArg = true
 		}
 	}
