@@ -143,117 +143,124 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 		}
 		return zsp.ZapScript, nil
 	case ZapLinkActionMedia:
-		var mp MediaParams
-		err = json.Unmarshal(action.Params, &mp)
-		if err != nil {
-			return "", fmt.Errorf("error unmarshalling media params: %w", err)
-		}
-
-		isSafe := false
-		if mp.Url != nil {
-			log.Debug().Msgf("checking media download url: %s", *mp.Url)
-
-			for _, safe := range MediaSafeList {
-				if strings.HasPrefix(*mp.Url, safe) {
-					isSafe = true
-					break
-				}
-			}
-
-			if !isSafe {
-				return "", errors.New("media download not in safe list")
-			}
-		}
-
-		if mp.Url == nil {
-			return "", errors.New("media download url is empty")
-		}
-
-		system, err := gamesdb.GetSystem(mp.System)
-		if err != nil {
-			return "", fmt.Errorf("error getting system: %w", err)
-		}
-
-		var launchers []platforms.Launcher
-		for _, l := range pl.Launchers() {
-			if l.SystemId == system.Id {
-				launchers = append(launchers, l)
-			}
-		}
-
-		if len(launchers) == 0 {
-			return "", fmt.Errorf("no launchers for system: %s", system.Id)
-		}
-
-		// just use the first launcher for now
-		launcher := launchers[0]
-
-		if launcher.Folders == nil {
-			return "", errors.New("no folders for launcher")
-		}
-
-		// just use the first folder for now
-		folder := launcher.Folders[0]
-
-		name := filepath.Base(*mp.Url)
-
-		// roots := pl.RootDirs(cfg)
-
-		// if len(roots) == 0 {
-		// 	return "", errors.New("no root dirs")
-		// }
-
-		// root := roots[0]
-
-		root := "/media/fat/games" // TODO: this is hardcoded for now
-
-		path := filepath.Join(root, folder, name)
-
-		log.Debug().Msgf("media path: %s", path)
-
-		// check if the file already exists
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		} else if !os.IsNotExist(err) {
-			return "", fmt.Errorf("error checking file: %w", err)
-		}
-
-		// download the file
-		log.Info().Msgf("downloading media: %s", *mp.Url)
-
-		resp, err := http.Get(*mp.Url)
-		if err != nil {
-			return "", fmt.Errorf("error getting url: %w", err)
-		}
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			if err != nil {
-				log.Error().Err(err).Msgf("closing body")
-			}
-		}(resp.Body)
-		if resp.StatusCode != 200 {
-			return "", fmt.Errorf("invalid status code: %d", resp.StatusCode)
-		}
-
-		file, err := os.Create(path)
-		if err != nil {
-			return "", fmt.Errorf("error creating file: %w", err)
-		}
-
-		defer func(File *os.File) {
-			err := File.Close()
-			if err != nil {
-				log.Error().Err(err).Msgf("closing file")
-			}
-		}(file)
-
-		_, err = io.Copy(file, resp.Body)
-		if err != nil {
-			return "", fmt.Errorf("error copying file: %w", err)
-		}
-
-		return path, nil
+		return installRunMedia(pl, action)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action.Method)
 	}
+}
+
+func installRunMedia(
+	pl platforms.Platform,
+	action ZapLinkAction,
+) (string, error) {
+	var mp MediaParams
+	err := json.Unmarshal(action.Params, &mp)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshalling media params: %w", err)
+	}
+
+	isSafe := false
+	if mp.Url != nil {
+		log.Debug().Msgf("checking media download url: %s", *mp.Url)
+
+		for _, safe := range MediaSafeList {
+			if strings.HasPrefix(*mp.Url, safe) {
+				isSafe = true
+				break
+			}
+		}
+
+		if !isSafe {
+			return "", errors.New("media download not in safe list")
+		}
+	}
+
+	if mp.Url == nil {
+		return "", errors.New("media download url is empty")
+	}
+
+	system, err := gamesdb.GetSystem(mp.System)
+	if err != nil {
+		return "", fmt.Errorf("error getting system: %w", err)
+	}
+
+	var launchers []platforms.Launcher
+	for _, l := range pl.Launchers() {
+		if l.SystemId == system.Id {
+			launchers = append(launchers, l)
+		}
+	}
+
+	if len(launchers) == 0 {
+		return "", fmt.Errorf("no launchers for system: %s", system.Id)
+	}
+
+	// just use the first launcher for now
+	launcher := launchers[0]
+
+	if launcher.Folders == nil {
+		return "", errors.New("no folders for launcher")
+	}
+
+	// just use the first folder for now
+	folder := launcher.Folders[0]
+
+	name := filepath.Base(*mp.Url)
+
+	// roots := pl.RootDirs(cfg)
+
+	// if len(roots) == 0 {
+	// 	return "", errors.New("no root dirs")
+	// }
+
+	// root := roots[0]
+
+	root := "/media/fat/games" // TODO: this is hardcoded for now
+
+	path := filepath.Join(root, folder, name)
+
+	log.Debug().Msgf("media path: %s", path)
+
+	// check if the file already exists
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("error checking file: %w", err)
+	}
+
+	// download the file
+	log.Info().Msgf("downloading media: %s", *mp.Url)
+
+	resp, err := http.Get(*mp.Url)
+	if err != nil {
+		return "", fmt.Errorf("error getting url: %w", err)
+	}
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Error().Err(err).Msgf("closing body")
+		}
+	}(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("invalid status code: %d", resp.StatusCode)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("error creating file: %w", err)
+	}
+
+	defer func(File *os.File) {
+		err := File.Close()
+		if err != nil {
+			log.Error().Err(err).Msgf("closing file")
+		}
+	}(file)
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error copying file: %w", err)
+	}
+
+	return path, nil
 }
