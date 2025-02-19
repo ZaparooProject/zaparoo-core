@@ -10,7 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -62,7 +65,11 @@ func isLink(s string) bool {
 	}
 }
 
-func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string, error) {
+func checkLink(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	value string,
+) (string, error) {
 	if !isLink(value) {
 		return "", nil
 	}
@@ -143,13 +150,14 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 		}
 		return zsp.ZapScript, nil
 	case ZapLinkActionMedia:
-		return installRunMedia(pl, action)
+		return installRunMedia(cfg, pl, action)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action.Method)
 	}
 }
 
 func installRunMedia(
+	cfg *config.Instance,
 	pl platforms.Platform,
 	action ZapLinkAction,
 ) (string, error) {
@@ -235,6 +243,35 @@ func installRunMedia(
 	// download the file
 	log.Info().Msgf("downloading media: %s", *mp.Url)
 
+	// display loading dialog
+	argsPath := filepath.Join(pl.TempDir(), "loader.json")
+	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
+	args := widgets.LoaderArgs{
+		Text:     fmt.Sprintf("Downloading %s...", mp.Name),
+		Complete: completePath,
+	}
+	argsJson, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling loader args: %w", err)
+	}
+	err = os.WriteFile(argsPath, argsJson, 0644)
+	if err != nil {
+		return "", fmt.Errorf("error writing loader args: %w", err)
+	}
+	// this is either the smartest or dumbest thing i ever came up with
+	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
+	apiArgs := models.RunParams{
+		Text: &text,
+	}
+	ps, err := json.Marshal(apiArgs)
+	if err != nil {
+		log.Error().Err(err).Msg("error creating run params")
+	}
+	_, err = client.LocalClient(cfg, "run", string(ps))
+	if err != nil {
+		log.Error().Err(err).Msg("error running local client")
+	}
+
 	resp, err := http.Get(*mp.Url)
 	if err != nil {
 		return "", fmt.Errorf("error getting url: %w", err)
@@ -264,6 +301,16 @@ func installRunMedia(
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error copying file: %w", err)
+	}
+
+	// remove loading dialog
+	err = os.Remove(argsPath)
+	if err != nil {
+		return "", fmt.Errorf("error removing loader args: %w", err)
+	}
+	err = os.WriteFile(completePath, []byte{}, 0644)
+	if err != nil {
+		return "", fmt.Errorf("error writing loader complete: %w", err)
 	}
 
 	return path, nil
