@@ -59,15 +59,18 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Scan mode", "Set scanning options", '4', func() {
 			pages.SwitchToPage("scan")
 		}).
-		AddItem("Systems", "Not implemented yet", '5', func() {
+		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
+			pages.SwitchToPage("tags")
 		}).
-		AddItem("Launchers", "Not implemented yet", '6', func() {
+		AddItem("Systems", "Not implemented yet", '6', func() {
 		}).
-		AddItem("ZapScript", "Not implemented yet", '7', func() {
+		AddItem("Launchers", "Not implemented yet", '7', func() {
 		}).
-		AddItem("Service", "Not implemented yet", '8', func() {
+		AddItem("ZapScript", "Not implemented yet", '8', func() {
 		}).
-		AddItem("Mappings", "Not implemented yet", '9', func() {
+		AddItem("Service", "Not implemented yet", '9', func() {
+		}).
+		AddItem("Mappings", "Not implemented yet", '0', func() {
 		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
 			cfg.Save()
@@ -80,6 +83,70 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
 	pageDefaults("main", pages, mainMenu)
 	return mainMenu
+}
+
+func BuildTagsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+
+	tagsMenu := tview.NewList().
+		AddItem("Read", "Check the content of a tag", '1', func() {
+			pages.SwitchToPage("tags_read")
+		}).
+		AddItem("Write", "Write a tag without running it", '2', func() {
+			pages.SwitchToPage("tags_write")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	tagsMenu.SetTitle(" Zaparoo config editor - Tags menu ")
+	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	pageDefaults("tags", pages, tagsMenu)
+	return tagsMenu
+}
+
+func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+
+	textArea := tview.NewTextArea().
+		SetLabel("Card content").
+		SetText(strings.Join(connectionStrings, "\n"), false).
+		SetSize(5, 40).
+		SetMaxLength(200)
+
+	tagsReadMenu := tview.NewForm().
+
+		AddFormItem(textArea).
+
+	tagsMenu := tview.NewList().
+		AddItem("Read", "Check the content of a tag", '1', func() {
+			pages.SwitchToPage("tags_read")
+		}).
+		AddItem("Write", "Write a tag without running it", '2', func() {
+			pages.SwitchToPage("tags_write")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	tagsMenu.SetTitle(" Zaparoo config editor - Read Tags ")
+	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	pageDefaults("tags_read", pages, tagsMenu)
+	return tagsMenu
+}
+
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+
+	tagsMenu := tview.NewList().
+		AddItem("Read", "Check the content of a tag", '1', func() {
+			pages.SwitchToPage("tags_read")
+		}).
+		AddItem("Write", "Write a tag without running it", '2', func() {
+			pages.SwitchToPage("tags_write")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	tagsMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	pageDefaults("tags_write", pages, tagsMenu)
+	return tagsMenu
 }
 
 /*
