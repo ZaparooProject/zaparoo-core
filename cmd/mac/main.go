@@ -22,11 +22,13 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
@@ -40,6 +42,17 @@ import (
 
 func main() {
 	pl := &mac.Platform{}
+	showLoader := flag.String(
+		"show-loader",
+		"",
+		"display a generic loading widget",
+	)
+	showPicker := flag.Bool(
+		"show-picker",
+		false,
+		"display a generic list picker widget",
+	)
+
 	flags := cli.SetupFlags()
 	flags.Pre(pl)
 
@@ -50,6 +63,17 @@ func main() {
 	)
 
 	flags.Post(cfg, pl)
+
+	if *showLoader != "" {
+		err := configui.LoaderUI(*showLoader)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	} else if *showPicker {
+		os.Exit(1)
+	}
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 

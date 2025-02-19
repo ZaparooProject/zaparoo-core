@@ -90,15 +90,10 @@ func main() {
 		false,
 		"add Zaparoo service to MiSTer startup if not already added",
 	)
-	showLoader := flag.Bool(
+	showLoader := flag.String(
 		"show-loader",
-		true,
-		"display a generic loading widget",
-	)
-	showLoaderText := flag.String(
-		"show-loader-text",
 		"",
-		"set text shown in loading widget",
+		"display a generic loading screen widget",
 	)
 
 	pl := &mister.Platform{}
@@ -111,8 +106,12 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
-	} else if *showLoader {
-		configui.LoaderUI(*showLoaderText)
+	} else if *showLoader != "" {
+		err := configui.LoaderUI(*showLoader)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
