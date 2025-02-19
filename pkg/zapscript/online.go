@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -62,7 +64,11 @@ func isLink(s string) bool {
 	}
 }
 
-func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string, error) {
+func checkLink(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	value string,
+) (string, error) {
 	if !isLink(value) {
 		return "", nil
 	}
@@ -143,13 +149,14 @@ func checkLink(_ *config.Instance, pl platforms.Platform, value string) (string,
 		}
 		return zsp.ZapScript, nil
 	case ZapLinkActionMedia:
-		return installRunMedia(pl, action)
+		return installRunMedia(cfg, pl, action)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action.Method)
 	}
 }
 
 func installRunMedia(
+	cfg *config.Instance,
 	pl platforms.Platform,
 	action ZapLinkAction,
 ) (string, error) {
@@ -234,6 +241,20 @@ func installRunMedia(
 
 	// download the file
 	log.Info().Msgf("downloading media: %s", *mp.Url)
+
+	// display loading dialog
+	text := ""
+	apiArgs := models.RunParams{
+		Text: &text,
+	}
+	ps, err := json.Marshal(apiArgs)
+	if err != nil {
+		log.Error().Err(err).Msg("error creating run params")
+	}
+	_, err = client.LocalClient(cfg, "run", string(ps))
+	if err != nil {
+		log.Error().Err(err).Msg("error running local client")
+	}
 
 	resp, err := http.Get(*mp.Url)
 	if err != nil {
