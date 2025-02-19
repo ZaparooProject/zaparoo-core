@@ -1,13 +1,15 @@
-package configui
+package widgets
 
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -38,15 +40,24 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 }
 
 type LoaderArgs struct {
-	Text    string `json:"text"`
-	Timeout int    `json:"timeout"`
+	Text     string `json:"text"`
+	Timeout  int    `json:"timeout"`
+	Complete string `json:"complete"`
 }
 
 // LoaderUI is a simple TUI screen that indicates something is happening to the
 // user. The text displayed can be customized with the text field.
-func LoaderUI(pl platforms.Platform, args string) error {
+func LoaderUI(pl platforms.Platform, argsPath string) error {
+	log.Debug().Str("args", argsPath).Msg("showing loader")
+
 	var loaderArgs LoaderArgs
-	err := json.Unmarshal([]byte(args), &loaderArgs)
+
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal([]byte(args), &loaderArgs)
 	if err != nil {
 		return err
 	}
@@ -56,7 +67,8 @@ func LoaderUI(pl platforms.Platform, args string) error {
 	}
 
 	app := tview.NewApplication()
-	setTheme(&tview.Styles)
+	configui.MisterScreenWorkaround(app, pl)
+	configui.SetTheme(&tview.Styles)
 
 	view := tview.NewTextView().
 		SetText(loaderArgs.Text).
@@ -81,6 +93,24 @@ func LoaderUI(pl platforms.Platform, args string) error {
 
 	handleTimeout(app, loaderArgs.Timeout)
 
+	var ticker *time.Ticker
+	if loaderArgs.Complete != "" {
+		go func() {
+			ticker = time.NewTicker(1 * time.Second)
+			for range ticker.C {
+				if _, err := os.Stat(loaderArgs.Complete); err == nil {
+					app.Stop()
+					err := os.Remove(loaderArgs.Complete)
+					if err != nil {
+						log.Error().Err(err).Msg("error removing complete file")
+					}
+					break
+				}
+			}
+		}()
+		defer ticker.Stop()
+	}
+
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEsc ||
 			event.Rune() == 'q' ||
@@ -89,8 +119,6 @@ func LoaderUI(pl platforms.Platform, args string) error {
 		}
 		return event
 	})
-
-	misterScreenWorkaround(app, pl)
 
 	if err := app.SetRoot(view, true).Run(); err != nil {
 		return err
@@ -113,9 +141,16 @@ type PickerArgs struct {
 
 // PickerUI displays a list picker of ZapScript to run via the API. Each action
 // can have an optional label.
-func PickerUI(cfg *config.Instance, pl platforms.Platform, args string) error {
+func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
+	log.Debug().Str("args", argsPath).Msg("showing picker")
+
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		return err
+	}
+
 	var pickerArgs PickerArgs
-	err := json.Unmarshal([]byte(args), &pickerArgs)
+	err = json.Unmarshal([]byte(args), &pickerArgs)
 	if err != nil {
 		return err
 	}
@@ -125,7 +160,8 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, args string) error {
 	}
 
 	app := tview.NewApplication()
-	setTheme(&tview.Styles)
+	configui.MisterScreenWorkaround(app, pl)
+	configui.SetTheme(&tview.Styles)
 
 	run := func(zapscript string) {
 		log.Info().Msgf("running picker zapscript: %s", zapscript)
@@ -204,8 +240,6 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, args string) error {
 		timer, cto = handleTimeout(app, cto)
 		return event
 	})
-
-	misterScreenWorkaround(app, pl)
 
 	if err := app.SetRoot(flex, true).Run(); err != nil {
 		return err

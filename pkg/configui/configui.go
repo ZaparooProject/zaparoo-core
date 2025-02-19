@@ -1,7 +1,6 @@
 package configui
 
 import (
-	"errors"
 	"os"
 	"slices"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
 
 type PrimitiveWithSetBorder interface {
@@ -208,13 +208,24 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return scanMenu
 }
 
-func misterScreenWorkaround(
+func MisterScreenWorkaround(
 	app *tview.Application,
 	pl platforms.Platform,
 ) {
+	log.Debug().Msg("checking for mister")
+	if pl.Id() != "mister" { // TODO: use a const id for this
+		return
+	}
+
+	hasTty := false
+	if _, err := os.Stat("/dev/tty"); err == nil {
+		log.Debug().Msg("running on mister, using /dev/tty")
+		hasTty = true
+	}
+
 	// on mister, when running from scripts menu, /dev/tty is not available
-	if _, err := os.Stat("/dev/tty"); errors.Is(err, os.ErrNotExist) &&
-		pl.Id() == "mister" { // TODO: use a const id for this
+	if !hasTty || os.Getenv("ZAPAROO_RUN_SCRIPT") == "1" {
+		log.Debug().Msg("running on mister, using /dev/tty2")
 		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
 		if err != nil {
 			panic(err)
@@ -229,7 +240,7 @@ func misterScreenWorkaround(
 	}
 }
 
-func setTheme(theme *tview.Theme) {
+func SetTheme(theme *tview.Theme) {
 	theme.BorderColor = tcell.ColorLightYellow
 	theme.PrimaryTextColor = tcell.ColorWhite
 	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
@@ -241,7 +252,7 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
-	setTheme(&tview.Styles)
+	SetTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
@@ -249,7 +260,7 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	BuildScanModeMenu(cfg, pages, app)
 	pages.SwitchToPage("main")
 
-	misterScreenWorkaround(app, pl)
+	MisterScreenWorkaround(app, pl)
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
