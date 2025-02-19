@@ -19,6 +19,8 @@ var (
 	ErrInvalidParams  = errors.New("invalid params")
 )
 
+const ApiPath = "/api/v0.1"
+
 // LocalClient sends a single unauthenticated method with params to the local
 // running API service, waits for a response until timeout then disconnects.
 func LocalClient(
@@ -29,7 +31,7 @@ func LocalClient(
 	u := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   "/api/v0.1",
+		Path:   ApiPath,
 	}
 
 	id, err := uuid.NewUUID()
@@ -99,9 +101,6 @@ func LocalClient(
 		}
 	}()
 
-	//reqFmt, _ := json.MarshalIndent(req, "", "    ")
-	//fmt.Println(string(reqFmt))
-
 	err = c.WriteJSON(req)
 	if err != nil {
 		return "", err
@@ -129,9 +128,6 @@ func LocalClient(
 		return "", err
 	}
 
-	//respFmt, _ := json.MarshalIndent(resp, "", "    ")
-	//fmt.Println(string(respFmt))
-
 	return string(b), nil
 }
 
@@ -142,7 +138,7 @@ func WaitNotification(
 	u := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   "/api/v1.0",
+		Path:   ApiPath,
 	}
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
