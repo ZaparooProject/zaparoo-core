@@ -13,6 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -243,7 +244,22 @@ func installRunMedia(
 	log.Info().Msgf("downloading media: %s", *mp.Url)
 
 	// display loading dialog
-	text := ""
+	argsPath := filepath.Join(pl.TempDir(), "loader.json")
+	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
+	args := widgets.LoaderArgs{
+		Text:     fmt.Sprintf("Downloading %s...", mp.Name),
+		Complete: completePath,
+	}
+	argsJson, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling loader args: %w", err)
+	}
+	err = os.WriteFile(argsPath, argsJson, 0644)
+	if err != nil {
+		return "", fmt.Errorf("error writing loader args: %w", err)
+	}
+	// this is either the smartest or dumbest thing i ever came up with
+	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
 	apiArgs := models.RunParams{
 		Text: &text,
 	}
@@ -285,6 +301,16 @@ func installRunMedia(
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error copying file: %w", err)
+	}
+
+	// remove loading dialog
+	err = os.Remove(argsPath)
+	if err != nil {
+		return "", fmt.Errorf("error removing loader args: %w", err)
+	}
+	err = os.WriteFile(completePath, []byte{}, 0644)
+	if err != nil {
+		return "", fmt.Errorf("error writing loader complete: %w", err)
 	}
 
 	return path, nil
