@@ -8,6 +8,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -43,7 +44,7 @@ type LoaderArgs struct {
 
 // LoaderUI is a simple TUI screen that indicates something is happening to the
 // user. The text displayed can be customized with the text field.
-func LoaderUI(args string) error {
+func LoaderUI(pl platforms.Platform, args string) error {
 	var loaderArgs LoaderArgs
 	err := json.Unmarshal([]byte(args), &loaderArgs)
 	if err != nil {
@@ -89,6 +90,8 @@ func LoaderUI(args string) error {
 		return event
 	})
 
+	misterScreenWorkaround(app, pl)
+
 	if err := app.SetRoot(view, true).Run(); err != nil {
 		return err
 	}
@@ -110,7 +113,7 @@ type PickerArgs struct {
 
 // PickerUI displays a list picker of ZapScript to run via the API. Each action
 // can have an optional label.
-func PickerUI(cfg *config.Instance, args string) error {
+func PickerUI(cfg *config.Instance, pl platforms.Platform, args string) error {
 	var pickerArgs PickerArgs
 	err := json.Unmarshal([]byte(args), &pickerArgs)
 	if err != nil {
@@ -201,6 +204,8 @@ func PickerUI(cfg *config.Instance, args string) error {
 		timer, cto = handleTimeout(app, cto)
 		return event
 	})
+
+	misterScreenWorkaround(app, pl)
 
 	if err := app.SetRoot(flex, true).Run(); err != nil {
 		return err

@@ -132,14 +132,14 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 		configui.ConfigUi(cfg, pl)
 		os.Exit(0)
 	} else if *f.ShowLoader != "" {
-		err := configui.LoaderUI(*f.ShowLoader)
+		err := configui.LoaderUI(pl, *f.ShowLoader)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
 	} else if *f.ShowPicker != "" {
-		err := configui.PickerUI(cfg, *f.ShowPicker)
+		err := configui.PickerUI(cfg, pl, *f.ShowPicker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
 			os.Exit(1)
