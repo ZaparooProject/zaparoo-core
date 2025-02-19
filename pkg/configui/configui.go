@@ -229,19 +229,19 @@ func misterScreenWorkaround(
 	}
 }
 
-func setTheme() {
-	tview.Styles.BorderColor = tcell.ColorLightYellow
-	tview.Styles.PrimaryTextColor = tcell.ColorWhite
-	tview.Styles.ContrastSecondaryTextColor = tcell.ColorFuchsia
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	tview.Styles.ContrastBackgroundColor = tcell.ColorFuchsia
+func setTheme(theme *tview.Theme) {
+	theme.BorderColor = tcell.ColorLightYellow
+	theme.PrimaryTextColor = tcell.ColorWhite
+	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
+	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
+	theme.ContrastBackgroundColor = tcell.ColorFuchsia
 }
 
 func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
-	setTheme()
+	setTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
