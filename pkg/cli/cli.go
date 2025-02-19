@@ -33,6 +33,8 @@ type Flags struct {
 	Qr           *bool
 	Version      *bool
 	Config       *bool
+	ShowLoader   *string
+	ShowPicker   *string
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -93,6 +95,16 @@ func SetupFlags() *Flags {
 			false,
 			"start the text ui to handle zaparoo config",
 		),
+		ShowLoader: flag.String(
+			"show-loader",
+			"",
+			"display a generic loading widget",
+		),
+		ShowPicker: flag.String(
+			"show-picker",
+			"",
+			"display a generic list picker widget",
+		),
 	}
 }
 
@@ -118,6 +130,20 @@ type ConnQr struct {
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
 		configui.ConfigUi(cfg, pl)
+		os.Exit(0)
+	} else if *f.ShowLoader != "" {
+		err := configui.LoaderUI(*f.ShowLoader)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	} else if *f.ShowPicker != "" {
+		err := configui.PickerUI(cfg, *f.ShowPicker)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
