@@ -33,6 +33,8 @@ type Flags struct {
 	Qr           *bool
 	Version      *bool
 	Config       *bool
+	ShowLoader   *string
+	ShowPicker   *string
 }
 
 // SetupFlags defines all common CLI flags between platforms.
