@@ -62,7 +62,7 @@ func openConsole(kbd input.Keyboard, vt string) error {
 	return nil
 }
 
-func runScript(pl Platform, bin string, args string, hidden bool) error {
+func runScript(pl *Platform, bin string, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
 		return err
 	}

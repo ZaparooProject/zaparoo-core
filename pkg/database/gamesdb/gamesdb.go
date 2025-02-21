@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gobwas/glob"
@@ -175,7 +176,7 @@ type IndexStatus struct {
 func NewNamesIndex(
 	platform platforms.Platform,
 	cfg *config.Instance,
-	systems []System,
+	systems []systemdefs.System,
 	update func(IndexStatus),
 ) (int, error) {
 	status := IndexStatus{
@@ -225,7 +226,7 @@ func NewNamesIndex(
 
 	g := new(errgroup.Group)
 	scanned := make(map[string]bool)
-	for _, s := range AllSystems() {
+	for _, s := range systemdefs.AllSystems() {
 		scanned[s.Id] = false
 	}
 
@@ -390,7 +391,7 @@ type SearchResult struct {
 // Iterate all indexed names and return matches to test func against query.
 func searchNamesGeneric(
 	platform platforms.Platform,
-	systems []System,
+	systems []systemdefs.System,
 	query string,
 	test func(string, string) bool,
 ) ([]SearchResult, error) {
@@ -444,21 +445,21 @@ func searchNamesGeneric(
 }
 
 // Return indexed names matching exact query (case insensitive).
-func SearchNamesExact(platform platforms.Platform, systems []System, query string) ([]SearchResult, error) {
+func SearchNamesExact(platform platforms.Platform, systems []systemdefs.System, query string) ([]SearchResult, error) {
 	return searchNamesGeneric(platform, systems, query, func(query, keyName string) bool {
 		return strings.EqualFold(query, keyName)
 	})
 }
 
 // Return indexed names partially matching query (case insensitive).
-func SearchNamesPartial(platform platforms.Platform, systems []System, query string) ([]SearchResult, error) {
+func SearchNamesPartial(platform platforms.Platform, systems []systemdefs.System, query string) ([]SearchResult, error) {
 	return searchNamesGeneric(platform, systems, query, func(query, keyName string) bool {
 		return strings.Contains(strings.ToLower(keyName), strings.ToLower(query))
 	})
 }
 
 // Return indexed names that include every word in query (case insensitive).
-func SearchNamesWords(platform platforms.Platform, systems []System, query string) ([]SearchResult, error) {
+func SearchNamesWords(platform platforms.Platform, systems []systemdefs.System, query string) ([]SearchResult, error) {
 	return searchNamesGeneric(platform, systems, query, func(query, keyName string) bool {
 		qWords := strings.Fields(strings.ToLower(query))
 
@@ -473,7 +474,7 @@ func SearchNamesWords(platform platforms.Platform, systems []System, query strin
 }
 
 // Return indexed names matching query using regular expression.
-func SearchNamesRegexp(platform platforms.Platform, systems []System, query string) ([]SearchResult, error) {
+func SearchNamesRegexp(platform platforms.Platform, systems []systemdefs.System, query string) ([]SearchResult, error) {
 	return searchNamesGeneric(platform, systems, query, func(query, keyName string) bool {
 		// TODO: this should be cached
 		r, err := regexp.Compile(query)
@@ -488,7 +489,7 @@ func SearchNamesRegexp(platform platforms.Platform, systems []System, query stri
 var globCache = make(map[string]glob.Glob)
 var globCacheMutex = &sync.RWMutex{}
 
-func SearchNamesGlob(platform platforms.Platform, systems []System, query string) ([]SearchResult, error) {
+func SearchNamesGlob(platform platforms.Platform, systems []systemdefs.System, query string) ([]SearchResult, error) {
 	return searchNamesGeneric(platform, systems, query, func(query, keyName string) bool {
 		globCacheMutex.RLock()
 		cached, ok := globCache[query]
@@ -513,7 +514,7 @@ func SearchNamesGlob(platform platforms.Platform, systems []System, query string
 }
 
 // Return true if a specific system is indexed in the gamesdb
-func SystemIndexed(platform platforms.Platform, system System) bool {
+func SystemIndexed(platform platforms.Platform, system systemdefs.System) bool {
 	if !Exists(platform) {
 		return false
 	}
@@ -563,7 +564,7 @@ func IndexedSystems(platform platforms.Platform) ([]string, error) {
 }
 
 // Return a random game from specified systems.
-func RandomGame(platform platforms.Platform, systems []System) (SearchResult, error) {
+func RandomGame(platform platforms.Platform, systems []systemdefs.System) (SearchResult, error) {
 	if !Exists(platform) {
 		return SearchResult{}, fmt.Errorf("gamesdb does not exist")
 	}

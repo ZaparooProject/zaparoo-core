@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -169,9 +169,9 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 
 	scanModes := []string{"Tap", "Hold"}
 
-	systems := []string{""}
-	for _, item := range gamesdb.AllSystems() {
-		systems = append(systems, item.Id)
+	allSystems := []string{""}
+	for _, item := range systemdefs.AllSystems() {
+		allSystems = append(allSystems, item.Id)
 	}
 
 	exitDelay := cfg.ReadersScan().ExitDelay
@@ -184,7 +184,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			delay, _ := strconv.ParseFloat(value, 32)
 			cfg.SetScanExitDelay(float32(delay))
 		}).
-		AddDropDown("Ignore systems", systems, 0, func(option string, optionIndex int) {
+		AddDropDown("Ignore systems", allSystems, 0, func(option string, optionIndex int) {
 			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {
 				if !slices.Contains(currentSystems, option) {

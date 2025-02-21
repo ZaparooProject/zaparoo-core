@@ -7,16 +7,17 @@ package mister
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
@@ -137,7 +138,7 @@ func (tr *Tracker) LookupCoreName(name string) (NameMapping, bool) {
 			return mapping, true
 		}
 
-		_, err := gamesdb.LookupSystem(name)
+		_, err := systemdefs.LookupSystem(name)
 		if err != nil {
 			log.Error().Msgf("error getting system %s", err)
 			continue
@@ -271,7 +272,7 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	system, err := gamesdb.GetSystem(launchers[0].SystemId)
+	system, err := systemdefs.GetSystem(launchers[0].SystemId)
 	if err != nil {
 		log.Error().Msgf("error getting system %s", err)
 		return

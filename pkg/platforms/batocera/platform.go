@@ -2,16 +2,17 @@ package batocera
 
 import (
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
@@ -185,7 +186,7 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			SystemId:   gamesdb.SystemGenesis,
+			SystemId:   systemdefs.SystemGenesis,
 			Folders:    []string{"megadrive"},
 			Extensions: []string{".bin", ".gen", ".md", ".sg", ".smd", ".zip", ".7z"},
 			Launch: func(cfg *config.Instance, path string) error {
