@@ -4,17 +4,18 @@ package mister
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 func launch(cfg *config.Instance, path string) error {
@@ -242,6 +243,13 @@ var Launchers = []platforms.Launcher{
 		Launch:     launch,
 	},
 	{
+		Id:         gamesdb.SystemAmigaCD32,
+		SystemId:   gamesdb.SystemAmigaCD32,
+		Folders:    []string{"AmigaCD32"},
+		Extensions: []string{".cue", ".chd"},
+		Launch:     launch,
+	},
+	{
 		Id:         gamesdb.SystemAstrocade,
 		SystemId:   gamesdb.SystemAstrocade,
 		Folders:    []string{"Astrocade"},
@@ -291,6 +299,13 @@ var Launchers = []platforms.Launcher{
 		SystemId:   gamesdb.SystemCasioPV1000,
 		Folders:    []string{"Casio_PV-1000"},
 		Extensions: []string{".bin"},
+		Launch:     launch,
+	},
+	{
+		Id:         gamesdb.SystemCDI,
+		SystemId:   gamesdb.SystemCDI,
+		Folders:    []string{"CD-i"},
+		Extensions: []string{".cue", ".chd"},
 		Launch:     launch,
 	},
 	{
@@ -421,6 +436,13 @@ var Launchers = []platforms.Launcher{
 		SystemId:   gamesdb.SystemIntellivision,
 		Folders:    []string{"Intellivision"},
 		Extensions: []string{".int", ".bin"},
+		Launch:     launch,
+	},
+	{
+		Id:         gamesdb.SystemJaguar,
+		SystemId:   gamesdb.SystemJaguar,
+		Folders:    []string{"Jaguar"},
+		Extensions: []string{".jag", ".j64", ".rom", ".bin"},
 		Launch:     launch,
 	},
 	{
@@ -895,6 +917,13 @@ var Launchers = []platforms.Launcher{
 		Launch:     launch,
 	},
 	{
+		Id:         "MSX1",
+		SystemId:   gamesdb.SystemMSX,
+		Folders:    []string{"MSX1"},
+		Extensions: []string{".dsk", ".rom"},
+		Launch:     launchAltCore(gamesdb.SystemMSX, "_Console/MSX1"),
+	},
+	{
 		Id:         gamesdb.SystemMultiComp,
 		SystemId:   gamesdb.SystemMultiComp,
 		Folders:    []string{"MultiComp"},
@@ -1089,6 +1118,13 @@ var Launchers = []platforms.Launcher{
 		SystemId:   gamesdb.SystemChip8,
 		Folders:    []string{"Chip8"},
 		Extensions: []string{".ch8"},
+		Launch:     launch,
+	},
+	{
+		Id:         gamesdb.SystemGroovy,
+		SystemId:   gamesdb.SystemGroovy,
+		Folders:    []string{"Groovy"},
+		Extensions: []string{".gmc"},
 		Launch:     launch,
 	},
 }
