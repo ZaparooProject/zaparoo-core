@@ -101,7 +101,7 @@ func main() {
 		"display a generic list picker widget",
 	)
 
-	pl := &mister.Platform{}
+	pl := mister.NewPlatform()
 	flags.Pre(pl)
 
 	if *addStartupFlag {

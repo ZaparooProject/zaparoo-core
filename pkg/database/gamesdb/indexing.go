@@ -2,18 +2,20 @@ package gamesdb
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 )
 
 type PathResult struct {
-	System System
+	System systemdefs.System
 	Path   string
 }
 
@@ -44,7 +46,7 @@ func FindPath(path string) (string, error) {
 	return "", fmt.Errorf("file match not found: %s", path)
 }
 
-func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []System) []PathResult {
+func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []systemdefs.System) []PathResult {
 	var matches []PathResult
 
 	for _, system := range systems {
@@ -118,7 +120,7 @@ func GetFiles(
 	var stack resultsStack
 	visited := make(map[string]struct{})
 
-	system, err := GetSystem(systemId)
+	system, err := systemdefs.GetSystem(systemId)
 	if err != nil {
 		return nil, err
 	}

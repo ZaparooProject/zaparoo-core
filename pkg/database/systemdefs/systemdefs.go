@@ -1,4 +1,4 @@
-package gamesdb
+package systemdefs
 
 import (
 	"fmt"

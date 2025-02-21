@@ -14,7 +14,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -191,7 +191,7 @@ func installRunMedia(
 		return "", errors.New("media download url is empty")
 	}
 
-	system, err := gamesdb.GetSystem(mp.System)
+	system, err := systemdefs.GetSystem(mp.System)
 	if err != nil {
 		return "", fmt.Errorf("error getting system: %w", err)
 	}

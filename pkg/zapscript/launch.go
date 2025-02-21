@@ -2,15 +2,17 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 )
@@ -36,7 +38,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 	}
 
 	if env.Args == "all" {
-		game, err := gamesdb.RandomGame(pl, gamesdb.AllSystems())
+		game, err := gamesdb.RandomGame(pl, systemdefs.AllSystems())
 		if err != nil {
 			return err
 		}
@@ -75,7 +77,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 	if len(ps) == 2 {
 		systemId, query := ps[0], ps[1]
 
-		system, err := gamesdb.LookupSystem(systemId)
+		system, err := systemdefs.LookupSystem(systemId)
 		if err != nil {
 			return err
 		} else if system == nil {
@@ -84,7 +86,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 
 		query = strings.ToLower(query)
 
-		res, err := gamesdb.SearchNamesGlob(pl, []gamesdb.System{*system}, query)
+		res, err := gamesdb.SearchNamesGlob(pl, []systemdefs.System{*system}, query)
 		if err != nil {
 			return err
 		}
@@ -102,10 +104,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 	}
 
 	systemIds := strings.Split(env.Args, ",")
-	systems := make([]gamesdb.System, 0, len(systemIds))
+	systems := make([]systemdefs.System, 0, len(systemIds))
 
 	for _, id := range systemIds {
-		system, err := gamesdb.LookupSystem(id)
+		system, err := systemdefs.LookupSystem(id)
 		if err != nil {
 			log.Error().Err(err).Msgf("error looking up system: %s", id)
 			continue
@@ -189,7 +191,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) error {
 
 	systemId, path := ps[0], ps[1]
 
-	system, err := gamesdb.LookupSystem(systemId)
+	system, err := systemdefs.LookupSystem(systemId)
 	if err != nil {
 		return err
 	}
@@ -233,7 +235,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) error {
 			// treat as a direct title launch
 			res, err := gamesdb.SearchNamesExact(
 				pl,
-				[]gamesdb.System{*system},
+				[]systemdefs.System{*system},
 				path,
 			)
 
@@ -268,7 +270,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) error {
 
 	if !strings.Contains(env.Args, "/") {
 		// search all systems
-		res, err := gamesdb.SearchNamesGlob(pl, gamesdb.AllSystems(), query)
+		res, err := gamesdb.SearchNamesGlob(pl, systemdefs.AllSystems(), query)
 		if err != nil {
 			return err
 		}
@@ -291,12 +293,12 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) error {
 		return fmt.Errorf("no query specified")
 	}
 
-	systems := make([]gamesdb.System, 0)
+	systems := make([]systemdefs.System, 0)
 
 	if systemId == "all" {
-		systems = gamesdb.AllSystems()
+		systems = systemdefs.AllSystems()
 	} else {
-		system, err := gamesdb.LookupSystem(systemId)
+		system, err := systemdefs.LookupSystem(systemId)
 		if err != nil {
 			return err
 		}
