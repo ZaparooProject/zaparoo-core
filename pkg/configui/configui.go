@@ -138,29 +138,6 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return tagsReadMenu
 }
 
-func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-
-	// textArea := tview.NewTextArea().
-	// 	SetLabel("Content").
-	// 	SetSize(5, 40).
-	// 	SetMaxLength(200)
-
-	tagsMenu := tview.NewList().
-		AddItem("Read", "Check the content of a tag", '1', func() {
-			pages.SwitchToPage("tags_read")
-		}).
-		AddItem("Write", "Write a tag without running it", '2', func() {
-			pages.SwitchToPage("tags_write")
-		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("main")
-		})
-	tagsMenu.SetTitle(" Zaparoo config editor - Write Tags ")
-	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("tags_write", pages, tagsMenu)
-	return tagsMenu
-}
-
 /*
 type Audio struct {
 	ScanFeedback bool `toml:"scan_feedback,omitempty"`
