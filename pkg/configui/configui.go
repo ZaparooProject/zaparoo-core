@@ -1,11 +1,14 @@
 package configui
 
 import (
+	"encoding/json"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -103,35 +106,44 @@ func BuildTagsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	return tagsMenu
 }
 
-func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	textArea := tview.NewTextArea().
-		SetLabel("Card content").
-		SetText(strings.Join(connectionStrings, "\n"), false).
-		SetSize(5, 40).
-		SetMaxLength(200)
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Press Enter to scan a card, Esc to Exit")
 
 	tagsReadMenu := tview.NewForm().
-
-		AddFormItem(textArea).
-
-	tagsMenu := tview.NewList().
-		AddItem("Read", "Check the content of a tag", '1', func() {
-			pages.SwitchToPage("tags_read")
-		}).
-		AddItem("Write", "Write a tag without running it", '2', func() {
-			pages.SwitchToPage("tags_write")
-		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("main")
-		})
-	tagsMenu.SetTitle(" Zaparoo config editor - Read Tags ")
-	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("tags_read", pages, tagsMenu)
-	return tagsMenu
+		AddFormItem(topTextView)
+	tagsReadMenu.SetTitle(" Zaparoo config editor - Read Tags ")
+	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			tagsReadMenu.Clear(false).AddFormItem(topTextView)
+			topTextView.SetText("Tap a card to read content")
+			app.ForceDraw()
+			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
+			var data models.TokenResponse
+			json.Unmarshal([]byte(resp), &data)
+			tagsReadMenu.AddTextView("UID", data.UID, 50, 1, true, false)
+			tagsReadMenu.AddTextView("data", data.Data, 50, 1, true, false)
+			tagsReadMenu.AddTextView("text", data.Text, 50, 4, true, false)
+			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
+		}
+		if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_read", pages, tagsReadMenu)
+	return tagsReadMenu
 }
 
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+
+	// textArea := tview.NewTextArea().
+	// 	SetLabel("Content").
+	// 	SetSize(5, 40).
+	// 	SetMaxLength(200)
 
 	tagsMenu := tview.NewList().
 		AddItem("Read", "Check the content of a tag", '1', func() {
@@ -322,6 +334,8 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	SetTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app)
+	BuildTagsMenu(cfg, pages, app)
+	BuildTagsReadMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)

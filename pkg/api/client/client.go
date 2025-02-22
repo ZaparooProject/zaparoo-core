@@ -3,15 +3,16 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strconv"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
-	"net/url"
-	"strconv"
-	"time"
 )
 
 var (
@@ -28,7 +29,7 @@ func LocalClient(
 	method string,
 	params string,
 ) (string, error) {
-	u := url.URL{
+	localWebsocketUrl := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
 		Path:   ApiPath,
@@ -58,7 +59,7 @@ func LocalClient(
 		return "", ErrInvalidParams
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(localWebsocketUrl.String(), nil)
 	if err != nil {
 		return "", err
 	}

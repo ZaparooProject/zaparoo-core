@@ -119,7 +119,17 @@ type ConnQr struct {
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
+		client.LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"runZapScript\":false}",
+		)
 		configui.ConfigUi(cfg, pl)
+		client.LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"runZapScript\":true}",
+		)
 		os.Exit(0)
 	}
 
