@@ -145,7 +145,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 
 	topTextView := tview.NewTextView().
 		SetLabel("").
-		SetText("Put a card on the reader, enter your text record and press enter to write")
+		SetText("Put a card on the reader, type or paste your text record and press enter to write. Esc to exit")
 	zapScriptTextArea := tview.NewTextArea().
 		SetLabel("ZapScript")
 
@@ -153,18 +153,19 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 		AddFormItem(topTextView).
 		AddFormItem(zapScriptTextArea)
 	tagsWriteMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+	tagsWriteMenu.SetFocus(1)
 	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEnter {
+			text := zapScriptTextArea.GetText()
+			strings.Trim(text, "\r\n ")
 			data, _ := json.Marshal(&models.ReaderWriteParams{
-				Text: zapScriptTextArea.GetText(),
+				Text: text,
 			})
 			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
 			zapScriptTextArea.SetText("", true)
 		} else if k == tcell.KeyEscape {
 			pages.SwitchToPage("tags")
-		} else {
-			zapScriptTextArea.Focus(func(p tview.Primitive) {})
 		}
 		return event
 	})
