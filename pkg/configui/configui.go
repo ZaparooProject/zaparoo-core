@@ -118,8 +118,11 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEnter {
+			// remove all the previous text if any. Add back the instructions
 			tagsReadMenu.Clear(false).AddFormItem(topTextView)
 			topTextView.SetText("Tap a card to read content")
+			// if we don't force a redraw, the waitNotification will keep the thread busy
+			// and the app won't update the screen
 			app.ForceDraw()
 			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
 			var data models.TokenResponse
@@ -136,6 +139,40 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	})
 	pageDefaults("tags_read", pages, tagsReadMenu)
 	return tagsReadMenu
+}
+
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Put a card on the reader, enter your text record and press enter to write")
+	zapScriptTextArea := tview.NewTextArea().
+		SetLabel("ZapScript")
+
+	tagsWriteMenu := tview.NewForm().
+		AddFormItem(topTextView).
+		AddFormItem(zapScriptTextArea)
+	tagsWriteMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			topTextView.SetText("Tap a card to write the record")
+			// if we don't force a redraw, the waitNotification will keep the thread busy
+			// and the app won't update the screen
+			app.ForceDraw()
+			data, _ := json.Marshal(&models.ReaderWriteParams{
+				Text: zapScriptTextArea.GetText(),
+			})
+			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
+			zapScriptTextArea.SetText("", true)
+		}
+		if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_write", pages, tagsWriteMenu)
+	return tagsWriteMenu
 }
 
 /*
@@ -313,6 +350,7 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	BuildMainMenu(cfg, pages, app)
 	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
+	BuildTagsWriteMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
