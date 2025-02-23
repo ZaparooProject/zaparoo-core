@@ -156,18 +156,15 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEnter {
-			topTextView.SetText("Tap a card to write the record")
-			// if we don't force a redraw, the waitNotification will keep the thread busy
-			// and the app won't update the screen
-			app.ForceDraw()
 			data, _ := json.Marshal(&models.ReaderWriteParams{
 				Text: zapScriptTextArea.GetText(),
 			})
 			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
 			zapScriptTextArea.SetText("", true)
-		}
-		if k == tcell.KeyEscape {
+		} else if k == tcell.KeyEscape {
 			pages.SwitchToPage("tags")
+		} else {
+			zapScriptTextArea.Focus(func(p tview.Primitive) {})
 		}
 		return event
 	})
