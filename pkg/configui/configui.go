@@ -76,7 +76,10 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Mappings", "Not implemented yet", '0', func() {
 		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
-			cfg.Save()
+			err := cfg.Save()
+			if err != nil {
+				log.Error().Err(err).Msg("error saving config")
+			}
 			app.Stop()
 		}).
 		AddItem("Quit Without saving", "Press to exit", 'q', func() {
@@ -88,8 +91,7 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	return mainMenu
 }
 
-func BuildTagsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-
+func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.List {
 	tagsMenu := tview.NewList().
 		AddItem("Read", "Check the content of a tag", '1', func() {
 			pages.SwitchToPage("tags_read")
@@ -107,7 +109,6 @@ func BuildTagsMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 }
 
 func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
 	topTextView := tview.NewTextView().
 		SetLabel("").
 		SetText("Press Enter to scan a card, Esc to Exit")
@@ -126,7 +127,11 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			app.ForceDraw()
 			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
 			var data models.TokenResponse
-			json.Unmarshal([]byte(resp), &data)
+			err := json.Unmarshal([]byte(resp), &data)
+			if err != nil {
+				log.Error().Err(err).Msg("error unmarshalling token")
+				return nil
+			}
 			tagsReadMenu.AddTextView("UID", data.UID, 50, 1, true, false)
 			tagsReadMenu.AddTextView("data", data.Data, 50, 1, true, false)
 			tagsReadMenu.AddTextView("text", data.Text, 50, 4, true, false)
@@ -141,8 +146,7 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return tagsReadMenu
 }
 
-func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	topTextView := tview.NewTextView().
 		SetLabel("").
 		SetText("Put a card on the reader, type or paste your text record and press enter to write. Esc to exit")
@@ -206,11 +210,10 @@ type Readers struct {
 }
 */
 
-func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
+func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
 
-	connectionStrings := []string{}
+	var connectionStrings []string
 	for _, item := range cfg.Readers().Connect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
@@ -227,7 +230,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	}).
 		AddFormItem(textArea).
 		AddButton("Confirm", func() {
-			newConnect := []config.ReadersConnect{}
+			var newConnect []config.ReadersConnect
 			connStrings := strings.Split(textArea.GetText(), "\n")
 			for _, item := range connStrings {
 				couple := strings.SplitN(item, ":", 2)
@@ -253,9 +256,9 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	scanMode := int(0)
+	scanMode := 0
 	if cfg.ReadersScan().Mode == config.ScanModeHold {
-		scanMode = int(1)
+		scanMode = 1
 	}
 
 	scanModes := []string{"Tap", "Hold"}
