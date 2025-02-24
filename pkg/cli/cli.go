@@ -119,8 +119,33 @@ type ConnQr struct {
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
+		_, err := client.LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"runZapScript\":false}",
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("error disabling run")
+			_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
+			os.Exit(1)
+		}
+
 		configui.ConfigUi(cfg, pl)
-		os.Exit(0)
+
+		// TODO: this should be in a defer or signal handler to or else it won't
+		// run if there was a crash or unhandled error
+		_, err = client.LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"runZapScript\":true}",
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("error enabling run")
+			_, _ = fmt.Fprintf(os.Stderr, "Error enabling run: %v\n", err)
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
 	}
 
 	if *f.Write != "" {

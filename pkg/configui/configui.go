@@ -1,11 +1,14 @@
 package configui
 
 import (
+	"encoding/json"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -59,18 +62,24 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Scan mode", "Set scanning options", '4', func() {
 			pages.SwitchToPage("scan")
 		}).
-		AddItem("Systems", "Not implemented yet", '5', func() {
+		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
+			pages.SwitchToPage("tags")
 		}).
-		AddItem("Launchers", "Not implemented yet", '6', func() {
+		AddItem("Systems", "Not implemented yet", '6', func() {
 		}).
-		AddItem("ZapScript", "Not implemented yet", '7', func() {
+		AddItem("Launchers", "Not implemented yet", '7', func() {
 		}).
-		AddItem("Service", "Not implemented yet", '8', func() {
+		AddItem("ZapScript", "Not implemented yet", '8', func() {
 		}).
-		AddItem("Mappings", "Not implemented yet", '9', func() {
+		AddItem("Service", "Not implemented yet", '9', func() {
+		}).
+		AddItem("Mappings", "Not implemented yet", '0', func() {
 		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
-			cfg.Save()
+			err := cfg.Save()
+			if err != nil {
+				log.Error().Err(err).Msg("error saving config")
+			}
 			app.Stop()
 		}).
 		AddItem("Quit Without saving", "Press to exit", 'q', func() {
@@ -80,6 +89,92 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
 	pageDefaults("main", pages, mainMenu)
 	return mainMenu
+}
+
+func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.List {
+	tagsMenu := tview.NewList().
+		AddItem("Read", "Check the content of a tag", '1', func() {
+			pages.SwitchToPage("tags_read")
+		}).
+		AddItem("Write", "Write a tag without running it", '2', func() {
+			pages.SwitchToPage("tags_write")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	tagsMenu.SetTitle(" Zaparoo config editor - Tags menu ")
+	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	pageDefaults("tags", pages, tagsMenu)
+	return tagsMenu
+}
+
+func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Press Enter to scan a card, Esc to Exit")
+
+	tagsReadMenu := tview.NewForm().
+		AddFormItem(topTextView)
+	tagsReadMenu.SetTitle(" Zaparoo config editor - Read Tags ")
+	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			// remove all the previous text if any. Add back the instructions
+			tagsReadMenu.Clear(false).AddFormItem(topTextView)
+			topTextView.SetText("Tap a card to read content")
+			// if we don't force a redraw, the waitNotification will keep the thread busy
+			// and the app won't update the screen
+			app.ForceDraw()
+			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
+			var data models.TokenResponse
+			err := json.Unmarshal([]byte(resp), &data)
+			if err != nil {
+				log.Error().Err(err).Msg("error unmarshalling token")
+				return nil
+			}
+			tagsReadMenu.AddTextView("UID", data.UID, 50, 1, true, false)
+			tagsReadMenu.AddTextView("data", data.Data, 50, 1, true, false)
+			tagsReadMenu.AddTextView("text", data.Text, 50, 4, true, false)
+			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
+		}
+		if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_read", pages, tagsReadMenu)
+	return tagsReadMenu
+}
+
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Put a card on the reader, type or paste your text record and press enter to write. Esc to exit")
+	zapScriptTextArea := tview.NewTextArea().
+		SetLabel("ZapScript")
+
+	tagsWriteMenu := tview.NewForm().
+		AddFormItem(topTextView).
+		AddFormItem(zapScriptTextArea)
+	tagsWriteMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+	tagsWriteMenu.SetFocus(1)
+	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			text := zapScriptTextArea.GetText()
+			strings.Trim(text, "\r\n ")
+			data, _ := json.Marshal(&models.ReaderWriteParams{
+				Text: text,
+			})
+			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
+			zapScriptTextArea.SetText("", true)
+		} else if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_write", pages, tagsWriteMenu)
+	return tagsWriteMenu
 }
 
 /*
@@ -115,11 +210,10 @@ type Readers struct {
 }
 */
 
-func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
+func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
 
-	connectionStrings := []string{}
+	var connectionStrings []string
 	for _, item := range cfg.Readers().Connect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
@@ -136,7 +230,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	}).
 		AddFormItem(textArea).
 		AddButton("Confirm", func() {
-			newConnect := []config.ReadersConnect{}
+			var newConnect []config.ReadersConnect
 			connStrings := strings.Split(textArea.GetText(), "\n")
 			for _, item := range connStrings {
 				couple := strings.SplitN(item, ":", 2)
@@ -162,9 +256,9 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	scanMode := int(0)
+	scanMode := 0
 	if cfg.ReadersScan().Mode == config.ScanModeHold {
-		scanMode = int(1)
+		scanMode = 1
 	}
 
 	scanModes := []string{"Tap", "Hold"}
@@ -255,6 +349,9 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	SetTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app)
+	BuildTagsMenu(cfg, pages, app)
+	BuildTagsReadMenu(cfg, pages, app)
+	BuildTagsWriteMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
