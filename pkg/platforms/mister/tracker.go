@@ -7,6 +7,7 @@ package mister
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,9 +224,7 @@ func (tr *Tracker) stopGame() {
 	tr.ActiveGameName = ""
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
-	tr.ns <- models.Notification{
-		Method: models.NotificationStopped,
-	}
+	notifications.MediaStopped(tr.ns)
 }
 
 // Load the current running game and set it as active.
@@ -294,15 +293,12 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystem = system.Id
 		tr.ActiveSystemName = meta.Name
 
-		tr.ns <- models.Notification{
-			Method: models.NotificationStarted,
-			Params: models.MediaStartedParams{
-				SystemId:   system.Id,
-				SystemName: meta.Name,
-				MediaName:  name,
-				MediaPath:  path,
-			},
-		}
+		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+			SystemId:   system.Id,
+			SystemName: meta.Name,
+			MediaName:  name,
+			MediaPath:  path,
+		})
 	}
 }
 

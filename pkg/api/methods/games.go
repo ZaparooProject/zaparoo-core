@@ -3,6 +3,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -50,13 +51,10 @@ func (s *Index) GenerateIndex(
 	s.TotalFiles = 0
 
 	log.Info().Msg("generating media index")
-	ns <- models.Notification{
-		Method: models.NotificationMediaIndexing,
-		Params: models.IndexResponse{
-			Exists:   false,
-			Indexing: true,
-		},
-	}
+	notifications.MediaIndexing(ns, models.IndexResponse{
+		Exists:   false,
+		Indexing: true,
+	})
 
 	go func() {
 		defer s.mu.Unlock()
@@ -83,17 +81,14 @@ func (s *Index) GenerateIndex(
 				}
 			}
 			log.Debug().Msgf("indexing status: %v", s)
-			ns <- models.Notification{
-				Method: models.NotificationMediaIndexing,
-				Params: models.IndexResponse{
-					Exists:             true,
-					Indexing:           true,
-					TotalSteps:         &s.TotalSteps,
-					CurrentStep:        &s.CurrentStep,
-					CurrentStepDisplay: &s.CurrentDesc,
-					TotalFiles:         &s.TotalFiles,
-				},
-			}
+			notifications.MediaIndexing(ns, models.IndexResponse{
+				Exists:             true,
+				Indexing:           true,
+				TotalSteps:         &s.TotalSteps,
+				CurrentStep:        &s.CurrentStep,
+				CurrentStepDisplay: &s.CurrentDesc,
+				TotalFiles:         &s.TotalFiles,
+			})
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error generating media index")
@@ -106,14 +101,11 @@ func (s *Index) GenerateIndex(
 		s.TotalFiles = 0
 
 		log.Info().Msg("finished generating media index")
-		ns <- models.Notification{
-			Method: models.NotificationMediaIndexing,
-			Params: models.IndexResponse{
-				Exists:     true,
-				Indexing:   false,
-				TotalFiles: &total,
-			},
-		}
+		notifications.MediaIndexing(ns, models.IndexResponse{
+			Exists:     true,
+			Indexing:   false,
+			TotalFiles: &total,
+		})
 	}()
 }
 
