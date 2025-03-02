@@ -29,13 +29,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const RequestTimeout = 30 * time.Second
-
 var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	// run
-	models.MethodLaunch: methods.HandleRun, // DEPRECATED
-	models.MethodRun:    methods.HandleRun,
-	models.MethodStop:   methods.HandleStop,
+	models.MethodLaunch:        methods.HandleRun, // DEPRECATED
+	models.MethodRun:           methods.HandleRun,
+	models.MethodRunLinkAction: methods.HandleRunLinkAction,
+	models.MethodStop:          methods.HandleStop,
 	// tokens
 	models.MethodTokens:  methods.HandleTokens,
 	models.MethodHistory: methods.HandleHistory,
@@ -153,7 +152,7 @@ func Start(
 
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
-	r.Use(middleware.Timeout(RequestTimeout))
+	r.Use(middleware.Timeout(config.ApiRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"https://*", "http://*", "capacitor://*"},
 		AllowedMethods: []string{"GET"},
