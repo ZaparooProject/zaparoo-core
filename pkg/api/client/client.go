@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/google/uuid"
@@ -107,7 +106,7 @@ func LocalClient(
 		return "", err
 	}
 
-	timer := time.NewTimer(api.RequestTimeout)
+	timer := time.NewTimer(config.ApiRequestTimeout)
 	select {
 	case <-done:
 		break
@@ -190,7 +189,7 @@ func WaitNotification(
 		}
 	}()
 
-	timer := time.NewTimer(api.RequestTimeout)
+	timer := time.NewTimer(config.ApiRequestTimeout)
 	select {
 	case <-done:
 		break
