@@ -28,43 +28,14 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
-
-func BuildAppAndRetry(
-	builder func(pl platforms.Platform, service *utils.Service) *tview.Application,
-	pl platforms.Platform,
-	service *utils.Service,
-) {
-	appTty := builder(pl, service)
-
-	if err := appTty.Run(); err != nil {
-		appTty = nil
-		appTty2 := builder(pl, service)
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-
-		if err == nil {
-			screen, err := tcell.NewTerminfoScreenFromTty(tty)
-			if err == nil {
-				appTty2.SetScreen(screen)
-			} else {
-				panic(err)
-			}
-		} else {
-			panic(err)
-		}
-
-		if err := appTty2.Run(); err != nil {
-			panic(err)
-		}
-	}
-}
 
 func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *tview.Application {
 	var startup mrextMister.Startup
@@ -115,7 +86,7 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
+		configui.BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
 	}
 }
 
@@ -262,5 +233,8 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Applicatio
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) {
 	// Asturur > Wizzo
-	BuildAppAndRetry(buildTheUi, pl, service)
+	builder := func() *tview.Application {
+		return buildTheUi(pl, service)
+	}
+	configui.BuildAppAndRetry(builder)
 }

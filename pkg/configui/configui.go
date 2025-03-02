@@ -2,7 +2,6 @@ package configui
 
 import (
 	"encoding/json"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,6 +19,33 @@ import (
 type PrimitiveWithSetBorder interface {
 	tview.Primitive
 	SetBorder(arg bool) *tview.Box
+}
+
+func BuildAppAndRetry(
+	builder func() *tview.Application,
+) {
+	appTty := builder()
+
+	if err := appTty.Run(); err != nil {
+		appTty = nil
+		appTty2 := builder()
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+
+		if err == nil {
+			screen, err := tcell.NewTerminfoScreenFromTty(tty)
+			if err == nil {
+				appTty2.SetScreen(screen)
+			} else {
+				panic(err)
+			}
+		} else {
+			panic(err)
+		}
+
+		if err := appTty2.Run(); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
@@ -302,38 +328,6 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return scanMenu
 }
 
-func MisterScreenWorkaround(
-	app *tview.Application,
-	pl platforms.Platform,
-) {
-	log.Debug().Msg("checking for mister")
-	if pl.Id() != "mister" { // TODO: use a const id for this
-		return
-	}
-
-	hasTty := false
-	if _, err := os.Stat("/dev/tty"); err == nil {
-		log.Debug().Msg("running on mister, using /dev/tty")
-		hasTty = true
-	}
-
-	// on mister, when running from scripts menu, /dev/tty is not available
-	if !hasTty || os.Getenv("ZAPAROO_RUN_SCRIPT") == "1" {
-		log.Debug().Msg("running on mister, using /dev/tty2")
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-		if err != nil {
-			panic(err)
-		}
-
-		screen, err := tcell.NewTerminfoScreenFromTty(tty)
-		if err != nil {
-			panic(err)
-		}
-
-		app.SetScreen(screen)
-	}
-}
-
 func SetTheme(theme *tview.Theme) {
 	theme.BorderColor = tcell.ColorLightYellow
 	theme.PrimaryTextColor = tcell.ColorWhite
@@ -342,7 +336,7 @@ func SetTheme(theme *tview.Theme) {
 	theme.ContrastBackgroundColor = tcell.ColorFuchsia
 }
 
-func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
+func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) *tview.Application {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
@@ -357,9 +351,15 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
 	BuildScanModeMenu(cfg, pages, app)
 	pages.SwitchToPage("main")
 
-	MisterScreenWorkaround(app, pl)
-
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		panic(err)
 	}
+	return app
+}
+
+func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
+	builder := func() *tview.Application {
+		return ConfigUiBuilder(cfg, pl)
+	}
+	BuildAppAndRetry(builder)
 }
