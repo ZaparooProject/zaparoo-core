@@ -215,6 +215,13 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveGamePath = "" // no way to find mra path from CORENAME
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
+
+		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+			SystemId:   tr.ActiveSystem,
+			SystemName: tr.ActiveSystemName,
+			MediaName:  tr.ActiveGameName,
+			MediaPath:  coreName,
+		})
 	}
 }
 
