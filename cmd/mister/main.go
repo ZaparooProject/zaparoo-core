@@ -138,11 +138,11 @@ func main() {
 		}
 		os.Exit(0)
 	} else if *showPicker != "" {
-		err := widgets.PickerUI(cfg, pl, *showPicker)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
-			os.Exit(1)
-		}
+		widgets.PickerUI(cfg, pl, *showPicker)
+		//if err != nil {
+		//	_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
+		//	os.Exit(1)
+		//}
 		os.Exit(0)
 	}
 

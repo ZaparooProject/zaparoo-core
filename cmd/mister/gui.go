@@ -86,7 +86,9 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		configui.BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
+		configui.BuildAppAndRetry(func() *tview.Application {
+			return buildTheInstallRequestApp(pl, service)
+		})
 	}
 }
 
