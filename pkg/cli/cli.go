@@ -130,7 +130,12 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}
 
-		configui.ConfigUi(cfg, pl)
+		err = configui.ConfigUi(cfg, pl)
+		if err != nil {
+			log.Error().Err(err).Msg("error starting config ui")
+			_, _ = fmt.Fprintf(os.Stderr, "Error starting config UI: %v\n", err)
+			os.Exit(1)
+		}
 
 		// TODO: this should be in a defer or signal handler to or else it won't
 		// run if there was a crash or unhandled error
@@ -143,9 +148,9 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			log.Error().Err(err).Msg("error enabling run")
 			_, _ = fmt.Fprintf(os.Stderr, "Error enabling run: %v\n", err)
 			os.Exit(1)
-		} else {
-			os.Exit(0)
 		}
+
+		os.Exit(0)
 	}
 
 	if *f.Write != "" {

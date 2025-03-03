@@ -28,45 +28,16 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func BuildAppAndRetry(
-	builder func(pl platforms.Platform, service *utils.Service) *tview.Application,
-	pl platforms.Platform,
-	service *utils.Service,
-) {
-	appTty := builder(pl, service)
-
-	if err := appTty.Run(); err != nil {
-		appTty = nil
-		appTty2 := builder(pl, service)
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-
-		if err == nil {
-			screen, err := tcell.NewTerminfoScreenFromTty(tty)
-			if err == nil {
-				appTty2.SetScreen(screen)
-			} else {
-				panic(err)
-			}
-		} else {
-			panic(err)
-		}
-
-		if err := appTty2.Run(); err != nil {
-			panic(err)
-		}
-	}
-}
-
-func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *tview.Application {
+func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
 	var startup mrextMister.Startup
 	app := tview.NewApplication()
 	// create the main modal
@@ -80,13 +51,13 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *t
 			if buttonLabel == "Yes" {
 				err := startup.AddService("mrext/" + config.AppName)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
 					os.Exit(1)
 				}
 				if len(startup.Entries) > 0 {
 					err = startup.Save()
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
+						_, _ = fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
 						os.Exit(1)
 					}
 				}
@@ -95,10 +66,11 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *t
 				app.Stop()
 			}
 		})
-	return app.SetRoot(modal, true).EnableMouse(true)
+
+	return app.SetRoot(modal, true).EnableMouse(true), nil
 }
 
-func tryAddStartup(pl platforms.Platform, service *utils.Service) {
+func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 	var startup mrextMister.Startup
 
 	err := startup.Load()
@@ -110,13 +82,20 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			panic(err)
+			return err
 		}
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		BuildAppAndRetry(buildTheInstallRequestApp, pl, service)
+		err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+			return buildTheInstallRequestApp(pl, service)
+		})
+		if err != nil {
+			log.Error().Msgf("failed to build app: %s", err)
+		}
 	}
+
+	return nil
 }
 
 func copyLogToSd(pl platforms.Platform) string {
@@ -180,7 +159,7 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Application {
+func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
@@ -257,10 +236,12 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Applicatio
 			}
 		})
 
-	return app.SetRoot(pages, true).EnableMouse(true)
+	return app.SetRoot(pages, true).EnableMouse(true), nil
 }
 
-func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) {
+func displayServiceInfo(pl platforms.Platform, _ *config.Instance, service *utils.Service) error {
 	// Asturur > Wizzo
-	BuildAppAndRetry(buildTheUi, pl, service)
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return buildTheUi(pl, service)
+	})
 }

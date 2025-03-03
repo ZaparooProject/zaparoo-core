@@ -47,19 +47,19 @@ type LoaderArgs struct {
 
 // LoaderUI is a simple TUI screen that indicates something is happening to the
 // user. The text displayed can be customized with the text field.
-func LoaderUI(pl platforms.Platform, argsPath string) error {
+func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing loader")
 
 	var loaderArgs LoaderArgs
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = json.Unmarshal([]byte(args), &loaderArgs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if loaderArgs.Text == "" {
@@ -67,7 +67,6 @@ func LoaderUI(pl platforms.Platform, argsPath string) error {
 	}
 
 	app := tview.NewApplication()
-	configui.MisterScreenWorkaround(app, pl)
 	configui.SetTheme(&tview.Styles)
 
 	view := tview.NewTextView().
@@ -120,11 +119,13 @@ func LoaderUI(pl platforms.Platform, argsPath string) error {
 		return event
 	})
 
-	if err := app.SetRoot(view, true).Run(); err != nil {
-		return err
-	}
+	return app.SetRoot(view, true), nil
+}
 
-	return nil
+func LoaderUI(pl platforms.Platform, argsPath string) error {
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return LoaderUIBuilder(pl, argsPath)
+	})
 }
 
 type PickerAction struct {
@@ -141,26 +142,25 @@ type PickerArgs struct {
 
 // PickerUI displays a list picker of ZapScript to run via the API. Each action
 // can have an optional label.
-func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
+func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing picker")
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var pickerArgs PickerArgs
 	err = json.Unmarshal([]byte(args), &pickerArgs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(pickerArgs.Actions) < 1 {
-		return errors.New("no actions were specified")
+		return nil, errors.New("no actions were specified")
 	}
 
 	app := tview.NewApplication()
-	configui.MisterScreenWorkaround(app, pl)
 	configui.SetTheme(&tview.Styles)
 
 	run := func(zapscript string) {
@@ -241,9 +241,11 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		return event
 	})
 
-	if err := app.SetRoot(flex, true).Run(); err != nil {
-		return err
-	}
+	return app.SetRoot(flex, true), nil
+}
 
-	return nil
+func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return PickerUIBuilder(cfg, pl, argsPath)
+	})
 }
