@@ -37,7 +37,7 @@ import (
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *tview.Application {
+func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
 	var startup mrextMister.Startup
 	app := tview.NewApplication()
 	// create the main modal
@@ -51,13 +51,13 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *t
 			if buttonLabel == "Yes" {
 				err := startup.AddService("mrext/" + config.AppName)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
+					_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
 					os.Exit(1)
 				}
 				if len(startup.Entries) > 0 {
 					err = startup.Save()
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
+						_, _ = fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
 						os.Exit(1)
 					}
 				}
@@ -66,10 +66,11 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) *t
 				app.Stop()
 			}
 		})
-	return app.SetRoot(modal, true).EnableMouse(true)
+
+	return app.SetRoot(modal, true).EnableMouse(true), nil
 }
 
-func tryAddStartup(pl platforms.Platform, service *utils.Service) {
+func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 	var startup mrextMister.Startup
 
 	err := startup.Load()
@@ -81,15 +82,20 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			panic(err)
+			return err
 		}
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		configui.BuildAppAndRetry(func() *tview.Application {
+		err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
 			return buildTheInstallRequestApp(pl, service)
 		})
+		if err != nil {
+			log.Error().Msgf("failed to build app: %s", err)
+		}
 	}
+
+	return nil
 }
 
 func copyLogToSd(pl platforms.Platform) string {
@@ -153,7 +159,7 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Application {
+func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
@@ -230,13 +236,12 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) *tview.Applicatio
 			}
 		})
 
-	return app.SetRoot(pages, true).EnableMouse(true)
+	return app.SetRoot(pages, true).EnableMouse(true), nil
 }
 
-func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) {
+func displayServiceInfo(pl platforms.Platform, _ *config.Instance, service *utils.Service) error {
 	// Asturur > Wizzo
-	builder := func() *tview.Application {
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return buildTheUi(pl, service)
-	}
-	configui.BuildAppAndRetry(builder)
+	})
 }

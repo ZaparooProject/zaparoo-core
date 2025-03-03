@@ -138,11 +138,11 @@ func main() {
 		}
 		os.Exit(0)
 	} else if *showPicker != "" {
-		widgets.PickerUI(cfg, pl, *showPicker)
-		//if err != nil {
-		//	_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
-		//	os.Exit(1)
-		//}
+		err := widgets.PickerUI(cfg, pl, *showPicker)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -162,7 +162,11 @@ func main() {
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
-	tryAddStartup(pl, svc)
+	err = tryAddStartup(pl, svc)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
+		os.Exit(1)
+	}
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
@@ -173,5 +177,9 @@ func main() {
 	}
 
 	// display main info gui
-	displayServiceInfo(pl, cfg, svc)
+	err = displayServiceInfo(pl, cfg, svc)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error displaying service info: %v\n", err)
+		os.Exit(1)
+	}
 }

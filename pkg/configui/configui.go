@@ -22,30 +22,38 @@ type PrimitiveWithSetBorder interface {
 }
 
 func BuildAppAndRetry(
-	builder func() *tview.Application,
-) {
-	appTty := builder()
+	builder func() (*tview.Application, error),
+) error {
+	appTty, err := builder()
+	if err != nil {
+		return err
+	}
 
 	if err := appTty.Run(); err != nil {
 		appTty = nil
-		appTty2 := builder()
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-
-		if err == nil {
-			screen, err := tcell.NewTerminfoScreenFromTty(tty)
-			if err == nil {
-				appTty2.SetScreen(screen)
-			} else {
-				panic(err)
-			}
-		} else {
-			panic(err)
+		appTty2, err := builder()
+		if err != nil {
+			return err
 		}
+
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+		if err != nil {
+			return err
+		}
+
+		screen, err := tcell.NewTerminfoScreenFromTty(tty)
+		if err != nil {
+			return err
+		}
+
+		appTty2.SetScreen(screen)
 
 		if err := appTty2.Run(); err != nil {
-			panic(err)
+			return err
 		}
 	}
+
+	return nil
 }
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
@@ -336,7 +344,7 @@ func SetTheme(theme *tview.Theme) {
 	theme.ContrastBackgroundColor = tcell.ColorFuchsia
 }
 
-func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) *tview.Application {
+func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) (*tview.Application, error) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
@@ -351,15 +359,11 @@ func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) *tview.Applica
 	BuildScanModeMenu(cfg, pages, app)
 	pages.SwitchToPage("main")
 
-	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
-	return app
+	return app.SetRoot(pages, true).EnableMouse(true), nil
 }
 
-func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
-	builder := func() *tview.Application {
+func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
+	return BuildAppAndRetry(func() (*tview.Application, error) {
 		return ConfigUiBuilder(cfg, pl)
-	}
-	BuildAppAndRetry(builder)
+	})
 }

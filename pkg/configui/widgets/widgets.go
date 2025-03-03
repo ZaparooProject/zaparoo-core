@@ -119,24 +119,13 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 		return event
 	})
 
-	if err := app.SetRoot(view, true).Run(); err != nil {
-		return app, err
-	}
-
-	return app, nil
+	return app.SetRoot(view, true), nil
 }
 
 func LoaderUI(pl platforms.Platform, argsPath string) error {
-	builder := func() *tview.Application {
-		app, err := LoaderUIBuilder(pl, argsPath)
-		if err == nil {
-			return app
-		}
-		return nil
-	}
-
-	configui.BuildAppAndRetry(builder)
-	return nil
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return LoaderUIBuilder(pl, argsPath)
+	})
 }
 
 type PickerAction struct {
@@ -252,20 +241,11 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return event
 	})
 
-	if err := app.SetRoot(flex, true).Run(); err != nil {
-		return nil, err
-	}
-
-	return app, nil
+	return app.SetRoot(flex, true), nil
 }
 
-func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) {
-	builder := func() *tview.Application {
-		app, err := PickerUIBuilder(cfg, pl, argsPath)
-		if err == nil {
-			return app
-		}
-		return nil
-	}
-	configui.BuildAppAndRetry(builder)
+func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
+	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return PickerUIBuilder(cfg, pl, argsPath)
+	})
 }
