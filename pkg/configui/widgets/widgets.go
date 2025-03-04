@@ -34,7 +34,9 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 	}
 
 	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
-		app.Stop()
+		app.QueueUpdateDraw(func() {
+			app.Stop()
+		})
 	})
 
 	return timer, to
@@ -73,10 +75,10 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 		return x, y, w, h
 	})
 
-	frames := []string{"|", "/", "-", "\\"}
-	frameIndex := 0
 	go func() {
-		for {
+		frames := []string{"|", "/", "-", "\\"}
+		frameIndex := 0
+		for app != nil {
 			app.QueueUpdateDraw(func() {
 				view.SetText(frames[frameIndex] + " " + loaderArgs.Text)
 			})
@@ -87,10 +89,9 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 
 	handleTimeout(app, loaderArgs.Timeout)
 
-	var ticker *time.Ticker
 	if loaderArgs.Complete != "" {
 		go func() {
-			ticker = time.NewTicker(1 * time.Second)
+			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
 				if _, err := os.Stat(loaderArgs.Complete); err == nil {
 					app.Stop()
@@ -102,7 +103,6 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 				}
 			}
 		}()
-		defer ticker.Stop()
 	}
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
