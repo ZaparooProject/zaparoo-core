@@ -3,6 +3,7 @@ package widgets
 import (
 	"encoding/json"
 	"errors"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"time"
 
@@ -33,16 +34,12 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 	}
 
 	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
-		app.Stop()
+		app.QueueUpdateDraw(func() {
+			app.Stop()
+		})
 	})
 
 	return timer, to
-}
-
-type LoaderArgs struct {
-	Text     string `json:"text"`
-	Timeout  int    `json:"timeout"`
-	Complete string `json:"complete"`
 }
 
 // LoaderUI is a simple TUI screen that indicates something is happening to the
@@ -50,14 +47,14 @@ type LoaderArgs struct {
 func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing loader")
 
-	var loaderArgs LoaderArgs
+	var loaderArgs widgetModels.LoaderArgs
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err
 	}
 
-	err = json.Unmarshal([]byte(args), &loaderArgs)
+	err = json.Unmarshal(args, &loaderArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +75,10 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 		return x, y, w, h
 	})
 
-	frames := []string{"|", "/", "-", "\\"}
-	frameIndex := 0
 	go func() {
-		for {
+		frames := []string{"|", "/", "-", "\\"}
+		frameIndex := 0
+		for app != nil {
 			app.QueueUpdateDraw(func() {
 				view.SetText(frames[frameIndex] + " " + loaderArgs.Text)
 			})
@@ -92,10 +89,9 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 
 	handleTimeout(app, loaderArgs.Timeout)
 
-	var ticker *time.Ticker
 	if loaderArgs.Complete != "" {
 		go func() {
-			ticker = time.NewTicker(1 * time.Second)
+			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
 				if _, err := os.Stat(loaderArgs.Complete); err == nil {
 					app.Stop()
@@ -107,7 +103,6 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 				}
 			}
 		}()
-		defer ticker.Stop()
 	}
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -128,18 +123,6 @@ func LoaderUI(pl platforms.Platform, argsPath string) error {
 	})
 }
 
-type PickerAction struct {
-	ZapScript string  `json:"zapscript"`
-	Label     *string `json:"label"`
-}
-
-type PickerArgs struct {
-	Actions []PickerAction `json:"actions"`
-	Title   string         `json:"title"`
-	Timeout int            `json:"timeout"`
-	Trusted *bool          `json:"trusted"`
-}
-
 // PickerUI displays a list picker of ZapScript to run via the API. Each action
 // can have an optional label.
 func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
@@ -150,8 +133,8 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return nil, err
 	}
 
-	var pickerArgs PickerArgs
-	err = json.Unmarshal([]byte(args), &pickerArgs)
+	var pickerArgs widgetModels.PickerArgs
+	err = json.Unmarshal(args, &pickerArgs)
 	if err != nil {
 		return nil, err
 	}
