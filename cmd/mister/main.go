@@ -130,6 +130,13 @@ func main() {
 
 	cfg := cli.Setup(pl, defaults, nil)
 
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
+
 	if *showLoader != "" {
 		err := widgets.LoaderUI(pl, *showLoader)
 		if err != nil {
