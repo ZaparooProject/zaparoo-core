@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -111,7 +115,44 @@ func checkLink(
 		return "", errors.New("no actions in zap link")
 	}
 
-	// just process the first action for now
+	if len(zl.Actions) > 1 {
+		if pl.Id() != "mister" {
+			return "", errors.New("multiple actions is not supported on this platform")
+		}
+
+		// forward multiple link actions to picker ui
+		argsPath := filepath.Join(pl.TempDir(), "picker.json")
+		args := widgetModels.PickerArgs{
+			Title: zl.Name,
+		}
+		args.Actions = zl.Actions
+
+		argsJson, err := json.Marshal(args)
+		if err != nil {
+			return "", err
+		}
+		err = os.WriteFile(argsPath, argsJson, 0644)
+		if err != nil {
+			return "", err
+		}
+
+		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-picker %s", argsPath)
+		apiArgs := models.RunParams{
+			Text: &text,
+		}
+		ps, err := json.Marshal(apiArgs)
+		if err != nil {
+			log.Error().Err(err).Msg("error creating run params")
+		}
+
+		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
+		if err != nil {
+			log.Error().Err(err).Msg("error running local client")
+		}
+
+		return "", nil
+	}
+
 	action := zl.Actions[0]
 	method := strings.ToLower(action.Method)
 
