@@ -14,21 +14,30 @@ import (
 	"github.com/wizzomafizzo/mrext/pkg/input"
 )
 
-func openConsole(kbd input.Keyboard, vt string) error {
-	getTty := func() (string, error) {
-		sys := "/sys/devices/virtual/tty/tty0/active"
-		if _, err := os.Stat(sys); err != nil {
-			return "", err
-		}
-
-		tty, err := os.ReadFile(sys)
-		if err != nil {
-			return "", err
-		}
-
-		return strings.TrimSpace(string(tty)), nil
+func getTTY() (string, error) {
+	sys := "/sys/devices/virtual/tty/tty0/active"
+	if _, err := os.Stat(sys); err != nil {
+		return "", err
 	}
 
+	tty, err := os.ReadFile(sys)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(tty)), nil
+}
+
+func scriptIsActive() (bool, error) {
+	cmd := exec.Command("bash", "-c", "ps ax | grep [/]tmp/script")
+	output, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(output)) != "", nil
+}
+
+func openConsole(kbd input.Keyboard, vt string) error {
 	// we use the F9 key as a means to disable main's usage of the framebuffer and allow scripts to run
 	// unfortunately when the menu "sleeps", any key press will be eaten by main and not trigger the console switch
 	// there's also no simple way to tell if mister has switched to the console
@@ -49,7 +58,7 @@ func openConsole(kbd input.Keyboard, vt string) error {
 		}
 		kbd.Console()
 		time.Sleep(50 * time.Millisecond)
-		tty, err = getTty()
+		tty, err = getTTY()
 		if err != nil {
 			return err
 		}
@@ -67,6 +76,14 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return err
 	}
 
+	if active, err := scriptIsActive(); active {
+		if err != nil {
+			log.Error().Err(err).Msg("error checking if script active")
+		}
+		log.Info().Msg("a script is already active, launching new script headless")
+		hidden = true
+	}
+
 	if pl.GetActiveLauncher() != "" {
 		// menu must be open to switch tty and launch script
 		log.Debug().Msg("killing launcher...")
@@ -74,7 +91,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		if err != nil {
 			return err
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 
 	if !hidden {

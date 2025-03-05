@@ -304,7 +304,7 @@ func InstallRunMedia(
 	if err != nil {
 		log.Error().Err(err).Msg("error creating run params")
 	}
-	_, err = client.LocalClient(cfg, "run", string(ps))
+	_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
 	if err != nil {
 		log.Error().Err(err).Msg("error running local client")
 	}
