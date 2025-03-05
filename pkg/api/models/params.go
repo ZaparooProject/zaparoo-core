@@ -80,6 +80,7 @@ type ZapLink struct {
 }
 
 type ZapScriptParams struct {
+	Name      string `json:"name"`
 	ZapScript string `json:"zapscript"`
 }
 
