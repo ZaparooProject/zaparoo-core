@@ -39,6 +39,7 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 		app.QueueUpdateDraw(func() {
 			app.Stop()
 		})
+		os.Exit(0)
 	})
 
 	return timer, to
@@ -216,6 +217,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	padding := tview.NewTextView()
 	list := tview.NewList()
 
+	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(titleText, 1, 0, false)
 	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
@@ -241,6 +243,10 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	})
 
 	for _, action := range actions {
+		if action.label == "" {
+			continue
+		}
+
 		list.AddItem(action.label, action.preview, 0, func() {
 			run(action.action)
 		})

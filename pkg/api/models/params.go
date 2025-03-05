@@ -76,6 +76,7 @@ type ZapLinkAction struct {
 
 type ZapLink struct {
 	Version int             `json:"version"`
+	Name    string          `json:"name"`
 	Actions []ZapLinkAction `json:"actions"`
 }
 
