@@ -16,6 +16,7 @@ const (
 const (
 	MethodLaunch         = "launch" // DEPRECATED
 	MethodRun            = "run"
+	MethodRunLinkAction  = "run.link.action"
 	MethodStop           = "stop"
 	MethodTokens         = "tokens"
 	MethodMedia          = "media"
