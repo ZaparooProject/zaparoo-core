@@ -123,6 +123,17 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return err
 	}
 
+	if MainHasFeature(MainFeaturePicker) {
+		err = os.MkdirAll(MainPickerDir, 0755)
+		if err != nil {
+			return err
+		}
+		err = os.WriteFile(MainPickerSelected, []byte(""), 0644)
+		if err != nil {
+			return err
+		}
+	}
+
 	// migrate old config folder db
 	oldTaptoDbPath := "/media/fat/Scripts/.config/tapto/tapto.db"
 	newTaptoDbPath := filepath.Join(p.DataDir(), config.TapToDbFile)
