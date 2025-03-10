@@ -3,7 +3,10 @@ package widgets
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -33,16 +36,13 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 	}
 
 	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
-		app.Stop()
+		app.QueueUpdateDraw(func() {
+			app.Stop()
+		})
+		os.Exit(0)
 	})
 
 	return timer, to
-}
-
-type LoaderArgs struct {
-	Text     string `json:"text"`
-	Timeout  int    `json:"timeout"`
-	Complete string `json:"complete"`
 }
 
 // LoaderUI is a simple TUI screen that indicates something is happening to the
@@ -50,14 +50,14 @@ type LoaderArgs struct {
 func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing loader")
 
-	var loaderArgs LoaderArgs
+	var loaderArgs widgetModels.LoaderArgs
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err
 	}
 
-	err = json.Unmarshal([]byte(args), &loaderArgs)
+	err = json.Unmarshal(args, &loaderArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +78,10 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 		return x, y, w, h
 	})
 
-	frames := []string{"|", "/", "-", "\\"}
-	frameIndex := 0
 	go func() {
-		for {
+		frames := []string{"|", "/", "-", "\\"}
+		frameIndex := 0
+		for app != nil {
 			app.QueueUpdateDraw(func() {
 				view.SetText(frames[frameIndex] + " " + loaderArgs.Text)
 			})
@@ -92,10 +92,9 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 
 	handleTimeout(app, loaderArgs.Timeout)
 
-	var ticker *time.Ticker
 	if loaderArgs.Complete != "" {
 		go func() {
-			ticker = time.NewTicker(1 * time.Second)
+			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
 				if _, err := os.Stat(loaderArgs.Complete); err == nil {
 					app.Stop()
@@ -107,7 +106,6 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 				}
 			}
 		}()
-		defer ticker.Stop()
 	}
 
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -128,20 +126,12 @@ func LoaderUI(pl platforms.Platform, argsPath string) error {
 	})
 }
 
-type PickerAction struct {
-	ZapScript string  `json:"zapscript"`
-	Label     *string `json:"label"`
+type pickerAction struct {
+	label   string
+	preview string
+	action  models.ZapLinkAction
 }
 
-type PickerArgs struct {
-	Actions []PickerAction `json:"actions"`
-	Title   string         `json:"title"`
-	Timeout int            `json:"timeout"`
-	Trusted *bool          `json:"trusted"`
-}
-
-// PickerUI displays a list picker of ZapScript to run via the API. Each action
-// can have an optional label.
 func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing picker")
 
@@ -150,8 +140,8 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return nil, err
 	}
 
-	var pickerArgs PickerArgs
-	err = json.Unmarshal([]byte(args), &pickerArgs)
+	var pickerArgs widgetModels.PickerArgs
+	err = json.Unmarshal(args, &pickerArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -160,20 +150,54 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return nil, errors.New("no actions were specified")
 	}
 
+	var actions []pickerAction
+	for _, la := range pickerArgs.Actions {
+		action := pickerAction{
+			action: la,
+		}
+
+		method := strings.ToLower(la.Method)
+		switch method {
+		case models.ZapLinkActionZapScript:
+			var zsp models.ZapScriptParams
+			err := json.Unmarshal(la.Params, &zsp)
+			if err != nil {
+				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
+			}
+			if zsp.Name != "" {
+				action.label = zsp.Name
+				action.preview = zsp.ZapScript
+			} else {
+				action.label = zsp.ZapScript
+			}
+		case models.ZapLinkActionMedia:
+			var zm models.MediaParams
+			err := json.Unmarshal(la.Params, &zm)
+			if err != nil {
+				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
+			}
+			action.label = zm.Name
+			if zm.Url != nil {
+				action.preview = *zm.Url
+			}
+		default:
+			log.Error().Msgf("unkown link action method: %s", la.Method)
+			continue
+		}
+
+		actions = append(actions, action)
+	}
+
 	app := tview.NewApplication()
 	configui.SetTheme(&tview.Styles)
 
-	run := func(zapscript string) {
-		log.Info().Msgf("running picker zapscript: %s", zapscript)
-		zs := zapscript
-		apiArgs := models.RunParams{
-			Text: &zs,
-		}
-		ps, err := json.Marshal(apiArgs)
+	run := func(action models.ZapLinkAction) {
+		log.Info().Msgf("running picker selection: %v", action)
+		ps, err := json.Marshal(action)
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
-		_, err = client.LocalClient(cfg, "run", string(ps))
+		_, err = client.LocalClient(cfg, models.MethodRunLinkAction, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
@@ -193,18 +217,19 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	padding := tview.NewTextView()
 	list := tview.NewList()
 
+	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(titleText, 1, 0, false)
 	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
 
 	list.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		longest := 2
-		for _, action := range pickerArgs.Actions {
-			if len(action.ZapScript) > longest {
-				longest = len(action.ZapScript)
+		for _, action := range actions {
+			if len(action.preview) > longest {
+				longest = len(action.preview)
 			}
-			if action.Label != nil && len(*action.Label) > longest {
-				longest = len(*action.Label)
+			if len(action.label) > longest {
+				longest = len(action.label)
 			}
 		}
 
@@ -217,17 +242,19 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return x, y, w, h
 	})
 
-	for _, action := range pickerArgs.Actions {
-		if action.Label != nil {
-			list.AddItem(*action.Label, action.ZapScript, 0, func() {
-				run(action.ZapScript)
-			})
-		} else {
-			list.AddItem(action.ZapScript, "", 0, func() {
-				run(action.ZapScript)
-			})
+	for _, action := range actions {
+		if action.label == "" {
+			continue
 		}
+
+		list.AddItem(action.label, action.preview, 0, func() {
+			run(action.action)
+		})
 	}
+
+	list.AddItem("Cancel", "", 0, func() {
+		app.Stop()
+	})
 
 	timer, cto := handleTimeout(app, pickerArgs.Timeout)
 
@@ -244,6 +271,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	return app.SetRoot(flex, true), nil
 }
 
+// PickerUI displays a list picker of Zap Link Actions to run via the API.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
 	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
