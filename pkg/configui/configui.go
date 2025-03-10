@@ -37,6 +37,7 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Service      Service   `toml:"service,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
+	Groovy       Groovy    `toml:"groovy:omitempty"`
 */
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
@@ -68,6 +69,8 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Service", "Not implemented yet", '8', func() {
 		}).
 		AddItem("Mappings", "Not implemented yet", '9', func() {
+		}).
+		AddItem("Groovy", "Not implemented yet", 'g', func() {
 		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
 			cfg.Save()

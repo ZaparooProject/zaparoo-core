@@ -2,16 +2,17 @@ package config
 
 import (
 	"errors"
-	"github.com/google/uuid"
-	"github.com/pelletier/go-toml/v2"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -32,6 +33,7 @@ type Values struct {
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Service      Service   `toml:"service,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
+	Groovy       Groovy    `toml:"groovy,omitempty"`
 }
 
 type Audio struct {
@@ -93,6 +95,12 @@ type Mappings struct {
 	Entry []MappingsEntry `toml:"entry,omitempty"`
 }
 
+type Groovy struct {
+	GmcProxyEnabled        bool   `toml:"gmc_proxy_enabled"`
+	GmcProxyPort           int    `toml:"gmc_proxy_port"`
+	GmcProxyBeaconInterval string `toml:"gmc_proxy_beacon_interval"`
+}
+
 var BaseDefaults = Values{
 	ConfigSchema: SchemaVersion,
 	Audio: Audio{
@@ -106,6 +114,11 @@ var BaseDefaults = Values{
 	},
 	Service: Service{
 		ApiPort: 7497,
+	},
+	Groovy: Groovy{
+		GmcProxyEnabled:        false,
+		GmcProxyPort:           32106,
+		GmcProxyBeaconInterval: "2s",
 	},
 }
 
@@ -477,4 +490,22 @@ func (c *Instance) LookupSystemDefaults(systemId string) (SystemsDefault, bool) 
 		}
 	}
 	return SystemsDefault{}, false
+}
+
+func (c *Instance) GmcProxyEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Groovy.GmcProxyEnabled
+}
+
+func (c *Instance) GmcProxyPort() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Groovy.GmcProxyPort
+}
+
+func (c *Instance) GmcProxyBeaconInterval() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Groovy.GmcProxyBeaconInterval
 }

@@ -23,18 +23,20 @@ package service
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+
 	"golang.org/x/exp/slices"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript"
@@ -209,10 +211,9 @@ func processTokenQueue(
 					log.Error().Err(err).Msgf("error adding history")
 				}
 			}()
-		case <-time.After(100 * time.Millisecond):
-			if st.ShouldStopService() {
-				break
-			}
+		case <-st.GetContext().Done():
+			log.Debug().Msg("Exiting Service worker via context cancellation")
+			break
 		}
 	}
 }
@@ -265,6 +266,11 @@ func Start(
 
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
+
+	if cfg.GmcProxyEnabled() {
+		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
+		go groovyproxy.Start(cfg, st, itq)
+	}
 
 	log.Info().Msg("starting reader manager")
 	go readerManager(pl, cfg, st, db, itq, lsq, plq)

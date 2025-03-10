@@ -2,12 +2,13 @@ package service
 
 import (
 	"errors"
+	"strings"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"strings"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -247,10 +248,14 @@ func readerManager(
 	}()
 
 	// token pre-processing loop
-	for !st.ShouldStopService() {
+	isStopped := false
+	for !isStopped {
 		var scan *tokens.Token
 
 		select {
+		case <-st.GetContext().Done():
+			log.Debug().Msg("Closing Readers via context cancellation")
+			isStopped = true
 		case t := <-scanQueue:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
