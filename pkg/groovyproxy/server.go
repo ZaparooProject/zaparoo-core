@@ -110,11 +110,11 @@ func Start(
 			log.Debug().Msg("Receieved GMC Load Event")
 			// **local: can prefix any valid Zapscript to run locally without proxy
 			if bytes.Compare(gmcBytes[:10], []byte("zapscript:")) == 0 {
+				log.Debug().Msg("GMC Command is Zapscript Format, running as Token")
 				text := string(gmcBytes[10:])
 				t := tokens.Token{
 					Text:     norm.NFC.String(text),
 					ScanTime: time.Now(),
-					Remote:   true,
 				}
 				st.SetActiveCard(t)
 				itq <- t

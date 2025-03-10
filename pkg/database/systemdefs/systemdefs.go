@@ -200,7 +200,6 @@ const (
 	SystemArcade  = "Arcade"
 	SystemArduboy = "Arduboy"
 	SystemChip8   = "Chip8"
-	SystemGroovy  = "Groovy"
 	SystemIOS     = "iOS"
 	SystemVideo   = "Video"
 	SystemGroovy  = "Groovy"
@@ -660,8 +659,5 @@ var Systems = map[string]System{
 	},
 	SystemVideo: {
 		Id: SystemVideo,
-	},
-	SystemGroovy: {
-		Id: SystemGroovy,
 	},
 }
