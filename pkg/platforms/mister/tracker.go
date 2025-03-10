@@ -7,16 +7,18 @@ package mister
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
@@ -137,7 +139,7 @@ func (tr *Tracker) LookupCoreName(name string) (NameMapping, bool) {
 			return mapping, true
 		}
 
-		_, err := gamesdb.LookupSystem(name)
+		_, err := systemdefs.LookupSystem(name)
 		if err != nil {
 			log.Error().Msgf("error getting system %s", err)
 			continue
@@ -213,6 +215,13 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveGamePath = "" // no way to find mra path from CORENAME
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
+
+		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+			SystemId:   tr.ActiveSystem,
+			SystemName: tr.ActiveSystemName,
+			MediaName:  tr.ActiveGameName,
+			MediaPath:  coreName,
+		})
 	}
 }
 
@@ -222,9 +231,7 @@ func (tr *Tracker) stopGame() {
 	tr.ActiveGameName = ""
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
-	tr.ns <- models.Notification{
-		Method: models.NotificationStopped,
-	}
+	notifications.MediaStopped(tr.ns)
 }
 
 // Load the current running game and set it as active.
@@ -271,7 +278,7 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	system, err := gamesdb.GetSystem(launchers[0].SystemId)
+	system, err := systemdefs.GetSystem(launchers[0].SystemId)
 	if err != nil {
 		log.Error().Msgf("error getting system %s", err)
 		return
@@ -293,15 +300,12 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystem = system.Id
 		tr.ActiveSystemName = meta.Name
 
-		tr.ns <- models.Notification{
-			Method: models.NotificationStarted,
-			Params: models.MediaStartedParams{
-				SystemId:   system.Id,
-				SystemName: meta.Name,
-				MediaName:  name,
-				MediaPath:  path,
-			},
-		}
+		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+			SystemId:   system.Id,
+			SystemName: meta.Name,
+			MediaName:  name,
+			MediaPath:  path,
+		})
 	}
 }
 

@@ -62,7 +62,7 @@ func openConsole(kbd input.Keyboard, vt string) error {
 	return nil
 }
 
-func runScript(pl Platform, bin string, args string, hidden bool) error {
+func runScript(pl *Platform, bin string, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
 		return err
 	}
@@ -98,6 +98,7 @@ func runScript(pl Platform, bin string, args string, hidden bool) error {
 export LC_ALL=en_US.UTF-8
 export HOME=/root
 export LESSKEY=/media/fat/linux/lesskey
+export ZAPAROO_RUN_SCRIPT=1
 cd $(dirname "%s")
 %s
 `, bin, bin+" "+args)
@@ -131,6 +132,7 @@ cd $(dirname "%s")
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8")
 		cmd.Env = append(cmd.Env, "HOME=/root")
 		cmd.Env = append(cmd.Env, "LESSKEY=/media/fat/linux/lesskey")
+		cmd.Env = append(cmd.Env, "ZAPAROO_RUN_SCRIPT=1")
 		cmd.Dir = filepath.Dir(bin)
 		return cmd.Run()
 	}

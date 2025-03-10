@@ -1,22 +1,59 @@
 package configui
 
 import (
-	"errors"
-	"os"
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
 
 type PrimitiveWithSetBorder interface {
 	tview.Primitive
 	SetBorder(arg bool) *tview.Box
+}
+
+func BuildAppAndRetry(
+	builder func() (*tview.Application, error),
+) error {
+	appTty, err := builder()
+	if err != nil {
+		return err
+	}
+
+	if err := appTty.Run(); err != nil {
+		appTty = nil
+		appTty2, err := builder()
+		if err != nil {
+			return err
+		}
+
+		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+		if err != nil {
+			return err
+		}
+
+		screen, err := tcell.NewTerminfoScreenFromTty(tty)
+		if err != nil {
+			return err
+		}
+
+		appTty2.SetScreen(screen)
+
+		if err := appTty2.Run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
@@ -60,20 +97,26 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Scan mode", "Set scanning options", '4', func() {
 			pages.SwitchToPage("scan")
 		}).
-		AddItem("Systems", "Not implemented yet", '5', func() {
+		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
+			pages.SwitchToPage("tags")
 		}).
-		AddItem("Launchers", "Not implemented yet", '6', func() {
+		AddItem("Systems", "Not implemented yet", '6', func() {
 		}).
-		AddItem("ZapScript", "Not implemented yet", '7', func() {
+		AddItem("Launchers", "Not implemented yet", '7', func() {
 		}).
-		AddItem("Service", "Not implemented yet", '8', func() {
+		AddItem("ZapScript", "Not implemented yet", '8', func() {
 		}).
-		AddItem("Mappings", "Not implemented yet", '9', func() {
+		AddItem("Service", "Not implemented yet", '9', func() {
+		}).
+		AddItem("Mappings", "Not implemented yet", '0', func() {
 		}).
 		AddItem("Groovy", "Not implemented yet", 'g', func() {
 		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
-			cfg.Save()
+			err := cfg.Save()
+			if err != nil {
+				log.Error().Err(err).Msg("error saving config")
+			}
 			app.Stop()
 		}).
 		AddItem("Quit Without saving", "Press to exit", 'q', func() {
@@ -83,6 +126,92 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
 	pageDefaults("main", pages, mainMenu)
 	return mainMenu
+}
+
+func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.List {
+	tagsMenu := tview.NewList().
+		AddItem("Read", "Check the content of a tag", '1', func() {
+			pages.SwitchToPage("tags_read")
+		}).
+		AddItem("Write", "Write a tag without running it", '2', func() {
+			pages.SwitchToPage("tags_write")
+		}).
+		AddItem("Go back", "Go back to main menu", 'b', func() {
+			pages.SwitchToPage("main")
+		})
+	tagsMenu.SetTitle(" Zaparoo config editor - Tags menu ")
+	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	pageDefaults("tags", pages, tagsMenu)
+	return tagsMenu
+}
+
+func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Press Enter to scan a card, Esc to Exit")
+
+	tagsReadMenu := tview.NewForm().
+		AddFormItem(topTextView)
+	tagsReadMenu.SetTitle(" Zaparoo config editor - Read Tags ")
+	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			// remove all the previous text if any. Add back the instructions
+			tagsReadMenu.Clear(false).AddFormItem(topTextView)
+			topTextView.SetText("Tap a card to read content")
+			// if we don't force a redraw, the waitNotification will keep the thread busy
+			// and the app won't update the screen
+			app.ForceDraw()
+			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
+			var data models.TokenResponse
+			err := json.Unmarshal([]byte(resp), &data)
+			if err != nil {
+				log.Error().Err(err).Msg("error unmarshalling token")
+				return nil
+			}
+			tagsReadMenu.AddTextView("UID", data.UID, 50, 1, true, false)
+			tagsReadMenu.AddTextView("data", data.Data, 50, 1, true, false)
+			tagsReadMenu.AddTextView("text", data.Text, 50, 4, true, false)
+			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
+		}
+		if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_read", pages, tagsReadMenu)
+	return tagsReadMenu
+}
+
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
+	topTextView := tview.NewTextView().
+		SetLabel("").
+		SetText("Put a card on the reader, type or paste your text record and press enter to write. Esc to exit")
+	zapScriptTextArea := tview.NewTextArea().
+		SetLabel("ZapScript")
+
+	tagsWriteMenu := tview.NewForm().
+		AddFormItem(topTextView).
+		AddFormItem(zapScriptTextArea)
+	tagsWriteMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+	tagsWriteMenu.SetFocus(1)
+	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEnter {
+			text := zapScriptTextArea.GetText()
+			strings.Trim(text, "\r\n ")
+			data, _ := json.Marshal(&models.ReaderWriteParams{
+				Text: text,
+			})
+			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
+			zapScriptTextArea.SetText("", true)
+		} else if k == tcell.KeyEscape {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+	pageDefaults("tags_write", pages, tagsWriteMenu)
+	return tagsWriteMenu
 }
 
 /*
@@ -118,11 +247,10 @@ type Readers struct {
 }
 */
 
-func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
+func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
 
-	connectionStrings := []string{}
+	var connectionStrings []string
 	for _, item := range cfg.Readers().Connect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
@@ -139,7 +267,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	}).
 		AddFormItem(textArea).
 		AddButton("Confirm", func() {
-			newConnect := []config.ReadersConnect{}
+			var newConnect []config.ReadersConnect
 			connStrings := strings.Split(textArea.GetText(), "\n")
 			for _, item := range connStrings {
 				couple := strings.SplitN(item, ":", 2)
@@ -165,16 +293,16 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
-	scanMode := int(0)
+	scanMode := 0
 	if cfg.ReadersScan().Mode == config.ScanModeHold {
-		scanMode = int(1)
+		scanMode = 1
 	}
 
 	scanModes := []string{"Tap", "Hold"}
 
-	systems := []string{""}
-	for _, item := range gamesdb.AllSystems() {
-		systems = append(systems, item.Id)
+	allSystems := []string{""}
+	for _, item := range systemdefs.AllSystems() {
+		allSystems = append(allSystems, item.Id)
 	}
 
 	exitDelay := cfg.ReadersScan().ExitDelay
@@ -187,7 +315,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			delay, _ := strconv.ParseFloat(value, 32)
 			cfg.SetScanExitDelay(float32(delay))
 		}).
-		AddDropDown("Ignore systems", systems, 0, func(option string, optionIndex int) {
+		AddDropDown("Ignore systems", allSystems, 0, func(option string, optionIndex int) {
 			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {
 				if !slices.Contains(currentSystems, option) {
@@ -211,39 +339,34 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return scanMenu
 }
 
-func ConfigUi(cfg *config.Instance, pl platforms.Platform) {
+func SetTheme(theme *tview.Theme) {
+	theme.BorderColor = tcell.ColorLightYellow
+	theme.PrimaryTextColor = tcell.ColorWhite
+	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
+	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
+	theme.ContrastBackgroundColor = tcell.ColorFuchsia
+}
+
+func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) (*tview.Application, error) {
 	app := tview.NewApplication()
 	pages := tview.NewPages()
 
-	tview.Styles.BorderColor = tcell.ColorLightYellow
-	tview.Styles.PrimaryTextColor = tcell.ColorWhite
-	tview.Styles.ContrastSecondaryTextColor = tcell.ColorFuchsia
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	tview.Styles.ContrastBackgroundColor = tcell.ColorFuchsia
+	SetTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app)
+	BuildTagsMenu(cfg, pages, app)
+	BuildTagsReadMenu(cfg, pages, app)
+	BuildTagsWriteMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
 	pages.SwitchToPage("main")
 
-	// on mister, when running from scripts menu, /dev/tty is not available
-	if _, err := os.Stat("/dev/tty"); errors.Is(err, os.ErrNotExist) &&
-		pl.Id() == "mister" { // TODO: use a const id for this
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-		if err != nil {
-			panic(err)
-		}
+	return app.SetRoot(pages, true).EnableMouse(true), nil
+}
 
-		screen, err := tcell.NewTerminfoScreenFromTty(tty)
-		if err != nil {
-			panic(err)
-		}
-
-		app.SetScreen(screen)
-	}
-
-	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
-	}
+func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
+	return BuildAppAndRetry(func() (*tview.Application, error) {
+		return ConfigUiBuilder(cfg, pl)
+	})
 }

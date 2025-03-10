@@ -80,7 +80,6 @@ func launchToken(
 			cfg,
 			plsc,
 			token,
-			mapped,
 			cmd,
 			len(cmds),
 			i,
@@ -89,7 +88,7 @@ func launchToken(
 			return err
 		}
 
-		if softwareSwap && !token.Remote {
+		if softwareSwap && !token.FromAPI {
 			log.Info().Msgf("current software launched set to: %s", token.UID)
 			lsq <- &token
 		}

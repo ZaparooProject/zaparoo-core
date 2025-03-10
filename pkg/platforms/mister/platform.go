@@ -7,19 +7,22 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -37,8 +40,8 @@ import (
 type Platform struct {
 	kbd                 input.Keyboard
 	gpd                 uinput.Gamepad
-	tr                  *Tracker
-	stopTr              func() error
+	tracker             *Tracker
+	stopTracker         func() error
 	dbLoadTime          time.Time
 	uidMap              map[string]string
 	textMap             map[string]string
@@ -47,6 +50,26 @@ type Platform struct {
 	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
 	stopSocket          func()
+	lastLauncherMu      sync.Mutex
+	lastLauncher        platforms.Launcher
+}
+
+func NewPlatform() *Platform {
+	return &Platform{
+		lastLauncherMu: sync.Mutex{},
+	}
+}
+
+func (p *Platform) setLastLauncher(l platforms.Launcher) {
+	p.lastLauncherMu.Lock()
+	defer p.lastLauncherMu.Unlock()
+	p.lastLauncher = l
+}
+
+func (p *Platform) getLastLauncher() platforms.Launcher {
+	p.lastLauncherMu.Lock()
+	defer p.lastLauncherMu.Unlock()
+	return p.lastLauncher
 }
 
 type oldDb struct {
@@ -189,7 +212,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
-		"mister.script": cmdMisterScript(*p),
+		"mister.script": cmdMisterScript(p),
 		"mister.mgl":    CmdMisterMgl,
 
 		"ini": CmdIni, // DEPRECATED
@@ -204,8 +227,8 @@ func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification
 		return err
 	}
 
-	p.tr = tr
-	p.stopTr = stopTr
+	p.tracker = tr
+	p.stopTracker = stopTr
 
 	// attempt arcadedb update
 	go func() {
@@ -239,8 +262,8 @@ func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification
 }
 
 func (p *Platform) Stop() error {
-	if p.stopTr != nil {
-		err := p.stopTr()
+	if p.stopTracker != nil {
+		err := p.stopTracker()
 		if err != nil {
 			return err
 		}
@@ -282,6 +305,14 @@ func (p *Platform) AfterScanHook(token tokens.Token) error {
 	}
 
 	p.lastScan = &token
+
+	// stop SAM from playing anything else
+	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("1"), 0644)
+		if err != nil {
+			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
+		}
+	}
 
 	return nil
 }
@@ -325,10 +356,21 @@ func (p *Platform) KillLauncher() error {
 }
 
 func (p *Platform) GetActiveLauncher() string {
+	lastLauncher := p.getLastLauncher()
+	if lastLauncher.Id != "" {
+		return lastLauncher.Id
+	}
+
 	core := GetActiveCoreName()
 
 	if core == mrextConfig.MenuCore {
 		return ""
+	}
+
+	for _, l := range p.Launchers() {
+		if strings.EqualFold(l.Id, core) {
+			return l.Id
+		}
 	}
 
 	return core
@@ -343,19 +385,19 @@ func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 }
 
 func (p *Platform) ActiveSystem() string {
-	return p.tr.ActiveSystem
+	return p.tracker.ActiveSystem
 }
 
 func (p *Platform) ActiveGame() string {
-	return p.tr.ActiveGameId
+	return p.tracker.ActiveGameId
 }
 
 func (p *Platform) ActiveGameName() string {
-	return p.tr.ActiveGameName
+	return p.tracker.ActiveGameName
 }
 
 func (p *Platform) ActiveGamePath() string {
-	return p.tr.ActiveGamePath
+	return p.tracker.ActiveGamePath
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
@@ -375,6 +417,7 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	}
 
 	// just pick the first one for now
+	p.setLastLauncher(launchers[0])
 	return launchers[0].Launch(cfg, path)
 }
 
@@ -501,8 +544,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
-		Id:         gamesdb.SystemAmiga,
-		SystemId:   gamesdb.SystemAmiga,
+		Id:         systemdefs.SystemAmiga,
+		SystemId:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -522,12 +565,12 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 			var fullPaths []string
 
-			s, err := gamesdb.GetSystem(gamesdb.SystemAmiga)
+			s, err := systemdefs.GetSystem(systemdefs.SystemAmiga)
 			if err != nil {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []gamesdb.System{*s})
+			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
 					tp, err := gamesdb.FindPath(filepath.Join(sf.Path, txt))
@@ -564,8 +607,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	}
 
 	neogeo := platforms.Launcher{
-		Id:         gamesdb.SystemNeoGeo,
-		SystemId:   gamesdb.SystemNeoGeo,
+		Id:         systemdefs.SystemNeoGeo,
+		SystemId:   systemdefs.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -587,12 +630,12 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			romsetsFilename := "romsets.xml"
 			names := make(map[string]string)
 
-			s, err := gamesdb.GetSystem(gamesdb.SystemNeoGeo)
+			s, err := systemdefs.GetSystem(systemdefs.SystemNeoGeo)
 			if err != nil {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []gamesdb.System{*s})
+			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				rsf, err := gamesdb.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
@@ -642,10 +685,10 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	mplayerVideo := platforms.Launcher{
 		Id:         "MPlayerVideo",
-		SystemId:   gamesdb.SystemVideo,
+		SystemId:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi"},
-		Launch:     launchMPlayer(*p),
+		Launch:     launchMPlayer(p),
 		Kill:       killMPlayer,
 	}
 

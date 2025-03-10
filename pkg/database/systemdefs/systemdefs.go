@@ -1,4 +1,4 @@
-package gamesdb
+package systemdefs
 
 import (
 	"fmt"
@@ -64,6 +64,7 @@ const (
 	SystemAdventureVision   = "AdventureVision"
 	SystemArcadia           = "Arcadia"
 	SystemAstrocade         = "Astrocade"
+	SystemAmigaCD32         = "AmigaCD32"
 	SystemAtari2600         = "Atari2600"
 	SystemAtari5200         = "Atari5200"
 	SystemAtari7800         = "Atari7800"
@@ -202,6 +203,7 @@ const (
 	SystemGroovy  = "Groovy"
 	SystemIOS     = "iOS"
 	SystemVideo   = "Video"
+	SystemGroovy  = "Groovy"
 )
 
 var Systems = map[string]System{
@@ -218,6 +220,9 @@ var Systems = map[string]System{
 	},
 	SystemArcadia: {
 		Id: SystemArcadia,
+	},
+	SystemAmigaCD32: {
+		Id: SystemAmigaCD32,
 	},
 	SystemAstrocade: {
 		Id: SystemAstrocade,
@@ -655,5 +660,8 @@ var Systems = map[string]System{
 	},
 	SystemVideo: {
 		Id: SystemVideo,
+	},
+	SystemGroovy: {
+		Id: SystemGroovy,
 	},
 }

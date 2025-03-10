@@ -3,21 +3,24 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strconv"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
-	"net/url"
-	"strconv"
-	"time"
 )
 
 var (
 	ErrRequestTimeout = errors.New("request timed out")
 	ErrInvalidParams  = errors.New("invalid params")
 )
+
+const ApiPath = "/api/v0.1"
 
 // LocalClient sends a single unauthenticated method with params to the local
 // running API service, waits for a response until timeout then disconnects.
@@ -26,10 +29,10 @@ func LocalClient(
 	method string,
 	params string,
 ) (string, error) {
-	u := url.URL{
+	localWebsocketUrl := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   "/api/v0.1",
+		Path:   ApiPath,
 	}
 
 	id, err := uuid.NewUUID()
@@ -56,7 +59,7 @@ func LocalClient(
 		return "", ErrInvalidParams
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(localWebsocketUrl.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -99,9 +102,6 @@ func LocalClient(
 		}
 	}()
 
-	//reqFmt, _ := json.MarshalIndent(req, "", "    ")
-	//fmt.Println(string(reqFmt))
-
 	err = c.WriteJSON(req)
 	if err != nil {
 		return "", err
@@ -129,9 +129,6 @@ func LocalClient(
 		return "", err
 	}
 
-	//respFmt, _ := json.MarshalIndent(resp, "", "    ")
-	//fmt.Println(string(respFmt))
-
 	return string(b), nil
 }
 
@@ -142,7 +139,7 @@ func WaitNotification(
 	u := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   "/api/v1.0",
+		Path:   ApiPath,
 	}
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)

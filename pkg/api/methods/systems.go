@@ -5,6 +5,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,17 +22,17 @@ func HandleSystems(env requests.RequestEnv) (any, error) {
 		log.Warn().Msg("no indexed systems found")
 	}
 
-	systems := make([]models.System, 0)
+	respSystems := make([]models.System, 0)
 
 	for _, id := range indexed {
-		sys, err := gamesdb.GetSystem(id)
+		system, err := systemdefs.GetSystem(id)
 		if err != nil {
 			log.Error().Err(err).Msgf("error getting system: %s", id)
 			continue
 		}
 
 		sr := models.System{
-			Id: sys.Id,
+			Id: system.Id,
 		}
 
 		sm, err := assets.GetSystemMetadata(id)
@@ -42,10 +43,10 @@ func HandleSystems(env requests.RequestEnv) (any, error) {
 		sr.Name = sm.Name
 		sr.Category = sm.Category
 
-		systems = append(systems, sr)
+		respSystems = append(respSystems, sr)
 	}
 
 	return models.SystemsResponse{
-		Systems: systems,
+		Systems: respSystems,
 	}, nil
 }

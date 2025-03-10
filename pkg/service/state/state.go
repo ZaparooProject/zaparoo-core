@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
@@ -55,20 +56,15 @@ func (s *State) SetActiveCard(card tokens.Token) {
 	s.activeToken = card
 	if !s.activeToken.ScanTime.IsZero() {
 		s.lastScanned = card
-		s.Notifications <- models.Notification{
-			Method: models.NotificationTokensAdded,
-			Params: models.TokenResponse{
-				Type:     card.Type,
-				UID:      card.UID,
-				Text:     card.Text,
-				Data:     card.Data,
-				ScanTime: card.ScanTime,
-			},
-		}
+		notifications.TokensAdded(s.Notifications, models.TokenResponse{
+			Type:     card.Type,
+			UID:      card.UID,
+			Text:     card.Text,
+			Data:     card.Data,
+			ScanTime: card.ScanTime,
+		})
 	} else {
-		s.Notifications <- models.Notification{
-			Method: models.NotificationTokensRemoved,
-		}
+		notifications.TokensRemoved(s.Notifications)
 	}
 
 	s.mu.Unlock()
@@ -131,10 +127,7 @@ func (s *State) SetReader(device string, reader readers.Reader) {
 	}
 
 	s.readers[device] = reader
-	s.Notifications <- models.Notification{
-		Method: models.NotificationReadersConnected,
-		Params: device,
-	}
+	notifications.ReadersAdded(s.Notifications, device)
 	s.mu.Unlock()
 }
 
@@ -148,10 +141,7 @@ func (s *State) RemoveReader(device string) {
 		}
 	}
 	delete(s.readers, device)
-	s.Notifications <- models.Notification{
-		Method: models.NotificationReadersDisconnected,
-		Params: device,
-	}
+	notifications.ReadersRemoved(s.Notifications, device)
 	s.mu.Unlock()
 }
 

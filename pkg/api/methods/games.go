@@ -3,13 +3,16 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
+	"sync"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -33,7 +36,7 @@ func (s *Index) GenerateIndex(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
-	systems []gamesdb.System,
+	systems []systemdefs.System,
 ) {
 	// TODO: this function should block until index is complete
 	// confirm that concurrent requests is working
@@ -48,13 +51,10 @@ func (s *Index) GenerateIndex(
 	s.TotalFiles = 0
 
 	log.Info().Msg("generating media index")
-	ns <- models.Notification{
-		Method: models.NotificationMediaIndexing,
-		Params: models.IndexResponse{
-			Exists:   false,
-			Indexing: true,
-		},
-	}
+	notifications.MediaIndexing(ns, models.IndexResponse{
+		Exists:   false,
+		Indexing: true,
+	})
 
 	go func() {
 		defer s.mu.Unlock()
@@ -68,7 +68,7 @@ func (s *Index) GenerateIndex(
 			} else if status.Step == status.Total {
 				s.CurrentDesc = "Writing database"
 			} else {
-				system, err := gamesdb.GetSystem(status.SystemId)
+				system, err := systemdefs.GetSystem(status.SystemId)
 				if err != nil {
 					s.CurrentDesc = status.SystemId
 				} else {
@@ -81,17 +81,14 @@ func (s *Index) GenerateIndex(
 				}
 			}
 			log.Debug().Msgf("indexing status: %v", s)
-			ns <- models.Notification{
-				Method: models.NotificationMediaIndexing,
-				Params: models.IndexResponse{
-					Exists:             true,
-					Indexing:           true,
-					TotalSteps:         &s.TotalSteps,
-					CurrentStep:        &s.CurrentStep,
-					CurrentStepDisplay: &s.CurrentDesc,
-					TotalFiles:         &s.TotalFiles,
-				},
-			}
+			notifications.MediaIndexing(ns, models.IndexResponse{
+				Exists:             true,
+				Indexing:           true,
+				TotalSteps:         &s.TotalSteps,
+				CurrentStep:        &s.CurrentStep,
+				CurrentStepDisplay: &s.CurrentDesc,
+				TotalFiles:         &s.TotalFiles,
+			})
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error generating media index")
@@ -104,14 +101,11 @@ func (s *Index) GenerateIndex(
 		s.TotalFiles = 0
 
 		log.Info().Msg("finished generating media index")
-		ns <- models.Notification{
-			Method: models.NotificationMediaIndexing,
-			Params: models.IndexResponse{
-				Exists:     true,
-				Indexing:   false,
-				TotalFiles: &total,
-			},
-		}
+		notifications.MediaIndexing(ns, models.IndexResponse{
+			Exists:     true,
+			Indexing:   false,
+			TotalFiles: &total,
+		})
 	}()
 }
 
@@ -124,7 +118,7 @@ var IndexInstance = NewIndex()
 func HandleIndexMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received index media request")
 
-	var systems []gamesdb.System
+	var systems []systemdefs.System
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
 		err := json.Unmarshal(env.Params, &params)
@@ -133,11 +127,11 @@ func HandleIndexMedia(env requests.RequestEnv) (any, error) {
 		}
 
 		if params.Systems == nil || len(*params.Systems) == 0 {
-			systems = gamesdb.AllSystems()
+			systems = systemdefs.AllSystems()
 		}
 
 		for _, s := range *params.Systems {
-			system, err := gamesdb.GetSystem(s)
+			system, err := systemdefs.GetSystem(s)
 			if err != nil {
 				return nil, errors.New("error getting system: " + err.Error())
 			}
@@ -145,7 +139,7 @@ func HandleIndexMedia(env requests.RequestEnv) (any, error) {
 			systems = append(systems, *system)
 		}
 	} else {
-		systems = gamesdb.AllSystems()
+		systems = systemdefs.AllSystems()
 	}
 
 	IndexInstance.GenerateIndex(
@@ -185,14 +179,14 @@ func HandleGames(env requests.RequestEnv) (any, error) {
 	query := params.Query
 
 	if system == nil || len(*system) == 0 {
-		search, err = gamesdb.SearchNamesWords(env.Platform, gamesdb.AllSystems(), query)
+		search, err = gamesdb.SearchNamesWords(env.Platform, systemdefs.AllSystems(), query)
 		if err != nil {
 			return nil, errors.New("error searching all media: " + err.Error())
 		}
 	} else {
-		systems := make([]gamesdb.System, 0)
+		systems := make([]systemdefs.System, 0)
 		for _, s := range *system {
-			system, err := gamesdb.GetSystem(s)
+			system, err := systemdefs.GetSystem(s)
 			if err != nil {
 				return nil, errors.New("error getting system: " + err.Error())
 			}
@@ -207,7 +201,7 @@ func HandleGames(env requests.RequestEnv) (any, error) {
 	}
 
 	for _, result := range search {
-		system, err := gamesdb.GetSystem(result.SystemId)
+		system, err := systemdefs.GetSystem(result.SystemId)
 		if err != nil {
 			continue
 		}

@@ -30,6 +30,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 
@@ -89,8 +90,18 @@ func main() {
 		false,
 		"add Zaparoo service to MiSTer startup if not already added",
 	)
+	showLoader := flag.String(
+		"show-loader",
+		"",
+		"display a generic loading widget",
+	)
+	showPicker := flag.String(
+		"show-picker",
+		"",
+		"display a generic list picker widget",
+	)
 
-	pl := &mister.Platform{}
+	pl := mister.NewPlatform()
 	flags.Pre(pl)
 
 	if *addStartupFlag {
@@ -119,6 +130,22 @@ func main() {
 
 	cfg := cli.Setup(pl, defaults, nil)
 
+	if *showLoader != "" {
+		err := widgets.LoaderUI(pl, *showLoader)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	} else if *showPicker != "" {
+		err := widgets.PickerUI(cfg, pl, *showPicker)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	svc, err := utils.NewService(utils.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
@@ -135,7 +162,11 @@ func main() {
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
-	tryAddStartup(pl, svc)
+	err = tryAddStartup(pl, svc)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
+		os.Exit(1)
+	}
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
@@ -146,5 +177,9 @@ func main() {
 	}
 
 	// display main info gui
-	displayServiceInfo(pl, cfg, svc)
+	err = displayServiceInfo(pl, cfg, svc)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error displaying service info: %v\n", err)
+		os.Exit(1)
+	}
 }

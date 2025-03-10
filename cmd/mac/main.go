@@ -40,6 +40,7 @@ import (
 
 func main() {
 	pl := &mac.Platform{}
+
 	flags := cli.SetupFlags()
 	flags.Pre(pl)
 

@@ -52,7 +52,7 @@ func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) error {
 	return mister.LaunchShortCore(env.Args)
 }
 
-func cmdMisterScript(plm Platform) func(platforms.Platform, platforms.CmdEnv) error {
+func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) error {
 	return func(pl platforms.Platform, env platforms.CmdEnv) error {
 		// TODO: generic read bool function
 		hidden := env.NamedArgs["hidden"] == "true" || env.NamedArgs["hidden"] == "yes"

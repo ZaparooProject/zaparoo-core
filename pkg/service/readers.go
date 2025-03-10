@@ -7,6 +7,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
@@ -31,7 +32,7 @@ func shouldExit(
 		return false
 	}
 
-	if st.GetLastScanned().Remote {
+	if st.GetLastScanned().FromAPI {
 		return false
 	}
 
@@ -184,30 +185,35 @@ func readerManager(
 			}
 
 			// run before_exit hook if one exists for system
-			var launcher platforms.Launcher
-			found := false
+			var systemIds []string
 			for _, l := range pl.Launchers() {
 				if l.Id == activeLauncher {
-					launcher = l
-					found = true
+					systemIds = append(systemIds, l.SystemId)
+					system, err := systemdefs.LookupSystem(l.SystemId)
+					if err == nil {
+						systemIds = append(systemIds, system.Aliases...)
+					}
 					break
 				}
 			}
-			if found {
-				defaults, ok := cfg.LookupSystemDefaults(launcher.SystemId)
-				if ok && defaults.BeforeExit != "" {
-					log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
-					plsc := playlists.PlaylistController{
-						Active: st.GetActivePlaylist(),
-						Queue:  plq,
-					}
-					t := tokens.Token{
-						ScanTime: time.Now(),
-						Text:     defaults.BeforeExit,
-					}
-					err := launchToken(pl, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Msgf("error launching on remove script: %s", err)
+			if len(systemIds) > 0 {
+				for _, systemId := range systemIds {
+					defaults, ok := cfg.LookupSystemDefaults(systemId)
+					if ok && defaults.BeforeExit != "" {
+						log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
+						plsc := playlists.PlaylistController{
+							Active: st.GetActivePlaylist(),
+							Queue:  plq,
+						}
+						t := tokens.Token{
+							ScanTime: time.Now(),
+							Text:     defaults.BeforeExit,
+						}
+						err := launchToken(pl, cfg, t, db, lsq, plsc)
+						if err != nil {
+							log.Error().Msgf("error launching on remove script: %s", err)
+						}
+						break
 					}
 				}
 			}

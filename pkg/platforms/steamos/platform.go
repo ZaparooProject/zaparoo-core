@@ -22,21 +22,22 @@ package steamos
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
@@ -185,7 +186,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
 			Id:       "Steam",
-			SystemId: gamesdb.SystemPC,
+			SystemId: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
 				cfg *config.Instance,

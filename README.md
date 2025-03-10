@@ -32,17 +32,17 @@ See the [Contributors](https://wiki.zaparoo.org/Contributors) page for a complet
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/timwilsie">
-                    <img src="https://avatars.githubusercontent.com/u/617551?v=4" width="100;" alt="timwilsie"/>
-                    <br />
-                    <sub><b>Tim Wilsie</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/asturur">
                     <img src="https://avatars.githubusercontent.com/u/1194048?v=4" width="100;" alt="asturur"/>
                     <br />
                     <sub><b>Andrea Bogazzi</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/timwilsie">
+                    <img src="https://avatars.githubusercontent.com/u/617551?v=4" width="100;" alt="timwilsie"/>
+                    <br />
+                    <sub><b>Tim Wilsie</b></sub>
                 </a>
             </td>
             <td align="center">
