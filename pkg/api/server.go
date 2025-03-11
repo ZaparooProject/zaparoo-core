@@ -4,18 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"io/fs"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -165,8 +166,11 @@ func Start(
 
 	// consume and broadcast notifications
 	go func(ns <-chan models.Notification) {
-		for !st.ShouldStopService() {
+		for {
 			select {
+			case <-st.GetContext().Done():
+				log.Debug().Msg("Closing HTTP server via context cancellation")
+				return
 			case n := <-ns:
 				ro := models.RequestObject{
 					JsonRpc: "2.0",

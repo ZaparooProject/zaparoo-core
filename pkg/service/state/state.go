@@ -1,11 +1,13 @@
 package state
 
 import (
+	"context"
+	"sync"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -18,22 +20,27 @@ type State struct {
 	runZapScript   bool
 	activeToken    tokens.Token // TODO: make a pointer
 	lastScanned    tokens.Token // TODO: make a pointer
-	stopService    bool         // TODO: make a context?
+	stopService    bool         // ctx used for observers when stopped
 	platform       platforms.Platform
 	readers        map[string]readers.Reader
 	softwareToken  *tokens.Token
 	wroteToken     *tokens.Token
 	Notifications  chan<- models.Notification // TODO: move outside state
 	activePlaylist *playlists.Playlist
+	ctx            context.Context
+	ctxCancelFunc  context.CancelFunc
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
 	ns := make(chan models.Notification)
+	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
 		runZapScript:  true,
 		platform:      platform,
 		readers:       make(map[string]readers.Reader),
 		Notifications: ns,
+		ctx:           ctx,
+		ctxCancelFunc: ctxCancelFunc,
 	}, ns
 }
 
@@ -79,8 +86,10 @@ func (s *State) StopService() {
 	s.mu.Lock()
 	s.stopService = true
 	s.mu.Unlock()
+	s.ctxCancelFunc()
 }
 
+// Deprecated, use <-GetContext().Done() channel instead
 func (s *State) ShouldStopService() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -182,4 +191,8 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
 	s.activePlaylist = playlist
 	s.mu.Unlock()
+}
+
+func (s *State) GetContext() context.Context {
+	return s.ctx
 }

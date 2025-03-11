@@ -254,10 +254,14 @@ func readerManager(
 	}()
 
 	// token pre-processing loop
-	for !st.ShouldStopService() {
+	isStopped := false
+	for !isStopped {
 		var scan *tokens.Token
 
 		select {
+		case <-st.GetContext().Done():
+			log.Debug().Msg("Closing Readers via context cancellation")
+			isStopped = true
 		case t := <-scanQueue:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)

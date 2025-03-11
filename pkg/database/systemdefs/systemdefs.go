@@ -651,13 +651,13 @@ var Systems = map[string]System{
 	SystemChip8: {
 		Id: SystemChip8,
 	},
+	SystemGroovy: {
+		Id: SystemGroovy,
+	},
 	SystemIOS: {
 		Id: SystemIOS,
 	},
 	SystemVideo: {
 		Id: SystemVideo,
-	},
-	SystemGroovy: {
-		Id: SystemGroovy,
 	},
 }

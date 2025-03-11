@@ -106,6 +106,42 @@ func launchAltCore(
 	}
 }
 
+func launchGroovyCore() func(*config.Instance, string) error {
+	// Merge into mrext?
+	return func(cfg *config.Instance, path string) error {
+		sn := games.System{
+			Id:           "Groovy",
+			Name:         "Groovy",
+			Category:     games.CategoryOther,
+			Manufacturer: "Sergi Clara",
+			ReleaseDate:  "2024-03-02",
+			Alias:        []string{"Groovy"},
+			Folder:       []string{"Groovy"},
+			Rbf:          "_Utility/Groovy",
+			Slots: []games.Slot{
+				{
+					Label: "GMC",
+					Exts:  []string{".gmc"},
+					Mgl: &games.MglParams{
+						Delay:  2,
+						Method: "f",
+						Index:  1,
+					},
+				},
+			},
+		}
+
+		log.Debug().Msgf("launching Groovy core: %v", sn)
+
+		err := mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		if err != nil {
+			return err
+		}
+
+		return mister.SetActiveGame(path)
+	}
+}
+
 func killCore(_ *config.Instance) error {
 	return mister.LaunchMenu()
 }
