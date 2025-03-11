@@ -2,7 +2,7 @@ package models
 
 import "github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 
-type LoaderArgs struct {
+type NoticeArgs struct {
 	Text     string `json:"text"`
 	Timeout  int    `json:"timeout"`
 	Complete string `json:"complete"`
