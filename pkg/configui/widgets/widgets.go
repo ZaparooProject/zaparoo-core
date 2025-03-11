@@ -45,32 +45,30 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 	return timer, to
 }
 
-// LoaderUI is a simple TUI screen that indicates something is happening to the
-// user. The text displayed can be customized with the text field.
-func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application, error) {
-	log.Debug().Str("args", argsPath).Msg("showing loader")
+func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {
+	log.Debug().Str("args", argsPath).Msg("showing notice")
 
-	var loaderArgs widgetModels.LoaderArgs
+	var noticeArgs widgetModels.NoticeArgs
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err
 	}
 
-	err = json.Unmarshal(args, &loaderArgs)
+	err = json.Unmarshal(args, &noticeArgs)
 	if err != nil {
 		return nil, err
 	}
 
-	if loaderArgs.Text == "" {
-		loaderArgs.Text = "Loading..."
+	if noticeArgs.Text == "" && loader {
+		noticeArgs.Text = "Loading..."
 	}
 
 	app := tview.NewApplication()
 	configui.SetTheme(&tview.Styles)
 
 	view := tview.NewTextView().
-		SetText(loaderArgs.Text).
+		SetText(noticeArgs.Text).
 		SetTextAlign(tview.AlignCenter)
 
 	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
@@ -78,27 +76,29 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 		return x, y, w, h
 	})
 
-	go func() {
-		frames := []string{"|", "/", "-", "\\"}
-		frameIndex := 0
-		for app != nil {
-			app.QueueUpdateDraw(func() {
-				view.SetText(frames[frameIndex] + " " + loaderArgs.Text)
-			})
-			frameIndex = (frameIndex + 1) % len(frames)
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
+	if loader {
+		go func() {
+			frames := []string{"|", "/", "-", "\\"}
+			frameIndex := 0
+			for app != nil {
+				app.QueueUpdateDraw(func() {
+					view.SetText(frames[frameIndex] + " " + noticeArgs.Text)
+				})
+				frameIndex = (frameIndex + 1) % len(frames)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	}
 
-	handleTimeout(app, loaderArgs.Timeout)
+	handleTimeout(app, noticeArgs.Timeout)
 
-	if loaderArgs.Complete != "" {
+	if noticeArgs.Complete != "" {
 		go func() {
 			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
-				if _, err := os.Stat(loaderArgs.Complete); err == nil {
+				if _, err := os.Stat(noticeArgs.Complete); err == nil {
 					app.Stop()
-					err := os.Remove(loaderArgs.Complete)
+					err := os.Remove(noticeArgs.Complete)
 					if err != nil {
 						log.Error().Err(err).Msg("error removing complete file")
 					}
@@ -120,9 +120,11 @@ func LoaderUIBuilder(pl platforms.Platform, argsPath string) (*tview.Application
 	return app.SetRoot(view, true), nil
 }
 
-func LoaderUI(pl platforms.Platform, argsPath string) error {
+// NoticeUI is a simple TUI screen that displays a message on screen. It can
+// also optionally include a loading indicator spinner next to the message.
+func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
-		return LoaderUIBuilder(pl, argsPath)
+		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 }
 
