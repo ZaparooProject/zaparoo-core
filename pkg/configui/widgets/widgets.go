@@ -97,7 +97,9 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
 				if _, err := os.Stat(noticeArgs.Complete); err == nil {
-					app.Stop()
+					app.QueueUpdateDraw(func() {
+						app.Stop()
+					})
 					err := os.Remove(noticeArgs.Complete)
 					if err != nil {
 						log.Error().Err(err).Msg("error removing complete file")
