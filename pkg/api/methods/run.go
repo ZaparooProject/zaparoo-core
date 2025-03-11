@@ -283,7 +283,7 @@ func InstallRunMedia(
 	// display loading dialog
 	argsPath := filepath.Join(pl.TempDir(), "loader.json")
 	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
-	args := widgetModels.LoaderArgs{
+	args := widgetModels.NoticeArgs{
 		Text:     fmt.Sprintf("Downloading %s...", mp.Name),
 		Complete: completePath,
 	}
