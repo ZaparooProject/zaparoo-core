@@ -55,6 +55,13 @@ See the [Contributors](https://wiki.zaparoo.org/Contributors) page for a complet
 		</tr>
 		<tr>
             <td align="center">
+                <a href="https://github.com/BossRighteous">
+                    <img src="https://avatars.githubusercontent.com/u/972810?v=4" width="100;" alt="BossRighteous"/>
+                    <br />
+                    <sub><b>BossRighteous</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/TheTrainGoes">
                     <img src="https://avatars.githubusercontent.com/u/32771064?v=4" width="100;" alt="TheTrainGoes"/>
                     <br />
@@ -89,6 +96,8 @@ See the [Contributors](https://wiki.zaparoo.org/Contributors) page for a complet
                     <sub><b>fayep</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/Spice-King">
                     <img src="https://avatars.githubusercontent.com/u/590498?v=4" width="100;" alt="Spice-King"/>
@@ -96,8 +105,6 @@ See the [Contributors](https://wiki.zaparoo.org/Contributors) page for a complet
                     <sub><b>Kyle Filz</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/sreuter">
                     <img src="https://avatars.githubusercontent.com/u/550246?v=4" width="100;" alt="sreuter"/>
