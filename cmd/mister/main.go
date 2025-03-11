@@ -96,7 +96,7 @@ func main() {
 		"display a generic loading widget",
 	)
 	showNotice := flag.String(
-		"show-loader",
+		"show-notice",
 		"",
 		"display a generic notice widget",
 	)
