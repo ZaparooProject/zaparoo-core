@@ -339,7 +339,7 @@ func InstallRunMedia(
 
 	// check if the file already exists
 	if _, err := os.Stat(path); err == nil {
-		if mp.PreNotice != nil {
+		if mp.PreNotice != nil && *mp.PreNotice != "" {
 			err = showNotice(cfg, pl, *mp.PreNotice)
 			if err != nil {
 				return "", fmt.Errorf("error showing pre-notice: %w", err)
@@ -402,7 +402,7 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error hiding loading dialog: %w", err)
 	}
 
-	if mp.PreNotice != nil {
+	if mp.PreNotice != nil && *mp.PreNotice != "" {
 		err = showNotice(cfg, pl, *mp.PreNotice)
 		if err != nil {
 			return "", fmt.Errorf("error showing pre-notice: %w", err)
