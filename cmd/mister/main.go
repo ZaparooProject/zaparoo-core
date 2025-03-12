@@ -157,7 +157,7 @@ func main() {
 		}
 		os.Exit(0)
 	} else if *showNotice != "" {
-		err := widgets.NoticeUI(pl, *showLoader, false)
+		err := widgets.NoticeUI(pl, *showNotice, false)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error showing notice: %v\n", err)
 			os.Exit(1)
