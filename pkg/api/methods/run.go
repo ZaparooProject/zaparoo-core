@@ -194,6 +194,70 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
+func showNotice(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	text string,
+) error {
+	argsPath := filepath.Join(pl.TempDir(), "loader.json")
+	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
+
+	if mister.MainHasFeature(mister.MainFeatureNotice) {
+		err := mister.RunDevCmd("show_notice", text)
+		if err != nil {
+			return fmt.Errorf("error running dev cmd: %w", err)
+		}
+	} else {
+		// fall back on script
+		args := widgetModels.NoticeArgs{
+			Text:     text,
+			Complete: completePath,
+		}
+		argsJson, err := json.Marshal(args)
+		if err != nil {
+			return fmt.Errorf("error marshalling notice args: %w", err)
+		}
+		err = os.WriteFile(argsPath, argsJson, 0644)
+		if err != nil {
+			return fmt.Errorf("error writing notice args: %w", err)
+		}
+		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-notice %s", argsPath)
+		apiArgs := models.RunParams{
+			Text: &text,
+		}
+		ps, err := json.Marshal(apiArgs)
+		if err != nil {
+			log.Error().Err(err).Msg("error creating run params")
+		}
+		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
+		if err != nil {
+			log.Error().Err(err).Msg("error running local client")
+		}
+	}
+
+	return nil
+}
+
+func hideNotice(
+	pl platforms.Platform,
+) error {
+	argsPath := filepath.Join(pl.TempDir(), "loader.json")
+	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
+
+	if !mister.MainHasFeature(mister.MainFeatureNotice) {
+		err := os.Remove(argsPath)
+		if err != nil {
+			return fmt.Errorf("error removing loader args: %w", err)
+		}
+		err = os.WriteFile(completePath, []byte{}, 0644)
+		if err != nil {
+			return fmt.Errorf("error writing loader complete: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func InstallRunMedia(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -273,6 +337,17 @@ func InstallRunMedia(
 
 	// check if the file already exists
 	if _, err := os.Stat(path); err == nil {
+		if mp.PreNotice != nil {
+			err = showNotice(cfg, pl, *mp.PreNotice)
+			if err != nil {
+				return "", fmt.Errorf("error showing pre-notice: %w", err)
+			}
+			time.Sleep(2 * time.Second)
+			err = hideNotice(pl)
+			if err != nil {
+				return "", fmt.Errorf("error hiding pre-notice: %w", err)
+			}
+		}
 		return path, nil
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("error checking file: %w", err)
@@ -284,41 +359,9 @@ func InstallRunMedia(
 	loadingText := fmt.Sprintf("Downloading %s...", mp.Name)
 
 	// display loading dialog
-	argsPath := filepath.Join(pl.TempDir(), "loader.json")
-	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
-	if mister.MainHasFeature(mister.MainFeatureNotice) {
-		// use custom main notice
-		err := mister.RunDevCmd("show_notice", loadingText)
-		if err != nil {
-			return "", fmt.Errorf("error running dev cmd: %w", err)
-		}
-	} else {
-		// fall back on script
-		args := widgetModels.NoticeArgs{
-			Text:     loadingText,
-			Complete: completePath,
-		}
-		argsJson, err := json.Marshal(args)
-		if err != nil {
-			return "", fmt.Errorf("error marshalling loader args: %w", err)
-		}
-		err = os.WriteFile(argsPath, argsJson, 0644)
-		if err != nil {
-			return "", fmt.Errorf("error writing loader args: %w", err)
-		}
-		// this is either the smartest or dumbest thing i ever came up with
-		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
-		apiArgs := models.RunParams{
-			Text: &text,
-		}
-		ps, err := json.Marshal(apiArgs)
-		if err != nil {
-			log.Error().Err(err).Msg("error creating run params")
-		}
-		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
-		if err != nil {
-			log.Error().Err(err).Msg("error running local client")
-		}
+	err = showNotice(cfg, pl, loadingText)
+	if err != nil {
+		return "", fmt.Errorf("error showing loading dialog: %w", err)
 	}
 
 	resp, err := http.Get(*mp.Url)
@@ -352,16 +395,9 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error copying file: %w", err)
 	}
 
-	if !mister.MainHasFeature(mister.MainFeatureNotice) {
-		// remove loading dialog if script was used
-		err = os.Remove(argsPath)
-		if err != nil {
-			return "", fmt.Errorf("error removing loader args: %w", err)
-		}
-		err = os.WriteFile(completePath, []byte{}, 0644)
-		if err != nil {
-			return "", fmt.Errorf("error writing loader complete: %w", err)
-		}
+	err = hideNotice(pl)
+	if err != nil {
+		return "", fmt.Errorf("error hiding loading dialog: %w", err)
 	}
 
 	return path, nil
