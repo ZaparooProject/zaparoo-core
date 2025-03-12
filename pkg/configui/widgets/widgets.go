@@ -92,11 +92,12 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 
 	handleTimeout(app, noticeArgs.Timeout)
 
+	ticker := time.NewTicker(1 * time.Second)
 	if noticeArgs.Complete != "" {
 		go func() {
-			ticker := time.NewTicker(1 * time.Second)
 			for range ticker.C {
 				if _, err := os.Stat(noticeArgs.Complete); err == nil {
+					log.Debug().Msg("notice complete file exists, stopping")
 					app.QueueUpdateDraw(func() {
 						app.Stop()
 					})
