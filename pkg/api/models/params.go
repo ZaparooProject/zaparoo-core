@@ -86,7 +86,8 @@ type ZapScriptParams struct {
 }
 
 type MediaParams struct {
-	Name   string  `json:"name"`
-	System string  `json:"system"`
-	Url    *string `json:"url"`
+	Name      string  `json:"name"`
+	System    string  `json:"system"`
+	Url       *string `json:"url"`
+	PreNotice *string `json:"preNotice"`
 }
