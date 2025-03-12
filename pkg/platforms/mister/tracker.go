@@ -7,6 +7,7 @@ package mister
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"os"
 	"path/filepath"
@@ -368,6 +369,41 @@ func loadRecent(filename string) error {
 	return nil
 }
 
+func (tr *Tracker) runPickerSelection(name string) {
+	contents, err := os.ReadFile(name)
+	if err != nil {
+		log.Error().Msgf("error reading main picker selected: %s", err)
+	} else if len(contents) == 0 {
+		log.Error().Msgf("main picker selected is empty")
+	} else {
+		path := strings.TrimSpace(string(contents))
+		path = config.SdFolder + "/" + path
+		log.Info().Msgf("main picker selected path: %s", path)
+
+		pickerContents, err := os.ReadFile(path)
+		if err != nil {
+			log.Error().Msgf("error reading main picker selected path: %s", err)
+		} else {
+			_, err = client.LocalClient(tr.cfg, models.MethodRunLinkAction, string(pickerContents))
+			if err != nil {
+				log.Error().Err(err).Msg("error running local client")
+			}
+		}
+
+		files, err := os.ReadDir(MainPickerDir)
+		if err != nil {
+			log.Error().Msgf("error reading picker items dir: %s", err)
+		} else {
+			for _, file := range files {
+				err := os.Remove(filepath.Join(MainPickerDir, file.Name()))
+				if err != nil {
+					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
+				}
+			}
+		}
+	}
+}
+
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
@@ -394,6 +430,9 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
 						}
+					} else if event.Name == MainPickerSelected {
+						log.Info().Msgf("main picker selected: %s", event.Name)
+						tr.runPickerSelection(event.Name)
 					}
 				}
 			case err, ok := <-watcher.Errors:
@@ -455,6 +494,13 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	err = watcher.Add(config.CurrentPathFile)
 	if err != nil {
 		return nil, err
+	}
+
+	if _, err := os.Stat(MainPickerSelected); err == nil && MainHasFeature(MainFeaturePicker) {
+		err = watcher.Add(MainPickerSelected)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return watcher, nil
