@@ -8,6 +8,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"io"
 	"net/http"
 	"net/url"
@@ -101,7 +102,7 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 	}
 
 	t.ScanTime = time.Now()
-	t.FromAPI = true // TODO: check if this is still necessary after api update
+	t.FromAPI = true
 
 	// TODO: how do we report back errors? put channel in queue
 	env.State.SetActiveCard(t)
@@ -280,33 +281,44 @@ func InstallRunMedia(
 	// download the file
 	log.Info().Msgf("downloading media: %s", *mp.Url)
 
+	loadingText := fmt.Sprintf("Downloading %s...", mp.Name)
+
 	// display loading dialog
 	argsPath := filepath.Join(pl.TempDir(), "loader.json")
 	completePath := filepath.Join(pl.TempDir(), ".loader-complete")
-	args := widgetModels.NoticeArgs{
-		Text:     fmt.Sprintf("Downloading %s...", mp.Name),
-		Complete: completePath,
-	}
-	argsJson, err := json.Marshal(args)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling loader args: %w", err)
-	}
-	err = os.WriteFile(argsPath, argsJson, 0644)
-	if err != nil {
-		return "", fmt.Errorf("error writing loader args: %w", err)
-	}
-	// this is either the smartest or dumbest thing i ever came up with
-	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
-	apiArgs := models.RunParams{
-		Text: &text,
-	}
-	ps, err := json.Marshal(apiArgs)
-	if err != nil {
-		log.Error().Err(err).Msg("error creating run params")
-	}
-	_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
-	if err != nil {
-		log.Error().Err(err).Msg("error running local client")
+	if mister.MainHasFeature(mister.MainFeatureNotice) {
+		// use custom main notice
+		err := mister.RunDevCmd("show_notice", loadingText)
+		if err != nil {
+			return "", fmt.Errorf("error running dev cmd: %w", err)
+		}
+	} else {
+		// fall back on script
+		args := widgetModels.NoticeArgs{
+			Text:     loadingText,
+			Complete: completePath,
+		}
+		argsJson, err := json.Marshal(args)
+		if err != nil {
+			return "", fmt.Errorf("error marshalling loader args: %w", err)
+		}
+		err = os.WriteFile(argsPath, argsJson, 0644)
+		if err != nil {
+			return "", fmt.Errorf("error writing loader args: %w", err)
+		}
+		// this is either the smartest or dumbest thing i ever came up with
+		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
+		apiArgs := models.RunParams{
+			Text: &text,
+		}
+		ps, err := json.Marshal(apiArgs)
+		if err != nil {
+			log.Error().Err(err).Msg("error creating run params")
+		}
+		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
+		if err != nil {
+			log.Error().Err(err).Msg("error running local client")
+		}
 	}
 
 	resp, err := http.Get(*mp.Url)
@@ -340,14 +352,16 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error copying file: %w", err)
 	}
 
-	// remove loading dialog
-	err = os.Remove(argsPath)
-	if err != nil {
-		return "", fmt.Errorf("error removing loader args: %w", err)
-	}
-	err = os.WriteFile(completePath, []byte{}, 0644)
-	if err != nil {
-		return "", fmt.Errorf("error writing loader complete: %w", err)
+	if !mister.MainHasFeature(mister.MainFeatureNotice) {
+		// remove loading dialog if script was used
+		err = os.Remove(argsPath)
+		if err != nil {
+			return "", fmt.Errorf("error removing loader args: %w", err)
+		}
+		err = os.WriteFile(completePath, []byte{}, 0644)
+		if err != nil {
+			return "", fmt.Errorf("error writing loader complete: %w", err)
+		}
 	}
 
 	return path, nil
