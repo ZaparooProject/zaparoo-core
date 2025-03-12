@@ -194,6 +194,8 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
+const preNoticeTime = 2 * time.Second
+
 func showNotice(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -342,7 +344,7 @@ func InstallRunMedia(
 			if err != nil {
 				return "", fmt.Errorf("error showing pre-notice: %w", err)
 			}
-			time.Sleep(2 * time.Second)
+			time.Sleep(preNoticeTime)
 			err = hideNotice(pl)
 			if err != nil {
 				return "", fmt.Errorf("error hiding pre-notice: %w", err)
@@ -398,6 +400,18 @@ func InstallRunMedia(
 	err = hideNotice(pl)
 	if err != nil {
 		return "", fmt.Errorf("error hiding loading dialog: %w", err)
+	}
+
+	if mp.PreNotice != nil {
+		err = showNotice(cfg, pl, *mp.PreNotice)
+		if err != nil {
+			return "", fmt.Errorf("error showing pre-notice: %w", err)
+		}
+		time.Sleep(preNoticeTime)
+		err = hideNotice(pl)
+		if err != nil {
+			return "", fmt.Errorf("error hiding pre-notice: %w", err)
+		}
 	}
 
 	return path, nil
