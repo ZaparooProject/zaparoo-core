@@ -133,6 +133,9 @@ func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application)
 		AddItem("Write", "Write a tag without running it", '2', func() {
 			pages.SwitchToPage("tags_write")
 		}).
+		AddItem("Search", "Search a game and write it", '3', func() {
+			pages.SwitchToPage("tags_search")
+		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
 			pages.SwitchToPage("main")
 		})
@@ -178,6 +181,28 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	})
 	pageDefaults("tags_read", pages, tagsReadMenu)
 	return tagsReadMenu
+}
+
+func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
+	tagsSearchMenu := tview.NewForm()
+	dropdown := tview.NewDropDown()
+	tagsSearchMenu.AddInputField("Search param", "", 20, func(value string, lastChar rune) bool {
+		var params models.SearchParams
+		params.Query = value
+		payload, _ := json.Marshal(params)
+		resp, _ := client.LocalClient(cfg, models.MethodMediaSearch, string(payload))
+		var response models.SearchResults
+		json.Unmarshal([]byte(resp), &response)
+		for _, result := range response.Results {
+			dropdown.AddOption(result.Name, func() {
+
+			})
+		}
+		return true
+	}, func(value string) {})
+	tagsSearchMenu.AddFormItem(dropdown)
+	pageDefaults("tags_search", pages, tagsSearchMenu)
+	return tagsSearchMenu
 }
 
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
@@ -353,6 +378,7 @@ func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) (*tview.Applic
 	BuildMainMenu(cfg, pages, app)
 	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
+	BuildTagsSearchMenu(cfg, pages, app)
 	BuildTagsWriteMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
