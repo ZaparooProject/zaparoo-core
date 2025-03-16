@@ -25,8 +25,10 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/getlantern/systray"
 	"github.com/rs/zerolog"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -109,10 +111,28 @@ func main() {
 		fmt.Printf("Web App: http://%s:%d/app/\n", ip.String(), cfg.ApiPort())
 	}
 
+	systray.Run(onReady(cfg, ip), onExit(doStop))
+
 	fmt.Println("Press any key to exit")
 	_, _ = fmt.Scanln()
 	doStop <- true
 	<-stopped
 
 	os.Exit(0)
+}
+
+func onReady(cfg *config.Instance, ip net.IP) func() {
+	return func() {
+		//systray.SetIcon(icon.Data)
+		systray.SetTitle("Zaparoo Core")
+		systray.SetTooltip(fmt.Sprintf("Address: %s:%d", ip.String(), cfg.ApiPort()))
+		systray.AddMenuItem("Quit", "Stop the Zaparoo service")
+	}
+}
+
+func onExit(doStop chan<- bool) func() {
+	return func() {
+		log.Info().Msg("exiting app")
+		doStop <- true
+	}
 }

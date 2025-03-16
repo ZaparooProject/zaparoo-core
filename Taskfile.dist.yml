@@ -176,7 +176,7 @@ tasks:
       GOARCH: "{{default .ARCH .BUILD_ARCH}}"
       GOOS: '{{default "windows" .BUILD_OS}}'
     cmds:
-      - go build -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
+      - go build {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
       - rm -f {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip
       - zip -j {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip {{.BUILD_DIR}}/{{.APP_BIN}}
 
@@ -190,6 +190,7 @@ tasks:
           PLATFORM: windows
           APP_BIN: Zaparoo.exe
           CGO_ENABLED: 0
+          BUILD_ARGS: -ldflags "-H=windowsgui"
 
   build-windows-amd64:
     cmds:
@@ -201,6 +202,7 @@ tasks:
           PLATFORM: windows
           APP_BIN: Zaparoo.exe
           CGO_ENABLED: 0
+          BUILD_ARGS: -ldflags "-H=windowsgui"
 
   build-mac-arm64:
     cmds:
