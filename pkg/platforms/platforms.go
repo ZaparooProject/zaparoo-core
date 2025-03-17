@@ -67,55 +67,64 @@ type Platform interface {
 	// StartPost runs any necessary platform setup function after the main
 	// service has started running.
 	StartPost(*config.Instance, chan<- models.Notification) error
-	// Stop runs any necessary cleanup function before the rest of the service
+	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
 	Stop() error
-	// Run immediately after a successful scan, before it is processed for launching.
+	// AfterScanHook is run immediately after a successful scan, but before
+	// it is processed for launching.
 	AfterScanHook(tokens.Token) error
-	// Run after the active readers have been updated.
+	// ReadersUpdateHook runs after a change has occurred with the state of
+	// the connected readers (i.e. when a reader is connected or disconnected),
+	// and is given the current new state of readers connected.
+	// TODO: this hook isn't very useful without knowing what changed. it may be
+	// better to split it into 2 separate hooks for added/removed
 	ReadersUpdateHook(map[string]*readers.Reader) error
-	// List of supported readers for this platform.
+	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
-	// List of root folders to scan for media files.
+	// RootDirs returns a list of root folders to scan for media files.
 	RootDirs(*config.Instance) []string
-	// Whether to treat zip files as folders during media scanning.
+	// ZipsAsDirs returns true if the platform treats .zip files as folders.
+	// TODO: this is just a mister thing. i wonder if it would be better to have
+	// some sort of single "config" value to look up things like this
+	// instead of implementing a method on every platform
 	ZipsAsDirs() bool
-	// Path to the configuration/database data for Zaparoo Core.
+	// DataDir returns the path to the configuration/database data for Core.
 	DataDir() string
-	// Path to the log folder for Zaparoo Core.
+	// LogDir returns the path to the log folder for Zaparoo Core.
 	LogDir() string
 	// ConfigDir returns the path of the parent directory of the config file.
 	ConfigDir() string
-	// TempDir return the path for storing temporary files. It may be called
+	// TempDir returns the path for storing temporary files. It may be called
 	// multiple times and must return the same path for the service lifetime.
 	TempDir() string
-	// Convert a path to a normalized form for the platform, the shortest
-	// possible path that can interpreted and lanched by Zaparoo Core. For writing
-	// to tokens.
+	// NormalizePath convert a path to a normalized form for the platform, the
+	// shortest possible path that can interpreted and launched by Core. For
+	// writing to tokens.
 	NormalizePath(*config.Instance, string) string
-	// Kill the currently running launcher process if possible.
+	// KillLauncher kills the currently running launcher process, if possible.
 	KillLauncher() error
-	// Return the ID of the currently active launcher. Empty string if none.
+	// GetActiveLauncher returns the ID of the currently active launcher or an
+	// empty string if none.
 	GetActiveLauncher() string
-	// Play a sound effect for error feedback.
-	PlayFailSound(*config.Instance) // TODO: change to like PlaySound?
-	// Play a sound effect for success feedback.
+	// PlayFailSound plays a sound effect for error feedback.
+	// TODO: merge with PlaySuccessSound into single PlayAudio function?
+	PlayFailSound(*config.Instance)
+	// PlaySuccessSound plays a sound effect for success feedback.
 	PlaySuccessSound(*config.Instance)
-	// Returns the currently active system ID.
+	// ActiveSystem returns the currently active system ID.
 	ActiveSystem() string
-	// Returns the currently active game ID.
+	// ActiveGame returns the currently active game ID.
 	ActiveGame() string // TODO: check where this is used
-	// Returns the currently active game name.
+	// ActiveGameName returns the currently active game name.
 	ActiveGameName() string
-	// Returns the currently active game path.
+	// ActiveGamePath returns the currently active game file path.
 	ActiveGamePath() string
-	// Launch a system by ID.
+	// LaunchSystem launches a system by ID, if possible for platform.
 	LaunchSystem(*config.Instance, string) error
-	// Launch a file by path.
+	// LaunchFile launches a file by path.
 	// TODO: i don't think this needs to exist now launch logic is on the
 	// launcher. better to be one func outside platform
 	LaunchFile(*config.Instance, string) error
-	// Launch a shell command.
 	KeyboardInput(string) error // DEPRECATED
 	KeyboardPress(string) error
 	GamepadPress(string) error
