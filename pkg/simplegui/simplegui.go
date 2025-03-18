@@ -25,6 +25,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -167,7 +168,9 @@ func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDe
 				app.Stop()
 			}
 			if buttonLabel == "Config" {
+				enabler := client.ZapScriptWrapper(cfg)
 				configui.ConfigUiBuilder(cfg, app, pages, func() {
+					enabler()
 					pages.SwitchToPage("main")
 				})
 			}

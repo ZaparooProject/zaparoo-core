@@ -3,7 +3,9 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -21,6 +23,36 @@ var (
 )
 
 const ApiPath = "/api/v0.1"
+
+// Disable runZapScript and returns a function that enables it back
+func ZapScriptWrapper(cfg *config.Instance) func() {
+	_, err := LocalClient(
+		cfg,
+		models.MethodSettingsUpdate,
+		"{\"runZapScript\":false}",
+	)
+	if err != nil {
+		log.Error().Err(err).Msg("error disabling run")
+		_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
+		os.Exit(1)
+	}
+
+	return func() {
+		// TODO: this should be in a defer or signal handler to or else it won't
+		// run if there was a crash or unhandled error
+		_, err = LocalClient(
+			cfg,
+			models.MethodSettingsUpdate,
+			"{\"runZapScript\":true}",
+		)
+		if err != nil {
+			log.Error().Err(err).Msg("error enabling run")
+			_, _ = fmt.Fprintf(os.Stderr, "Error enabling run: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+}
 
 // LocalClient sends a single unauthenticated method with params to the local
 // running API service, waits for a response until timeout then disconnects.

@@ -347,6 +347,9 @@ func SetTheme(theme *tview.Theme) {
 }
 
 func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.Pages, exitFunc func()) (*tview.Application, error) {
+
+	SetTheme(&tview.Styles)
+
 	BuildMainMenu(cfg, pages, app, exitFunc)
 	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
@@ -354,6 +357,7 @@ func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
+
 	pages.SwitchToPage("mainconfig")
 
 	return app.SetRoot(pages, true).EnableMouse(true), nil
@@ -363,7 +367,6 @@ func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
 	return BuildAppAndRetry(func() (*tview.Application, error) {
 		app := tview.NewApplication()
 		pages := tview.NewPages()
-		SetTheme(&tview.Styles)
 		exitFunc := func() { app.Stop() }
 		return ConfigUiBuilder(cfg, app, pages, exitFunc)
 	})
