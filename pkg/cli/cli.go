@@ -149,29 +149,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}
 	} else if *f.Read {
-		enableRun := func() {
-			_, err := client.LocalClient(
-				cfg,
-				models.MethodSettingsUpdate,
-				"{\"runZapScript\":true}",
-			)
-			if err != nil {
-				log.Error().Err(err).Msg("error re-enabling run")
-				_, _ = fmt.Fprintf(os.Stderr, "Error re-enabling run: %v\n", err)
-				os.Exit(1)
-			}
-		}
-
-		_, err := client.LocalClient(
-			cfg,
-			models.MethodSettingsUpdate,
-			"{\"runZapScript\":false}",
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error disabling run")
-			_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
-			os.Exit(1)
-		}
+		enableRun := client.ZapScriptWrapper(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
