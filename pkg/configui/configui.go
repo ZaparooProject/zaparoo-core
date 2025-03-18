@@ -78,7 +78,6 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 */
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
-	pages.RemovePage("mainconfig")
 	debugLogging := "DISABLED"
 	if cfg.DebugLogging() {
 		debugLogging = "ENABLED"
