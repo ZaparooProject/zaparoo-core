@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,25 +51,26 @@ type Platform struct {
 	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
 	stopSocket          func()
-	lastLauncherMu      sync.Mutex
+	platformMu          sync.Mutex
 	lastLauncher        platforms.Launcher
+	lastUIHidden        time.Time
 }
 
 func NewPlatform() *Platform {
 	return &Platform{
-		lastLauncherMu: sync.Mutex{},
+		platformMu: sync.Mutex{},
 	}
 }
 
 func (p *Platform) setLastLauncher(l platforms.Launcher) {
-	p.lastLauncherMu.Lock()
-	defer p.lastLauncherMu.Unlock()
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	p.lastLauncher = l
 }
 
 func (p *Platform) getLastLauncher() platforms.Launcher {
-	p.lastLauncherMu.Lock()
-	defer p.lastLauncherMu.Unlock()
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
 	return p.lastLauncher
 }
 
@@ -708,4 +710,57 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	ls = append(ls, neogeo)
 	ls = append(ls, mplayerVideo)
 	return ls
+}
+
+func (p *Platform) ShowNotice(
+	cfg *config.Instance,
+	args widgetModels.NoticeArgs,
+) (func() error, time.Duration, error) {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
+	if time.Since(p.lastUIHidden) < 2*time.Second && !MainHasFeature(MainFeatureNotice) {
+		log.Debug().Msg("waiting for previous notice to finish")
+		time.Sleep(3 * time.Second)
+	}
+
+	completePath, err := showNotice(cfg, p, args.Text, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	return func() error {
+		p.platformMu.Lock()
+		defer p.platformMu.Unlock()
+		p.lastUIHidden = time.Now()
+		return hideNotice(completePath)
+	}, preNoticeTime(), nil
+}
+
+func (p *Platform) ShowLoader(
+	cfg *config.Instance,
+	args widgetModels.NoticeArgs,
+) (func() error, error) {
+	p.platformMu.Lock()
+	defer p.platformMu.Unlock()
+	if time.Since(p.lastUIHidden) < 2*time.Second && !MainHasFeature(MainFeatureNotice) {
+		log.Debug().Msg("waiting for previous notice to finish")
+		time.Sleep(3 * time.Second)
+	}
+
+	completePath, err := showNotice(cfg, p, args.Text, true)
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		p.platformMu.Lock()
+		defer p.platformMu.Unlock()
+		p.lastUIHidden = time.Now()
+		return hideNotice(completePath)
+	}, nil
+}
+
+func (p *Platform) ShowPicker(
+	cfg *config.Instance,
+	args widgetModels.PickerArgs,
+) error {
+	return showPicker(cfg, p, args)
 }

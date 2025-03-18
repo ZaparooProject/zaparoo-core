@@ -4,14 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -97,69 +93,6 @@ func getZapLink(url string) (models.ZapLink, error) {
 	return zl, nil
 }
 
-func misterSetupMainPicker(zl models.ZapLink) error {
-	// remove existing items
-	files, err := os.ReadDir(mister.MainPickerDir)
-	if err != nil {
-		log.Error().Msgf("error reading picker items dir: %s", err)
-	} else {
-		for _, file := range files {
-			err := os.Remove(filepath.Join(mister.MainPickerDir, file.Name()))
-			if err != nil {
-				log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
-			}
-		}
-	}
-
-	// write items to dir
-	for _, action := range zl.Actions {
-		var name string
-		switch action.Method {
-		case models.ZapLinkActionZapScript:
-			var zsp models.ZapScriptParams
-			err = json.Unmarshal(action.Params, &zsp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling zap script params: %w", err)
-			}
-
-			name = zsp.Name
-			if name == "" {
-				continue
-			}
-		case models.ZapLinkActionMedia:
-			var mp models.MediaParams
-			err = json.Unmarshal(action.Params, &mp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling media params: %w", err)
-			}
-
-			name = mp.Name
-			if name == "" {
-				continue
-			}
-		}
-
-		contents, err := json.Marshal(action)
-		if err != nil {
-			return err
-		}
-
-		path := filepath.Join(mister.MainPickerDir, name+".txt")
-		err = os.WriteFile(path, contents, 0644)
-		if err != nil {
-			return err
-		}
-	}
-
-	// launch
-	err = os.WriteFile(mister.CmdInterface, []byte("show_picker\n"), 0644)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func checkLink(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -181,52 +114,15 @@ func checkLink(
 
 	// multiple actions get forward to a picker menu
 	if len(zl.Actions) > 1 {
-		// TODO: these should be moved to a set of generic platform methods
-		if pl.Id() != "mister" {
-			return "", errors.New("multiple actions is not supported on this platform")
-		}
-
-		// use custom main ui if available
-		if mister.MainHasFeature(mister.MainFeaturePicker) {
-			err = misterSetupMainPicker(zl)
-			if err != nil {
-				return "", err
-			} else {
-				return "", nil
-			}
-		}
-
-		// fall back to launching script menu
-		argsPath := filepath.Join(pl.TempDir(), "picker.json")
-		args := widgetModels.PickerArgs{
-			Title: zl.Name,
-		}
-		args.Actions = zl.Actions
-
-		argsJson, err := json.Marshal(args)
+		err := pl.ShowPicker(cfg, widgetModels.PickerArgs{
+			Title:   zl.Name,
+			Actions: zl.Actions,
+		})
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("error showing picker: %w", err)
+		} else {
+			return "", nil
 		}
-		err = os.WriteFile(argsPath, argsJson, 0644)
-		if err != nil {
-			return "", err
-		}
-
-		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-picker %s", argsPath)
-		apiArgs := models.RunParams{
-			Text: &text,
-		}
-		ps, err := json.Marshal(apiArgs)
-		if err != nil {
-			log.Error().Err(err).Msg("error creating run params")
-		}
-
-		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
-		if err != nil {
-			log.Error().Err(err).Msg("error running local client")
-		}
-
-		return "", nil
 	}
 
 	action := zl.Actions[0]

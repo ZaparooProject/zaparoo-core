@@ -6,6 +6,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 )
 
 const (
@@ -128,10 +131,23 @@ type Platform interface {
 	KeyboardInput(string) error // DEPRECATED
 	KeyboardPress(string) error
 	GamepadPress(string) error
-	// Process a token command that has been resolved to a platform command.
+	// ForwardCmd processes a platform-specific ZapScript command.
 	ForwardCmd(CmdEnv) error
 	LookupMapping(tokens.Token) (string, bool)
 	Launchers() []Launcher
+	// ShowNotice displays a string on-screen of the platform device. Returns
+	// a function that may be used to manually hide the notice.
+	ShowNotice(*config.Instance, widgetModels.NoticeArgs) (func() error, time.Duration, error)
+	// ShowLoader displays a string on-screen of the platform device alongside
+	// an animation indicating something is in progress. Returns a function
+	// that may be used to manually hide the loader and an optional delay to
+	// wait before hiding.
+	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
+	// ShowPicker displays a list picker on-screen of the platform device with
+	// a list of Zap Link Actions to choose from. The chosen action will be
+	// forwarded to the local API instance to be run. Returns a function that
+	// may be used to manually cancel and hide the picker.
+	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
 }
 
 type LaunchToken struct {

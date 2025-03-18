@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"io"
 	"net/http"
 	"net/url"
@@ -27,8 +25,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
-
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 )
 
 var (
@@ -195,88 +191,6 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func preNoticeTime() time.Duration {
-	if mister.MainHasFeature(mister.MainFeatureNotice) {
-		return 3 * time.Second
-	} else {
-		return 5 * time.Second
-	}
-}
-
-func showNotice(
-	cfg *config.Instance,
-	pl platforms.Platform,
-	text string,
-	loader bool,
-) (string, error) {
-	log.Info().Msgf("showing notice: %s", text)
-	argsId := utils.RandSeq(10)
-	argsName := "notice-" + argsId + ".json"
-	if loader {
-		argsName = "loader-" + argsId + ".json"
-	}
-	argsPath := filepath.Join(pl.TempDir(), argsName)
-	completePath := argsPath + ".complete"
-
-	if mister.MainHasFeature(mister.MainFeatureNotice) {
-		err := mister.RunDevCmd("show_notice", text)
-		if err != nil {
-			return "", fmt.Errorf("error running dev cmd: %w", err)
-		}
-	} else {
-		log.Debug().Msg("launching script notice")
-		// fall back on script
-		args := widgetModels.NoticeArgs{
-			Text:     text,
-			Complete: completePath,
-		}
-		argsJson, err := json.Marshal(args)
-		if err != nil {
-			return "", fmt.Errorf("error marshalling notice args: %w", err)
-		}
-		err = os.WriteFile(argsPath, argsJson, 0644)
-		if err != nil {
-			return "", fmt.Errorf("error writing notice args: %w", err)
-		}
-		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-notice %s", argsPath)
-		if loader {
-			text = fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
-		}
-		log.Debug().Msgf("running script notice: %s", text)
-		apiArgs := models.RunParams{
-			Text: &text,
-		}
-		ps, err := json.Marshal(apiArgs)
-		if err != nil {
-			log.Error().Err(err).Msg("error creating run params")
-		}
-		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
-		if err != nil {
-			log.Error().Err(err).Msg("error running local client")
-		}
-	}
-
-	return argsPath, nil
-}
-
-func hideNotice(
-	pl platforms.Platform,
-	argsPath string,
-) error {
-	if !mister.MainHasFeature(mister.MainFeatureNotice) {
-		err := os.Remove(argsPath)
-		if err != nil {
-			return fmt.Errorf("error removing notice args: %w", err)
-		}
-		err = os.WriteFile(argsPath+".complete", []byte{}, 0644)
-		if err != nil {
-			return fmt.Errorf("error writing notice complete: %w", err)
-		}
-	}
-
-	return nil
-}
-
 func InstallRunMedia(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -357,12 +271,19 @@ func InstallRunMedia(
 	// check if the file already exists
 	if _, err := os.Stat(path); err == nil {
 		if mp.PreNotice != nil && *mp.PreNotice != "" {
-			argsPath, err := showNotice(cfg, pl, *mp.PreNotice, false)
+			hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
+				Text: *mp.PreNotice,
+			})
 			if err != nil {
 				return "", fmt.Errorf("error showing pre-notice: %w", err)
 			}
-			time.Sleep(preNoticeTime())
-			err = hideNotice(pl, argsPath)
+
+			if delay > 0 {
+				log.Debug().Msgf("delaying pre-notice: %d", delay)
+				time.Sleep(delay)
+			}
+
+			err = hide()
 			if err != nil {
 				return "", fmt.Errorf("error hiding pre-notice: %w", err)
 			}
@@ -377,8 +298,9 @@ func InstallRunMedia(
 
 	loadingText := fmt.Sprintf("Downloading %s...", mp.Name)
 
-	// display loading dialog
-	argsPath, err := showNotice(cfg, pl, loadingText, true)
+	hideLoader, err := pl.ShowLoader(cfg, widgetModels.NoticeArgs{
+		Text: loadingText,
+	})
 	if err != nil {
 		return "", fmt.Errorf("error showing loading dialog: %w", err)
 	}
@@ -413,23 +335,25 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error copying file: %w", err)
 	}
 
-	err = hideNotice(pl, argsPath)
+	err = hideLoader()
 	if err != nil {
 		return "", fmt.Errorf("error hiding loading dialog: %w", err)
 	}
 
 	if mp.PreNotice != nil && *mp.PreNotice != "" {
-		if !mister.MainHasFeature(mister.MainFeatureNotice) {
-			_ = pl.Stop()
-			time.Sleep(2 * time.Second)
-		}
-
-		argsPath, err = showNotice(cfg, pl, *mp.PreNotice, false)
+		hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
+			Text: *mp.PreNotice,
+		})
 		if err != nil {
 			return "", fmt.Errorf("error showing pre-notice: %w", err)
 		}
-		time.Sleep(preNoticeTime())
-		err = hideNotice(pl, argsPath)
+
+		if delay > 0 {
+			log.Debug().Msgf("delaying pre-notice: %d", delay)
+			time.Sleep(delay)
+		}
+
+		err = hide()
 		if err != nil {
 			return "", fmt.Errorf("error hiding pre-notice: %w", err)
 		}
