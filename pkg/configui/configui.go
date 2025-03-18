@@ -24,36 +24,11 @@ type PrimitiveWithSetBorder interface {
 func BuildAppAndRetry(
 	builder func() (*tview.Application, error),
 ) error {
-	appTty, err := builder()
+	app, err := builder()
 	if err != nil {
 		return err
 	}
-
-	if err := appTty.Run(); err != nil {
-		appTty = nil
-		appTty2, err := builder()
-		if err != nil {
-			return err
-		}
-
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
-		if err != nil {
-			return err
-		}
-
-		screen, err := tcell.NewTerminfoScreenFromTty(tty)
-		if err != nil {
-			return err
-		}
-
-		appTty2.SetScreen(screen)
-
-		if err := appTty2.Run(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return tryRunApp(app, builder)
 }
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
