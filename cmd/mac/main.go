@@ -27,14 +27,17 @@ import (
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 )
 
@@ -54,29 +57,24 @@ func main() {
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 
-	stopSvc, err := service.Start(pl, cfg)
+	_, err := service.Start(pl, cfg)
+
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
 		fmt.Println("Error starting service:", err)
 		os.Exit(1)
 	}
 
-	ip, err := utils.GetLocalIp()
-	if err != nil {
-		fmt.Println("Device address: Unknown")
-	} else {
-		fmt.Println("Device address:", ip.String())
-	}
+	configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		return simplegui.BuildTheUi(pl, true, cfg, "")
+	})
 
-	fmt.Println("Press Enter to exit")
-	fmt.Scanln()
+	// err = stopSvc()
+	// if err != nil {
+	// 	log.Error().Msgf("error stopping service: %s", err)
+	// 	fmt.Println("Error stopping service:", err)
+	// 	os.Exit(1)
+	// }
 
-	err = stopSvc()
-	if err != nil {
-		log.Error().Msgf("error stopping service: %s", err)
-		fmt.Println("Error stopping service:", err)
-		os.Exit(1)
-	}
-
-	os.Exit(0)
+	// os.Exit(0)
 }

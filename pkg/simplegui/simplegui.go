@@ -28,15 +28,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
-func copyLogToSd(pl platforms.Platform) string {
+func copyLogToSd(pl platforms.Platform, logDestinationPath string) string {
 	logPath := path.Join(pl.LogDir(), config.LogFile)
-	newPath := path.Join(mister.DataDir, config.LogFile)
+	newPath := logDestinationPath
 	err := utils.CopyFile(logPath, newPath)
 	outcome := ""
 	if err != nil {
@@ -95,13 +94,12 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func buildTheUi(pl platforms.Platform, service *utils.Service, cfg *config.Instance) (*tview.Application, error) {
+func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDestinationPath string) (*tview.Application, error) {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
 
 	var statusText string
-	running := service.Running()
 	if running {
 		statusText = "RUNNING"
 	} else {
@@ -136,18 +134,20 @@ func buildTheUi(pl platforms.Platform, service *utils.Service, cfg *config.Insta
 				pages.RemovePage("upload")
 			}, true)
 			pages.AddPage("upload", modal, true, true)
-		}).
-		AddItem("Copy to SD card", "", 'b', func() {
+		})
+	if logDestinationPath != "" {
+		logExport.AddItem("Copy to SD card", "", 'b', func() {
 			pages.RemovePage("export")
-			outcome := copyLogToSd(pl)
+			outcome := copyLogToSd(pl, logDestinationPath)
 			modal := genericModal(outcome, "Log copy", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("copy")
 			}, true)
 			pages.AddPage("copy", modal, true, true)
-		}).
-		AddItem("Cancel", "", 'q', func() {
-			pages.RemovePage("export")
-		}).
+		})
+	}
+	logExport.AddItem("Cancel", "", 'q', func() {
+		pages.RemovePage("export")
+	}).
 		ShowSecondaryText(false)
 	// Coloring will require some effort
 	// SetBackgroundColor(modal.GetBackgroundColor())
