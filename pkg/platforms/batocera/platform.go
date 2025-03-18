@@ -2,10 +2,12 @@ package batocera
 
 import (
 	"errors"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -197,4 +199,25 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+}
+
+func (p *Platform) ShowNotice(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, time.Duration, error) {
+	return nil, 0, nil
+}
+
+func (p *Platform) ShowLoader(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, error) {
+	return nil, nil
+}
+
+func (p *Platform) ShowPicker(
+	_ *config.Instance,
+	_ widgetModels.PickerArgs,
+) error {
+	return nil
 }

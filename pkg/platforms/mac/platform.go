@@ -3,11 +3,13 @@ package mac
 import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -164,5 +166,26 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers() []platforms.Launcher {
+	return nil
+}
+
+func (p *Platform) ShowNotice(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, time.Duration, error) {
+	return nil, 0, nil
+}
+
+func (p *Platform) ShowLoader(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, error) {
+	return nil, nil
+}
+
+func (p *Platform) ShowPicker(
+	_ *config.Instance,
+	_ widgetModels.PickerArgs,
+) error {
 	return nil
 }
