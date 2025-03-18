@@ -27,9 +27,7 @@ import (
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
-	"github.com/rivo/tview"
 	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
@@ -57,7 +55,7 @@ func main() {
 
 	fmt.Println("Zaparoo v" + config.AppVersion)
 
-	_, err := service.Start(pl, cfg)
+	stopSvc, err := service.Start(pl, cfg)
 
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
@@ -65,16 +63,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	configui.BuildAppAndRetry(func() (*tview.Application, error) {
-		return simplegui.BuildTheUi(pl, true, cfg, "")
-	})
+	app, err := simplegui.BuildTheUi(pl, true, cfg, "")
 
-	// err = stopSvc()
-	// if err != nil {
-	// 	log.Error().Msgf("error stopping service: %s", err)
-	// 	fmt.Println("Error stopping service:", err)
-	// 	os.Exit(1)
-	// }
+	if err != nil {
+		log.Error().Msgf("error starting the UI: %s", err)
+		fmt.Println("error starting the UI", err)
+		os.Exit(1)
+	}
 
-	// os.Exit(0)
+	app.Run()
+	err = stopSvc()
+	if err != nil {
+		log.Error().Msgf("error stopping service: %s", err)
+		fmt.Println("Error stopping service:", err)
+		os.Exit(1)
+	}
+
+	os.Exit(0)
 }
