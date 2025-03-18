@@ -77,8 +77,8 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	Groovy       Groovy    `toml:"groovy:omitempty"`
 */
 
-func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	pages.RemovePage("main")
+func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
+	pages.RemovePage("mainconfig")
 	debugLogging := "DISABLED"
 	if cfg.DebugLogging() {
 		debugLogging = "ENABLED"
@@ -86,7 +86,7 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 	mainMenu := tview.NewList().
 		AddItem("Debug Logging", "Change the status of debug logging currently "+debugLogging, '1', func() {
 			cfg.SetDebugLogging(!cfg.DebugLogging())
-			BuildMainMenu(cfg, pages, app)
+			BuildMainMenu(cfg, pages, app, exitFunc)
 		}).
 		AddItem("Audio", "Set audio options like the feedback", '2', func() {
 			pages.SwitchToPage("audio")
@@ -100,31 +100,31 @@ func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applicat
 		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
 			pages.SwitchToPage("tags")
 		}).
-		AddItem("Systems", "Not implemented yet", '6', func() {
-		}).
-		AddItem("Launchers", "Not implemented yet", '7', func() {
-		}).
-		AddItem("ZapScript", "Not implemented yet", '8', func() {
-		}).
-		AddItem("Service", "Not implemented yet", '9', func() {
-		}).
-		AddItem("Mappings", "Not implemented yet", '0', func() {
-		}).
-		AddItem("Groovy", "Not implemented yet", 'g', func() {
-		}).
+		// AddItem("Systems", "Not implemented yet", '6', func() {
+		// }).
+		// AddItem("Launchers", "Not implemented yet", '7', func() {
+		// }).
+		// AddItem("ZapScript", "Not implemented yet", '8', func() {
+		// }).
+		// AddItem("Service", "Not implemented yet", '9', func() {
+		// }).
+		// AddItem("Mappings", "Not implemented yet", '0', func() {
+		// }).
+		// AddItem("Groovy", "Not implemented yet", 'g', func() {
+		// }).
 		AddItem("Save and exit", "Press to save", 's', func() {
 			err := cfg.Save()
 			if err != nil {
 				log.Error().Err(err).Msg("error saving config")
 			}
-			app.Stop()
+			exitFunc()
 		}).
 		AddItem("Quit Without saving", "Press to exit", 'q', func() {
-			app.Stop()
+			exitFunc()
 		})
 	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("main", pages, mainMenu)
+	pageDefaults("mainconfig", pages, mainMenu)
 	return mainMenu
 }
 
@@ -137,7 +137,7 @@ func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application)
 			pages.SwitchToPage("tags_write")
 		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("main")
+			pages.SwitchToPage("mainconfig")
 		})
 	tagsMenu.SetTitle(" Zaparoo config editor - Tags menu ")
 	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
@@ -232,7 +232,7 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 			BuildAudionMenu(cfg, pages, app)
 		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("main")
+			pages.SwitchToPage("mainconfig")
 		})
 	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
 	audioMenu.SetSecondaryTextColor(tcell.ColorYellow)
@@ -277,7 +277,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 			}
 
 			cfg.SetReaderConnections(newConnect)
-			pages.SwitchToPage("main")
+			pages.SwitchToPage("mainconfig")
 		})
 
 	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
@@ -332,7 +332,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		}).
 		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
 		AddButton("Confirm", func() {
-			pages.SwitchToPage("main")
+			pages.SwitchToPage("mainconfig")
 		})
 	scanMenu.SetTitle(" Zaparoo config editor - Scan mode menu ")
 	pageDefaults("scan", pages, scanMenu)
@@ -347,26 +347,25 @@ func SetTheme(theme *tview.Theme) {
 	theme.ContrastBackgroundColor = tcell.ColorFuchsia
 }
 
-func ConfigUiBuilder(cfg *config.Instance, pl platforms.Platform) (*tview.Application, error) {
-	app := tview.NewApplication()
-	pages := tview.NewPages()
-
-	SetTheme(&tview.Styles)
-
-	BuildMainMenu(cfg, pages, app)
+func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.Pages, exitFunc func()) (*tview.Application, error) {
+	BuildMainMenu(cfg, pages, app, exitFunc)
 	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
 	BuildTagsWriteMenu(cfg, pages, app)
 	BuildAudionMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
-	pages.SwitchToPage("main")
+	pages.SwitchToPage("mainconfig")
 
 	return app.SetRoot(pages, true).EnableMouse(true), nil
 }
 
 func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
 	return BuildAppAndRetry(func() (*tview.Application, error) {
-		return ConfigUiBuilder(cfg, pl)
+		app := tview.NewApplication()
+		pages := tview.NewPages()
+		SetTheme(&tview.Styles)
+		exitFunc := func() { app.Stop() }
+		return ConfigUiBuilder(cfg, app, pages, exitFunc)
 	})
 }

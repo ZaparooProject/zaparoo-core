@@ -225,8 +225,11 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Applicati
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 	modal.SetText(text).
-		AddButtons([]string{"Export log", "Exit"}).
+		AddButtons([]string{"Export log", "Config", "Exit"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Exit" {
+				app.Stop()
+			}
 			if buttonLabel == "Exit" {
 				app.Stop()
 			}
