@@ -159,7 +159,7 @@ func genericModal(message string, title string, action func(buttonIndex int, but
 	return modal
 }
 
-func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
+func buildTheUi(pl platforms.Platform, service *utils.Service, cfg *config.Instance) (*tview.Application, error) {
 	app := tview.NewApplication()
 	modal := tview.NewModal()
 	logExport := tview.NewList()
@@ -230,7 +230,10 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Applicati
 			if buttonLabel == "Exit" {
 				app.Stop()
 			}
-			if buttonLabel == "Exit" {
+			if buttonLabel == "Config" {
+				configui.ConfigUiBuilder(cfg, app, pages, func() {
+					pages.SwitchToPage("main")
+				})
 				app.Stop()
 			}
 			if buttonLabel == "Export log" {
@@ -242,9 +245,9 @@ func buildTheUi(pl platforms.Platform, service *utils.Service) (*tview.Applicati
 	return app.SetRoot(pages, true).EnableMouse(true), nil
 }
 
-func displayServiceInfo(pl platforms.Platform, _ *config.Instance, service *utils.Service) error {
+func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
 	// Asturur > Wizzo
 	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
-		return buildTheUi(pl, service)
+		return buildTheUi(pl, service, cfg)
 	})
 }
