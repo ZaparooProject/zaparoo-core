@@ -20,6 +20,9 @@ var SuccessSound []byte
 //go:embed sounds/fail.wav
 var FailSound []byte
 
+//go:embed icon.ico
+var Icon []byte
+
 //go:embed systems/*
 var Systems embed.FS
 

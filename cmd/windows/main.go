@@ -23,14 +23,20 @@ package main
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/rs/zerolog"
 	"io"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/getlantern/systray"
+	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
@@ -109,10 +115,59 @@ func main() {
 		fmt.Printf("Web App: http://%s:%d/app/\n", ip.String(), cfg.ApiPort())
 	}
 
+	systray.Run(onReady(cfg, ip, pl), func() {
+		os.Exit(0)
+	})
+
 	fmt.Println("Press any key to exit")
 	_, _ = fmt.Scanln()
 	doStop <- true
 	<-stopped
 
 	os.Exit(0)
+}
+
+func onReady(cfg *config.Instance, ip net.IP, pl platforms.Platform) func() {
+	return func() {
+		systray.SetIcon(assets.Icon)
+		systray.SetTitle("Zaparoo Core")
+		systray.SetTooltip("Zaparoo Core v" + config.AppVersion)
+
+		addr := systray.AddMenuItem(fmt.Sprintf("Address: %s:%d", ip.String(), cfg.ApiPort()), "")
+		addr.Disable()
+
+		conf := systray.AddMenuItem("Open config folder", "Open config folder")
+		logs := systray.AddMenuItem("View log file", "View log file")
+		webui := systray.AddMenuItem("Open web UI", "Open web UI")
+		systray.AddSeparator()
+		quit := systray.AddMenuItem("Quit", "Stop the Zaparoo service")
+
+		go func() {
+			for {
+				select {
+				case <-quit.ClickedCh:
+					systray.Quit()
+					return
+				case <-webui.ClickedCh:
+					addr := fmt.Sprintf("http://%s:%d/app/", ip.String(), cfg.ApiPort())
+					err := exec.Command("explorer", addr).Start()
+					if err != nil {
+						log.Error().Msgf("error opening web UI: %s", err)
+					}
+				case <-logs.ClickedCh:
+					logFile := filepath.Join(pl.LogDir(), "core.log")
+					err := exec.Command("explorer", logFile).Start()
+					if err != nil {
+						log.Error().Msgf("error opening log file: %s", err)
+					}
+				case <-conf.ClickedCh:
+					folder := pl.ConfigDir()
+					err := exec.Command("explorer", folder).Start()
+					if err != nil {
+						log.Error().Msgf("error opening config folder: %s", err)
+					}
+				}
+			}
+		}()
+	}
 }

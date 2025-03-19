@@ -71,6 +71,12 @@ type Launchers struct {
 	IndexRoot   []string `toml:"index_root,omitempty,multiline"`
 	AllowFile   []string `toml:"allow_file,omitempty,multiline"`
 	allowFileRe []*regexp.Regexp
+	Default     []LaunchersDefault `toml:"default,omitempty"`
+}
+
+type LaunchersDefault struct {
+	Launcher   string `toml:"launcher"`
+	InstallDir string `toml:"install_dir,omitempty"`
 }
 
 type ZapScript struct {
@@ -490,6 +496,17 @@ func (c *Instance) LookupSystemDefaults(systemId string) (SystemsDefault, bool) 
 		}
 	}
 	return SystemsDefault{}, false
+}
+
+func (c *Instance) LookupLauncherDefaults(launcherId string) (LaunchersDefault, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, defaultLauncher := range c.vals.Launchers.Default {
+		if strings.EqualFold(defaultLauncher.Launcher, launcherId) {
+			return defaultLauncher, true
+		}
+	}
+	return LaunchersDefault{}, false
 }
 
 func (c *Instance) GmcProxyEnabled() bool {

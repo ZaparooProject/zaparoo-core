@@ -372,7 +372,7 @@ type LaunchBoxGame struct {
 	ID    string `xml:"ID"`
 }
 
-func findLaunchBoxDir() (string, error) {
+func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -387,6 +387,11 @@ func findLaunchBoxDir() (string, error) {
 		"C:\\LaunchBox",
 		"D:\\LaunchBox",
 		"E:\\LaunchBox",
+	}
+
+	def, ok := cfg.LookupLauncherDefaults("LaunchBox")
+	if ok && def.InstallDir != "" {
+		dirs = append([]string{def.InstallDir}, dirs...)
 	}
 
 	for _, dir := range dirs {
@@ -462,7 +467,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 					return results, nil
 				}
 
-				lbDir, err := findLaunchBoxDir()
+				lbDir, err := findLaunchBoxDir(cfg)
 				if err != nil {
 					return results, err
 				}
@@ -510,7 +515,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, nil
 			},
 			Launch: func(cfg *config.Instance, path string) error {
-				lbDir, err := findLaunchBoxDir()
+				lbDir, err := findLaunchBoxDir(cfg)
 				if err != nil {
 					return err
 				}
