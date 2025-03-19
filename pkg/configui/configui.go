@@ -31,11 +31,21 @@ func BuildAppAndRetry(
 	return tryRunApp(app, builder)
 }
 
-func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) S {
+func centerWidget(width, height int, p tview.Primitive) tview.Primitive {
+	return tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().
+			SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(p, height, 1, true).
+			AddItem(nil, 0, 1, false), width, 1, true).
+		AddItem(nil, 0, 1, false)
+}
+
+func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) tview.Primitive {
 	widget.SetBorder(true)
-	widget.SetRect(0, 0, 75, 20)
 	pages.RemovePage(name)
-	pages.AddAndSwitchToPage(name, widget, false)
+	pages.AddAndSwitchToPage(name, widget, true)
 	return widget
 }
 
@@ -360,8 +370,8 @@ func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.
 	BuildScanModeMenu(cfg, pages, app)
 
 	pages.SwitchToPage("mainconfig")
-
-	return app.SetRoot(pages, true).EnableMouse(true), nil
+	centeredPages := centerWidget(70, 20, pages)
+	return app.SetRoot(centeredPages, true).EnableMouse(true), nil
 }
 
 func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
