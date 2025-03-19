@@ -7,6 +7,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
@@ -329,4 +330,25 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers() []platforms.Launcher {
 	return mister.Launchers
+}
+
+func (p *Platform) ShowNotice(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, time.Duration, error) {
+	return nil, 0, nil
+}
+
+func (p *Platform) ShowLoader(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, error) {
+	return nil, nil
+}
+
+func (p *Platform) ShowPicker(
+	_ *config.Instance,
+	_ widgetModels.PickerArgs,
+) error {
+	return nil
 }

@@ -4,11 +4,13 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -523,4 +525,25 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+}
+
+func (p *Platform) ShowNotice(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, time.Duration, error) {
+	return nil, 0, nil
+}
+
+func (p *Platform) ShowLoader(
+	_ *config.Instance,
+	_ widgetModels.NoticeArgs,
+) (func() error, error) {
+	return nil, nil
+}
+
+func (p *Platform) ShowPicker(
+	_ *config.Instance,
+	_ widgetModels.PickerArgs,
+) error {
+	return nil
 }

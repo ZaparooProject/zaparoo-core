@@ -6,6 +6,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
+	"os"
+	"strings"
 )
 
 const (
@@ -23,7 +25,33 @@ const (
 	ScriptsDir         = mrextConfig.ScriptsFolder
 	CmdInterface       = "/dev/MiSTer_cmd"
 	LinuxDir           = "/media/fat/linux"
+	MainPickerDir      = "/tmp/PICKERITEMS"
+	MainPickerSelected = "/tmp/PICKERSELECTED"
+	MainFeaturesFile   = "/tmp/MAINFEATURES"
+	MainFeaturePicker  = "PICKER"
+	MainFeatureNotice  = "NOTICE"
 )
+
+func MainHasFeature(feature string) bool {
+	if _, err := os.Stat(MainFeaturesFile); os.IsNotExist(err) {
+		return false
+	}
+
+	contents, err := os.ReadFile(MainFeaturesFile)
+	if err != nil {
+		return false
+	}
+
+	features := strings.Split(string(contents), ",")
+
+	for _, f := range features {
+		if strings.EqualFold(f, feature) {
+			return true
+		}
+	}
+
+	return false
+}
 
 func UserConfigToMrext(cfg *config.Instance) *mrextConfig.UserConfig {
 	var setCore []string

@@ -95,6 +95,11 @@ func main() {
 		"",
 		"display a generic loading widget",
 	)
+	showNotice := flag.String(
+		"show-notice",
+		"",
+		"display a generic notice widget",
+	)
 	showPicker := flag.String(
 		"show-picker",
 		"",
@@ -130,8 +135,15 @@ func main() {
 
 	cfg := cli.Setup(pl, defaults, nil)
 
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
+
 	if *showLoader != "" {
-		err := widgets.LoaderUI(pl, *showLoader)
+		err := widgets.NoticeUI(pl, *showLoader, true)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
 			os.Exit(1)
@@ -141,6 +153,13 @@ func main() {
 		err := widgets.PickerUI(cfg, pl, *showPicker)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	} else if *showNotice != "" {
+		err := widgets.NoticeUI(pl, *showNotice, false)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error showing notice: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)
