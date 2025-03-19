@@ -27,14 +27,15 @@ import (
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
 	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 )
 
@@ -55,22 +56,22 @@ func main() {
 	fmt.Println("Zaparoo v" + config.AppVersion)
 
 	stopSvc, err := service.Start(pl, cfg)
+
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
 		fmt.Println("Error starting service:", err)
 		os.Exit(1)
 	}
 
-	ip, err := utils.GetLocalIp()
+	app, err := simplegui.BuildTheUi(pl, true, cfg, "")
+
 	if err != nil {
-		fmt.Println("Device address: Unknown")
-	} else {
-		fmt.Println("Device address:", ip.String())
+		log.Error().Msgf("error starting the UI: %s", err)
+		fmt.Println("error starting the UI", err)
+		os.Exit(1)
 	}
 
-	fmt.Println("Press Enter to exit")
-	fmt.Scanln()
-
+	app.Run()
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)

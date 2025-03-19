@@ -119,37 +119,15 @@ type ConnQr struct {
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
-		_, err := client.LocalClient(
-			cfg,
-			models.MethodSettingsUpdate,
-			"{\"runZapScript\":false}",
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error disabling run")
-			_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
-			os.Exit(1)
-		}
+		enabler := client.ZapScriptWrapper(cfg)
 
-		err = configui.ConfigUi(cfg, pl)
+		err := configui.ConfigUi(cfg, pl)
 		if err != nil {
 			log.Error().Err(err).Msg("error starting config ui")
 			_, _ = fmt.Fprintf(os.Stderr, "Error starting config UI: %v\n", err)
 			os.Exit(1)
 		}
-
-		// TODO: this should be in a defer or signal handler to or else it won't
-		// run if there was a crash or unhandled error
-		_, err = client.LocalClient(
-			cfg,
-			models.MethodSettingsUpdate,
-			"{\"runZapScript\":true}",
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error enabling run")
-			_, _ = fmt.Fprintf(os.Stderr, "Error enabling run: %v\n", err)
-			os.Exit(1)
-		}
-
+		enabler()
 		os.Exit(0)
 	}
 
@@ -171,29 +149,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}
 	} else if *f.Read {
-		enableRun := func() {
-			_, err := client.LocalClient(
-				cfg,
-				models.MethodSettingsUpdate,
-				"{\"runZapScript\":true}",
-			)
-			if err != nil {
-				log.Error().Err(err).Msg("error re-enabling run")
-				_, _ = fmt.Fprintf(os.Stderr, "Error re-enabling run: %v\n", err)
-				os.Exit(1)
-			}
-		}
-
-		_, err := client.LocalClient(
-			cfg,
-			models.MethodSettingsUpdate,
-			"{\"runZapScript\":false}",
-		)
-		if err != nil {
-			log.Error().Err(err).Msg("error disabling run")
-			_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
-			os.Exit(1)
-		}
+		enableRun := client.ZapScriptWrapper(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
