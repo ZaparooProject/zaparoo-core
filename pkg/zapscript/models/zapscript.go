@@ -3,11 +3,6 @@ package models
 import "encoding/json"
 
 const (
-	ZapLinkActionZapScript = "zapscript"
-	ZapLinkActionMedia     = "media"
-)
-
-const (
 	ZapScriptCmdLaunch       = "launch"
 	ZapScriptCmdLaunchSystem = "launch.system"
 	ZapScriptCmdLaunchRandom = "launch.random"
@@ -17,8 +12,9 @@ const (
 	ZapScriptCmdPlaylistNext     = "playlist.next"
 	ZapScriptCmdPlaylistPrevious = "playlist.previous"
 
-	ZapScriptCmdExecute = "execute"
-	ZapScriptCmdDelay   = "delay"
+	ZapScriptCmdExecute  = "execute"
+	ZapScriptCmdDelay    = "delay"
+	ZapScriptCmdEvaluate = "evaluate"
 
 	ZapScriptCmdMisterINI    = "mister.ini"
 	ZapScriptCmdMisterCore   = "mister.core"
@@ -33,6 +29,9 @@ const (
 	ZapScriptCmdInputCoinP1   = "input.coinp1"
 	ZapScriptCmdInputCoinP2   = "input.coinp2"
 
+	ZapScriptCmdUINotice = "ui.notice"
+	ZapScriptCmdUIPicker = "ui.picker"
+
 	ZapScriptCmdInputKey = "input.key" // DEPRECATED
 	ZapScriptCmdKey      = "key"       // DEPRECATED
 	ZapScriptCmdCoinP1   = "coinp1"    // DEPRECATED
@@ -45,25 +44,32 @@ const (
 	ZapScriptCmdGet      = "get"       // DEPRECATED
 )
 
-type ZapLinkAction struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+type ZapScriptCmd struct {
+	Version int             `json:"version"` // schema version
+	ID      string          `json:"id"`      // internal id of command instance
+	Name    *string         `json:"name"`    // optional display name
+	Cmd     string          `json:"cmd"`
+	Args    json.RawMessage `json:"args"`
 }
 
-type ZapLink struct {
-	Version int             `json:"version"`
-	Name    string          `json:"name"`
-	Actions []ZapLinkAction `json:"actions"`
+type CmdEvaluateArgs struct {
+	ZapScript string `json:"zapscript" arg:"position=1"`
 }
 
-type ZapScriptParams struct {
-	Name      string `json:"name"`
-	ZapScript string `json:"zapscript"`
-}
-
-type MediaParams struct {
-	Name      string  `json:"name"`
-	System    string  `json:"system"`
-	Url       *string `json:"url"`
+type CmdLaunchArgs struct {
+	Path      string  `json:"path" arg:"position=1"`
+	Launcher  *string `json:"launcher"`
+	Name      *string `json:"name"`
+	System    *string `json:"system"`
+	URL       *string `json:"url"`
 	PreNotice *string `json:"preNotice"`
+}
+
+type CmdNotice struct {
+	Text   string `json:"text" arg:"position=1"`
+	Loader *bool  `json:"loader"`
+}
+
+type CmdPicker struct {
+	Items []ZapScriptCmd `json:"items"`
 }

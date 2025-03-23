@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"io"
 	"net/http"
 	"net/url"
@@ -109,6 +109,54 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
+func HandleRunCommand(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received run link action request")
+
+	if len(env.Params) == 0 {
+		return nil, ErrMissingParams
+	}
+
+	var t tokens.Token
+
+	var cmd zapScriptModels.ZapScriptCmd
+	err := json.Unmarshal(env.Params, &cmd)
+	if err != nil {
+		return nil, ErrInvalidParams
+	}
+
+	cmdName := strings.ToLower(cmd.Cmd)
+	switch cmdName {
+	case zapScriptModels.ZapScriptCmdEvaluate:
+		var args zapScriptModels.CmdEvaluateArgs
+		err = json.Unmarshal(cmd.Args, &args)
+		if err != nil {
+			return nil, fmt.Errorf("error unmarshalling evaluate params: %w", err)
+		}
+		t.Text = args.ZapScript
+	case zapScriptModels.ZapScriptCmdLaunch:
+		var args zapScriptModels.CmdLaunchArgs
+		err = json.Unmarshal(cmd.Args, &args)
+		if err != nil {
+			return nil, fmt.Errorf("error unmarshalling evaluate params: %w", err)
+		}
+		// TODO: this will timeout on large downloads
+		t.Text, err = InstallRunMedia(env.Config, env.Platform, args)
+		if err != nil {
+			return nil, fmt.Errorf("error installing and running media: %w", err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported cmd: %s", cmdName)
+	}
+
+	t.ScanTime = time.Now()
+	t.FromAPI = true
+
+	env.State.SetActiveCard(t)
+	env.TokenQueue <- t
+
+	return nil, nil
+}
+
 func HandleRunRest(
 	cfg *config.Instance,
 	st *state.State,
@@ -149,70 +197,21 @@ func HandleStop(env requests.RequestEnv) (any, error) {
 	return nil, env.Platform.KillLauncher()
 }
 
-func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received run link action request")
-
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
-	var t tokens.Token
-
-	var params api.ZapLinkAction
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
-	}
-
-	method := strings.ToLower(params.Method)
-	switch method {
-	case api.ZapLinkActionZapScript:
-		var zsp api.ZapScriptParams
-		err = json.Unmarshal(params.Params, &zsp)
-		if err != nil {
-			return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
-		}
-		t.Text = zsp.ZapScript
-	case api.ZapLinkActionMedia:
-		// TODO: this will timeout on large downloads
-		t.Text, err = InstallRunMedia(env.Config, env.Platform, params)
-		if err != nil {
-			return nil, fmt.Errorf("error installing and running media: %w", err)
-		}
-	default:
-		return "", fmt.Errorf("unknown link action: %s", method)
-	}
-
-	t.ScanTime = time.Now()
-	t.FromAPI = true
-
-	env.State.SetActiveCard(t)
-	env.TokenQueue <- t
-
-	return nil, nil
-}
-
 func InstallRunMedia(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	action api.ZapLinkAction,
+	launchArgs zapScriptModels.CmdLaunchArgs,
 ) (string, error) {
 	if pl.Id() != "mister" {
 		return "", errors.New("media install only supported for mister")
 	}
 
-	var mp api.MediaParams
-	err := json.Unmarshal(action.Params, &mp)
-	if err != nil {
-		return "", fmt.Errorf("error unmarshalling media params: %w", err)
-	}
-
 	isSafe := false
-	if mp.Url != nil {
-		log.Debug().Msgf("checking media download url: %s", *mp.Url)
+	if launchArgs.URL != nil {
+		log.Debug().Msgf("checking media download url: %s", *launchArgs.URL)
 
 		for _, safe := range MediaSafeList {
-			if strings.HasPrefix(*mp.Url, safe) {
+			if strings.HasPrefix(*launchArgs.URL, safe) {
 				isSafe = true
 				break
 			}
@@ -223,11 +222,13 @@ func InstallRunMedia(
 		}
 	}
 
-	if mp.Url == nil {
+	if launchArgs.URL == nil {
 		return "", errors.New("media download url is empty")
+	} else if launchArgs.System == nil {
+		return "", errors.New("media system is empty")
 	}
 
-	system, err := systemdefs.GetSystem(mp.System)
+	system, err := systemdefs.GetSystem(*launchArgs.System)
 	if err != nil {
 		return "", fmt.Errorf("error getting system: %w", err)
 	}
@@ -253,7 +254,7 @@ func InstallRunMedia(
 	// just use the first folder for now
 	folder := launcher.Folders[0]
 
-	name := filepath.Base(*mp.Url)
+	name := filepath.Base(*launchArgs.URL)
 
 	// roots := pl.RootDirs(cfg)
 
@@ -271,9 +272,9 @@ func InstallRunMedia(
 
 	// check if the file already exists
 	if _, err := os.Stat(path); err == nil {
-		if mp.PreNotice != nil && *mp.PreNotice != "" {
+		if launchArgs.PreNotice != nil && *launchArgs.PreNotice != "" {
 			hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
-				Text: *mp.PreNotice,
+				Text: *launchArgs.PreNotice,
 			})
 			if err != nil {
 				return "", fmt.Errorf("error showing pre-notice: %w", err)
@@ -295,9 +296,9 @@ func InstallRunMedia(
 	}
 
 	// download the file
-	log.Info().Msgf("downloading media: %s", *mp.Url)
+	log.Info().Msgf("downloading media: %s", *launchArgs.URL)
 
-	loadingText := fmt.Sprintf("Downloading %s...", mp.Name)
+	loadingText := fmt.Sprintf("Downloading %s...", *launchArgs.URL)
 
 	hideLoader, err := pl.ShowLoader(cfg, widgetModels.NoticeArgs{
 		Text: loadingText,
@@ -306,7 +307,7 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error showing loading dialog: %w", err)
 	}
 
-	resp, err := http.Get(*mp.Url)
+	resp, err := http.Get(*launchArgs.URL)
 	if err != nil {
 		return "", fmt.Errorf("error getting url: %w", err)
 	}
@@ -341,9 +342,9 @@ func InstallRunMedia(
 		return "", fmt.Errorf("error hiding loading dialog: %w", err)
 	}
 
-	if mp.PreNotice != nil && *mp.PreNotice != "" {
+	if launchArgs.PreNotice != nil && *launchArgs.PreNotice != "" {
 		hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
-			Text: *mp.PreNotice,
+			Text: *launchArgs.PreNotice,
 		})
 		if err != nil {
 			return "", fmt.Errorf("error showing pre-notice: %w", err)

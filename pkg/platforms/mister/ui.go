@@ -3,16 +3,17 @@ package mister
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -110,39 +111,51 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 	}
 
 	// write items to dir
-	for _, action := range args.Actions {
-		var name string
-		switch action.Method {
-		case api.ZapLinkActionZapScript:
-			var zsp api.ZapScriptParams
-			err = json.Unmarshal(action.Params, &zsp)
+	for _, cmd := range args.Cmds {
+		var itemName string
+		cmdName := strings.ToLower(cmd.Cmd)
+		switch cmdName {
+		case zapScriptModels.ZapScriptCmdEvaluate:
+			var zsp zapScriptModels.CmdEvaluateArgs
+			err = json.Unmarshal(cmd.Args, &zsp)
 			if err != nil {
-				return fmt.Errorf("error unmarshalling zap script params: %w", err)
+				return fmt.Errorf("error unmarshalling evaluate params: %w", err)
 			}
 
-			name = zsp.Name
-			if name == "" {
+			if cmd.Name != nil && *cmd.Name != "" {
+				itemName = *cmd.Name
+			} else {
 				continue
 			}
-		case api.ZapLinkActionMedia:
-			var mp api.MediaParams
-			err = json.Unmarshal(action.Params, &mp)
+		case zapScriptModels.ZapScriptCmdLaunch:
+			var mp zapScriptModels.CmdLaunchArgs
+			err = json.Unmarshal(cmd.Args, &mp)
 			if err != nil {
-				return fmt.Errorf("error unmarshalling media params: %w", err)
+				return fmt.Errorf("error unmarshalling launch params: %w", err)
 			}
 
-			name = mp.Name
-			if name == "" {
+			if mp.Name != nil && *mp.Name != "" {
+				itemName = *mp.Name
+			}
+
+			// prefer top-level name
+			if cmd.Name != nil && *cmd.Name != "" {
+				itemName = *cmd.Name
+			}
+
+			if itemName == "" {
 				continue
 			}
+		default:
+			continue
 		}
 
-		contents, err := json.Marshal(action)
+		contents, err := json.Marshal(cmd)
 		if err != nil {
 			return err
 		}
 
-		path := filepath.Join(MainPickerDir, name+".txt")
+		path := filepath.Join(MainPickerDir, itemName+".txt")
 		err = os.WriteFile(path, contents, 0644)
 		if err != nil {
 			return err

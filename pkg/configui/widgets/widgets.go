@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
 	"strings"
 	"time"
@@ -135,7 +135,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 type pickerAction struct {
 	label   string
 	preview string
-	action  api.ZapLinkAction
+	action  zapScriptModels.ZapScriptCmd
 }
 
 func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
@@ -152,42 +152,47 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return nil, err
 	}
 
-	if len(pickerArgs.Actions) < 1 {
+	if len(pickerArgs.Cmds) < 1 {
 		return nil, errors.New("no actions were specified")
 	}
 
 	var actions []pickerAction
-	for _, la := range pickerArgs.Actions {
+	for _, la := range pickerArgs.Cmds {
 		action := pickerAction{
 			action: la,
 		}
 
-		method := strings.ToLower(la.Method)
-		switch method {
-		case api.ZapLinkActionZapScript:
-			var zsp api.ZapScriptParams
-			err := json.Unmarshal(la.Params, &zsp)
+		cmdName := strings.ToLower(la.Cmd)
+		switch cmdName {
+		case zapScriptModels.ZapScriptCmdEvaluate:
+			var zsp zapScriptModels.CmdEvaluateArgs
+			err := json.Unmarshal(la.Args, &zsp)
 			if err != nil {
 				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
 			}
-			if zsp.Name != "" {
-				action.label = zsp.Name
+			if la.Name != nil && *la.Name != "" {
+				action.label = *la.Name
 				action.preview = zsp.ZapScript
 			} else {
 				action.label = zsp.ZapScript
 			}
-		case api.ZapLinkActionMedia:
-			var zm api.MediaParams
-			err := json.Unmarshal(la.Params, &zm)
+		case zapScriptModels.ZapScriptCmdLaunch:
+			var zm zapScriptModels.CmdLaunchArgs
+			err := json.Unmarshal(la.Args, &zm)
 			if err != nil {
 				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
 			}
-			action.label = zm.Name
-			if zm.Url != nil {
-				action.preview = *zm.Url
+			if la.Name != nil && *la.Name != "" {
+				action.label = *la.Name
+			}
+			if zm.Name != nil && *zm.Name != "" {
+				action.label = *zm.Name
+			}
+			if zm.URL != nil {
+				action.preview = *zm.URL
 			}
 		default:
-			log.Error().Msgf("unkown link action method: %s", la.Method)
+			log.Error().Msgf("unknown cmd: %s", la.Cmd)
 			continue
 		}
 
@@ -197,13 +202,13 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	app := tview.NewApplication()
 	configui.SetTheme(&tview.Styles)
 
-	run := func(action api.ZapLinkAction) {
+	run := func(action zapScriptModels.ZapScriptCmd) {
 		log.Info().Msgf("running picker selection: %v", action)
 		ps, err := json.Marshal(action)
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
-		_, err = client.LocalClient(cfg, models.MethodRunLinkAction, string(ps))
+		_, err = client.LocalClient(cfg, models.MethodRunCommand, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
@@ -277,7 +282,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	return app.SetRoot(flex, true), nil
 }
 
-// PickerUI displays a list picker of Zap Link Actions to run via the API.
+// PickerUI displays a list picker of Zap Link Cmds to run via the API.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
 	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)

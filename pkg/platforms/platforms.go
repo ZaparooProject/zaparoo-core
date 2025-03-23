@@ -144,7 +144,7 @@ type Platform interface {
 	// wait before hiding.
 	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
 	// ShowPicker displays a list picker on-screen of the platform device with
-	// a list of Zap Link Actions to choose from. The chosen action will be
+	// a list of Zap Link Cmds to choose from. The chosen action will be
 	// forwarded to the local API instance to be run. Returns a function that
 	// may be used to manually cancel and hide the picker.
 	ShowPicker(*config.Instance, widgetModels.PickerArgs) error

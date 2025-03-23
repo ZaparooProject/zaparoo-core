@@ -22,7 +22,7 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"net/url"
 	"os"
 	"path/filepath"
