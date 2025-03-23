@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -157,7 +158,7 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 
 	var t tokens.Token
 
-	var params models.ZapLinkAction
+	var params api.ZapLinkAction
 	err := json.Unmarshal(env.Params, &params)
 	if err != nil {
 		return nil, ErrInvalidParams
@@ -165,14 +166,14 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 
 	method := strings.ToLower(params.Method)
 	switch method {
-	case models.ZapLinkActionZapScript:
-		var zsp models.ZapScriptParams
+	case api.ZapLinkActionZapScript:
+		var zsp api.ZapScriptParams
 		err = json.Unmarshal(params.Params, &zsp)
 		if err != nil {
 			return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
 		}
 		t.Text = zsp.ZapScript
-	case models.ZapLinkActionMedia:
+	case api.ZapLinkActionMedia:
 		// TODO: this will timeout on large downloads
 		t.Text, err = InstallRunMedia(env.Config, env.Platform, params)
 		if err != nil {
@@ -194,13 +195,13 @@ func HandleRunLinkAction(env requests.RequestEnv) (any, error) {
 func InstallRunMedia(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	action models.ZapLinkAction,
+	action api.ZapLinkAction,
 ) (string, error) {
 	if pl.Id() != "mister" {
 		return "", errors.New("media install only supported for mister")
 	}
 
-	var mp models.MediaParams
+	var mp api.MediaParams
 	err := json.Unmarshal(action.Params, &mp)
 	if err != nil {
 		return "", fmt.Errorf("error unmarshalling media params: %w", err)

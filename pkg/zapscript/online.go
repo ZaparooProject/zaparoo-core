@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"io"
 	"net/http"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -32,17 +32,17 @@ func maybeZapLink(s string) bool {
 	}
 }
 
-func getZapLink(url string) (models.ZapLink, error) {
+func getZapLink(url string) (api.ZapLink, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return models.ZapLink{}, err
+		return api.ZapLink{}, err
 	}
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return models.ZapLink{}, err
+		return api.ZapLink{}, err
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -53,12 +53,12 @@ func getZapLink(url string) (models.ZapLink, error) {
 
 	if resp.StatusCode != 200 {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
-		return models.ZapLink{}, errors.New("invalid status code")
+		return api.ZapLink{}, errors.New("invalid status code")
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		return models.ZapLink{}, errors.New("content type is empty")
+		return api.ZapLink{}, errors.New("content type is empty")
 	}
 
 	content := ""
@@ -70,21 +70,21 @@ func getZapLink(url string) (models.ZapLink, error) {
 	}
 
 	if content == "" {
-		return models.ZapLink{}, errors.New("no valid content type")
+		return api.ZapLink{}, errors.New("no valid content type")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return models.ZapLink{}, fmt.Errorf("error reading body: %w", err)
+		return api.ZapLink{}, fmt.Errorf("error reading body: %w", err)
 	}
 
 	if content != MimeZaparooZapLink {
-		return models.ZapLink{}, errors.New("invalid content type")
+		return api.ZapLink{}, errors.New("invalid content type")
 	}
 
 	log.Debug().Msgf("zap link body: %s", string(body))
 
-	var zl models.ZapLink
+	var zl api.ZapLink
 	err = json.Unmarshal(body, &zl)
 	if err != nil {
 		return zl, fmt.Errorf("error unmarshalling body: %w", err)
@@ -129,14 +129,14 @@ func checkLink(
 	method := strings.ToLower(action.Method)
 
 	switch method {
-	case models.ZapLinkActionZapScript:
-		var zsp models.ZapScriptParams
+	case api.ZapLinkActionZapScript:
+		var zsp api.ZapScriptParams
 		err = json.Unmarshal(action.Params, &zsp)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling zap script params: %w", err)
 		}
 		return zsp.ZapScript, nil
-	case models.ZapLinkActionMedia:
+	case api.ZapLinkActionMedia:
 		return methods.InstallRunMedia(cfg, pl, action)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action.Method)

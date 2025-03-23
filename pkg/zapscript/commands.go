@@ -22,6 +22,7 @@ package zapscript
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -42,51 +43,52 @@ import (
 // TODO: game file by hash
 
 var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
-	"launch":        cmdLaunch,
-	"launch.system": cmdSystem,
-	"launch.random": cmdRandom,
-	"launch.search": cmdSearch,
+	models.ZapScriptCmdLaunch:       cmdLaunch,
+	models.ZapScriptCmdLaunchSystem: cmdSystem,
+	models.ZapScriptCmdLaunchRandom: cmdRandom,
+	models.ZapScriptCmdLaunchSearch: cmdSearch,
 
-	"playlist.play":     cmdPlaylistPlay,
-	"playlist.next":     cmdPlaylistNext,
-	"playlist.previous": cmdPlaylistPrevious,
+	models.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
+	models.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
+	models.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
 
-	"execute": cmdExecute,
-	"delay":   cmdDelay,
+	models.ZapScriptCmdExecute: cmdExecute,
+	models.ZapScriptCmdDelay:   cmdDelay,
 
-	"mister.ini":    forwardCmd,
-	"mister.core":   forwardCmd,
-	"mister.script": forwardCmd,
-	"mister.mgl":    forwardCmd,
+	models.ZapScriptCmdMisterINI:    forwardCmd,
+	models.ZapScriptCmdMisterCore:   forwardCmd,
+	models.ZapScriptCmdMisterScript: forwardCmd,
+	models.ZapScriptCmdMisterMGL:    forwardCmd,
 
-	"http.get":  cmdHttpGet,
-	"http.post": cmdHttpPost,
+	models.ZapScriptCmdHTTPGet:  cmdHttpGet,
+	models.ZapScriptCmdHTTPPost: cmdHttpPost,
 
-	"input.keyboard": cmdKeyboard,
-	"input.gamepad":  cmdGamepad,
-	"input.coinp1":   cmdCoinP1,
-	"input.coinp2":   cmdCoinP2,
+	models.ZapScriptCmdInputKeyboard: cmdKeyboard,
+	models.ZapScriptCmdInputGamepad:  cmdGamepad,
+	models.ZapScriptCmdInputCoinP1:   cmdCoinP1,
+	models.ZapScriptCmdInputCoinP2:   cmdCoinP2,
 
-	"input.key": cmdKey,     // DEPRECATED
-	"key":       cmdKey,     // DEPRECATED
-	"coinp1":    cmdCoinP1,  // DEPRECATED
-	"coinp2":    cmdCoinP2,  // DEPRECATED
-	"random":    cmdRandom,  // DEPRECATED
-	"shell":     cmdExecute, // DEPRECATED
-	"command":   cmdExecute, // DEPRECATED
-	"ini":       forwardCmd, // DEPRECATED
-	"system":    cmdSystem,  // DEPRECATED
-	"get":       cmdHttpGet, // DEPRECATED
+	models.ZapScriptCmdInputKey: cmdKey,     // DEPRECATED
+	models.ZapScriptCmdKey:      cmdKey,     // DEPRECATED
+	models.ZapScriptCmdCoinP1:   cmdCoinP1,  // DEPRECATED
+	models.ZapScriptCmdCoinP2:   cmdCoinP2,  // DEPRECATED
+	models.ZapScriptCmdRandom:   cmdRandom,  // DEPRECATED
+	models.ZapScriptCmdShell:    cmdExecute, // DEPRECATED
+	models.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
+	models.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
+	models.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
+	models.ZapScriptCmdGet:      cmdHttpGet, // DEPRECATED
 }
 
+// specifies ZapScript commands that may start/stop/change playing media
 var softwareChangeCommands = []string{
-	"random", // DEPRECATED
-	"launch",
-	"launch.system",
-	"launch.random",
-	"launch.search",
-	"mister.core",
-	"mister.mgl",
+	models.ZapScriptCmdRandom,
+	models.ZapScriptCmdLaunch,
+	models.ZapScriptCmdLaunchSystem,
+	models.ZapScriptCmdLaunchRandom,
+	models.ZapScriptCmdLaunchSearch,
+	models.ZapScriptCmdMisterCore,
+	models.ZapScriptCmdMisterMGL,
 }
 
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) error {

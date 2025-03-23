@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"strings"
@@ -134,7 +135,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 type pickerAction struct {
 	label   string
 	preview string
-	action  models.ZapLinkAction
+	action  api.ZapLinkAction
 }
 
 func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
@@ -163,8 +164,8 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 
 		method := strings.ToLower(la.Method)
 		switch method {
-		case models.ZapLinkActionZapScript:
-			var zsp models.ZapScriptParams
+		case api.ZapLinkActionZapScript:
+			var zsp api.ZapScriptParams
 			err := json.Unmarshal(la.Params, &zsp)
 			if err != nil {
 				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
@@ -175,8 +176,8 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 			} else {
 				action.label = zsp.ZapScript
 			}
-		case models.ZapLinkActionMedia:
-			var zm models.MediaParams
+		case api.ZapLinkActionMedia:
+			var zm api.MediaParams
 			err := json.Unmarshal(la.Params, &zm)
 			if err != nil {
 				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
@@ -196,7 +197,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	app := tview.NewApplication()
 	configui.SetTheme(&tview.Styles)
 
-	run := func(action models.ZapLinkAction) {
+	run := func(action api.ZapLinkAction) {
 		log.Info().Msgf("running picker selection: %v", action)
 		ps, err := json.Marshal(action)
 		if err != nil {

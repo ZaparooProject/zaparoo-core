@@ -3,6 +3,7 @@ package mister
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -112,8 +113,8 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 	for _, action := range args.Actions {
 		var name string
 		switch action.Method {
-		case models.ZapLinkActionZapScript:
-			var zsp models.ZapScriptParams
+		case api.ZapLinkActionZapScript:
+			var zsp api.ZapScriptParams
 			err = json.Unmarshal(action.Params, &zsp)
 			if err != nil {
 				return fmt.Errorf("error unmarshalling zap script params: %w", err)
@@ -123,8 +124,8 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 			if name == "" {
 				continue
 			}
-		case models.ZapLinkActionMedia:
-			var mp models.MediaParams
+		case api.ZapLinkActionMedia:
+			var mp api.MediaParams
 			err = json.Unmarshal(action.Params, &mp)
 			if err != nil {
 				return fmt.Errorf("error unmarshalling media params: %w", err)
