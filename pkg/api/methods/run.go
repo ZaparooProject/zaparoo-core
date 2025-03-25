@@ -298,7 +298,11 @@ func InstallRunMedia(
 	// download the file
 	log.Info().Msgf("downloading media: %s", *launchArgs.URL)
 
-	loadingText := fmt.Sprintf("Downloading %s...", *launchArgs.URL)
+	itemDisplay := *launchArgs.URL
+	if launchArgs.Name != nil && *launchArgs.Name != "" {
+		itemDisplay = *launchArgs.Name
+	}
+	loadingText := fmt.Sprintf("Downloading %s...", itemDisplay)
 
 	hideLoader, err := pl.ShowLoader(cfg, widgetModels.NoticeArgs{
 		Text: loadingText,
