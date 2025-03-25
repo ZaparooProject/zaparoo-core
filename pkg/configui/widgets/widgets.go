@@ -3,11 +3,9 @@ package widgets
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -133,12 +131,11 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 }
 
 type pickerAction struct {
-	label   string
-	preview string
-	action  zapScriptModels.ZapScriptCmd
+	label  string
+	action zapScriptModels.ZapScript
 }
 
-func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath string) (*tview.Application, error) {
+func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
 	log.Debug().Str("args", argsPath).Msg("showing picker")
 
 	args, err := os.ReadFile(argsPath)
@@ -152,47 +149,19 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 		return nil, err
 	}
 
-	if len(pickerArgs.Cmds) < 1 {
+	if len(pickerArgs.Items) < 1 {
 		return nil, errors.New("no actions were specified")
 	}
 
 	var actions []pickerAction
-	for _, la := range pickerArgs.Cmds {
+	for _, la := range pickerArgs.Items {
 		action := pickerAction{
 			action: la,
 		}
 
-		cmdName := strings.ToLower(la.Cmd)
-		switch cmdName {
-		case zapScriptModels.ZapScriptCmdEvaluate:
-			var zsp zapScriptModels.CmdEvaluateArgs
-			err := json.Unmarshal(la.Args, &zsp)
-			if err != nil {
-				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
-			}
-			if la.Name != nil && *la.Name != "" {
-				action.label = *la.Name
-				action.preview = zsp.ZapScript
-			} else {
-				action.label = zsp.ZapScript
-			}
-		case zapScriptModels.ZapScriptCmdLaunch:
-			var zm zapScriptModels.CmdLaunchArgs
-			err := json.Unmarshal(la.Args, &zm)
-			if err != nil {
-				return nil, fmt.Errorf("error unmarshalling zapscript params: %w", err)
-			}
-			if la.Name != nil && *la.Name != "" {
-				action.label = *la.Name
-			}
-			if zm.Name != nil && *zm.Name != "" {
-				action.label = *zm.Name
-			}
-			if zm.URL != nil {
-				action.preview = *zm.URL
-			}
-		default:
-			log.Error().Msgf("unknown cmd: %s", la.Cmd)
+		if la.Name != nil && *la.Name != "" {
+			action.label = *la.Name
+		} else {
 			continue
 		}
 
@@ -202,7 +171,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	app := tview.NewApplication()
 	configui.SetTheme(&tview.Styles)
 
-	run := func(action zapScriptModels.ZapScriptCmd) {
+	run := func(action zapScriptModels.ZapScript) {
 		log.Info().Msgf("running picker selection: %v", action)
 		ps, err := json.Marshal(action)
 		if err != nil {
@@ -236,9 +205,6 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 	list.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		longest := 2
 		for _, action := range actions {
-			if len(action.preview) > longest {
-				longest = len(action.preview)
-			}
 			if len(action.label) > longest {
 				longest = len(action.label)
 			}
@@ -258,7 +224,7 @@ func PickerUIBuilder(cfg *config.Instance, pl platforms.Platform, argsPath strin
 			continue
 		}
 
-		list.AddItem(action.label, action.preview, 0, func() {
+		list.AddItem(action.label, "", 0, func() {
 			run(action.action)
 		})
 	}

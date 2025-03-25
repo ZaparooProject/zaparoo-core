@@ -9,8 +9,8 @@ type NoticeArgs struct {
 }
 
 type PickerArgs struct {
-	Cmds    []models.ZapScriptCmd `json:"commands"`
-	Title   string                `json:"title"`
-	Timeout int                   `json:"timeout"`
-	Trusted *bool                 `json:"trusted"`
+	Items   []models.ZapScript `json:"items"`
+	Title   string             `json:"title"`
+	Timeout int                `json:"timeout"`
+	Trusted *bool              `json:"trusted"`
 }

@@ -44,12 +44,17 @@ const (
 	ZapScriptCmdGet      = "get"       // DEPRECATED
 )
 
+type ZapScript struct {
+	ZapScript int            `json:"zapscript"` // schema version
+	Name      *string        `json:"name"`      // optional display name
+	Cmds      []ZapScriptCmd `json:"cmds"`
+}
+
 type ZapScriptCmd struct {
-	Version int             `json:"version"` // schema version
-	ID      string          `json:"id"`      // internal id of command instance
-	Name    *string         `json:"name"`    // optional display name
-	Cmd     string          `json:"cmd"`
-	Args    json.RawMessage `json:"args"`
+	ID   string          `json:"id"`   // internal id of command instance
+	Name *string         `json:"name"` // optional display name
+	Cmd  string          `json:"cmd"`
+	Args json.RawMessage `json:"args"`
 }
 
 type CmdEvaluateArgs struct {
@@ -71,5 +76,5 @@ type CmdNotice struct {
 }
 
 type CmdPicker struct {
-	Items []ZapScriptCmd `json:"items"`
+	Items []ZapScript `json:"items"`
 }

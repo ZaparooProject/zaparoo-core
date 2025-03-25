@@ -118,11 +118,25 @@ func HandleRunCommand(env requests.RequestEnv) (any, error) {
 
 	var t tokens.Token
 
-	var cmd zapScriptModels.ZapScriptCmd
-	err := json.Unmarshal(env.Params, &cmd)
+	var zs zapScriptModels.ZapScript
+	err := json.Unmarshal(env.Params, &zs)
 	if err != nil {
 		return nil, ErrInvalidParams
 	}
+
+	if zs.ZapScript != 1 {
+		log.Error().Msg("invalid zapscript version")
+		return nil, ErrInvalidParams
+	}
+
+	if len(zs.Cmds) == 0 {
+		log.Error().Msg("no commands in zapscript")
+		return nil, ErrInvalidParams
+	} else if len(zs.Cmds) > 1 {
+		log.Warn().Msg("too many commands in zapscript, using first")
+	}
+
+	cmd := zs.Cmds[0]
 
 	cmdName := strings.ToLower(cmd.Cmd)
 	switch cmdName {

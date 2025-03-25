@@ -9,11 +9,9 @@ import (
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -111,51 +109,17 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 	}
 
 	// write items to dir
-	for _, cmd := range args.Cmds {
-		var itemName string
-		cmdName := strings.ToLower(cmd.Cmd)
-		switch cmdName {
-		case zapScriptModels.ZapScriptCmdEvaluate:
-			var zsp zapScriptModels.CmdEvaluateArgs
-			err = json.Unmarshal(cmd.Args, &zsp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling evaluate params: %w", err)
-			}
-
-			if cmd.Name != nil && *cmd.Name != "" {
-				itemName = *cmd.Name
-			} else {
-				continue
-			}
-		case zapScriptModels.ZapScriptCmdLaunch:
-			var mp zapScriptModels.CmdLaunchArgs
-			err = json.Unmarshal(cmd.Args, &mp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling launch params: %w", err)
-			}
-
-			if mp.Name != nil && *mp.Name != "" {
-				itemName = *mp.Name
-			}
-
-			// prefer top-level name
-			if cmd.Name != nil && *cmd.Name != "" {
-				itemName = *cmd.Name
-			}
-
-			if itemName == "" {
-				continue
-			}
-		default:
+	for _, item := range args.Items {
+		if item.Name == nil || *item.Name == "" {
 			continue
 		}
 
-		contents, err := json.Marshal(cmd)
+		contents, err := json.Marshal(item)
 		if err != nil {
 			return err
 		}
 
-		path := filepath.Join(MainPickerDir, itemName+".txt")
+		path := filepath.Join(MainPickerDir, *item.Name+".txt")
 		err = os.WriteFile(path, contents, 0644)
 		if err != nil {
 			return err

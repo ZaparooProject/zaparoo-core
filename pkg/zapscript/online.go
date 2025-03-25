@@ -34,19 +34,19 @@ func maybeRemoteZapScript(s string) bool {
 	}
 }
 
-func getRemoteZapScript(url string) (zapScriptModels.ZapScriptCmd, error) {
+func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
 	// TODO: this should return a list and handle receiving a raw list of
 	// 		 zapscript objects
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return zapScriptModels.ZapScriptCmd{}, err
+		return zapScriptModels.ZapScript{}, err
 	}
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return zapScriptModels.ZapScriptCmd{}, err
+		return zapScriptModels.ZapScript{}, err
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -57,12 +57,12 @@ func getRemoteZapScript(url string) (zapScriptModels.ZapScriptCmd, error) {
 
 	if resp.StatusCode != 200 {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
-		return zapScriptModels.ZapScriptCmd{}, errors.New("invalid status code")
+		return zapScriptModels.ZapScript{}, errors.New("invalid status code")
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		return zapScriptModels.ZapScriptCmd{}, errors.New("content type is empty")
+		return zapScriptModels.ZapScript{}, errors.New("content type is empty")
 	}
 
 	content := ""
@@ -74,24 +74,28 @@ func getRemoteZapScript(url string) (zapScriptModels.ZapScriptCmd, error) {
 	}
 
 	if content == "" {
-		return zapScriptModels.ZapScriptCmd{}, errors.New("no valid content type")
+		return zapScriptModels.ZapScript{}, errors.New("no valid content type")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return zapScriptModels.ZapScriptCmd{}, fmt.Errorf("error reading body: %w", err)
+		return zapScriptModels.ZapScript{}, fmt.Errorf("error reading body: %w", err)
 	}
 
 	if content != MIMEZaparooZapScript {
-		return zapScriptModels.ZapScriptCmd{}, errors.New("invalid content type")
+		return zapScriptModels.ZapScript{}, errors.New("invalid content type")
 	}
 
 	log.Debug().Msgf("zap link body: %s", string(body))
 
-	var zl zapScriptModels.ZapScriptCmd
+	var zl zapScriptModels.ZapScript
 	err = json.Unmarshal(body, &zl)
 	if err != nil {
 		return zl, fmt.Errorf("error unmarshalling body: %w", err)
+	}
+
+	if zl.ZapScript != 1 {
+		return zl, errors.New("invalid zapscript version")
 	}
 
 	return zl, nil
@@ -112,19 +116,26 @@ func checkLink(
 		return "", err
 	}
 
-	cmd := strings.ToLower(zl.Cmd)
+	if len(zl.Cmds) == 0 {
+		return "", errors.New("no commands")
+	} else if len(zl.Cmds) > 1 {
+		log.Warn().Msgf("multiple commands in link, using first: %v", zl.Cmds[0])
+	}
 
-	switch cmd {
+	cmd := zl.Cmds[0]
+	cmdName := strings.ToLower(cmd.Cmd)
+
+	switch cmdName {
 	case zapScriptModels.ZapScriptCmdEvaluate:
 		var args zapScriptModels.CmdEvaluateArgs
-		err = json.Unmarshal(zl.Args, &args)
+		err = json.Unmarshal(cmd.Args, &args)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling evaluate params: %w", err)
 		}
 		return args.ZapScript, nil
 	case zapScriptModels.ZapScriptCmdLaunch:
 		var args zapScriptModels.CmdLaunchArgs
-		err = json.Unmarshal(zl.Args, &args)
+		err = json.Unmarshal(cmd.Args, &args)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling launch args: %w", err)
 		}
@@ -136,15 +147,15 @@ func checkLink(
 		}
 	case zapScriptModels.ZapScriptCmdUIPicker:
 		var cmdArgs zapScriptModels.CmdPicker
-		err = json.Unmarshal(zl.Args, &cmdArgs)
+		err = json.Unmarshal(cmd.Args, &cmdArgs)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling picker args: %w", err)
 		}
 		pickerArgs := widgetModels.PickerArgs{
-			Cmds: cmdArgs.Items,
+			Items: cmdArgs.Items,
 		}
-		if zl.Name != nil {
-			pickerArgs.Title = *zl.Name
+		if cmd.Name != nil {
+			pickerArgs.Title = *cmd.Name
 		}
 		err := pl.ShowPicker(cfg, pickerArgs)
 		if err != nil {
@@ -154,6 +165,6 @@ func checkLink(
 			return "", nil
 		}
 	default:
-		return "", fmt.Errorf("unknown cmd: %s", cmd)
+		return "", fmt.Errorf("unknown cmdName: %s", cmdName)
 	}
 }
