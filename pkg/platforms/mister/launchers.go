@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"archive/zip"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +19,62 @@ import (
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
+func checkInZip(path string) string {
+	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
+		return path
+	}
+
+	fileInfo, err := os.Stat(path)
+	if err != nil || fileInfo.IsDir() {
+		log.Error().Err(err).Msgf("failed to access the zip file at path: %s", path)
+		return path
+	}
+
+	zipReader, err := zip.OpenReader(path)
+	if err != nil {
+		log.Error().Err(err).Msgf("failed to open zip file: %s", path)
+		return path
+	}
+	defer func(zipReader *zip.ReadCloser) {
+		err := zipReader.Close()
+		if err != nil {
+			log.Error().Err(err).Msgf("failed to close zip file: %s", path)
+		}
+	}(zipReader)
+
+	var firstFilePath string
+	matchingFilePath := ""
+	zipName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+
+	for _, file := range zipReader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		if firstFilePath == "" {
+			firstFilePath = file.Name
+		}
+
+		if strings.EqualFold(strings.TrimSuffix(filepath.Base(file.Name), filepath.Ext(file.Name)), zipName) {
+			matchingFilePath = file.Name
+			break
+		}
+	}
+
+	if matchingFilePath != "" {
+		log.Debug().Msgf("found matching file: %s", matchingFilePath)
+		return filepath.Join(path, matchingFilePath)
+	} else if firstFilePath != "" && len(zipReader.File) == 1 {
+		log.Debug().Msgf("found single file in zip archive: %s", firstFilePath)
+		return filepath.Join(path, firstFilePath)
+	}
+
+	log.Warn().Msgf("no suitable file found in zip archive: %s", path)
+	return path
+}
+
 func launch(cfg *config.Instance, path string) error {
+	path = checkInZip(path)
 	err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
 	if err != nil {
 		return err
@@ -37,6 +93,7 @@ func launchSinden(
 		if err != nil {
 			return err
 		}
+		path = checkInZip(path)
 
 		sn := *s
 		sn.Rbf = "_Sinden/" + rbfName + "_Sinden"
@@ -59,6 +116,7 @@ func launchAggGnw(cfg *config.Instance, path string) error {
 	if err != nil {
 		return err
 	}
+	path = checkInZip(path)
 
 	sn := *s
 	sn.Rbf = "_Console/GameAndWatch"
@@ -91,6 +149,7 @@ func launchAltCore(
 		if err != nil {
 			return err
 		}
+		path = checkInZip(path)
 
 		sn := *s
 		sn.Rbf = rbfPath
