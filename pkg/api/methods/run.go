@@ -34,11 +34,6 @@ var (
 	ErrNotAllowed    = errors.New("not allowed")
 )
 
-var MediaSafeList = []string{
-	"https://cdn.zaparoo.com",
-	"https://secure.cdn.zaparoo.com",
-}
-
 func HandleRun(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received run request")
 
@@ -221,29 +216,13 @@ func InstallRunMedia(
 		return "", errors.New("media install only supported for mister")
 	}
 
-	isSafe := false
-	if launchArgs.URL != nil {
-		log.Debug().Msgf("checking media download url: %s", *launchArgs.URL)
-
-		for _, safe := range MediaSafeList {
-			if strings.HasPrefix(*launchArgs.URL, safe) {
-				isSafe = true
-				break
-			}
-		}
-
-		if !isSafe {
-			return "", errors.New("media download not in safe list")
-		}
-	}
-
 	if launchArgs.URL == nil {
 		return "", errors.New("media download url is empty")
 	} else if launchArgs.System == nil {
 		return "", errors.New("media system is empty")
 	}
 
-	system, err := systemdefs.GetSystem(*launchArgs.System)
+	system, err := systemdefs.LookupSystem(*launchArgs.System)
 	if err != nil {
 		return "", fmt.Errorf("error getting system: %w", err)
 	}
