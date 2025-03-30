@@ -1,6 +1,6 @@
 package models
 
-import "github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+import "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 type NoticeArgs struct {
 	Text     string `json:"text"`
@@ -9,8 +9,8 @@ type NoticeArgs struct {
 }
 
 type PickerArgs struct {
-	Actions []models.ZapLinkAction `json:"actions"`
-	Title   string                 `json:"title"`
-	Timeout int                    `json:"timeout"`
-	Trusted *bool                  `json:"trusted"`
+	Items   []models.ZapScript `json:"items"`
+	Title   string             `json:"title"`
+	Timeout int                `json:"timeout"`
+	Trusted *bool              `json:"trusted"`
 }

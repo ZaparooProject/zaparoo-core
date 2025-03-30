@@ -423,6 +423,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
+	path = checkInZip(path)
 	launchers := utils.PathToLaunchers(cfg, p, path)
 
 	if len(launchers) == 0 {

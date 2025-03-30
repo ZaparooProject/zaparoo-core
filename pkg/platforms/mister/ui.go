@@ -109,39 +109,17 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 	}
 
 	// write items to dir
-	for _, action := range args.Actions {
-		var name string
-		switch action.Method {
-		case models.ZapLinkActionZapScript:
-			var zsp models.ZapScriptParams
-			err = json.Unmarshal(action.Params, &zsp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling zap script params: %w", err)
-			}
-
-			name = zsp.Name
-			if name == "" {
-				continue
-			}
-		case models.ZapLinkActionMedia:
-			var mp models.MediaParams
-			err = json.Unmarshal(action.Params, &mp)
-			if err != nil {
-				return fmt.Errorf("error unmarshalling media params: %w", err)
-			}
-
-			name = mp.Name
-			if name == "" {
-				continue
-			}
+	for _, item := range args.Items {
+		if item.Name == nil || *item.Name == "" {
+			continue
 		}
 
-		contents, err := json.Marshal(action)
+		contents, err := json.Marshal(item)
 		if err != nil {
 			return err
 		}
 
-		path := filepath.Join(MainPickerDir, name+".txt")
+		path := filepath.Join(MainPickerDir, *item.Name+".txt")
 		err = os.WriteFile(path, contents, 0644)
 		if err != nil {
 			return err

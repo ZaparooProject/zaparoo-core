@@ -1,7 +1,5 @@
 package models
 
-import "encoding/json"
-
 type SearchParams struct {
 	Query      string    `json:"query"`
 	Systems    *[]string `json:"systems"`
@@ -62,32 +60,4 @@ type NewClientParams struct {
 
 type DeleteClientParams struct {
 	Id string `json:"id"`
-}
-
-const (
-	ZapLinkActionZapScript = "zapscript"
-	ZapLinkActionMedia     = "media"
-)
-
-type ZapLinkAction struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-}
-
-type ZapLink struct {
-	Version int             `json:"version"`
-	Name    string          `json:"name"`
-	Actions []ZapLinkAction `json:"actions"`
-}
-
-type ZapScriptParams struct {
-	Name      string `json:"name"`
-	ZapScript string `json:"zapscript"`
-}
-
-type MediaParams struct {
-	Name      string  `json:"name"`
-	System    string  `json:"system"`
-	Url       *string `json:"url"`
-	PreNotice *string `json:"preNotice"`
 }
