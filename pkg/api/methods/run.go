@@ -109,8 +109,8 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleRunCommand(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received run link action request")
+func HandleRunScript(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received run script request")
 
 	if len(env.Params) == 0 {
 		return nil, ErrMissingParams
@@ -121,11 +121,12 @@ func HandleRunCommand(env requests.RequestEnv) (any, error) {
 	var zs zapScriptModels.ZapScript
 	err := json.Unmarshal(env.Params, &zs)
 	if err != nil {
+		log.Error().Msgf("error unmarshalling zapscript: %s", err)
 		return nil, ErrInvalidParams
 	}
 
 	if zs.ZapScript != 1 {
-		log.Error().Msg("invalid zapscript version")
+		log.Error().Msgf("invalid zapscript version: %d", zs.ZapScript)
 		return nil, ErrInvalidParams
 	}
 

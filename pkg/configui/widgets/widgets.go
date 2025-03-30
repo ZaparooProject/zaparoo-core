@@ -177,7 +177,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
-		_, err = client.LocalClient(cfg, models.MethodRunCommand, string(ps))
+		_, err = client.LocalClient(cfg, models.MethodRunScript, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
