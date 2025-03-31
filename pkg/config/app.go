@@ -3,7 +3,7 @@ package config
 import "time"
 
 const (
-	AppVersion        = "2.2.0-dev"
+	AppVersion        = "2.2.0"
 	AppName           = "zaparoo"
 	GamesDbFile       = "games.db"
 	TapToDbFile       = "tapto.db"
