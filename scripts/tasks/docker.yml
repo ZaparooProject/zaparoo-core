@@ -1,0 +1,37 @@
+version: "3"
+
+tasks:
+  build-image:
+    internal: true
+    cmds:
+      - docker build --platform linux/{{.ARCH}} --build-arg UID=$UID --build-arg GID=$GID {{default "" .CACHE_ARGS}} -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+
+  build-app:
+    internal: true
+    vars:
+      BUILD_NAME: "{{.PLATFORM}}{{if .BUILD_ARCH}}_{{.BUILD_ARCH}}{{end}}"
+      BUILD_DIR: "./_build/{{.BUILD_NAME}}"
+      ZIP_FULLPATH: "{{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip"
+    cmds:
+      - task: run
+        vars:
+          IMAGE_NAME: "{{.IMAGE_NAME}}"
+          BUILD_DIR: "{{.BUILD_DIR}}"
+          DOCKER_ARCH: "{{.DOCKER_ARCH}}"
+          PLATFORM: "{{.PLATFORM}}"
+          APP_BIN: "{{.APP_BIN}}"
+          EXEC: '{{default "task build" .EXEC}}'
+          EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
+      - rm -f {{.ZIP_FULLPATH}}
+      - zip -j {{.ZIP_FULLPATH}} {{.BUILD_DIR}}/{{.APP_BIN}}
+
+  run:
+    internal: true
+    vars:
+      BUILDCACHE: "{{.HOME}}/.cache/go-build"
+      GOCACHE: "{{.HOME}}/go"
+      IMG_BUILDCACHE: /home/build/.cache/go-build
+      IMG_GOCACHE: /home/build/go
+    cmds:
+      - mkdir -p {{.BUILDCACHE}} {{.GOCACHE}}
+      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build -e PLATFORM={{.PLATFORM}} -e APP_BIN={{.APP_BIN}} {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}
