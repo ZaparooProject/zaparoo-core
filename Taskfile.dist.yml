@@ -23,6 +23,7 @@ includes:
   mister: ./scripts/tasks/mister.yml
   mistex: ./scripts/tasks/mistex.yml
   recalbox: ./scripts/tasks/recalbox.yml
+  retropie: ./scripts/tasks/retropie.yml
   steamos: ./scripts/tasks/steamos.yml
   windows: ./scripts/tasks/windows.yml
 
