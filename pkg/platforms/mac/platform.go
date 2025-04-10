@@ -1,11 +1,14 @@
 package mac
 
 import (
+	"errors"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/adrg/xdg"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +23,7 @@ import (
 )
 
 type Platform struct {
+	tempDir string
 }
 
 func (p *Platform) Id() string {
@@ -35,6 +39,19 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
+	tempDir, err := os.MkdirTemp("", "zaparoo-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	p.tempDir = tempDir
+
+	for _, dir := range []string{p.DataDir(), p.LogDir(), p.ConfigDir()} {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create dir: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -43,6 +60,12 @@ func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) e
 }
 
 func (p *Platform) Stop() error {
+	err := os.RemoveAll(p.TempDir())
+	if err != nil {
+		return err
+	}
+	p.tempDir = ""
+
 	return nil
 }
 
@@ -62,29 +85,23 @@ func (p *Platform) ZipsAsDirs() bool {
 	return false
 }
 
-func exeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-
-	return filepath.Dir(exe)
-}
-
 func (p *Platform) DataDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
 func (p *Platform) TempDir() string {
-	return filepath.Join(os.TempDir(), config.AppName)
+	if p.tempDir == "" {
+		log.Warn().Msg("temp dir not set")
+	}
+	return p.tempDir
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
@@ -131,18 +148,18 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	log.Info().Msgf("launching file: %s", path)
+	launchers := utils.PathToLaunchers(cfg, p, path)
+	if len(launchers) == 0 {
+		return errors.New("no launcher found")
+	}
+	launcher := launchers[0]
 
-	if filepath.Ext(path) == ".txt" {
-		// get filename minus ext
-
-		fn := filepath.Base(path)
-		fn = fn[:len(fn)-4]
-
-		return exec.Command("cmd", "/c", "C:\\Program Files (x86)\\Steam\\steam.exe", "steam://rungameid/"+fn).Start()
+	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
+		return errors.New("file not allowed: " + path)
 	}
 
-	return nil
+	log.Info().Msgf("launching file with %s: %s", launcher.Id, path)
+	return launcher.Launch(cfg, path)
 }
 
 func (p *Platform) KeyboardInput(input string) error {
@@ -166,7 +183,16 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers() []platforms.Launcher {
-	return nil
+	return []platforms.Launcher{
+		{
+			Id:            "Generic",
+			Extensions:    []string{".sh"},
+			AllowListOnly: true,
+			Launch: func(cfg *config.Instance, path string) error {
+				return exec.Command(path).Start()
+			},
+		},
+	}
 }
 
 func (p *Platform) ShowNotice(
