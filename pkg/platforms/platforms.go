@@ -18,8 +18,10 @@ const (
 
 const (
 	PlatformIDBatocera  = "batocera"
+	PlatformIDBazzite   = "bazzite"
 	PlatformIDChimeraOS = "chimeraos"
 	PlatformIDLibreELEC = "libreelec"
+	PlatformIDLinux     = "linux"
 	PlatformIDMac       = "mac"
 	PlatformIDMister    = "mister"
 	PlatformIDMistex    = "mistex"
