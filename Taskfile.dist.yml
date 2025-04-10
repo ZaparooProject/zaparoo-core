@@ -62,6 +62,22 @@ tasks:
           DOCKERFILE: "./scripts/linux_amd64/build"
           ARCH: amd64
 
+  build-image-linux-arm64:
+    cmds:
+      - task: build-docker-image
+        vars:
+          IMAGE_NAME: zaparoo/linux-arm64-build
+          DOCKERFILE: "./scripts/linux_arm64/build"
+          ARCH: arm64/v8
+
+  build-image-linux-amd64:
+    cmds:
+      - task: build-docker-image
+        vars:
+          IMAGE_NAME: zaparoo/linux-amd64-build
+          DOCKERFILE: "./scripts/linux_amd64/build"
+          ARCH: amd64
+
   run-docker:
     internal: true
     vars:
@@ -154,6 +170,28 @@ tasks:
           BUILD_ARCH: amd64
           DOCKER_ARCH: amd64
           IMAGE_NAME: zaparoo/batocera-amd64-build
+          APP_BIN: zaparoo
+
+  build-linux-arm64:
+    cmds:
+      - task: build-image-linux-arm64
+      - task: build-docker
+        vars:
+          PLATFORM: linux
+          BUILD_ARCH: arm64
+          DOCKER_ARCH: arm64/v8
+          IMAGE_NAME: zaparoo/linux-arm64-build
+          APP_BIN: zaparoo
+
+  build-linux-amd64:
+    cmds:
+      - task: build-image-linux-amd64
+      - task: build-docker
+        vars:
+          PLATFORM: linux
+          BUILD_ARCH: amd64
+          DOCKER_ARCH: amd64
+          IMAGE_NAME: zaparoo/linux-amd64-build
           APP_BIN: zaparoo
 
   build-steamos-amd64:
