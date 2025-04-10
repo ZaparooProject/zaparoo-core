@@ -6,7 +6,7 @@ tasks:
     cmds:
       - task: :docker:build-image
         vars:
-          IMAGE_NAME: zaparoo/steamos-amd64-build
+          IMAGE_NAME: zaparoo/linux-amd64-build
           DOCKERFILE: "./scripts/linux_amd64/build"
           ARCH: amd64
 
@@ -18,7 +18,7 @@ tasks:
           PLATFORM: steamos
           BUILD_ARCH: amd64
           DOCKER_ARCH: amd64
-          IMAGE_NAME: zaparoo/steamos-amd64-build
+          IMAGE_NAME: zaparoo/linux-amd64-build
           APP_BIN: zaparoo
 
   deploy-amd64:
