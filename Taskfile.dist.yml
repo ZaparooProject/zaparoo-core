@@ -16,6 +16,7 @@ includes:
   docker: ./scripts/tasks/docker.yml
   batocera: ./scripts/tasks/batocera.yml
   bazzite: ./scripts/tasks/bazzite.yml
+  chimeraos: ./scripts/tasks/chimeraos.yml
   linux: ./scripts/tasks/linux.yml
   mac: ./scripts/tasks/mac.yml
   mister: ./scripts/tasks/mister.yml
