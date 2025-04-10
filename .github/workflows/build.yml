@@ -37,7 +37,6 @@ jobs:
           - chimeraos
           - libreelec
           - recalbox
-          - retropie
         arch:
           - amd64
           - arm64
