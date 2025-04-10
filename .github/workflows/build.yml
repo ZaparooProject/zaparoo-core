@@ -36,6 +36,7 @@ jobs:
           - bazzite
           - chimeraos
           - libreelec
+          - recalbox
         arch:
           - amd64
           - arm64
