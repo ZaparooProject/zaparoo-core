@@ -194,7 +194,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command("bash", "-c", path).Start()
+				return exec.Command(path).Start()
 			},
 		},
 	}
