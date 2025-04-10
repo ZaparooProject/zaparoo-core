@@ -15,6 +15,7 @@ dotenv: [".env"]
 includes:
   docker: ./scripts/tasks/docker.yml
   batocera: ./scripts/tasks/batocera.yml
+  bazzite: ./scripts/tasks/bazzite.yml
   linux: ./scripts/tasks/linux.yml
   mac: ./scripts/tasks/mac.yml
   mister: ./scripts/tasks/mister.yml

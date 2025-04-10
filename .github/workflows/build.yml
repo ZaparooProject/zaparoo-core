@@ -33,6 +33,7 @@ jobs:
           - mac
           - batocera
           - linux
+          - bazzite
         arch:
           - amd64
           - arm64
