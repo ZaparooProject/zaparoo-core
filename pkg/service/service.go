@@ -223,18 +223,6 @@ func Start(
 ) (func() error, error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
-	dirs := []string{
-		pl.DataDir(),
-		pl.TempDir(),
-		filepath.Join(pl.DataDir(), platforms.MappingsDir),
-	}
-	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl)
 	// TODO: convert this to a *token channel
@@ -247,6 +235,18 @@ func Start(
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		return nil, err
+	}
+
+	dirs := []string{
+		pl.DataDir(),
+		pl.TempDir(),
+		filepath.Join(pl.DataDir(), platforms.MappingsDir),
+	}
+	for _, dir := range dirs {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	log.Info().Msg("opening user database")

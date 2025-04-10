@@ -2,11 +2,13 @@ package batocera
 
 import (
 	"errors"
+	"fmt"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	"github.com/adrg/xdg"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -14,7 +16,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
@@ -24,6 +25,7 @@ import (
 )
 
 type Platform struct {
+	tempDir string
 }
 
 func (p *Platform) Id() string {
@@ -35,10 +37,24 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
 		simple_serial.NewReader(cfg),
+		optical_drive.NewReader(cfg),
 	}
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
+	tempDir, err := os.MkdirTemp("", "zaparoo-")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	p.tempDir = tempDir
+
+	for _, dir := range []string{p.DataDir(), p.LogDir(), p.ConfigDir()} {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return fmt.Errorf("failed to create dir: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -47,18 +63,24 @@ func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) e
 }
 
 func (p *Platform) Stop() error {
+	err := os.RemoveAll(p.TempDir())
+	if err != nil {
+		return err
+	}
+	p.tempDir = ""
+
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
+func (p *Platform) AfterScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
+func (p *Platform) ReadersUpdateHook(_ map[string]*readers.Reader) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (p *Platform) RootDirs(_ *config.Instance) []string {
 	return []string{
 		"/userdata/roms",
 	}
@@ -69,22 +91,25 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
-	return utils.ExeDir()
+	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
 func (p *Platform) TempDir() string {
-	return filepath.Join(os.TempDir(), config.AppName)
+	if p.tempDir == "" {
+		log.Warn().Msg("temp dir not set")
+	}
+	return p.tempDir
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -100,10 +125,10 @@ func (p *Platform) GetActiveLauncher() string {
 	return ""
 }
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
+func (p *Platform) PlayFailSound(_ *config.Instance) {
 }
 
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
+func (p *Platform) PlaySuccessSound(_ *config.Instance) {
 }
 
 func (p *Platform) ActiveSystem() string {
@@ -122,62 +147,39 @@ func (p *Platform) ActiveGamePath() string {
 	return ""
 }
 
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+func (p *Platform) LaunchSystem(_ *config.Instance, id string) error {
 	log.Info().Msgf("launching system: %s", id)
 	return nil
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	log.Info().Msgf("launching file: %s", path)
-
-	relPath := path
-	for _, rf := range p.RootDirs(cfg) {
-		if strings.HasPrefix(relPath, rf+"/") {
-			relPath = strings.TrimPrefix(relPath, rf+"/")
-			break
-		}
+	launchers := utils.PathToLaunchers(cfg, p, path)
+	if len(launchers) == 0 {
+		return errors.New("no launcher found")
 	}
-	log.Info().Msgf("relative path: %s", relPath)
+	launcher := launchers[0]
 
-	root := strings.Split(relPath, "/")[0]
-	log.Info().Msgf("root: %s", root)
-
-	systemId := ""
-	for _, launcher := range p.Launchers() {
-		for _, folder := range launcher.Folders {
-			if folder == root {
-				systemId = launcher.SystemId
-				break
-			}
-		}
+	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
+		return errors.New("file not allowed: " + path)
 	}
 
-	if systemId == "" {
-		log.Error().Msgf("system not found for path: %s", path)
-	}
-
-	for _, launcher := range p.Launchers() {
-		if launcher.SystemId == systemId {
-			return launcher.Launch(cfg, path)
-		}
-	}
-
-	return errors.New("launcher not found")
+	log.Info().Msgf("launching file with %s: %s", launcher.Id, path)
+	return launcher.Launch(cfg, path)
 }
 
-func (p *Platform) KeyboardInput(input string) error {
+func (p *Platform) KeyboardInput(_ string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (p *Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (p *Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
+func (p *Platform) ForwardCmd(_ platforms.CmdEnv) error {
 	return nil
 }
 
@@ -188,14 +190,11 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			SystemId:   systemdefs.SystemGenesis,
-			Folders:    []string{"megadrive"},
-			Extensions: []string{".bin", ".gen", ".md", ".sg", ".smd", ".zip", ".7z"},
+			Id:            "Generic",
+			Extensions:    []string{".sh"},
+			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
-				cmd := exec.Command("emulatorlauncher", "-system", "megadrive", "-rom", path)
-				cmd.Env = os.Environ()
-				cmd.Env = append(cmd.Env, "DISPLAY=:0.0")
-				return cmd.Start()
+				return exec.Command("bash", "-c", path).Start()
 			},
 		},
 	}

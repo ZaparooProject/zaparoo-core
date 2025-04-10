@@ -35,8 +35,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
-	_ "embed"
 )
 
 func main() {

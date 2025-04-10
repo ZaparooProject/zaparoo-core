@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (C) 2023-2025 Callan Barrett
 
 This file is part of Zaparoo Core.
 
@@ -23,63 +23,78 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"io"
 	"os"
-
-	"github.com/rs/zerolog/log"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"os/signal"
+	"syscall"
 )
 
-const appName = config.AppName
-
 func main() {
-	versionOpt := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *versionOpt {
-		fmt.Println("Zaparoo Core v" + config.AppVersion + " (batocera)")
-		os.Exit(0)
-	}
+	sigs := make(chan os.Signal, 1)
+	defer close(sigs)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	pl := &batocera.Platform{}
+	flags := cli.SetupFlags()
+
+	doInstall := flag.Bool("install", false, "configure system for zaparoo")
+	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
+	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
+
+	flags.Pre(pl)
+
+	// TODO: i think batocera uses a read-only root image, so these may not work or stick
+	//       everything runs as root so udev rules won't be necessary, but might be an
+	//       issue with acr122u readers
+	if *doInstall {
+		err := installer.CLIInstall()
+		if err != nil {
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
+	} else if *doUninstall {
+		err := installer.CLIUninstall()
+		if err != nil {
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
+	}
+
+	// only difference with daemon mode right now is no log pretty printing
+	// TODO: launch simple gui
+	// TODO: fork service if it's not running
+	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
+	if *asDaemon {
+		logWriters = []io.Writer{os.Stderr}
+	}
 
 	cfg := cli.Setup(
 		pl,
 		config.BaseDefaults,
-		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
+		logWriters,
 	)
 
-	fmt.Println("Zaparoo Core v" + config.AppVersion)
+	flags.Post(cfg, pl)
 
-	stopSvc, err := service.Start(pl, cfg)
+	stop, err := service.Start(pl, cfg)
 	if err != nil {
-		log.Error().Msgf("error starting service: %s", err)
-		fmt.Println("Error starting service:", err)
+		log.Error().Err(err).Msg("error starting service")
 		os.Exit(1)
 	}
 
-	ip, err := utils.GetLocalIp()
+	<-sigs
+	err = stop()
 	if err != nil {
-		fmt.Println("Device address: Unknown")
-	} else {
-		fmt.Println("Device address:", ip.String())
-	}
-
-	fmt.Println("Press Enter to exit")
-	fmt.Scanln()
-
-	err = stopSvc()
-	if err != nil {
-		log.Error().Msgf("error stopping service: %s", err)
-		fmt.Println("Error stopping service:", err)
+		log.Error().Err(err).Msg("error stopping service")
 		os.Exit(1)
 	}
 
