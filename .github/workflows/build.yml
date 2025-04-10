@@ -34,6 +34,8 @@ jobs:
           - batocera
           - linux
           - bazzite
+          - chimeraos
+          - libreelec
         arch:
           - amd64
           - arm64
