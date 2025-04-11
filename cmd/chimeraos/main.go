@@ -37,6 +37,13 @@ import (
 	"syscall"
 )
 
+// launch api: https://github.com/ChimeraOS/chimera/tree/master/bin
+// default user gamer/gamer
+// default launcher steam
+// ssh is disabled by default, requires public key
+// acr122u works by default
+// pn532 requires udev rules
+
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)

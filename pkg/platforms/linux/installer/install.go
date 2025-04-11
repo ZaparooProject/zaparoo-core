@@ -30,6 +30,8 @@ NFC readers that were already connected.
 Continue with install? [Y/n] `
 )
 
+// TODO: above prompt errors with no input instead of defaulting to Y
+
 func CLIInstall() error {
 	fmt.Println(installMsg)
 	var input string

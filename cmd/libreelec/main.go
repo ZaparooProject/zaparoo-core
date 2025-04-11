@@ -23,7 +23,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/libreelec"
@@ -36,6 +35,14 @@ import (
 	"os/signal"
 	"syscall"
 )
+
+// ssh disabled by default
+// probably need arm32 build
+// default user root/libreelec
+// home folder is /storage
+// api is available for indexing and launching. may need to be turned on
+// pn532 and acr122u work out of box
+// https://wiki.libreelec.tv/configuration/startup-shutdown
 
 func main() {
 	sigs := make(chan os.Signal, 1)
@@ -65,11 +72,6 @@ func main() {
 		} else {
 			os.Exit(0)
 		}
-	}
-
-	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
-		os.Exit(1)
 	}
 
 	// only difference with daemon mode right now is no log pretty printing

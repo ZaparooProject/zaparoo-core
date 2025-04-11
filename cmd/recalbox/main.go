@@ -23,10 +23,8 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/recalbox"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
@@ -37,6 +35,14 @@ import (
 	"syscall"
 )
 
+// home: /recalbox/share/system
+// user: root/recalboxroot (ssh on by default)
+// https://wiki.recalbox.com/en/advanced-usage/scripts-on-emulationstation-events
+// most of fs is read-only? no +x allowed
+// /recalbox/share/userscripts allows writes
+// mount -o remount,rw /
+// put in /recalbox/scripts
+
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
@@ -45,36 +51,10 @@ func main() {
 	pl := &recalbox.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
 	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
 
 	flags.Pre(pl)
 
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	}
-
-	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
-		os.Exit(1)
-	}
-
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
 	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
 	if *asDaemon {
 		logWriters = []io.Writer{os.Stderr}
