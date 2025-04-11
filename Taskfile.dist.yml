@@ -30,7 +30,7 @@ includes:
 tasks:
   build:
     cmds:
-      - go build --ldflags "-linkmode external -extldflags -static -s -w" -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
+      - go build --ldflags "-linkmode external -extldflags -static -s -w" -tags netgo -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
 
   build-basic:
     internal: true
