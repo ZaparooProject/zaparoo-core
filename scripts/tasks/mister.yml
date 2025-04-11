@@ -1,0 +1,48 @@
+version: "3"
+
+tasks:
+  setup-arm:
+    internal: true
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/mister-arm-build
+          DOCKERFILE: "./scripts/mister/build"
+          ARCH: arm/v7
+
+  build-arm:
+    cmds:
+      - task: setup-arm
+      - task: :docker:build-app
+        vars:
+          PLATFORM: mister
+          BUILD_ARCH: arm
+          DOCKER_ARCH: arm/v7
+          IMAGE_NAME: zaparoo/mister-arm-build
+          APP_BIN: zaparoo.sh
+          EXEC: build.sh
+
+  shell-arm:
+    vars:
+      BUILDCACHE: "{{.BUILD_DIR}}/.go-buildcache"
+      GOCACHE: "{{.BUILD_DIR}}/.go-cache"
+      IMAGE_NAME: zaparoo/mister-arm-build
+      IMG_BUILDCACHE: /home/build/.cache/go-build
+      IMG_GOCACHE: /home/build/go
+    cmds:
+      - task: setup-arm
+      - task: :docker:run
+        vars:
+          BUILD_DIR: "./_build/mister"
+          PLATFORM: mister
+          BUILD_ARCH: arm
+          DOCKER_ARCH: arm/v7
+          IMAGE_NAME: zaparoo/mister-arm-build
+          EXTRA_DOCKER_ARGS: -it
+          EXEC: bash
+
+  deploy-arm:
+    cmds:
+      - task: build-arm
+      - scp _build/mister_arm/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
+      - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart

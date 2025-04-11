@@ -25,8 +25,7 @@ import (
 	"flag"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/recalbox"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -36,45 +35,26 @@ import (
 	"syscall"
 )
 
-// home: /userdata/system
-// TODO: how to we run on startup? https://wiki.batocera.org/launch_a_script
+// home: /recalbox/share/system
+// user: root/recalboxroot (ssh on by default)
+// https://wiki.recalbox.com/en/advanced-usage/scripts-on-emulationstation-events
+// most of fs is read-only? no +x allowed
+// /recalbox/share/userscripts allows writes
+// mount -o remount,rw /
+// put in /recalbox/scripts
 
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	pl := &batocera.Platform{}
+	pl := &recalbox.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
 	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
 
 	flags.Pre(pl)
 
-	// TODO: i think batocera uses a read-only root image, so these may not work or stick
-	//       everything runs as root so udev rules won't be necessary, but might be an
-	//       issue with acr122u readers
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	}
-
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
 	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
 	if *asDaemon {
 		logWriters = []io.Writer{os.Stderr}

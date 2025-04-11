@@ -1,25 +1,48 @@
-package mac
+/*
+Zaparoo Core
+Copyright (C) 2024, 2025 Callan Barrett
+
+This file is part of Zaparoo Core.
+
+Zaparoo Core is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Zaparoo Core is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+package recalbox
 
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532_uart"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
-	"github.com/rs/zerolog/log"
 )
 
 type Platform struct {
@@ -27,14 +50,15 @@ type Platform struct {
 }
 
 func (p *Platform) Id() string {
-	return platforms.PlatformIDMac
+	return platforms.PlatformIDRecalbox
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
 		simple_serial.NewReader(cfg),
-		pn532_uart.NewReader(cfg),
+		libnfc.NewReader(cfg),
+		optical_drive.NewReader(cfg),
 	}
 }
 
@@ -69,15 +93,15 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
+func (p *Platform) AfterScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
+func (p *Platform) ReadersUpdateHook(_ map[string]*readers.Reader) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (p *Platform) RootDirs(_ *config.Instance) []string {
 	return []string{}
 }
 
@@ -104,7 +128,7 @@ func (p *Platform) TempDir() string {
 	return p.tempDir
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -120,10 +144,10 @@ func (p *Platform) GetActiveLauncher() string {
 	return ""
 }
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
+func (p *Platform) PlayFailSound(_ *config.Instance) {
 }
 
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
+func (p *Platform) PlaySuccessSound(_ *config.Instance) {
 }
 
 func (p *Platform) ActiveSystem() string {
@@ -142,8 +166,7 @@ func (p *Platform) ActiveGamePath() string {
 	return ""
 }
 
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	log.Info().Msgf("launching system: %s", id)
+func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return nil
 }
 
@@ -162,7 +185,7 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 	return launcher.Launch(cfg, path)
 }
 
-func (p *Platform) KeyboardInput(input string) error {
+func (p *Platform) KeyboardInput(_ string) error {
 	return nil
 }
 
@@ -174,7 +197,7 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
+func (p *Platform) ForwardCmd(_ platforms.CmdEnv) error {
 	return nil
 }
 

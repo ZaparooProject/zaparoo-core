@@ -49,7 +49,7 @@ import (
 type Platform struct{}
 
 func (p *Platform) Id() string {
-	return "steamos"
+	return platforms.PlatformIDSteamOS
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

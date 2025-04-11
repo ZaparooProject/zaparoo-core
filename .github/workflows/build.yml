@@ -32,6 +32,11 @@ jobs:
           - windows
           - mac
           - batocera
+          - linux
+          - bazzite
+          - chimeraos
+          - libreelec
+          - recalbox
         arch:
           - amd64
           - arm64
@@ -97,7 +102,7 @@ jobs:
         run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=${{matrix.platform}}-${{matrix.arch}} --cache-from type=gha,scope=${{matrix.platform}}-${{matrix.arch}}\" > .env
         if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
-        run: task build-${{matrix.platform}}-${{matrix.arch}}
+        run: task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Add release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

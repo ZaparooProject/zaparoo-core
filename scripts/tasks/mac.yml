@@ -1,0 +1,22 @@
+version: "3"
+
+tasks:
+  build-arm64:
+    cmds:
+      - task: :build-basic
+        vars:
+          BUILD_OS: darwin
+          BUILD_ARCH: arm64
+          PLATFORM: mac
+          APP_BIN: zaparoo
+          CGO_ENABLED: 0
+
+  build-amd64:
+    cmds:
+      - task: :build-basic
+        vars:
+          BUILD_OS: darwin
+          BUILD_ARCH: amd64
+          PLATFORM: mac
+          APP_BIN: zaparoo
+          CGO_ENABLED: 0
