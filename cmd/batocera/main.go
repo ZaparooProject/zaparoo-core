@@ -36,6 +36,9 @@ import (
 	"syscall"
 )
 
+// home: /userdata/system
+// TODO: how to we run on startup? https://wiki.batocera.org/launch_a_script
+
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)

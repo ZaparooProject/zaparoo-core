@@ -37,6 +37,13 @@ import (
 	"syscall"
 )
 
+// default user bazzite/bazzite, sudo is enabled
+// SSH is disabled by default (sudo systemctl enable --now sshd)
+// home: /home/bazzite
+// pn532 works without any changes, tag scans
+// acr122u works after modeprobe blacklist
+// add steam as a default launcher
+
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
