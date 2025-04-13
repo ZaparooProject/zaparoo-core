@@ -16,6 +16,21 @@ const (
 	MappingsDir = "mappings"
 )
 
+const (
+	PlatformIDBatocera  = "batocera"
+	PlatformIDBazzite   = "bazzite"
+	PlatformIDChimeraOS = "chimeraos"
+	PlatformIDLibreELEC = "libreelec"
+	PlatformIDLinux     = "linux"
+	PlatformIDMac       = "mac"
+	PlatformIDMister    = "mister"
+	PlatformIDMistex    = "mistex"
+	PlatformIDRecalbox  = "recalbox"
+	PlatformIDRetroPie  = "retropie"
+	PlatformIDSteamOS   = "steamos"
+	PlatformIDWindows   = "windows"
+)
+
 type CmdEnv struct {
 	Cmd           string
 	Args          string

@@ -37,7 +37,7 @@ type Platform struct {
 }
 
 func (p *Platform) Id() string {
-	return "mistex"
+	return platforms.PlatformIDMistex
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

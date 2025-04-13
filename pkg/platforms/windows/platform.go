@@ -33,7 +33,7 @@ type Platform struct {
 }
 
 func (p *Platform) Id() string {
-	return "windows"
+	return platforms.PlatformIDWindows
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

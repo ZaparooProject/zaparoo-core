@@ -35,8 +35,6 @@ func maybeRemoteZapScript(s string) bool {
 }
 
 func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
-	// TODO: this should return a list and handle receiving a raw list of
-	// 		 zapscript objects
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return zapScriptModels.ZapScript{}, err

@@ -97,7 +97,7 @@ func (p *Platform) SetDB(uidMap map[string]string, textMap map[string]string) {
 }
 
 func (p *Platform) Id() string {
-	return "mister"
+	return platforms.PlatformIDMister
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {

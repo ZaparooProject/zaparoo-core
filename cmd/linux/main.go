@@ -23,9 +23,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
@@ -36,15 +37,12 @@ import (
 	"syscall"
 )
 
-// home: /userdata/system
-// TODO: how to we run on startup? https://wiki.batocera.org/launch_a_script
-
 func main() {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	pl := &batocera.Platform{}
+	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
 	doInstall := flag.Bool("install", false, "configure system for zaparoo")
@@ -53,9 +51,6 @@ func main() {
 
 	flags.Pre(pl)
 
-	// TODO: i think batocera uses a read-only root image, so these may not work or stick
-	//       everything runs as root so udev rules won't be necessary, but might be an
-	//       issue with acr122u readers
 	if *doInstall {
 		err := installer.CLIInstall()
 		if err != nil {
@@ -70,6 +65,11 @@ func main() {
 		} else {
 			os.Exit(0)
 		}
+	}
+
+	if os.Geteuid() == 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
+		os.Exit(1)
 	}
 
 	// only difference with daemon mode right now is no log pretty printing
