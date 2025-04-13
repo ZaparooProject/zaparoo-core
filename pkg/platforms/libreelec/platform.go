@@ -265,7 +265,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		{
 			Id:         "LocalKodi",
 			SystemId:   systemdefs.SystemVideo,
-			Folders:    []string{"/storage/Videos"},
+			Folders:    []string{"/storage/videos"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
 			Launch:     kodiLaunch,
 		},
