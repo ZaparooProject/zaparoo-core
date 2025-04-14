@@ -108,7 +108,9 @@ func (p *Platform) ReadersUpdateHook(_ map[string]*readers.Reader) error {
 }
 
 func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{}
+	return []string{
+		"/storage",
+	}
 }
 
 func (p *Platform) ZipsAsDirs() bool {
@@ -265,7 +267,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		{
 			Id:         "LocalKodi",
 			SystemId:   systemdefs.SystemVideo,
-			Folders:    []string{"/storage/videos"},
+			Folders:    []string{"videos"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
 			Launch:     kodiLaunch,
 		},
