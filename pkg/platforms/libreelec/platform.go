@@ -21,11 +21,8 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package libreelec
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,63 +210,14 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
-type KodiPlayerOpenItemParams struct {
-	File string `json:"file"`
-}
-
-type KodiPlayerOpenParams struct {
-	Item KodiPlayerOpenItemParams `json:"item"`
-}
-
-type KodiLaunchRequest struct {
-	JsonRPC string               `json:"jsonrpc"`
-	ID      int                  `json:"id"`
-	Method  string               `json:"method"`
-	Params  KodiPlayerOpenParams `json:"params"`
-}
-
-func kodiLaunch(cfg *config.Instance, path string) error {
-	req := KodiLaunchRequest{
-		JsonRPC: "2.0",
-		ID:      1,
-		Method:  "Player.Open",
-		Params: KodiPlayerOpenParams{
-			Item: KodiPlayerOpenItemParams{
-				File: path,
-			},
-		},
-	}
-
-	reqJson, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	kodiURL := "http://localhost:8080/jsonrpc"
-	kodiReq, err := http.NewRequest("POST", kodiURL, bytes.NewBuffer(reqJson))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	kodiReq.Header.Set("Content-Type", "application/json")
-	kodiReq.Header.Set("Accept", "application/json")
-
-	client := &http.Client{}
-	_, err = client.Do(kodiReq)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-
-	return nil
-}
-
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			Id:         "LocalKodi",
+			Id:         "KodilLocal",
 			SystemId:   systemdefs.SystemVideo,
 			Folders:    []string{"videos"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
-			Launch:     kodiLaunch,
+			Launch:     kodiLaunchRequest,
 		},
 		{
 			Id:            "Generic",
