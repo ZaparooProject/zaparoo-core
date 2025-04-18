@@ -202,6 +202,10 @@ const (
 	SystemChip8   = "Chip8"
 	SystemIOS     = "iOS"
 	SystemVideo   = "Video"
+	SystemAudio   = "Audio"
+	SystemMovie   = "Movie"
+	SystemTV      = "TV"
+	SystemMusic   = "Music"
 	SystemGroovy  = "Groovy"
 )
 
