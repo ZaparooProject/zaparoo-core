@@ -213,7 +213,7 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			Id:         "KodilLocal",
+			Id:         "KodiLocal",
 			SystemId:   systemdefs.SystemVideo,
 			Folders:    []string{"videos"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
