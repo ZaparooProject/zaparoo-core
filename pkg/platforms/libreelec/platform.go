@@ -48,6 +48,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 )
 
+const (
+	SchemeKodiMovie = "kodi.movie"
+	SchemeKodiTV    = "kodi.tv"
+)
+
 type Platform struct {
 	tempDir string
 }
@@ -218,6 +223,13 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			Folders:    []string{"videos"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
 			Launch:     kodiLaunchRequest,
+		},
+		{
+			Id:       "KodiMovie",
+			SystemId: systemdefs.SystemMovie,
+			Schemes:  []string{SchemeKodiMovie},
+			Launch:   kodiLaunchMovieRequest,
+			Scanner:  kodiScanMovies,
 		},
 		{
 			Id:            "Generic",
