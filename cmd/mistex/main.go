@@ -49,7 +49,7 @@ Description=Zaparoo Core service
 [Service]
 Type=forking
 Restart=no
-ExecStart=/media/fat/Scripts/zaparoo.sh -service start
+ExecStart=/media/fat/Scripts/zaparoo_service -service start
 
 [Install]
 WantedBy=multi-user.target

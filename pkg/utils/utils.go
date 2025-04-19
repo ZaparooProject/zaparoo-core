@@ -22,6 +22,7 @@ package utils
 
 import (
 	"archive/zip"
+	"bufio"
 	"crypto/md5"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -205,4 +206,30 @@ func RandSeq(n int) string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+func YesNoPrompt(label string, def bool) bool {
+	choices := "Y/n"
+	if !def {
+		choices = "y/N"
+	}
+
+	r := bufio.NewReader(os.Stdin)
+	var s string
+
+	for {
+		_, _ = fmt.Fprintf(os.Stderr, "%s [%s] ", label, choices)
+		s, _ = r.ReadString('\n')
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return def
+		}
+		s = strings.ToLower(s)
+		if s == "y" || s == "yes" {
+			return true
+		}
+		if s == "n" || s == "no" {
+			return false
+		}
+	}
 }
