@@ -7,11 +7,19 @@ import (
 	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
+	"time"
 )
 
 const apiURL = "http://localhost:1234"
 
-func apiRequest(path string, body string) ([]byte, error) {
+func apiRequest(path string, body string, timeout time.Duration) ([]byte, error) {
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
 	var kodiReq *http.Request
 	var err error
 	if body != "" {
@@ -26,7 +34,6 @@ func apiRequest(path string, body string) ([]byte, error) {
 		}
 	}
 
-	client := &http.Client{}
 	resp, err := client.Do(kodiReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
@@ -49,17 +56,17 @@ func apiRequest(path string, body string) ([]byte, error) {
 }
 
 func apiEmuKill() error {
-	_, err := apiRequest("/emukill", "")
+	_, err := apiRequest("/emukill", "", 1*time.Second)
 	return err
 }
 
 func apiLaunch(path string) error {
-	_, err := apiRequest("/launch", path)
+	_, err := apiRequest("/launch", path, 0)
 	return err
 }
 
 func apiNotify(msg string) error {
-	_, err := apiRequest("/notify", msg)
+	_, err := apiRequest("/notify", msg, 0)
 	return err
 }
 
@@ -92,7 +99,7 @@ type APIRunningGameResponse struct {
 }
 
 func apiRunningGame() (APIRunningGameResponse, bool, error) {
-	resp, err := apiRequest("/runningGame", "")
+	resp, err := apiRequest("/runningGame", "", 0)
 	if err != nil {
 		return APIRunningGameResponse{}, false, err
 	}

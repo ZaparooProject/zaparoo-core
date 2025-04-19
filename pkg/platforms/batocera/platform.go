@@ -168,7 +168,17 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 }
 
 func (p *Platform) KillLauncher() error {
-	return apiEmuKill()
+	tries := 0
+	maxTries := 10
+	for tries < maxTries {
+		log.Debug().Msgf("trying to kill launcher: %d", tries+1)
+		err := apiEmuKill()
+		if err != nil {
+			log.Error().Msgf("error killing launcher: %s", err)
+		}
+		tries++
+	}
+	return nil
 }
 
 func (p *Platform) GetActiveLauncher() string {
