@@ -40,3 +40,9 @@ tasks:
           DOCKER_ARCH: amd64
           IMAGE_NAME: zaparoo/linux-amd64-build
           APP_BIN: zaparoo
+
+  deploy-arm64:
+    cmds:
+      - task: build-arm64
+      - scp _build/batocera_arm64/zaparoo root@${BATOCERA_IP}:/userdata/system/zaparoo
+      - ssh root@${BATOCERA_IP} /userdata/system/zaparoo -service restart

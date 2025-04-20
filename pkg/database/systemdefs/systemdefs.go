@@ -142,7 +142,7 @@ const (
 	SystemAcornAtom      = "AcornAtom"
 	SystemAcornElectron  = "AcornElectron"
 	SystemAliceMC10      = "AliceMC10"
-	SystemAmiga          = "Amiga"
+	SystemAmiga          = "Amiga" // TODO: Amiga1200/500/etc.
 	SystemAmstrad        = "Amstrad"
 	SystemAmstradPCW     = "AmstradPCW"
 	SystemApogee         = "Apogee"
