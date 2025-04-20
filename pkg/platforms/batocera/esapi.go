@@ -99,7 +99,10 @@ type APIRunningGameResponse struct {
 }
 
 func apiRunningGame() (APIRunningGameResponse, bool, error) {
-	resp, err := apiRequest("/runningGame", "", 0)
+	// for some reason this is more accurate if we do a fake request first
+	_, _ = apiRequest("/runningGame", "", 500*time.Millisecond)
+
+	resp, err := apiRequest("/runningGame", "", 1*time.Second)
 	if err != nil {
 		return APIRunningGameResponse{}, false, err
 	}

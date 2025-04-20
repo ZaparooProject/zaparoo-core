@@ -1,6 +1,7 @@
 package batocera
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -172,15 +173,25 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 func (p *Platform) KillLauncher() error {
 	tries := 0
 	maxTries := 10
+
 	for tries < maxTries {
-		log.Debug().Msgf("trying to kill launcher: %d", tries+1)
+		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
 		err := apiEmuKill()
-		if err != nil {
-			log.Error().Msgf("error killing launcher: %s", err)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
+
+		_, running, err := apiRunningGame()
+		if err != nil {
+			return err
+		} else if !running {
+			return nil
+		}
+
 		tries++
 	}
-	return nil
+
+	return fmt.Errorf("failed to kill launcher")
 }
 
 func (p *Platform) GetActiveLauncher() string {
@@ -293,6 +304,19 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 
 	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
 		return errors.New("file not allowed: " + path)
+	}
+
+	// exit current media if one is running
+	_, running, err := apiRunningGame()
+	if err != nil {
+		return err
+	} else if running {
+		log.Info().Msg("exiting current media")
+		err = p.KillLauncher()
+		if err != nil {
+			return err
+		}
+		time.Sleep(2500 * time.Millisecond)
 	}
 
 	log.Info().Msgf("launching file with %s: %s", launcher.Id, path)
