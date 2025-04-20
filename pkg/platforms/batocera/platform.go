@@ -8,7 +8,6 @@ import (
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
 	"github.com/bendahl/uinput"
 	"github.com/wizzomafizzo/mrext/pkg/input"
 	"io"
@@ -34,6 +33,9 @@ const (
 	AssetsDir            = "assets"
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
+	HomeDir              = "/userdata/system"
+	DataDir              = HomeDir + "/.local/share/" + config.AppName
+	ConfigDir            = HomeDir + "/.config/" + config.AppName
 )
 
 type Platform struct {
@@ -148,15 +150,15 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
-	return filepath.Join(xdg.DataHome, config.AppName)
+	return DataDir
 }
 
 func (p *Platform) LogDir() string {
-	return filepath.Join(xdg.DataHome, config.AppName)
+	return DataDir
 }
 
 func (p *Platform) ConfigDir() string {
-	return filepath.Join(xdg.ConfigHome, config.AppName)
+	return ConfigDir
 }
 
 func (p *Platform) TempDir() string {
