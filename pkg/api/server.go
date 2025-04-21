@@ -45,6 +45,7 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 	// settings
 	models.MethodSettings:       methods.HandleSettings,
 	models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
+	models.MethodSettingsReload: methods.HandleSettingsReload,
 	// systems
 	models.MethodSystems: methods.HandleSystems,
 	// mappings
@@ -62,7 +63,7 @@ var methodMap = map[string]func(requests.RequestEnv) (any, error){
 func handleRequest(env requests.RequestEnv, req models.RequestObject) (any, error) {
 	log.Debug().Interface("request", req).Msg("received request")
 
-	fn, ok := methodMap[req.Method]
+	fn, ok := methodMap[strings.ToLower(req.Method)]
 	if !ok {
 		return nil, errors.New("unknown method")
 	}

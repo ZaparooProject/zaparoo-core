@@ -24,6 +24,7 @@ const (
 	MethodMediaSearch    = "media.search"
 	MethodSettings       = "settings"
 	MethodSettingsUpdate = "settings.update"
+	MethodSettingsReload = "settings.reload"
 	MethodClients        = "clients"
 	MethodClientsNew     = "clients.new"
 	MethodClientsDelete  = "clients.delete"

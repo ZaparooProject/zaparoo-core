@@ -2,10 +2,13 @@ package methods
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
+	"path/filepath"
 )
 
 func HandleSettings(env requests.RequestEnv) (any, error) {
@@ -29,6 +32,25 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 	}
 
 	return resp, nil
+}
+
+func HandleSettingsReload(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received settings reload request")
+
+	err := env.Config.Load()
+	if err != nil {
+		log.Error().Err(err).Msg("error loading settings")
+		return nil, errors.New("error loading settings")
+	}
+
+	mapDir := filepath.Join(env.Platform.DataDir(), platforms.MappingsDir)
+	err = env.Config.LoadMappings(mapDir)
+	if err != nil {
+		log.Error().Err(err).Msg("error loading mappings")
+		return nil, errors.New("error loading mappings")
+	}
+
+	return nil, nil
 }
 
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
