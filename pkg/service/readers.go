@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"strings"
 	"time"
 
@@ -43,6 +42,11 @@ func shouldExit(
 	return true
 }
 
+type toConnectDevice struct {
+	connectionString string
+	device           config.ReadersConnect
+}
+
 func connectReaders(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -50,38 +54,39 @@ func connectReaders(
 	iq chan<- readers.Scan,
 ) error {
 	rs := st.ListReaders()
-	var toConnect []string
-
-	// TODO: this needs to gather the final list of reader paths, resolve any
-	// symlinks, remove duplicates, and then connect to them
+	var toConnect []toConnectDevice
+	toConnectStrs := func() []string {
+		var tc []string
+		for _, device := range toConnect {
+			tc = append(tc, device.connectionString)
+		}
+		return tc
+	}
 
 	for _, device := range cfg.Readers().Connect {
-		connStr := device.Driver + ":" + device.Path
-		if !utils.Contains(rs, connStr) && !utils.Contains(toConnect, connStr) {
+		if !utils.Contains(rs, device.ConnectionString()) &&
+			!utils.Contains(toConnectStrs(), device.ConnectionString()) {
 			log.Debug().Msgf("config device not connected, adding: %s", device)
-			toConnect = append(toConnect, connStr)
+			toConnect = append(toConnect, toConnectDevice{
+				connectionString: device.ConnectionString(),
+				device:           device,
+			})
 		}
 	}
 
 	// user defined readers
 	for _, device := range toConnect {
-		if _, ok := st.GetReader(device); !ok {
-			ps := strings.SplitN(device, ":", 2)
-			if len(ps) != 2 {
-				return errors.New("invalid device string")
-			}
-
-			rt := ps[0]
-
+		if _, ok := st.GetReader(device.connectionString); !ok {
+			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {
 				ids := r.Ids()
 				if utils.Contains(ids, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
-					err := r.Open(device, iq)
+					err := r.Open(device.device, iq)
 					if err != nil {
 						log.Error().Msgf("error opening reader: %s", err)
 					} else {
-						st.SetReader(device, r)
+						st.SetReader(device.connectionString, r)
 						log.Info().Msgf("opened reader: %s", device)
 						break
 					}
@@ -95,7 +100,18 @@ func connectReaders(
 		for _, r := range pl.SupportedReaders(cfg) {
 			detect := r.Detect(st.ListReaders())
 			if detect != "" {
-				err := r.Open(detect, iq)
+				ps := strings.SplitN(detect, ":", 2)
+				if len(ps) != 2 {
+					log.Error().Msgf("invalid auto-detect string: %s", detect)
+					continue
+				}
+
+				device := config.ReadersConnect{
+					Driver: ps[0],
+					Path:   ps[1],
+				}
+
+				err := r.Open(device, iq)
 				if err != nil {
 					log.Error().Msgf("error opening detected reader %s: %s", detect, err)
 				}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,8 +54,13 @@ type ReadersScan struct {
 }
 
 type ReadersConnect struct {
-	Driver string `toml:"driver"`
-	Path   string `toml:"path,omitempty"`
+	Driver   string `toml:"driver"`
+	Path     string `toml:"path,omitempty"`
+	IDSource string `toml:"id_source,omitempty"`
+}
+
+func (r ReadersConnect) ConnectionString() string {
+	return fmt.Sprintf("%s:%s", r.Driver, r.Path)
 }
 
 type Systems struct {

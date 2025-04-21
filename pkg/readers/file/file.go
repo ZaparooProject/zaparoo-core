@@ -19,7 +19,7 @@ const TokenType = "file"
 
 type Reader struct {
 	cfg     *config.Instance
-	device  string
+	device  config.ReadersConnect
 	path    string
 	polling bool
 }
@@ -34,17 +34,12 @@ func (r *Reader) Ids() []string {
 	return []string{"file"}
 }
 
-func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
-	ps := strings.SplitN(device, ":", 2)
-	if len(ps) != 2 {
-		return errors.New("invalid device string: " + device)
+func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+	if !utils.Contains(r.Ids(), device.Driver) {
+		return errors.New("invalid reader id: " + device.Driver)
 	}
 
-	if !utils.Contains(r.Ids(), ps[0]) {
-		return errors.New("invalid reader id: " + ps[0])
-	}
-
-	path := ps[1]
+	path := device.Path
 
 	if !filepath.IsAbs(path) {
 		return errors.New("invalid device path, must be absolute")
@@ -82,7 +77,7 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 			if err != nil {
 				// TODO: have a max retries?
 				iq <- readers.Scan{
-					Source: r.device,
+					Source: r.device.ConnectionString(),
 					Error:  err,
 				}
 				continue
@@ -95,7 +90,7 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 				log.Debug().Msg("file is empty, removing token")
 				token = nil
 				iq <- readers.Scan{
-					Source: r.device,
+					Source: r.device.ConnectionString(),
 					Token:  nil,
 				}
 				continue
@@ -114,12 +109,12 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 				Text:     text,
 				Data:     hex.EncodeToString(contents),
 				ScanTime: time.Now(),
-				Source:   r.device,
+				Source:   r.device.ConnectionString(),
 			}
 
 			log.Debug().Msgf("new token: %s", token.Text)
 			iq <- readers.Scan{
-				Source: r.device,
+				Source: r.device.ConnectionString(),
 				Token:  token,
 			}
 		}
@@ -138,7 +133,7 @@ func (r *Reader) Detect(connected []string) string {
 }
 
 func (r *Reader) Device() string {
-	return r.device
+	return r.device.ConnectionString()
 }
 
 func (r *Reader) Connected() bool {
