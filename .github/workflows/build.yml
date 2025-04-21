@@ -33,10 +33,6 @@ jobs:
           - mac
           - batocera
           - linux
-          - bazzite
-          - chimeraos
-          - libreelec
-          - recalbox
         arch:
           - amd64
           - arm64
@@ -47,6 +43,8 @@ jobs:
             arch: arm
           - platform: mistex
             arch: arm64
+          - platform: batocera
+            arch: arm
     steps:
       - uses: actions/checkout@v4
       - id: zaparooapprel
