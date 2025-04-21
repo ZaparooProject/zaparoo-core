@@ -132,7 +132,7 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 
 	log.Debug().Msgf("looking up core name: %s", name)
 
-	for _, mapping := range tr.NameMap {
+	for i, mapping := range tr.NameMap {
 		if !strings.EqualFold(mapping.CoreName, name) {
 			continue
 		} else {
@@ -141,7 +141,7 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 
 		if mapping.ArcadeName != "" {
 			log.Debug().Msgf("arcade name: %s", mapping.ArcadeName)
-			return &mapping
+			return &tr.NameMap[i]
 		}
 
 		_, err := systemdefs.LookupSystem(name)
@@ -151,7 +151,7 @@ func (tr *Tracker) LookupCoreName(name string) *NameMapping {
 		}
 
 		log.Info().Msgf("found mapping: %s -> %s", name, mapping.Name)
-		return &mapping
+		return &tr.NameMap[i]
 	}
 
 	return nil
