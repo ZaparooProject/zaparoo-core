@@ -23,11 +23,12 @@ package libreelec
 import (
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
@@ -43,6 +44,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+)
+
+const (
+	SchemeKodiMovie = "kodi.movie"
+	SchemeKodiTV    = "kodi.tv"
 )
 
 type Platform struct {
@@ -102,7 +110,9 @@ func (p *Platform) ReadersUpdateHook(_ map[string]*readers.Reader) error {
 }
 
 func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{}
+	return []string{
+		"/storage",
+	}
 }
 
 func (p *Platform) ZipsAsDirs() bool {
@@ -207,6 +217,20 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
+		{
+			Id:         "KodiLocal",
+			SystemId:   systemdefs.SystemVideo,
+			Folders:    []string{"videos"},
+			Extensions: []string{".avi", ".mp4", ".mkv"},
+			Launch:     kodiLaunchRequest,
+		},
+		{
+			Id:       "KodiMovie",
+			SystemId: systemdefs.SystemMovie,
+			Schemes:  []string{SchemeKodiMovie},
+			Launch:   kodiLaunchMovieRequest,
+			Scanner:  kodiScanMovies,
+		},
 		{
 			Id:            "Generic",
 			Extensions:    []string{".sh"},
