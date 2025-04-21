@@ -173,14 +173,24 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 
 	run := func(action zapScriptModels.ZapScript) {
 		log.Info().Msgf("running picker selection: %v", action)
-		ps, err := json.Marshal(action)
+
+		zsrp := models.RunScriptParams{
+			ZapScript: action.ZapScript,
+			Name:      action.Name,
+			Cmds:      action.Cmds,
+			Unsafe:    pickerArgs.Unsafe,
+		}
+
+		ps, err := json.Marshal(zsrp)
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
+
 		_, err = client.LocalClient(cfg, models.MethodRunScript, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
+
 		app.Stop()
 	}
 

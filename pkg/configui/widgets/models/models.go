@@ -12,5 +12,5 @@ type PickerArgs struct {
 	Items   []models.ZapScript `json:"items"`
 	Title   string             `json:"title"`
 	Timeout int                `json:"timeout"`
-	Trusted *bool              `json:"trusted"`
+	Unsafe  bool               `json:"unsafe"`
 }

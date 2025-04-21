@@ -12,7 +12,7 @@ import (
 
 // DEPRECATED
 func cmdKey(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
+	if env.Unsafe {
 		return fmt.Errorf("command cannot be run from a remote source")
 	}
 	return pl.KeyboardInput(env.Args)
@@ -73,7 +73,7 @@ func readKeys(keys string) ([]string, error) {
 }
 
 func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
+	if env.Unsafe {
 		return fmt.Errorf("command cannot be run from a remote source")
 	}
 
@@ -98,7 +98,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
 }
 
 func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
+	if env.Unsafe {
 		return fmt.Errorf("command cannot be run from a remote source")
 	}
 

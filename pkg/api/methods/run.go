@@ -78,6 +78,10 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 		if !hasArg {
 			return nil, ErrInvalidParams
 		}
+
+		if params.Unsafe {
+			t.Unsafe = true
+		}
 	} else {
 		log.Debug().Msgf("could not unmarshal run params, trying string: %s", env.Params)
 
@@ -113,11 +117,21 @@ func HandleRunScript(env requests.RequestEnv) (any, error) {
 
 	var t tokens.Token
 
-	var zs zapScriptModels.ZapScript
-	err := json.Unmarshal(env.Params, &zs)
+	var zsrp models.RunScriptParams
+	err := json.Unmarshal(env.Params, &zsrp)
 	if err != nil {
-		log.Error().Msgf("error unmarshalling zapscript: %s", err)
+		log.Error().Msgf("error unmarshalling run zapscript: %s", err)
 		return nil, ErrInvalidParams
+	}
+
+	if zsrp.Unsafe {
+		t.Unsafe = true
+	}
+
+	zs := zapScriptModels.ZapScript{
+		ZapScript: zsrp.ZapScript,
+		Name:      zsrp.Name,
+		Cmds:      zsrp.Cmds,
 	}
 
 	if zs.ZapScript != 1 {
