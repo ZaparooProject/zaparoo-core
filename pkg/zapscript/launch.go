@@ -77,16 +77,22 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 	if len(ps) == 2 {
 		systemId, query := ps[0], ps[1]
 
-		system, err := systemdefs.LookupSystem(systemId)
-		if err != nil {
-			return err
-		} else if system == nil {
-			return fmt.Errorf("system not found: %s", systemId)
+		var systems []systemdefs.System
+		if strings.EqualFold(systemId, "all") {
+			systems = systemdefs.AllSystems()
+		} else {
+			system, err := systemdefs.LookupSystem(systemId)
+			if err != nil {
+				return err
+			} else if system == nil {
+				return fmt.Errorf("system not found: %s", systemId)
+			}
+			systems = []systemdefs.System{*system}
 		}
 
 		query = strings.ToLower(query)
 
-		res, err := gamesdb.SearchNamesGlob(pl, []systemdefs.System{*system}, query)
+		res, err := gamesdb.SearchNamesGlob(pl, systems, query)
 		if err != nil {
 			return err
 		}
