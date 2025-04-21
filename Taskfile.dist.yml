@@ -1,7 +1,8 @@
 version: "3"
 
 env:
-  APP_VERSION: "2.3.0-dev"
+  APP_VERSION:
+    sh: echo -n "$(git rev-parse --short HEAD)-dev"
   GO111MODULE: on
   GOPROXY: https://goproxy.io,direct
   CGO_ENABLED: 1
