@@ -20,7 +20,7 @@ tasks:
           DOCKER_ARCH: arm/v7
           IMAGE_NAME: zaparoo/mister-arm-build
           APP_BIN: zaparoo.sh
-          EXEC: build.sh
+          EXEC: build.sh "{{.APP_VERSION}}"
 
   shell-arm:
     vars:

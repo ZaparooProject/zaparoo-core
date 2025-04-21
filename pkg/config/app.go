@@ -2,8 +2,9 @@ package config
 
 import "time"
 
+var AppVersion = "DEVELOPMENT"
+
 const (
-	AppVersion        = "2.2.0"
 	AppName           = "zaparoo"
 	GamesDbFile       = "games.db"
 	TapToDbFile       = "tapto.db"

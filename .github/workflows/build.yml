@@ -102,7 +102,7 @@ jobs:
         run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=${{matrix.platform}}-${{matrix.arch}} --cache-from type=gha,scope=${{matrix.platform}}-${{matrix.arch}}\" > .env
         if: matrix.platform != 'windows' && matrix.platform != 'mac'
       - name: Build
-        run: task ${{matrix.platform}}:build-${{matrix.arch}}
+        run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Add release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
