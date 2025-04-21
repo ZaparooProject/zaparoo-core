@@ -23,7 +23,9 @@ tasks:
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
       - rm -f {{.ZIP_FULLPATH}}
-      - zip -j {{.ZIP_FULLPATH}} {{.BUILD_DIR}}/{{.APP_BIN}}
+      - cp LICENSE {{.BUILD_DIR}}/LICENSE.txt
+      - curl -L "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/{{.PLATFORM}}.md" -o {{.BUILD_DIR}}/README.txt
+      - zip -j {{.ZIP_FULLPATH}} {{.BUILD_DIR}}/{{.APP_BIN}} {{.BUILD_DIR}}/LICENSE.txt {{.BUILD_DIR}}/README.txt
 
   run:
     internal: true
