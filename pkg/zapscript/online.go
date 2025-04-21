@@ -27,6 +27,7 @@ var AcceptedMimeTypes = []string{
 }
 
 func maybeRemoteZapScript(s string) bool {
+	s = strings.ToLower(s)
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 		return true
 	} else {
