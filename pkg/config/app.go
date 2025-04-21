@@ -11,5 +11,6 @@ const (
 	LogFile           = "core.log"
 	PidFile           = "core.pid"
 	CfgFile           = "config.toml"
+	UserDir           = "user"
 	ApiRequestTimeout = 30 * time.Second
 )

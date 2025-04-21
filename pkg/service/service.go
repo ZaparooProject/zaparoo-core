@@ -224,29 +224,37 @@ func Start(
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// TODO: define the notifications chan here instead of in state
-	st, ns := state.NewState(pl)
+	st, ns := state.NewState(pl) // global state, notification queue
 	// TODO: convert this to a *token channel
-	itq := make(chan tokens.Token)
-	lsq := make(chan *tokens.Token)
-	plq := make(chan *playlists.Playlist)
+	itq := make(chan tokens.Token)        // input token queue
+	lsq := make(chan *tokens.Token)       // launch software queue
+	plq := make(chan *playlists.Playlist) // playlist queue
 
-	log.Info().Msg("running platform pre start")
-	err := pl.StartPre(cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("platform start pre error")
-		return nil, err
+	if _, ok := platforms.HasUserDir(); ok {
+		log.Info().Msg("using user directory for storage")
 	}
 
+	log.Info().Msg("creating platform directories")
 	dirs := []string{
-		pl.DataDir(),
+		pl.ConfigDir(),
+		pl.LogDir(),
 		pl.TempDir(),
+		pl.DataDir(),
 		filepath.Join(pl.DataDir(), platforms.MappingsDir),
+		filepath.Join(pl.DataDir(), platforms.AssetsDir),
 	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	log.Info().Msg("running platform pre start")
+	err := pl.StartPre(cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("platform start pre error")
+		return nil, err
 	}
 
 	log.Info().Msg("opening user database")
