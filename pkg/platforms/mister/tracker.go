@@ -125,32 +125,36 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.NameMap = nameMap
 }
 
-func (tr *Tracker) LookupCoreName(name string) (NameMapping, bool) {
+func (tr *Tracker) LookupCoreName(name string) *NameMapping {
+	if name == "" {
+		return nil
+	}
+
 	log.Debug().Msgf("looking up core name: %s", name)
 
 	for _, mapping := range tr.NameMap {
-		if len(mapping.CoreName) != len(name) {
-			continue
-		}
-
 		if !strings.EqualFold(mapping.CoreName, name) {
 			continue
-		} else if mapping.ArcadeName != "" {
+		} else {
+			log.Debug().Msgf("found mapping: %s -> %s", name, mapping.Name)
+		}
+
+		if mapping.ArcadeName != "" {
 			log.Debug().Msgf("arcade name: %s", mapping.ArcadeName)
-			return mapping, true
+			return &mapping
 		}
 
 		_, err := systemdefs.LookupSystem(name)
 		if err != nil {
-			log.Error().Msgf("error getting system %s", err)
+			log.Error().Msgf("error getting system: %s", err)
 			continue
 		}
 
 		log.Info().Msgf("found mapping: %s -> %s", name, mapping.Name)
-		return mapping, true
+		return &mapping
 	}
 
-	return NameMapping{}, false
+	return nil
 }
 
 func (tr *Tracker) stopCore() bool {
@@ -205,7 +209,7 @@ func (tr *Tracker) LoadCore() {
 	}
 
 	// set arcade core details
-	if result, ok := tr.LookupCoreName(coreName); ok && result.ArcadeName != "" {
+	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
 		err := mister.SetActiveGame(result.CoreName)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
