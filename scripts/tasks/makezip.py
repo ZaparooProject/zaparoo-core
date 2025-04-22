@@ -4,6 +4,8 @@ import sys
 import urllib.request
 import zipfile
 
+# IMPORTANT: This script must be run from the root of the repo!
+
 base_url: str = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
 platform_docs: dict[str, str] = {
     "batocera": "batocera.mdx",
@@ -17,6 +19,9 @@ platform_docs: dict[str, str] = {
     "recalbox": "recalbox.mdx",
     "steamos": "steamos.md",
     "windows": "windows/index.md"
+}
+extra_files: dict[str, list[str]] = {
+    "batocera": ["cmd/batocera/conf/zaparoo_service"]
 }
 
 
@@ -80,3 +85,8 @@ if __name__ == "__main__":
         dist.write(app_path, arcname=os.path.basename(app_path))
         dist.write(license_path, arcname=os.path.basename(license_path))
         dist.write(readme_path, arcname=os.path.basename(readme_path))
+
+        if platform in extra_files:
+            for file in extra_files[platform]:
+                shutil.copy(file, build_dir)
+                dist.write(file, arcname=os.path.basename(file))
