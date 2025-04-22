@@ -67,7 +67,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 	gpd, err := uinput.CreateGamepad(
 		"/dev/uinput",
-		[]byte("zaparoo"),
+		[]byte("Zaparoo"),
 		0x1234,
 		0x5678,
 	)
