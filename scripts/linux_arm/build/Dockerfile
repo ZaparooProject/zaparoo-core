@@ -1,8 +1,8 @@
-FROM arm64v8/debian:bookworm
+FROM arm32v7/debian:bookworm
 
 RUN apt-get update -y && apt-get upgrade -y
 RUN apt-get install ca-certificates openssl -y && update-ca-certificates
-RUN apt-get install build-essential git curl -y && \
+RUN apt-get install build-essential git -y && \
     apt-get install libusb-dev libtool autoconf automake pkgconf -y
 
 COPY --from=golang:1.23 /usr/local/go/ /usr/local/go/
@@ -19,8 +19,8 @@ RUN cd /internal/libnfc && \
     make -j "$(nproc)" && \
     make install
 
-# install task
-RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+# manually build arm32 version of task
+RUN env GOBIN=/usr/local/go/bin go install github.com/go-task/task/v3/cmd/task@latest
 
 # drop permissions on output files
 ARG UID=1000

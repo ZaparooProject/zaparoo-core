@@ -20,22 +20,22 @@ import (
 	"go.bug.st/serial"
 )
 
-type Pn532UartReader struct {
+type PN532UARTReader struct {
 	cfg       *config.Instance
-	device    string
+	device    config.ReadersConnect
 	name      string
 	polling   bool
 	port      serial.Port
 	lastToken *tokens.Token
 }
 
-func NewReader(cfg *config.Instance) *Pn532UartReader {
-	return &Pn532UartReader{
+func NewReader(cfg *config.Instance) *PN532UARTReader {
+	return &PN532UARTReader{
 		cfg: cfg,
 	}
 }
 
-func (r *Pn532UartReader) Ids() []string {
+func (r *PN532UARTReader) Ids() []string {
 	return []string{"pn532_uart"}
 }
 
@@ -70,17 +70,12 @@ func connect(name string) (serial.Port, error) {
 	return port, nil
 }
 
-func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
-	ps := strings.SplitN(device, ":", 2)
-	if len(ps) != 2 {
-		return errors.New("invalid device string: " + device)
+func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+	if !utils.Contains(r.Ids(), device.Driver) {
+		return errors.New("invalid reader id: " + device.Driver)
 	}
 
-	if !utils.Contains(r.Ids(), ps[0]) {
-		return errors.New("invalid reader id: " + ps[0])
-	}
-
-	name := ps[1]
+	name := device.Path
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(name); err != nil {
@@ -132,7 +127,7 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				if zeroScans == maxZeroScans && r.lastToken != nil {
 					if r.lastToken != nil {
 						iq <- readers.Scan{
-							Source: r.device,
+							Source: r.device.ConnectionString(),
 							Token:  nil,
 						}
 						r.lastToken = nil
@@ -228,12 +223,12 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 				Text:     tagText,
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
-				Source:   r.device,
+				Source:   r.device.ConnectionString(),
 			}
 
 			if !utils.TokensEqual(token, r.lastToken) {
 				iq <- readers.Scan{
-					Source: r.device,
+					Source: r.device.ConnectionString(),
 					Token:  token,
 				}
 			}
@@ -245,7 +240,7 @@ func (r *Pn532UartReader) Open(device string, iq chan<- readers.Scan) error {
 	return nil
 }
 
-func (r *Pn532UartReader) Close() error {
+func (r *PN532UARTReader) Close() error {
 	r.polling = false
 	if r.port != nil {
 		err := r.port.Close()
@@ -260,7 +255,7 @@ func (r *Pn532UartReader) Close() error {
 var serialCacheMu = &sync.RWMutex{}
 var serialBlockList []string
 
-func (r *Pn532UartReader) Detect(connected []string) string {
+func (r *PN532UARTReader) Detect(connected []string) string {
 	ports, err := utils.GetSerialDeviceList()
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get serial ports")
@@ -340,18 +335,18 @@ func (r *Pn532UartReader) Detect(connected []string) string {
 	return ""
 }
 
-func (r *Pn532UartReader) Device() string {
-	return r.device
+func (r *PN532UARTReader) Device() string {
+	return r.device.ConnectionString()
 }
 
-func (r *Pn532UartReader) Connected() bool {
+func (r *PN532UARTReader) Connected() bool {
 	return r.polling && r.port != nil
 }
 
-func (r *Pn532UartReader) Info() string {
+func (r *PN532UARTReader) Info() string {
 	return "PN532 UART (" + r.name + ")"
 }
 
-func (r *Pn532UartReader) Write(text string) (*tokens.Token, error) {
+func (r *PN532UARTReader) Write(text string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }

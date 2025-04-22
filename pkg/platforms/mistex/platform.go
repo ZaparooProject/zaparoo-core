@@ -190,6 +190,9 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return mister.DataDir
 }
 
@@ -198,6 +201,9 @@ func (p *Platform) LogDir() string {
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return mister.DataDir
 }
 

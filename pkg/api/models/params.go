@@ -1,5 +1,7 @@
 package models
 
+import "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+
 type SearchParams struct {
 	Query      string    `json:"query"`
 	Systems    *[]string `json:"systems"`
@@ -11,10 +13,18 @@ type MediaIndexParams struct {
 }
 
 type RunParams struct {
-	Type *string `json:"type"`
-	UID  *string `json:"uid"`
-	Text *string `json:"text"`
-	Data *string `json:"data"`
+	Type   *string `json:"type"`
+	UID    *string `json:"uid"`
+	Text   *string `json:"text"`
+	Data   *string `json:"data"`
+	Unsafe bool    `json:"unsafe"`
+}
+
+type RunScriptParams struct {
+	ZapScript int                   `json:"zapscript"`
+	Name      *string               `json:"name"`
+	Cmds      []models.ZapScriptCmd `json:"cmds"`
+	Unsafe    bool                  `json:"unsafe"`
 }
 
 type AddMappingParams struct {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,8 +54,13 @@ type ReadersScan struct {
 }
 
 type ReadersConnect struct {
-	Driver string `toml:"driver"`
-	Path   string `toml:"path,omitempty"`
+	Driver   string `toml:"driver"`
+	Path     string `toml:"path,omitempty"`
+	IDSource string `toml:"id_source,omitempty"`
+}
+
+func (r ReadersConnect) ConnectionString() string {
+	return fmt.Sprintf("%s:%s", r.Driver, r.Path)
 }
 
 type Systems struct {
@@ -433,35 +439,50 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 		return err
 	}
 
-	mapFiles, err := os.ReadDir(mappingsDir)
+	var mapFiles []string
+
+	err = filepath.WalkDir(
+		mappingsDir,
+		func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			if strings.ToLower(filepath.Ext(d.Name())) != ".toml" {
+				return nil
+			}
+
+			mapFiles = append(mapFiles, path)
+
+			return nil
+		},
+	)
 	if err != nil {
 		return err
 	}
+	log.Info().Msgf("found %d mapping files", len(mapFiles))
 
 	filesCounts := 0
 	mappingsCount := 0
 
-	for _, mapFile := range mapFiles {
-		if mapFile.IsDir() {
-			continue
-		}
-
-		if filepath.Ext(mapFile.Name()) != ".toml" {
-			continue
-		}
-
-		mapPath := filepath.Join(mappingsDir, mapFile.Name())
+	for _, mapPath := range mapFiles {
 		log.Debug().Msgf("loading mapping file: %s", mapPath)
 
 		data, err := os.ReadFile(mapPath)
 		if err != nil {
-			return err
+			log.Error().Msgf("error reading mapping file: %s", mapPath)
+			continue
 		}
 
 		var newVals Values
 		err = toml.Unmarshal(data, &newVals)
 		if err != nil {
-			return err
+			log.Error().Msgf("error parsing mapping file: %s", mapPath)
+			continue
 		}
 
 		c.vals.Mappings.Entry = append(c.vals.Mappings.Entry, newVals.Mappings.Entry...)

@@ -46,16 +46,6 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(filepath.Join(xdg.ConfigHome, config.AppName), 0755)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -84,14 +74,23 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
@@ -101,10 +100,6 @@ func (p *Platform) TempDir() string {
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return path
-}
-
-func LaunchMenu() error {
-	return nil
 }
 
 func (p *Platform) KillLauncher() error {

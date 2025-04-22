@@ -22,7 +22,6 @@ package chimeraos
 
 import (
 	"errors"
-	"fmt"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"os/exec"
@@ -45,9 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
 )
 
-type Platform struct {
-	tempDir string
-}
+type Platform struct{}
 
 func (p *Platform) Id() string {
 	return platforms.PlatformIDChimeraOS
@@ -63,19 +60,6 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	tempDir, err := os.MkdirTemp("", "zaparoo-")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	p.tempDir = tempDir
-
-	for _, dir := range []string{p.DataDir(), p.LogDir(), p.ConfigDir()} {
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			return fmt.Errorf("failed to create dir: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -84,12 +68,6 @@ func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) e
 }
 
 func (p *Platform) Stop() error {
-	err := os.RemoveAll(p.TempDir())
-	if err != nil {
-		return err
-	}
-	p.tempDir = ""
-
 	return nil
 }
 
@@ -110,30 +88,32 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
 func (p *Platform) TempDir() string {
-	if p.tempDir == "" {
-		log.Warn().Msg("temp dir not set")
-	}
-	return p.tempDir
+	return filepath.Join(os.TempDir(), config.AppName)
 }
 
 func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
-}
-
-func LaunchMenu() error {
-	return nil
 }
 
 func (p *Platform) KillLauncher() error {

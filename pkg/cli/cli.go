@@ -35,6 +35,7 @@ type Flags struct {
 	Config       *bool
 	ShowLoader   *string
 	ShowPicker   *string
+	Reload       *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -94,6 +95,11 @@ func SetupFlags() *Flags {
 			"config",
 			false,
 			"start the text ui to handle zaparoo config",
+		),
+		Reload: flag.Bool(
+			"reload",
+			false,
+			"reload config and mappings from disk",
 		),
 	}
 }
@@ -206,6 +212,15 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 
 		fmt.Println(resp)
 		os.Exit(0)
+	} else if *f.Reload {
+		_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
+		if err != nil {
+			log.Error().Err(err).Msg("error reloading settings")
+			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
 	}
 
 	// clients

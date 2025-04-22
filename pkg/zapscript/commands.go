@@ -140,14 +140,18 @@ func LaunchToken(
 	totalCommands int,
 	currentIndex int,
 ) (error, bool) {
-	var untrusted bool
+	var unsafe bool
 	newText, err := checkLink(cfg, pl, text)
 	if err != nil {
 		log.Error().Err(err).Msgf("error checking link, continuing")
 	} else if newText != "" {
 		log.Info().Msgf("valid zap link, replacing text: %s", newText)
 		text = newText
-		untrusted = true
+		unsafe = true
+	}
+
+	if t.Unsafe {
+		unsafe = true
 	}
 
 	// advanced args
@@ -195,7 +199,7 @@ func LaunchToken(
 			Text:          text,
 			TotalCommands: totalCommands,
 			CurrentIndex:  currentIndex,
-			Untrusted:     untrusted,
+			Unsafe:        unsafe,
 		}
 
 		if f, ok := commandMappings[cmd]; ok {
@@ -229,6 +233,6 @@ func LaunchToken(
 		Text:          text,
 		TotalCommands: totalCommands,
 		CurrentIndex:  currentIndex,
-		Untrusted:     untrusted,
+		Unsafe:        unsafe,
 	}), true
 }

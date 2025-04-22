@@ -40,7 +40,7 @@ type CmdEnv struct {
 	Text          string
 	TotalCommands int
 	CurrentIndex  int
-	Untrusted     bool
+	Unsafe        bool
 }
 
 type ScanResult struct {

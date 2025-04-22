@@ -58,19 +58,6 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	for _, dir := range []string{
-		p.DataDir(),
-		p.LogDir(),
-		p.ConfigDir(),
-		p.TempDir(),
-		filepath.Join(p.DataDir(), AssetsDir),
-	} {
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			return fmt.Errorf("failed to create dir: %w", err)
-		}
-	}
-
 	kbd, err := input.NewKeyboard()
 	if err != nil {
 		return err
@@ -80,7 +67,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 	gpd, err := uinput.CreateGamepad(
 		"/dev/uinput",
-		[]byte("zaparoo"),
+		[]byte("Zaparoo"),
 		0x1234,
 		0x5678,
 	)
@@ -151,14 +138,23 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return DataDir
 }
 
 func (p *Platform) LogDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return DataDir
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return ConfigDir
 }
 
