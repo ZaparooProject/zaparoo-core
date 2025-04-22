@@ -45,10 +45,7 @@ tasks:
       CGO_ENABLED: 0
     cmds:
       - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
-      - rm -f {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip
-      - cp LICENSE {{.BUILD_DIR}}/LICENSE.txt
-      - python3 scripts/tasks/fetchreadme.py {{.PLATFORM}} {{.BUILD_DIR}}
-      - zip -j {{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip {{.BUILD_DIR}}/{{.APP_BIN}} {{.BUILD_DIR}}/LICENSE.txt {{.BUILD_DIR}}/README.txt
+      - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
 
   clean: rm -rf _build
 

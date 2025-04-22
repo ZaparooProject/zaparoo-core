@@ -15,7 +15,6 @@ tasks:
     vars:
       BUILD_NAME: "{{.PLATFORM}}{{if .BUILD_ARCH}}_{{.BUILD_ARCH}}{{end}}"
       BUILD_DIR: "./_build/{{.BUILD_NAME}}"
-      ZIP_FULLPATH: "{{.BUILD_DIR}}/zaparoo-{{.BUILD_NAME}}.zip"
     cmds:
       - task: run
         vars:
@@ -26,10 +25,7 @@ tasks:
           APP_BIN: "{{.APP_BIN}}"
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
-      - rm -f {{.ZIP_FULLPATH}}
-      - cp LICENSE {{.BUILD_DIR}}/LICENSE.txt
-      - python3 scripts/tasks/fetchreadme.py {{.PLATFORM}} {{.BUILD_DIR}}
-      - zip -j {{.ZIP_FULLPATH}} {{.BUILD_DIR}}/{{.APP_BIN}} {{.BUILD_DIR}}/LICENSE.txt {{.BUILD_DIR}}/README.txt
+      - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
 
   run:
     internal: true
