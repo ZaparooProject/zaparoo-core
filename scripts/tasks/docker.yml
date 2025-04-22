@@ -3,6 +3,10 @@ version: "3"
 tasks:
   build-image:
     internal: true
+    sources:
+      - scripts/**/Dockerfile
+    status:
+      - docker image inspect {{.IMAGE_NAME}}
     cmds:
       - docker build --platform linux/{{.ARCH}} --build-arg UID=$UID --build-arg GID=$GID {{default "" .CACHE_ARGS}} -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
 
@@ -24,7 +28,7 @@ tasks:
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
       - rm -f {{.ZIP_FULLPATH}}
       - cp LICENSE {{.BUILD_DIR}}/LICENSE.txt
-      - curl -L "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/{{.PLATFORM}}.md" -o {{.BUILD_DIR}}/README.txt
+      - python3 scripts/tasks/fetchreadme.py {{.PLATFORM}} {{.BUILD_DIR}}
       - zip -j {{.ZIP_FULLPATH}} {{.BUILD_DIR}}/{{.APP_BIN}} {{.BUILD_DIR}}/LICENSE.txt {{.BUILD_DIR}}/README.txt
 
   run:

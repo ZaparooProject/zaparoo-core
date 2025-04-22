@@ -6,8 +6,8 @@ tasks:
     cmds:
       - task: :docker:build-image
         vars:
-          IMAGE_NAME: zaparoo/mister-arm-build
-          DOCKERFILE: "./scripts/mister/build"
+          IMAGE_NAME: zaparoo/linux-arm-build
+          DOCKERFILE: "./scripts/linux_arm/build"
           ARCH: arm/v7
 
   build-arm:
@@ -18,15 +18,14 @@ tasks:
           PLATFORM: mister
           BUILD_ARCH: arm
           DOCKER_ARCH: arm/v7
-          IMAGE_NAME: zaparoo/mister-arm-build
+          IMAGE_NAME: zaparoo/linux-arm-build
           APP_BIN: zaparoo.sh
-          EXEC: build.sh "{{.APP_VERSION}}"
 
   shell-arm:
     vars:
       BUILDCACHE: "{{.BUILD_DIR}}/.go-buildcache"
       GOCACHE: "{{.BUILD_DIR}}/.go-cache"
-      IMAGE_NAME: zaparoo/mister-arm-build
+      IMAGE_NAME: zaparoo/linux-arm-build
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
@@ -37,7 +36,7 @@ tasks:
           PLATFORM: mister
           BUILD_ARCH: arm
           DOCKER_ARCH: arm/v7
-          IMAGE_NAME: zaparoo/mister-arm-build
+          IMAGE_NAME: zaparoo/linux-arm-build
           EXTRA_DOCKER_ARGS: -it
           EXEC: bash
 

@@ -1,10 +1,10 @@
-This is the development repository for the Zaparoo Core software.
+This is the development repository for Zaparoo Core.
 
-Visit [Zaparoo.org](https://zaparoo.org/) for more information about the Zaparoo project and the [Downloads](https://zaparoo.org/) page for links to download Zaparoo Core for your platform.
+Visit [Zaparoo.org](https://zaparoo.org/) for more information about the Zaparoo project or the [Downloads](https://zaparoo.org/downloads/#zaparoo-core) page to download Zaparoo Core for your platform.
 
 ## Contributors
 
-See the [Contributors](https://wiki.zaparoo.org/Contributors) page for a complete list of all contributors to the Zaparoo project. Contributions are welcome and appreciated!
+See the [Contributors](https://zaparoo.org/docs/community/contributors/) page for a complete list of all contributors to the Zaparoo project. Contributions are welcome and appreciated!
 
 <!-- readme: contributors -start -->
 <table>
