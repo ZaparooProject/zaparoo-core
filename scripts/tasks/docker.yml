@@ -30,10 +30,11 @@ tasks:
   run:
     internal: true
     vars:
-      BUILDCACHE: "{{.HOME}}/.cache/go-build"
-      GOCACHE: "{{.HOME}}/go"
+      BUILDCACHE: "{{if eq OS \"windows\"}}{{.LOCALAPPDATA}}\\go-build{{else}}{{.HOME}}/.cache/go-build{{end}}"
+      GOCACHE: "{{if eq OS \"windows\"}}{{.USERPROFILE}}\\go{{else}}{{.HOME}}/go{{end}}"
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - mkdir -p {{.BUILDCACHE}} {{.GOCACHE}}
-      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v {{.BUILDCACHE}}:{{.IMG_BUILDCACHE}} -v {{.GOCACHE}}:{{.IMG_GOCACHE}} -v ${PWD}:/build -e PLATFORM={{.PLATFORM}} -e APP_BIN={{.APP_BIN}} {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}
+      - "{{if eq OS \"windows\"}}cmd /c if not exist \"{{.BUILDCACHE}}\" mkdir \"{{.BUILDCACHE}}\"{{else}}mkdir -p \"{{.BUILDCACHE}}\"{{end}}"
+      - "{{if eq OS \"windows\"}}cmd /c if not exist \"{{.GOCACHE}}\" mkdir \"{{.GOCACHE}}\"{{else}}mkdir -p \"{{.GOCACHE}}\"{{end}}"
+      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v "{{.BUILDCACHE}}:{{.IMG_BUILDCACHE}}" -v "{{.GOCACHE}}:{{.IMG_GOCACHE}}" -v "${PWD}:/build" -e PLATFORM={{.PLATFORM}} -e APP_BIN={{.APP_BIN}} {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}

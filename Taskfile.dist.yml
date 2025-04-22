@@ -8,9 +8,9 @@ env:
   CGO_ENABLED: 1
   CGO_LDFLAGS: -lnfc -lusb
   UID:
-    sh: "{{if eq OS \"windows\"}}powershell echo 1000{{else}}id -u{{end}}"
+    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -u{{end}}"
   GID:
-    sh: "{{if eq OS \"windows\"}}powershell echo 1000{{else}}id -g{{end}}"
+    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -g{{end}}"
 
 dotenv: [".env"]
 
@@ -47,7 +47,7 @@ tasks:
       - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
       - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
 
-  clean: rm -rf _build
+  clean: "{{if eq OS \"windows\"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build"
 
   test: go test ./...
 
@@ -55,4 +55,4 @@ tasks:
     cmds:
       - go test -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out
-      - rm coverage.out
+      - "{{if eq OS \"windows\"}}powershell rm {{else}}rm {{end}} coverage.out"
