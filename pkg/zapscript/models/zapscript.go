@@ -13,6 +13,8 @@ const (
 	ZapScriptCmdPlaylistNext     = "playlist.next"
 	ZapScriptCmdPlaylistPrevious = "playlist.previous"
 	ZapScriptCmdPlaylistGoto     = "playlist.goto"
+	ZapScriptCmdPlaylistPause    = "playlist.pause"
+	ZapScriptCmdPlaylistLoad     = "playlist.load"
 
 	ZapScriptCmdExecute  = "execute"
 	ZapScriptCmdDelay    = "delay"

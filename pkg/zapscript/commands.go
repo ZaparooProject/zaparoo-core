@@ -52,6 +52,8 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	models.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
 	models.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
 	models.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
+	models.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
+	models.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
 
 	models.ZapScriptCmdExecute: cmdExecute,
 	models.ZapScriptCmdDelay:   cmdDelay,

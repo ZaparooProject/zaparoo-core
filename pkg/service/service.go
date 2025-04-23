@@ -110,55 +110,48 @@ func processTokenQueue(
 		select {
 		case pls := <-plq:
 			activePlaylist := st.GetActivePlaylist()
+			launchPlaylist := func() {
+				t := tokens.Token{
+					Text:     pls.Current(),
+					ScanTime: time.Now(),
+					Source:   tokens.SourcePlaylist,
+				}
+				plsc := playlists.PlaylistController{
+					Active: activePlaylist,
+					Queue:  plq,
+				}
+				err := launchToken(platform, cfg, t, db, lsq, plsc)
+				if err != nil {
+					log.Error().Err(err).Msgf("error launching token")
+				}
+			}
 
 			if pls == nil {
+				// playlist is cleared
 				if activePlaylist != nil {
 					log.Info().Msg("clearing active playlist")
 				}
 				st.SetActivePlaylist(nil)
 				continue
 			} else if activePlaylist == nil {
+				// new playlist loaded
 				log.Info().Msg("setting new active playlist, launching token")
 				st.SetActivePlaylist(pls)
-				go func() {
-					t := tokens.Token{
-						Text:     pls.Current(),
-						ScanTime: time.Now(),
-						Source:   tokens.SourcePlaylist,
-					}
-					plsc := playlists.PlaylistController{
-						Active: activePlaylist,
-						Queue:  plq,
-					}
-					err := launchToken(platform, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Err(err).Msgf("error launching token")
-					}
-				}()
+				if pls.Playing {
+					go launchPlaylist()
+				}
 				continue
 			} else {
-				if pls.Current() == activePlaylist.Current() {
+				// active playlist updated
+				if pls.Current() == activePlaylist.Current() && pls.Playing == activePlaylist.Playing {
 					log.Debug().Msg("playlist current token unchanged, skipping")
 					continue
 				}
-
 				log.Info().Msg("updating active playlist, launching token")
 				st.SetActivePlaylist(pls)
-				go func() {
-					t := tokens.Token{
-						Text:     pls.Current(),
-						ScanTime: time.Now(),
-						Source:   tokens.SourcePlaylist,
-					}
-					plsc := playlists.PlaylistController{
-						Active: activePlaylist,
-						Queue:  plq,
-					}
-					err := launchToken(platform, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Err(err).Msgf("error launching token")
-					}
-				}()
+				if pls.Playing {
+					go launchPlaylist()
+				}
 				continue
 			}
 		case t := <-itq:

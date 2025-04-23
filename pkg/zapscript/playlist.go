@@ -42,10 +42,10 @@ func readPlaylistFolder(path string) ([]string, error) {
 	return media, nil
 }
 
-func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) error {
+func loadPlaylist(env platforms.CmdEnv) (*playlists.Playlist, error) {
 	media, err := readPlaylistFolder(env.Args)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if v, ok := env.NamedArgs["mode"]; ok && strings.EqualFold(v, "random") {
@@ -55,8 +55,34 @@ func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) error {
 		})
 	}
 
-	log.Info().Any("media", media).Msgf("new playlist: %s", env.Args)
-	pls := playlists.NewPlaylist(media)
+	return playlists.NewPlaylist(media), nil
+}
+
+func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) error {
+	if env.Playlist.Active != nil && env.Args == "" {
+		log.Info().Msg("starting paused playlist")
+		env.Playlist.Queue <- playlists.Play(*env.Playlist.Active)
+		return nil
+	}
+
+	pls, err := loadPlaylist(env)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Any("media", pls.Media).Msgf("play playlist: %s", env.Args)
+	env.Playlist.Queue <- playlists.Play(*pls)
+
+	return nil
+}
+
+func cmdPlaylistLoad(_ platforms.Platform, env platforms.CmdEnv) error {
+	pls, err := loadPlaylist(env)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Any("media", pls.Media).Msgf("load playlist: %s", env.Args)
 	env.Playlist.Queue <- pls
 
 	return nil
@@ -103,5 +129,14 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) error {
 	}
 
 	env.Playlist.Queue <- nil
+	return pl.KillLauncher()
+}
+
+func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) error {
+	if env.Playlist.Active == nil {
+		return fmt.Errorf("no playlist active")
+	}
+
+	env.Playlist.Queue <- playlists.Pause(*env.Playlist.Active)
 	return pl.KillLauncher()
 }
