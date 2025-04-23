@@ -34,6 +34,19 @@ func Previous(p Playlist) *Playlist {
 	}
 }
 
+func Goto(p Playlist, idx int) *Playlist {
+	if idx >= len(p.Media) {
+		idx = len(p.Media) - 1
+	} else if idx < 0 {
+		idx = 0
+	}
+	p.Index = idx
+	return &Playlist{
+		Media: p.Media,
+		Index: idx,
+	}
+}
+
 func (p *Playlist) Current() string {
 	return p.Media[p.Index]
 }

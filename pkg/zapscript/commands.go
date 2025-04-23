@@ -39,7 +39,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-// TODO: adding some logging for each command
 // TODO: game file by hash
 
 var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
@@ -49,8 +48,10 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	models.ZapScriptCmdLaunchSearch: cmdSearch,
 
 	models.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
+	models.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,
 	models.ZapScriptCmdPlaylistNext:     cmdPlaylistNext,
 	models.ZapScriptCmdPlaylistPrevious: cmdPlaylistPrevious,
+	models.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
 
 	models.ZapScriptCmdExecute: cmdExecute,
 	models.ZapScriptCmdDelay:   cmdDelay,
@@ -184,11 +185,17 @@ func LaunchToken(
 
 		text = strings.TrimPrefix(text, "**")
 		ps := strings.SplitN(text, ":", 2)
-		if len(ps) < 2 {
-			return fmt.Errorf("invalid command: %s", text), false
-		}
 
-		cmd, args := strings.ToLower(strings.TrimSpace(ps[0])), strings.TrimSpace(ps[1])
+		var cmd string
+		var args string
+
+		if len(ps) < 2 {
+			cmd = strings.ToLower(strings.TrimSpace(ps[0]))
+			args = ""
+		} else {
+			cmd = strings.ToLower(strings.TrimSpace(ps[0]))
+			args = strings.TrimSpace(ps[1])
+		}
 
 		env := platforms.CmdEnv{
 			Cmd:           cmd,

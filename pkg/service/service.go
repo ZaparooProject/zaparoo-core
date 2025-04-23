@@ -115,11 +115,11 @@ func processTokenQueue(
 				if activePlaylist != nil {
 					log.Info().Msg("clearing active playlist")
 				}
-				activePlaylist = nil
+				st.SetActivePlaylist(nil)
 				continue
 			} else if activePlaylist == nil {
 				log.Info().Msg("setting new active playlist, launching token")
-				activePlaylist = pls
+				st.SetActivePlaylist(pls)
 				go func() {
 					t := tokens.Token{
 						Text:     pls.Current(),
@@ -143,7 +143,7 @@ func processTokenQueue(
 				}
 
 				log.Info().Msg("updating active playlist, launching token")
-				activePlaylist = pls
+				st.SetActivePlaylist(pls)
 				go func() {
 					t := tokens.Token{
 						Text:     pls.Current(),

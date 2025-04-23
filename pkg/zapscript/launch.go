@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
@@ -322,58 +320,4 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) error {
 	}
 
 	return launch(res[0].Path)
-}
-
-func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Args == "" {
-		return fmt.Errorf("no playlist path specified")
-	}
-
-	if _, err := os.Stat(env.Args); err != nil {
-		return err
-	}
-
-	files, err := os.ReadDir(env.Args)
-	if err != nil {
-		return err
-	}
-
-	media := make([]string, 0)
-	for _, file := range files {
-		if file.IsDir() || filepath.Ext(file.Name()) == "" {
-			continue
-		}
-
-		media = append(media, filepath.Join(env.Args, file.Name()))
-	}
-
-	if len(media) == 0 {
-		return fmt.Errorf("no media found in: %s", env.Args)
-	}
-
-	log.Info().Any("media", media).Msgf("new playlist: %s", env.Args)
-	pls := playlists.NewPlaylist(media)
-	env.Playlist.Queue <- pls
-
-	return nil
-}
-
-func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
-	}
-
-	env.Playlist.Queue <- playlists.Next(*env.Playlist.Active)
-
-	return nil
-}
-
-func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
-	}
-
-	env.Playlist.Queue <- playlists.Previous(*env.Playlist.Active)
-
-	return nil
 }

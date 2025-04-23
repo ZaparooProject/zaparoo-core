@@ -9,8 +9,10 @@ const (
 	ZapScriptCmdLaunchSearch = "launch.search"
 
 	ZapScriptCmdPlaylistPlay     = "playlist.play"
+	ZapScriptCmdPlaylistStop     = "playlist.stop"
 	ZapScriptCmdPlaylistNext     = "playlist.next"
 	ZapScriptCmdPlaylistPrevious = "playlist.previous"
+	ZapScriptCmdPlaylistGoto     = "playlist.goto"
 
 	ZapScriptCmdExecute  = "execute"
 	ZapScriptCmdDelay    = "delay"
