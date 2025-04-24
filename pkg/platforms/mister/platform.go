@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
@@ -575,7 +576,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return false
 			}
 		},
-		Launch: launch,
+		Launch: launch(systemdefs.SystemAmiga),
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
@@ -640,7 +641,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return false
 			}
 		},
-		Launch: launch,
+		Launch: launch(systemdefs.SystemNeoGeo),
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
