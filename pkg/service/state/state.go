@@ -29,6 +29,7 @@ type State struct {
 	activePlaylist *playlists.Playlist
 	ctx            context.Context
 	ctxCancelFunc  context.CancelFunc
+	selectedItem   string
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
@@ -190,6 +191,18 @@ func (s *State) GetActivePlaylist() *playlists.Playlist {
 func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
 	s.activePlaylist = playlist
+	s.mu.Unlock()
+}
+
+func (s *State) GetSelectedItem() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.selectedItem
+}
+
+func (s *State) SetSelectedItem(selectedItem string) {
+	s.mu.Lock()
+	s.selectedItem = selectedItem
 	s.mu.Unlock()
 }
 

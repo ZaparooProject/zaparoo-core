@@ -294,7 +294,8 @@ func Start(
 	r.Get("/l/*", methods.HandleRunRest(cfg, st, itq)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, st, itq))
 	r.Get("/run/*", methods.HandleRunRest(cfg, st, itq))
-
+	r.Get("/select-item/*", methods.HandleItemSelect(cfg, st, itq))
+	r.Get("/selected-item", methods.HandleTestWritten(cfg, st, itq))
 	r.Get("/app/*", handleApp)
 	// redirect to /app/
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {

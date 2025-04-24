@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
@@ -213,6 +214,52 @@ func HandleRunRest(
 
 		st.SetActiveCard(t)
 		itq <- t
+	}
+}
+
+/*
+ * Receives a text string in get
+ * and stores it in the state
+ * It allows to store temporary information from UIs that allow for scripting
+ * the GET method is chose for simplicity of handling it with curl
+ * It supports integration with the UI of batocera and others
+ */
+func HandleItemSelect(
+	cfg *config.Instance,
+	st *state.State,
+	itq chan<- tokens.Token,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Info().Msg("received REST item select request")
+
+		text := chi.URLParam(r, "*")
+		text, err := url.QueryUnescape(text)
+		if err != nil {
+			log.Error().Msgf("error decoding request: %s", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		st.SetSelectedItem(text)
+
+		log.Info().Msgf("Selected item saved in state: %s", text)
+	}
+}
+
+func HandleTestWritten(
+	cfg *config.Instance,
+	st *state.State,
+	itq chan<- tokens.Token,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Info().Msg("received REST item select request")
+
+		text := st.GetSelectedItem()
+
+		w.WriteHeader(200)
+		w.Write([]byte(text))
+
+		log.Info().Msgf("Selected item saved in state: %s", text)
 	}
 }
 
