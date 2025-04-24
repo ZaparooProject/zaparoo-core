@@ -146,12 +146,27 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}
 
+		enableRun := client.ZapScriptWrapper(cfg)
+
+		// cleanup after ctrl-c
+		sigs := make(chan os.Signal, 1)
+		defer close(sigs)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			enableRun()
+			os.Exit(1)
+		}()
+
 		_, err = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
+			enableRun()
 			os.Exit(1)
 		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written sucessfully\n", *f.Write)
+			enableRun()
 			os.Exit(0)
 		}
 	} else if *f.Read {
