@@ -10,7 +10,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) error {
+func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	go func() {
 		resp, err := http.Get(env.Args)
 		if err != nil {
@@ -24,13 +24,13 @@ func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) error {
 		}
 	}()
 
-	return nil
+	return platforms.CmdResult{}, nil
 }
 
-func cmdHttpPost(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdHttpPost(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	parts := strings.SplitN(env.Args, ",", 3)
 	if len(parts) < 3 {
-		return fmt.Errorf("invalid post format: %s", env.Args)
+		return platforms.CmdResult{}, fmt.Errorf("invalid post format: %s", env.Args)
 	}
 
 	url, format, data := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
@@ -48,5 +48,5 @@ func cmdHttpPost(pl platforms.Platform, env platforms.CmdEnv) error {
 		}
 	}()
 
-	return nil
+	return platforms.CmdResult{}, nil
 }

@@ -74,11 +74,16 @@ func launchToken(
 	log.Info().Msgf("launching ZapScript: %s", text)
 	cmds := strings.Split(text, "||")
 
+	pls := plsc.Active
+
 	for i, cmd := range cmds {
-		err, softwareSwap := zapscript.LaunchToken(
+		result, err := zapscript.LaunchToken(
 			platform,
 			cfg,
-			plsc,
+			playlists.PlaylistController{
+				Active: pls,
+				Queue:  plsc.Queue,
+			},
 			token,
 			cmd,
 			len(cmds),
@@ -88,9 +93,14 @@ func launchToken(
 			return err
 		}
 
-		if softwareSwap && !token.FromAPI {
-			log.Info().Msgf("current software launched set to: %s", token.UID)
+		if result.MediaChanged && !token.FromAPI {
+			log.Debug().Any("token", token).Msg("media changed, updating token")
+			log.Info().Msgf("current media launched set to: %s", token.UID)
 			lsq <- &token
+		}
+
+		if result.PlaylistChanged {
+			pls = result.Playlist
 		}
 	}
 
@@ -110,55 +120,68 @@ func processTokenQueue(
 		select {
 		case pls := <-plq:
 			activePlaylist := st.GetActivePlaylist()
+			launchPlaylistMedia := func() {
+				t := tokens.Token{
+					Text:     pls.Current().Path,
+					ScanTime: time.Now(),
+					Source:   tokens.SourcePlaylist,
+				}
+				plsc := playlists.PlaylistController{
+					Active: activePlaylist,
+					Queue:  plq,
+				}
+
+				err := launchToken(platform, cfg, t, db, lsq, plsc)
+				if err != nil {
+					log.Error().Err(err).Msgf("error launching token")
+				}
+
+				he := database.HistoryEntry{
+					Time: t.ScanTime,
+					Type: t.Type,
+					UID:  t.UID,
+					Text: t.Text,
+					Data: t.Data,
+				}
+				he.Success = err == nil
+				err = db.AddHistory(he)
+				if err != nil {
+					log.Error().Err(err).Msgf("error adding history")
+				}
+			}
 
 			if pls == nil {
+				// playlist is cleared
 				if activePlaylist != nil {
-					log.Info().Msg("clearing active playlist")
+					log.Info().Msg("clearing playlist")
 				}
-				activePlaylist = nil
+				st.SetActivePlaylist(nil)
 				continue
 			} else if activePlaylist == nil {
-				log.Info().Msg("setting new active playlist, launching token")
-				activePlaylist = pls
-				go func() {
-					t := tokens.Token{
-						Text:     pls.Current(),
-						ScanTime: time.Now(),
-						Source:   tokens.SourcePlaylist,
-					}
-					plsc := playlists.PlaylistController{
-						Active: activePlaylist,
-						Queue:  plq,
-					}
-					err := launchToken(platform, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Err(err).Msgf("error launching token")
-					}
-				}()
+				// new playlist loaded
+				st.SetActivePlaylist(pls)
+				if pls.Playing {
+					log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
+					go launchPlaylistMedia()
+				} else {
+					log.Info().Any("pls", pls).Msg("setting new playlist")
+				}
 				continue
 			} else {
-				if pls.Current() == activePlaylist.Current() {
+				// active playlist updated
+				if pls.Current() == activePlaylist.Current() &&
+					pls.Playing == activePlaylist.Playing {
 					log.Debug().Msg("playlist current token unchanged, skipping")
 					continue
 				}
 
-				log.Info().Msg("updating active playlist, launching token")
-				activePlaylist = pls
-				go func() {
-					t := tokens.Token{
-						Text:     pls.Current(),
-						ScanTime: time.Now(),
-						Source:   tokens.SourcePlaylist,
-					}
-					plsc := playlists.PlaylistController{
-						Active: activePlaylist,
-						Queue:  plq,
-					}
-					err := launchToken(platform, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Err(err).Msgf("error launching token")
-					}
-				}()
+				st.SetActivePlaylist(pls)
+				if pls.Playing {
+					log.Info().Any("pls", pls).Msg("updating playlist, launching token")
+					go launchPlaylistMedia()
+				} else {
+					log.Info().Any("pls", pls).Msg("updating playlist")
+				}
 				continue
 			}
 		case t := <-itq:

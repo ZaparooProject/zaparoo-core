@@ -9,8 +9,9 @@ type NoticeArgs struct {
 }
 
 type PickerArgs struct {
-	Items   []models.ZapScript `json:"items"`
-	Title   string             `json:"title"`
-	Timeout int                `json:"timeout"`
-	Unsafe  bool               `json:"unsafe"`
+	Items    []models.ZapScript `json:"items"`
+	Title    string             `json:"title"`
+	Selected int                `json:"selected"`
+	Timeout  int                `json:"timeout"`
+	Unsafe   bool               `json:"unsafe"`
 }

@@ -177,8 +177,8 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(_ platforms.CmdEnv) error {
-	return nil
+func (p *Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{}, nil
 }
 
 func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
