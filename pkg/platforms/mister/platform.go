@@ -322,7 +322,7 @@ func (p *Platform) AfterScanHook(token tokens.Token) error {
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
-		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("1"), 0644)
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0644)
 		if err != nil {
 			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
 		}
