@@ -1,9 +1,12 @@
 package zapscript
 
 import (
+	"encoding/json"
 	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/rs/zerolog/log"
 	"math/rand"
 	"os"
@@ -55,88 +58,171 @@ func loadPlaylist(env platforms.CmdEnv) (*playlists.Playlist, error) {
 		})
 	}
 
-	return playlists.NewPlaylist(media), nil
+	return playlists.NewPlaylist(env.Args, media), nil
 }
 
-func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) error {
+func cmdPlaylistPlay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active != nil && env.Args == "" {
 		log.Info().Msg("starting paused playlist")
-		env.Playlist.Queue <- playlists.Play(*env.Playlist.Active)
-		return nil
+		pls := playlists.Play(*env.Playlist.Active)
+		env.Playlist.Queue <- pls
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        pls,
+		}, nil
 	}
 
 	pls, err := loadPlaylist(env)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	log.Info().Any("media", pls.Media).Msgf("play playlist: %s", env.Args)
-	env.Playlist.Queue <- playlists.Play(*pls)
+	pls = playlists.Play(*pls)
+	env.Playlist.Queue <- pls
 
-	return nil
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
 }
 
-func cmdPlaylistLoad(_ platforms.Platform, env platforms.CmdEnv) error {
+func cmdPlaylistLoad(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	pls, err := loadPlaylist(env)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	log.Info().Any("media", pls.Media).Msgf("load playlist: %s", env.Args)
 	env.Playlist.Queue <- pls
 
-	return nil
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
 }
 
-func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
+func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	pls, err := loadPlaylist(env)
+	if err != nil {
+		return platforms.CmdResult{}, err
 	}
 
-	env.Playlist.Queue <- playlists.Next(*env.Playlist.Active)
-
-	return nil
-}
-
-func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
+	if env.Playlist.Active != nil && env.Playlist.Active.ID == pls.ID {
+		log.Debug().Msg("opening active playlist")
+		pls.Index = env.Playlist.Active.Index
 	}
 
-	env.Playlist.Queue <- playlists.Previous(*env.Playlist.Active)
+	log.Info().Any("media", pls.Media).Msgf("open playlist: %s", env.Args)
+	env.Playlist.Queue <- pls
 
-	return nil
+	var items []models.ZapScript
+	for i, m := range pls.Media {
+		name := filepath.Base(m)
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+		if i == pls.Index {
+			name = fmt.Sprintf("* %s", name)
+		}
+
+		args := models.CmdEvaluateArgs{
+			ZapScript: "**playlist.goto:" + strconv.Itoa(i+1) + "||**playlist.play",
+		}
+		rawArgs, err := json.Marshal(args)
+		if err != nil {
+			log.Error().Err(err).Msgf("marshaling playlist picker launch args")
+			continue
+		}
+
+		items = append(items, models.ZapScript{
+			ZapScript: 1,
+			Name:      &name,
+			Cmds: []models.ZapScriptCmd{
+				{
+					Cmd:  models.ZapScriptCmdEvaluate,
+					Args: rawArgs,
+				},
+			},
+		})
+	}
+
+	return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        pls,
+		}, pl.ShowPicker(env.Cfg, widgetModels.PickerArgs{
+			Items: items,
+		})
 }
 
-func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) error {
+func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+	}
+
+	pls := playlists.Next(*env.Playlist.Active)
+	env.Playlist.Queue <- pls
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
+}
+
+func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Playlist.Active == nil {
+		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+	}
+
+	pls := playlists.Previous(*env.Playlist.Active)
+	env.Playlist.Queue <- pls
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
+}
+
+func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Playlist.Active == nil {
+		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
 	}
 
 	index, err := strconv.Atoi(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
-	env.Playlist.Queue <- playlists.Goto(*env.Playlist.Active, index-1)
+	pls := playlists.Goto(*env.Playlist.Active, index-1)
+	env.Playlist.Queue <- pls
 
-	return nil
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
 }
 
-func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
 	}
 
 	env.Playlist.Queue <- nil
-	return pl.KillLauncher()
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        nil,
+	}, pl.KillLauncher()
 }
 
-func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
 	}
 
-	env.Playlist.Queue <- playlists.Pause(*env.Playlist.Active)
-	return pl.KillLauncher()
+	pls := playlists.Pause(*env.Playlist.Active)
+	env.Playlist.Queue <- pls
+
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, pl.KillLauncher()
 }

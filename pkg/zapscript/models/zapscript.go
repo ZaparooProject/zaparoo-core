@@ -15,10 +15,12 @@ const (
 	ZapScriptCmdPlaylistGoto     = "playlist.goto"
 	ZapScriptCmdPlaylistPause    = "playlist.pause"
 	ZapScriptCmdPlaylistLoad     = "playlist.load"
+	ZapScriptCmdPlaylistOpen     = "playlist.open"
 
 	ZapScriptCmdExecute  = "execute"
 	ZapScriptCmdDelay    = "delay"
 	ZapScriptCmdEvaluate = "evaluate"
+	ZapScriptCmdStop     = "stop"
 
 	ZapScriptCmdMisterINI    = "mister.ini"
 	ZapScriptCmdMisterCore   = "mister.core"

@@ -366,8 +366,8 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
-	return fmt.Errorf("command not supported on batocera: %s", env.Cmd)
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
 
 func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {

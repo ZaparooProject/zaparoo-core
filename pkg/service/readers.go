@@ -225,7 +225,7 @@ func readerManager(
 							ScanTime: time.Now(),
 							Text:     defaults.BeforeExit,
 						}
-						err := launchToken(pl, cfg, t, db, lsq, plsc)
+						err := launchToken(st, pl, cfg, t, db, lsq, plsc)
 						if err != nil {
 							log.Error().Msgf("error launching on remove script: %s", err)
 						}

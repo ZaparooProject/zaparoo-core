@@ -1,13 +1,15 @@
 package playlists
 
 type Playlist struct {
+	ID      string
 	Media   []string
 	Index   int
 	Playing bool
 }
 
-func NewPlaylist(media []string) *Playlist {
+func NewPlaylist(id string, media []string) *Playlist {
 	return &Playlist{
+		ID:      id,
 		Media:   media,
 		Index:   0,
 		Playing: false,
@@ -20,6 +22,7 @@ func Next(p Playlist) *Playlist {
 		idx = 0
 	}
 	return &Playlist{
+		ID:      p.ID,
 		Media:   p.Media,
 		Index:   idx,
 		Playing: p.Playing,
@@ -32,6 +35,7 @@ func Previous(p Playlist) *Playlist {
 		idx = len(p.Media) - 1
 	}
 	return &Playlist{
+		ID:      p.ID,
 		Media:   p.Media,
 		Index:   idx,
 		Playing: p.Playing,
@@ -46,6 +50,7 @@ func Goto(p Playlist, idx int) *Playlist {
 	}
 	p.Index = idx
 	return &Playlist{
+		ID:      p.ID,
 		Media:   p.Media,
 		Index:   idx,
 		Playing: p.Playing,
@@ -54,6 +59,7 @@ func Goto(p Playlist, idx int) *Playlist {
 
 func Play(p Playlist) *Playlist {
 	return &Playlist{
+		ID:      p.ID,
 		Media:   p.Media,
 		Index:   p.Index,
 		Playing: true,
@@ -62,6 +68,7 @@ func Play(p Playlist) *Playlist {
 
 func Pause(p Playlist) *Playlist {
 	return &Playlist{
+		ID:      p.ID,
 		Media:   p.Media,
 		Index:   p.Index,
 		Playing: false,

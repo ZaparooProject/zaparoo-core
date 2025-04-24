@@ -52,6 +52,7 @@ func inExitGameBlocklist(platform platforms.Platform, cfg *config.Instance) bool
 }
 
 func launchToken(
+	st *state.State,
 	platform platforms.Platform,
 	cfg *config.Instance,
 	token tokens.Token,
@@ -75,10 +76,13 @@ func launchToken(
 	cmds := strings.Split(text, "||")
 
 	for i, cmd := range cmds {
-		err, softwareSwap := zapscript.LaunchToken(
+		result, err := zapscript.LaunchToken(
 			platform,
 			cfg,
-			plsc,
+			playlists.PlaylistController{
+				Active: st.GetActivePlaylist(),
+				Queue:  plsc.Queue,
+			},
 			token,
 			cmd,
 			len(cmds),
@@ -88,8 +92,8 @@ func launchToken(
 			return err
 		}
 
-		if softwareSwap && !token.FromAPI {
-			log.Info().Msgf("current software launched set to: %s", token.UID)
+		if result.MediaChanged && !token.FromAPI {
+			log.Info().Msgf("current media launched set to: %s", token.UID)
 			lsq <- &token
 		}
 	}
@@ -120,7 +124,7 @@ func processTokenQueue(
 					Active: activePlaylist,
 					Queue:  plq,
 				}
-				err := launchToken(platform, cfg, t, db, lsq, plsc)
+				err := launchToken(st, platform, cfg, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}
@@ -129,28 +133,34 @@ func processTokenQueue(
 			if pls == nil {
 				// playlist is cleared
 				if activePlaylist != nil {
-					log.Info().Msg("clearing active playlist")
+					log.Info().Msg("clearing playlist")
 				}
 				st.SetActivePlaylist(nil)
 				continue
 			} else if activePlaylist == nil {
 				// new playlist loaded
-				log.Info().Msg("setting new active playlist, launching token")
 				st.SetActivePlaylist(pls)
 				if pls.Playing {
+					log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
 					go launchPlaylist()
+				} else {
+					log.Info().Any("pls", pls).Msg("setting new playlist")
 				}
 				continue
 			} else {
 				// active playlist updated
-				if pls.Current() == activePlaylist.Current() && pls.Playing == activePlaylist.Playing {
+				if pls.Current() == activePlaylist.Current() &&
+					pls.Playing == activePlaylist.Playing {
 					log.Debug().Msg("playlist current token unchanged, skipping")
 					continue
 				}
-				log.Info().Msg("updating active playlist, launching token")
+
 				st.SetActivePlaylist(pls)
 				if pls.Playing {
+					log.Info().Any("pls", pls).Msg("updating playlist, launching token")
 					go launchPlaylist()
+				} else {
+					log.Info().Any("pls", pls).Msg("updating playlist")
 				}
 				continue
 			}
@@ -192,7 +202,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = launchToken(platform, cfg, t, db, lsq, plsc)
+				err = launchToken(st, platform, cfg, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}

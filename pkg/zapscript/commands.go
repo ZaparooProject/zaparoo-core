@@ -1,6 +1,6 @@
 /*
 Zaparoo Core
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (C) 2023 - 2025 Callan Barrett
 
 This file is part of Zaparoo Core.
 
@@ -32,16 +32,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
-	"golang.org/x/exp/slices"
-
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-// TODO: game file by hash
-
-var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
+var cmdMap = map[string]func(
+	platforms.Platform,
+	platforms.CmdEnv,
+) (platforms.CmdResult, error){
 	models.ZapScriptCmdLaunch:       cmdLaunch,
 	models.ZapScriptCmdLaunchSystem: cmdSystem,
 	models.ZapScriptCmdLaunchRandom: cmdRandom,
@@ -54,9 +53,11 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	models.ZapScriptCmdPlaylistGoto:     cmdPlaylistGoto,
 	models.ZapScriptCmdPlaylistPause:    cmdPlaylistPause,
 	models.ZapScriptCmdPlaylistLoad:     cmdPlaylistLoad,
+	models.ZapScriptCmdPlaylistOpen:     cmdPlaylistOpen,
 
 	models.ZapScriptCmdExecute: cmdExecute,
 	models.ZapScriptCmdDelay:   cmdDelay,
+	models.ZapScriptCmdStop:    cmdStop,
 
 	models.ZapScriptCmdMisterINI:    forwardCmd,
 	models.ZapScriptCmdMisterCore:   forwardCmd,
@@ -83,18 +84,7 @@ var commandMappings = map[string]func(platforms.Platform, platforms.CmdEnv) erro
 	models.ZapScriptCmdGet:      cmdHttpGet, // DEPRECATED
 }
 
-// specifies ZapScript commands that may start/stop/change playing media
-var softwareChangeCommands = []string{
-	models.ZapScriptCmdRandom,
-	models.ZapScriptCmdLaunch,
-	models.ZapScriptCmdLaunchSystem,
-	models.ZapScriptCmdLaunchRandom,
-	models.ZapScriptCmdLaunchSearch,
-	models.ZapScriptCmdMisterCore,
-	models.ZapScriptCmdMisterMGL,
-}
-
-func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) error {
+func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	return pl.ForwardCmd(env)
 }
 
@@ -132,8 +122,7 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("file not found: %s", path)
 }
 
-// LaunchToken parses and runs a single ZapScript command. Returns true if
-// the command launched media.
+// LaunchToken parses and runs a single ZapScript command.
 func LaunchToken(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -142,7 +131,7 @@ func LaunchToken(
 	text string,
 	totalCommands int,
 	currentIndex int,
-) (error, bool) {
+) (platforms.CmdResult, error) {
 	var unsafe bool
 	newText, err := checkLink(cfg, pl, text)
 	if err != nil {
@@ -157,17 +146,17 @@ func LaunchToken(
 		unsafe = true
 	}
 
-	// advanced args
+	// parse advanced args
 	namedArgs := make(map[string]string)
 	if i := strings.LastIndex(text, "?"); i != -1 {
 		u, err := url.Parse(text[i:])
 		if err != nil {
-			return err, false
+			return platforms.CmdResult{}, err
 		}
 
 		qs, err := url.ParseQuery(u.RawQuery)
 		if err != nil {
-			return err, false
+			return platforms.CmdResult{}, err
 		}
 
 		text = text[:i]
@@ -181,8 +170,9 @@ func LaunchToken(
 	// explicit commands must begin with **
 	if strings.HasPrefix(text, "**") {
 		if t.Source == tokens.SourcePlaylist {
-			log.Debug().Str("text", text).Msgf("playlists cannot run commands, skipping")
-			return nil, false
+			// TODO: why not? why did i write this?
+			log.Error().Str("text", text).Msgf("playlists cannot run commands, skipping")
+			return platforms.CmdResult{}, err
 		}
 
 		text = strings.TrimPrefix(text, "**")
@@ -211,19 +201,17 @@ func LaunchToken(
 			Unsafe:        unsafe,
 		}
 
-		if f, ok := commandMappings[cmd]; ok {
+		if f, ok := cmdMap[cmd]; ok {
 			log.Info().Msgf("launching command: %s", cmd)
-
-			softwareChange := slices.Contains(softwareChangeCommands, cmd)
-			if softwareChange {
+			res, err := f(pl, env)
+			if err == nil && res.MediaChanged {
 				// a launch triggered outside a playlist itself
 				log.Debug().Msg("clearing current playlist")
 				plsc.Queue <- nil
 			}
-
-			return f(pl, env), softwareChange
+			return res, err
 		} else {
-			return fmt.Errorf("unknown command: %s", cmd), false
+			return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 		}
 	}
 
@@ -243,5 +231,5 @@ func LaunchToken(
 		TotalCommands: totalCommands,
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
-	}), true
+	})
 }

@@ -47,7 +47,7 @@ type Platform struct {
 	uidMap              map[string]string
 	textMap             map[string]string
 	stopMappingsWatcher func() error
-	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) error
+	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
 	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
 	stopSocket          func()
@@ -222,7 +222,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.stopSocket = stopSocket
 
-	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
+	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
 		"mister.script": cmdMisterScript(p),
@@ -488,11 +488,11 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := p.cmdMappings[env.Cmd]; ok {
 		return f(p, env)
 	} else {
-		return fmt.Errorf("command not supported on mister: %s", env.Cmd)
+		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 	}
 }
 
