@@ -52,7 +52,6 @@ func inExitGameBlocklist(platform platforms.Platform, cfg *config.Instance) bool
 }
 
 func launchToken(
-	st *state.State,
 	platform platforms.Platform,
 	cfg *config.Instance,
 	token tokens.Token,
@@ -75,12 +74,14 @@ func launchToken(
 	log.Info().Msgf("launching ZapScript: %s", text)
 	cmds := strings.Split(text, "||")
 
+	pls := plsc.Active
+
 	for i, cmd := range cmds {
 		result, err := zapscript.LaunchToken(
 			platform,
 			cfg,
 			playlists.PlaylistController{
-				Active: st.GetActivePlaylist(),
+				Active: pls,
 				Queue:  plsc.Queue,
 			},
 			token,
@@ -93,8 +94,13 @@ func launchToken(
 		}
 
 		if result.MediaChanged && !token.FromAPI {
+			log.Debug().Any("token", token).Msg("media changed, updating token")
 			log.Info().Msgf("current media launched set to: %s", token.UID)
 			lsq <- &token
+		}
+
+		if result.PlaylistChanged {
+			pls = result.Playlist
 		}
 	}
 
@@ -114,7 +120,7 @@ func processTokenQueue(
 		select {
 		case pls := <-plq:
 			activePlaylist := st.GetActivePlaylist()
-			launchPlaylist := func() {
+			launchPlaylistMedia := func() {
 				t := tokens.Token{
 					Text:     pls.Current(),
 					ScanTime: time.Now(),
@@ -124,9 +130,23 @@ func processTokenQueue(
 					Active: activePlaylist,
 					Queue:  plq,
 				}
-				err := launchToken(st, platform, cfg, t, db, lsq, plsc)
+
+				err := launchToken(platform, cfg, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
+				}
+
+				he := database.HistoryEntry{
+					Time: t.ScanTime,
+					Type: t.Type,
+					UID:  t.UID,
+					Text: t.Text,
+					Data: t.Data,
+				}
+				he.Success = err == nil
+				err = db.AddHistory(he)
+				if err != nil {
+					log.Error().Err(err).Msgf("error adding history")
 				}
 			}
 
@@ -142,7 +162,7 @@ func processTokenQueue(
 				st.SetActivePlaylist(pls)
 				if pls.Playing {
 					log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
-					go launchPlaylist()
+					go launchPlaylistMedia()
 				} else {
 					log.Info().Any("pls", pls).Msg("setting new playlist")
 				}
@@ -158,7 +178,7 @@ func processTokenQueue(
 				st.SetActivePlaylist(pls)
 				if pls.Playing {
 					log.Info().Any("pls", pls).Msg("updating playlist, launching token")
-					go launchPlaylist()
+					go launchPlaylistMedia()
 				} else {
 					log.Info().Any("pls", pls).Msg("updating playlist")
 				}
@@ -202,7 +222,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = launchToken(st, platform, cfg, t, db, lsq, plsc)
+				err = launchToken(platform, cfg, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}

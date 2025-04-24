@@ -82,9 +82,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (
 
 		args = args[1:]
 		if len(args) == 0 {
-			return platforms.CmdResult{
-				MediaChanged: !hidden,
-			}, runScript(plm, script, "", hidden)
+			return platforms.CmdResult{}, runScript(plm, script, "", hidden)
 		}
 
 		cleaned := "'"
@@ -109,9 +107,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (
 		cleaned += "'"
 
 		log.Info().Msgf("running script: %s", script+" "+cleaned)
-		return platforms.CmdResult{
-			MediaChanged: !hidden,
-		}, runScript(plm, script, cleaned, hidden)
+		return platforms.CmdResult{}, runScript(plm, script, cleaned, hidden)
 	}
 }
 

@@ -204,25 +204,20 @@ func LaunchToken(
 		if f, ok := cmdMap[cmd]; ok {
 			log.Info().Msgf("launching command: %s", cmd)
 			res, err := f(pl, env)
-			if err == nil && res.MediaChanged {
-				// a launch triggered outside a playlist itself
-				log.Debug().Msg("clearing current playlist")
+
+			if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {
+				log.Debug().Any("token", t).Msg("cmd launch: clearing current playlist")
 				plsc.Queue <- nil
 			}
+
 			return res, err
 		} else {
 			return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 		}
 	}
 
-	if t.Source != tokens.SourcePlaylist {
-		// a launch triggered outside a playlist itself
-		log.Debug().Msg("clearing current playlist")
-		plsc.Queue <- nil
-	}
-
 	// if it's not a command, treat it as a generic launch command
-	return cmdLaunch(pl, platforms.CmdEnv{
+	res, err := cmdLaunch(pl, platforms.CmdEnv{
 		Cmd:           "launch",
 		Args:          text,
 		NamedArgs:     namedArgs,
@@ -232,4 +227,11 @@ func LaunchToken(
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
 	})
+
+	if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {
+		log.Debug().Msg("generic launch: clearing current playlist")
+		plsc.Queue <- nil
+	}
+
+	return res, err
 }
