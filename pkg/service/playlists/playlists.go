@@ -1,13 +1,18 @@
 package playlists
 
+type PlaylistMedia struct {
+	Path string
+	Name string
+}
+
 type Playlist struct {
 	ID      string
-	Media   []string
+	Media   []PlaylistMedia
 	Index   int
 	Playing bool
 }
 
-func NewPlaylist(id string, media []string) *Playlist {
+func NewPlaylist(id string, media []PlaylistMedia) *Playlist {
 	return &Playlist{
 		ID:      id,
 		Media:   media,
@@ -75,7 +80,7 @@ func Pause(p Playlist) *Playlist {
 	}
 }
 
-func (p *Playlist) Current() string {
+func (p *Playlist) Current() PlaylistMedia {
 	return p.Media[p.Index]
 }
 

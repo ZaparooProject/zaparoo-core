@@ -122,7 +122,7 @@ func processTokenQueue(
 			activePlaylist := st.GetActivePlaylist()
 			launchPlaylistMedia := func() {
 				t := tokens.Token{
-					Text:     pls.Current(),
+					Text:     pls.Current().Path,
 					ScanTime: time.Now(),
 					Source:   tokens.SourcePlaylist,
 				}
