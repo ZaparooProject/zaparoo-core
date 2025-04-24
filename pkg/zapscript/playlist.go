@@ -149,7 +149,8 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 			PlaylistChanged: true,
 			Playlist:        pls,
 		}, pl.ShowPicker(env.Cfg, widgetModels.PickerArgs{
-			Items: items,
+			Items:    items,
+			Selected: pls.Index,
 		})
 }
 

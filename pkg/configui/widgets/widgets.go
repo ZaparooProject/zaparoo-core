@@ -239,6 +239,12 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		})
 	}
 
+	if pickerArgs.Selected < 0 || pickerArgs.Selected >= len(actions) {
+		pickerArgs.Selected = 0
+	} else {
+		list.SetCurrentItem(pickerArgs.Selected)
+	}
+
 	list.AddItem("Cancel", "", 0, func() {
 		app.Stop()
 	})
