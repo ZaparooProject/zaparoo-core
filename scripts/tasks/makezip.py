@@ -8,8 +8,8 @@ import zipfile
 
 base_url: str = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
 platform_docs: dict[str, str] = {
-    "batocera": "batocera.mdx",
-    "bazzite": "bazzite.md",
+    "batocera": "batocera.md",
+    "bazzite": "bazzite.mdx",
     "chimeraos": "chimeraos.mdx",
     "libreelec": "libreelec.mdx",
     "linux": "linux.mdx",
