@@ -181,6 +181,9 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistMedia, error) {
 		if file.IsDir() || filepath.Ext(file.Name()) == "" {
 			continue
 		}
+		if strings.HasPrefix(file.Name(), ".") {
+			continue
+		}
 		files = append(files, filepath.Join(path, file.Name()))
 	}
 
