@@ -246,20 +246,19 @@ func HandleItemSelect(
 	}
 }
 
-func HandleTestWritten(
+func HandleSelectedItem(
 	cfg *config.Instance,
 	st *state.State,
 	itq chan<- tokens.Token,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Msg("received REST item select request")
+		log.Info().Msg("received REST selected item request")
 
 		text := st.GetSelectedItem()
 
 		w.WriteHeader(200)
 		w.Write([]byte(text))
 
-		log.Info().Msgf("Selected item saved in state: %s", text)
 	}
 }
 
