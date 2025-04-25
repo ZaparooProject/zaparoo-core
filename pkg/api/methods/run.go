@@ -217,51 +217,6 @@ func HandleRunRest(
 	}
 }
 
-/*
- * Receives a text string in get
- * and stores it in the state
- * It allows to store temporary information from UIs that allow for scripting
- * the GET method is chose for simplicity of handling it with curl
- * It supports integration with the UI of batocera and others
- */
-func HandleItemSelect(
-	cfg *config.Instance,
-	st *state.State,
-	itq chan<- tokens.Token,
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Msg("received REST item select request")
-
-		text := chi.URLParam(r, "*")
-		text, err := url.QueryUnescape(text)
-		if err != nil {
-			log.Error().Msgf("error decoding request: %s", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		st.SetSelectedItem(text)
-
-		log.Info().Msgf("Selected item saved in state: %s", text)
-	}
-}
-
-func HandleSelectedItem(
-	cfg *config.Instance,
-	st *state.State,
-	itq chan<- tokens.Token,
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Info().Msg("received REST selected item request")
-
-		text := st.GetSelectedItem()
-
-		w.WriteHeader(200)
-		w.Write([]byte(text))
-
-	}
-}
-
 func HandleStop(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received stop request")
 	return nil, env.Platform.KillLauncher()
