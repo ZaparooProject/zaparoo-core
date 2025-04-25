@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -126,9 +127,19 @@ func (s *State) SetReader(device string, reader readers.Reader) {
 			log.Warn().Err(err).Msg("error closing reader")
 		}
 	}
-
 	s.readers[device] = reader
-	notifications.ReadersAdded(s.Notifications, device)
+
+	ps := strings.SplitN(device, ":", 2)
+	driver := ps[0]
+	var path string
+	if len(ps) > 1 {
+		path = ps[1]
+	}
+	notifications.ReadersAdded(s.Notifications, models.ReaderResponse{
+		Connected: true,
+		Driver:    driver,
+		Path:      path,
+	})
 	s.mu.Unlock()
 }
 
@@ -141,8 +152,18 @@ func (s *State) RemoveReader(device string) {
 			log.Warn().Err(err).Msg("error closing reader")
 		}
 	}
+	ps := strings.SplitN(device, ":", 2)
+	driver := ps[0]
+	var path string
+	if len(ps) > 1 {
+		path = ps[1]
+	}
 	delete(s.readers, device)
-	notifications.ReadersRemoved(s.Notifications, device)
+	notifications.ReadersRemoved(s.Notifications, models.ReaderResponse{
+		Connected: false,
+		Driver:    driver,
+		Path:      path,
+	})
 	s.mu.Unlock()
 }
 

@@ -1,6 +1,9 @@
 package models
 
-import "github.com/google/uuid"
+import (
+	"encoding/json"
+	"github.com/google/uuid"
+)
 
 const (
 	NotificationReadersConnected    = "readers.added"
@@ -41,14 +44,14 @@ const (
 
 type Notification struct {
 	Method string
-	Params any
+	Params json.RawMessage
 }
 
 type RequestObject struct {
-	JsonRpc string     `json:"jsonrpc"`
-	Id      *uuid.UUID `json:"id,omitempty"`
-	Method  string     `json:"method"`
-	Params  any        `json:"params,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      *uuid.UUID      `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
 }
 
 type ErrorObject struct {
@@ -57,22 +60,8 @@ type ErrorObject struct {
 }
 
 type ResponseObject struct {
-	JsonRpc string       `json:"jsonrpc"`
+	JSONRPC string       `json:"jsonrpc"`
 	ID      uuid.UUID    `json:"id"`
 	Result  any          `json:"result,omitempty"`
 	Error   *ErrorObject `json:"error,omitempty"`
-}
-
-type ClientResponse struct {
-	Id      uuid.UUID `json:"id"`
-	Name    string    `json:"name"`
-	Address string    `json:"address"`
-	Secret  string    `json:"secret"`
-}
-
-type MediaStartedParams struct {
-	SystemId   string `json:"systemId"`
-	SystemName string `json:"systemName"`
-	MediaPath  string `json:"mediaPath"`
-	MediaName  string `json:"mediaName"`
 }

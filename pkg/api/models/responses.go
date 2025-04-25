@@ -1,6 +1,7 @@
 package models
 
 import (
+	"github.com/google/uuid"
 	"time"
 )
 
@@ -81,10 +82,9 @@ type IndexResponse struct {
 }
 
 type ReaderResponse struct {
-	// TODO: type
 	Connected bool   `json:"connected"`
-	Device    string `json:"device"`
-	Info      string `json:"info"`
+	Driver    string `json:"driver"`
+	Path      string `json:"path"`
 }
 
 type PlayingResponse struct {
@@ -107,4 +107,11 @@ type MediaResponse struct {
 type TokensResponse struct {
 	Active []TokenResponse `json:"active"`
 	Last   *TokenResponse  `json:"last,omitempty"`
+}
+
+type ClientResponse struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	Address string    `json:"address"`
+	Secret  string    `json:"secret"`
 }

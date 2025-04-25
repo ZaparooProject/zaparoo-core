@@ -72,20 +72,15 @@ func LocalClient(
 	}
 
 	req := models.RequestObject{
-		JsonRpc: "2.0",
-		Id:      &id,
+		JSONRPC: "2.0",
+		ID:      &id,
 		Method:  method,
 	}
 
 	if len(params) == 0 {
 		req.Params = nil
 	} else if json.Valid([]byte(params)) {
-		var ps interface{}
-		err := json.Unmarshal([]byte(params), &ps)
-		if err != nil {
-			return "", err
-		}
-		req.Params = &ps
+		req.Params = []byte(params)
 	} else {
 		return "", ErrInvalidParams
 	}
@@ -119,7 +114,7 @@ func LocalClient(
 				continue
 			}
 
-			if m.JsonRpc != "2.0" {
+			if m.JSONRPC != "2.0" {
 				log.Error().Msg("invalid jsonrpc version")
 				continue
 			}
@@ -202,12 +197,12 @@ func WaitNotification(
 				continue
 			}
 
-			if m.JsonRpc != "2.0" {
+			if m.JSONRPC != "2.0" {
 				log.Error().Msg("invalid jsonrpc version")
 				continue
 			}
 
-			if m.Id != nil {
+			if m.ID != nil {
 				continue
 			}
 

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -47,83 +48,139 @@ var JSONRPCErrorInternalError = models.ErrorObject{
 	Code:    -32603,
 	Message: "Internal error",
 }
-var JSONRPCErrorServerError = models.ErrorObject{
-	Code:    -32000,
-	Message: "Server error",
-}
 
-func maybeUUID(req models.RequestObject) uuid.UUID {
-	if req.Id == nil {
-		return uuid.Nil
-	} else {
-		return *req.Id
+func makeJSONRPCError(code int, message string) models.ErrorObject {
+	return models.ErrorObject{
+		Code:    code,
+		Message: message,
 	}
 }
 
-var methodMap = map[string]func(requests.RequestEnv) (any, error){
-	// run
-	models.MethodLaunch:    methods.HandleRun, // DEPRECATED
-	models.MethodRun:       methods.HandleRun,
-	models.MethodRunScript: methods.HandleRunScript,
-	models.MethodStop:      methods.HandleStop,
-	// tokens
-	models.MethodTokens:  methods.HandleTokens,
-	models.MethodHistory: methods.HandleHistory,
-	// media
-	models.MethodMedia:       methods.HandleMedia,
-	models.MethodMediaIndex:  methods.HandleIndexMedia,
-	models.MethodMediaSearch: methods.HandleGames,
-	// settings
-	models.MethodSettings:       methods.HandleSettings,
-	models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
-	models.MethodSettingsReload: methods.HandleSettingsReload,
-	// systems
-	models.MethodSystems: methods.HandleSystems,
-	// mappings
-	models.MethodMappings:       methods.HandleMappings,
-	models.MethodMappingsNew:    methods.HandleAddMapping,
-	models.MethodMappingsDelete: methods.HandleDeleteMapping,
-	models.MethodMappingsUpdate: methods.HandleUpdateMapping,
-	models.MethodMappingsReload: methods.HandleReloadMappings,
-	// readers
-	models.MethodReadersWrite: methods.HandleReaderWrite,
-	// utils
-	models.MethodVersion: methods.HandleVersion,
+type MethodMap struct {
+	sync.Map
 }
 
-func handleRequest(env requests.RequestEnv, req models.RequestObject) (any, error) {
-	log.Debug().Interface("request", req).Msg("received request")
+func isValidMethodName(name string) bool {
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r == '.') {
+			return false
+		}
+	}
+	return name != ""
+}
 
-	fn, ok := methodMap[strings.ToLower(req.Method)]
+func (m *MethodMap) AddMethod(
+	name string,
+	handler func(requests.RequestEnv) (any, error),
+) error {
+	if name == "" {
+		return fmt.Errorf("method name cannot be empty")
+	} else if !isValidMethodName(name) {
+		return fmt.Errorf("method name contains invalid characters: %s", name)
+	} else if _, exists := m.GetMethod(name); exists {
+		return fmt.Errorf("method already exists: %s", name)
+	}
+	m.Store(strings.ToLower(name), handler)
+	return nil
+}
+
+func (m *MethodMap) GetMethod(name string) (func(requests.RequestEnv) (any, error), bool) {
+	fn, ok := m.Load(strings.ToLower(name))
 	if !ok {
-		return nil, fmt.Errorf("unknown method: %s", req.Method)
+		return nil, false
+	}
+	return fn.(func(requests.RequestEnv) (any, error)), true
+}
+
+func (m *MethodMap) ListMethods() []string {
+	var ms []string
+	m.Range(func(key, value interface{}) bool {
+		ms = append(ms, key.(string))
+		return true
+	})
+	return ms
+}
+
+func NewMethodMap() *MethodMap {
+	var m MethodMap
+
+	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
+		// run
+		models.MethodLaunch:    methods.HandleRun,
+		models.MethodRun:       methods.HandleRun,
+		models.MethodRunScript: methods.HandleRunScript,
+		models.MethodStop:      methods.HandleStop,
+		// tokens
+		models.MethodTokens:  methods.HandleTokens,
+		models.MethodHistory: methods.HandleHistory,
+		// media
+		models.MethodMedia:       methods.HandleMedia,
+		models.MethodMediaIndex:  methods.HandleIndexMedia,
+		models.MethodMediaSearch: methods.HandleGames,
+		// settings
+		models.MethodSettings:       methods.HandleSettings,
+		models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
+		models.MethodSettingsReload: methods.HandleSettingsReload,
+		// systems
+		models.MethodSystems: methods.HandleSystems,
+		// mappings
+		models.MethodMappings:       methods.HandleMappings,
+		models.MethodMappingsNew:    methods.HandleAddMapping,
+		models.MethodMappingsDelete: methods.HandleDeleteMapping,
+		models.MethodMappingsUpdate: methods.HandleUpdateMapping,
+		models.MethodMappingsReload: methods.HandleReloadMappings,
+		// readers
+		models.MethodReadersWrite: methods.HandleReaderWrite,
+		// utils
+		models.MethodVersion: methods.HandleVersion,
 	}
 
-	if req.Id == nil {
-		return nil, fmt.Errorf("missing ID for request: %s", req.Method)
-	}
-
-	var params []byte
-	if req.Params != nil {
-		var err error
-		// double unmarshal to use json decode on params later
-		params, err = json.Marshal(req.Params)
+	for name, fn := range defaultMethods {
+		err := m.AddMethod(name, fn)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing params: %w", err)
+			log.Error().Err(err).Msgf("error adding default method: %s", name)
 		}
 	}
 
-	env.Id = *req.Id
-	env.Params = params
-
-	return fn(env)
+	return &m
 }
 
+// handleRequest validates a client request and forwards it to the
+// appropriate method handler. Returns the method's result object.
+func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.RequestObject) (any, *models.ErrorObject) {
+	log.Debug().Interface("request", req).Msg("received request")
+
+	fn, ok := methodMap.GetMethod(req.Method)
+	if !ok {
+		log.Error().Str("method", req.Method).Msg("unknown method")
+		return nil, &JSONRPCErrorMethodNotFound
+	}
+
+	if req.ID == nil {
+		log.Error().Str("method", req.Method).Msg("missing ID for request")
+		return nil, &JSONRPCErrorInvalidRequest
+	}
+
+	env.ID = *req.ID
+	env.Params = req.Params
+
+	resp, err := fn(env)
+	if err != nil {
+		log.Error().Err(err).Msg("error handling request")
+		// TODO: return error object from methods
+		rpcError := makeJSONRPCError(1, err.Error())
+		return nil, &rpcError
+	} else {
+		return resp, nil
+	}
+}
+
+// sendResponse marshals a method result and sends it to the client.
 func sendResponse(session *melody.Session, id uuid.UUID, result any) error {
 	log.Debug().Interface("result", result).Msg("sending response")
 
 	resp := models.ResponseObject{
-		JsonRpc: "2.0",
+		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
 	}
@@ -136,11 +193,12 @@ func sendResponse(session *melody.Session, id uuid.UUID, result any) error {
 	return session.Write(data)
 }
 
+// sendError sends a JSON-RPC error object response to the client.
 func sendError(session *melody.Session, id uuid.UUID, error models.ErrorObject) error {
 	log.Debug().Int("code", error.Code).Str("message", error.Message).Msg("sending error")
 
 	resp := models.ResponseObject{
-		JsonRpc: "2.0",
+		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &error,
 	}
@@ -158,6 +216,7 @@ func handleResponse(resp models.ResponseObject) error {
 	return nil
 }
 
+// handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
 	appFs, err := fs.Sub(assets.App, "_app/dist")
 	if err != nil {
@@ -169,6 +228,8 @@ func handleApp(w http.ResponseWriter, r *http.Request) {
 	http.StripPrefix("/app", http.FileServer(http.FS(appFs))).ServeHTTP(w, r)
 }
 
+// broadcastNotifications consumes and broadcasts all incoming API
+// notifications to all connected clients.
 func broadcastNotifications(
 	state *state.State,
 	session *melody.Melody,
@@ -181,7 +242,7 @@ func broadcastNotifications(
 			return
 		case notif := <-notifications:
 			req := models.RequestObject{
-				JsonRpc: "2.0",
+				JSONRPC: "2.0",
 				Method:  notif.Method,
 				Params:  notif.Params,
 			}
@@ -201,7 +262,11 @@ func broadcastNotifications(
 	}
 }
 
+// handleWSMessage parses all incoming WS requests, identifies what type of
+// JSON-RPC object they may be and forwards them to the appropriate function
+// to handle that type of message.
 func handleWSMessage(
+	methodMap *MethodMap,
 	platform platforms.Platform,
 	cfg *config.Instance,
 	state *state.State,
@@ -238,9 +303,13 @@ func handleWSMessage(
 		var req models.RequestObject
 		err := json.Unmarshal(msg, &req)
 
-		if err == nil && req.JsonRpc != "2.0" {
-			log.Error().Str("jsonrpc", req.JsonRpc).Msg("unsupported payload version")
-			err := sendError(session, maybeUUID(req), JSONRPCErrorInvalidRequest)
+		if err == nil && req.JSONRPC != "2.0" {
+			log.Error().Str("jsonrpc", req.JSONRPC).Msg("unsupported payload version")
+			id := uuid.Nil
+			if req.ID != nil {
+				id = *req.ID
+			}
+			err := sendError(session, id, JSONRPCErrorInvalidRequest)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending error response")
 			}
@@ -248,16 +317,17 @@ func handleWSMessage(
 		}
 
 		if err == nil && req.Method != "" {
-			if req.Id == nil {
+			if req.ID == nil {
 				// request is notification
 				log.Info().Interface("req", req).Msg("received notification, ignoring")
 				return
 			}
 
+			// request is a request
 			rawIp := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 			clientIp := net.ParseIP(rawIp[0])
 
-			resp, err := handleRequest(requests.RequestEnv{
+			resp, rpcError := handleRequest(methodMap, requests.RequestEnv{
 				Platform:   platform,
 				Config:     cfg,
 				State:      state,
@@ -265,19 +335,19 @@ func handleWSMessage(
 				TokenQueue: inTokenQueue,
 				IsLocal:    clientIp.IsLoopback(),
 			}, req)
-			if err != nil {
-				// TODO: handlers should return their own error object
-				err := sendError(session, *req.Id, JSONRPCErrorServerError)
+			if rpcError != nil {
+				err := sendError(session, *req.ID, *rpcError)
 				if err != nil {
 					log.Error().Err(err).Msg("error sending error response")
 				}
 				return
 			}
 
-			err = sendResponse(session, *req.Id, resp)
+			err = sendResponse(session, *req.ID, resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
+			return
 		}
 
 		// otherwise try parse a response, which has an id field
@@ -291,6 +361,7 @@ func handleWSMessage(
 			return
 		}
 
+		// can't identify the message
 		log.Error().Err(err).Msg("message does not match known types")
 		err = sendError(session, uuid.Nil, JSONRPCErrorInvalidRequest)
 		if err != nil {
@@ -300,6 +371,7 @@ func handleWSMessage(
 	}
 }
 
+// Start starts the API web server and blocks until it shuts down.
 func Start(
 	platform platforms.Platform,
 	cfg *config.Instance,
@@ -319,6 +391,8 @@ func Start(
 		AllowedHeaders: []string{"Accept"},
 		ExposedHeaders: []string{},
 	}))
+
+	methodMap := NewMethodMap()
 
 	session := melody.New()
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool { return true }
@@ -345,7 +419,7 @@ func Start(
 		}
 	})
 
-	session.HandleMessage(handleWSMessage(platform, cfg, state, inTokenQueue, db))
+	session.HandleMessage(handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
