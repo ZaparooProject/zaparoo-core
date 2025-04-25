@@ -30,7 +30,7 @@ type State struct {
 	activePlaylist *playlists.Playlist
 	ctx            context.Context
 	ctxCancelFunc  context.CancelFunc
-	selectedItem   string
+	activeMedia    *models.ActiveMedia
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
@@ -89,13 +89,6 @@ func (s *State) StopService() {
 	s.stopService = true
 	s.mu.Unlock()
 	s.ctxCancelFunc()
-}
-
-// Deprecated, use <-GetContext().Done() channel instead
-func (s *State) ShouldStopService() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.stopService
 }
 
 func (s *State) SetRunZapScript(run bool) {
@@ -215,15 +208,15 @@ func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Unlock()
 }
 
-func (s *State) GetSelectedItem() string {
+func (s *State) ActiveMedia() *models.ActiveMedia {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.selectedItem
+	return s.activeMedia
 }
 
-func (s *State) SetSelectedItem(selectedItem string) {
+func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 	s.mu.Lock()
-	s.selectedItem = selectedItem
+	s.activeMedia = media
 	s.mu.Unlock()
 }
 

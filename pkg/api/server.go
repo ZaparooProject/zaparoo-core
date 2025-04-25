@@ -115,9 +115,12 @@ func NewMethodMap() *MethodMap {
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
 		// media
-		models.MethodMedia:       methods.HandleMedia,
-		models.MethodMediaIndex:  methods.HandleIndexMedia,
-		models.MethodMediaSearch: methods.HandleGames,
+		models.MethodMedia:             methods.HandleMedia,
+		models.MethodMediaGenerate:     methods.HandleGenerateMedia,
+		models.MethodMediaIndex:        methods.HandleGenerateMedia,
+		models.MethodMediaSearch:       methods.HandleMediaSearch,
+		models.MethodMediaActive:       methods.HandleActiveMedia,
+		models.MethodMediaActiveUpdate: methods.HandleUpdateActiveMedia,
 		// settings
 		models.MethodSettings:       methods.HandleSettings,
 		models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
@@ -496,9 +499,6 @@ func Start(
 	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
 	r.Get("/run/*", methods.HandleRunRest(cfg, state, inTokenQueue))
-
-	r.Get("/select-item/*", methods.HandleItemSelect(cfg, state, inTokenQueue))
-	r.Get("/selected-item", methods.HandleSelectedItem(cfg, state, inTokenQueue))
 
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {

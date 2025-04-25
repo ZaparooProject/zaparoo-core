@@ -72,7 +72,7 @@ type TokenResponse struct {
 	ScanTime time.Time `json:"scanTime"`
 }
 
-type IndexResponse struct {
+type IndexingStatusResponse struct {
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
@@ -87,7 +87,7 @@ type ReaderResponse struct {
 	Path      string `json:"path"`
 }
 
-type PlayingResponse struct {
+type ActiveMedia struct {
 	SystemId   string `json:"systemId"`
 	SystemName string `json:"systemName"`
 	MediaPath  string `json:"mediaPath"`
@@ -100,8 +100,8 @@ type VersionResponse struct {
 }
 
 type MediaResponse struct {
-	Database IndexResponse     `json:"database"`
-	Active   []PlayingResponse `json:"active"`
+	Database IndexingStatusResponse `json:"database"`
+	Active   []ActiveMedia          `json:"active"`
 }
 
 type TokensResponse struct {

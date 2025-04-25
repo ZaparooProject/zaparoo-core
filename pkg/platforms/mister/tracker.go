@@ -222,7 +222,7 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveSystemName = ArcadeSystem
 
 		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
-			SystemId:   tr.ActiveSystem,
+			SystemID:   tr.ActiveSystem,
 			SystemName: tr.ActiveSystemName,
 			MediaName:  tr.ActiveGameName,
 			MediaPath:  coreName,
@@ -306,7 +306,7 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystemName = meta.Name
 
 		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
-			SystemId:   system.Id,
+			SystemID:   system.Id,
 			SystemName: meta.Name,
 			MediaName:  name,
 			MediaPath:  path,

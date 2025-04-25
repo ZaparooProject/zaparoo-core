@@ -23,7 +23,7 @@ func sendNotification(ns chan<- models.Notification, method string, payload any)
 	}
 }
 
-func MediaIndexing(ns chan<- models.Notification, payload models.IndexResponse) {
+func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusResponse) {
 	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 
