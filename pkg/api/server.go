@@ -201,7 +201,7 @@ func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
 func sendWSError(session *melody.Session, id uuid.UUID, error models.ErrorObject) error {
 	log.Debug().Int("code", error.Code).Str("message", error.Message).Msg("sending error")
 
-	resp := models.ResponseObject{
+	resp := models.ResponseErrorObject{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &error,
@@ -409,7 +409,7 @@ func handlePostRequest(
 		var respBody []byte
 		id, resp, rpcError := processRequestObject(methodMap, env, body)
 		if rpcError != nil {
-			errorResp := models.ResponseObject{
+			errorResp := models.ResponseErrorObject{
 				JSONRPC: "2.0",
 				ID:      id,
 				Error:   rpcError,

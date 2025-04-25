@@ -65,6 +65,15 @@ type ErrorObject struct {
 type ResponseObject struct {
 	JSONRPC string       `json:"jsonrpc"`
 	ID      uuid.UUID    `json:"id"`
-	Result  any          `json:"result,omitempty"`
+	Result  any          `json:"result"`
 	Error   *ErrorObject `json:"error,omitempty"`
+}
+
+// ResponseErrorObject exists for sending errors, so we can omit result from
+// the response, but so nil responses are still returned when using the main
+// ResponseObject.
+type ResponseErrorObject struct {
+	JSONRPC string       `json:"jsonrpc"`
+	ID      uuid.UUID    `json:"id"`
+	Error   *ErrorObject `json:"error"`
 }
