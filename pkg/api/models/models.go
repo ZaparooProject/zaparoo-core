@@ -58,7 +58,7 @@ type ErrorObject struct {
 
 type ResponseObject struct {
 	JsonRpc string       `json:"jsonrpc"`
-	Id      uuid.UUID    `json:"id"`
+	ID      uuid.UUID    `json:"id"`
 	Result  any          `json:"result,omitempty"`
 	Error   *ErrorObject `json:"error,omitempty"`
 }
