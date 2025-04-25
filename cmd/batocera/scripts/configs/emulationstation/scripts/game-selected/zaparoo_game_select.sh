@@ -21,4 +21,4 @@ case ${system} in
 esac
 
 # Execute this part every time this event triggers.
-curl -X GET http://127.0.0.1:7497/select-item/${rom}
+curl -X GET http://127.0.0.1:7497/select-item/$(echo ${rom} | jq -sRr @uri)
