@@ -10,6 +10,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -170,13 +171,13 @@ func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.Req
 		// TODO: return error object from methods
 		rpcError := makeJSONRPCError(1, err.Error())
 		return nil, &rpcError
-	} else {
-		return resp, nil
 	}
+	return resp, nil
+
 }
 
-// sendResponse marshals a method result and sends it to the client.
-func sendResponse(session *melody.Session, id uuid.UUID, result any) error {
+// sendWSResponse marshals a method result and sends it to the client.
+func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
 	log.Debug().Interface("result", result).Msg("sending response")
 
 	resp := models.ResponseObject{
@@ -193,8 +194,8 @@ func sendResponse(session *melody.Session, id uuid.UUID, result any) error {
 	return session.Write(data)
 }
 
-// sendError sends a JSON-RPC error object response to the client.
-func sendError(session *melody.Session, id uuid.UUID, error models.ErrorObject) error {
+// sendWSError sends a JSON-RPC error object response to the client.
+func sendWSError(session *melody.Session, id uuid.UUID, error models.ErrorObject) error {
 	log.Debug().Int("code", error.Code).Str("message", error.Message).Msg("sending error")
 
 	resp := models.ResponseObject{
@@ -262,6 +263,61 @@ func broadcastNotifications(
 	}
 }
 
+func processRequestObject(
+	methodMap *MethodMap,
+	env requests.RequestEnv,
+	msg []byte,
+) (uuid.UUID, any, *models.ErrorObject) {
+	if !json.Valid(msg) {
+		log.Error().Msg("request payload is not valid JSON")
+		return uuid.Nil, nil, &JSONRPCErrorParseError
+	}
+
+	// try parse a request first, which has a method field
+	var req models.RequestObject
+	err := json.Unmarshal(msg, &req)
+
+	if err == nil && req.JSONRPC != "2.0" {
+		id := uuid.Nil
+		if req.ID != nil {
+			id = *req.ID
+		}
+		log.Error().Str("version", req.JSONRPC).Msg("unsupported JSON-RPC version")
+		return id, nil, &JSONRPCErrorInvalidRequest
+	}
+
+	if err == nil && req.Method != "" {
+		if req.ID == nil {
+			// request is notification, we don't do anything with these yet
+			log.Info().Interface("req", req).Msg("received notification, ignoring")
+			return uuid.Nil, nil, nil
+		}
+
+		// request is a request
+		resp, rpcError := handleRequest(methodMap, env, req)
+		if rpcError != nil {
+			return *req.ID, nil, rpcError
+		} else {
+			return *req.ID, resp, nil
+		}
+	}
+
+	// otherwise try parse a response, which has an id field
+	var resp models.ResponseObject
+	err = json.Unmarshal(msg, &resp)
+	if err == nil && resp.ID != uuid.Nil {
+		err := handleResponse(resp)
+		if err != nil {
+			log.Error().Err(err).Msg("error handling response")
+			return resp.ID, nil, &JSONRPCErrorInternalError
+		}
+		return resp.ID, nil, nil
+	}
+
+	// can't identify the message
+	return uuid.Nil, nil, &JSONRPCErrorInvalidRequest
+}
+
 // handleWSMessage parses all incoming WS requests, identifies what type of
 // JSON-RPC object they may be and forwards them to the appropriate function
 // to handle that type of message.
@@ -289,85 +345,98 @@ func handleWSMessage(
 			return
 		}
 
-		if !json.Valid(msg) {
-			log.Error().Msg("data not valid json")
-			err := sendError(session, uuid.Nil, JSONRPCErrorParseError)
-			if err != nil {
-				log.Error().Err(err).Msg("error sending error response")
-				return
-			}
-			return
+		rawIp := strings.SplitN(session.Request.RemoteAddr, ":", 2)
+		clientIp := net.ParseIP(rawIp[0])
+		env := requests.RequestEnv{
+			Platform:   platform,
+			Config:     cfg,
+			State:      state,
+			Database:   db,
+			TokenQueue: inTokenQueue,
+			IsLocal:    clientIp.IsLoopback(),
 		}
 
-		// try parse a request first, which has a method field
-		var req models.RequestObject
-		err := json.Unmarshal(msg, &req)
-
-		if err == nil && req.JSONRPC != "2.0" {
-			log.Error().Str("jsonrpc", req.JSONRPC).Msg("unsupported payload version")
-			id := uuid.Nil
-			if req.ID != nil {
-				id = *req.ID
-			}
-			err := sendError(session, id, JSONRPCErrorInvalidRequest)
+		id, resp, rpcError := processRequestObject(methodMap, env, msg)
+		if rpcError != nil {
+			err := sendWSError(session, id, *rpcError)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending error response")
 			}
-			return
-		}
-
-		if err == nil && req.Method != "" {
-			if req.ID == nil {
-				// request is notification
-				log.Info().Interface("req", req).Msg("received notification, ignoring")
-				return
-			}
-
-			// request is a request
-			rawIp := strings.SplitN(session.Request.RemoteAddr, ":", 2)
-			clientIp := net.ParseIP(rawIp[0])
-
-			resp, rpcError := handleRequest(methodMap, requests.RequestEnv{
-				Platform:   platform,
-				Config:     cfg,
-				State:      state,
-				Database:   db,
-				TokenQueue: inTokenQueue,
-				IsLocal:    clientIp.IsLoopback(),
-			}, req)
-			if rpcError != nil {
-				err := sendError(session, *req.ID, *rpcError)
-				if err != nil {
-					log.Error().Err(err).Msg("error sending error response")
-				}
-				return
-			}
-
-			err = sendResponse(session, *req.ID, resp)
+		} else {
+			err := sendWSResponse(session, id, resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
+		}
+	}
+}
+
+func handlePostRequest(
+	methodMap *MethodMap,
+	platform platforms.Platform,
+	cfg *config.Instance,
+	state *state.State,
+	inTokenQueue chan<- tokens.Token,
+	db *database.Database,
+) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "Content-Type is not application/json", http.StatusUnsupportedMediaType)
 			return
 		}
 
-		// otherwise try parse a response, which has an id field
-		var resp models.ResponseObject
-		err = json.Unmarshal(msg, &resp)
-		if err == nil && resp.ID != uuid.Nil {
-			err := handleResponse(resp)
-			if err != nil {
-				log.Error().Err(err).Msg("error handling response")
-			}
-			return
-		}
-
-		// can't identify the message
-		log.Error().Err(err).Msg("message does not match known types")
-		err = sendError(session, uuid.Nil, JSONRPCErrorInvalidRequest)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			log.Error().Err(err).Msg("error sending error response")
+			log.Error().Err(err).Msg("failed to read request body")
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			return
 		}
-		return
+
+		rawIp := strings.SplitN(r.RemoteAddr, ":", 2)
+		clientIp := net.ParseIP(rawIp[0])
+		env := requests.RequestEnv{
+			Platform:   platform,
+			Config:     cfg,
+			State:      state,
+			Database:   db,
+			TokenQueue: inTokenQueue,
+			IsLocal:    clientIp.IsLoopback(),
+		}
+
+		var respBody []byte
+		id, resp, rpcError := processRequestObject(methodMap, env, body)
+		if rpcError != nil {
+			errorResp := models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      id,
+				Error:   rpcError,
+			}
+			respBody, err = json.Marshal(errorResp)
+			if err != nil {
+				log.Error().Err(err).Msg("error marshalling error response")
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			resp := models.ResponseObject{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result:  resp,
+			}
+			respBody, err = json.Marshal(resp)
+			if err != nil {
+				log.Error().Err(err).Msg("error marshalling response")
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, err = w.Write(respBody)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to write error response")
+		}
 	}
 }
 
@@ -404,6 +473,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: latest")
 		}
 	})
+	r.Post("/api", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
 
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -411,6 +481,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
+	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -418,14 +489,17 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
+	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
 
 	session.HandleMessage(handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
 	r.Get("/run/*", methods.HandleRunRest(cfg, state, inTokenQueue))
+
 	r.Get("/select-item/*", methods.HandleItemSelect(cfg, state, inTokenQueue))
 	r.Get("/selected-item", methods.HandleSelectedItem(cfg, state, inTokenQueue))
+
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
