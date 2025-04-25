@@ -11,6 +11,7 @@ func sendNotification(ns chan<- models.Notification, method string, payload any)
 		params, err := json.Marshal(payload)
 		if err != nil {
 			log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
+			return
 		}
 		ns <- models.Notification{
 			Method: method,
