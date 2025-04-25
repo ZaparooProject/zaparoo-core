@@ -1,6 +1,7 @@
 package models
 
 import (
+	"github.com/google/uuid"
 	"time"
 )
 
@@ -71,7 +72,7 @@ type TokenResponse struct {
 	ScanTime time.Time `json:"scanTime"`
 }
 
-type IndexResponse struct {
+type IndexingStatusResponse struct {
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
@@ -81,13 +82,12 @@ type IndexResponse struct {
 }
 
 type ReaderResponse struct {
-	// TODO: type
 	Connected bool   `json:"connected"`
-	Device    string `json:"device"`
-	Info      string `json:"info"`
+	Driver    string `json:"driver"`
+	Path      string `json:"path"`
 }
 
-type PlayingResponse struct {
+type ActiveMedia struct {
 	SystemId   string `json:"systemId"`
 	SystemName string `json:"systemName"`
 	MediaPath  string `json:"mediaPath"`
@@ -100,11 +100,18 @@ type VersionResponse struct {
 }
 
 type MediaResponse struct {
-	Database IndexResponse     `json:"database"`
-	Active   []PlayingResponse `json:"active"`
+	Database IndexingStatusResponse `json:"database"`
+	Active   []ActiveMedia          `json:"active"`
 }
 
 type TokensResponse struct {
 	Active []TokenResponse `json:"active"`
 	Last   *TokenResponse  `json:"last,omitempty"`
+}
+
+type ClientResponse struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	Address string    `json:"address"`
+	Secret  string    `json:"secret"`
 }

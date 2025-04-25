@@ -71,3 +71,16 @@ type NewClientParams struct {
 type DeleteClientParams struct {
 	Id string `json:"id"`
 }
+
+type MediaStartedParams struct {
+	SystemID   string `json:"systemId"`
+	SystemName string `json:"systemName"`
+	MediaPath  string `json:"mediaPath"`
+	MediaName  string `json:"mediaName"`
+}
+
+type UpdateActiveMediaParams struct {
+	SystemID  string `json:"systemId"`
+	MediaPath string `json:"mediaPath"`
+	MediaName string `json:"mediaName"`
+}

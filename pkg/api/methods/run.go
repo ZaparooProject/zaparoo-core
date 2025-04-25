@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"

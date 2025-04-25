@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -29,6 +30,7 @@ type State struct {
 	activePlaylist *playlists.Playlist
 	ctx            context.Context
 	ctxCancelFunc  context.CancelFunc
+	activeMedia    *models.ActiveMedia
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
@@ -89,13 +91,6 @@ func (s *State) StopService() {
 	s.ctxCancelFunc()
 }
 
-// Deprecated, use <-GetContext().Done() channel instead
-func (s *State) ShouldStopService() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.stopService
-}
-
 func (s *State) SetRunZapScript(run bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -125,9 +120,19 @@ func (s *State) SetReader(device string, reader readers.Reader) {
 			log.Warn().Err(err).Msg("error closing reader")
 		}
 	}
-
 	s.readers[device] = reader
-	notifications.ReadersAdded(s.Notifications, device)
+
+	ps := strings.SplitN(device, ":", 2)
+	driver := ps[0]
+	var path string
+	if len(ps) > 1 {
+		path = ps[1]
+	}
+	notifications.ReadersAdded(s.Notifications, models.ReaderResponse{
+		Connected: true,
+		Driver:    driver,
+		Path:      path,
+	})
 	s.mu.Unlock()
 }
 
@@ -140,8 +145,18 @@ func (s *State) RemoveReader(device string) {
 			log.Warn().Err(err).Msg("error closing reader")
 		}
 	}
+	ps := strings.SplitN(device, ":", 2)
+	driver := ps[0]
+	var path string
+	if len(ps) > 1 {
+		path = ps[1]
+	}
 	delete(s.readers, device)
-	notifications.ReadersRemoved(s.Notifications, device)
+	notifications.ReadersRemoved(s.Notifications, models.ReaderResponse{
+		Connected: false,
+		Driver:    driver,
+		Path:      path,
+	})
 	s.mu.Unlock()
 }
 
@@ -190,6 +205,18 @@ func (s *State) GetActivePlaylist() *playlists.Playlist {
 func (s *State) SetActivePlaylist(playlist *playlists.Playlist) {
 	s.mu.Lock()
 	s.activePlaylist = playlist
+	s.mu.Unlock()
+}
+
+func (s *State) ActiveMedia() *models.ActiveMedia {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeMedia
+}
+
+func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	s.mu.Lock()
+	s.activeMedia = media
 	s.mu.Unlock()
 }
 
