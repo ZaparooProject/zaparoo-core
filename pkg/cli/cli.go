@@ -165,7 +165,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			enableRun()
 			os.Exit(1)
 		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written sucessfully\n", *f.Write)
+			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
 			enableRun()
 			os.Exit(0)
 		}
