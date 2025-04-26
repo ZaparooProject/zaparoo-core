@@ -25,17 +25,17 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/symm">
-                    <img src="https://avatars.githubusercontent.com/u/69390?v=4" width="100;" alt="symm"/>
-                    <br />
-                    <sub><b>Gareth Jones</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/asturur">
                     <img src="https://avatars.githubusercontent.com/u/1194048?v=4" width="100;" alt="asturur"/>
                     <br />
                     <sub><b>Andrea Bogazzi</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/symm">
+                    <img src="https://avatars.githubusercontent.com/u/69390?v=4" width="100;" alt="symm"/>
+                    <br />
+                    <sub><b>Gareth Jones</b></sub>
                 </a>
             </td>
             <td align="center">
