@@ -41,7 +41,7 @@ import (
 // api: https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/services/HttpServerThread.cpp
 //      api access works locally with no changes
 
-//go:embed conf/zaparoo_service
+//go:embed scripts/services/zaparoo_service
 var serviceFile string
 
 const serviceFilePath = "/userdata/system/services/zaparoo_service"
