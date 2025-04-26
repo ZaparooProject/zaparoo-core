@@ -21,7 +21,7 @@ platform_docs: dict[str, str] = {
     "windows": "windows/index.md"
 }
 extra_files: dict[str, list[str]] = {
-    "batocera": ["cmd/batocera/conf/zaparoo_service"]
+    "batocera": ["cmd/batocera/scripts"]
 }
 
 
@@ -88,5 +88,8 @@ if __name__ == "__main__":
 
         if platform in extra_files:
             for file in extra_files[platform]:
-                shutil.copy(file, build_dir)
+                if os.path.isfile(file):
+                    shutil.copy(file, build_dir)
+                if os.path.isdir(file):
+                    shutil.copytree(file, build_dir, dirs_exist_ok=True)
                 dist.write(file, arcname=os.path.basename(file))
