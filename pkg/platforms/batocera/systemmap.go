@@ -129,7 +129,7 @@ var SystemMap = map[string]string{
 	"sg1000":      systemdefs.SystemSG1000,
 	"sgb":         systemdefs.SystemSuperGameboy,
 	"snes":        systemdefs.SystemSNES,
-	"snes-msu1":   systemdefs.SystemSNES,
+	"snes-msu1":   systemdefs.SystemSNESMSU1,
 	"supergrafx":  systemdefs.SystemSuperGrafx,
 	"supervision": systemdefs.SystemSuperVision,
 	"ti99":        systemdefs.SystemTI994A,
