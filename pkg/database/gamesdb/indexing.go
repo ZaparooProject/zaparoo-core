@@ -52,7 +52,7 @@ func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []syste
 	for _, system := range systems {
 		var launchers []platforms.Launcher
 		for _, l := range pl.Launchers() {
-			if l.SystemId == system.Id {
+			if l.SystemId == system.ID {
 				launchers = append(launchers, l)
 			}
 		}
@@ -200,13 +200,13 @@ func GetFiles(
 
 			for i := range zipFiles {
 				abs := filepath.Join(path, zipFiles[i])
-				if utils.MatchSystemFile(cfg, platform, (*system).Id, abs) {
+				if utils.MatchSystemFile(cfg, platform, (*system).ID, abs) {
 					*results = append(*results, abs)
 				}
 			}
 		} else {
 			// regular files
-			if utils.MatchSystemFile(cfg, platform, (*system).Id, path) {
+			if utils.MatchSystemFile(cfg, platform, (*system).ID, path) {
 				*results = append(*results, path)
 			}
 		}

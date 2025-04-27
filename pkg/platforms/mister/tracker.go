@@ -289,24 +289,24 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	meta, err := assets.GetSystemMetadata(system.Id)
+	meta, err := assets.GetSystemMetadata(system.ID)
 	if err != nil {
 		log.Error().Msgf("error getting system metadata %s", err)
 		return
 	}
 
-	id := fmt.Sprintf("%s/%s", system.Id, filename)
+	id := fmt.Sprintf("%s/%s", system.ID, filename)
 
 	if id != tr.ActiveGameId {
 		tr.ActiveGameId = id
 		tr.ActiveGameName = name
 		tr.ActiveGamePath = path
 
-		tr.ActiveSystem = system.Id
+		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
 		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
-			SystemID:   system.Id,
+			SystemID:   system.ID,
 			SystemName: meta.Name,
 			MediaName:  name,
 			MediaPath:  path,

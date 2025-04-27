@@ -197,7 +197,7 @@ func NewNamesIndex(
 
 	filteredIds := make([]string, 0)
 	for _, s := range systems {
-		filteredIds = append(filteredIds, s.Id)
+		filteredIds = append(filteredIds, s.ID)
 	}
 
 	indexed, err := readIndexedSystems(db)
@@ -221,13 +221,13 @@ func NewNamesIndex(
 	update(status)
 	systemPaths := make(map[string][]string)
 	for _, v := range GetSystemPaths(platform, platform.RootDirs(cfg), systems) {
-		systemPaths[v.System.Id] = append(systemPaths[v.System.Id], v.Path)
+		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 
 	g := new(errgroup.Group)
 	scanned := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
-		scanned[s.Id] = false
+		scanned[s.ID] = false
 	}
 
 	sysPathIds := utils.AlphaMapKeys(systemPaths)
@@ -325,20 +325,20 @@ func NewNamesIndex(
 
 	for _, l := range anyScanners {
 		for _, s := range systems {
-			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.Id)
-			results, err := l.Scanner(cfg, s.Id, []platforms.ScanResult{})
+			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.ID)
+			results, err := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
 			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.Id)
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.ID)
 				continue
 			}
 
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.Id)
+			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.ID)
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				scanned[s.Id] = true
+				scanned[s.ID] = true
 
-				systemId := s.Id
+				systemId := s.ID
 				g.Go(func() error {
 					fis := make([]fileInfo, 0)
 					for _, p := range results {
@@ -416,7 +416,7 @@ func searchNamesGeneric(
 		bn := tx.Bucket([]byte(BucketNames))
 
 		for _, system := range systems {
-			pre := []byte(system.Id + ":")
+			pre := []byte(system.ID + ":")
 			nameIdx := bytes.Index(pre, []byte(":"))
 
 			c := bn.Cursor()
@@ -425,7 +425,7 @@ func searchNamesGeneric(
 
 				if test(query, keyName) {
 					results = append(results, SearchResult{
-						SystemId: system.Id,
+						SystemId: system.ID,
 						Name:     keyName,
 						Path:     string(v),
 					})
@@ -535,7 +535,7 @@ func SystemIndexed(platform platforms.Platform, system systemdefs.System) bool {
 		return false
 	}
 
-	return utils.Contains(systems, system.Id)
+	return utils.Contains(systems, system.ID)
 }
 
 // Return all systems indexed in the gamesdb
@@ -592,14 +592,14 @@ func RandomGame(platform platforms.Platform, systems []systemdefs.System) (Searc
 	err = db.View(func(tx *bolt.Tx) error {
 		bn := tx.Bucket([]byte(BucketNames))
 
-		pre := []byte(system.Id + ":")
+		pre := []byte(system.ID + ":")
 		nameIdx := bytes.Index(pre, []byte(":"))
 
 		c := bn.Cursor()
 		for k, v := c.Seek(pre); k != nil && bytes.HasPrefix(k, pre); k, v = c.Next() {
 			keyName := string(k[nameIdx+1:])
 			possible = append(possible, SearchResult{
-				SystemId: system.Id,
+				SystemId: system.ID,
 				Name:     keyName,
 				Path:     string(v),
 			})
@@ -612,7 +612,7 @@ func RandomGame(platform platforms.Platform, systems []systemdefs.System) (Searc
 	}
 
 	if len(possible) == 0 {
-		return result, fmt.Errorf("no games found for system: %s", system.Id)
+		return result, fmt.Errorf("no games found for system: %s", system.ID)
 	}
 
 	result, err = utils.RandomElem(possible)
