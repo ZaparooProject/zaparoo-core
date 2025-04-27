@@ -32,7 +32,7 @@ import (
 type Platform struct {
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDWindows
 }
 

@@ -48,7 +48,7 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDBatocera
 }
 

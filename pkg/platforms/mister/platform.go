@@ -98,7 +98,7 @@ func (p *Platform) SetDB(uidMap map[string]string, textMap map[string]string) {
 	p.textMap = textMap
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDMister
 }
 

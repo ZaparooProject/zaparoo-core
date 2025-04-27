@@ -158,7 +158,7 @@ func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDe
 		SetTitle("Log export")
 
 	// create the main modal
-	modal.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.Id() + ")").
+	modal.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ")").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 	modal.SetText(text).

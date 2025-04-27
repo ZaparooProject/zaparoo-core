@@ -90,8 +90,8 @@ type Launcher struct {
 }
 
 type Platform interface {
-	// Id returns the unique ID of this platform.
-	Id() string
+	// ID returns the unique ID of this platform.
+	ID() string
 	// StartPre runs any necessary platform setup functions before the main
 	// service has started running.
 	StartPre(*config.Instance) error

@@ -36,7 +36,7 @@ type Platform struct {
 	stopTr func() error
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDMistex
 }
 

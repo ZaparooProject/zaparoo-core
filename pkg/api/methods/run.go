@@ -227,7 +227,7 @@ func InstallRunMedia(
 	pl platforms.Platform,
 	launchArgs zapScriptModels.CmdLaunchArgs,
 ) (string, error) {
-	if pl.Id() != platforms.PlatformIDMister {
+	if pl.ID() != platforms.PlatformIDMister {
 		return "", errors.New("media install only supported for mister")
 	}
 
