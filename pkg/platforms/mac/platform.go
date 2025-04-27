@@ -51,7 +51,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
+func (p *Platform) ScanHook(token tokens.Token) error {
 	return nil
 }
 

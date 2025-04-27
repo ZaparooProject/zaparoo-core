@@ -157,7 +157,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) AfterScanHook(_ tokens.Token) error {
+func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 

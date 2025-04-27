@@ -92,11 +92,11 @@ type Launcher struct {
 type Platform interface {
 	// ID returns the unique ID of this platform.
 	ID() string
-	// StartPre runs any necessary platform setup BEFORE the main
-	// service has started running.
+	// StartPre runs any necessary platform setup BEFORE the main service has
+	// started running.
 	StartPre(*config.Instance) error
-	// StartPost runs any necessary platform setup AFTER the main
-	// service has started running.
+	// StartPost runs any necessary platform setup AFTER the main service has
+	// started running.
 	StartPost(
 		*config.Instance,
 		func() *models.ActiveMedia,
@@ -105,9 +105,9 @@ type Platform interface {
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
 	Stop() error
-	// AfterScanHook is run immediately after a successful scan, but before
-	// it is processed for launching.
-	AfterScanHook(tokens.Token) error
+	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
+	// processed for launching.
+	ScanHook(tokens.Token) error
 	// ReadersUpdateHook runs after a change has occurred with the state of
 	// the connected readers (i.e. when a reader is connected or disconnected),
 	// and is given the current new state of readers connected.

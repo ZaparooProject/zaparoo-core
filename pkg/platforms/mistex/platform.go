@@ -170,7 +170,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
+func (p *Platform) ScanHook(token tokens.Token) error {
 	f, err := os.Create(mister.TokenReadFile)
 	if err != nil {
 		return fmt.Errorf("unable to create scan result file %s: %s", mister.TokenReadFile, err)
