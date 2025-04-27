@@ -402,7 +402,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
 			Id:       "Steam",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
 				cfg *config.Instance,
@@ -429,7 +429,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		},
 		{
 			Id:       "Flashpoint",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
 			Launch: func(cfg *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "flashpoint://")

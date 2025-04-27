@@ -52,7 +52,7 @@ func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []syste
 	for _, system := range systems {
 		var launchers []platforms.Launcher
 		for _, l := range pl.Launchers() {
-			if l.SystemId == system.ID {
+			if l.SystemID == system.ID {
 				launchers = append(launchers, l)
 			}
 		}

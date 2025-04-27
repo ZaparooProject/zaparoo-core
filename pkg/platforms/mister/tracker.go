@@ -283,7 +283,7 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	system, err := systemdefs.GetSystem(launchers[0].SystemId)
+	system, err := systemdefs.GetSystem(launchers[0].SystemID)
 	if err != nil {
 		log.Error().Msgf("error getting system %s", err)
 		return

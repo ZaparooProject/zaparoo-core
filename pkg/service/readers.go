@@ -204,8 +204,8 @@ func readerManager(
 			var systemIds []string
 			for _, l := range pl.Launchers() {
 				if l.Id == activeLauncher {
-					systemIds = append(systemIds, l.SystemId)
-					system, err := systemdefs.LookupSystem(l.SystemId)
+					systemIds = append(systemIds, l.SystemID)
+					system, err := systemdefs.LookupSystem(l.SystemID)
 					if err == nil {
 						systemIds = append(systemIds, system.Aliases...)
 					}

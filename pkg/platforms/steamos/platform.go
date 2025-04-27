@@ -193,7 +193,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
 			Id:       "Steam",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
 				cfg *config.Instance,

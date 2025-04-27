@@ -65,7 +65,7 @@ type Launcher struct {
 	// Unique ID of the launcher, visible to user.
 	Id string
 	// Systems associated with this launcher.
-	SystemId string
+	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.
 	// TODO: Support absolute paths?
 	// TODO: rename RootDirs

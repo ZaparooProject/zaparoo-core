@@ -244,7 +244,7 @@ func InstallRunMedia(
 
 	var launchers []platforms.Launcher
 	for _, l := range pl.Launchers() {
-		if l.SystemId == system.ID {
+		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}
 	}

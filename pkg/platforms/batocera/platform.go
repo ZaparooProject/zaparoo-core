@@ -163,7 +163,38 @@ func (p *Platform) TempDir() string {
 }
 
 func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
+	originalPath := path
+	newPath := strings.ReplaceAll(path, "\\", "/")
+	lowerPath := strings.ToLower(newPath)
+
+	gotRoot := false
+	for _, rootDir := range p.RootDirs(nil) {
+		rootDir = strings.ReplaceAll(rootDir, "\\", "/")
+		rootDir = strings.ToLower(rootDir)
+		if strings.HasPrefix(lowerPath, rootDir) {
+			gotRoot = true
+			newPath = path[len(rootDir):]
+			if newPath[0] == '/' {
+				newPath = newPath[1:]
+			}
+			break
+		}
+	}
+	if !gotRoot {
+		return originalPath
+	}
+
+	parts := strings.Split(newPath, "/")
+	if len(parts) < 2 {
+		return originalPath
+	}
+
+	system, err := fromBatoceraSystem(parts[0])
+	if err != nil || system == "" {
+		return originalPath
+	}
+
+	return system + "/" + strings.Join(parts[1:], "/")
 }
 
 func (p *Platform) KillLauncher() error {
@@ -422,8 +453,9 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	for k, v := range SystemMap {
 		launchers = append(launchers, platforms.Launcher{
-			Id:      v,
-			Folders: []string{k},
+			Id:       v,
+			SystemID: v,
+			Folders:  []string{k},
 			Launch: func(cfg *config.Instance, path string) error {
 				return apiLaunch(path)
 			},
