@@ -119,6 +119,7 @@ const (
 	SystemSuperVision       = "SuperVision"
 	SystemSaturn            = "Saturn"
 	SystemSNES              = "SNES"
+	SystemSNESMSU1          = "SNESMSU1"
 	SystemSNESMusic         = "SNESMusic"
 	SystemSuperGrafx        = "SuperGrafx"
 	SystemSwitch            = "Switch"
@@ -411,6 +412,10 @@ var Systems = map[string]System{
 	SystemSNES: {
 		ID:      SystemSNES,
 		Aliases: []string{"SuperNintendo"},
+	},
+	SystemSNESMSU1: {
+		ID:      SystemSNESMSU1,
+		Aliases: []string{"MSU1", "MSU-1"},
 	},
 	SystemSNESMusic: {
 		ID: SystemSNESMusic,
