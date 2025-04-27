@@ -19,7 +19,7 @@ const (
 	IDSourceUUID      = "uuid"
 	IDSourceLabel     = "label"
 	IDSourceMerged    = "merged"
-	MergedIDSeparator = ":"
+	MergedIDSeparator = "/"
 )
 
 type FileReader struct {
