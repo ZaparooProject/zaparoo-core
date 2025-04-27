@@ -566,7 +566,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
 		Id:         systemdefs.SystemAmiga,
-		SystemId:   systemdefs.SystemAmiga,
+		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -629,7 +629,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	neogeo := platforms.Launcher{
 		Id:         systemdefs.SystemNeoGeo,
-		SystemId:   systemdefs.SystemNeoGeo,
+		SystemID:   systemdefs.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -706,7 +706,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	mplayerVideo := platforms.Launcher{
 		Id:         "MPlayerVideo",
-		SystemId:   systemdefs.SystemVideo,
+		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi"},
 		Launch:     launchMPlayer(p),

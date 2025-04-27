@@ -244,13 +244,13 @@ func InstallRunMedia(
 
 	var launchers []platforms.Launcher
 	for _, l := range pl.Launchers() {
-		if l.SystemId == system.Id {
+		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}
 	}
 
 	if len(launchers) == 0 {
-		return "", fmt.Errorf("no launchers for system: %s", system.Id)
+		return "", fmt.Errorf("no launchers for system: %s", system.ID)
 	}
 
 	// just use the first launcher for now

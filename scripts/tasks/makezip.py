@@ -20,7 +20,9 @@ platform_docs: dict[str, str] = {
     "steamos": "steamos.md",
     "windows": "windows/index.md"
 }
-extra_files: dict[str, list[str]] = {
+# files will be copied to the root of the zip
+# dirs will copy the entire dir and preserve the structure
+extra_items: dict[str, list[str]] = {
     "batocera": ["cmd/batocera/scripts"]
 }
 
@@ -76,9 +78,7 @@ if __name__ == "__main__":
         os.remove(zip_path)
 
     readme_path = os.path.join(build_dir, "README.txt")
-    if os.path.exists(readme_path):
-        print(f"File '{readme_path}' already exists. Skipping download.")
-    else:
+    if not os.path.exists(readme_path):
         download_doc(platform, build_dir)
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as dist:
@@ -86,10 +86,19 @@ if __name__ == "__main__":
         dist.write(license_path, arcname=os.path.basename(license_path))
         dist.write(readme_path, arcname=os.path.basename(readme_path))
 
-        if platform in extra_files:
-            for file in extra_files[platform]:
-                if os.path.isfile(file):
-                    shutil.copy(file, build_dir)
-                if os.path.isdir(file):
-                    shutil.copytree(file, build_dir, dirs_exist_ok=True)
-                dist.write(file, arcname=os.path.basename(file))
+        if platform in extra_items:
+            for item in extra_items[platform]:
+                if os.path.isfile(item):
+                    # copy single files to the root of the zip
+                    extra_file = os.path.join(build_dir, os.path.basename(item))
+                    shutil.copy(item, build_dir)
+                    dist.write(extra_file, arcname=os.path.basename(item))
+                if os.path.isdir(item):
+                    extra_dir = os.path.join(build_dir, os.path.basename(item))
+                    if not os.path.exists(extra_dir):
+                        os.makedirs(extra_dir)
+                    shutil.copytree(item, extra_dir, dirs_exist_ok=True)
+                    for root, dirs, files in os.walk(extra_dir):
+                        for file in files:
+                            path = str(os.path.join(root, file))
+                            dist.write(path, arcname=os.path.join(os.path.relpath(root, build_dir), file))

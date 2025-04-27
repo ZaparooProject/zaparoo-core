@@ -73,9 +73,9 @@ func (s *IndexingStatus) GenerateMediaDB(
 				if err != nil {
 					s.CurrentDesc = status.SystemId
 				} else {
-					md, err := assets.GetSystemMetadata(system.Id)
+					md, err := assets.GetSystemMetadata(system.ID)
 					if err != nil {
-						s.CurrentDesc = system.Id
+						s.CurrentDesc = system.ID
 					} else {
 						s.CurrentDesc = md.Name
 					}
@@ -209,8 +209,8 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 
 		results = append(results, models.SearchResultMedia{
 			System: models.System{
-				Id:   system.Id,
-				Name: system.Id,
+				Id:   system.ID,
+				Name: system.ID,
 			},
 			Name: result.Name,
 			Path: env.Platform.NormalizePath(env.Config, result.Path),
@@ -283,13 +283,13 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("error looking up system: %w", err)
 	}
 
-	systemMeta, err := assets.GetSystemMetadata(system.Id)
+	systemMeta, err := assets.GetSystemMetadata(system.ID)
 	if err != nil {
 		return nil, fmt.Errorf("error getting system metadata: %w", err)
 	}
 
 	activeMedia := models.ActiveMedia{
-		SystemId:   system.Id,
+		SystemId:   system.ID,
 		SystemName: systemMeta.Name,
 		MediaName:  params.MediaName,
 		MediaPath:  env.Platform.NormalizePath(env.Config, params.MediaPath),

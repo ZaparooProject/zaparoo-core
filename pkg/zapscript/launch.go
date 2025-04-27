@@ -222,7 +222,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	var launchers []platforms.Launcher
 	for _, l := range pl.Launchers() {
-		if l.SystemId == system.Id {
+		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}
 	}
@@ -238,6 +238,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	for _, f := range folders {
 		systemPath := filepath.Join(f, path)
+		log.Debug().Msgf("checking system path: %s", systemPath)
 		if fp, err := findFile(pl, env.Cfg, systemPath); err == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
 			return platforms.CmdResult{
@@ -255,7 +256,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			// TODO: passthrough advanced args
 			return cmdSearch(pl, env)
 		} else {
-			log.Info().Msgf("searching in %s: %s", system.Id, path)
+			log.Info().Msgf("searching in %s: %s", system.ID, path)
 			// treat as a direct title launch
 			res, err := gamesdb.SearchNamesExact(
 				pl,

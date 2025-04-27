@@ -3,6 +3,7 @@ package batocera
 import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"strings"
 )
 
 var SystemMap = map[string]string{
@@ -129,7 +130,7 @@ var SystemMap = map[string]string{
 	"sg1000":      systemdefs.SystemSG1000,
 	"sgb":         systemdefs.SystemSuperGameboy,
 	"snes":        systemdefs.SystemSNES,
-	"snes-msu1":   systemdefs.SystemSNES,
+	"snes-msu1":   systemdefs.SystemSNESMSU1,
 	"supergrafx":  systemdefs.SystemSuperGrafx,
 	"supervision": systemdefs.SystemSuperVision,
 	"ti99":        systemdefs.SystemTI994A,
@@ -147,14 +148,6 @@ var SystemMap = map[string]string{
 	"zxspectrum": systemdefs.SystemZXSpectrum,
 }
 
-var ReverseSystemMap = map[string]string{}
-
-func init() {
-	for k, v := range SystemMap {
-		ReverseSystemMap[v] = k
-	}
-}
-
 func fromBatoceraSystem(batoceraSystem string) (string, error) {
 	v, ok := SystemMap[batoceraSystem]
 	if !ok {
@@ -163,10 +156,12 @@ func fromBatoceraSystem(batoceraSystem string) (string, error) {
 	return v, nil
 }
 
-func toBatoceraSystem(zaparooSystem string) (string, error) {
-	v, ok := ReverseSystemMap[zaparooSystem]
-	if !ok {
-		return "", fmt.Errorf("unknown system: %s", zaparooSystem)
+func toBatoceraSystems(zaparooSystem string) ([]string, error) {
+	var results []string
+	for k, v := range SystemMap {
+		if strings.EqualFold(zaparooSystem, v) {
+			results = append(results, k)
+		}
 	}
-	return v, nil
+	return results, nil
 }

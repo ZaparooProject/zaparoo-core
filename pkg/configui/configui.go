@@ -311,7 +311,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 
 	allSystems := []string{""}
 	for _, item := range systemdefs.AllSystems() {
-		allSystems = append(allSystems, item.Id)
+		allSystems = append(allSystems, item.ID)
 	}
 
 	exitDelay := cfg.ReadersScan().ExitDelay
