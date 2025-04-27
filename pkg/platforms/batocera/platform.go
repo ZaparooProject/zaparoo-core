@@ -432,23 +432,25 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				systemID string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				batSysName, err := toBatoceraSystem(systemID)
+				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {
 					return nil, err
 				}
 
-				for _, rootDir := range p.RootDirs(cfg) {
-					gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
-					gameList, err := readESGameListXML(gameListPath)
-					if err != nil {
-						log.Error().Msgf("error reading gamelist.xml: %s", err)
-						continue
-					}
-					for _, game := range gameList.Games {
-						results = append(results, platforms.ScanResult{
-							Name: game.Name,
-							Path: filepath.Join(rootDir, batSysName, game.Path),
-						})
+				for _, batSysName := range batSysNames {
+					for _, rootDir := range p.RootDirs(cfg) {
+						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
+						gameList, err := readESGameListXML(gameListPath)
+						if err != nil {
+							log.Error().Msgf("error reading gamelist.xml: %s", err)
+							continue
+						}
+						for _, game := range gameList.Games {
+							results = append(results, platforms.ScanResult{
+								Name: game.Name,
+								Path: filepath.Join(rootDir, batSysName, game.Path),
+							})
+						}
 					}
 				}
 
