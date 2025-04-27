@@ -27,7 +27,7 @@ func shouldExit(
 	}
 
 	// do not exit from menu, there is nowhere to go anyway
-	if pl.GetActiveLauncher() == "" {
+	if st.ActiveMedia().SystemID == "" {
 		return false
 	}
 
@@ -35,7 +35,7 @@ func shouldExit(
 		return false
 	}
 
-	if inExitGameBlocklist(pl, cfg) {
+	if inExitGameBlocklist(cfg, st) {
 		return false
 	}
 
@@ -193,7 +193,7 @@ func readerManager(
 				return
 			}
 
-			activeLauncher := pl.GetActiveLauncher()
+			activeLauncher := st.ActiveMedia().LauncherID
 			softToken := st.GetSoftwareToken()
 			if activeLauncher == "" || softToken == nil {
 				log.Debug().Msg("no active launcher, not exiting")

@@ -88,10 +88,31 @@ type ReaderResponse struct {
 }
 
 type ActiveMedia struct {
-	SystemId   string `json:"systemId"`
-	SystemName string `json:"systemName"`
-	MediaPath  string `json:"mediaPath"`
-	MediaName  string `json:"mediaName"`
+	LauncherID string    `json:"launcherId"`
+	SystemID   string    `json:"systemId"`
+	SystemName string    `json:"systemName"`
+	Path       string    `json:"mediaPath"`
+	Name       string    `json:"mediaName"`
+	Started    time.Time `json:"started"`
+}
+
+func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
+	if with == nil {
+		return false
+	}
+	if a.SystemID != with.SystemID {
+		return false
+	}
+	if a.SystemName != with.SystemName {
+		return false
+	}
+	if a.Path != with.Path {
+		return false
+	}
+	if a.Name != with.Name {
+		return false
+	}
+	return true
 }
 
 type VersionResponse struct {

@@ -34,14 +34,18 @@ const (
 	AssetsDir            = "assets"
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
-	HomeDir              = "/userdata/system"
-	DataDir              = HomeDir + "/.local/share/" + config.AppName
-	ConfigDir            = HomeDir + "/.config/" + config.AppName
+	// HomeDir is hardcoded because home in env is not set at the point which
+	// the service file is called to start.
+	HomeDir   = "/userdata/system"
+	DataDir   = HomeDir + "/.local/share/" + config.AppName
+	ConfigDir = HomeDir + "/.config/" + config.AppName
 )
 
 type Platform struct {
-	kbd input.Keyboard
-	gpd uinput.Gamepad
+	kbd            input.Keyboard
+	gpd            uinput.Gamepad
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
 }
 
 func (p *Platform) Id() string {
@@ -106,7 +110,39 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
-func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
+
+	game, running, err := apiRunningGame()
+	if err != nil {
+		return err
+	}
+	if running {
+		systemID, err := fromBatoceraSystem(game.SystemName)
+		if err != nil {
+			return err
+		}
+
+		systemMeta, err := assets.GetSystemMetadata(systemID)
+		if err != nil {
+			return err
+		}
+
+		p.setActiveMedia(&models.ActiveMedia{
+			SystemID:   systemID,
+			SystemName: systemMeta.Name,
+			Name:       game.Name,
+			Path:       p.NormalizePath(cfg, game.Path),
+		})
+	} else {
+		p.setActiveMedia(nil)
+	}
+
 	return nil
 }
 
@@ -221,23 +257,6 @@ func (p *Platform) KillLauncher() error {
 	return fmt.Errorf("failed to kill launcher")
 }
 
-func (p *Platform) GetActiveLauncher() string {
-	game, running, err := apiRunningGame()
-	if err != nil {
-		log.Error().Msgf("error getting running game: %s", err)
-		return ""
-	} else if !running {
-		return ""
-	} else {
-		system, err := fromBatoceraSystem(game.SystemName)
-		if err != nil {
-			log.Error().Msgf("error converting system name: %s", err)
-			return ""
-		}
-		return system
-	}
-}
-
 func (p *Platform) PlayFailSound(cfg *config.Instance) {
 	if !cfg.AudioFeedback() {
 		return
@@ -257,64 +276,6 @@ func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 	err := exec.Command("aplay", successPath).Start()
 	if err != nil {
 		log.Error().Msgf("error playing success sound: %s", err)
-	}
-}
-
-func (p *Platform) ActiveSystem() string {
-	game, running, err := apiRunningGame()
-	if err != nil {
-		log.Error().Msgf("error getting running game: %s", err)
-		return ""
-	} else if !running {
-		return ""
-	} else {
-		system, err := fromBatoceraSystem(game.SystemName)
-		if err != nil {
-			log.Error().Msgf("error converting system name: %s", err)
-			return ""
-		}
-		return system
-	}
-}
-
-func (p *Platform) ActiveGame() string {
-	game, running, err := apiRunningGame()
-	if err != nil {
-		log.Error().Msgf("error getting running game: %s", err)
-		return ""
-	} else if !running {
-		return ""
-	} else {
-		system, err := fromBatoceraSystem(game.SystemName)
-		if err != nil {
-			log.Error().Msgf("error converting system name: %s", err)
-			return ""
-		}
-		return system + "/" + game.Name
-	}
-}
-
-func (p *Platform) ActiveGameName() string {
-	game, running, err := apiRunningGame()
-	if err != nil {
-		log.Error().Msgf("error getting running game: %s", err)
-		return ""
-	} else if !running {
-		return ""
-	} else {
-		return game.Name
-	}
-}
-
-func (p *Platform) ActiveGamePath() string {
-	game, running, err := apiRunningGame()
-	if err != nil {
-		log.Error().Msgf("error getting running game: %s", err)
-		return ""
-	} else if !running {
-		return ""
-	} else {
-		return game.Path
 	}
 }
 

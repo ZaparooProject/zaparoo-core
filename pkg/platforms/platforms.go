@@ -97,7 +97,11 @@ type Platform interface {
 	StartPre(*config.Instance) error
 	// StartPost runs any necessary platform setup function after the main
 	// service has started running.
-	StartPost(*config.Instance, chan<- models.Notification) error
+	StartPost(
+		*config.Instance,
+		func() *models.ActiveMedia,
+		func(*models.ActiveMedia),
+	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
 	Stop() error
@@ -134,27 +138,15 @@ type Platform interface {
 	NormalizePath(*config.Instance, string) string
 	// KillLauncher kills the currently running launcher process, if possible.
 	KillLauncher() error
-	// GetActiveLauncher returns the ID of the currently active launcher or an
-	// empty string if none.
-	GetActiveLauncher() string
 	// PlayFailSound plays a sound effect for error feedback.
 	// TODO: merge with PlaySuccessSound into single PlayAudio function?
 	PlayFailSound(*config.Instance)
 	// PlaySuccessSound plays a sound effect for success feedback.
 	PlaySuccessSound(*config.Instance)
-	// ActiveSystem returns the currently active system ID.
-	ActiveSystem() string
-	// ActiveGame returns the currently active game ID.
-	ActiveGame() string // TODO: check where this is used
-	// ActiveGameName returns the currently active game name.
-	ActiveGameName() string
-	// ActiveGamePath returns the currently active game file path.
-	ActiveGamePath() string
 	// LaunchSystem launches a system by ID, if possible for platform.
 	LaunchSystem(*config.Instance, string) error
 	// LaunchFile launches a file by path.
-	// TODO: i don't think this needs to exist now launch logic is on the
-	// launcher. better to be one func outside platform
+	// TODO: rename Launch
 	LaunchFile(*config.Instance, string) error
 	KeyboardInput(string) error // DEPRECATED
 	KeyboardPress(string) error

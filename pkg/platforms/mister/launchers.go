@@ -221,7 +221,7 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 
 		vt := "4"
 
-		if pl.ActiveSystem() != "" {
+		if pl.activeMedia().SystemID != "" {
 
 		}
 

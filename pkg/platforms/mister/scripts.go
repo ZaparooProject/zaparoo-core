@@ -84,7 +84,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		hidden = true
 	}
 
-	if pl.GetActiveLauncher() != "" && !hidden {
+	if pl.activeMedia().SystemID != "" && !hidden {
 		// menu must be open to switch tty and launch script
 		log.Debug().Msg("killing launcher...")
 		err := pl.KillLauncher()

@@ -63,7 +63,11 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
-func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
+func (p *Platform) StartPost(
+	_ *config.Instance,
+	_ func() *models.ActiveMedia,
+	_ func(*models.ActiveMedia),
+) error {
 	return nil
 }
 
@@ -120,30 +124,10 @@ func (p *Platform) KillLauncher() error {
 	return nil
 }
 
-func (p *Platform) GetActiveLauncher() string {
-	return ""
-}
-
 func (p *Platform) PlayFailSound(_ *config.Instance) {
 }
 
 func (p *Platform) PlaySuccessSound(_ *config.Instance) {
-}
-
-func (p *Platform) ActiveSystem() string {
-	return ""
-}
-
-func (p *Platform) ActiveGame() string {
-	return ""
-}
-
-func (p *Platform) ActiveGameName() string {
-	return ""
-}
-
-func (p *Platform) ActiveGamePath() string {
-	return ""
 }
 
 func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {

@@ -43,12 +43,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func inExitGameBlocklist(platform platforms.Platform, cfg *config.Instance) bool {
+func inExitGameBlocklist(
+	cfg *config.Instance,
+	state *state.State,
+) bool {
 	var blocklist []string
 	for _, v := range cfg.ReadersScan().IgnoreSystem {
 		blocklist = append(blocklist, strings.ToLower(v))
 	}
-	return slices.Contains(blocklist, strings.ToLower(platform.GetActiveLauncher()))
+	return slices.Contains(blocklist, strings.ToLower(state.ActiveMedia().SystemID))
 }
 
 func launchToken(
@@ -309,7 +312,7 @@ func Start(
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
 
 	log.Info().Msg("running platform post start")
-	err = pl.StartPost(cfg, st.Notifications)
+	err = pl.StartPost(cfg, st.ActiveMedia, st.SetActiveMedia)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
 		return nil, err

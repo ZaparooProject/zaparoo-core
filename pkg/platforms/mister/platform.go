@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
 	"github.com/bendahl/uinput"
 	"github.com/rs/zerolog/log"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	"github.com/wizzomafizzo/mrext/pkg/input"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
@@ -55,6 +54,8 @@ type Platform struct {
 	platformMu          sync.Mutex
 	lastLauncher        platforms.Launcher
 	lastUIHidden        time.Time
+	activeMedia         func() *models.ActiveMedia
+	setActiveMedia      func(*models.ActiveMedia)
 }
 
 func NewPlatform() *Platform {
@@ -235,8 +236,21 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
-func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
-	tr, stopTr, err := StartTracker(*UserConfigToMrext(cfg), ns, cfg, p)
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
+
+	tr, stopTr, err := StartTracker(
+		*UserConfigToMrext(cfg),
+		cfg,
+		p,
+		activeMedia,
+		setActiveMedia,
+	)
 	if err != nil {
 		return err
 	}
@@ -375,49 +389,12 @@ func (p *Platform) KillLauncher() error {
 	return nil
 }
 
-func (p *Platform) GetActiveLauncher() string {
-	lastLauncher := p.getLastLauncher()
-	if lastLauncher.Id != "" {
-		return lastLauncher.Id
-	}
-
-	core := GetActiveCoreName()
-
-	if core == mrextConfig.MenuCore {
-		return ""
-	}
-
-	for _, l := range p.Launchers() {
-		if strings.EqualFold(l.Id, core) {
-			return l.Id
-		}
-	}
-
-	return core
-}
-
 func (p *Platform) PlayFailSound(cfg *config.Instance) {
 	PlayFail(cfg)
 }
 
 func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 	PlaySuccess(cfg)
-}
-
-func (p *Platform) ActiveSystem() string {
-	return p.tracker.ActiveSystem
-}
-
-func (p *Platform) ActiveGame() string {
-	return p.tracker.ActiveGameId
-}
-
-func (p *Platform) ActiveGameName() string {
-	return p.tracker.ActiveGameName
-}
-
-func (p *Platform) ActiveGamePath() string {
-	return p.tracker.ActiveGamePath
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {

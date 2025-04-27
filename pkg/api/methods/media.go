@@ -236,17 +236,18 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		Active: make([]models.ActiveMedia, 0),
 	}
 
-	if env.Platform.ActiveGamePath() != "" {
-		system, err := assets.GetSystemMetadata(env.Platform.ActiveSystem())
+	activeMedia := env.State.ActiveMedia()
+	if activeMedia.Path != "" {
+		system, err := assets.GetSystemMetadata(activeMedia.SystemID)
 		if err != nil {
 			return nil, errors.New("error getting system metadata: " + err.Error())
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
-			SystemId:   system.Id,
+			SystemID:   system.Id,
 			SystemName: system.Name,
-			MediaName:  env.Platform.ActiveGameName(),
-			MediaPath:  env.Platform.NormalizePath(env.Config, env.Platform.ActiveGamePath()),
+			Name:       activeMedia.Name,
+			Path:       env.Platform.NormalizePath(env.Config, activeMedia.Path),
 		})
 	}
 
@@ -289,10 +290,10 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	activeMedia := models.ActiveMedia{
-		SystemId:   system.ID,
+		SystemID:   system.ID,
 		SystemName: systemMeta.Name,
-		MediaName:  params.MediaName,
-		MediaPath:  env.Platform.NormalizePath(env.Config, params.MediaPath),
+		Name:       params.MediaName,
+		Path:       env.Platform.NormalizePath(env.Config, params.MediaPath),
 	}
 
 	env.State.SetActiveMedia(&activeMedia)
@@ -308,9 +309,9 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	return models.ActiveMedia{
-		SystemId:   media.SystemId,
+		SystemID:   media.SystemID,
 		SystemName: media.SystemName,
-		MediaName:  media.MediaName,
-		MediaPath:  media.MediaPath,
+		Name:       media.Name,
+		Path:       media.Path,
 	}, nil
 }

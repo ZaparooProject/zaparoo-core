@@ -105,8 +105,18 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
-func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
-	tr, stopTr, err := mister.StartTracker(*mister.UserConfigToMrext(cfg), ns, cfg, p)
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) error {
+	tr, stopTr, err := mister.StartTracker(
+		*mister.UserConfigToMrext(cfg),
+		cfg,
+		p,
+		activeMedia,
+		setActiveMedia,
+	)
 	if err != nil {
 		return err
 	}
