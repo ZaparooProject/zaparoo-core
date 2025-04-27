@@ -49,7 +49,7 @@ func mappingKey(id string) []byte {
 	return []byte(fmt.Sprintf("mappings:%s", id))
 }
 
-func NormalizeUid(uid string) string {
+func NormalizeID(uid string) string {
 	uid = strings.TrimSpace(uid)
 	uid = strings.ToLower(uid)
 	uid = strings.ReplaceAll(uid, ":", "")
@@ -66,7 +66,7 @@ func (d *Database) AddMapping(m Mapping) error {
 	}
 
 	if m.Type == MappingTypeUID {
-		m.Pattern = NormalizeUid(m.Pattern)
+		m.Pattern = NormalizeID(m.Pattern)
 	}
 
 	if m.Pattern == "" {
@@ -128,7 +128,7 @@ func (d *Database) UpdateMapping(id string, m Mapping) error {
 	}
 
 	if m.Type == MappingTypeUID {
-		m.Pattern = NormalizeUid(m.Pattern)
+		m.Pattern = NormalizeID(m.Pattern)
 	}
 
 	if m.Pattern == "" {
