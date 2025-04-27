@@ -289,7 +289,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
 }
 
-func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return mm.LaunchGenericFile(mister.UserConfigToMrext(cfg), path)
 }
 

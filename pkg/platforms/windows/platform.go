@@ -121,7 +121,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return nil
 }
 
-func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	launchers := utils.PathToLaunchers(cfg, p, path)
 	if len(launchers) == 0 {
 		return errors.New("no launcher found")

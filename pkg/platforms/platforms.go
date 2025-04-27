@@ -92,10 +92,10 @@ type Launcher struct {
 type Platform interface {
 	// ID returns the unique ID of this platform.
 	ID() string
-	// StartPre runs any necessary platform setup functions before the main
+	// StartPre runs any necessary platform setup BEFORE the main
 	// service has started running.
 	StartPre(*config.Instance) error
-	// StartPost runs any necessary platform setup function after the main
+	// StartPost runs any necessary platform setup AFTER the main
 	// service has started running.
 	StartPost(
 		*config.Instance,
@@ -145,9 +145,8 @@ type Platform interface {
 	PlaySuccessSound(*config.Instance)
 	// LaunchSystem launches a system by ID, if possible for platform.
 	LaunchSystem(*config.Instance, string) error
-	// LaunchFile launches a file by path.
-	// TODO: rename Launch
-	LaunchFile(*config.Instance, string) error
+	// LaunchMedia launches a file by path.
+	LaunchMedia(*config.Instance, string) error
 	KeyboardInput(string) error // DEPRECATED
 	KeyboardPress(string) error
 	GamepadPress(string) error

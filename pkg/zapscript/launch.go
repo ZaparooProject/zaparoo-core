@@ -165,7 +165,7 @@ func getAltLauncher(
 		}, nil
 	} else {
 		return func(args string) error {
-			return pl.LaunchFile(env.Cfg, args)
+			return pl.LaunchMedia(env.Cfg, args)
 		}, nil
 	}
 }
