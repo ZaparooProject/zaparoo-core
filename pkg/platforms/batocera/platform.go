@@ -174,7 +174,7 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 		if strings.HasPrefix(lowerPath, rootDir) {
 			gotRoot = true
 			newPath = path[len(rootDir):]
-			if newPath[0] == '/' {
+			if len(newPath) > 0 && newPath[0] == '/' {
 				newPath = newPath[1:]
 			}
 			break
