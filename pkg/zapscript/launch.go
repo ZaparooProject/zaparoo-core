@@ -11,7 +11,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -37,8 +36,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 		return err
 	}
 
+	gamesdb := env.Database.MediaDB
+
 	if env.Args == "all" {
-		game, err := gamesdb.RandomGame(pl, systemdefs.AllSystems())
+		game, err := gamesdb.RandomGame(systemdefs.AllSystems())
 		if err != nil {
 			return err
 		}
@@ -86,7 +87,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 
 		query = strings.ToLower(query)
 
-		res, err := gamesdb.SearchNamesGlob(pl, []systemdefs.System{*system}, query)
+		res, err := gamesdb.SearchMediaPathGlob([]systemdefs.System{*system}, query)
 		if err != nil {
 			return err
 		}
@@ -116,7 +117,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) error {
 		systems = append(systems, *system)
 	}
 
-	game, err := gamesdb.RandomGame(pl, systems)
+	game, err := gamesdb.RandomGame(systems)
 	if err != nil {
 		return err
 	}
@@ -224,6 +225,8 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) error {
 		}
 	}
 
+	gamesdb := env.Database.MediaDB
+
 	// search if the path contains no / or file extensions
 	if !strings.Contains(path, "/") && filepath.Ext(path) == "" {
 		if strings.Contains(path, "*") {
@@ -233,8 +236,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) error {
 		} else {
 			log.Info().Msgf("searching in %s: %s", system.Id, path)
 			// treat as a direct title launch
-			res, err := gamesdb.SearchNamesExact(
-				pl,
+			res, err := gamesdb.SearchMediaPathExact(
 				[]systemdefs.System{*system},
 				path,
 			)
@@ -268,9 +270,11 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) error {
 	query := strings.ToLower(env.Args)
 	query = strings.TrimSpace(query)
 
+	gamesdb := env.Database.MediaDB
+
 	if !strings.Contains(env.Args, "/") {
 		// search all systems
-		res, err := gamesdb.SearchNamesGlob(pl, systemdefs.AllSystems(), query)
+		res, err := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
 		if err != nil {
 			return err
 		}
@@ -306,7 +310,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) error {
 		systems = append(systems, *system)
 	}
 
-	res, err := gamesdb.SearchNamesGlob(pl, systems, query)
+	res, err := gamesdb.SearchMediaPathGlob(systems, query)
 	if err != nil {
 		return err
 	}

@@ -4,7 +4,7 @@ go 1.23.0
 
 toolchain go1.23.6
 
-require golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa
+require golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
 
 require gopkg.in/ini.v1 v1.67.0
 
@@ -15,15 +15,16 @@ require (
 	github.com/libp2p/zeroconf/v2 v2.2.0 // indirect
 	github.com/miekg/dns v1.1.55 // indirect
 	github.com/txn2/txeh v1.4.0 // indirect
-	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/tools v0.30.0 // indirect
+	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/net v0.37.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/tools v0.31.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
 require (
 	github.com/creack/goselect v0.1.2 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
 	github.com/getlantern/errors v0.0.0-20190325191628-abdb3e3e36f7 // indirect
@@ -37,9 +38,14 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/term v0.29.0 // indirect
+	golang.org/x/term v0.30.0 // indirect
+	modernc.org/libc v1.62.1 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.9.1 // indirect
 )
 
 require (
@@ -62,6 +68,7 @@ require (
 	github.com/wizzomafizzo/mrext v0.1.3
 	go.bug.st/serial v1.6.2
 	go.etcd.io/bbolt v1.3.9
-	golang.org/x/sync v0.11.0
-	golang.org/x/text v0.22.0
+	golang.org/x/sync v0.13.0
+	golang.org/x/text v0.24.0
+	modernc.org/sqlite v1.37.0
 )

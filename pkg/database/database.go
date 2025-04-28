@@ -1,86 +1,31 @@
 package database
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"database/sql"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	bolt "go.etcd.io/bbolt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 )
 
-const (
-	BucketHistory  = "history"
-	BucketMappings = "mappings"
-	BucketClients  = "clients"
-)
+/*
+ * In attempting to correct circular import deps these non-concrete
+ * interfaces were moves to this generic package level.
+ * Actual implementations found in userdb/mediadb
+ */
 
-func dbFile(pl platforms.Platform) string {
-	return filepath.Join(pl.DataDir(), config.TapToDbFile)
-}
-
-// Check if the db exists on disk.
-func DbExists(pl platforms.Platform) bool {
-	_, err := os.Stat(dbFile(pl))
-	return err == nil
-}
-
-// Open the db with the given options. If the database does not exist it
-// will be created and the buckets will be initialized.
-func open(pl platforms.Platform, options *bolt.Options) (*bolt.DB, error) {
-	err := os.MkdirAll(filepath.Dir(dbFile(pl)), 0755)
-	if err != nil {
-		return nil, err
-	}
-
-	db, err := bolt.Open(dbFile(pl), 0600, options)
-	if err != nil {
-		return nil, err
-	}
-
-	err = db.Update(func(txn *bolt.Tx) error {
-		for _, bucket := range []string{
-			BucketHistory,
-			BucketMappings,
-			BucketClients,
-		} {
-			_, err := txn.CreateBucketIfNotExists([]byte(bucket))
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
+/*
+ * Portable interface for ENV bindings
+ */
 type Database struct {
-	bdb *bolt.DB
+	UserDB  UserDBI
+	MediaDB MediaDBI
 }
 
-func Open(pl platforms.Platform) (*Database, error) {
-	db, err := open(pl, &bolt.Options{})
-	if err != nil {
-		return nil, err
-	}
-
-	return &Database{bdb: db}, nil
-}
-
-func (d *Database) Close() error {
-	return d.bdb.Close()
-}
-
-// TODO: reader source (physical reader vs web)
-// TODO: metadata
+/*
+ * Structs for SQL records
+ */
 type HistoryEntry struct {
+	DBID    int64
 	Time    time.Time `json:"time"`
 	Type    string    `json:"type"`
 	UID     string    `json:"uid"`
@@ -89,51 +34,113 @@ type HistoryEntry struct {
 	Success bool      `json:"success"`
 }
 
-func HistoryKey(entry HistoryEntry) string {
-	// TODO: web has no uid, this could collide, use autoincrement instead
-	return entry.Time.Format(time.RFC3339) + "-" + entry.UID
+type Mapping struct {
+	DBID     int64
+	Id       string `json:"id"`
+	Added    int64  `json:"added"`
+	Label    string `json:"label"`
+	Enabled  bool   `json:"enabled"`
+	Type     string `json:"type"`
+	Match    string `json:"match"`
+	Pattern  string `json:"pattern"`
+	Override string `json:"override"`
 }
 
-func (d *Database) AddHistory(entry HistoryEntry) error {
-	return d.bdb.Update(func(txn *bolt.Tx) error {
-		b := txn.Bucket([]byte(BucketHistory))
-
-		data, err := json.Marshal(entry)
-		if err != nil {
-			return err
-		}
-
-		return b.Put([]byte(HistoryKey(entry)), data)
-	})
+type System struct {
+	DBID     int64
+	SystemId string
+	Name     string
 }
 
-func (d *Database) GetHistory() ([]HistoryEntry, error) {
-	var entries []HistoryEntry
-	i := 0
-	maxResults := 25
+type MediaTitle struct {
+	DBID       int64
+	SystemDBID int64
+	Slug       string
+	Name       string
+}
 
-	err := d.bdb.View(func(txn *bolt.Tx) error {
-		b := txn.Bucket([]byte(BucketHistory))
+type Media struct {
+	DBID           int64
+	MediaTitleDBID int64
+	Path           string
+}
 
-		c := b.Cursor()
-		for k, v := c.Last(); k != nil; k, v = c.Prev() {
-			if i >= maxResults {
-				break
-			}
+type TagType struct {
+	DBID int64
+	Type string
+}
 
-			var entry HistoryEntry
-			err := json.Unmarshal(v, &entry)
-			if err != nil {
-				return err
-			}
+type Tag struct {
+	DBID     int64
+	TypeDBID int64
+	Tag      string
+}
 
-			entries = append(entries, entry)
+type MediaTag struct {
+	DBID      int64
+	MediaDBID int64
+	TagDBID   int64
+}
 
-			i++
-		}
+type SearchResult struct {
+	SystemId string
+	Name     string
+	Path     string
+}
 
-		return nil
-	})
+type FileInfo struct {
+	SystemId string
+	Path     string
+	Name     string
+}
 
-	return entries, err
+type ScanState struct {
+	Systems    []System
+	SystemIds  map[string]int
+	Titles     []MediaTitle
+	TitleIds   map[string]int
+	Media      []Media
+	MediaIds   map[string]int // Path
+	TagTypes   []TagType
+	TagTypeIds map[string]int
+	Tags       []Tag
+	TagIds     map[string]int
+	MediaTags  []MediaTag
+}
+
+/*
+ * Interfaces for external deps
+ */
+
+type GenericDBI interface {
+	Open() error
+	UnsafeGetSqlDb() *sql.DB
+	Truncate() error
+	Allocate() error
+	Vacuum() error
+	Close() error
+}
+
+type UserDBI interface {
+	GenericDBI
+	AddHistory(entry HistoryEntry) error
+	GetHistory(lastId int) ([]HistoryEntry, error)
+	AddMapping(m Mapping) error
+	GetMapping(id string) (Mapping, error)
+	DeleteMapping(id string) error
+	UpdateMapping(id string, m Mapping) error
+	GetAllMappings() ([]Mapping, error)
+	GetEnabledMappings() ([]Mapping, error)
+}
+
+type MediaDBI interface {
+	GenericDBI
+	Exists() bool
+	ReindexFromScanState(ss *ScanState) error
+	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
+	IndexedSystems() ([]string, error)
+	SystemIndexed(system systemdefs.System) bool
+	RandomGame(systems []systemdefs.System) (SearchResult, error)
 }

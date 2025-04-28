@@ -24,17 +24,19 @@ import (
 	"archive/zip"
 	"crypto/md5"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/rs/zerolog/log"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/rs/zerolog/log"
 )
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -205,4 +207,25 @@ func RandSeq(n int) string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+func SlugifyString(input string) string {
+	r := regexp.MustCompile(`(\(.*\))|(\[.*\])|(\.\w*$)|[^a-z0-9A-Z]`)
+	rep := r.ReplaceAllStringFunc(input, func(m string) string {
+		return ""
+	})
+	return strings.ToLower(rep)
+}
+
+func FilenameFromPath(path string) string {
+	p := filepath.Clean(path)
+	b := filepath.Base(p)
+	e := filepath.Ext(p)
+	r, _ := strings.CutSuffix(b, e)
+	return r
+}
+
+func SlugifyPath(path string) string {
+	fn := FilenameFromPath(path)
+	return SlugifyString(fn)
 }

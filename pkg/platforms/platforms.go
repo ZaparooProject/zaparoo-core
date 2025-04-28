@@ -1,12 +1,14 @@
 package platforms
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"time"
 
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 )
@@ -26,6 +28,7 @@ type CmdEnv struct {
 	TotalCommands int
 	CurrentIndex  int
 	Untrusted     bool
+	Database      *database.Database
 }
 
 type ScanResult struct {

@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,10 +15,12 @@ import (
 	"sync"
 	"time"
 
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -138,7 +139,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 	// migrate old config folder db
 	oldTaptoDbPath := "/media/fat/Scripts/.config/tapto/tapto.db"
-	newTaptoDbPath := filepath.Join(p.DataDir(), config.TapToDbFile)
+	newTaptoDbPath := filepath.Join(p.DataDir(), config.UserDbFile)
 	if _, err := os.Stat(oldTaptoDbPath); err == nil {
 		if _, err := os.Stat(newTaptoDbPath); errors.Is(err, os.ErrNotExist) {
 			err := utils.CopyFile(oldTaptoDbPath, newTaptoDbPath)
@@ -584,10 +585,10 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
-					tp, err := gamesdb.FindPath(filepath.Join(sf.Path, txt))
+					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
 					if err == nil {
 						f, err := os.Open(tp)
 						if err != nil {
@@ -649,9 +650,9 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
-				rsf, err := gamesdb.FindPath(filepath.Join(sf.Path, romsetsFilename))
+				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
 					romsets, err := readRomsets(rsf)
 					if err != nil {

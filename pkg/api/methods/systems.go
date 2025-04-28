@@ -4,7 +4,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/rs/zerolog/log"
 )
@@ -12,7 +11,7 @@ import (
 func HandleSystems(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received systems request")
 
-	indexed, err := gamesdb.IndexedSystems(env.Platform)
+	indexed, err := env.Database.MediaDB.IndexedSystems()
 	if err != nil {
 		log.Error().Err(err).Msgf("error getting indexed systems")
 		indexed = []string{}
