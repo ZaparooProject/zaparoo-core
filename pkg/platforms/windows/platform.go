@@ -30,6 +30,8 @@ import (
 )
 
 type Platform struct {
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
 }
 
 func (p *Platform) ID() string {
@@ -51,9 +53,11 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	_ *config.Instance,
-	_ func() *models.ActiveMedia,
-	_ func(*models.ActiveMedia),
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
 ) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
 	return nil
 }
 
@@ -107,6 +111,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 }
 
 func (p *Platform) StopActiveLauncher() error {
+	p.setActiveMedia(nil)
 	return nil
 }
 
@@ -116,24 +121,24 @@ func (p *Platform) PlayFailSound(cfg *config.Instance) {
 func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 }
 
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	log.Info().Msgf("launching system: %s", id)
-	return nil
+func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return fmt.Errorf("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
-	launchers := utils.PathToLaunchers(cfg, p, path)
-	if len(launchers) == 0 {
-		return errors.New("no launcher found")
-	}
-	launcher := launchers[0]
-
-	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
-		return errors.New("file not allowed: " + path)
+	log.Info().Msgf("launch media: %s", path)
+	launcher, err := utils.FindLauncher(cfg, p, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
-	log.Info().Msgf("launching file: %s", path)
-	return launcher.Launch(cfg, path)
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	return nil
 }
 
 func (p *Platform) KeyboardInput(input string) error {
@@ -385,7 +390,7 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			Id:       "Steam",
+			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
@@ -412,7 +417,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:       "Flashpoint",
+			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
 			Launch: func(cfg *config.Instance, path string) error {
@@ -426,7 +431,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:            "Generic",
+			ID:            "Generic",
 			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
@@ -434,7 +439,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:      "LaunchBox",
+			ID:      "LaunchBox",
 			Schemes: []string{"launchbox"},
 			Scanner: func(
 				cfg *config.Instance,

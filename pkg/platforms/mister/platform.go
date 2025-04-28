@@ -386,6 +386,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 
 func (p *Platform) StopActiveLauncher() error {
 	ExitGame()
+	p.setActiveMedia(nil)
 	return nil
 }
 
@@ -407,16 +408,21 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+	log.Info().Msgf("launch media: %s", path)
 	path = checkInZip(path)
-	launchers := utils.PathToLaunchers(cfg, p, path)
-
-	if len(launchers) == 0 {
-		return errors.New("no launcher found")
+	launcher, err := utils.FindLauncher(cfg, p, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
-	// just pick the first one for now
-	p.setLastLauncher(launchers[0])
-	return launchers[0].Launch(cfg, path)
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	p.setLastLauncher(launcher)
+	return nil
 }
 
 func (p *Platform) KeyboardInput(input string) error {
@@ -542,7 +548,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
-		Id:         systemdefs.SystemAmiga,
+		ID:         systemdefs.SystemAmiga,
 		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
@@ -605,7 +611,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	}
 
 	neogeo := platforms.Launcher{
-		Id:         systemdefs.SystemNeoGeo,
+		ID:         systemdefs.SystemNeoGeo,
 		SystemID:   systemdefs.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
@@ -682,7 +688,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	}
 
 	mplayerVideo := platforms.Launcher{
-		Id:         "MPlayerVideo",
+		ID:         "MPlayerVideo",
 		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi"},

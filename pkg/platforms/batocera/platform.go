@@ -233,30 +233,6 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return system + "/" + strings.Join(parts[1:], "/")
 }
 
-func (p *Platform) StopActiveLauncher() error {
-	tries := 0
-	maxTries := 10
-
-	for tries < maxTries {
-		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
-		err := apiEmuKill()
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-
-		_, running, err := apiRunningGame()
-		if err != nil {
-			return err
-		} else if !running {
-			return nil
-		}
-
-		tries++
-	}
-
-	return fmt.Errorf("failed to kill launcher")
-}
-
 func (p *Platform) PlayFailSound(cfg *config.Instance) {
 	if !cfg.AudioFeedback() {
 		return
@@ -279,19 +255,48 @@ func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 	}
 }
 
+func (p *Platform) StopActiveLauncher() error {
+	log.Info().Msg("stopping active launcher")
+	tries := 0
+	maxTries := 10
+
+	killed := false
+	for tries < maxTries {
+		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
+		err := apiEmuKill()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+
+		_, running, err := apiRunningGame()
+		if err != nil {
+			return err
+		} else if !running {
+			killed = true
+			break
+		}
+
+		tries++
+	}
+
+	if killed {
+		log.Info().Msg("stopped active launcher")
+		p.setActiveMedia(nil)
+		return nil
+	} else {
+		return fmt.Errorf("stop active launcher: failed to stop launcher")
+	}
+}
+
 func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching system not supported on batocera")
+	return fmt.Errorf("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
-	launchers := utils.PathToLaunchers(cfg, p, path)
-	if len(launchers) == 0 {
-		return errors.New("no launcher found")
-	}
-	launcher := launchers[0]
-
-	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
-		return errors.New("file not allowed: " + path)
+	log.Info().Msgf("launch media: %s", path)
+	launcher, err := utils.FindLauncher(cfg, p, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	// exit current media if one is running
@@ -307,8 +312,13 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 		time.Sleep(2500 * time.Millisecond)
 	}
 
-	log.Info().Msgf("launching file with %s: %s", launcher.Id, path)
-	return launcher.Launch(cfg, path)
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	return nil
 }
 
 func (p *Platform) KeyboardInput(input string) error {
@@ -403,7 +413,7 @@ func readESGameListXML(path string) (ESGameList, error) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		{
-			Id:            "Generic",
+			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
@@ -414,7 +424,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	for k, v := range SystemMap {
 		launchers = append(launchers, platforms.Launcher{
-			Id:       v,
+			ID:       v,
 			SystemID: v,
 			Folders:  []string{k},
 			Launch: func(cfg *config.Instance, path string) error {

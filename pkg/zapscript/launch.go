@@ -148,7 +148,7 @@ func getAltLauncher(
 		var launcher platforms.Launcher
 
 		for _, l := range pl.Launchers() {
-			if l.Id == env.NamedArgs["launcher"] {
+			if l.ID == env.NamedArgs["launcher"] {
 				launcher = l
 				break
 			}

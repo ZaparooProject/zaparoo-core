@@ -203,7 +203,7 @@ func readerManager(
 			// run before_exit hook if one exists for system
 			var systemIds []string
 			for _, l := range pl.Launchers() {
-				if l.Id == activeLauncher {
+				if l.ID == activeLauncher {
 					systemIds = append(systemIds, l.SystemID)
 					system, err := systemdefs.LookupSystem(l.SystemID)
 					if err == nil {

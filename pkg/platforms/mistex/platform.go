@@ -30,10 +30,12 @@ import (
 )
 
 type Platform struct {
-	kbd    input.Keyboard
-	gpd    uinput.Gamepad
-	tr     *mister.Tracker
-	stopTr func() error
+	kbd            input.Keyboard
+	gpd            uinput.Gamepad
+	tr             *mister.Tracker
+	stopTr         func() error
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
 }
 
 func (p *Platform) ID() string {
@@ -110,6 +112,9 @@ func (p *Platform) StartPost(
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
+
 	tr, stopTr, err := mister.StartTracker(
 		*mister.UserConfigToMrext(cfg),
 		cfg,
@@ -243,7 +248,11 @@ func LaunchMenu() error {
 }
 
 func (p *Platform) StopActiveLauncher() error {
-	return LaunchMenu()
+	err := LaunchMenu()
+	if err == nil {
+		p.setActiveMedia(nil)
+	}
+	return err
 }
 
 func (p *Platform) GetActiveLauncher() string {
@@ -290,7 +299,19 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
-	return mm.LaunchGenericFile(mister.UserConfigToMrext(cfg), path)
+	log.Info().Msgf("launch media: %s", path)
+	launcher, err := utils.FindLauncher(cfg, p, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
+	}
+
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
+	return nil
 }
 
 func (p *Platform) KeyboardInput(input string) error {

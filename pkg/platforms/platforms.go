@@ -63,7 +63,7 @@ type ScanResult struct {
 
 type Launcher struct {
 	// Unique ID of the launcher, visible to user.
-	Id string
+	ID string
 	// Systems associated with this launcher.
 	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.
