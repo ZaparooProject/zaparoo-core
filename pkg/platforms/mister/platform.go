@@ -384,7 +384,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return NormalizePath(cfg, path)
 }
 
-func (p *Platform) KillLauncher() error {
+func (p *Platform) StopActiveLauncher() error {
 	ExitGame()
 	return nil
 }

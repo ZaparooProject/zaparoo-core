@@ -242,7 +242,7 @@ func LaunchMenu() error {
 	return nil
 }
 
-func (p *Platform) KillLauncher() error {
+func (p *Platform) StopActiveLauncher() error {
 	return LaunchMenu()
 }
 

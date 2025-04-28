@@ -21,7 +21,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if strings.EqualFold(env.Args, "menu") {
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, pl.KillLauncher()
+		}, pl.StopActiveLauncher()
 	}
 
 	return platforms.CmdResult{

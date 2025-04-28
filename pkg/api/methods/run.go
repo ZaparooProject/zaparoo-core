@@ -219,7 +219,7 @@ func HandleRunRest(
 
 func HandleStop(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received stop request")
-	return nil, env.Platform.KillLauncher()
+	return nil, env.Platform.StopActiveLauncher()
 }
 
 func InstallRunMedia(

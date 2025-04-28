@@ -136,8 +136,8 @@ type Platform interface {
 	// shortest possible path that can interpreted and launched by Core. For
 	// writing to tokens.
 	NormalizePath(*config.Instance, string) string
-	// KillLauncher kills the currently running launcher process, if possible.
-	KillLauncher() error
+	// StopActiveLauncher kills the currently running launcher process, if possible.
+	StopActiveLauncher() error
 	// PlayFailSound plays a sound effect for error feedback.
 	// TODO: merge with PlaySuccessSound into single PlayAudio function?
 	PlayFailSound(*config.Instance)
@@ -166,6 +166,7 @@ type Platform interface {
 	// a list of Zap Link Cmds to choose from. The chosen action will be
 	// forwarded to the local API instance to be run. Returns a function that
 	// may be used to manually cancel and hide the picker.
+	// TODO: it appears to not return said function
 	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
 }
 

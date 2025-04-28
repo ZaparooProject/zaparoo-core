@@ -96,7 +96,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return path
 }
 
-func (p *Platform) KillLauncher() error {
+func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 

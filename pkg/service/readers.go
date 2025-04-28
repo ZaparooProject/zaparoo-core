@@ -236,7 +236,7 @@ func readerManager(
 
 			// exit the media
 			log.Info().Msg("exiting media")
-			err := pl.KillLauncher()
+			err := pl.StopActiveLauncher()
 			if err != nil {
 				log.Warn().Msgf("error killing launcher: %s", err)
 			}

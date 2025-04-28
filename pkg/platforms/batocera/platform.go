@@ -233,7 +233,7 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return system + "/" + strings.Join(parts[1:], "/")
 }
 
-func (p *Platform) KillLauncher() error {
+func (p *Platform) StopActiveLauncher() error {
 	tries := 0
 	maxTries := 10
 
@@ -300,7 +300,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 		return err
 	} else if running {
 		log.Info().Msg("exiting current media")
-		err = p.KillLauncher()
+		err = p.StopActiveLauncher()
 		if err != nil {
 			return err
 		}
