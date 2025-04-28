@@ -13,10 +13,8 @@ import (
 const (
 	AssetsDir          = DataDir + "/" + platforms.AssetsDir
 	TempDir            = "/tmp/zaparoo"
-	DisableLaunchFile  = TempDir + "/zaparoo.disabled"
 	SuccessSoundFile   = AssetsDir + "/success.wav"
 	FailSoundFile      = AssetsDir + "/fail.wav"
-	SocketFile         = TempDir + "/core.sock"
 	LegacyMappingsPath = "/media/fat/nfc.csv"
 	TokenReadFile      = "/tmp/TOKENREAD" // TODO: remove this, use file driver
 	DataDir            = "/media/fat/zaparoo"

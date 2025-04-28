@@ -50,7 +50,6 @@ type Platform struct {
 	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
 	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
-	stopSocket          func()
 	platformMu          sync.Mutex
 	lastLauncher        platforms.Launcher
 	lastUIHidden        time.Time
@@ -210,20 +209,6 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		_ = ff.Close()
 	}
 
-	stopSocket, err := StartSocketServer(
-		p,
-		func() *tokens.Token {
-			return p.lastScan
-		},
-		func() map[string]*readers.Reader {
-			return p.readers
-		},
-	)
-	if err != nil {
-		log.Error().Msgf("error starting socket server: %s", err)
-	}
-	p.stopSocket = stopSocket
-
 	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
@@ -309,10 +294,6 @@ func (p *Platform) Stop() error {
 		if err != nil {
 			return err
 		}
-	}
-
-	if p.stopSocket != nil {
-		p.stopSocket()
 	}
 
 	return nil
