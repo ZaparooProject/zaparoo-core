@@ -106,10 +106,12 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayFailSound(_ *config.Instance) {
-}
+func (p *Platform) PlayAudio(path string) error {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.Settings().DataDir, path)
+	}
 
-func (p *Platform) PlaySuccessSound(_ *config.Instance) {
+	return nil
 }
 
 func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {

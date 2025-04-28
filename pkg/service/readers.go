@@ -162,8 +162,14 @@ func readerManager(
 	stopService := make(chan bool)
 
 	playFail := func() {
+		if !cfg.AudioFeedback() {
+			return
+		}
 		if time.Since(lastError) > 1*time.Second {
-			pl.PlayFailSound(cfg)
+			err := pl.PlayAudio(config.FailSoundFilename)
+			if err != nil {
+				log.Warn().Msgf("error playing fail sound: %s", err)
+			}
 		}
 	}
 
@@ -335,7 +341,14 @@ func readerManager(
 			}
 
 			log.Info().Msgf("sending token: %v", scan)
-			pl.PlaySuccessSound(cfg)
+
+			if cfg.AudioFeedback() {
+				err := pl.PlayAudio(config.SuccessSoundFilename)
+				if err != nil {
+					log.Warn().Msgf("error playing success sound: %s", err)
+				}
+			}
+
 			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")

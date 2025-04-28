@@ -31,9 +31,6 @@ import (
 )
 
 const (
-	AssetsDir            = "assets"
-	SuccessSoundFilename = "success.wav"
-	FailSoundFilename    = "fail.wav"
 	// HomeDir is hardcoded because home in env is not set at the point which
 	// the service file is called to start.
 	HomeDir   = "/userdata/system"
@@ -79,33 +76,6 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return err
 	}
 	p.gpd = gpd
-
-	successPath := filepath.Join(utils.DataDir(p), AssetsDir, SuccessSoundFilename)
-	if _, err := os.Stat(successPath); err != nil {
-		sf, err := os.Create(successPath)
-		if err != nil {
-			log.Error().Msgf("error creating success sound file: %s", err)
-		}
-		_, err = sf.Write(assets.SuccessSound)
-		if err != nil {
-			log.Error().Msgf("error writing success sound file: %s", err)
-		}
-		_ = sf.Close()
-	}
-
-	failPath := filepath.Join(utils.DataDir(p), AssetsDir, FailSoundFilename)
-	if _, err := os.Stat(failPath); err != nil {
-		// copy fail sound to temp
-		ff, err := os.Create(failPath)
-		if err != nil {
-			log.Error().Msgf("error creating fail sound file: %s", err)
-		}
-		_, err = ff.Write(assets.FailSound)
-		if err != nil {
-			log.Error().Msgf("error writing fail sound file: %s", err)
-		}
-		_ = ff.Close()
-	}
 
 	return nil
 }
@@ -209,26 +179,16 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return system + "/" + strings.Join(parts[1:], "/")
 }
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
-	if !cfg.AudioFeedback() {
-		return
+func (p *Platform) PlayAudio(path string) error {
+	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
+		return fmt.Errorf("unsupported audio format: %s", path)
 	}
-	failPath := filepath.Join(utils.DataDir(p), AssetsDir, FailSoundFilename)
-	err := exec.Command("aplay", failPath).Start()
-	if err != nil {
-		log.Error().Msgf("error playing fail sound: %s", err)
-	}
-}
 
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
-	if !cfg.AudioFeedback() {
-		return
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.Settings().DataDir, path)
 	}
-	successPath := filepath.Join(utils.DataDir(p), AssetsDir, SuccessSoundFilename)
-	err := exec.Command("aplay", successPath).Start()
-	if err != nil {
-		log.Error().Msgf("error playing success sound: %s", err)
-	}
+
+	return exec.Command("aplay", path).Start()
 }
 
 func (p *Platform) StopActiveLauncher() error {

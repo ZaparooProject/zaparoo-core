@@ -23,6 +23,7 @@ package service
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
@@ -244,19 +245,7 @@ func processTokenQueue(
 	}
 }
 
-func Start(
-	pl platforms.Platform,
-	cfg *config.Instance,
-) (func() error, error) {
-	log.Info().Msgf("version: %s", config.AppVersion)
-
-	// TODO: define the notifications chan here instead of in state
-	st, ns := state.NewState(pl) // global state, notification queue
-	// TODO: convert this to a *token channel
-	itq := make(chan tokens.Token)        // input token queue
-	lsq := make(chan *tokens.Token)       // launch software queue
-	plq := make(chan *playlists.Playlist) // playlist queue
-
+func setupEnvironment(pl platforms.Platform) error {
 	if _, ok := utils.HasUserDir(); ok {
 		log.Info().Msg("using 'user' directory for storage")
 	}
@@ -272,12 +261,70 @@ func Start(
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
+	successSoundPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		config.SuccessSoundFilename,
+	)
+	if _, err := os.Stat(successSoundPath); err != nil {
+		// copy success sound to temp
+		sf, err := os.Create(successSoundPath)
+		if err != nil {
+			log.Error().Msgf("error creating success sound file: %s", err)
+		}
+		_, err = sf.Write(assets.SuccessSound)
+		if err != nil {
+			log.Error().Msgf("error writing success sound file: %s", err)
+		}
+		_ = sf.Close()
+	}
+
+	failSoundPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		config.FailSoundFilename,
+	)
+	if _, err := os.Stat(failSoundPath); err != nil {
+		// copy fail sound to temp
+		ff, err := os.Create(failSoundPath)
+		if err != nil {
+			log.Error().Msgf("error creating fail sound file: %s", err)
+		}
+		_, err = ff.Write(assets.FailSound)
+		if err != nil {
+			log.Error().Msgf("error writing fail sound file: %s", err)
+		}
+		_ = ff.Close()
+	}
+
+	return nil
+}
+
+func Start(
+	pl platforms.Platform,
+	cfg *config.Instance,
+) (func() error, error) {
+	log.Info().Msgf("version: %s", config.AppVersion)
+
+	// TODO: define the notifications chan here instead of in state
+	st, ns := state.NewState(pl) // global state, notification queue
+	// TODO: convert this to a *token channel
+	itq := make(chan tokens.Token)        // input token queue
+	lsq := make(chan *tokens.Token)       // launch software queue
+	plq := make(chan *playlists.Playlist) // playlist event queue
+
+	err := setupEnvironment(pl)
+	if err != nil {
+		log.Error().Err(err).Msg("error setting up environment")
+		return nil, err
+	}
+
 	log.Info().Msg("running platform pre start")
-	err := pl.StartPre(cfg)
+	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		return nil, err

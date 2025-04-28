@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
@@ -154,32 +154,6 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.stopMappingsWatcher = closeMappingsWatcher
 
-	if _, err := os.Stat(SuccessSoundFile); err != nil {
-		// copy success sound to temp
-		sf, err := os.Create(SuccessSoundFile)
-		if err != nil {
-			log.Error().Msgf("error creating success sound file: %s", err)
-		}
-		_, err = sf.Write(assets.SuccessSound)
-		if err != nil {
-			log.Error().Msgf("error writing success sound file: %s", err)
-		}
-		_ = sf.Close()
-	}
-
-	if _, err := os.Stat(FailSoundFile); err != nil {
-		// copy fail sound to temp
-		ff, err := os.Create(FailSoundFile)
-		if err != nil {
-			log.Error().Msgf("error creating fail sound file: %s", err)
-		}
-		_, err = ff.Write(assets.FailSound)
-		if err != nil {
-			log.Error().Msgf("error writing fail sound file: %s", err)
-		}
-		_ = ff.Close()
-	}
-
 	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
@@ -222,7 +196,7 @@ func (p *Platform) StartPost(
 			return
 		}
 
-		arcadeDbUpdated, err := UpdateArcadeDb()
+		arcadeDbUpdated, err := UpdateArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to download arcade database: %s", err)
 		}
@@ -234,7 +208,7 @@ func (p *Platform) StartPost(
 			log.Info().Msg("arcade database is up to date")
 		}
 
-		m, err := ReadArcadeDb()
+		m, err := ReadArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to read arcade database: %s", err)
 		} else {
@@ -320,12 +294,16 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
-	PlayFail(cfg)
-}
+func (p *Platform) PlayAudio(path string) error {
+	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
+		return fmt.Errorf("unsupported audio format: %s", path)
+	}
 
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
-	PlaySuccess(cfg)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.Settings().DataDir, path)
+	}
+
+	return exec.Command("aplay", path).Start()
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {

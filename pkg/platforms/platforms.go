@@ -31,6 +31,8 @@ const (
 	PlatformIDWindows   = "windows"
 )
 
+// CmdEnv is the local state of a scanned token, as it processes each ZapScript
+// command. Every command run has access to and can modify it.
 type CmdEnv struct {
 	Cmd           string
 	Args          string
@@ -56,11 +58,18 @@ type CmdResult struct {
 	Playlist *playlists.Playlist
 }
 
+// ScanResult is a result generated from a media database indexing files or
+// other media sources.
 type ScanResult struct {
+	// Path is the absolute path to this media.
 	Path string
+	// Name is the display name of the media, shown to the users and used for
+	// search queries.
 	Name string
 }
 
+// Launcher defines how a platform launcher can launch media and what media it
+// supports launching.
 type Launcher struct {
 	// Unique ID of the launcher, visible to user.
 	ID string
@@ -89,6 +98,8 @@ type Launcher struct {
 	AllowListOnly bool
 }
 
+// Settings defines all simple settings/configuration values available for a
+// platform.
 type Settings struct {
 	// DataDir returns the root folder where things like databases and
 	// downloaded assets are permanently stored. WARNING: This value should be
@@ -106,6 +117,8 @@ type Settings struct {
 	ZipsAsDirs bool
 }
 
+// Platform is the central interface that defines how Core interacts with a
+// supported platform.
 type Platform interface {
 	// ID returns the unique ID of this platform.
 	ID() string
@@ -137,13 +150,12 @@ type Platform interface {
 	// shortest possible path that can interpreted and launched by Core. For
 	// writing to tokens.
 	NormalizePath(*config.Instance, string) string
-	// StopActiveLauncher kills the currently running launcher process, if possible.
+	// StopActiveLauncher kills/exits the currently running launcher process.
 	StopActiveLauncher() error
-	// PlayFailSound plays a sound effect for error feedback.
-	// TODO: merge with PlaySuccessSound into single PlayAudio function?
-	PlayFailSound(*config.Instance)
-	// PlaySuccessSound plays a sound effect for success feedback.
-	PlaySuccessSound(*config.Instance)
+	// PlayAudio plays an audio file at the given path. A relative path will be
+	// resolved using the data directory assets folder as the base. This
+	// function does not block until the audio finishes.
+	PlayAudio(string) error
 	// LaunchSystem launches a system by ID, if possible for platform.
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches a file by path.
@@ -153,15 +165,25 @@ type Platform interface {
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
 	ForwardCmd(CmdEnv) (CmdResult, error)
+	// LookupMapping is a platform-specific method of matching a token to a
+	// mapping. It takes last precedence when checking mapping sources.
 	LookupMapping(tokens.Token) (string, bool)
+	// Launchers is the complete list of all launchers available on this
+	// platform.
 	Launchers() []Launcher
 	// ShowNotice displays a string on-screen of the platform device. Returns
-	// a function that may be used to manually hide the notice.
-	ShowNotice(*config.Instance, widgetModels.NoticeArgs) (func() error, time.Duration, error)
+	// a function that may be used to manually hide the notice and a minimum
+	// amount of time that should be waited until trying to close the notice,
+	// for platforms where initializing a notice takes time.
+	ShowNotice(
+		*config.Instance,
+		widgetModels.NoticeArgs,
+	) (func() error, time.Duration, error)
 	// ShowLoader displays a string on-screen of the platform device alongside
 	// an animation indicating something is in progress. Returns a function
 	// that may be used to manually hide the loader and an optional delay to
 	// wait before hiding.
+	// TODO: does this need a close delay returned as well?
 	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
 	// ShowPicker displays a list picker on-screen of the platform device with
 	// a list of Zap Link Cmds to choose from. The chosen action will be
@@ -169,9 +191,4 @@ type Platform interface {
 	// may be used to manually cancel and hide the picker.
 	// TODO: it appears to not return said function
 	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
-}
-
-type LaunchToken struct {
-	Token    tokens.Token
-	Launcher Launcher
 }

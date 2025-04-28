@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -14,28 +13,6 @@ import (
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
-
-func PlaySuccess(cfg *config.Instance) {
-	if !cfg.AudioFeedback() {
-		return
-	}
-
-	err := exec.Command("aplay", SuccessSoundFile).Start()
-	if err != nil {
-		log.Error().Msgf("error playing success sound: %s", err)
-	}
-}
-
-func PlayFail(cfg *config.Instance) {
-	if !cfg.AudioFeedback() {
-		return
-	}
-
-	err := exec.Command("aplay", FailSoundFile).Start()
-	if err != nil {
-		log.Error().Msgf("error playing fail sound: %s", err)
-	}
-}
 
 func ExitGame() {
 	_ = mrextMister.LaunchMenu()
