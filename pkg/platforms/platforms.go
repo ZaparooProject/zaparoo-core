@@ -108,12 +108,6 @@ type Platform interface {
 	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
 	// processed for launching.
 	ScanHook(tokens.Token) error
-	// ReadersUpdateHook runs after a change has occurred with the state of
-	// the connected readers (i.e. when a reader is connected or disconnected),
-	// and is given the current new state of readers connected.
-	// TODO: this hook isn't very useful without knowing what changed. it may be
-	// better to split it into 2 separate hooks for added/removed
-	ReadersUpdateHook(map[string]*readers.Reader) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.

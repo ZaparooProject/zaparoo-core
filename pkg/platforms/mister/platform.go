@@ -48,7 +48,6 @@ type Platform struct {
 	textMap             map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
-	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
 	platformMu          sync.Mutex
 	lastLauncher        platforms.Launcher
@@ -323,11 +322,6 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 		}
 	}
 
-	return nil
-}
-
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
-	p.readers = readers
 	return nil
 }
 

@@ -69,10 +69,6 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
-	return nil
-}
-
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return []string{}
 }
