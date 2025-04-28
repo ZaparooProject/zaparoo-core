@@ -247,3 +247,50 @@ func DoLaunch(
 
 	return nil
 }
+
+// HasUserDir checks if a "user" directory exists next to the Zaparoo binary
+// and returns true and the absolute path to it. This directory is used as a
+// parent for all platform directories if it exists, for a portable install.
+func HasUserDir() (string, bool) {
+	exeDir := ""
+	envExe := os.Getenv(config.AppEnv)
+	var err error
+
+	if envExe != "" {
+		exeDir = envExe
+	} else {
+		exeDir, err = os.Executable()
+		if err != nil {
+			return "", false
+		}
+	}
+
+	parent := filepath.Dir(exeDir)
+	userDir := filepath.Join(parent, config.UserDir)
+
+	if info, err := os.Stat(userDir); err == nil {
+		if !info.IsDir() {
+			return "", false
+		} else {
+			return userDir, true
+		}
+	} else {
+		return "", false
+	}
+}
+
+func ConfigDir(pl platforms.Platform) string {
+	if v, ok := HasUserDir(); ok {
+		return v
+	} else {
+		return pl.Settings().ConfigDir
+	}
+}
+
+func DataDir(pl platforms.Platform) string {
+	if v, ok := HasUserDir(); ok {
+		return v
+	} else {
+		return pl.Settings().DataDir
+	}
+}

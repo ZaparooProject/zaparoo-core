@@ -89,6 +89,23 @@ type Launcher struct {
 	AllowListOnly bool
 }
 
+type Settings struct {
+	// DataDir returns the root folder where things like databases and
+	// downloaded assets are permanently stored. WARNING: This value should be
+	// accessed using the DataDir function in the utils package.
+	DataDir string
+	// ConfigDir returns the directory where the config file is stored.
+	// WARNING: This value should be accessed using the ConfigDir function in
+	// the utils package.
+	ConfigDir string
+	// TempDir returns a temporary directory where the logs are stored and any
+	// files used for inter-process communication. Expect it to be deleted.
+	TempDir string
+	// ZipsAsDir returns true if this platform treats .zip files as if they
+	// were directories for the purpose of launching media.
+	ZipsAsDirs bool
+}
+
 type Platform interface {
 	// ID returns the unique ID of this platform.
 	ID() string
@@ -105,6 +122,10 @@ type Platform interface {
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
 	Stop() error
+	// Settings returns all simple platform-specific settings such as paths.
+	// NOTE: Some values on the Settings struct should be accessed using helper
+	// functions in the utils package instead of directly. Check comments.
+	Settings() Settings
 	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
 	// processed for launching.
 	ScanHook(tokens.Token) error
@@ -112,20 +133,6 @@ type Platform interface {
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
 	RootDirs(*config.Instance) []string
-	// ZipsAsDirs returns true if the platform treats .zip files as folders.
-	// TODO: this is just a mister thing. i wonder if it would be better to have
-	// some sort of single "config" value to look up things like this
-	// instead of implementing a method on every platform
-	ZipsAsDirs() bool
-	// DataDir returns the path to the configuration/database data for Core.
-	DataDir() string
-	// LogDir returns the path to the log folder for Zaparoo Core.
-	LogDir() string
-	// ConfigDir returns the path of the parent directory of the config file.
-	ConfigDir() string
-	// TempDir returns the path for storing temporary files. It may be called
-	// multiple times and must return the same path for the service lifetime.
-	TempDir() string
 	// NormalizePath convert a path to a normalized form for the platform, the
 	// shortest possible path that can interpreted and launched by Core. For
 	// writing to tokens.

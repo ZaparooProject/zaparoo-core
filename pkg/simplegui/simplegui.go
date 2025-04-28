@@ -35,7 +35,7 @@ import (
 )
 
 func copyLogToSd(pl platforms.Platform, logDestinationPath string) string {
-	logPath := path.Join(pl.LogDir(), config.LogFile)
+	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	newPath := logDestinationPath
 	err := utils.CopyFile(logPath, newPath)
 	outcome := ""
@@ -49,8 +49,7 @@ func copyLogToSd(pl platforms.Platform, logDestinationPath string) string {
 }
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
-
-	logPath := path.Join(pl.LogDir(), config.LogFile)
+	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
 	pages.RemovePage("export")
 	// fixme: this is not updating, too busy

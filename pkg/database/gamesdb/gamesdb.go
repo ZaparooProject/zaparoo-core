@@ -33,19 +33,19 @@ func NameKey(systemId string, name string) string {
 
 // Exists returns true if the media database exists on disk.
 func Exists(platform platforms.Platform) bool {
-	_, err := os.Stat(filepath.Join(platform.DataDir(), config.GamesDbFile))
+	_, err := os.Stat(filepath.Join(utils.DataDir(platform), config.GamesDbFile))
 	return err == nil
 }
 
 // Open the gamesdb with the given options. If the database does not exist it
 // will be created and the buckets will be initialized.
 func open(platform platforms.Platform, options *bolt.Options) (*bolt.DB, error) {
-	err := os.MkdirAll(filepath.Dir(filepath.Join(platform.DataDir(), config.GamesDbFile)), 0755)
+	err := os.MkdirAll(filepath.Dir(filepath.Join(utils.DataDir(platform), config.GamesDbFile)), 0755)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := bolt.Open(filepath.Join(platform.DataDir(), config.GamesDbFile), 0600, options)
+	db, err := bolt.Open(filepath.Join(utils.DataDir(platform), config.GamesDbFile), 0600, options)
 	if err != nil {
 		return nil, err
 	}

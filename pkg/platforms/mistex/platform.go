@@ -196,30 +196,13 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return games.GetGamesFolders(mister.UserConfigToMrext(cfg))
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return true
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    mister.DataDir,
+		ConfigDir:  mister.DataDir,
+		TempDir:    mister.TempDir,
+		ZipsAsDirs: true,
 	}
-	return mister.DataDir
-}
-
-func (p *Platform) LogDir() string {
-	return mister.TempDir
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return mister.DataDir
-}
-
-func (p *Platform) TempDir() string {
-	return mister.TempDir
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {

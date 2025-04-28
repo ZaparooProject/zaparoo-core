@@ -64,33 +64,13 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return []string{}
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return false
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
+		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
+		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		ZipsAsDirs: false,
 	}
-	return filepath.Join(xdg.DataHome, config.AppName)
-}
-
-func (p *Platform) LogDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return filepath.Join(xdg.DataHome, config.AppName)
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return filepath.Join(xdg.ConfigHome, config.AppName)
-}
-
-func (p *Platform) TempDir() string {
-	return filepath.Join(os.TempDir(), config.AppName)
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {

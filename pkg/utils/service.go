@@ -35,7 +35,7 @@ type ServiceArgs struct {
 }
 
 func NewService(args ServiceArgs) (*Service, error) {
-	err := os.MkdirAll(args.Platform.TempDir(), 0755)
+	err := os.MkdirAll(args.Platform.Settings().TempDir, 0755)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func NewService(args ServiceArgs) (*Service, error) {
 
 // Create new PID file using current process PID.
 func (s *Service) createPidFile() error {
-	path := filepath.Join(s.pl.TempDir(), config.PidFile)
+	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
 	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0644)
 	if err != nil {
@@ -59,7 +59,7 @@ func (s *Service) createPidFile() error {
 }
 
 func (s *Service) removePidFile() error {
-	err := os.Remove(filepath.Join(s.pl.TempDir(), config.PidFile))
+	err := os.Remove(filepath.Join(s.pl.Settings().TempDir, config.PidFile))
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func (s *Service) removePidFile() error {
 // Pid returns the process ID of the current running service daemon.
 func (s *Service) Pid() (int, error) {
 	pid := 0
-	path := filepath.Join(s.pl.TempDir(), config.PidFile)
+	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 
 	if _, err := os.Stat(path); err == nil {
 		pidFile, err := os.ReadFile(path)
@@ -128,7 +128,7 @@ func (s *Service) stopService() error {
 	tempPath, err := os.Executable()
 	if err != nil {
 		log.Error().Err(err).Msg("error getting executable path")
-	} else if strings.HasPrefix(tempPath, s.pl.TempDir()) {
+	} else if strings.HasPrefix(tempPath, s.pl.Settings().TempDir) {
 		err = os.Remove(tempPath)
 		if err != nil {
 			log.Error().Err(err).Msg("error removing temporary binary")
@@ -227,7 +227,7 @@ func (s *Service) Start() error {
 		return fmt.Errorf("error opening binary: %w", err)
 	}
 
-	tempPath := filepath.Join(s.pl.TempDir(), filepath.Base(binPath))
+	tempPath := filepath.Join(s.pl.Settings().TempDir, filepath.Base(binPath))
 	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
 	if err != nil {
 		return fmt.Errorf("error creating temp binary: %w", err)
@@ -252,7 +252,7 @@ func (s *Service) Start() error {
 	cmd.Env = env
 
 	// point new binary to existing config file
-	configPath := filepath.Join(s.pl.ConfigDir(), config.CfgFile)
+	configPath := filepath.Join(ConfigDir(s.pl), config.CfgFile)
 
 	if _, err := os.Stat(configPath); err == nil {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", config.CfgEnv, configPath))

@@ -382,7 +382,7 @@ func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writ
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewConfig(pl.ConfigDir(), defaultConfig)
+	cfg, err := config.NewConfig(utils.ConfigDir(pl), defaultConfig)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)

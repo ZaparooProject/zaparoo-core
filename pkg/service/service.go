@@ -23,6 +23,7 @@ package service
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,18 +257,17 @@ func Start(
 	lsq := make(chan *tokens.Token)       // launch software queue
 	plq := make(chan *playlists.Playlist) // playlist queue
 
-	if _, ok := platforms.HasUserDir(); ok {
-		log.Info().Msg("using user directory for storage")
+	if _, ok := utils.HasUserDir(); ok {
+		log.Info().Msg("using 'user' directory for storage")
 	}
 
 	log.Info().Msg("creating platform directories")
 	dirs := []string{
-		pl.ConfigDir(),
-		pl.LogDir(),
-		pl.TempDir(),
-		pl.DataDir(),
-		filepath.Join(pl.DataDir(), platforms.MappingsDir),
-		filepath.Join(pl.DataDir(), platforms.AssetsDir),
+		utils.ConfigDir(pl),
+		pl.Settings().TempDir,
+		utils.DataDir(pl),
+		filepath.Join(utils.DataDir(pl), platforms.MappingsDir),
+		filepath.Join(utils.DataDir(pl), platforms.AssetsDir),
 	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
@@ -291,7 +291,7 @@ func Start(
 	}
 
 	log.Info().Msg("loading mapping files")
-	err = cfg.LoadMappings(filepath.Join(pl.DataDir(), platforms.MappingsDir))
+	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), platforms.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 		return nil, err

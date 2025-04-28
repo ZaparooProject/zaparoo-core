@@ -2,6 +2,7 @@ package database
 
 import (
 	"encoding/json"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,7 +19,7 @@ const (
 )
 
 func dbFile(pl platforms.Platform) string {
-	return filepath.Join(pl.DataDir(), config.TapToDbFile)
+	return filepath.Join(utils.DataDir(pl), config.TapToDbFile)
 }
 
 // Check if the db exists on disk.

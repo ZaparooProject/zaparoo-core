@@ -137,10 +137,6 @@ func connectReaders(
 			rsm[id] = &r
 		}
 	}
-	err := pl.ReadersUpdateHook(rsm)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }

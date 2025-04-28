@@ -5,7 +5,6 @@ package mister
 import (
 	"bufio"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,41 +109,14 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(TempDir, 0755)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(DataDir, 0755)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(filepath.Join(p.DataDir(), platforms.AssetsDir), 0755)
-	if err != nil {
-		return err
-	}
-
 	if MainHasFeature(MainFeaturePicker) {
-		err = os.MkdirAll(MainPickerDir, 0755)
+		err := os.MkdirAll(MainPickerDir, 0755)
 		if err != nil {
 			return err
 		}
 		err = os.WriteFile(MainPickerSelected, []byte(""), 0644)
 		if err != nil {
 			return err
-		}
-	}
-
-	// migrate old config folder db
-	oldTaptoDbPath := "/media/fat/Scripts/.config/tapto/tapto.db"
-	newTaptoDbPath := filepath.Join(p.DataDir(), config.TapToDbFile)
-	if _, err := os.Stat(oldTaptoDbPath); err == nil {
-		if _, err := os.Stat(newTaptoDbPath); errors.Is(err, os.ErrNotExist) {
-			err := utils.CopyFile(oldTaptoDbPath, newTaptoDbPath)
-			if err != nil {
-				return err
-			}
 		}
 	}
 
@@ -329,30 +301,13 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return games.GetGamesFolders(UserConfigToMrext(cfg))
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return true
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    DataDir,
+		ConfigDir:  DataDir,
+		TempDir:    TempDir,
+		ZipsAsDirs: true,
 	}
-	return DataDir
-}
-
-func (p *Platform) LogDir() string {
-	return TempDir
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return DataDir
-}
-
-func (p *Platform) TempDir() string {
-	return TempDir
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {

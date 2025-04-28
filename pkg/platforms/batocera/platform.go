@@ -80,7 +80,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.gpd = gpd
 
-	successPath := filepath.Join(p.DataDir(), AssetsDir, SuccessSoundFilename)
+	successPath := filepath.Join(utils.DataDir(p), AssetsDir, SuccessSoundFilename)
 	if _, err := os.Stat(successPath); err != nil {
 		sf, err := os.Create(successPath)
 		if err != nil {
@@ -93,7 +93,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		_ = sf.Close()
 	}
 
-	failPath := filepath.Join(p.DataDir(), AssetsDir, FailSoundFilename)
+	failPath := filepath.Join(utils.DataDir(p), AssetsDir, FailSoundFilename)
 	if _, err := os.Stat(failPath); err != nil {
 		// copy fail sound to temp
 		ff, err := os.Create(failPath)
@@ -165,33 +165,13 @@ func (p *Platform) RootDirs(_ *config.Instance) []string {
 	return []string{"/userdata/roms"}
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return false
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    DataDir,
+		ConfigDir:  ConfigDir,
+		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		ZipsAsDirs: false,
 	}
-	return DataDir
-}
-
-func (p *Platform) LogDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return DataDir
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return ConfigDir
-}
-
-func (p *Platform) TempDir() string {
-	return filepath.Join(os.TempDir(), config.AppName)
 }
 
 func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
@@ -233,7 +213,7 @@ func (p *Platform) PlayFailSound(cfg *config.Instance) {
 	if !cfg.AudioFeedback() {
 		return
 	}
-	failPath := filepath.Join(p.DataDir(), AssetsDir, FailSoundFilename)
+	failPath := filepath.Join(utils.DataDir(p), AssetsDir, FailSoundFilename)
 	err := exec.Command("aplay", failPath).Start()
 	if err != nil {
 		log.Error().Msgf("error playing fail sound: %s", err)
@@ -244,7 +224,7 @@ func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
 	if !cfg.AudioFeedback() {
 		return
 	}
-	successPath := filepath.Join(p.DataDir(), AssetsDir, SuccessSoundFilename)
+	successPath := filepath.Join(utils.DataDir(p), AssetsDir, SuccessSoundFilename)
 	err := exec.Command("aplay", successPath).Start()
 	if err != nil {
 		log.Error().Msgf("error playing success sound: %s", err)
