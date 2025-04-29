@@ -15,7 +15,7 @@ import (
 // be used to attempt to associate a file with a system.
 
 type System struct {
-	Id      string
+	ID      string
 	Aliases []string
 }
 
@@ -137,6 +137,7 @@ const (
 	SystemSuperVision       = "SuperVision"
 	SystemSaturn            = "Saturn"
 	SystemSNES              = "SNES"
+	SystemSNESMSU1          = "SNESMSU1"
 	SystemSNESMusic         = "SNESMusic"
 	SystemSuperGrafx        = "SuperGrafx"
 	SystemSwitch            = "Switch"
@@ -160,7 +161,7 @@ const (
 	SystemAcornAtom      = "AcornAtom"
 	SystemAcornElectron  = "AcornElectron"
 	SystemAliceMC10      = "AliceMC10"
-	SystemAmiga          = "Amiga"
+	SystemAmiga          = "Amiga" // TODO: Amiga1200/500/etc.
 	SystemAmstrad        = "Amstrad"
 	SystemAmstradPCW     = "AmstradPCW"
 	SystemApogee         = "Apogee"
@@ -226,456 +227,461 @@ const (
 var Systems = map[string]System{
 	// Consoles
 	System3DO: {
-		Id: System3DO,
+		ID: System3DO,
 	},
 	System3DS: {
-		Id: System3DS,
+		ID: System3DS,
 	},
 	SystemAdventureVision: {
-		Id:      SystemAdventureVision,
+		ID:      SystemAdventureVision,
 		Aliases: []string{"AVision"},
 	},
 	SystemArcadia: {
-		Id: SystemArcadia,
+		ID: SystemArcadia,
 	},
 	SystemAmigaCD32: {
-		Id: SystemAmigaCD32,
+		ID: SystemAmigaCD32,
 	},
 	SystemAstrocade: {
-		Id: SystemAstrocade,
+		ID: SystemAstrocade,
 	},
 	SystemAtari2600: {
-		Id: SystemAtari2600,
+		ID: SystemAtari2600,
 	},
 	SystemAtari5200: {
-		Id: SystemAtari5200,
+		ID: SystemAtari5200,
 	},
 	SystemAtari7800: {
-		Id: SystemAtari7800,
+		ID: SystemAtari7800,
 	},
 	SystemAtariLynx: {
-		Id: SystemAtariLynx,
+		ID: SystemAtariLynx,
 	},
 	SystemAtariXEGS: {
-		Id: SystemAtariXEGS,
+		ID: SystemAtariXEGS,
 	},
 	SystemCasioPV1000: {
-		Id:      SystemCasioPV1000,
+		ID:      SystemCasioPV1000,
 		Aliases: []string{"Casio_PV-1000"},
 	},
 	SystemCDI: {
-		Id:      SystemCDI,
+		ID:      SystemCDI,
 		Aliases: []string{"CD-i"},
 	},
 	SystemChannelF: {
-		Id: SystemChannelF,
+		ID: SystemChannelF,
 	},
 	SystemColecoVision: {
-		Id:      SystemColecoVision,
+		ID:      SystemColecoVision,
 		Aliases: []string{"Coleco"},
 	},
 	SystemCreatiVision: {
-		Id: SystemCreatiVision,
+		ID: SystemCreatiVision,
 	},
 	SystemDreamcast: {
-		Id: SystemDreamcast,
+		ID: SystemDreamcast,
 	},
 	SystemFDS: {
-		Id:      SystemFDS,
+		ID:      SystemFDS,
 		Aliases: []string{"FamicomDiskSystem"},
 	},
 	SystemGamate: {
-		Id: SystemGamate,
+		ID: SystemGamate,
 	},
 	SystemGameboy: {
-		Id:      SystemGameboy,
+		ID:      SystemGameboy,
 		Aliases: []string{"GB"},
 	},
 	SystemGameboyColor: {
-		Id:      SystemGameboyColor,
+		ID:      SystemGameboyColor,
 		Aliases: []string{"GBC"},
 	},
 	SystemGameboy2P: {
 		// TODO: Split 2P core into GB and GBC?
-		Id: SystemGameboy2P,
+		ID: SystemGameboy2P,
 	},
 	SystemGameCube: {
-		Id: SystemGameCube,
+		ID: SystemGameCube,
 	},
 	SystemGameGear: {
-		Id:      SystemGameGear,
+		ID:      SystemGameGear,
 		Aliases: []string{"GG"},
 	},
 	SystemGameNWatch: {
-		Id: SystemGameNWatch,
+		ID: SystemGameNWatch,
 	},
 	SystemGameCom: {
-		Id: SystemGameCom,
+		ID: SystemGameCom,
 	},
 	SystemGBA: {
-		Id:      SystemGBA,
+		ID:      SystemGBA,
 		Aliases: []string{"GameboyAdvance"},
 	},
 	SystemGBA2P: {
-		Id: SystemGBA2P,
+		ID: SystemGBA2P,
 	},
 	SystemGenesis: {
-		Id:      SystemGenesis,
+		ID:      SystemGenesis,
 		Aliases: []string{"MegaDrive"},
 	},
 	SystemIntellivision: {
-		Id: SystemIntellivision,
+		ID: SystemIntellivision,
 	},
 	SystemJaguar: {
-		Id: SystemJaguar,
+		ID: SystemJaguar,
 	},
 	SystemJaguarCD: {
-		Id: SystemJaguarCD,
+		ID: SystemJaguarCD,
 	},
 	SystemMasterSystem: {
-		Id:      SystemMasterSystem,
+		ID:      SystemMasterSystem,
 		Aliases: []string{"SMS"},
 	},
 	SystemMegaCD: {
-		Id:      SystemMegaCD,
+		ID:      SystemMegaCD,
 		Aliases: []string{"SegaCD"},
 	},
 	SystemMegaDuck: {
-		Id: SystemMegaDuck,
+		ID: SystemMegaDuck,
 	},
 	SystemNDS: {
-		Id:      SystemNDS,
+		ID:      SystemNDS,
 		Aliases: []string{"NintendoDS"},
 	},
 	SystemNeoGeo: {
-		Id: SystemNeoGeo,
+		ID: SystemNeoGeo,
 	},
 	SystemNeoGeoCD: {
-		Id: SystemNeoGeoCD,
+		ID: SystemNeoGeoCD,
 	},
 	SystemNeoGeoPocket: {
-		Id: SystemNeoGeoPocket,
+		ID: SystemNeoGeoPocket,
 	},
 	SystemNeoGeoPocketColor: {
-		Id: SystemNeoGeoPocketColor,
+		ID: SystemNeoGeoPocketColor,
 	},
 	SystemNES: {
-		Id: SystemNES,
+		ID: SystemNES,
 	},
 	SystemNESMusic: {
-		Id: SystemNESMusic,
+		ID: SystemNESMusic,
 	},
 	SystemNintendo64: {
-		Id:      SystemNintendo64,
+		ID:      SystemNintendo64,
 		Aliases: []string{"N64"},
 	},
 	SystemOdyssey2: {
-		Id: SystemOdyssey2,
+		ID: SystemOdyssey2,
 	},
 	SystemOuya: {
-		Id: SystemOuya,
+		ID: SystemOuya,
 	},
 	SystemPocketChallengeV2: {
-		Id: SystemPocketChallengeV2,
+		ID: SystemPocketChallengeV2,
 	},
 	SystemPokemonMini: {
-		Id: SystemPokemonMini,
+		ID: SystemPokemonMini,
 	},
 	SystemPSX: {
-		Id:      SystemPSX,
+		ID:      SystemPSX,
 		Aliases: []string{"Playstation", "PS1"},
 	},
 	SystemPS2: {
-		Id:      SystemPS2,
+		ID:      SystemPS2,
 		Aliases: []string{"Playstation2"},
 	},
 	SystemPS3: {
-		Id:      SystemPS3,
+		ID:      SystemPS3,
 		Aliases: []string{"Playstation3"},
 	},
 	SystemPS4: {
-		Id:      SystemPS4,
+		ID:      SystemPS4,
 		Aliases: []string{"Playstation4"},
 	},
 	SystemPS5: {
-		Id:      SystemPS5,
+		ID:      SystemPS5,
 		Aliases: []string{"Playstation5"},
 	},
 	SystemPSP: {
-		Id:      SystemPSP,
+		ID:      SystemPSP,
 		Aliases: []string{"PlaystationPortable"},
 	},
 	SystemSega32X: {
-		Id:      SystemSega32X,
+		ID:      SystemSega32X,
 		Aliases: []string{"S32X", "32X"},
 	},
 	SystemSeriesXS: {
-		Id:      SystemSeriesXS,
+		ID:      SystemSeriesXS,
 		Aliases: []string{"SeriesX", "SeriesS"},
 	},
 	SystemSG1000: {
-		Id: SystemSG1000,
+		ID: SystemSG1000,
 	},
 	SystemSuperGameboy: {
-		Id:      SystemSuperGameboy,
+		ID:      SystemSuperGameboy,
 		Aliases: []string{"SGB"},
 	},
 	SystemSuperVision: {
-		Id: SystemSuperVision,
+		ID: SystemSuperVision,
 	},
 	SystemSaturn: {
-		Id: SystemSaturn,
+		ID: SystemSaturn,
 	},
 	SystemSNES: {
-		Id:      SystemSNES,
+		ID:      SystemSNES,
 		Aliases: []string{"SuperNintendo"},
 	},
+	SystemSNESMSU1: {
+		ID:      SystemSNESMSU1,
+		Aliases: []string{"MSU1", "MSU-1"},
+	},
 	SystemSNESMusic: {
-		Id: SystemSNESMusic,
+		ID: SystemSNESMusic,
 	},
 	SystemSuperGrafx: {
-		Id: SystemSuperGrafx,
+		ID: SystemSuperGrafx,
 	},
 	SystemSwitch: {
-		Id:      SystemSwitch,
+		ID:      SystemSwitch,
 		Aliases: []string{"NintendoSwitch"},
 	},
 	SystemTurboGrafx16: {
-		Id:      SystemTurboGrafx16,
+		ID:      SystemTurboGrafx16,
 		Aliases: []string{"TGFX16", "PCEngine"},
 	},
 	SystemTurboGrafx16CD: {
-		Id:      SystemTurboGrafx16CD,
+		ID:      SystemTurboGrafx16CD,
 		Aliases: []string{"TGFX16-CD", "PCEngineCD"},
 	},
 	SystemVC4000: {
-		Id: SystemVC4000,
+		ID: SystemVC4000,
 	},
 	SystemVectrex: {
-		Id: SystemVectrex,
+		ID: SystemVectrex,
 	},
 	SystemVirtualBoy: {
-		Id: SystemVirtualBoy,
+		ID: SystemVirtualBoy,
 	},
 	SystemVita: {
-		Id:      SystemVita,
+		ID:      SystemVita,
 		Aliases: []string{"PSVita"},
 	},
 	SystemWii: {
-		Id:      SystemWii,
+		ID:      SystemWii,
 		Aliases: []string{"NintendoWii"},
 	},
 	SystemWiiU: {
-		Id:      SystemWiiU,
+		ID:      SystemWiiU,
 		Aliases: []string{"NintendoWiiU"},
 	},
 	SystemWonderSwan: {
-		Id: SystemWonderSwan,
+		ID: SystemWonderSwan,
 	},
 	SystemWonderSwanColor: {
-		Id: SystemWonderSwanColor,
+		ID: SystemWonderSwanColor,
 	},
 	SystemXbox: {
-		Id: SystemXbox,
+		ID: SystemXbox,
 	},
 	SystemXbox360: {
-		Id: SystemXbox360,
+		ID: SystemXbox360,
 	},
 	SystemXboxOne: {
-		Id: SystemXboxOne,
+		ID: SystemXboxOne,
 	},
 	// Computers
 	SystemAcornAtom: {
-		Id: SystemAcornAtom,
+		ID: SystemAcornAtom,
 	},
 	SystemAcornElectron: {
-		Id: SystemAcornElectron,
+		ID: SystemAcornElectron,
 	},
 	SystemAliceMC10: {
-		Id: SystemAliceMC10,
+		ID: SystemAliceMC10,
 	},
 	SystemAmiga: {
-		Id:      SystemAmiga,
+		ID:      SystemAmiga,
 		Aliases: []string{"Minimig"},
 	},
 	SystemAmstrad: {
-		Id: SystemAmstrad,
+		ID: SystemAmstrad,
 	},
 	SystemAmstradPCW: {
-		Id:      SystemAmstradPCW,
+		ID:      SystemAmstradPCW,
 		Aliases: []string{"Amstrad-PCW"},
 	},
 	SystemDOS: {
-		Id:      SystemDOS,
+		ID:      SystemDOS,
 		Aliases: []string{"ao486", "MS-DOS"},
 	},
 	SystemApogee: {
-		Id: SystemApogee,
+		ID: SystemApogee,
 	},
 	SystemAppleI: {
-		Id:      SystemAppleI,
+		ID:      SystemAppleI,
 		Aliases: []string{"Apple-I"},
 	},
 	SystemAppleII: {
-		Id:      SystemAppleII,
+		ID:      SystemAppleII,
 		Aliases: []string{"Apple-II"},
 	},
 	SystemAquarius: {
-		Id: SystemAquarius,
+		ID: SystemAquarius,
 	},
 	SystemAtari800: {
-		Id: SystemAtari800,
+		ID: SystemAtari800,
 	},
 	SystemBBCMicro: {
-		Id: SystemBBCMicro,
+		ID: SystemBBCMicro,
 	},
 	SystemBK0011M: {
-		Id: SystemBK0011M,
+		ID: SystemBK0011M,
 	},
 	SystemC16: {
-		Id: SystemC16,
+		ID: SystemC16,
 	},
 	SystemC64: {
-		Id: SystemC64,
+		ID: SystemC64,
 	},
 	SystemCasioPV2000: {
-		Id:      SystemCasioPV2000,
+		ID:      SystemCasioPV2000,
 		Aliases: []string{"Casio_PV-2000"},
 	},
 	SystemCoCo2: {
-		Id: SystemCoCo2,
+		ID: SystemCoCo2,
 	},
 	SystemEDSAC: {
-		Id: SystemEDSAC,
+		ID: SystemEDSAC,
 	},
 	SystemGalaksija: {
-		Id: SystemGalaksija,
+		ID: SystemGalaksija,
 	},
 	SystemInteract: {
-		Id: SystemInteract,
+		ID: SystemInteract,
 	},
 	SystemJupiter: {
-		Id: SystemJupiter,
+		ID: SystemJupiter,
 	},
 	SystemLaser: {
-		Id:      SystemLaser,
+		ID:      SystemLaser,
 		Aliases: []string{"Laser310"},
 	},
 	SystemLynx48: {
-		Id: SystemLynx48,
+		ID: SystemLynx48,
 	},
 	SystemMacPlus: {
-		Id: SystemMacPlus,
+		ID: SystemMacPlus,
 	},
 	SystemMacOS: {
-		Id: SystemMacOS,
+		ID: SystemMacOS,
 	},
 	SystemMSX: {
-		Id: SystemMSX,
+		ID: SystemMSX,
 	},
 	SystemMultiComp: {
-		Id: SystemMultiComp,
+		ID: SystemMultiComp,
 	},
 	SystemOrao: {
-		Id: SystemOrao,
+		ID: SystemOrao,
 	},
 	SystemOric: {
-		Id: SystemOric,
+		ID: SystemOric,
 	},
 	SystemPC: {
-		Id: SystemPC,
+		ID: SystemPC,
 	},
 	SystemPCXT: {
-		Id: SystemPCXT,
+		ID: SystemPCXT,
 	},
 	SystemPDP1: {
-		Id: SystemPDP1,
+		ID: SystemPDP1,
 	},
 	SystemPET2001: {
-		Id: SystemPET2001,
+		ID: SystemPET2001,
 	},
 	SystemPMD85: {
-		Id: SystemPMD85,
+		ID: SystemPMD85,
 	},
 	SystemQL: {
-		Id: SystemQL,
+		ID: SystemQL,
 	},
 	SystemRX78: {
-		Id: SystemRX78,
+		ID: SystemRX78,
 	},
 	SystemSAMCoupe: {
-		Id: SystemSAMCoupe,
+		ID: SystemSAMCoupe,
 	},
 	SystemSordM5: {
-		Id:      SystemSordM5,
+		ID:      SystemSordM5,
 		Aliases: []string{"Sord M5"},
 	},
 	SystemSpecialist: {
-		Id:      SystemSpecialist,
+		ID:      SystemSpecialist,
 		Aliases: []string{"SPMX"},
 	},
 	SystemSVI328: {
-		Id: SystemSVI328,
+		ID: SystemSVI328,
 	},
 	SystemTatungEinstein: {
-		Id: SystemTatungEinstein,
+		ID: SystemTatungEinstein,
 	},
 	SystemTI994A: {
-		Id:      SystemTI994A,
+		ID:      SystemTI994A,
 		Aliases: []string{"TI-99_4A"},
 	},
 	SystemTomyTutor: {
-		Id: SystemTomyTutor,
+		ID: SystemTomyTutor,
 	},
 	SystemTRS80: {
-		Id: SystemTRS80,
+		ID: SystemTRS80,
 	},
 	SystemTSConf: {
-		Id: SystemTSConf,
+		ID: SystemTSConf,
 	},
 	SystemUK101: {
-		Id: SystemUK101,
+		ID: SystemUK101,
 	},
 	SystemVector06C: {
-		Id:      SystemVector06C,
+		ID:      SystemVector06C,
 		Aliases: []string{"Vector06"},
 	},
 	SystemVIC20: {
-		Id: SystemVIC20,
+		ID: SystemVIC20,
 	},
 	SystemX68000: {
-		Id: SystemX68000,
+		ID: SystemX68000,
 	},
 	SystemZX81: {
-		Id: SystemZX81,
+		ID: SystemZX81,
 	},
 	SystemZXSpectrum: {
-		Id:      SystemZXSpectrum,
+		ID:      SystemZXSpectrum,
 		Aliases: []string{"Spectrum"},
 	},
 	SystemZXNext: {
-		Id: SystemZXNext,
+		ID: SystemZXNext,
 	},
 	// Other
 	SystemAndroid: {
-		Id: SystemAndroid,
+		ID: SystemAndroid,
 	},
 	SystemArcade: {
-		Id: SystemArcade,
+		ID:      SystemArcade,
+		Aliases: []string{"MAME"},
 	},
 	SystemArduboy: {
-		Id: SystemArduboy,
+		ID: SystemArduboy,
 	},
 	SystemChip8: {
-		Id: SystemChip8,
+		ID: SystemChip8,
 	},
 	SystemGroovy: {
-		Id: SystemGroovy,
+		ID: SystemGroovy,
 	},
 	SystemIOS: {
-		Id: SystemIOS,
+		ID: SystemIOS,
 	},
 	SystemVideo: {
-		Id: SystemVideo,
+		ID: SystemVideo,
 	},
 }

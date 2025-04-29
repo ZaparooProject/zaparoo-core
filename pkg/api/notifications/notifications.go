@@ -1,50 +1,53 @@
 package notifications
 
-import "github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+import (
+	"encoding/json"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/rs/zerolog/log"
+)
 
-func MediaIndexing(ns chan<- models.Notification, payload models.IndexResponse) {
-	ns <- models.Notification{
-		Method: models.NotificationMediaIndexing,
-		Params: payload,
+func sendNotification(ns chan<- models.Notification, method string, payload any) {
+	if payload != nil {
+		params, err := json.Marshal(payload)
+		if err != nil {
+			log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
+			return
+		}
+		ns <- models.Notification{
+			Method: method,
+			Params: params,
+		}
+	} else {
+		ns <- models.Notification{
+			Method: method,
+		}
 	}
+}
+
+func MediaIndexing(ns chan<- models.Notification, payload models.IndexingStatusResponse) {
+	sendNotification(ns, models.NotificationMediaIndexing, payload)
 }
 
 func MediaStopped(ns chan<- models.Notification) {
-	ns <- models.Notification{
-		Method: models.NotificationStopped,
-	}
+	sendNotification(ns, models.NotificationStopped, nil)
 }
 
 func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedParams) {
-	ns <- models.Notification{
-		Method: models.NotificationStarted,
-		Params: payload,
-	}
+	sendNotification(ns, models.NotificationStarted, payload)
 }
 
 func TokensAdded(ns chan<- models.Notification, payload models.TokenResponse) {
-	ns <- models.Notification{
-		Method: models.NotificationTokensAdded,
-		Params: payload,
-	}
+	sendNotification(ns, models.NotificationTokensAdded, payload)
 }
 
 func TokensRemoved(ns chan<- models.Notification) {
-	ns <- models.Notification{
-		Method: models.NotificationTokensRemoved,
-	}
+	sendNotification(ns, models.NotificationTokensRemoved, nil)
 }
 
-func ReadersAdded(ns chan<- models.Notification, id string) {
-	ns <- models.Notification{
-		Method: models.NotificationReadersConnected,
-		Params: id,
-	}
+func ReadersAdded(ns chan<- models.Notification, payload models.ReaderResponse) {
+	sendNotification(ns, models.NotificationReadersConnected, payload)
 }
 
-func ReadersRemoved(ns chan<- models.Notification, id string) {
-	ns <- models.Notification{
-		Method: models.NotificationReadersDisconnected,
-		Params: id,
-	}
+func ReadersRemoved(ns chan<- models.Notification, payload models.ReaderResponse) {
+	sendNotification(ns, models.NotificationReadersDisconnected, payload)
 }

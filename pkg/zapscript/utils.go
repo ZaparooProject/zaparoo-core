@@ -12,26 +12,31 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) error {
+func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
+	log.Info().Msg("stopping media")
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, pl.KillLauncher()
+}
+
+func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("delaying for: %s", env.Args)
 
 	amount, err := strconv.Atoi(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	time.Sleep(time.Duration(amount) * time.Millisecond)
 
-	return nil
+	return platforms.CmdResult{}, nil
 }
 
-func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
-		return fmt.Errorf("command cannot be run from a remote source")
-	}
-
-	if !env.Cfg.IsExecuteAllowed(env.Args) {
-		return fmt.Errorf("execute not allowed: %s", env.Args)
+func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+	} else if !env.Cfg.IsExecuteAllowed(env.Args) {
+		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", env.Args)
 	}
 
 	// very basic support for treating quoted strings as a single field
@@ -56,7 +61,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
 	}
 
 	if len(tokenArgs) == 0 {
-		return fmt.Errorf("execute command is empty")
+		return platforms.CmdResult{}, fmt.Errorf("execute command is empty")
 	}
 
 	cmd := tokenArgs[0]
@@ -66,5 +71,5 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) error {
 		cmdArgs = tokenArgs[1:]
 	}
 
-	return exec.Command(cmd, cmdArgs...).Run()
+	return platforms.CmdResult{}, exec.Command(cmd, cmdArgs...).Run()
 }

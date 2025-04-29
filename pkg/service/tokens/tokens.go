@@ -20,4 +20,5 @@ type Token struct {
 	ScanTime time.Time
 	FromAPI  bool
 	Source   string
+	Unsafe   bool
 }

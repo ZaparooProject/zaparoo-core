@@ -1,14 +1,23 @@
 package playlists
 
-type Playlist struct {
-	Media []string
-	Index int
+type PlaylistMedia struct {
+	Path string
+	Name string
 }
 
-func NewPlaylist(media []string) *Playlist {
+type Playlist struct {
+	ID      string
+	Media   []PlaylistMedia
+	Index   int
+	Playing bool
+}
+
+func NewPlaylist(id string, media []PlaylistMedia) *Playlist {
 	return &Playlist{
-		Media: media,
-		Index: 0,
+		ID:      id,
+		Media:   media,
+		Index:   0,
+		Playing: false,
 	}
 }
 
@@ -18,8 +27,10 @@ func Next(p Playlist) *Playlist {
 		idx = 0
 	}
 	return &Playlist{
-		Media: p.Media,
-		Index: idx,
+		ID:      p.ID,
+		Media:   p.Media,
+		Index:   idx,
+		Playing: p.Playing,
 	}
 }
 
@@ -29,12 +40,47 @@ func Previous(p Playlist) *Playlist {
 		idx = len(p.Media) - 1
 	}
 	return &Playlist{
-		Media: p.Media,
-		Index: idx,
+		ID:      p.ID,
+		Media:   p.Media,
+		Index:   idx,
+		Playing: p.Playing,
 	}
 }
 
-func (p *Playlist) Current() string {
+func Goto(p Playlist, idx int) *Playlist {
+	if idx >= len(p.Media) {
+		idx = len(p.Media) - 1
+	} else if idx < 0 {
+		idx = 0
+	}
+	p.Index = idx
+	return &Playlist{
+		ID:      p.ID,
+		Media:   p.Media,
+		Index:   idx,
+		Playing: p.Playing,
+	}
+}
+
+func Play(p Playlist) *Playlist {
+	return &Playlist{
+		ID:      p.ID,
+		Media:   p.Media,
+		Index:   p.Index,
+		Playing: true,
+	}
+}
+
+func Pause(p Playlist) *Playlist {
+	return &Playlist{
+		ID:      p.ID,
+		Media:   p.Media,
+		Index:   p.Index,
+		Playing: false,
+	}
+}
+
+func (p *Playlist) Current() PlaylistMedia {
 	return p.Media[p.Index]
 }
 

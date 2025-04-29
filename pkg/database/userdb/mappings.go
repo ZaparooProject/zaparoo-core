@@ -31,7 +31,7 @@ var AllowedMatchTypes = []string{
 	MatchTypeRegex,
 }
 
-func NormalizeUid(uid string) string {
+func NormalizeID(uid string) string {
 	uid = strings.TrimSpace(uid)
 	uid = strings.ToLower(uid)
 	uid = strings.ReplaceAll(uid, ":", "")
@@ -48,7 +48,7 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 	}
 
 	if m.Type == MappingTypeUID {
-		m.Pattern = NormalizeUid(m.Pattern)
+		m.Pattern = NormalizeID(m.Pattern)
 	}
 
 	if m.Pattern == "" {
@@ -85,7 +85,7 @@ func (db *UserDB) UpdateMapping(id string, m database.Mapping) error {
 	}
 
 	if m.Type == MappingTypeUID {
-		m.Pattern = NormalizeUid(m.Pattern)
+		m.Pattern = NormalizeID(m.Pattern)
 	}
 
 	if m.Pattern == "" {

@@ -76,7 +76,7 @@ func MatchSystemFile(
 	path string,
 ) bool {
 	for _, l := range pl.Launchers() {
-		if l.SystemId == systemId {
+		if l.SystemID == systemId {
 			if PathIsLauncher(cfg, pl, l, path) {
 				return true
 			}

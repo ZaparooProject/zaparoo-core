@@ -18,6 +18,21 @@ const (
 	MappingsDir = "mappings"
 )
 
+const (
+	PlatformIDBatocera  = "batocera"
+	PlatformIDBazzite   = "bazzite"
+	PlatformIDChimeraOS = "chimeraos"
+	PlatformIDLibreELEC = "libreelec"
+	PlatformIDLinux     = "linux"
+	PlatformIDMac       = "mac"
+	PlatformIDMister    = "mister"
+	PlatformIDMistex    = "mistex"
+	PlatformIDRecalbox  = "recalbox"
+	PlatformIDRetroPie  = "retropie"
+	PlatformIDSteamOS   = "steamos"
+	PlatformIDWindows   = "windows"
+)
+
 type CmdEnv struct {
 	Cmd           string
 	Args          string
@@ -27,8 +42,21 @@ type CmdEnv struct {
 	Text          string
 	TotalCommands int
 	CurrentIndex  int
-	Untrusted     bool
+	Unsafe        bool
 	Database      *database.Database
+}
+
+// CmdResult returns a summary of what global side effects may or may not have
+// happened as a result of a single ZapScript command running.
+type CmdResult struct {
+	// MediaChanged is true if a command may have started or stopped running
+	// media, and could affect handling of the hold mode feature. This doesn't
+	// include playlist changes, which manage running media separately.
+	MediaChanged bool
+	// PlaylistChanged is true if a command started/changed/stopped a playlist.
+	PlaylistChanged bool
+	// Playlist is the result of the playlist change.
+	Playlist *playlists.Playlist
 }
 
 type ScanResult struct {
@@ -40,7 +68,7 @@ type Launcher struct {
 	// Unique ID of the launcher, visible to user.
 	Id string
 	// Systems associated with this launcher.
-	SystemId string
+	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.
 	// TODO: Support absolute paths?
 	// TODO: rename RootDirs
@@ -135,7 +163,7 @@ type Platform interface {
 	KeyboardPress(string) error
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
-	ForwardCmd(CmdEnv) error
+	ForwardCmd(CmdEnv) (CmdResult, error)
 	LookupMapping(tokens.Token) (string, bool)
 	Launchers() []Launcher
 	// ShowNotice displays a string on-screen of the platform device. Returns

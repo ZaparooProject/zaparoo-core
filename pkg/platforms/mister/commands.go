@@ -15,23 +15,23 @@ import (
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func CmdIni(_ platforms.Platform, env platforms.CmdEnv) error {
+func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	inis, err := mister.GetAllMisterIni()
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	if len(inis) == 0 {
-		return fmt.Errorf("no ini files found")
+		return platforms.CmdResult{}, fmt.Errorf("no ini files found")
 	}
 
 	id, err := strconv.Atoi(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	if id < 1 || id > len(inis) {
-		return fmt.Errorf("ini id out of range: %d", id)
+		return platforms.CmdResult{}, fmt.Errorf("ini id out of range: %d", id)
 	}
 
 	doRelaunch := true
@@ -42,43 +42,47 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) error {
 
 	err = mister.SetActiveIni(id, doRelaunch)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
-	return nil
+	return platforms.CmdResult{
+		MediaChanged: doRelaunch,
+	}, nil
 }
 
-func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) error {
-	return mister.LaunchShortCore(env.Args)
+func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, mister.LaunchShortCore(env.Args)
 }
 
-func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) error {
-	return func(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error) {
+	return func(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 		// TODO: generic read bool function
 		hidden := env.NamedArgs["hidden"] == "true" || env.NamedArgs["hidden"] == "yes"
 
 		args := strings.Fields(env.Args)
 
 		if len(args) == 0 {
-			return fmt.Errorf("no script specified")
+			return platforms.CmdResult{}, fmt.Errorf("no script specified")
 		}
 
 		script := args[0]
 
 		if !strings.HasSuffix(script, ".sh") {
-			return fmt.Errorf("invalid script: %s", script)
+			return platforms.CmdResult{}, fmt.Errorf("invalid script: %s", script)
 		}
 
 		scriptPath := filepath.Join(ScriptsDir, script)
 		if _, err := os.Stat(scriptPath); err != nil {
-			return fmt.Errorf("script not found: %s", script)
+			return platforms.CmdResult{}, fmt.Errorf("script not found: %s", script)
 		}
 
 		script = scriptPath
 
 		args = args[1:]
 		if len(args) == 0 {
-			return runScript(plm, script, "", hidden)
+			return platforms.CmdResult{}, runScript(plm, script, "", hidden)
 		}
 
 		cleaned := "'"
@@ -103,33 +107,33 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) e
 		cleaned += "'"
 
 		log.Info().Msgf("running script: %s", script+" "+cleaned)
-		return runScript(plm, script, cleaned, hidden)
+		return platforms.CmdResult{}, runScript(plm, script, cleaned, hidden)
 	}
 }
 
-func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) error {
+func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Args == "" {
-		return fmt.Errorf("no mgl specified")
+		return platforms.CmdResult{}, fmt.Errorf("no mgl specified")
 	}
 
 	tmpFile, err := os.CreateTemp("", "*.mgl")
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	_, err = tmpFile.WriteString(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	err = tmpFile.Close()
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	cmd, err := os.OpenFile(CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 	defer func(cmd *os.File) {
 		err := cmd.Close()
@@ -140,7 +144,7 @@ func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) error {
 
 	_, err = cmd.WriteString(fmt.Sprintf("load_core %s\n", tmpFile.Name()))
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	go func() {
@@ -148,5 +152,7 @@ func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) error {
 		_ = os.Remove(tmpFile.Name())
 	}()
 
-	return nil
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, nil
 }

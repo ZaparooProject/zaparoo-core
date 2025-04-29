@@ -334,7 +334,7 @@ func NewNamesIndex(
 
 	scanned := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
-		scanned[s.Id] = false
+		scanned[s.ID] = false
 	}
 
 	sysPathIds := utils.AlphaMapKeys(systemPaths)

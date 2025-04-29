@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 )
 
@@ -16,7 +17,7 @@ type Reader interface {
 	Ids() []string
 	// Open any necessary connections to the device and start polling.
 	// Takes a device connection string and a channel to send scanned tokens.
-	Open(string, chan<- Scan) error
+	Open(config.ReadersConnect, chan<- Scan) error
 	// Close any open connections to the device and stop polling.
 	Close() error
 	// Detect attempts to search for a connected device and returns the device

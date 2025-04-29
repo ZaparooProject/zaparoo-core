@@ -125,32 +125,36 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.NameMap = nameMap
 }
 
-func (tr *Tracker) LookupCoreName(name string) (NameMapping, bool) {
+func (tr *Tracker) LookupCoreName(name string) *NameMapping {
+	if name == "" {
+		return nil
+	}
+
 	log.Debug().Msgf("looking up core name: %s", name)
 
-	for _, mapping := range tr.NameMap {
-		if len(mapping.CoreName) != len(name) {
-			continue
-		}
-
+	for i, mapping := range tr.NameMap {
 		if !strings.EqualFold(mapping.CoreName, name) {
 			continue
-		} else if mapping.ArcadeName != "" {
+		} else {
+			log.Debug().Msgf("found mapping: %s -> %s", name, mapping.Name)
+		}
+
+		if mapping.ArcadeName != "" {
 			log.Debug().Msgf("arcade name: %s", mapping.ArcadeName)
-			return mapping, true
+			return &tr.NameMap[i]
 		}
 
 		_, err := systemdefs.LookupSystem(name)
 		if err != nil {
-			log.Error().Msgf("error getting system %s", err)
+			log.Error().Msgf("error getting system: %s", err)
 			continue
 		}
 
 		log.Info().Msgf("found mapping: %s -> %s", name, mapping.Name)
-		return mapping, true
+		return &tr.NameMap[i]
 	}
 
-	return NameMapping{}, false
+	return nil
 }
 
 func (tr *Tracker) stopCore() bool {
@@ -205,7 +209,7 @@ func (tr *Tracker) LoadCore() {
 	}
 
 	// set arcade core details
-	if result, ok := tr.LookupCoreName(coreName); ok && result.ArcadeName != "" {
+	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
 		err := mister.SetActiveGame(result.CoreName)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
@@ -218,7 +222,7 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveSystemName = ArcadeSystem
 
 		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
-			SystemId:   tr.ActiveSystem,
+			SystemID:   tr.ActiveSystem,
 			SystemName: tr.ActiveSystemName,
 			MediaName:  tr.ActiveGameName,
 			MediaPath:  coreName,
@@ -279,30 +283,30 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	system, err := systemdefs.GetSystem(launchers[0].SystemId)
+	system, err := systemdefs.GetSystem(launchers[0].SystemID)
 	if err != nil {
 		log.Error().Msgf("error getting system %s", err)
 		return
 	}
 
-	meta, err := assets.GetSystemMetadata(system.Id)
+	meta, err := assets.GetSystemMetadata(system.ID)
 	if err != nil {
 		log.Error().Msgf("error getting system metadata %s", err)
 		return
 	}
 
-	id := fmt.Sprintf("%s/%s", system.Id, filename)
+	id := fmt.Sprintf("%s/%s", system.ID, filename)
 
 	if id != tr.ActiveGameId {
 		tr.ActiveGameId = id
 		tr.ActiveGameName = name
 		tr.ActiveGamePath = path
 
-		tr.ActiveSystem = system.Id
+		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
 		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
-			SystemId:   system.Id,
+			SystemID:   system.ID,
 			SystemName: meta.Name,
 			MediaName:  name,
 			MediaPath:  path,

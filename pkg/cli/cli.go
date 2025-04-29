@@ -35,6 +35,7 @@ type Flags struct {
 	Config       *bool
 	ShowLoader   *string
 	ShowPicker   *string
+	Reload       *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -95,6 +96,11 @@ func SetupFlags() *Flags {
 			false,
 			"start the text ui to handle zaparoo config",
 		),
+		Reload: flag.Bool(
+			"reload",
+			false,
+			"reload config and mappings from disk",
+		),
 	}
 }
 
@@ -140,12 +146,27 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}
 
+		enableRun := client.ZapScriptWrapper(cfg)
+
+		// cleanup after ctrl-c
+		sigs := make(chan os.Signal, 1)
+		defer close(sigs)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigs
+			enableRun()
+			os.Exit(1)
+		}()
+
 		_, err = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
+			enableRun()
 			os.Exit(1)
 		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
+			enableRun()
 			os.Exit(0)
 		}
 	} else if *f.Read {
@@ -206,6 +227,15 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 
 		fmt.Println(resp)
 		os.Exit(0)
+	} else if *f.Reload {
+		_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
+		if err != nil {
+			log.Error().Err(err).Msg("error reloading settings")
+			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
+			os.Exit(1)
+		} else {
+			os.Exit(0)
+		}
 	}
 
 	// clients
@@ -232,7 +262,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	//		if c.Address != "" {
 	//			fmt.Printf("- Address: %s\n", c.Address)
 	//		}
-	//		fmt.Printf("- ID:     %s\n", c.Id)
+	//		fmt.Printf("- ID:     %s\n", c.ID)
 	//		fmt.Printf("- Secret: %s\n", c.Secret)
 	//
 	//		if *f.Qr {
@@ -243,7 +273,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	//			}
 	//
 	//			cq := ConnQr{
-	//				Id:      c.Id,
+	//				ID:      c.ID,
 	//				Secret:  c.Secret,
 	//				Address: ip.String(),
 	//			}
@@ -290,7 +320,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	//	}
 	//
 	//	fmt.Println("New client registered:")
-	//	fmt.Printf("- ID:     %s\n", c.Id)
+	//	fmt.Printf("- ID:     %s\n", c.ID)
 	//	fmt.Printf("- Name:   %s\n", c.Name)
 	//	fmt.Printf("- Secret: %s\n", c.Secret)
 	//
@@ -302,7 +332,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	//		}
 	//
 	//		cq := ConnQr{
-	//			Id:      c.Id,
+	//			ID:      c.ID,
 	//			Secret:  c.Secret,
 	//			Address: ip.String(),
 	//		}
@@ -322,7 +352,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	//	os.Exit(0)
 	//} else if *f.DeleteClient != "" {
 	//	data, err := json.Marshal(&models.DeleteClientParams{
-	//		Id: *f.DeleteClient,
+	//		ID: *f.DeleteClient,
 	//	})
 	//	if err != nil {
 	//		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)

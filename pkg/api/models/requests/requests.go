@@ -1,6 +1,7 @@
 package requests
 
 import (
+	"encoding/json"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -16,6 +17,6 @@ type RequestEnv struct {
 	Database   *database.Database
 	TokenQueue chan<- tokens.Token
 	IsLocal    bool
-	Id         uuid.UUID
-	Params     []byte
+	ID         uuid.UUID
+	Params     json.RawMessage
 }

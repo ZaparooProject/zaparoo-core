@@ -53,10 +53,7 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	fmt.Println("Zaparoo v" + config.AppVersion)
-
 	stopSvc, err := service.Start(pl, cfg)
-
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
 		fmt.Println("Error starting service:", err)

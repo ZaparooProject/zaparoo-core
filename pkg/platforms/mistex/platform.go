@@ -37,7 +37,7 @@ type Platform struct {
 }
 
 func (p *Platform) Id() string {
-	return "mistex"
+	return platforms.PlatformIDMistex
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
@@ -190,6 +190,9 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return mister.DataDir
 }
 
@@ -198,6 +201,9 @@ func (p *Platform) LogDir() string {
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return mister.DataDir
 }
 
@@ -316,11 +322,11 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := commandsMappings[env.Cmd]; ok {
 		return f(p, env)
 	} else {
-		return fmt.Errorf("command not supported on mister: %s", env.Cmd)
+		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 	}
 }
 

@@ -36,13 +36,18 @@ import (
 
 func checkMappingUid(m database.Mapping, t tokens.Token) bool {
 	uid := userdb.NormalizeUid(t.UID)
+	pattern := userdb.NormalizeUid(m.Pattern)
 
 	switch {
 	case m.Match == userdb.MatchTypeExact:
-		return uid == m.Pattern
+		log.Debug().Msgf("checking exact match: %s == %s", pattern, uid)
+		return uid == pattern
 	case m.Match == userdb.MatchTypePartial:
-		return strings.Contains(uid, m.Pattern)
+		log.Debug().Msgf("checking partial match: %s contains %s", pattern, uid)
+		return strings.Contains(uid, pattern)
 	case m.Match == userdb.MatchTypeRegex:
+		// don't normalize regex pattern
+		log.Debug().Msgf("checking regex match: %s matches %s", m.Pattern, uid)
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")

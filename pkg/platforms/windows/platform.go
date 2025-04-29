@@ -33,7 +33,7 @@ type Platform struct {
 }
 
 func (p *Platform) Id() string {
-	return "windows"
+	return platforms.PlatformIDWindows
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
@@ -46,16 +46,6 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(filepath.Join(xdg.ConfigHome, config.AppName), 0755)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -84,14 +74,23 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
@@ -101,10 +100,6 @@ func (p *Platform) TempDir() string {
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return path
-}
-
-func LaunchMenu() error {
-	return nil
 }
 
 func (p *Platform) KillLauncher() error {
@@ -169,8 +164,8 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
-	return nil
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{}, nil
 }
 
 func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
@@ -407,7 +402,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
 			Id:       "Steam",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
 				cfg *config.Instance,
@@ -434,7 +429,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		},
 		{
 			Id:       "Flashpoint",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
 			Launch: func(cfg *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "flashpoint://")

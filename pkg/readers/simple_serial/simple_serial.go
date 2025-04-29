@@ -19,7 +19,7 @@ import (
 
 type SimpleSerialReader struct {
 	cfg       *config.Instance
-	device    string
+	device    config.ReadersConnect
 	path      string
 	polling   bool
 	port      serial.Port
@@ -56,7 +56,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	t := tokens.Token{
 		Data:     line,
 		ScanTime: time.Now(),
-		Source:   r.device,
+		Source:   r.device.ConnectionString(),
 	}
 
 	ps := strings.Split(args, "\t")
@@ -85,17 +85,12 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	return &t, nil
 }
 
-func (r *SimpleSerialReader) Open(device string, iq chan<- readers.Scan) error {
-	ps := strings.SplitN(device, ":", 2)
-	if len(ps) != 2 {
-		return errors.New("invalid device string: " + device)
+func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+	if !utils.Contains(r.Ids(), device.Driver) {
+		return errors.New("invalid reader id: " + device.Driver)
 	}
 
-	if !utils.Contains(r.Ids(), ps[0]) {
-		return errors.New("invalid reader id: " + ps[0])
-	}
-
-	path := ps[1]
+	path := device.Path
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(path); err != nil {
@@ -148,7 +143,7 @@ func (r *SimpleSerialReader) Open(device string, iq chan<- readers.Scan) error {
 
 					if t != nil && !utils.TokensEqual(t, r.lastToken) {
 						iq <- readers.Scan{
-							Source: r.device,
+							Source: r.device.ConnectionString(),
 							Token:  t,
 						}
 					}
@@ -163,7 +158,7 @@ func (r *SimpleSerialReader) Open(device string, iq chan<- readers.Scan) error {
 
 			if r.lastToken != nil && time.Since(r.lastToken.ScanTime) > 1*time.Second {
 				iq <- readers.Scan{
-					Source: r.device,
+					Source: r.device.ConnectionString(),
 					Token:  nil,
 				}
 				r.lastToken = nil
@@ -190,7 +185,7 @@ func (r *SimpleSerialReader) Detect(connected []string) string {
 }
 
 func (r *SimpleSerialReader) Device() string {
-	return r.device
+	return r.device.ConnectionString()
 }
 
 func (r *SimpleSerialReader) Connected() bool {
