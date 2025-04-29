@@ -136,10 +136,6 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardInput(_ string) error {
-	return nil
-}
-
 func (p *Platform) KeyboardPress(name string) error {
 	return nil
 }

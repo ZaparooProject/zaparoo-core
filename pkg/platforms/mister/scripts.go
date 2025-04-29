@@ -4,6 +4,7 @@ package mister
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/input"
 )
 
 func getTTY() (string, error) {
@@ -37,7 +37,7 @@ func scriptIsActive() (bool, error) {
 	return strings.TrimSpace(string(output)) != "", nil
 }
 
-func openConsole(kbd input.Keyboard, vt string) error {
+func openConsole(pl platforms.Platform, vt string) error {
 	// we use the F9 key as a means to disable main's usage of the framebuffer and allow scripts to run
 	// unfortunately when the menu "sleeps", any key press will be eaten by main and not trigger the console switch
 	// there's also no simple way to tell if mister has switched to the console
@@ -56,7 +56,11 @@ func openConsole(kbd input.Keyboard, vt string) error {
 		if tries > 10 {
 			return fmt.Errorf("could not switch to tty1")
 		}
-		kbd.Console()
+		// switch to console
+		err := pl.KeyboardPress("{f9}")
+		if err != nil {
+			return err
+		}
 		time.Sleep(50 * time.Millisecond)
 		tty, err = getTTY()
 		if err != nil {
@@ -95,7 +99,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 	}
 
 	if !hidden {
-		err := openConsole(pl.kbd, "3")
+		err := openConsole(pl, "3")
 		if err != nil {
 			hidden = true
 			log.Warn().Msg("error opening console, running script headless")
@@ -140,7 +144,11 @@ cd $(dirname "%s")
 			return err
 		}
 
-		pl.kbd.ExitConsole()
+		// exit console
+		err = pl.KeyboardPress("{f12}")
+		if err != nil {
+			return err
+		}
 
 		return nil
 	} else {

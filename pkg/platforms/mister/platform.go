@@ -6,11 +6,11 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,16 +30,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
-	"github.com/bendahl/uinput"
 	"github.com/rs/zerolog/log"
 	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/input"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 type Platform struct {
-	kbd                 input.Keyboard
-	gpd                 uinput.Gamepad
+	kbd                 linuxinput.Keyboard
+	gpd                 linuxinput.Gamepad
 	tracker             *Tracker
 	stopTracker         func() error
 	dbLoadTime          time.Time
@@ -120,19 +118,13 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		}
 	}
 
-	kbd, err := input.NewKeyboard()
+	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
 		return err
 	}
-
 	p.kbd = kbd
 
-	gpd, err := uinput.CreateGamepad(
-		"/dev/uinput",
-		[]byte("zaparoo"),
-		0x1234,
-		0x5678,
-	)
+	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
 		return err
 	}
@@ -227,11 +219,14 @@ func (p *Platform) Stop() error {
 		}
 	}
 
-	if p.gpd != nil {
-		err := p.gpd.Close()
-		if err != nil {
-			return err
-		}
+	err := p.kbd.Close()
+	if err != nil {
+		log.Warn().Err(err).Msg("error closing keyboard")
+	}
+
+	err = p.gpd.Close()
+	if err != nil {
+		log.Warn().Err(err).Msg("error closing gamepad")
 	}
 
 	if p.stopMappingsWatcher != nil {
@@ -333,51 +328,20 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardInput(input string) error {
-	code, err := strconv.Atoi(input)
-	if err != nil {
-		return err
-	}
-
-	p.kbd.Press(code)
-
-	return nil
-}
-
 func (p *Platform) KeyboardPress(name string) error {
-	code, ok := KeyboardMap[name]
+	code, ok := linuxinput.ToKeyboardCode(name)
 	if !ok {
-		return fmt.Errorf("unknown key: %s", name)
+		return fmt.Errorf("unknown keyboard key: %s", name)
 	}
-
-	if code < 0 {
-		p.kbd.Combo(42, -code)
-	} else {
-		p.kbd.Press(code)
-	}
-
-	return nil
+	return p.kbd.Press(code)
 }
 
 func (p *Platform) GamepadPress(name string) error {
-	code, ok := GamepadMap[name]
+	code, ok := linuxinput.GamepadMap[name]
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-
-	err := p.gpd.ButtonDown(code)
-	if err != nil {
-		return err
-	}
-
-	time.Sleep(40 * time.Millisecond)
-
-	err = p.gpd.ButtonUp(code)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return p.gpd.Press(code)
 }
 
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {

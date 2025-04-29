@@ -150,24 +150,31 @@ type Platform interface {
 	// shortest possible path that can interpreted and launched by Core. For
 	// writing to tokens.
 	NormalizePath(*config.Instance, string) string
-	// StopActiveLauncher kills/exits the currently running launcher process.
+	// StopActiveLauncher kills/exits the currently running launcher process
+	// and clears the active media if it was successful.
 	StopActiveLauncher() error
 	// PlayAudio plays an audio file at the given path. A relative path will be
 	// resolved using the data directory assets folder as the base. This
 	// function does not block until the audio finishes.
 	PlayAudio(string) error
-	// LaunchSystem launches a system by ID, if possible for platform.
+	// LaunchSystem launches a system by ID. This generally means, if a
+	// platform even has the capability, attempt to launch the default or most
+	// appropriate launcher for a given system, without any media loaded.
 	LaunchSystem(*config.Instance, string) error
-	// LaunchMedia launches a file by path.
+	// LaunchMedia launches some media by path and sets the active media if it
+	// was successful.
 	LaunchMedia(*config.Instance, string) error
-	KeyboardInput(string) error // DEPRECATED
+	// KeyboardPress presses and then releases a single keyboard button on a
+	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error
+	// GamepadPress presses and then releases a single gamepad button on a
+	// virtual gamepad, using a button name from the ZapScript format.
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
 	ForwardCmd(CmdEnv) (CmdResult, error)
 	// LookupMapping is a platform-specific method of matching a token to a
 	// mapping. It takes last precedence when checking mapping sources.
-	LookupMapping(tokens.Token) (string, bool)
+	LookupMapping(tokens.Token) (string, bool) // DEPRECATED
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers() []Launcher
@@ -175,6 +182,7 @@ type Platform interface {
 	// a function that may be used to manually hide the notice and a minimum
 	// amount of time that should be waited until trying to close the notice,
 	// for platforms where initializing a notice takes time.
+	// TODO: can this just block instead of returning a delay?
 	ShowNotice(
 		*config.Instance,
 		widgetModels.NoticeArgs,

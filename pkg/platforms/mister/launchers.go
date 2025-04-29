@@ -236,7 +236,7 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 			return err
 		}
 
-		err = openConsole(pl.kbd, vt)
+		err = openConsole(pl, vt)
 		if err != nil {
 			return err
 		}
