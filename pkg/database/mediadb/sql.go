@@ -383,7 +383,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	var results []database.SearchResult
 	var args = make([]any, 0)
 	for _, sys := range systems {
-		args = append(args, sys.Id)
+		args = append(args, sys.ID)
 	}
 	args = append(args, slug, path)
 	stmt, err := db.Prepare(`
@@ -432,7 +432,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	var results []database.SearchResult
 	var args = make([]any, 0)
 	for _, sys := range systems {
-		args = append(args, sys.Id)
+		args = append(args, sys.ID)
 	}
 	for _, p := range parts {
 		args = append(args, "%"+p+"%")
@@ -491,11 +491,11 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 	if err != nil {
 		return false
 	}
-	err = q.QueryRow(system.Id).Scan(&systemId)
+	err = q.QueryRow(system.ID).Scan(&systemId)
 	if err != nil {
 		return false
 	}
-	return systemId == system.Id
+	return systemId == system.ID
 }
 
 func sqlIndexedSystems(db *sql.DB) ([]string, error) {
@@ -536,7 +536,7 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 	if err != nil {
 		return row, err
 	}
-	err = q.QueryRow(system.Id).Scan(
+	err = q.QueryRow(system.ID).Scan(
 		&row.SystemId,
 		&row.Path,
 	)

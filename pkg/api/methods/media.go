@@ -7,8 +7,6 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"

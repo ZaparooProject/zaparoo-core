@@ -25,6 +25,7 @@ require (
 require (
 	github.com/creack/goselect v0.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
 	github.com/getlantern/errors v0.0.0-20190325191628-abdb3e3e36f7 // indirect
@@ -42,6 +43,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	golang.org/x/sync v0.13.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.62.1 // indirect
@@ -58,7 +60,6 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/go-chi/chi/v5 v5.0.12
 	github.com/go-chi/cors v1.2.1
-	github.com/gobwas/glob v0.2.3
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -70,8 +71,6 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/wizzomafizzo/mrext v0.1.3
 	go.bug.st/serial v1.6.2
-	go.etcd.io/bbolt v1.3.9
-	golang.org/x/sync v0.13.0
 	golang.org/x/text v0.24.0
 	modernc.org/sqlite v1.37.0
 )

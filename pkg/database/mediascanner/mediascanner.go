@@ -53,7 +53,7 @@ func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []syste
 	for _, system := range systems {
 		var launchers []platforms.Launcher
 		for _, l := range pl.Launchers() {
-			if l.SystemId == system.Id {
+			if l.SystemID == system.ID {
 				launchers = append(launchers, l)
 			}
 		}
@@ -201,13 +201,13 @@ func GetFiles(
 
 			for i := range zipFiles {
 				abs := filepath.Join(path, zipFiles[i])
-				if utils.MatchSystemFile(cfg, platform, (*system).Id, abs) {
+				if utils.MatchSystemFile(cfg, platform, (*system).ID, abs) {
 					*results = append(*results, abs)
 				}
 			}
 		} else {
 			// regular files
-			if utils.MatchSystemFile(cfg, platform, (*system).Id, path) {
+			if utils.MatchSystemFile(cfg, platform, (*system).ID, path) {
 				*results = append(*results, path)
 			}
 		}
@@ -320,7 +320,7 @@ func NewNamesIndex(
 
 	filteredIds := make([]string, 0)
 	for _, s := range systems {
-		filteredIds = append(filteredIds, s.Id)
+		filteredIds = append(filteredIds, s.ID)
 	}
 
 	// Reset Media DB instead of selective rebuild
@@ -329,7 +329,7 @@ func NewNamesIndex(
 	update(status)
 	systemPaths := make(map[string][]string)
 	for _, v := range GetSystemPaths(platform, platform.RootDirs(cfg), systems) {
-		systemPaths[v.System.Id] = append(systemPaths[v.System.Id], v.Path)
+		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 
 	scanned := make(map[string]bool)
@@ -364,7 +364,7 @@ func NewNamesIndex(
 		// for each system launcher in platform, run the results through its
 		// custom scan function if one exists
 		for _, l := range platform.Launchers() {
-			if l.SystemId == k && l.Scanner != nil {
+			if l.SystemID == k && l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
 				var err error
 				files, err = l.Scanner(cfg, systemId, files)
@@ -392,7 +392,7 @@ func NewNamesIndex(
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from regular index
 	for _, l := range platform.Launchers() {
-		systemId := l.SystemId
+		systemId := l.SystemID
 		if !scanned[systemId] && l.Scanner != nil {
 			log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
 			results, err := l.Scanner(cfg, systemId, []platforms.ScanResult{})
@@ -417,26 +417,26 @@ func NewNamesIndex(
 	// launcher scanners with no system defined are run against every system
 	var anyScanners []platforms.Launcher
 	for _, l := range platform.Launchers() {
-		if l.SystemId == "" && l.Scanner != nil {
+		if l.SystemID == "" && l.Scanner != nil {
 			anyScanners = append(anyScanners, l)
 		}
 	}
 
 	for _, l := range anyScanners {
 		for _, s := range systems {
-			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.Id)
-			results, err := l.Scanner(cfg, s.Id, []platforms.ScanResult{})
+			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.ID)
+			results, err := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
 			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.Id)
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.ID)
 				continue
 			}
 
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.Id)
+			log.Debug().Msgf("scanned %d files for system: %s", len(results), s.ID)
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				scanned[s.Id] = true
-				systemId := s.Id
+				scanned[s.ID] = true
+				systemId := s.ID
 
 				for _, p := range results {
 					AddMediaPath(&scanState, systemId, p.Path)

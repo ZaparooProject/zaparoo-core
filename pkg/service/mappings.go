@@ -35,8 +35,8 @@ import (
 )
 
 func checkMappingUid(m database.Mapping, t tokens.Token) bool {
-	uid := userdb.NormalizeUid(t.UID)
-	pattern := userdb.NormalizeUid(m.Pattern)
+	uid := userdb.NormalizeID(t.UID)
+	pattern := userdb.NormalizeID(m.Pattern)
 
 	switch {
 	case m.Match == userdb.MatchTypeExact:

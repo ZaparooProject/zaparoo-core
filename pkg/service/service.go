@@ -146,7 +146,7 @@ func processTokenQueue(
 					Data: t.Data,
 				}
 				he.Success = err == nil
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
