@@ -132,11 +132,12 @@ func sqlBulkInsertSystems(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -171,11 +172,12 @@ func sqlBulkInsertTitles(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -211,11 +213,12 @@ func sqlBulkInsertMedia(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -250,11 +253,12 @@ func sqlBulkInsertTagTypes(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -288,11 +292,12 @@ func sqlBulkInsertTags(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -327,17 +332,18 @@ func sqlBulkInsertMediaTags(db *sql.DB, ss *database.ScanState) error {
 		return err
 	}
 	for i, row := range rows {
+		if row.DBID == 0 {
+			continue
+		}
 		if i%1000 == 0 {
-			if i >= 0 {
-				_, err = db.Exec("COMMIT")
-				_, err = db.Exec("BEGIN")
-			}
+			_, err = db.Exec("COMMIT")
+			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
 			MediaTags
 			(DBID, MediaDBID, TagDBID)
-			values (?, ?, ?);
+			values (?, ?, ?)
 		`)
 		if err != nil {
 			return err

@@ -14,7 +14,7 @@ import (
 // insert IDs. Batching should be able to run with assumed IDs
 
 func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, int) {
-	pf := getPathFragments(path)
+	pf := GetPathFragments(path)
 
 	systemIndex := len(ss.Systems)
 	if foundSystemIndex, ok := ss.SystemIds[systemId]; !ok {
@@ -55,8 +55,10 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 
 	if pf.Ext != "" {
 		if _, ok := ss.TagIds[pf.Ext]; !ok {
+			tagIndex := len(ss.Tags)
+			ss.TagIds[pf.Ext] = tagIndex
 			ss.Tags = append(ss.Tags, database.Tag{
-				DBID:     int64(len(ss.Tags)),
+				DBID:     int64(tagIndex),
 				Tag:      pf.Ext,
 				TypeDBID: int64(2),
 			})
@@ -67,6 +69,12 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 		tagIndex := len(ss.Tags)
 		if foundTagIndex, ok := ss.TagIds[tagStr]; !ok {
 			tagTypeIndex := getTagTypeIndexFromUnknownTag(ss, tagStr)
+			ss.TagIds[tagStr] = tagIndex
+			if tagTypeIndex <= 1 {
+				// For now don't add unknown tags to DB until we figure out a use case.
+				ss.TagIds[tagStr] = 0
+				continue
+			}
 			ss.Tags = append(ss.Tags, database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      tagStr,
@@ -74,6 +82,10 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 			})
 		} else {
 			tagIndex = foundTagIndex
+		}
+
+		if tagIndex == 0 {
+			continue
 		}
 
 		ss.MediaTags = append(ss.MediaTags, database.MediaTag{
@@ -108,7 +120,7 @@ func getTagsFromFileName(filename string) []string {
 	return tags
 }
 
-func getTitleFromFileName(filename string) string {
+func getTitleFromFilename(filename string) string {
 	r := regexp.MustCompile(`^([^\(\[]*)`)
 	title := r.FindString(filename)
 	return strings.TrimSpace(title)
@@ -116,8 +128,8 @@ func getTitleFromFileName(filename string) string {
 
 func seedKnownTags(ss *database.ScanState) {
 	typeMatches := map[string][]string{
-		"Unknown":   {}, // 1 KEEP HERE
-		"Extension": {}, // 2 KEEP HERE
+		"Unknown":   {"unknown"}, // 1 KEEP HERE
+		"Extension": {".ext"},    // 2 KEEP HERE
 		"Version": {
 			"rev", "v",
 		},
@@ -193,14 +205,14 @@ func seedKnownTags(ss *database.ScanState) {
 	}
 }
 
-func getTagTypeIndexFromUnknownTag(ss *database.ScanState, tag string) int {
+func getTagTypeIndexFromUnknownTag(ss *database.ScanState, tagStr string) int {
 	// Known mappings are preseeded but a few special cases exist
 	// mostly around trailing numbers which are accounted for in seed
 	tagTypeIndex := 1 // Unknown
 
 	// drop spaced conditions
 	r := regexp.MustCompile(`^[a-z]+`)
-	tagAlpha := r.FindString(tag)
+	tagAlpha := r.FindString(tagStr)
 	if tagAlpha == "" {
 		return tagTypeIndex
 	}
@@ -212,17 +224,19 @@ func getTagTypeIndexFromUnknownTag(ss *database.ScanState, tag string) int {
 		tagTypeIndex = int(tag.TypeDBID)
 	}
 
+	// TODO: year as XXXX numeric or XXXX-XXXX or XXXX-XX
+
 	return tagTypeIndex
 }
 
-func getPathFragments(path string) MediaPathFragments {
+func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
 	f.Path = filepath.Clean(path)
 	fileBase := filepath.Base(f.Path)
 	f.Ext = filepath.Ext(f.Path)
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
-	f.Slug = utils.SlugifyString(f.FileName)
+	f.Title = getTitleFromFilename(f.FileName)
+	f.Slug = utils.SlugifyString(f.Title)
 	f.Tags = getTagsFromFileName(f.FileName)
-	f.Title = getTitleFromFileName(f.FileName)
 	return f
 }

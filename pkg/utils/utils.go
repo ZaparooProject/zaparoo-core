@@ -210,7 +210,7 @@ func RandSeq(n int) string {
 }
 
 func SlugifyString(input string) string {
-	r := regexp.MustCompile(`(\(.*\))|(\[.*\])|(\.\w*$)|[^a-z0-9A-Z]`)
+	r := regexp.MustCompile(`(\(.*\))|(\[.*\])|[^a-z0-9A-Z]`)
 	rep := r.ReplaceAllStringFunc(input, func(m string) string {
 		return ""
 	})

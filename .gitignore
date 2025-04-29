@@ -28,3 +28,4 @@ Taskfile.yml
 
 .DS_Store
 tmp/
+/cmd/scratch

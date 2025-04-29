@@ -3,7 +3,6 @@ package mediadb
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +36,6 @@ func OpenMediaDB(pl platforms.Platform) (*MediaDB, error) {
 func (db *MediaDB) Open() error {
 	exists := true
 	dbPath := filepath.Join(db.pl.DataDir(), config.MediaDbFile)
-	fmt.Println(dbPath)
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
