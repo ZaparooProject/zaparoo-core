@@ -44,8 +44,8 @@ func sqlAllocate(db *sql.DB) error {
 
 func sqlTruncate(db *sql.DB) error {
 	sqlStmt := `
-	delete from table History;
-	delete from table Mappings;
+	delete from History;
+	delete from Mappings;
 	vacuum;
 	`
 	_, err := db.Exec(sqlStmt)
