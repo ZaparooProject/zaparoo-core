@@ -90,6 +90,7 @@ func launchToken(
 			cmd,
 			len(cmds),
 			i,
+			db,
 		)
 		if err != nil {
 			return err
