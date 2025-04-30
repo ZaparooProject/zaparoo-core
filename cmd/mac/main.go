@@ -30,10 +30,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
-
 	"github.com/rs/zerolog/log"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -59,14 +59,54 @@ func isServiceRunning(cfg *config.Instance) bool {
 	return true
 }
 
-func systrayOnReady(pl platforms.Platform) func() {
+func systrayOnReady(cfg *config.Instance, pl platforms.Platform) func() {
 	return func() {
 		systray.SetIcon(systrayIcon)
+
+		mWebUI := systray.AddMenuItem("Web UI", "Open Zaparoo web UI")
+		mReloadConfig := systray.AddMenuItem("Reload Config", "Reload Core config file and mappings")
+		systray.AddSeparator()
+		mEditConfig := systray.AddMenuItem("Edit Config", "Edit Core config file")
+		mOpenMappings := systray.AddMenuItem("Open Mappings", "Open Core mappings directory")
+		mOpenLog := systray.AddMenuItem("Open Log", "Open Core log file")
+		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("Quit", "Quit and stop Zaparoo service")
-		mQuit.SetTitle(pl.Settings().TempDir)
+
 		go func() {
-			<-mQuit.ClickedCh
-			systray.Quit()
+			for {
+				select {
+				case <-mWebUI.ClickedCh:
+					url := fmt.Sprintf("http://localhost:%d/app/", cfg.ApiPort())
+					err := exec.Command("open", url).Start()
+					if err != nil {
+						log.Error().Err(err).Msg("failed to open web page")
+					}
+				case <-mOpenLog.ClickedCh:
+					err := exec.Command("open", filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
+					if err != nil {
+						log.Error().Err(err).Msg("failed to open log file")
+					}
+				case <-mEditConfig.ClickedCh:
+					err := exec.Command("open", filepath.Join(pl.Settings().ConfigDir, config.CfgFile)).Start()
+					if err != nil {
+						log.Error().Err(err).Msg("failed to open config file")
+					}
+				case <-mOpenMappings.ClickedCh:
+					err := exec.Command("open", filepath.Join(pl.Settings().DataDir, platforms.MappingsDir)).Start()
+					if err != nil {
+						log.Error().Err(err).Msg("failed to open mappings dir")
+					}
+				case <-mReloadConfig.ClickedCh:
+					_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
+					if err != nil {
+						log.Error().Err(err).Msg("failed to reload config")
+					} else {
+						log.Info().Msg("reloaded config")
+					}
+				case <-mQuit.ClickedCh:
+					systray.Quit()
+				}
+			}
 		}()
 	}
 }
@@ -130,7 +170,7 @@ func main() {
 		}
 
 		if *appMode {
-			systray.Run(systrayOnReady(pl), func() {
+			systray.Run(systrayOnReady(cfg, pl), func() {
 				exit <- true
 			})
 		}
