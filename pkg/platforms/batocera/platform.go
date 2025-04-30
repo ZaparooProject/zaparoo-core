@@ -323,8 +323,15 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	}
 
 	for k, v := range SystemMap {
+		launcherID, ok := LauncherMap[k]
+		if !ok {
+			log.Error().Msgf("unknown batocera launcher: %s", k)
+			continue
+		}
+
 		launchers = append(launchers, platforms.Launcher{
 			ID:       v,
+			Id:       launcherID,
 			SystemID: v,
 			Folders:  []string{k},
 			Launch: func(cfg *config.Instance, path string) error {
