@@ -22,15 +22,18 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"flag"
 	"fmt"
-	"io"
-	"os"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
-	"github.com/rs/zerolog"
-
 	"github.com/rs/zerolog/log"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 
@@ -39,40 +42,108 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 )
 
-func main() {
-	pl := &mac.Platform{}
+func isServiceRunning(cfg *config.Instance) bool {
+	_, err := client.LocalClient(cfg, models.MethodVersion, "")
+	if err != nil {
+		log.Debug().Msgf("error checking if service is running: %s", err)
+		return false
+	}
+	return true
+}
 
+func main() {
+	if os.Geteuid() == 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
+		os.Exit(1)
+	}
+
+	pl := &mac.Platform{}
 	flags := cli.SetupFlags()
+
+	daemonMode := flag.Bool(
+		"daemon",
+		false,
+		"run Zaparoo with no GUI",
+	)
+
 	flags.Pre(pl)
+
+	var logWriters []io.Writer
+	if *daemonMode {
+		logWriters = []io.Writer{os.Stderr}
+	}
 
 	cfg := cli.Setup(
 		pl,
 		config.BaseDefaults,
-		[]io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}},
+		logWriters,
 	)
+
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
 
 	flags.Post(cfg, pl)
 
-	stopSvc, err := service.Start(pl, cfg)
+	if *daemonMode {
+		sigs := make(chan os.Signal, 1)
+		defer close(sigs)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+		stopSvc, err := service.Start(pl, cfg)
+		if err != nil {
+			log.Error().Msgf("error starting service: %s", err)
+			fmt.Println("Error starting service:", err)
+			os.Exit(1)
+		}
+
+		<-sigs
+
+		err = stopSvc()
+		if err != nil {
+			log.Error().Msgf("error stopping service: %s", err)
+			fmt.Println("Error stopping service:", err)
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
+	if !isServiceRunning(cfg) {
+		stopSvc, err := service.Start(pl, cfg)
+		if err != nil {
+			log.Error().Msgf("error starting service: %s", err)
+			fmt.Println("Error starting service:", err)
+			os.Exit(1)
+		}
+
+		defer func() {
+			err := stopSvc()
+			if err != nil {
+				log.Error().Msgf("error stopping service: %s", err)
+			}
+		}()
+	}
+
+	app, err := simplegui.BuildTheUi(
+		pl,
+		isServiceRunning(cfg),
+		cfg,
+		filepath.Join(os.Getenv("HOME"), "Desktop"),
+	)
 	if err != nil {
-		log.Error().Msgf("error starting service: %s", err)
-		fmt.Println("Error starting service:", err)
+		log.Error().Msgf("error building the UI: %s", err)
+		fmt.Println("error building the UI", err)
 		os.Exit(1)
 	}
 
-	app, err := simplegui.BuildTheUi(pl, true, cfg, "")
-
+	err = app.Run()
 	if err != nil {
-		log.Error().Msgf("error starting the UI: %s", err)
-		fmt.Println("error starting the UI", err)
-		os.Exit(1)
-	}
-
-	app.Run()
-	err = stopSvc()
-	if err != nil {
-		log.Error().Msgf("error stopping service: %s", err)
-		fmt.Println("Error stopping service:", err)
+		log.Error().Msgf("error running the UI: %s", err)
+		fmt.Println("error running the UI", err)
 		os.Exit(1)
 	}
 
