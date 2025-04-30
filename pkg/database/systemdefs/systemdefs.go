@@ -104,6 +104,7 @@ const (
 	SystemNintendo64        = "Nintendo64"
 	SystemOdyssey2          = "Odyssey2"
 	SystemOuya              = "Ouya"
+	SystemPCFX              = "PCFX"
 	SystemPocketChallengeV2 = "PocketChallengeV2"
 	SystemPokemonMini       = "PokemonMini"
 	SystemPSX               = "PSX"
@@ -143,7 +144,9 @@ const (
 	SystemAcornAtom      = "AcornAtom"
 	SystemAcornElectron  = "AcornElectron"
 	SystemAliceMC10      = "AliceMC10"
-	SystemAmiga          = "Amiga" // TODO: Amiga1200/500/etc.
+	SystemAmiga          = "Amiga"
+	SystemAmiga500       = "Amiga500"
+	SystemAmiga1200      = "Amiga1200"
 	SystemAmstrad        = "Amstrad"
 	SystemAmstradPCW     = "AmstradPCW"
 	SystemApogee         = "Apogee"
@@ -178,6 +181,7 @@ const (
 	SystemQL             = "QL"
 	SystemRX78           = "RX78"
 	SystemSAMCoupe       = "SAMCoupe"
+	SystemScummVM        = "ScummVM"
 	SystemSordM5         = "SordM5"
 	SystemSpecialist     = "Specialist"
 	SystemSVI328         = "SVI328"
@@ -189,6 +193,7 @@ const (
 	SystemUK101          = "UK101"
 	SystemVector06C      = "Vector06C"
 	SystemVIC20          = "VIC20"
+	SystemWindows        = "Windows"
 	SystemX68000         = "X68000"
 	SystemZX81           = "ZX81"
 	SystemZXSpectrum     = "ZXSpectrum"
@@ -197,13 +202,18 @@ const (
 
 // Other
 const (
-	SystemAndroid = "Android"
-	SystemArcade  = "Arcade"
-	SystemArduboy = "Arduboy"
-	SystemChip8   = "Chip8"
-	SystemIOS     = "iOS"
-	SystemVideo   = "Video"
-	SystemGroovy  = "Groovy"
+	SystemAndroid    = "Android"
+	SystemArcade     = "Arcade"
+	SystemAtomiswave = "Atomiswave"
+	SystemArduboy    = "Arduboy"
+	SystemChip8      = "Chip8"
+	SystemDAPHNE     = "DAPHNE"
+	SystemIOS        = "iOS"
+	SystemModel3     = "Model3"
+	SystemNAOMI      = "NAOMI"
+	SystemNAOMI2     = "NAOMI2"
+	SystemVideo      = "Video"
+	SystemGroovy     = "Groovy"
 )
 
 var Systems = map[string]System{
@@ -358,6 +368,9 @@ var Systems = map[string]System{
 	SystemOuya: {
 		ID: SystemOuya,
 	},
+	SystemPCFX: {
+		ID: SystemPCFX,
+	},
 	SystemPocketChallengeV2: {
 		ID: SystemPocketChallengeV2,
 	},
@@ -485,6 +498,14 @@ var Systems = map[string]System{
 		ID:      SystemAmiga,
 		Aliases: []string{"Minimig"},
 	},
+	SystemAmiga500: {
+		ID:      SystemAmiga500,
+		Aliases: []string{"A500"},
+	},
+	SystemAmiga1200: {
+		ID:      SystemAmiga1200,
+		Aliases: []string{"A1200"},
+	},
 	SystemAmstrad: {
 		ID: SystemAmstrad,
 	},
@@ -593,6 +614,9 @@ var Systems = map[string]System{
 	SystemSAMCoupe: {
 		ID: SystemSAMCoupe,
 	},
+	SystemScummVM: {
+		ID: SystemScummVM,
+	},
 	SystemSordM5: {
 		ID:      SystemSordM5,
 		Aliases: []string{"Sord M5"},
@@ -630,6 +654,10 @@ var Systems = map[string]System{
 	SystemVIC20: {
 		ID: SystemVIC20,
 	},
+	SystemWindows: {
+		ID:      SystemWindows,
+		Aliases: []string{"Win32", "Win16"},
+	},
 	SystemX68000: {
 		ID: SystemX68000,
 	},
@@ -651,17 +679,33 @@ var Systems = map[string]System{
 		ID:      SystemArcade,
 		Aliases: []string{"MAME"},
 	},
+	SystemAtomiswave: {
+		ID: SystemAtomiswave,
+	},
 	SystemArduboy: {
 		ID: SystemArduboy,
 	},
 	SystemChip8: {
 		ID: SystemChip8,
 	},
+	SystemDAPHNE: {
+		ID:      SystemDAPHNE,
+		Aliases: []string{"LaserDisc"},
+	},
 	SystemGroovy: {
 		ID: SystemGroovy,
 	},
 	SystemIOS: {
 		ID: SystemIOS,
+	},
+	SystemModel3: {
+		ID: SystemModel3,
+	},
+	SystemNAOMI: {
+		ID: SystemNAOMI,
+	},
+	SystemNAOMI2: {
+		ID: SystemNAOMI2,
 	},
 	SystemVideo: {
 		ID: SystemVideo,
