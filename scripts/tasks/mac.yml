@@ -20,3 +20,7 @@ tasks:
           PLATFORM: mac
           APP_BIN: zaparoo
           CGO_ENABLED: 0
+
+  dev:
+    cmds:
+      - air --build.cmd "task mac:build-{{.CLI_ARGS}}" --build.bin "./_build/mac_{{.CLI_ARGS}}/zaparoo -daemon"
