@@ -33,6 +33,7 @@ require (
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -45,6 +46,7 @@ require (
 )
 
 require (
+	fyne.io/systray v1.11.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/clausecker/nfc/v2 v2.1.4

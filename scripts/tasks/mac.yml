@@ -1,6 +1,12 @@
 version: "3"
 
 tasks:
+  build-app:
+    cmds:
+      - rm -rf "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app"
+      - cp -r "./cmd/mac/app/Zaparoo Core.app" "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app"
+      - cp ./_build/mac_{{.BUILD_ARCH}}/zaparoo "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
+
   build-arm64:
     cmds:
       - task: :build-basic
@@ -9,7 +15,10 @@ tasks:
           BUILD_ARCH: arm64
           PLATFORM: mac
           APP_BIN: zaparoo
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
+      - task: build-app
+        vars:
+          BUILD_ARCH: arm64
 
   build-amd64:
     cmds:
@@ -19,7 +28,10 @@ tasks:
           BUILD_ARCH: amd64
           PLATFORM: mac
           APP_BIN: zaparoo
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
+      - task: build-app
+        vars:
+          BUILD_ARCH: amd64
 
   dev:
     cmds:

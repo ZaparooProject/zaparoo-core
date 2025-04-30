@@ -27,7 +27,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
+
 	"github.com/rs/zerolog/log"
 	"io"
 	"os"
@@ -35,25 +38,42 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+
+	_ "embed"
 )
+
+import "fyne.io/systray"
+
+//go:embed app/systrayicon.png
+var systrayIcon []byte
 
 func isServiceRunning(cfg *config.Instance) bool {
 	_, err := client.LocalClient(cfg, models.MethodVersion, "")
 	if err != nil {
-		log.Debug().Msgf("error checking if service is running: %s", err)
+		log.Debug().Err(err).Msg("error checking if service running")
 		return false
 	}
 	return true
 }
 
+func systrayOnReady(pl platforms.Platform) func() {
+	return func() {
+		systray.SetIcon(systrayIcon)
+		mQuit := systray.AddMenuItem("Quit", "Quit and stop Zaparoo service")
+		mQuit.SetTitle(pl.Settings().TempDir)
+		go func() {
+			<-mQuit.ClickedCh
+			systray.Quit()
+		}()
+	}
+}
+
 func main() {
 	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
 		os.Exit(1)
 	}
 
@@ -63,7 +83,12 @@ func main() {
 	daemonMode := flag.Bool(
 		"daemon",
 		false,
-		"run Zaparoo with no GUI",
+		"run Zaparoo service in foreground with no GUI",
+	)
+	appMode := flag.Bool(
+		"app",
+		false,
+		"run Zaparoo service with system tray",
 	)
 
 	flags.Pre(pl)
@@ -81,31 +106,44 @@ func main() {
 
 	defer func() {
 		if err := recover(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %s\n", err)
 			log.Fatal().Msgf("panic: %v", err)
 		}
 	}()
 
 	flags.Post(cfg, pl)
 
-	if *daemonMode {
+	if *daemonMode || *appMode {
 		sigs := make(chan os.Signal, 1)
 		defer close(sigs)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
+		exit := make(chan bool, 1)
+		defer close(exit)
+
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
-			log.Error().Msgf("error starting service: %s", err)
-			fmt.Println("Error starting service:", err)
+			// TODO: send notification if failed or succeeded
+			log.Error().Err(err).Msg("error starting service")
+			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
 			os.Exit(1)
 		}
 
-		<-sigs
+		if *appMode {
+			systray.Run(systrayOnReady(pl), func() {
+				exit <- true
+			})
+		}
+
+		select {
+		case <-sigs:
+		case <-exit:
+		}
 
 		err = stopSvc()
 		if err != nil {
-			log.Error().Msgf("error stopping service: %s", err)
-			fmt.Println("Error stopping service:", err)
+			log.Error().Err(err).Msgf("error stopping service")
+			_, _ = fmt.Fprintf(os.Stderr, "Error stopping service: %s\n", err)
 			os.Exit(1)
 		}
 
@@ -116,7 +154,7 @@ func main() {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			fmt.Println("Error starting service:", err)
+			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
 			os.Exit(1)
 		}
 
@@ -129,21 +167,19 @@ func main() {
 	}
 
 	app, err := simplegui.BuildTheUi(
-		pl,
-		isServiceRunning(cfg),
-		cfg,
-		filepath.Join(os.Getenv("HOME"), "Desktop"),
+		pl, isServiceRunning(cfg), cfg,
+		filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 	)
 	if err != nil {
-		log.Error().Msgf("error building the UI: %s", err)
-		fmt.Println("error building the UI", err)
+		log.Error().Err(err).Msgf("error building UI")
+		_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
 		os.Exit(1)
 	}
 
 	err = app.Run()
 	if err != nil {
-		log.Error().Msgf("error running the UI: %s", err)
-		fmt.Println("error running the UI", err)
+		log.Error().Err(err).Msg("error running UI")
+		_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
 		os.Exit(1)
 	}
 

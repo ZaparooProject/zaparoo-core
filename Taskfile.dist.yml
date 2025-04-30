@@ -42,7 +42,8 @@ tasks:
     env:
       GOARCH: "{{default .ARCH .BUILD_ARCH}}"
       GOOS: '{{default "windows" .BUILD_OS}}'
-      CGO_ENABLED: 0
+      CGO_ENABLED: '{{default .CGO_ENABLED 0}}'
+      CGO_LDFLAGS: ''
     cmds:
       - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
       - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
