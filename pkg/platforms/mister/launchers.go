@@ -246,6 +246,35 @@ func launchDOS() func(*config.Instance, string) error {
 	}
 }
 
+func launchAtari2600() func(*config.Instance, string) error {
+	return func(cfg *config.Instance, path string) error {
+		s, err := games.GetSystem("Atari2600")
+		if err != nil {
+			return err
+		}
+		path = checkInZip(path)
+
+		sn := *s
+		sn.Slots = []games.Slot{
+			{
+				Exts: []string{".a26", ".bin"},
+				Mgl: &games.MglParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		}
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		if err != nil {
+			return err
+		}
+
+		return mister.SetActiveGame(path)
+	}
+}
+
 func killCore(_ *config.Instance) error {
 	return mister.LaunchMenu()
 }
@@ -408,7 +437,20 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemAtari2600,
 		Folders:    []string{"ATARI7800", "Atari2600"},
 		Extensions: []string{".a26"},
-		Launch:     launch(systemdefs.SystemAtari2600),
+		Launch:     launchAtari2600(),
+		Test: func(cfg *config.Instance, path string) bool {
+			lowerPath := strings.ToLower(path)
+			// TODO: really, this should specifically check on the root dirs,
+			// 		 but we'd need to modify the test function to have access
+			//       to the platform interface. it's probably a safe enough bet
+			//       that something in an atari2600 subdir is for atari2600
+			if (strings.Contains(lowerPath, "/atari2600/") ||
+				strings.Contains(lowerPath, "/atari 2600/")) &&
+				filepath.Ext(lowerPath) == ".bin" {
+				return true
+			}
+			return false
+		},
 	},
 	{
 		Id:       "LLAPIAtari2600",
