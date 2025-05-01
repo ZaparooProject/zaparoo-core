@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -76,12 +77,12 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return err
 	}
 
-	if active, err := scriptIsActive(); active {
-		if err != nil {
-			log.Error().Err(err).Msg("error checking if script active")
-		}
-		log.Info().Msg("a script is already active, launching new script headless")
-		hidden = true
+	active, err := scriptIsActive()
+	if err != nil {
+		log.Error().Msgf("error checking if script is active: %s", err)
+	} else if active {
+		log.Debug().Msg("script is already active, not running")
+		return errors.New("script is already active")
 	}
 
 	if pl.GetActiveLauncher() != "" && !hidden {
