@@ -75,6 +75,15 @@ func checkInZip(path string) string {
 
 func launch(systemID string) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
+		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
+			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			if err != nil {
+				log.Error().Err(err).Msg("error launching mgl")
+				return err
+			}
+			return mister.SetActiveGame(path)
+		}
+
 		s, err := games.GetSystem(systemID)
 		if err != nil {
 			return err
@@ -205,6 +214,34 @@ func launchGroovyCore() func(*config.Instance, string) error {
 			return err
 		}
 
+		return mister.SetActiveGame(path)
+	}
+}
+
+func launchDOS() func(*config.Instance, string) error {
+	return func(cfg *config.Instance, path string) error {
+		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
+			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			if err != nil {
+				log.Error().Err(err).Msg("error launching mgl")
+				return err
+			}
+			return mister.SetActiveGame(path)
+		}
+
+		s, err := games.GetSystem("ao486")
+		if err != nil {
+			return err
+		}
+
+		path = checkInZip(path)
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), *s, path)
+		if err != nil {
+			return err
+		}
+
+		log.Debug().Msgf("setting active game: %s", path)
 		return mister.SetActiveGame(path)
 	}
 }
@@ -890,8 +927,8 @@ var Launchers = []platforms.Launcher{
 		Id:         systemdefs.SystemDOS,
 		SystemID:   systemdefs.SystemDOS,
 		Folders:    []string{"AO486"},
-		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemDOS),
+		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd", ".mgl"},
+		Launch:     launchDOS(),
 	},
 	{
 		Id:         systemdefs.SystemApogee,
@@ -1184,7 +1221,7 @@ var Launchers = []platforms.Launcher{
 		Id:         systemdefs.SystemX68000,
 		SystemID:   systemdefs.SystemX68000,
 		Folders:    []string{"X68000"},
-		Extensions: []string{".d88", ".hdf"},
+		Extensions: []string{".d88", ".hdf", ".mgl"},
 		Launch:     launch(systemdefs.SystemX68000),
 	},
 	{
