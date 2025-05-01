@@ -16,6 +16,8 @@ tasks:
           PLATFORM: mac
           APP_BIN: zaparoo
           CGO_ENABLED: 1
+        env:
+          CGO_LDFLAGS: ''
       - task: build-app
         vars:
           BUILD_ARCH: arm64
@@ -29,10 +31,12 @@ tasks:
           PLATFORM: mac
           APP_BIN: zaparoo
           CGO_ENABLED: 1
+        env:
+          CGO_LDFLAGS: ''
       - task: build-app
         vars:
           BUILD_ARCH: amd64
 
   dev:
     cmds:
-      - air --build.cmd "task mac:build-{{.CLI_ARGS}}" --build.bin "./_build/mac_{{.CLI_ARGS}}/zaparoo -daemon"
+      - air --build.cmd "task mac:build-{{.CLI_ARGS}}" --build.bin "./_build/mac_{{.CLI_ARGS}}/zaparoo -app"

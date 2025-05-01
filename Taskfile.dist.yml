@@ -5,8 +5,6 @@ env:
     sh: echo -n "$(git rev-parse --short HEAD)-dev"
   GO111MODULE: on
   GOPROXY: https://goproxy.io,direct
-  CGO_ENABLED: 1
-  CGO_LDFLAGS: -lnfc -lusb
   UID:
     sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -u{{end}}"
   GID:
@@ -45,7 +43,7 @@ tasks:
       CGO_ENABLED: '{{default .CGO_ENABLED 0}}'
       CGO_LDFLAGS: ''
     cmds:
-      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
+      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}' -extldflags='-Wl,-no_warn_duplicate_libraries'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
       - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
 
   clean: "{{if eq OS \"windows\"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build"
