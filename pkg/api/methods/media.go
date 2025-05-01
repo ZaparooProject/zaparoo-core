@@ -237,7 +237,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	activeMedia := env.State.ActiveMedia()
-	if activeMedia.Path != "" {
+	if activeMedia != nil && activeMedia.Path != "" {
 		system, err := assets.GetSystemMetadata(activeMedia.SystemID)
 		if err != nil {
 			return nil, errors.New("error getting system metadata: " + err.Error())
