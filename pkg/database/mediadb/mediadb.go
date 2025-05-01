@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -99,13 +100,14 @@ func (db *MediaDB) ReindexFromScanState(ss *database.ScanState) error {
 
 	// clear DB
 	db.Allocate()
+	sqlBeginTransaction(db.sql)
 
 	// Clear unneeded state maps for GC
-	ss.SystemIds = make(map[string]int)
-	ss.TitleIds = make(map[string]int)
-	ss.MediaIds = make(map[string]int)
-	ss.TagTypeIds = make(map[string]int)
-	ss.TagIds = make(map[string]int)
+	ss.SystemIDs = make(map[string]int)
+	ss.TitleIDs = make(map[string]int)
+	ss.MediaIDs = make(map[string]int)
+	ss.TagTypeIDs = make(map[string]int)
+	ss.TagIDs = make(map[string]int)
 
 	var err error
 	err = sqlBulkInsertSystems(db.sql, ss)
@@ -146,6 +148,11 @@ func (db *MediaDB) ReindexFromScanState(ss *database.ScanState) error {
 
 	// Apply indexes
 	sqlIndexTables(db.sql)
+
+	sqlCommitTransaction(db.sql)
+
+	// MiSTer especially needs some help here
+	runtime.GC()
 
 	return nil
 }

@@ -11,11 +11,24 @@ import (
 
 // Queries go here to keep the interface clean
 
+const MediaDBVersion string = "1.0"
+
 func sqlAllocate(db *sql.DB) error {
 	// ROWID is an internal subject to change on vacuum
 	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 	// persistent between vacuums
 	sqlStmt := `
+	drop table if exists DBInfo;
+	create table DBInfo (
+		DBID INTEGER PRIMARY KEY,
+		Version text
+	);
+
+	insert into
+	DBInfo
+	(DBID, Version)
+	values (1, ?);
+
 	drop table if exists Systems;
 	create table Systems (
 		DBID INTEGER PRIMARY KEY,
@@ -75,7 +88,7 @@ func sqlAllocate(db *sql.DB) error {
 		Binary blob
 	);
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.Exec(sqlStmt, MediaDBVersion)
 	return err
 }
 
@@ -102,6 +115,7 @@ func sqlIndexTables(db *sql.DB) error {
 func sqlTruncate(db *sql.DB) error {
 	// Consider deleting sqlite db file and reallocating?
 	sqlStmt := `
+	delete from table DBInfo;
 	delete from table Systems;
 	delete from table MediaTitles;
 	delete from table Media;
@@ -124,20 +138,21 @@ func sqlVacuum(db *sql.DB) error {
 	return err
 }
 
+func sqlBeginTransaction(db *sql.DB) error {
+	_, err := db.Exec("BEGIN")
+	return err
+}
+
+func sqlCommitTransaction(db *sql.DB) error {
+	_, err := db.Exec("COMMIT")
+	return err
+}
+
 func sqlBulkInsertSystems(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.Systems
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -150,34 +165,21 @@ func sqlBulkInsertSystems(db *sql.DB, ss *database.ScanState) error {
 		}
 		_, err = stmt.Exec(
 			row.DBID,
-			row.SystemId,
+			row.SystemID,
 			row.Name,
 		)
 		if err != nil {
 			return err
 		}
 	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 func sqlBulkInsertTitles(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.Titles
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -198,27 +200,14 @@ func sqlBulkInsertTitles(db *sql.DB, ss *database.ScanState) error {
 			return err
 		}
 	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 func sqlBulkInsertMedia(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.Media
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -238,27 +227,14 @@ func sqlBulkInsertMedia(db *sql.DB, ss *database.ScanState) error {
 			return err
 		}
 	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 func sqlBulkInsertTagTypes(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.TagTypes
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -277,27 +253,14 @@ func sqlBulkInsertTagTypes(db *sql.DB, ss *database.ScanState) error {
 			return err
 		}
 	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 func sqlBulkInsertTags(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.Tags
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -317,27 +280,14 @@ func sqlBulkInsertTags(db *sql.DB, ss *database.ScanState) error {
 			return err
 		}
 	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 func sqlBulkInsertMediaTags(db *sql.DB, ss *database.ScanState) error {
 	rows := ss.MediaTags
-	var err error
-	_, err = db.Exec("BEGIN")
-	if err != nil {
-		return err
-	}
-	for i, row := range rows {
+	for _, row := range rows {
 		if row.DBID == 0 {
 			continue
-		}
-		if i%1000 == 0 {
-			_, err = db.Exec("COMMIT")
-			_, err = db.Exec("BEGIN")
 		}
 		stmt, err := db.Prepare(`
 			insert into
@@ -356,10 +306,6 @@ func sqlBulkInsertMediaTags(db *sql.DB, ss *database.ScanState) error {
 		if err != nil {
 			return err
 		}
-	}
-	_, err = db.Exec("COMMIT")
-	if err != nil {
-		return err
 	}
 	return nil
 }
@@ -412,7 +358,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	for rows.Next() {
 		result := database.SearchResult{}
 		err := rows.Scan(
-			&result.SystemId,
+			&result.SystemID,
 			&result.Path,
 		)
 		if err != nil {
@@ -463,7 +409,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	for rows.Next() {
 		result := database.SearchResult{}
 		err := rows.Scan(
-			&result.SystemId,
+			&result.SystemID,
 			&result.Path,
 		)
 		if err != nil {
@@ -537,7 +483,7 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 		return row, err
 	}
 	err = q.QueryRow(system.ID).Scan(
-		&row.SystemId,
+		&row.SystemID,
 		&row.Path,
 	)
 	row.Name = utils.FilenameFromPath(row.Path)

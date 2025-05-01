@@ -304,27 +304,24 @@ func NewNamesIndex(
 	}
 
 	scanState := database.ScanState{
-		Systems:    make([]database.System, 1, 128),
-		SystemIds:  make(map[string]int, 128),
-		Titles:     make([]database.MediaTitle, 1, 131072),
-		TitleIds:   make(map[string]int, 131072),
-		Media:      make([]database.Media, 1, 131072),
-		MediaIds:   make(map[string]int, 131072),
-		TagTypes:   make([]database.TagType, 1, 16),
-		TagTypeIds: make(map[string]int, 16),
-		Tags:       make([]database.Tag, 1, 64),
-		TagIds:     make(map[string]int, 64),
-		MediaTags:  make([]database.MediaTag, 262144),
+		Systems:    make([]database.System, 1),
+		SystemIDs:  make(map[string]int),
+		Titles:     make([]database.MediaTitle, 1),
+		TitleIDs:   make(map[string]int),
+		Media:      make([]database.Media, 1),
+		MediaIDs:   make(map[string]int),
+		TagTypes:   make([]database.TagType, 1),
+		TagTypeIDs: make(map[string]int),
+		Tags:       make([]database.Tag, 1),
+		TagIDs:     make(map[string]int),
+		MediaTags:  make([]database.MediaTag, 1),
 	}
-	seedKnownTags(&scanState)
+	SeedKnownTags(&scanState)
 
 	filteredIds := make([]string, 0)
 	for _, s := range systems {
 		filteredIds = append(filteredIds, s.ID)
 	}
-
-	// Reset Media DB instead of selective rebuild
-	db.Allocate()
 
 	update(status)
 	systemPaths := make(map[string][]string)

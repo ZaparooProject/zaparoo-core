@@ -202,7 +202,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	}
 
 	for _, result := range search {
-		system, err := systemdefs.GetSystem(result.SystemId)
+		system, err := systemdefs.GetSystem(result.SystemID)
 		if err != nil {
 			continue
 		}

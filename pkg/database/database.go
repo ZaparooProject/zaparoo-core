@@ -48,7 +48,7 @@ type Mapping struct {
 
 type System struct {
 	DBID     int64
-	SystemId string
+	SystemID string
 	Name     string
 }
 
@@ -83,28 +83,28 @@ type MediaTag struct {
 }
 
 type SearchResult struct {
-	SystemId string
+	SystemID string
 	Name     string
 	Path     string
 }
 
 type FileInfo struct {
-	SystemId string
+	SystemID string
 	Path     string
 	Name     string
 }
 
 type ScanState struct {
 	Systems    []System
-	SystemIds  map[string]int
+	SystemIDs  map[string]int
 	Titles     []MediaTitle
-	TitleIds   map[string]int
+	TitleIDs   map[string]int
 	Media      []Media
-	MediaIds   map[string]int // Path
+	MediaIDs   map[string]int // Path
 	TagTypes   []TagType
-	TagTypeIds map[string]int
+	TagTypeIDs map[string]int
 	Tags       []Tag
-	TagIds     map[string]int
+	TagIDs     map[string]int
 	MediaTags  []MediaTag
 }
 

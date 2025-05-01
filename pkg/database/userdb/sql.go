@@ -8,12 +8,24 @@ import (
 )
 
 // Queries go here to keep the interface clean
+const UserDBVersion string = "1.0"
 
 func sqlAllocate(db *sql.DB) error {
 	// ROWID is an internal subject to change on vacuum
 	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 	// persistent between vacuums
-	sqlStmt := `
+	sqlStmt := `	
+	drop table if exists DBInfo;
+	create table DBInfo (
+		DBID INTEGER PRIMARY KEY,
+		Version text
+	);
+
+	insert into
+	DBInfo
+	(DBID, Version)
+	values (1, ?);
+
 	drop table if exists History;
 	create table History (
 		DBID INTEGER PRIMARY KEY,
@@ -38,7 +50,7 @@ func sqlAllocate(db *sql.DB) error {
 		Override text not null
 	);
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.Exec(sqlStmt, UserDBVersion)
 	return err
 }
 

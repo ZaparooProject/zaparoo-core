@@ -1,6 +1,7 @@
 package mediascanner
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,24 +14,25 @@ import (
 // Instead of indexing string columns use in-mem map to track records to
 // insert IDs. Batching should be able to run with assumed IDs
 
-func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, int) {
+func AddMediaPath(ss *database.ScanState, systemID string, path string) (int, int) {
 	pf := GetPathFragments(path)
 
 	systemIndex := len(ss.Systems)
-	if foundSystemIndex, ok := ss.SystemIds[systemId]; !ok {
-		ss.SystemIds[systemId] = systemIndex
+	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
+		ss.SystemIDs[systemID] = systemIndex
 		ss.Systems = append(ss.Systems, database.System{
 			DBID:     int64(systemIndex),
-			SystemId: systemId,
-			Name:     systemId,
+			SystemID: systemID,
+			Name:     systemID,
 		})
 	} else {
 		systemIndex = foundSystemIndex
 	}
 
 	titleIndex := len(ss.Titles)
-	if foundTitleIndex, ok := ss.TitleIds[pf.Title]; !ok {
-		ss.TitleIds[pf.Title] = titleIndex
+	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
+	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
+		ss.TitleIDs[titleKey] = titleIndex
 		ss.Titles = append(ss.Titles, database.MediaTitle{
 			DBID:       int64(titleIndex),
 			Slug:       pf.Slug,
@@ -42,8 +44,9 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 	}
 
 	mediaIndex := len(ss.Media)
-	if foundMediaIndex, ok := ss.MediaIds[pf.Path]; !ok {
-		ss.MediaIds[pf.Path] = mediaIndex
+	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
+	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
+		ss.MediaIDs[mediaKey] = mediaIndex
 		ss.Media = append(ss.Media, database.Media{
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
@@ -54,9 +57,9 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 	}
 
 	if pf.Ext != "" {
-		if _, ok := ss.TagIds[pf.Ext]; !ok {
+		if _, ok := ss.TagIDs[pf.Ext]; !ok {
 			tagIndex := len(ss.Tags)
-			ss.TagIds[pf.Ext] = tagIndex
+			ss.TagIDs[pf.Ext] = tagIndex
 			ss.Tags = append(ss.Tags, database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      pf.Ext,
@@ -67,14 +70,13 @@ func AddMediaPath(ss *database.ScanState, systemId string, path string) (int, in
 
 	for _, tagStr := range pf.Tags {
 		tagIndex := len(ss.Tags)
-		if foundTagIndex, ok := ss.TagIds[tagStr]; !ok {
+		if foundTagIndex, ok := ss.TagIDs[tagStr]; !ok {
 			tagTypeIndex := getTagTypeIndexFromUnknownTag(ss, tagStr)
-			ss.TagIds[tagStr] = tagIndex
 			if tagTypeIndex <= 1 {
 				// For now don't add unknown tags to DB until we figure out a use case.
-				ss.TagIds[tagStr] = 0
 				continue
 			}
+			ss.TagIDs[tagStr] = tagIndex
 			ss.Tags = append(ss.Tags, database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      tagStr,
@@ -126,10 +128,10 @@ func getTitleFromFilename(filename string) string {
 	return strings.TrimSpace(title)
 }
 
-func seedKnownTags(ss *database.ScanState) {
+func SeedKnownTags(ss *database.ScanState) {
 	typeMatches := map[string][]string{
 		"Unknown":   {"unknown"}, // 1 KEEP HERE
-		"Extension": {".ext"},    // 2 KEEP HERE
+		"Extension": {".ext"},
 		"Version": {
 			"rev", "v",
 		},
@@ -151,6 +153,15 @@ func seedKnownTags(ss *database.ScanState) {
 			"LT", "LU", "LV", "MN", "MX", "MY", "NL", "NO", "NP", "NZ", "OM", "PE", "PH",
 			"PL", "PT", "QA", "RO", "RU", "SE", "SG", "SI", "SK", "TH", "TR", "TW", "US",
 			"VN", "YU", "ZA",
+		},
+		"Year": {
+			"1970", "1971", "1972", "1973", "1974", "1975", "1976", "1977", "1978", "1979",
+			"1980", "1981", "1982", "1983", "1984", "1985", "1986", "1987", "1988", "1989",
+			"1990", "1991", "1992", "1993", "1994", "1995", "1996", "1997", "1998", "1999",
+			"2000", "2001", "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009",
+			"2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019",
+			"2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029",
+			"19xx", "197x", "198x", "199x", "20xx", "200x", "201x", "202x",
 		},
 		"Dev Status": {
 			"alpha", "beta", "preview", "pre-release", "proto", "sample",
@@ -187,7 +198,7 @@ func seedKnownTags(ss *database.ScanState) {
 	tagIndex := 0
 	for typeStr, tags := range typeMatches {
 		tagTypeIndex++
-		ss.TagTypeIds[typeStr] = tagTypeIndex
+		ss.TagTypeIDs[typeStr] = tagTypeIndex
 		ss.TagTypes = append(ss.TagTypes, database.TagType{
 			DBID: int64(tagTypeIndex),
 			Type: typeStr,
@@ -195,7 +206,7 @@ func seedKnownTags(ss *database.ScanState) {
 
 		for _, tag := range tags {
 			tagIndex++
-			ss.TagIds[tag] = tagIndex
+			ss.TagIDs[tag] = tagIndex
 			ss.Tags = append(ss.Tags, database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      strings.ToLower(tag),
@@ -217,14 +228,12 @@ func getTagTypeIndexFromUnknownTag(ss *database.ScanState, tagStr string) int {
 		return tagTypeIndex
 	}
 
-	if foundTagIndex, ok := ss.TagIds[tagAlpha]; !ok {
+	if foundTagIndex, ok := ss.TagIDs[tagAlpha]; !ok {
 		return tagTypeIndex
 	} else {
 		tag := ss.Tags[foundTagIndex]
 		tagTypeIndex = int(tag.TypeDBID)
 	}
-
-	// TODO: year as XXXX numeric or XXXX-XXXX or XXXX-XX
 
 	return tagTypeIndex
 }
