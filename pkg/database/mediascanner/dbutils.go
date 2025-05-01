@@ -130,7 +130,6 @@ func getTitleFromFilename(filename string) string {
 
 func SeedKnownTags(ss *database.ScanState) {
 	typeMatches := map[string][]string{
-		"Unknown":   {"unknown"}, // 1 KEEP HERE
 		"Extension": {".ext"},
 		"Version": {
 			"rev", "v",
@@ -194,8 +193,20 @@ func SeedKnownTags(ss *database.ScanState) {
 		},
 	}
 
-	tagTypeIndex := 0
-	tagIndex := 0
+	tagTypeIndex := 1
+	ss.TagTypeIDs["Unknown"] = tagTypeIndex
+	ss.TagTypes = append(ss.TagTypes, database.TagType{
+		DBID: int64(tagTypeIndex),
+		Type: "Unknown",
+	})
+	tagIndex := 1
+	ss.TagIDs["unknown"] = tagIndex
+	ss.Tags = append(ss.Tags, database.Tag{
+		DBID:     int64(tagIndex),
+		Tag:      "unknown",
+		TypeDBID: int64(tagTypeIndex),
+	})
+
 	for typeStr, tags := range typeMatches {
 		tagTypeIndex++
 		ss.TagTypeIDs[typeStr] = tagTypeIndex
