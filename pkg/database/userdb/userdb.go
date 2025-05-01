@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var ERROR_NULL_SQL = errors.New("UserDB is not connected")
+var ErrorNullSql = errors.New("UserDB is not connected")
 
 type UserDB struct {
 	sql *sql.DB
@@ -53,21 +53,21 @@ func (db *UserDB) UnsafeGetSqlDb() *sql.DB {
 
 func (db *UserDB) Truncate() error {
 	if db.sql == nil {
-		return ERROR_NULL_SQL
+		return ErrorNullSql
 	}
 	return sqlTruncate(db.sql)
 }
 
 func (db *UserDB) Allocate() error {
 	if db.sql == nil {
-		return ERROR_NULL_SQL
+		return ErrorNullSql
 	}
 	return sqlAllocate(db.sql)
 }
 
 func (db *UserDB) Vacuum() error {
 	if db.sql == nil {
-		return ERROR_NULL_SQL
+		return ErrorNullSql
 	}
 	return sqlVacuum(db.sql)
 }

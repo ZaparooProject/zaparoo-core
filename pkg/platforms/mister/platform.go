@@ -137,18 +137,6 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		}
 	}
 
-	// migrate old config folder db
-	oldTaptoDbPath := "/media/fat/Scripts/.config/tapto/tapto.db"
-	newTaptoDbPath := filepath.Join(p.DataDir(), config.UserDbFile)
-	if _, err := os.Stat(oldTaptoDbPath); err == nil {
-		if _, err := os.Stat(newTaptoDbPath); errors.Is(err, os.ErrNotExist) {
-			err := utils.CopyFile(oldTaptoDbPath, newTaptoDbPath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	kbd, err := input.NewKeyboard()
 	if err != nil {
 		return err
