@@ -104,7 +104,7 @@ func sqlIndexTables(db *sql.DB) error {
 	create index mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
 	create index mediatitletags_tag_idx on MediaTitleTags (TagDBID);
 	create index supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
-	create index supportingmedia_media_idx on SupportingMedia (MediaDBID);
+	create index supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
 	create index supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	vacuum;
 	`
