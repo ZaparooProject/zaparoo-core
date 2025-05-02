@@ -169,8 +169,10 @@ func sqlBulkInsertSystems(db *sql.DB, ss *database.ScanState) error {
 			row.Name,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -197,8 +199,10 @@ func sqlBulkInsertTitles(db *sql.DB, ss *database.ScanState) error {
 			row.Name,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -224,8 +228,10 @@ func sqlBulkInsertMedia(db *sql.DB, ss *database.ScanState) error {
 			row.Path,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -250,8 +256,10 @@ func sqlBulkInsertTagTypes(db *sql.DB, ss *database.ScanState) error {
 			row.Type,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -277,8 +285,10 @@ func sqlBulkInsertTags(db *sql.DB, ss *database.ScanState) error {
 			row.Tag,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -304,8 +314,10 @@ func sqlBulkInsertMediaTags(db *sql.DB, ss *database.ScanState) error {
 			row.TagDBID,
 		)
 		if err != nil {
+			_ = stmt.Close()
 			return err
 		}
+		_ = stmt.Close()
 	}
 	return nil
 }
@@ -348,13 +360,19 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		and Media.Path = ?
 		LIMIT 1
 	`)
+	if err != nil {
+		return results, err
+	}
+	_ = stmt.Close()
+
 	rows, err := stmt.Query(
 		args...,
 	)
 	if err != nil {
 		return results, err
 	}
-	defer rows.Close()
+	_ = stmt.Close()
+
 	for rows.Next() {
 		result := database.SearchResult{}
 		err := rows.Scan(
@@ -367,10 +385,12 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		result.Name = utils.FilenameFromPath(result.Path)
 		results = append(results, result)
 	}
+
 	err = rows.Err()
 	if err != nil {
 		return results, err
 	}
+
 	return results, nil
 }
 
@@ -399,13 +419,18 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		prepareVariadic(" Media.Path like ? ", " and ", len(parts)) +
 		` LIMIT 250
 	`)
+	defer func(stmt *sql.Stmt) {
+		_ = stmt.Close()
+	}(stmt)
 	rows, err := stmt.Query(
 		args...,
 	)
 	if err != nil {
 		return results, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		_ = rows.Close()
+	}(rows)
 	for rows.Next() {
 		result := database.SearchResult{}
 		err := rows.Scan(
@@ -433,7 +458,9 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 		from Systems
 		where SystemId = ?;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		_ = q.Close()
+	}(q)
 	if err != nil {
 		return false
 	}
@@ -449,12 +476,16 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	q, err := db.Prepare(`
 		select SystemId from Systems;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		_ = q.Close()
+	}(q)
 	rows, err := q.Query()
 	if err != nil {
 		return list, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		_ = rows.Close()
+	}(rows)
 	for rows.Next() {
 		row := ""
 		err := rows.Scan(&row)
@@ -478,7 +509,9 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 		where Systems.SystemId = ?
 		ORDER BY RANDOM() LIMIT 1;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		_ = q.Close()
+	}(q)
 	if err != nil {
 		return row, err
 	}
