@@ -16,26 +16,21 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 type Flags struct {
-	Write        *string
-	Read         *bool
-	Run          *string
-	Launch       *string
-	Api          *string
-	Clients      *bool
-	NewClient    *string
-	DeleteClient *string
-	Qr           *bool
-	Version      *bool
-	Config       *bool
-	ShowLoader   *string
-	ShowPicker   *string
-	Reload       *bool
+	Write      *string
+	Read       *bool
+	Run        *string
+	Launch     *string
+	Api        *string
+	Version    *bool
+	Config     *bool
+	ShowLoader *string
+	ShowPicker *string
+	Reload     *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -66,26 +61,6 @@ func SetupFlags() *Flags {
 			"",
 			"send method and params to API and print response",
 		),
-		//Clients: flag.Bool(
-		//	"clients",
-		//	false,
-		//	"list all registered API clients and secrets",
-		//),
-		//NewClient: flag.String(
-		//	"new-client",
-		//	"",
-		//	"register new API client with given display name",
-		//),
-		//DeleteClient: flag.String(
-		//	"delete-client",
-		//	"",
-		//	"revoke access to API for given client ID",
-		//),
-		//Qr: flag.Bool(
-		//	"qr",
-		//	false,
-		//	"output a connection QR code along with client details",
-		//),
 		Version: flag.Bool(
 			"version",
 			false,
@@ -94,7 +69,7 @@ func SetupFlags() *Flags {
 		Config: flag.Bool(
 			"config",
 			false,
-			"start the text ui to handle zaparoo config",
+			"start the text ui to handle Zaparoo config",
 		),
 		Reload: flag.Bool(
 			"reload",
@@ -102,6 +77,16 @@ func SetupFlags() *Flags {
 			"reload config and mappings from disk",
 		),
 	}
+}
+
+func isFlagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 // Pre runs flag parsing and actions any immediate flags that don't
@@ -115,10 +100,23 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	}
 }
 
-type ConnQr struct {
-	Id      uuid.UUID `json:"id"`
-	Secret  string    `json:"sec"`
-	Address string    `json:"addr"`
+func runFlag(cfg *config.Instance, value string) {
+	data, err := json.Marshal(&models.RunParams{
+		Text: &value,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+		os.Exit(1)
+	}
+
+	_, err = client.LocalClient(cfg, models.MethodRun, string(data))
+	if err != nil {
+		log.Error().Err(err).Msg("error running")
+		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
+		os.Exit(1)
+	} else {
+		os.Exit(0)
+	}
 }
 
 // Post actions all remaining common flags that require the environment to be
@@ -126,7 +124,6 @@ type ConnQr struct {
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
 		enabler := client.ZapScriptWrapper(cfg)
-
 		err := configui.ConfigUi(cfg, pl)
 		if err != nil {
 			log.Error().Err(err).Msg("error starting config ui")
@@ -135,9 +132,12 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 		}
 		enabler()
 		os.Exit(0)
-	}
+	} else if isFlagPassed("write") {
+		if *f.Write == "" {
+			_, _ = fmt.Fprintf(os.Stderr, "Error: write flag requires a value\n")
+			os.Exit(1)
+		}
 
-	if *f.Write != "" {
 		data, err := json.Marshal(&models.ReaderWriteParams{
 			Text: *f.Write,
 		})
@@ -193,24 +193,23 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 		enableRun()
 		fmt.Println(resp)
 		os.Exit(0)
-	} else if *f.Run != "" || *f.Launch != "" {
-		data, err := json.Marshal(&models.RunParams{
-			Text: f.Run,
-		})
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
+	} else if isFlagPassed("launch") {
+		if *f.Launch == "" {
+			_, _ = fmt.Fprintf(os.Stderr, "Error: launch flag requires a value\n")
+			os.Exit(1)
+		}
+		runFlag(cfg, *f.Launch)
+	} else if isFlagPassed("run") {
+		if *f.Run == "" {
+			_, _ = fmt.Fprintf(os.Stderr, "Error: run flag requires a value\n")
+		}
+		runFlag(cfg, *f.Run)
+	} else if isFlagPassed("api") {
+		if *f.Api == "" {
+			_, _ = fmt.Fprintf(os.Stderr, "Error: api flag requires a value\n")
 			os.Exit(1)
 		}
 
-		_, err = client.LocalClient(cfg, models.MethodRun, string(data))
-		if err != nil {
-			log.Error().Err(err).Msg("error running")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	} else if *f.Api != "" {
 		ps := strings.SplitN(*f.Api, ":", 2)
 		method := ps[0]
 		params := ""
@@ -237,141 +236,6 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}
 	}
-
-	// clients
-	//if *f.Clients {
-	//	resp, err := client.LocalClient(cfg, models.MethodClients, "")
-	//	if err != nil {
-	//		log.Error().Err(err).Msg("error calling API")
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-	//		os.Exit(1)
-	//	}
-	//
-	//	var clients []models.ClientResponse
-	//	err = json.Unmarshal([]byte(resp), &clients)
-	//	if err != nil {
-	//		log.Error().Err(err).Msg("error decoding API response")
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
-	//	}
-	//
-	//	for _, c := range clients {
-	//		fmt.Println("---")
-	//		if c.Name != "" {
-	//			fmt.Printf("- Name:   %s\n", c.Name)
-	//		}
-	//		if c.Address != "" {
-	//			fmt.Printf("- Address: %s\n", c.Address)
-	//		}
-	//		fmt.Printf("- ID:     %s\n", c.ID)
-	//		fmt.Printf("- Secret: %s\n", c.Secret)
-	//
-	//		if *f.Qr {
-	//			ip, err := utils.GetLocalIp()
-	//			if err != nil {
-	//				_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
-	//				os.Exit(1)
-	//			}
-	//
-	//			cq := ConnQr{
-	//				ID:      c.ID,
-	//				Secret:  c.Secret,
-	//				Address: ip.String(),
-	//			}
-	//			respQr, err := json.Marshal(cq)
-	//			if err != nil {
-	//				_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
-	//				os.Exit(1)
-	//			}
-	//
-	//			qrterminal.Generate(
-	//				string(respQr),
-	//				qrterminal.L,
-	//				os.Stdout,
-	//			)
-	//		}
-	//	}
-	//
-	//	os.Exit(0)
-	//} else if *f.NewClient != "" {
-	//	data, err := json.Marshal(&models.NewClientParams{
-	//		Name: *f.NewClient,
-	//	})
-	//	if err != nil {
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
-	//		os.Exit(1)
-	//	}
-	//
-	//	resp, err := client.LocalClient(
-	//		cfg,
-	//		models.MethodClientsNew,
-	//		string(data),
-	//	)
-	//	if err != nil {
-	//		log.Error().Err(err).Msg("error calling API")
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-	//		os.Exit(1)
-	//	}
-	//
-	//	var c models.ClientResponse
-	//	err = json.Unmarshal([]byte(resp), &c)
-	//	if err != nil {
-	//		log.Error().Err(err).Msg("error decoding API response")
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error decoding API response: %v\n", err)
-	//	}
-	//
-	//	fmt.Println("New client registered:")
-	//	fmt.Printf("- ID:     %s\n", c.ID)
-	//	fmt.Printf("- Name:   %s\n", c.Name)
-	//	fmt.Printf("- Secret: %s\n", c.Secret)
-	//
-	//	if *f.Qr {
-	//		ip, err := utils.GetLocalIp()
-	//		if err != nil {
-	//			_, _ = fmt.Fprintf(os.Stderr, "Error getting local IP: %v\n", err)
-	//			os.Exit(1)
-	//		}
-	//
-	//		cq := ConnQr{
-	//			ID:      c.ID,
-	//			Secret:  c.Secret,
-	//			Address: ip.String(),
-	//		}
-	//		respQr, err := json.Marshal(cq)
-	//		if err != nil {
-	//			_, _ = fmt.Fprintf(os.Stderr, "Error encoding QR code: %v\n", err)
-	//			os.Exit(1)
-	//		}
-	//
-	//		qrterminal.Generate(
-	//			string(respQr),
-	//			qrterminal.L,
-	//			os.Stdout,
-	//		)
-	//	}
-	//
-	//	os.Exit(0)
-	//} else if *f.DeleteClient != "" {
-	//	data, err := json.Marshal(&models.DeleteClientParams{
-	//		ID: *f.DeleteClient,
-	//	})
-	//	if err != nil {
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error encoding params: %v\n", err)
-	//		os.Exit(1)
-	//	}
-	//
-	//	_, err = client.LocalClient(
-	//		cfg,
-	//		models.MethodClientsDelete,
-	//		string(data),
-	//	)
-	//	if err != nil {
-	//		log.Error().Err(err).Msg("error calling API")
-	//		_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
-	//		os.Exit(1)
-	//	}
-	//
-	//	os.Exit(0)
-	//}
 }
 
 // Setup initializes the user config and logging. Returns a user config object.

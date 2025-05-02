@@ -342,6 +342,9 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				systemID string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
+				// drop existing results since they're just junk here
+				results = []platforms.ScanResult{}
+
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {
 					return nil, err
@@ -374,6 +377,12 @@ func (p *Platform) Launchers() []platforms.Launcher {
 					sysDir = filepath.Clean(sysDir)
 					sysDir = strings.ToLower(sysDir)
 					if strings.HasPrefix(path, sysDir) {
+						if filepath.Ext(path) == "" {
+							return false
+						}
+						if filepath.Ext(path) == ".txt" {
+							return false
+						}
 						return true
 					}
 				}

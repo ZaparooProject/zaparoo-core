@@ -75,6 +75,15 @@ func checkInZip(path string) string {
 
 func launch(systemID string) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
+		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
+			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			if err != nil {
+				log.Error().Err(err).Msg("error launching mgl")
+				return err
+			}
+			return mister.SetActiveGame(path)
+		}
+
 		s, err := games.GetSystem(systemID)
 		if err != nil {
 			return err
@@ -201,6 +210,63 @@ func launchGroovyCore() func(*config.Instance, string) error {
 		log.Debug().Msgf("launching Groovy core: %v", sn)
 
 		err := mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		if err != nil {
+			return err
+		}
+
+		return mister.SetActiveGame(path)
+	}
+}
+
+func launchDOS() func(*config.Instance, string) error {
+	return func(cfg *config.Instance, path string) error {
+		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
+			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			if err != nil {
+				log.Error().Err(err).Msg("error launching mgl")
+				return err
+			}
+			return mister.SetActiveGame(path)
+		}
+
+		s, err := games.GetSystem("ao486")
+		if err != nil {
+			return err
+		}
+
+		path = checkInZip(path)
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), *s, path)
+		if err != nil {
+			return err
+		}
+
+		log.Debug().Msgf("setting active game: %s", path)
+		return mister.SetActiveGame(path)
+	}
+}
+
+func launchAtari2600() func(*config.Instance, string) error {
+	return func(cfg *config.Instance, path string) error {
+		s, err := games.GetSystem("Atari2600")
+		if err != nil {
+			return err
+		}
+		path = checkInZip(path)
+
+		sn := *s
+		sn.Slots = []games.Slot{
+			{
+				Exts: []string{".a26", ".bin"},
+				Mgl: &games.MglParams{
+					Delay:  1,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		}
+
+		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
 		if err != nil {
 			return err
 		}
@@ -371,7 +437,20 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemAtari2600,
 		Folders:    []string{"ATARI7800", "Atari2600"},
 		Extensions: []string{".a26"},
-		Launch:     launch(systemdefs.SystemAtari2600),
+		Launch:     launchAtari2600(),
+		Test: func(cfg *config.Instance, path string) bool {
+			lowerPath := strings.ToLower(path)
+			// TODO: really, this should specifically check on the root dirs,
+			// 		 but we'd need to modify the test function to have access
+			//       to the platform interface. it's probably a safe enough bet
+			//       that something in an atari2600 subdir is for atari2600
+			if (strings.Contains(lowerPath, "/atari2600/") ||
+				strings.Contains(lowerPath, "/atari 2600/")) &&
+				filepath.Ext(lowerPath) == ".bin" {
+				return true
+			}
+			return false
+		},
 	},
 	{
 		ID:       "LLAPIAtari2600",
@@ -890,8 +969,8 @@ var Launchers = []platforms.Launcher{
 		ID:         systemdefs.SystemDOS,
 		SystemID:   systemdefs.SystemDOS,
 		Folders:    []string{"AO486"},
-		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemDOS),
+		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd", ".mgl"},
+		Launch:     launchDOS(),
 	},
 	{
 		ID:         systemdefs.SystemApogee,
@@ -1184,7 +1263,7 @@ var Launchers = []platforms.Launcher{
 		ID:         systemdefs.SystemX68000,
 		SystemID:   systemdefs.SystemX68000,
 		Folders:    []string{"X68000"},
-		Extensions: []string{".d88", ".hdf"},
+		Extensions: []string{".d88", ".hdf", ".mgl"},
 		Launch:     launch(systemdefs.SystemX68000),
 	},
 	{
