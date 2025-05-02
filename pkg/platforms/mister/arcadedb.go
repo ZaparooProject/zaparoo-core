@@ -4,6 +4,8 @@ package mister
 
 import (
 	"encoding/json"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"io"
 	"net/http"
 	"os"
@@ -54,7 +56,13 @@ type ArcadeDbEntry struct {
 	NumButtons      string `csv:"num_buttons"`
 }
 
-func UpdateArcadeDb() (bool, error) {
+func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
+	arcadeDBPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		ArcadeDbFile,
+	)
+
 	resp, err := http.Get(ArcadeDbUrl)
 	if err != nil {
 		return false, err
@@ -76,13 +84,13 @@ func UpdateArcadeDb() (bool, error) {
 		return false, nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(ArcadeDbFile), 0755)
+	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0755)
 	if err != nil {
 		return false, err
 	}
 
 	dbAge := time.Time{}
-	if dbFile, err := os.Stat(ArcadeDbFile); err == nil {
+	if dbFile, err := os.Stat(arcadeDBPath); err == nil {
 		dbAge = dbFile.ModTime()
 	}
 
@@ -115,7 +123,7 @@ func UpdateArcadeDb() (bool, error) {
 		return false, err
 	}
 
-	err = os.WriteFile(ArcadeDbFile, body, 0644)
+	err = os.WriteFile(arcadeDBPath, body, 0644)
 	if err != nil {
 		return false, err
 	}
@@ -123,12 +131,18 @@ func UpdateArcadeDb() (bool, error) {
 	return true, nil
 }
 
-func ReadArcadeDb() ([]ArcadeDbEntry, error) {
-	if _, err := os.Stat(ArcadeDbFile); os.IsNotExist(err) {
+func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
+	arcadeDBPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		ArcadeDbFile,
+	)
+
+	if _, err := os.Stat(arcadeDBPath); os.IsNotExist(err) {
 		return nil, err
 	}
 
-	dbFile, err := os.Open(ArcadeDbFile)
+	dbFile, err := os.Open(arcadeDBPath)
 	if err != nil {
 		return nil, err
 	}

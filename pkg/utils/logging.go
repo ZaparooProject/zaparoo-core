@@ -12,13 +12,13 @@ import (
 )
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
-	err := os.MkdirAll(pl.LogDir(), 0755)
+	err := os.MkdirAll(pl.Settings().TempDir, 0755)
 	if err != nil {
 		return err
 	}
 
 	var logWriters = []io.Writer{&lumberjack.Logger{
-		Filename:   filepath.Join(pl.LogDir(), config.LogFile),
+		Filename:   filepath.Join(pl.Settings().TempDir, config.LogFile),
 		MaxSize:    1,
 		MaxBackups: 2,
 	}}

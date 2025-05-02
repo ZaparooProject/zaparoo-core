@@ -219,7 +219,7 @@ func HandleRunRest(
 
 func HandleStop(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received stop request")
-	return nil, env.Platform.KillLauncher()
+	return nil, env.Platform.StopActiveLauncher()
 }
 
 func InstallRunMedia(
@@ -227,7 +227,7 @@ func InstallRunMedia(
 	pl platforms.Platform,
 	launchArgs zapScriptModels.CmdLaunchArgs,
 ) (string, error) {
-	if pl.Id() != platforms.PlatformIDMister {
+	if pl.ID() != platforms.PlatformIDMister {
 		return "", errors.New("media install only supported for mister")
 	}
 

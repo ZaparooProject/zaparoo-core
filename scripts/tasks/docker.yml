@@ -15,6 +15,9 @@ tasks:
     vars:
       BUILD_NAME: "{{.PLATFORM}}{{if .BUILD_ARCH}}_{{.BUILD_ARCH}}{{end}}"
       BUILD_DIR: "./_build/{{.BUILD_NAME}}"
+    env:
+      CGO_ENABLED: 1
+      CGO_LDFLAGS: -lnfc -lusb
     cmds:
       - task: run
         vars:

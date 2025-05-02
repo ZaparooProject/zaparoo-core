@@ -16,7 +16,7 @@ func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, er
 	log.Info().Msg("stopping media")
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, pl.KillLauncher()
+	}, pl.StopActiveLauncher()
 }
 
 func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {

@@ -5,15 +5,16 @@ package mistex
 import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"github.com/rs/zerolog/log"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -22,21 +23,21 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
-	"github.com/bendahl/uinput"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/input"
 	mm "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 type Platform struct {
-	kbd    input.Keyboard
-	gpd    uinput.Gamepad
-	tr     *mister.Tracker
-	stopTr func() error
+	kbd            linuxinput.Keyboard
+	gpd            linuxinput.Gamepad
+	tr             *mister.Tracker
+	stopTr         func() error
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDMistex
 }
 
@@ -59,54 +60,36 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return err
 	}
 
-	kbd, err := input.NewKeyboard()
+	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
 		return err
 	}
 	p.kbd = kbd
 
-	gpd, err := uinput.CreateGamepad(
-		"/dev/uinput",
-		[]byte("zaparoo"),
-		0x1234,
-		0x5678,
-	)
+	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
 		return err
 	}
 	p.gpd = gpd
 
-	if _, err := os.Stat(mister.SuccessSoundFile); err != nil {
-		// copy success sound to temp
-		sf, err := os.Create(mister.SuccessSoundFile)
-		if err != nil {
-			log.Error().Msgf("error creating success sound file: %s", err)
-		}
-		_, err = sf.Write(assets.SuccessSound)
-		if err != nil {
-			log.Error().Msgf("error writing success sound file: %s", err)
-		}
-		_ = sf.Close()
-	}
-
-	if _, err := os.Stat(mister.FailSoundFile); err != nil {
-		// copy fail sound to temp
-		ff, err := os.Create(mister.FailSoundFile)
-		if err != nil {
-			log.Error().Msgf("error creating fail sound file: %s", err)
-		}
-		_, err = ff.Write(assets.FailSound)
-		if err != nil {
-			log.Error().Msgf("error writing fail sound file: %s", err)
-		}
-		_ = ff.Close()
-	}
-
 	return nil
 }
 
-func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification) error {
-	tr, stopTr, err := mister.StartTracker(*mister.UserConfigToMrext(cfg), ns, cfg, p)
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
+
+	tr, stopTr, err := mister.StartTracker(
+		*mister.UserConfigToMrext(cfg),
+		cfg,
+		p,
+		activeMedia,
+		setActiveMedia,
+	)
 	if err != nil {
 		return err
 	}
@@ -122,7 +105,7 @@ func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification
 			return
 		}
 
-		arcadeDbUpdated, err := mister.UpdateArcadeDb()
+		arcadeDbUpdated, err := mister.UpdateArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to download arcade database: %s", err)
 		}
@@ -134,7 +117,7 @@ func (p *Platform) StartPost(cfg *config.Instance, ns chan<- models.Notification
 			log.Info().Msg("arcade database is up to date")
 		}
 
-		m, err := mister.ReadArcadeDb()
+		m, err := mister.ReadArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to read arcade database: %s", err)
 		} else {
@@ -150,17 +133,20 @@ func (p *Platform) Stop() error {
 		return p.stopTr()
 	}
 
-	if p.gpd != nil {
-		err := p.gpd.Close()
-		if err != nil {
-			return err
-		}
+	err := p.kbd.Close()
+	if err != nil {
+		log.Warn().Err(err).Msg("error closing keyboard")
+	}
+
+	err = p.gpd.Close()
+	if err != nil {
+		log.Warn().Err(err).Msg("error closing gamepad")
 	}
 
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
+func (p *Platform) ScanHook(token tokens.Token) error {
 	f, err := os.Create(mister.TokenReadFile)
 	if err != nil {
 		return fmt.Errorf("unable to create scan result file %s: %s", mister.TokenReadFile, err)
@@ -177,38 +163,17 @@ func (p *Platform) AfterScanHook(token tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
-	return nil
-}
-
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return games.GetGamesFolders(mister.UserConfigToMrext(cfg))
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return true
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    mister.DataDir,
+		ConfigDir:  mister.DataDir,
+		TempDir:    mister.TempDir,
+		ZipsAsDirs: true,
 	}
-	return mister.DataDir
-}
-
-func (p *Platform) LogDir() string {
-	return mister.TempDir
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return mister.DataDir
-}
-
-func (p *Platform) TempDir() string {
-	return mister.TempDir
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
@@ -232,8 +197,12 @@ func LaunchMenu() error {
 	return nil
 }
 
-func (p *Platform) KillLauncher() error {
-	return LaunchMenu()
+func (p *Platform) StopActiveLauncher() error {
+	err := LaunchMenu()
+	if err == nil {
+		p.setActiveMedia(nil)
+	}
+	return err
 }
 
 func (p *Platform) GetActiveLauncher() string {
@@ -246,12 +215,16 @@ func (p *Platform) GetActiveLauncher() string {
 	return core
 }
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
-	mister.PlayFail(cfg)
-}
+func (p *Platform) PlayAudio(path string) error {
+	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
+		return fmt.Errorf("unsupported audio format: %s", path)
+	}
 
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
-	mister.PlaySuccess(cfg)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.Settings().DataDir, path)
+	}
+
+	return exec.Command("aplay", path).Start()
 }
 
 func (p *Platform) ActiveSystem() string {
@@ -279,47 +252,36 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
 }
 
-func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	return mm.LaunchGenericFile(mister.UserConfigToMrext(cfg), path)
-}
-
-func (p *Platform) KeyboardInput(input string) error {
-	code, err := strconv.Atoi(input)
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+	log.Info().Msgf("launch media: %s", path)
+	launcher, err := utils.FindLauncher(cfg, p, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
-	p.kbd.Press(code)
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
 
 	return nil
 }
 
 func (p *Platform) KeyboardPress(name string) error {
-	code, ok := mister.KeyboardMap[name]
+	code, ok := linuxinput.ToKeyboardCode(name)
 	if !ok {
-		return fmt.Errorf("unknown key: %s", name)
+		return fmt.Errorf("unknown keyboard key: %s", name)
 	}
-
-	if code < 0 {
-		p.kbd.Combo(42, -code)
-	} else {
-		p.kbd.Press(code)
-	}
-
-	return nil
+	return p.kbd.Press(code)
 }
 
 func (p *Platform) GamepadPress(name string) error {
-	code, ok := mister.GamepadMap[name]
+	code, ok := linuxinput.GamepadMap[name]
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-
-	p.gpd.ButtonDown(code)
-	time.Sleep(40 * time.Millisecond)
-	p.gpd.ButtonUp(code)
-
-	return nil
+	return p.gpd.Press(code)
 }
 
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {

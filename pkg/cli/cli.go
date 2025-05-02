@@ -95,7 +95,7 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	flag.Parse()
 
 	if *f.Version {
-		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.Id())
+		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
 		os.Exit(0)
 	}
 }
@@ -246,7 +246,7 @@ func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writ
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewConfig(pl.ConfigDir(), defaultConfig)
+	cfg, err := config.NewConfig(utils.ConfigDir(pl), defaultConfig)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)

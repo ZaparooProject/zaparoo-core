@@ -2,6 +2,7 @@ package zapscript
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 	"strconv"
 	"time"
 
@@ -13,9 +14,17 @@ import (
 // DEPRECATED
 func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+		return platforms.CmdResult{}, fmt.Errorf("input.key cannot be run from a remote source")
 	}
-	return platforms.CmdResult{}, pl.KeyboardInput(env.Args)
+	legacyCode, err := strconv.Atoi(env.Args)
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Args)
+	}
+	code := keyboardmap.GetLegacyKey(legacyCode)
+	if code == "" {
+		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Args)
+	}
+	return platforms.CmdResult{}, pl.KeyboardPress(code)
 }
 
 // converts a string to a list of key symbols. long names are named inside
@@ -126,7 +135,7 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 	}
 
 	for i := 0; i < amount; i++ {
-		_ = pl.KeyboardInput(key)
+		_ = pl.KeyboardPress(key)
 		time.Sleep(100 * time.Millisecond)
 	}
 
@@ -135,10 +144,10 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 
 func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 1: %s", env.Args)
-	return insertCoin(pl, env, "6")
+	return insertCoin(pl, env, "5")
 }
 
 func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 2: %s", env.Args)
-	return insertCoin(pl, env, "7")
+	return insertCoin(pl, env, "6")
 }

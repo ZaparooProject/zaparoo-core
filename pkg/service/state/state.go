@@ -215,9 +215,42 @@ func (s *State) ActiveMedia() *models.ActiveMedia {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
+	oldMedia := s.ActiveMedia()
 	s.mu.Lock()
-	s.activeMedia = media
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if oldMedia == nil && media == nil {
+		return
+	}
+	if media == nil {
+		// media has stopped
+		s.activeMedia = media
+		notifications.MediaStopped(s.Notifications)
+		return
+	}
+	if oldMedia == nil {
+		// media has started
+		s.activeMedia = media
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+		})
+		return
+	}
+	if !oldMedia.Equal(media) {
+		// media has changed
+		s.activeMedia = media
+		notifications.MediaStopped(s.Notifications)
+		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
+			SystemID:   media.SystemID,
+			SystemName: media.SystemName,
+			MediaName:  media.Name,
+			MediaPath:  media.Path,
+		})
+		return
+	}
+	return
 }
 
 func (s *State) GetContext() context.Context {
