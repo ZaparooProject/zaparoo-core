@@ -2,32 +2,29 @@
 
 package mister
 
-// TODO: i don't think it's actually useful to track if a system is running,
-// it should probably be completely removed and just report game playing state
-
 import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	utils2 "github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 
 	"github.com/wizzomafizzo/mrext/pkg/metadata"
-	"github.com/wizzomafizzo/mrext/pkg/utils"
+	mrextUtils "github.com/wizzomafizzo/mrext/pkg/utils"
 
-	"github.com/wizzomafizzo/mrext/pkg/config"
+	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
@@ -42,11 +39,10 @@ type NameMapping struct {
 }
 
 type Tracker struct {
-	Config           *config.UserConfig
+	Config           *mrextConfig.UserConfig
 	mu               sync.Mutex
-	ns               chan<- models.Notification
 	pl               platforms.Platform
-	cfg              *config2.Instance
+	cfg              *config.Instance
 	ActiveCore       string
 	ActiveSystem     string
 	ActiveSystemName string
@@ -54,6 +50,8 @@ type Tracker struct {
 	ActiveGameName   string
 	ActiveGamePath   string
 	NameMap          []NameMapping
+	activeMedia      func() *models.ActiveMedia
+	setActiveMedia   func(*models.ActiveMedia)
 }
 
 func generateNameMap() []NameMapping {
@@ -94,7 +92,13 @@ func generateNameMap() []NameMapping {
 	return nameMap
 }
 
-func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl platforms.Platform, cfg2 *config2.Instance) (*Tracker, error) {
+func NewTracker(
+	mrextCfg *mrextConfig.UserConfig,
+	pl platforms.Platform,
+	cfg *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
 	nameMap := generateNameMap()
@@ -102,10 +106,9 @@ func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl platfo
 	log.Info().Msgf("loaded %d name mappings", len(nameMap))
 
 	return &Tracker{
-		Config:           cfg,
-		ns:               ns,
+		Config:           mrextCfg,
 		pl:               pl,
-		cfg:              cfg2,
+		cfg:              cfg,
 		ActiveCore:       "",
 		ActiveSystem:     "",
 		ActiveSystemName: "",
@@ -113,6 +116,8 @@ func NewTracker(cfg *config.UserConfig, ns chan<- models.Notification, pl platfo
 		ActiveGameName:   "",
 		ActiveGamePath:   "",
 		NameMap:          nameMap,
+		activeMedia:      activeMedia,
+		setActiveMedia:   setActiveMedia,
 	}, nil
 }
 
@@ -180,7 +185,7 @@ func (tr *Tracker) LoadCore() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	data, err := os.ReadFile(config.CoreNameFile)
+	data, err := os.ReadFile(mrextConfig.CoreNameFile)
 	coreName := string(data)
 
 	if err != nil {
@@ -188,7 +193,7 @@ func (tr *Tracker) LoadCore() {
 		return
 	}
 
-	if coreName == config.MenuCore {
+	if coreName == mrextConfig.MenuCore {
 		err := mister.SetActiveGame("")
 		if err != nil {
 			log.Error().Msgf("error setting active game: %s", err)
@@ -202,7 +207,7 @@ func (tr *Tracker) LoadCore() {
 	tr.stopCore()
 	tr.ActiveCore = coreName
 
-	if coreName == config.MenuCore {
+	if coreName == mrextConfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")
 		tr.stopGame()
 		return
@@ -221,11 +226,12 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
 
-		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+		tr.setActiveMedia(&models.ActiveMedia{
 			SystemID:   tr.ActiveSystem,
 			SystemName: tr.ActiveSystemName,
-			MediaName:  tr.ActiveGameName,
-			MediaPath:  coreName,
+			Name:       tr.ActiveGameName,
+			Path:       coreName,
+			Started:    time.Now(),
 		})
 	}
 }
@@ -236,7 +242,8 @@ func (tr *Tracker) stopGame() {
 	tr.ActiveGameName = ""
 	tr.ActiveSystem = ""
 	tr.ActiveSystemName = ""
-	notifications.MediaStopped(tr.ns)
+
+	tr.setActiveMedia(nil)
 }
 
 // Load the current running game and set it as active.
@@ -260,7 +267,7 @@ func (tr *Tracker) loadGame() {
 
 	path := mister.ResolvePath(activeGame)
 	filename := filepath.Base(path)
-	name := utils.RemoveFileExt(filename)
+	name := mrextUtils.RemoveFileExt(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, err := mister.ReadMgl(path)
@@ -277,7 +284,7 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	launchers := utils2.PathToLaunchers(tr.cfg, tr.pl, path)
+	launchers := utils.PathToLaunchers(tr.cfg, tr.pl, path)
 	if len(launchers) == 0 {
 		log.Warn().Msgf("no launchers found for %s", path)
 		return
@@ -305,11 +312,12 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
-		notifications.MediaStarted(tr.ns, models.MediaStartedParams{
+		tr.setActiveMedia(&models.ActiveMedia{
 			SystemID:   system.ID,
 			SystemName: meta.Name,
-			MediaName:  name,
-			MediaPath:  path,
+			Name:       name,
+			Path:       path,
+			Started:    time.Now(),
 		})
 	}
 }
@@ -381,7 +389,7 @@ func (tr *Tracker) runPickerSelection(name string) {
 		log.Error().Msgf("main picker selected is empty")
 	} else {
 		path := strings.TrimSpace(string(contents))
-		path = config.SdFolder + "/" + path
+		path = mrextConfig.SdFolder + "/" + path
 		log.Info().Msgf("main picker selected path: %s", path)
 
 		pickerContents, err := os.ReadFile(path)
@@ -425,11 +433,11 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					return
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					if event.Name == config.CoreNameFile {
+					if event.Name == mrextConfig.CoreNameFile {
 						tr.LoadCore()
-					} else if event.Name == config.ActiveGameFile {
+					} else if event.Name == mrextConfig.ActiveGameFile {
 						tr.loadGame()
-					} else if strings.HasPrefix(event.Name, config.CoreConfigFolder) {
+					} else if strings.HasPrefix(event.Name, mrextConfig.CoreConfigFolder) {
 						err = loadRecent(event.Name)
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
@@ -448,54 +456,54 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		}
 	}()
 
-	if _, err := os.Stat(config.CoreNameFile); os.IsNotExist(err) {
-		err := os.WriteFile(config.CoreNameFile, []byte(""), 0644)
+	if _, err := os.Stat(mrextConfig.CoreNameFile); os.IsNotExist(err) {
+		err := os.WriteFile(mrextConfig.CoreNameFile, []byte(""), 0644)
 		if err != nil {
 			return nil, err
 		}
-		log.Info().Msgf("created core name file: %s", config.CoreNameFile)
+		log.Info().Msgf("created core name file: %s", mrextConfig.CoreNameFile)
 	}
 
-	err = watcher.Add(config.CoreNameFile)
+	err = watcher.Add(mrextConfig.CoreNameFile)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := os.Stat(config.CoreConfigFolder); os.IsNotExist(err) {
-		err := os.MkdirAll(config.CoreConfigFolder, 0755)
+	if _, err := os.Stat(mrextConfig.CoreConfigFolder); os.IsNotExist(err) {
+		err := os.MkdirAll(mrextConfig.CoreConfigFolder, 0755)
 		if err != nil {
 			return nil, err
 		}
-		log.Info().Msgf("created core config folder: %s", config.CoreConfigFolder)
+		log.Info().Msgf("created core config folder: %s", mrextConfig.CoreConfigFolder)
 	}
 
-	err = watcher.Add(config.CoreConfigFolder)
+	err = watcher.Add(mrextConfig.CoreConfigFolder)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := os.Stat(config.ActiveGameFile); os.IsNotExist(err) {
-		err := os.WriteFile(config.ActiveGameFile, []byte(""), 0644)
+	if _, err := os.Stat(mrextConfig.ActiveGameFile); os.IsNotExist(err) {
+		err := os.WriteFile(mrextConfig.ActiveGameFile, []byte(""), 0644)
 		if err != nil {
 			return nil, err
 		}
-		log.Info().Msgf("created active game file: %s", config.ActiveGameFile)
+		log.Info().Msgf("created active game file: %s", mrextConfig.ActiveGameFile)
 	}
 
-	err = watcher.Add(config.ActiveGameFile)
+	err = watcher.Add(mrextConfig.ActiveGameFile)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := os.Stat(config.CurrentPathFile); os.IsNotExist(err) {
-		err := os.WriteFile(config.CurrentPathFile, []byte(""), 0644)
+	if _, err := os.Stat(mrextConfig.CurrentPathFile); os.IsNotExist(err) {
+		err := os.WriteFile(mrextConfig.CurrentPathFile, []byte(""), 0644)
 		if err != nil {
 			return nil, err
 		}
-		log.Info().Msgf("created current path file: %s", config.CurrentPathFile)
+		log.Info().Msgf("created current path file: %s", mrextConfig.CurrentPathFile)
 	}
 
-	err = watcher.Add(config.CurrentPathFile)
+	err = watcher.Add(mrextConfig.CurrentPathFile)
 	if err != nil {
 		return nil, err
 	}
@@ -510,8 +518,14 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	return watcher, nil
 }
 
-func StartTracker(cfg config.UserConfig, ns chan<- models.Notification, cfg2 *config2.Instance, pl platforms.Platform) (*Tracker, func() error, error) {
-	tr, err := NewTracker(&cfg, ns, pl, cfg2)
+func StartTracker(
+	mrextCfg mrextConfig.UserConfig,
+	cfg *config.Instance,
+	pl platforms.Platform,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) (*Tracker, func() error, error) {
+	tr, err := NewTracker(&mrextCfg, pl, cfg, activeMedia, setActiveMedia)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err

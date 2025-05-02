@@ -11,6 +11,6 @@ func HandleVersion(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received version request")
 	return models.VersionResponse{
 		Version:  config.AppVersion,
-		Platform: env.Platform.Id(),
+		Platform: env.Platform.ID(),
 	}, nil
 }

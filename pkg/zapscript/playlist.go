@@ -394,7 +394,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        nil,
-	}, pl.KillLauncher()
+	}, pl.StopActiveLauncher()
 }
 
 func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -408,5 +408,5 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        pls,
-	}, pl.KillLauncher()
+	}, pl.StopActiveLauncher()
 }

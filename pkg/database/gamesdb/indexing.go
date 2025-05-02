@@ -190,7 +190,7 @@ func GetFiles(
 			return err
 		}
 
-		if utils.IsZip(path) && platform.ZipsAsDirs() {
+		if utils.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
 			zipFiles, err := utils.ListZip(path)
 			if err != nil {

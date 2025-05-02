@@ -36,7 +36,7 @@ func showNotice(
 	if loader {
 		argsName = "loader-" + argsId + ".json"
 	}
-	argsPath := filepath.Join(pl.TempDir(), argsName)
+	argsPath := filepath.Join(pl.Settings().TempDir, argsName)
 	completePath := argsPath + ".complete"
 
 	if MainHasFeature(MainFeatureNotice) {
@@ -151,7 +151,7 @@ func showPicker(
 	}
 
 	// fall back to launching script menu
-	argsPath := filepath.Join(pl.TempDir(), "picker.json")
+	argsPath := filepath.Join(pl.Settings().TempDir, "picker.json")
 	argsJson, err := json.Marshal(args)
 	if err != nil {
 		return err

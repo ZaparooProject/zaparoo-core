@@ -221,7 +221,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reload mappings request")
 
-	mapDir := filepath.Join(env.Platform.DataDir(), platforms.MappingsDir)
+	mapDir := filepath.Join(utils.DataDir(env.Platform), platforms.MappingsDir)
 	err := env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")
