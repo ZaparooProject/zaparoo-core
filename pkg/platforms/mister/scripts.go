@@ -29,25 +29,28 @@ func getTTY() (string, error) {
 	return strings.TrimSpace(string(tty)), nil
 }
 
-func scriptIsActive() (bool, error) {
+func scriptIsActive() bool {
 	cmd := exec.Command("bash", "-c", "ps ax | grep [/]tmp/script")
 	output, err := cmd.Output()
 	if err != nil {
-		return false, err
+		// grep returns an error code if there was no result
+		return false
 	}
-	return strings.TrimSpace(string(output)) != "", nil
+	return strings.TrimSpace(string(output)) != ""
 }
 
 func openConsole(kbd input.Keyboard, vt string) error {
-	// we use the F9 key as a means to disable main's usage of the framebuffer and allow scripts to run
-	// unfortunately when the menu "sleeps", any key press will be eaten by main and not trigger the console switch
-	// there's also no simple way to tell if mister has switched to the console
-	// so what we do is switch to tty3, which is unused by mister, then attempt to switch to console,
-	// which sets tty to 1 on success, then check in a loop if it actually did change to 1 and keep pressing F9
-	// until it's switched
+	// we use the F9 key as a means to disable main's usage of the framebuffer and
+	// allow scripts to run unfortunately when the menu "sleeps". any key press will
+	// be eaten by main and not trigger the console switch. there's also no simple way
+	// to tell if mister has switched to the console. so what we do is switch to tty3,
+	// which is unused by mister. then attempt to switch to console, which sets tty
+	// to 1 on success. then check in a loop if it actually did change to 1 and keep
+	// pressing F9 until it's switched
 
 	err := exec.Command("chvt", vt).Run()
 	if err != nil {
+		log.Debug().Err(err).Msg("open console: error running chvt")
 		return err
 	}
 
@@ -55,7 +58,7 @@ func openConsole(kbd input.Keyboard, vt string) error {
 	tty := ""
 	for {
 		if tries > 10 {
-			return fmt.Errorf("could not switch to tty1")
+			return fmt.Errorf("open console: could not switch to tty1")
 		}
 		kbd.Console()
 		time.Sleep(50 * time.Millisecond)
@@ -77,12 +80,9 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return err
 	}
 
-	active, err := scriptIsActive()
-	if err != nil {
-		log.Error().Msgf("error checking if script is active: %s", err)
-	} else if active {
-		log.Debug().Msg("script is already active, not running")
-		return errors.New("script is already active")
+	active := scriptIsActive()
+	if active {
+		return errors.New("a script is already running")
 	}
 
 	if pl.GetActiveLauncher() != "" && !hidden {
@@ -92,59 +92,12 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		if err != nil {
 			return err
 		}
+		// wait for menu core
 		time.Sleep(1 * time.Second)
 	}
 
-	if !hidden {
-		err := openConsole(pl.kbd, "3")
-		if err != nil {
-			hidden = true
-			log.Warn().Msg("error opening console, running script headless")
-		}
-	}
-
-	if !hidden {
-		// this is just to follow mister's convention, which reserves
-		// tty2 for scripts
-		err := exec.Command("chvt", "2").Run()
-		if err != nil {
-			return err
-		}
-
-		// this is how mister launches scripts itself
-		launcher := fmt.Sprintf(`#!/bin/bash
-export LC_ALL=en_US.UTF-8
-export HOME=/root
-export LESSKEY=/media/fat/linux/lesskey
-export ZAPAROO_RUN_SCRIPT=1
-cd $(dirname "%s")
-%s
-`, bin, bin+" "+args)
-
-		err = os.WriteFile("/tmp/script", []byte(launcher), 0755)
-		if err != nil {
-			return err
-		}
-
-		err = exec.Command(
-			"/sbin/agetty",
-			"-a",
-			"root",
-			"-l",
-			"/tmp/script",
-			"--nohostname",
-			"-L",
-			"tty2",
-			"linux",
-		).Run()
-		if err != nil {
-			return err
-		}
-
-		pl.kbd.ExitConsole()
-
-		return nil
-	} else {
+	if hidden {
+		// run the script directly
 		cmd := exec.Command(bin, args)
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8")
@@ -154,6 +107,81 @@ cd $(dirname "%s")
 		cmd.Dir = filepath.Dir(bin)
 		return cmd.Run()
 	}
+
+	// run it on-screen like a regular script
+	err := openConsole(pl.kbd, "3")
+	if err != nil {
+		log.Error().Err(err).Msg("error opening console for script")
+	}
+
+	scriptPath := "/tmp/script"
+	vt := "2"
+	runScript := "1"
+	// TODO: these shouldn't be hardcoded
+	log.Debug().Msgf("bin: %s", bin)
+	log.Debug().Msgf("args: %s", args)
+	if strings.HasSuffix(bin, "/zaparoo.sh") && strings.HasPrefix(args, "'-show-") {
+		// launching widgets, so we'll use a different tty and script name
+		// to avoid the active script check (widgets handle this)
+		log.Debug().Msg("widget launched, changing params")
+		scriptPath = "/tmp/widget_script"
+		vt = "4"
+		runScript = "2"
+	}
+
+	// this is just to follow mister's convention, which reserves
+	// tty2 for scripts
+	err = exec.Command("chvt", vt).Run()
+	if err != nil {
+		return err
+	}
+
+	// this is how mister launches scripts itself
+	launcher := fmt.Sprintf(`#!/bin/bash
+export LC_ALL=en_US.UTF-8
+export HOME=/root
+export LESSKEY=/media/fat/linux/lesskey
+export ZAPAROO_RUN_SCRIPT=%s
+cd $(dirname "%s")
+%s
+`, runScript, bin, bin+" "+args)
+
+	err = os.WriteFile(scriptPath, []byte(launcher), 0755)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(
+		"/sbin/agetty",
+		"-a",
+		"root",
+		"-l",
+		scriptPath,
+		"--nohostname",
+		"-L",
+		"tty"+vt,
+		"linux",
+	)
+
+	exit := func() {
+		if pl.GetActiveLauncher() == "" {
+			pl.kbd.ExitConsole()
+		} else {
+			return
+		}
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
+			exit()
+		}
+		return err
+	}
+
+	exit()
+	return nil
 }
 
 func echoFile(path string, s string) error {
