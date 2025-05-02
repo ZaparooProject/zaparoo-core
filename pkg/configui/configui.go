@@ -63,39 +63,22 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 */
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
-	debugLogging := "DISABLED"
-	if cfg.DebugLogging() {
-		debugLogging = "ENABLED"
-	}
 	mainMenu := tview.NewList().
-		AddItem("Debug Logging", "Change the status of debug logging currently "+debugLogging, '1', func() {
-			cfg.SetDebugLogging(!cfg.DebugLogging())
-			BuildMainMenu(cfg, pages, app, exitFunc)
-		}).
-		AddItem("Audio", "Set audio options like the feedback", '2', func() {
-			pages.SwitchToPage("audio")
-		}).
-		AddItem("Readers", "Set nfc readers options", '3', func() {
+		AddItem("Readers", "Set nfc readers options", '1', func() {
 			pages.SwitchToPage("readers")
 		}).
-		AddItem("Scan mode", "Set scanning options", '4', func() {
+		AddItem("Scan mode", "Set scanning options", '2', func() {
 			pages.SwitchToPage("scan")
 		}).
-		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
+		AddItem("Manage tags", "Read and write nfc tags", '3', func() {
 			pages.SwitchToPage("tags")
 		}).
-		// AddItem("Systems", "Not implemented yet", '6', func() {
-		// }).
-		// AddItem("Launchers", "Not implemented yet", '7', func() {
-		// }).
-		// AddItem("ZapScript", "Not implemented yet", '8', func() {
-		// }).
-		// AddItem("Service", "Not implemented yet", '9', func() {
-		// }).
-		// AddItem("Mappings", "Not implemented yet", '0', func() {
-		// }).
-		// AddItem("Groovy", "Not implemented yet", 'g', func() {
-		// }).
+		AddItem("Misc", "Set audio, debug and db options", '4', func() {
+			pages.SwitchToPage("misc")
+		}).
+		AddItem("Index media", "Rebuild the index for the media db", '5', func() {
+			pages.SwitchToPage("media")
+		}).
 		AddItem("Save and exit", "Press to save", 's', func() {
 			err := cfg.Save()
 			if err != nil {
@@ -229,23 +212,22 @@ type Audio struct {
 }
 */
 
-func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	audioFeedback := " "
-	if cfg.AudioFeedback() {
-		audioFeedback = "X"
-	}
-
-	audioMenu := tview.NewList().
-		AddItem("["+audioFeedback+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
-			cfg.SetAudioFeedback(!cfg.AudioFeedback())
-			BuildAudionMenu(cfg, pages, app)
+func BuildMiscMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+	audioFeedback := cfg.AudioFeedback()
+	debugLogging := cfg.DebugLogging()
+	audioMenu := tview.NewForm().
+		AddCheckbox("Debug Logging", debugLogging, func(checked bool) {
+			cfg.SetDebugLogging(checked)
 		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
+		AddCheckbox("Audio feedback", audioFeedback, func(checked bool) {
+			cfg.SetAudioFeedback(checked)
+		}).
+		AddButton("Go Back", func() {
 			pages.SwitchToPage("mainconfig")
 		})
-	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
-	audioMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("audio", pages, audioMenu)
+	audioMenu.SetFocus(0)
+	audioMenu.SetTitle(" Zaparoo config editor - Misc menu ")
+	pageDefaults("misc", pages, audioMenu)
 	return audioMenu
 }
 
@@ -292,6 +274,27 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
 	pageDefaults("readers", pages, readersMenu)
 	return readersMenu
+}
+
+func BuildMediaIndexMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
+	allSystems := []string{"All"}
+	for _, item := range systemdefs.AllSystems() {
+		allSystems = append(allSystems, item.Id)
+	}
+	mediaIndexMenu := tview.NewForm()
+	mediaIndexMenu.AddDropDown("Select a system", allSystems, 0, func(option string, optionIndex int) {
+
+	})
+	mediaIndexMenu.AddButton("Start indexing", func() {
+
+	})
+	mediaIndexMenu.AddButton("Go Back", func() {
+		pages.SwitchToPage("mainconfig")
+	})
+	mediaIndexMenu.SetFocus(0)
+	mediaIndexMenu.SetTitle(" Zaparoo config editor - Media index menu ")
+	pageDefaults("media", pages, mediaIndexMenu)
+	return mediaIndexMenu
 }
 
 /* type ReadersScan struct {
@@ -365,9 +368,10 @@ func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.
 	BuildTagsReadMenu(cfg, pages, app)
 	BuildTagsSearchMenu(cfg, pages, app)
 	BuildTagsWriteMenu(cfg, pages, app)
-	BuildAudionMenu(cfg, pages, app)
+	BuildMiscMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
+	BuildMediaIndexMenu(cfg, pages, app)
 
 	pages.SwitchToPage("mainconfig")
 	centeredPages := centerWidget(70, 20, pages)
