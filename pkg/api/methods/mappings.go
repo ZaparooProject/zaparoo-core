@@ -3,13 +3,15 @@ package methods
 import (
 	"encoding/json"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -23,7 +25,7 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 		Mappings: make([]models.MappingResponse, 0),
 	}
 
-	mappings, err := env.Database.GetAllMappings()
+	mappings, err := env.Database.UserDB.GetAllMappings()
 	if err != nil {
 		log.Error().Err(err).Msg("error getting mappings")
 		return nil, errors.New("error getting mappings")
@@ -54,11 +56,11 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 }
 
 func validateAddMappingParams(amr *models.AddMappingParams) error {
-	if !utils.Contains(database.AllowedMappingTypes, amr.Type) {
+	if !utils.Contains(userdb.AllowedMappingTypes, amr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if !utils.Contains(database.AllowedMatchTypes, amr.Match) {
+	if !utils.Contains(userdb.AllowedMatchTypes, amr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -66,7 +68,7 @@ func validateAddMappingParams(amr *models.AddMappingParams) error {
 		return errors.New("missing pattern")
 	}
 
-	if amr.Match == database.MatchTypeRegex {
+	if amr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(amr.Pattern)
 		if err != nil {
 			return err
@@ -104,7 +106,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 		Override: params.Override,
 	}
 
-	err = env.Database.AddMapping(m)
+	err = env.Database.UserDB.AddMapping(m)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +127,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	err = env.Database.DeleteMapping(strconv.Itoa(params.Id))
+	err = env.Database.UserDB.DeleteMapping(strconv.Itoa(params.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +140,11 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 		return errors.New("missing fields")
 	}
 
-	if umr.Type != nil && !utils.Contains(database.AllowedMappingTypes, *umr.Type) {
+	if umr.Type != nil && !utils.Contains(userdb.AllowedMappingTypes, *umr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if umr.Match != nil && !utils.Contains(database.AllowedMatchTypes, *umr.Match) {
+	if umr.Match != nil && !utils.Contains(userdb.AllowedMatchTypes, *umr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -150,7 +152,7 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 		return errors.New("missing pattern")
 	}
 
-	if umr.Match != nil && *umr.Match == database.MatchTypeRegex {
+	if umr.Match != nil && *umr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(*umr.Pattern)
 		if err != nil {
 			return err
@@ -179,7 +181,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	oldMapping, err := env.Database.GetMapping(strconv.Itoa(params.Id))
+	oldMapping, err := env.Database.UserDB.GetMapping(strconv.Itoa(params.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +212,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		newMapping.Override = *params.Override
 	}
 
-	err = env.Database.UpdateMapping(strconv.Itoa(params.Id), newMapping)
+	err = env.Database.UserDB.UpdateMapping(strconv.Itoa(params.Id), newMapping)
 	if err != nil {
 		return nil, err
 	}

@@ -6,8 +6,8 @@ var AppVersion = "DEVELOPMENT"
 
 const (
 	AppName           = "zaparoo"
-	GamesDbFile       = "games.db"
-	TapToDbFile       = "tapto.db"
+	MediaDbFile       = "media.db"
+	UserDbFile        = "user.db"
 	LogFile           = "core.log"
 	PidFile           = "core.pid"
 	CfgFile           = "config.toml"

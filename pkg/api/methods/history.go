@@ -2,6 +2,7 @@ package methods
 
 import (
 	"errors"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/rs/zerolog/log"
@@ -42,7 +43,7 @@ func HandleTokens(env requests.RequestEnv) (any, error) {
 func HandleHistory(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received history request")
 
-	entries, err := env.Database.GetHistory()
+	entries, err := env.Database.UserDB.GetHistory(0)
 	if err != nil {
 		log.Error().Err(err).Msgf("error getting history")
 		return nil, errors.New("error getting history")

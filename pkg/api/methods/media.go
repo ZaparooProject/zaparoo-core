@@ -4,15 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -29,15 +31,12 @@ type IndexingStatus struct {
 	TotalFiles  int
 }
 
-func (s *IndexingStatus) MediaDBExists(platform platforms.Platform) bool {
-	return gamesdb.Exists(platform)
-}
-
 func (s *IndexingStatus) GenerateMediaDB(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
 	systems []systemdefs.System,
+	db *database.Database,
 ) {
 	// TODO: this function should block until index is complete
 	// confirm that concurrent requests is working
@@ -60,7 +59,7 @@ func (s *IndexingStatus) GenerateMediaDB(
 	go func() {
 		defer s.mu.Unlock()
 
-		total, err := gamesdb.NewNamesIndex(pl, cfg, systems, func(status gamesdb.IndexStatus) {
+		total, err := mediascanner.NewNamesIndex(pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			s.TotalSteps = status.Total
 			s.CurrentStep = status.Step
 			s.TotalFiles = status.Files
@@ -148,6 +147,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		env.Config,
 		env.State.Notifications,
 		systems,
+		env.Database,
 	)
 	return nil, nil
 }
@@ -175,12 +175,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	}
 
 	var results = make([]models.SearchResultMedia, 0)
-	var search []gamesdb.SearchResult
+	var search []database.SearchResult
 	system := params.Systems
 	query := params.Query
 
 	if system == nil || len(*system) == 0 {
-		search, err = gamesdb.SearchNamesWords(env.Platform, systemdefs.AllSystems(), query)
+		search, err = env.Database.MediaDB.SearchMediaPathWords(systemdefs.AllSystems(), query)
 		if err != nil {
 			return nil, errors.New("error searching all media: " + err.Error())
 		}
@@ -195,14 +195,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 			systems = append(systems, *system)
 		}
 
-		search, err = gamesdb.SearchNamesWords(env.Platform, systems, query)
+		search, err = env.Database.MediaDB.SearchMediaPathWords(systems, query)
 		if err != nil {
 			return nil, errors.New("error searching media: " + err.Error())
 		}
 	}
 
 	for _, result := range search {
-		system, err := systemdefs.GetSystem(result.SystemId)
+		system, err := systemdefs.GetSystem(result.SystemID)
 		if err != nil {
 			continue
 		}
@@ -250,7 +250,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		})
 	}
 
-	resp.Database.Exists = IndexingStatusInstance.MediaDBExists(env.Platform)
+	resp.Database.Exists = env.Database.MediaDB.Exists()
 	resp.Database.Indexing = IndexingStatusInstance.Indexing
 
 	if resp.Database.Indexing {
