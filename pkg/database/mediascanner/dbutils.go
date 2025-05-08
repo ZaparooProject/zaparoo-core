@@ -8,93 +8,116 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/rs/zerolog/log"
 )
 
 // We can't batch effectively without a sense of relationships
 // Instead of indexing string columns use in-mem map to track records to
 // insert IDs. Batching should be able to run with assumed IDs
+// database.ScanState and DB transactions allow accumulation
 
-func AddMediaPath(ss *database.ScanState, systemID string, path string) (int, int) {
+func FlushScanStateMaps(ss *database.ScanState) {
+	ss.SystemIDs = make(map[string]int)
+	ss.TitleIDs = make(map[string]int)
+	ss.MediaIDs = make(map[string]int)
+	//ss.TagTypeIDs = make(map[string]int)
+	//ss.TagIDs = make(map[string]int)
+}
+
+func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string, path string) (int, int) {
 	pf := GetPathFragments(path)
 
-	systemIndex := len(ss.Systems)
+	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
+		ss.SystemsIndex++
+		systemIndex = ss.SystemsIndex
 		ss.SystemIDs[systemID] = systemIndex
-		ss.Systems = append(ss.Systems, database.System{
+		_, err := db.InsertSystem(database.System{
 			DBID:     int64(systemIndex),
 			SystemID: systemID,
 			Name:     systemID,
 		})
+		if err != nil {
+			log.Error().Err(err).Msgf("error inserting system: %s", systemID)
+		}
 	} else {
 		systemIndex = foundSystemIndex
 	}
 
-	titleIndex := len(ss.Titles)
+	titleIndex := 0
 	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
+		ss.TitlesIndex++
+		titleIndex = ss.TitlesIndex
 		ss.TitleIDs[titleKey] = titleIndex
-		ss.Titles = append(ss.Titles, database.MediaTitle{
+		_, err := db.InsertMediaTitle(database.MediaTitle{
 			DBID:       int64(titleIndex),
 			Slug:       pf.Slug,
 			Name:       pf.Title,
 			SystemDBID: int64(systemIndex),
 		})
+		if err != nil {
+			log.Error().Err(err).Msgf("error inserting media title: %s", pf.Title)
+		}
 	} else {
 		titleIndex = foundTitleIndex
 	}
 
-	mediaIndex := len(ss.Media)
+	mediaIndex := 0
 	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
+		ss.MediaIndex++
+		mediaIndex = ss.MediaIndex
 		ss.MediaIDs[mediaKey] = mediaIndex
-		ss.Media = append(ss.Media, database.Media{
+		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
 		})
+		if err != nil {
+			log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
+		}
 	} else {
 		mediaIndex = foundMediaIndex
 	}
 
 	if pf.Ext != "" {
 		if _, ok := ss.TagIDs[pf.Ext]; !ok {
-			tagIndex := len(ss.Tags)
+			ss.TagsIndex++
+			tagIndex := ss.TagsIndex
 			ss.TagIDs[pf.Ext] = tagIndex
-			ss.Tags = append(ss.Tags, database.Tag{
+			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      pf.Ext,
 				TypeDBID: int64(2),
 			})
+			if err != nil {
+				log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
+			}
 		}
 	}
 
 	for _, tagStr := range pf.Tags {
-		tagIndex := len(ss.Tags)
-		if foundTagIndex, ok := ss.TagIDs[tagStr]; !ok {
-			tagTypeIndex := getTagTypeIndexFromUnknownTag(ss, tagStr)
-			if tagTypeIndex <= 1 {
-				// For now don't add unknown tags to DB until we figure out a use case.
-				continue
-			}
-			ss.TagIDs[tagStr] = tagIndex
-			ss.Tags = append(ss.Tags, database.Tag{
-				DBID:     int64(tagIndex),
-				Tag:      tagStr,
-				TypeDBID: int64(tagTypeIndex),
-			})
-		} else {
+		tagIndex := 0
+
+		if foundTagIndex, ok := ss.TagIDs[tagStr]; ok {
 			tagIndex = foundTagIndex
 		}
 
 		if tagIndex == 0 {
+			// Don't insert unknown tags for now
+			//log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
 			continue
 		}
 
-		ss.MediaTags = append(ss.MediaTags, database.MediaTag{
-			DBID:      int64(len(ss.MediaTags)),
+		_, err := db.InsertMediaTag(database.MediaTag{
+			DBID:      int64(ss.MediaTagsIndex),
 			TagDBID:   int64(tagIndex),
 			MediaDBID: int64(mediaIndex),
 		})
+		if err != nil {
+			log.Error().Err(err).Msgf("error inserting media tag relationship: %s", tagStr)
+		}
 	}
 	return titleIndex, mediaIndex
 }
@@ -128,9 +151,8 @@ func getTitleFromFilename(filename string) string {
 	return strings.TrimSpace(title)
 }
 
-func SeedKnownTags(ss *database.ScanState) {
+func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	typeMatches := map[string][]string{
-		"Extension": {".ext"},
 		"Version": {
 			"rev", "v",
 		},
@@ -193,67 +215,60 @@ func SeedKnownTags(ss *database.ScanState) {
 		},
 	}
 
-	tagTypeIndex := 1
-	ss.TagTypeIDs["Unknown"] = tagTypeIndex
-	ss.TagTypes = append(ss.TagTypes, database.TagType{
-		DBID: int64(tagTypeIndex),
+	ss.TagTypesIndex++
+	db.InsertTagType(database.TagType{
+		DBID: int64(ss.TagTypesIndex),
 		Type: "Unknown",
 	})
-	tagIndex := 1
-	ss.TagIDs["unknown"] = tagIndex
-	ss.Tags = append(ss.Tags, database.Tag{
-		DBID:     int64(tagIndex),
+
+	ss.TagsIndex++
+	ss.TagIDs["unknown"] = ss.TagsIndex
+	db.InsertTag(database.Tag{
+		DBID:     int64(ss.TagsIndex),
 		Tag:      "unknown",
-		TypeDBID: int64(tagTypeIndex),
+		TypeDBID: int64(ss.TagTypesIndex),
+	})
+
+	ss.TagTypesIndex++
+	db.InsertTagType(database.TagType{
+		DBID: int64(ss.TagTypesIndex),
+		Type: "Extension",
+	})
+
+	ss.TagsIndex++
+	ss.TagIDs[".ext"] = ss.TagsIndex
+	db.InsertTag(database.Tag{
+		DBID:     int64(ss.TagsIndex),
+		Tag:      ".ext",
+		TypeDBID: int64(ss.TagTypesIndex),
 	})
 
 	for typeStr, tags := range typeMatches {
-		tagTypeIndex++
-		ss.TagTypeIDs[typeStr] = tagTypeIndex
-		ss.TagTypes = append(ss.TagTypes, database.TagType{
-			DBID: int64(tagTypeIndex),
+		ss.TagTypesIndex++
+		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
+		db.InsertTagType(database.TagType{
+			DBID: int64(ss.TagTypesIndex),
 			Type: typeStr,
 		})
 
 		for _, tag := range tags {
-			tagIndex++
-			ss.TagIDs[tag] = tagIndex
-			ss.Tags = append(ss.Tags, database.Tag{
-				DBID:     int64(tagIndex),
+			ss.TagsIndex++
+			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
+			db.InsertTag(database.Tag{
+				DBID:     int64(ss.TagsIndex),
 				Tag:      strings.ToLower(tag),
-				TypeDBID: int64(tagTypeIndex),
+				TypeDBID: int64(ss.TagTypesIndex),
 			})
 		}
 	}
-}
-
-func getTagTypeIndexFromUnknownTag(ss *database.ScanState, tagStr string) int {
-	// Known mappings are preseeded but a few special cases exist
-	// mostly around trailing numbers which are accounted for in seed
-	tagTypeIndex := 1 // Unknown
-
-	// drop spaced conditions
-	r := regexp.MustCompile(`^[a-z]+`)
-	tagAlpha := r.FindString(tagStr)
-	if tagAlpha == "" {
-		return tagTypeIndex
-	}
-
-	if foundTagIndex, ok := ss.TagIDs[tagAlpha]; !ok {
-		return tagTypeIndex
-	} else {
-		tag := ss.Tags[foundTagIndex]
-		tagTypeIndex = int(tag.TypeDBID)
-	}
-
-	return tagTypeIndex
+	ss.TagTypeIDs = make(map[string]int)
 }
 
 func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
 	f.Path = filepath.Clean(path)
 	fileBase := filepath.Base(f.Path)
-	f.Ext = filepath.Ext(f.Path)
+	f.Ext = strings.ToLower(filepath.Ext(f.Path))
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	f.Title = getTitleFromFilename(f.FileName)
 	f.Slug = utils.SlugifyString(f.Title)

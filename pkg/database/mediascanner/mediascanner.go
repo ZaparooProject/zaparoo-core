@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -298,25 +299,29 @@ func NewNamesIndex(
 	update func(IndexStatus),
 ) (int, error) {
 	db := fdb.MediaDB
+
+	db.Allocate()
+	db.BeginTransaction()
+
 	status := IndexStatus{
 		Total: len(systems) + 2, // estimate steps
 		Step:  1,
 	}
 
 	scanState := database.ScanState{
-		Systems:    make([]database.System, 1),
-		SystemIDs:  make(map[string]int),
-		Titles:     make([]database.MediaTitle, 1),
-		TitleIDs:   make(map[string]int),
-		Media:      make([]database.Media, 1),
-		MediaIDs:   make(map[string]int),
-		TagTypes:   make([]database.TagType, 1),
-		TagTypeIDs: make(map[string]int),
-		Tags:       make([]database.Tag, 1),
-		TagIDs:     make(map[string]int),
-		MediaTags:  make([]database.MediaTag, 1),
+		SystemsIndex:   0,
+		SystemIDs:      make(map[string]int),
+		TitlesIndex:    0,
+		TitleIDs:       make(map[string]int),
+		MediaIndex:     0,
+		MediaIDs:       make(map[string]int),
+		TagTypesIndex:  0,
+		TagTypeIDs:     make(map[string]int),
+		TagsIndex:      0,
+		TagIDs:         make(map[string]int),
+		MediaTagsIndex: 0,
 	}
-	SeedKnownTags(&scanState)
+	SeedKnownTags(db, &scanState)
 
 	filteredIds := make([]string, 0)
 	for _, s := range systems {
@@ -382,8 +387,10 @@ func NewNamesIndex(
 		scanned[systemId] = true
 
 		for _, p := range files {
-			AddMediaPath(&scanState, systemId, p.Path)
+			AddMediaPath(db, &scanState, systemId, p.Path)
 		}
+
+		FlushScanStateMaps(&scanState)
 	}
 
 	// run each custom scanner at least once, even if there are no paths
@@ -405,9 +412,10 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				for _, p := range results {
-					AddMediaPath(&scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemId, p.Path)
 				}
 			}
+			FlushScanStateMaps(&scanState)
 		}
 	}
 
@@ -436,9 +444,10 @@ func NewNamesIndex(
 				systemId := s.ID
 
 				for _, p := range results {
-					AddMediaPath(&scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemId, p.Path)
 				}
 			}
+			FlushScanStateMaps(&scanState)
 		}
 	}
 
@@ -446,10 +455,15 @@ func NewNamesIndex(
 	status.SystemId = ""
 	update(status)
 
-	err := db.ReindexFromScanState(&scanState)
+	scanState.TagIDs = make(map[string]int)
+	db.ReindexTables()
+	err := db.CommitTransaction()
 	if err != nil {
 		log.Error().Err(err).Msg("MediaDB sqlite bulk insert failed")
 	}
+
+	// MiSTer needs the love here
+	runtime.GC()
 
 	indexedSystems := make([]string, 0)
 	log.Debug().Msgf("scanned systems: %v", scanned)

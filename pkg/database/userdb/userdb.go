@@ -27,7 +27,7 @@ func OpenUserDB(pl platforms.Platform) (*UserDB, error) {
 
 func (db *UserDB) Open() error {
 	exists := true
-	dbPath := filepath.Join(db.pl.DataDir(), config.UserDbFile)
+	dbPath := db.GetDBPath()
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
@@ -45,6 +45,10 @@ func (db *UserDB) Open() error {
 		return db.Allocate()
 	}
 	return nil
+}
+
+func (db *UserDB) GetDBPath() string {
+	return filepath.Join(db.pl.DataDir(), config.UserDbFile)
 }
 
 func (db *UserDB) UnsafeGetSqlDb() *sql.DB {

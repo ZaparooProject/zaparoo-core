@@ -14,7 +14,7 @@ func sqlAllocate(db *sql.DB) error {
 	// ROWID is an internal subject to change on vacuum
 	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 	// persistent between vacuums
-	sqlStmt := `	
+	sqlStmt := `
 	drop table if exists DBInfo;
 	create table DBInfo (
 		DBID INTEGER PRIMARY KEY,

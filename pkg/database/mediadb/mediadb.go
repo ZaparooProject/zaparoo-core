@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -31,7 +30,7 @@ func OpenMediaDB(pl platforms.Platform) (*MediaDB, error) {
 
 func (db *MediaDB) Open() error {
 	exists := true
-	dbPath := filepath.Join(db.pl.DataDir(), config.MediaDbFile)
+	dbPath := db.GetDBPath()
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
@@ -49,6 +48,10 @@ func (db *MediaDB) Open() error {
 		return db.Allocate()
 	}
 	return nil
+}
+
+func (db *MediaDB) GetDBPath() string {
+	return filepath.Join(db.pl.DataDir(), config.MediaDbFile)
 }
 
 func (db *MediaDB) Exists() bool {
@@ -87,69 +90,16 @@ func (db *MediaDB) Close() error {
 	return db.sql.Close()
 }
 
-// Update the names index with the given files.
-func (db *MediaDB) ReindexFromScanState(ss *database.ScanState) error {
-	if db.sql == nil {
-		return ErrorNullSql
-	}
+func (db *MediaDB) BeginTransaction() error {
+	return sqlBeginTransaction(db.sql)
+}
 
-	// clear DB
-	db.Allocate()
-	sqlBeginTransaction(db.sql)
+func (db *MediaDB) CommitTransaction() error {
+	return sqlCommitTransaction(db.sql)
+}
 
-	// Clear unneeded state maps for GC
-	ss.SystemIDs = make(map[string]int)
-	ss.TitleIDs = make(map[string]int)
-	ss.MediaIDs = make(map[string]int)
-	ss.TagTypeIDs = make(map[string]int)
-	ss.TagIDs = make(map[string]int)
-
-	var err error
-	err = sqlBulkInsertSystems(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.Systems = make([]database.System, 0)
-
-	err = sqlBulkInsertTitles(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.Titles = make([]database.MediaTitle, 0)
-
-	err = sqlBulkInsertMedia(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.Media = make([]database.Media, 0)
-
-	err = sqlBulkInsertTagTypes(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.TagTypes = make([]database.TagType, 0)
-
-	err = sqlBulkInsertTags(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.Tags = make([]database.Tag, 0)
-
-	err = sqlBulkInsertMediaTags(db.sql, ss)
-	if err != nil {
-		return err
-	}
-	ss.MediaTags = make([]database.MediaTag, 0)
-
-	// Apply indexes
-	sqlIndexTables(db.sql)
-
-	sqlCommitTransaction(db.sql)
-
-	// MiSTer especially needs some help here
-	runtime.GC()
-
-	return nil
+func (db *MediaDB) ReindexTables() error {
+	return sqlIndexTables(db.sql)
 }
 
 // Return indexed names matching exact query (case insensitive).
@@ -227,4 +177,100 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 	}
 
 	return sqlRandomGame(db.sql, system)
+}
+
+func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
+	return sqlFindSystem(db.sql, row)
+}
+
+func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
+	return sqlInsertSystem(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, error) {
+	system, err := db.FindSystem(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertSystem(row)
+	}
+	return system, err
+}
+
+func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	return sqlFindMediaTitle(db.sql, row)
+}
+
+func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	return sqlInsertMediaTitle(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	system, err := db.FindMediaTitle(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertMediaTitle(row)
+	}
+	return system, err
+}
+
+func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
+	return sqlFindMedia(db.sql, row)
+}
+
+func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
+	return sqlInsertMedia(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
+	system, err := db.FindMedia(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertMedia(row)
+	}
+	return system, err
+}
+
+func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
+	return sqlFindTagType(db.sql, row)
+}
+
+func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
+	return sqlInsertTagType(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, error) {
+	system, err := db.FindTagType(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertTagType(row)
+	}
+	return system, err
+}
+
+func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
+	return sqlFindTag(db.sql, row)
+}
+
+func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
+	return sqlInsertTag(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
+	system, err := db.FindTag(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertTag(row)
+	}
+	return system, err
+}
+
+func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	return sqlFindMediaTag(db.sql, row)
+}
+
+func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	return sqlInsertMediaTag(db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	system, err := db.FindMediaTag(row)
+	if err == sql.ErrNoRows {
+		system, err = db.InsertMediaTag(row)
+	}
+	return system, err
 }

@@ -18,6 +18,9 @@ func sqlAllocate(db *sql.DB) error {
 	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 	// persistent between vacuums
 	sqlStmt := `
+	PRAGMA journal_mode = OFF;
+	PRAGMA synchronous = OFF;
+
 	drop table if exists DBInfo;
 	create table DBInfo (
 		DBID INTEGER PRIMARY KEY,
@@ -148,167 +151,358 @@ func sqlCommitTransaction(db *sql.DB) error {
 	return err
 }
 
-func sqlBulkInsertSystems(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.Systems
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			Systems
-			(DBID, SystemId, Name)
-			values (?, ?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.SystemID,
-			row.Name,
-		)
-		if err != nil {
-			return err
-		}
+func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) {
+	var row database.System
+	stmt, err := db.Prepare(`
+		select
+		DBID, SystemID, Name
+		from Systems
+		where DBID = ?
+		or SystemID = ?
+		limit 1;
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
 	}
-	return nil
+	err = stmt.QueryRow(
+		system.DBID,
+		system.SystemID,
+	).Scan(
+		&row.DBID,
+		&row.SystemID,
+		&row.Name,
+	)
+	return row, err
 }
 
-func sqlBulkInsertTitles(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.Titles
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			MediaTitles
-			(DBID, SystemDBID, Slug, Name)
-			values (?, ?, ?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.SystemDBID,
-			row.Slug,
-			row.Name,
-		)
-		if err != nil {
-			return err
-		}
+func sqlInsertSystem(db *sql.DB, row database.System) (database.System, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
 	}
-	return nil
+	stmt, err := db.Prepare(`
+		insert into
+		Systems
+		(DBID, SystemID, Name)
+		values (?, ?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.SystemID,
+		row.Name,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
 }
 
-func sqlBulkInsertMedia(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.Media
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			Media
-			(DBID, MediaTitleDBID, Path)
-			values (?, ?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.MediaTitleDBID,
-			row.Path,
-		)
-		if err != nil {
-			return err
-		}
+func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
+	var row database.MediaTitle
+	stmt, err := db.Prepare(`
+		select
+		DBID, SystemDBID, Slug, Name
+		from MediaTitles
+		where DBID = ?
+		or Slug = ?
+		LIMIT 1;
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
 	}
-	return nil
+	err = stmt.QueryRow(
+		title.DBID,
+		title.Slug,
+	).Scan(
+		&row.DBID,
+		&row.SystemDBID,
+		&row.Slug,
+		&row.Name,
+	)
+	return row, err
 }
 
-func sqlBulkInsertTagTypes(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.TagTypes
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			TagTypes
-			(DBID, Type)
-			values (?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.Type,
-		)
-		if err != nil {
-			return err
-		}
+func sqlInsertMediaTitle(db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
 	}
-	return nil
+	stmt, err := db.Prepare(`
+		insert into
+		MediaTitles
+		(DBID, SystemDBID, Slug, Name)
+		values (?, ?, ?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.SystemDBID,
+		row.Slug,
+		row.Name,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
 }
 
-func sqlBulkInsertTags(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.Tags
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			Tags
-			(DBID, TypeDBID, Tag)
-			values (?, ?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.TypeDBID,
-			row.Tag,
+func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
+	var row database.Media
+	stmt, err := db.Prepare(`
+		select
+		DBID, MediaTitleDBID, Path
+		from Media
+		where DBID = ?
+		or (
+			MediaTitleDBID = ?
+			and Path = ?
 		)
-		if err != nil {
-			return err
-		}
+		LIMIT 1;
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
 	}
-	return nil
+	err = stmt.QueryRow(
+		media.DBID,
+		media.MediaTitleDBID,
+		media.Path,
+	).Scan(
+		&row.DBID,
+		&row.MediaTitleDBID,
+		&row.Path,
+	)
+	return row, err
 }
 
-func sqlBulkInsertMediaTags(db *sql.DB, ss *database.ScanState) error {
-	rows := ss.MediaTags
-	for _, row := range rows {
-		if row.DBID == 0 {
-			continue
-		}
-		stmt, err := db.Prepare(`
-			insert into
-			MediaTags
-			(DBID, MediaDBID, TagDBID)
-			values (?, ?, ?)
-		`)
-		if err != nil {
-			return err
-		}
-		_, err = stmt.Exec(
-			row.DBID,
-			row.MediaDBID,
-			row.TagDBID,
-		)
-		if err != nil {
-			return err
-		}
+func sqlInsertMedia(db *sql.DB, row database.Media) (database.Media, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
 	}
-	return nil
+	stmt, err := db.Prepare(`
+		insert into
+		Media
+		(DBID, MediaTitleDBID, Path)
+		values (?, ?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.MediaTitleDBID,
+		row.Path,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
 }
+
+func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, error) {
+	var row database.TagType
+	stmt, err := db.Prepare(`
+		select
+		DBID, Type
+		from TagTypes
+		where DBID = ?
+		or Type = ?
+		LIMIT 1;
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	err = stmt.QueryRow(
+		tagType.DBID,
+		tagType.Type,
+	).Scan(
+		&row.DBID,
+		&row.Type,
+	)
+	return row, err
+}
+
+func sqlInsertTagType(db *sql.DB, row database.TagType) (database.TagType, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
+	}
+	stmt, err := db.Prepare(`
+		insert into
+		TagTypes
+		(DBID, Type)
+		values (?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.Type,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
+}
+
+func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
+	var row database.Tag
+	stmt, err := db.Prepare(`
+		select
+		DBID, TypeDBID, Tag
+		from Tags
+		where DBID = ?
+		or Tag = ?
+		LIMIT 1;
+	`)
+	// TODO: Add TagType dependency when unknown tags supported
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	err = stmt.QueryRow(
+		tagType.DBID,
+		tagType.Tag,
+	).Scan(
+		&row.DBID,
+		&row.TypeDBID,
+		&row.Tag,
+	)
+	return row, err
+}
+
+func sqlInsertTag(db *sql.DB, row database.Tag) (database.Tag, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
+	}
+	stmt, err := db.Prepare(`
+		insert into
+		Tags
+		(DBID, TypeDBID, Tag)
+		values (?, ?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.TypeDBID,
+		row.Tag,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
+}
+
+func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
+	var row database.MediaTag
+	stmt, err := db.Prepare(`
+		select
+		DBID, MediaDBID, TagDBID
+		from MediaTags
+		where DBID = ?
+		or (
+			MediaDBID = ?
+			and TagDBID = ?
+		)
+		LIMIT 1;
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	err = stmt.QueryRow(
+		mediaTag.DBID,
+		mediaTag.MediaDBID,
+		mediaTag.TagDBID,
+	).Scan(
+		&row.DBID,
+		&row.MediaDBID,
+		&row.TagDBID,
+	)
+	return row, err
+}
+
+func sqlInsertMediaTag(db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
+	var DBID any = nil
+	if row.DBID != 0 {
+		DBID = row.DBID
+	}
+	stmt, err := db.Prepare(`
+		insert into
+		MediaTags
+		(DBID, MediaDBID, TagDBID)
+		values (?, ?, ?)
+	`)
+	defer stmt.Close()
+	if err != nil {
+		return row, err
+	}
+	res, err := stmt.Exec(
+		DBID,
+		row.MediaDBID,
+		row.TagDBID,
+	)
+	if err != nil {
+		return row, err
+	}
+	lastId, err := res.LastInsertId()
+	row.DBID = lastId
+	return row, err
+}
+
+// Not in use
+/*
+func sqlCleanInactiveMedia(db *sql.DB) error {
+	_, err := db.Exec(`
+		delete from MediaTitles
+		where DBID in (
+			select MediaTitleDBID
+			from Media
+			where IsActive = 0
+			group by MediaTitleDBID
+		);
+
+		delete from MediaTags
+		where MediaDBID in (
+			select DBID
+			from Media
+			where IsActive = 0
+		);
+
+		delete from Media
+		where IsActive = 0;
+	`)
+	return err
+}
+*/
 
 // return ?, ?,... based on count
 func prepareVariadic(p string, s string, c int) string {
