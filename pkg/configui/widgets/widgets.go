@@ -3,9 +3,15 @@ package widgets
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -18,7 +24,98 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const DefaultTimeout = 30 // seconds
+const (
+	DefaultTimeout = 30 // seconds
+	PIDFilename    = "widget.pid"
+)
+
+func runningFromZapScript() bool {
+	return os.Getenv("ZAPAROO_RUN_SCRIPT") == "2"
+}
+
+func isProcessRunning(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS != "windows" {
+		err = process.Signal(syscall.Signal(0))
+	}
+	return err == nil
+}
+
+func pidPath(pl platforms.Platform) string {
+	return filepath.Join(pl.TempDir(), PIDFilename)
+}
+
+func createPIDFile(pl platforms.Platform) error {
+	path := pidPath(pl)
+	if _, err := os.Stat(path); err == nil {
+		return errors.New("PID file already exists")
+	}
+	pid := os.Getpid()
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+func removePIDFile(pl platforms.Platform) error {
+	path := pidPath(pl)
+	_, err := os.Stat(path)
+	if err == nil {
+		return os.Remove(path)
+	} else if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// killWidgetIfRunning checks if a widget is running via the PID file and
+// tries to kill it with an interrupt. Returns true if it was killed.
+func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
+	path := pidPath(pl)
+	if _, err := os.Stat(path); err != nil {
+		return false, nil
+	}
+
+	pid := 0
+	if pidBytes, err := os.ReadFile(path); err == nil {
+		pid, err = strconv.Atoi(string(pidBytes))
+		if err != nil {
+			return false, err
+		}
+
+		if !isProcessRunning(pid) {
+			// clean up stale file
+			err := os.Remove(path)
+			if err != nil {
+				return false, err
+			} else {
+				return false, nil
+			}
+		}
+	} else {
+		return false, err
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false, err
+	}
+
+	err = proc.Signal(syscall.SIGTERM)
+	if err != nil {
+		return false, err
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(path); err == nil {
+		err := os.Remove(path)
+		if err != nil {
+			return true, err
+		}
+	}
+
+	return true, nil
+}
 
 // handleTimeout adds a background timer which quits the app once ended. It's
 // used to make sure there aren't hanging processes running in the background
@@ -35,9 +132,6 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 	}
 
 	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
-		app.QueueUpdateDraw(func() {
-			app.Stop()
-		})
 		os.Exit(0)
 	})
 
@@ -45,8 +139,6 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 }
 
 func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {
-	log.Debug().Str("args", argsPath).Msg("showing notice")
-
 	var noticeArgs widgetModels.NoticeArgs
 
 	args, err := os.ReadFile(argsPath)
@@ -97,14 +189,14 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 			for range ticker.C {
 				if _, err := os.Stat(noticeArgs.Complete); err == nil {
 					log.Debug().Msg("notice complete file exists, stopping")
-					app.QueueUpdateDraw(func() {
-						app.Stop()
-					})
 					err := os.Remove(noticeArgs.Complete)
 					if err != nil {
 						log.Error().Err(err).Msg("error removing complete file")
 					}
-					break
+					app.QueueUpdateDraw(func() {
+						app.Stop()
+					})
+					os.Exit(0)
 				}
 			}
 		}()
@@ -125,9 +217,51 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 // NoticeUI is a simple TUI screen that displays a message on screen. It can
 // also optionally include a loading indicator spinner next to the message.
 func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
-	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	log.Info().Str("args", argsPath).Msg("showing notice")
+
+	pidFileCreated := false
+	if runningFromZapScript() {
+		killed, err := killWidgetIfRunning(pl)
+		if err != nil {
+			return fmt.Errorf("notice widget: %w", err)
+		}
+		if killed {
+			log.Info().Msg("killed open widget")
+		}
+		err = createPIDFile(pl)
+		if err != nil {
+			return fmt.Errorf("notice widget: %w", err)
+		}
+		pidFileCreated = true
+	}
+
+	if pidFileCreated {
+		defer func() {
+			log.Info().Msg("cleaning up PID file on exit")
+			err := removePIDFile(pl)
+			if err != nil {
+				log.Error().Err(err).Msg("error removing PID file")
+			}
+		}()
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			log.Info().Str("signal", sig.String()).Msg("received signal, cleaning up PID file")
+			err := removePIDFile(pl)
+			if err != nil {
+				log.Error().Err(err).Msg("error removing PID file")
+			}
+			os.Exit(2)
+		}()
+	}
+
+	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
+	log.Debug().Msg("exiting notice widget")
+	return err
 }
 
 type pickerAction struct {
@@ -136,8 +270,6 @@ type pickerAction struct {
 }
 
 func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
-	log.Debug().Str("args", argsPath).Msg("showing picker")
-
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err
@@ -173,14 +305,24 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 
 	run := func(action zapScriptModels.ZapScript) {
 		log.Info().Msgf("running picker selection: %v", action)
-		ps, err := json.Marshal(action)
+
+		zsrp := models.RunScriptParams{
+			ZapScript: action.ZapScript,
+			Name:      action.Name,
+			Cmds:      action.Cmds,
+			Unsafe:    pickerArgs.Unsafe,
+		}
+
+		ps, err := json.Marshal(zsrp)
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
+
 		_, err = client.LocalClient(cfg, models.MethodRunScript, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
+
 		app.Stop()
 	}
 
@@ -229,6 +371,12 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		})
 	}
 
+	if pickerArgs.Selected < 0 || pickerArgs.Selected >= len(actions) {
+		pickerArgs.Selected = 0
+	} else {
+		list.SetCurrentItem(pickerArgs.Selected)
+	}
+
 	list.AddItem("Cancel", "", 0, func() {
 		app.Stop()
 	})
@@ -250,7 +398,49 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 
 // PickerUI displays a list picker of Zap Link Cmds to run via the API.
 func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) error {
-	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	log.Info().Str("args", argsPath).Msg("showing picker")
+
+	pidFileCreated := false
+	if runningFromZapScript() {
+		killed, err := killWidgetIfRunning(pl)
+		if err != nil {
+			return fmt.Errorf("picker widget: %w", err)
+		}
+		if killed {
+			log.Info().Msg("killed open widget")
+		}
+		err = createPIDFile(pl)
+		if err != nil {
+			return fmt.Errorf("picker widget: %w", err)
+		}
+		pidFileCreated = true
+	}
+
+	if pidFileCreated {
+		defer func() {
+			log.Info().Msg("cleaning up PID file on exit")
+			err := removePIDFile(pl)
+			if err != nil {
+				log.Error().Err(err).Msg("error removing PID file")
+			}
+		}()
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			log.Info().Str("signal", sig.String()).Msg("received signal, cleaning up PID file")
+			err := removePIDFile(pl)
+			if err != nil {
+				log.Error().Err(err).Msg("error removing PID file")
+			}
+			os.Exit(2)
+		}()
+	}
+
+	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
+	log.Debug().Msg("exiting picker widget")
+	return err
 }

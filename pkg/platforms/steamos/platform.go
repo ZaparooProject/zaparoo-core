@@ -62,7 +62,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	return os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
+	return nil
 }
 
 func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
@@ -90,14 +90,23 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) LogDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.DataHome, config.AppName)
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return filepath.Join(xdg.ConfigHome, config.AppName)
 }
 
@@ -107,10 +116,6 @@ func (p *Platform) TempDir() string {
 
 func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
-}
-
-func LaunchMenu() error {
-	return nil
 }
 
 func (p *Platform) KillLauncher() error {
@@ -176,8 +181,8 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(_ platforms.CmdEnv) error {
-	return nil
+func (p *Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{}, nil
 }
 
 func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
@@ -188,7 +193,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
 			Id:       "Steam",
-			SystemId: systemdefs.SystemPC,
+			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
 				cfg *config.Instance,

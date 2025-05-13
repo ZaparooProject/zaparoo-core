@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
@@ -47,7 +48,7 @@ type Platform struct {
 	uidMap              map[string]string
 	textMap             map[string]string
 	stopMappingsWatcher func() error
-	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) error
+	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
 	readers             map[string]*readers.Reader
 	lastScan            *tokens.Token
 	stopSocket          func()
@@ -222,7 +223,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.stopSocket = stopSocket
 
-	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) error{
+	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
 		"mister.script": cmdMisterScript(p),
@@ -321,7 +322,7 @@ func (p *Platform) AfterScanHook(token tokens.Token) error {
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
-		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("1"), 0644)
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0644)
 		if err != nil {
 			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
 		}
@@ -344,6 +345,9 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return DataDir
 }
 
@@ -352,6 +356,9 @@ func (p *Platform) LogDir() string {
 }
 
 func (p *Platform) ConfigDir() string {
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
 	return DataDir
 }
 
@@ -482,11 +489,11 @@ func (p *Platform) GamepadPress(name string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) error {
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := p.cmdMappings[env.Cmd]; ok {
 		return f(p, env)
 	} else {
-		return fmt.Errorf("command not supported on mister: %s", env.Cmd)
+		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 	}
 }
 
@@ -559,7 +566,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
 		Id:         systemdefs.SystemAmiga,
-		SystemId:   systemdefs.SystemAmiga,
+		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -569,7 +576,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return false
 			}
 		},
-		Launch: launch,
+		Launch: launch(systemdefs.SystemAmiga),
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
@@ -622,7 +629,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	neogeo := platforms.Launcher{
 		Id:         systemdefs.SystemNeoGeo,
-		SystemId:   systemdefs.SystemNeoGeo,
+		SystemID:   systemdefs.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
 		Test: func(cfg *config.Instance, path string) bool {
@@ -634,7 +641,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return false
 			}
 		},
-		Launch: launch,
+		Launch: launch(systemdefs.SystemNeoGeo),
 		Scanner: func(
 			cfg *config.Instance,
 			systemId string,
@@ -699,7 +706,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 
 	mplayerVideo := platforms.Launcher{
 		Id:         "MPlayerVideo",
-		SystemId:   systemdefs.SystemVideo,
+		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi"},
 		Launch:     launchMPlayer(p),

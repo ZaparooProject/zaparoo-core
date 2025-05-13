@@ -3,6 +3,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"sync"
 
@@ -19,7 +20,7 @@ import (
 
 const defaultMaxResults = 250
 
-type Index struct {
+type IndexingStatus struct {
 	mu          sync.Mutex
 	Indexing    bool
 	TotalSteps  int
@@ -28,11 +29,11 @@ type Index struct {
 	TotalFiles  int
 }
 
-func (s *Index) Exists(platform platforms.Platform) bool {
+func (s *IndexingStatus) MediaDBExists(platform platforms.Platform) bool {
 	return gamesdb.Exists(platform)
 }
 
-func (s *Index) GenerateIndex(
+func (s *IndexingStatus) GenerateMediaDB(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
@@ -50,8 +51,8 @@ func (s *Index) GenerateIndex(
 	s.Indexing = true
 	s.TotalFiles = 0
 
-	log.Info().Msg("generating media index")
-	notifications.MediaIndexing(ns, models.IndexResponse{
+	log.Info().Msg("generating media db")
+	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 		Exists:   false,
 		Indexing: true,
 	})
@@ -72,16 +73,16 @@ func (s *Index) GenerateIndex(
 				if err != nil {
 					s.CurrentDesc = status.SystemId
 				} else {
-					md, err := assets.GetSystemMetadata(system.Id)
+					md, err := assets.GetSystemMetadata(system.ID)
 					if err != nil {
-						s.CurrentDesc = system.Id
+						s.CurrentDesc = system.ID
 					} else {
 						s.CurrentDesc = md.Name
 					}
 				}
 			}
 			log.Debug().Msgf("indexing status: %v", s)
-			notifications.MediaIndexing(ns, models.IndexResponse{
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 				Exists:             true,
 				Indexing:           true,
 				TotalSteps:         &s.TotalSteps,
@@ -91,7 +92,7 @@ func (s *Index) GenerateIndex(
 			})
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error generating media index")
+			log.Error().Err(err).Msg("error generating media db")
 		}
 
 		s.Indexing = false
@@ -100,8 +101,8 @@ func (s *Index) GenerateIndex(
 		s.CurrentDesc = ""
 		s.TotalFiles = 0
 
-		log.Info().Msg("finished generating media index")
-		notifications.MediaIndexing(ns, models.IndexResponse{
+		log.Info().Msg("finished generating media db")
+		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 			Exists:     true,
 			Indexing:   false,
 			TotalFiles: &total,
@@ -109,14 +110,14 @@ func (s *Index) GenerateIndex(
 	}()
 }
 
-func NewIndex() *Index {
-	return &Index{}
+func NewIndexingStatus() *IndexingStatus {
+	return &IndexingStatus{}
 }
 
-var IndexInstance = NewIndex()
+var IndexingStatusInstance = NewIndexingStatus()
 
-func HandleIndexMedia(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received index media request")
+func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received generate media request")
 
 	var systems []systemdefs.System
 	if len(env.Params) > 0 {
@@ -142,7 +143,7 @@ func HandleIndexMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
-	IndexInstance.GenerateIndex(
+	IndexingStatusInstance.GenerateMediaDB(
 		env.Platform,
 		env.Config,
 		env.State.Notifications,
@@ -151,7 +152,7 @@ func HandleIndexMedia(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleGames(env requests.RequestEnv) (any, error) {
+func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received media search request")
 
 	if len(env.Params) == 0 {
@@ -208,8 +209,8 @@ func HandleGames(env requests.RequestEnv) (any, error) {
 
 		results = append(results, models.SearchResultMedia{
 			System: models.System{
-				Id:   system.Id,
-				Name: system.Id,
+				Id:   system.ID,
+				Name: system.ID,
 			},
 			Name: result.Name,
 			Path: env.Platform.NormalizePath(env.Config, result.Path),
@@ -232,7 +233,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received media request")
 
 	resp := models.MediaResponse{
-		Active: make([]models.PlayingResponse, 0),
+		Active: make([]models.ActiveMedia, 0),
 	}
 
 	if env.Platform.ActiveGamePath() != "" {
@@ -241,7 +242,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 			return nil, errors.New("error getting system metadata: " + err.Error())
 		}
 
-		resp.Active = append(resp.Active, models.PlayingResponse{
+		resp.Active = append(resp.Active, models.ActiveMedia{
 			SystemId:   system.Id,
 			SystemName: system.Name,
 			MediaName:  env.Platform.ActiveGameName(),
@@ -249,15 +250,67 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		})
 	}
 
-	resp.Database.Exists = IndexInstance.Exists(env.Platform)
-	resp.Database.Indexing = IndexInstance.Indexing
+	resp.Database.Exists = IndexingStatusInstance.MediaDBExists(env.Platform)
+	resp.Database.Indexing = IndexingStatusInstance.Indexing
 
 	if resp.Database.Indexing {
-		resp.Database.TotalSteps = &IndexInstance.TotalSteps
-		resp.Database.CurrentStep = &IndexInstance.CurrentStep
-		resp.Database.CurrentStepDisplay = &IndexInstance.CurrentDesc
-		resp.Database.TotalFiles = &IndexInstance.TotalFiles
+		resp.Database.TotalSteps = &IndexingStatusInstance.TotalSteps
+		resp.Database.CurrentStep = &IndexingStatusInstance.CurrentStep
+		resp.Database.CurrentStepDisplay = &IndexingStatusInstance.CurrentDesc
+		resp.Database.TotalFiles = &IndexingStatusInstance.TotalFiles
 	}
 
 	return resp, nil
+}
+
+func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received update active media request")
+
+	if len(env.Params) == 0 {
+		log.Info().Msg("clearing active media")
+		env.State.SetActiveMedia(nil)
+		return nil, nil
+	}
+
+	var params models.UpdateActiveMediaParams
+	err := json.Unmarshal(env.Params, &params)
+	if err != nil {
+		return nil, ErrInvalidParams
+	}
+
+	system, err := systemdefs.LookupSystem(params.SystemID)
+	if err != nil {
+		return nil, fmt.Errorf("error looking up system: %w", err)
+	}
+
+	systemMeta, err := assets.GetSystemMetadata(system.ID)
+	if err != nil {
+		return nil, fmt.Errorf("error getting system metadata: %w", err)
+	}
+
+	activeMedia := models.ActiveMedia{
+		SystemId:   system.ID,
+		SystemName: systemMeta.Name,
+		MediaName:  params.MediaName,
+		MediaPath:  env.Platform.NormalizePath(env.Config, params.MediaPath),
+	}
+
+	env.State.SetActiveMedia(&activeMedia)
+	return nil, nil
+}
+
+func HandleActiveMedia(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received active media request")
+
+	media := env.State.ActiveMedia()
+	if media == nil {
+		return nil, nil
+	}
+
+	return models.ActiveMedia{
+		SystemId:   media.SystemId,
+		SystemName: media.SystemName,
+		MediaName:  media.MediaName,
+		MediaPath:  media.MediaPath,
+	}, nil
 }

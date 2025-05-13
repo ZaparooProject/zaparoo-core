@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +19,7 @@ var udevFile string
 const (
 	modprobePath = "/etc/modprobe.d/blacklist-zaparoo.conf"
 	udevPath     = "/etc/udev/rules.d/60-zaparoo.rules"
-	installMsg   = `Zaparoo will perform the following steps if not already done:
+	installMsg   = `Zaparoo will perform the following steps if required:
 - Add udev rules which allow user access to common NFC reader devices.
 - Block certain NFC kernel modules from loading that prevent access to much
   more common readers.
@@ -27,20 +28,11 @@ These steps are completely safe and can be reverted with the uninstall command.
 You may need to reboot for the changes to take effect or unplug and replug any
 NFC readers that were already connected.
 
-Continue with install? [Y/n] `
+Continue with install?`
 )
 
-// TODO: above prompt errors with no input instead of defaulting to Y
-
 func CLIInstall() error {
-	fmt.Println(installMsg)
-	var input string
-	_, err := fmt.Scanln(&input)
-	if err != nil {
-		fmt.Println("Error reading input: ", err)
-		return err
-	}
-	if input == "n" || input == "N" {
+	if !utils.YesNoPrompt(installMsg, true) {
 		fmt.Println("Aborting install.")
 		return nil
 	} else {

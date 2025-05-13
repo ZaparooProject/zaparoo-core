@@ -23,81 +23,125 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/rs/zerolog"
+	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"io"
 	"os"
-	"os/signal"
-	"syscall"
+	"path"
+
+	_ "embed"
 )
 
-// home: /userdata/system
-// TODO: how to we run on startup? https://wiki.batocera.org/launch_a_script
+// api: https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/services/HttpServerThread.cpp
+//      api access works locally with no changes
+
+//go:embed scripts/services/zaparoo_service
+var serviceFile string
+
+const serviceFilePath = "/userdata/system/services/zaparoo_service"
 
 func main() {
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
 	pl := &batocera.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
-	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
+	serviceFlag := flag.String(
+		"service",
+		"",
+		"manage Zaparoo service (start|stop|restart|status)",
+	)
+	doInstall := flag.Bool(
+		"install",
+		false,
+		"install Zaparoo service",
+	)
+	doUninstall := flag.Bool(
+		"uninstall",
+		false,
+		"uninstall Zaparoo service",
+	)
 
 	flags.Pre(pl)
 
-	// TODO: i think batocera uses a read-only root image, so these may not work or stick
-	//       everything runs as root so udev rules won't be necessary, but might be an
-	//       issue with acr122u readers
 	if *doInstall {
-		err := installer.CLIInstall()
+		err := os.MkdirAll(path.Dir(serviceFilePath), 0755)
 		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error creating service directory: %v\n", err)
 			os.Exit(1)
-		} else {
-			os.Exit(0)
 		}
+		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0755)
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Zaparoo service installed successfully.")
+		os.Exit(0)
 	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
+		if _, err := os.Stat(serviceFilePath); err == nil {
+			err := os.Remove(serviceFilePath)
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error removing service file: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Zaparoo service uninstalled successfully.")
 			os.Exit(0)
 		}
-	}
-
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
-	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
-	if *asDaemon {
-		logWriters = []io.Writer{os.Stderr}
 	}
 
 	cfg := cli.Setup(
 		pl,
 		config.BaseDefaults,
-		logWriters,
+		nil,
 	)
+
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
+
+	svc, err := utils.NewService(utils.ServiceArgs{
+		Entry: func() (func() error, error) {
+			return service.Start(pl, cfg)
+		},
+		Platform: pl,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("error creating service")
+		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
+		os.Exit(1)
+	}
+	svc.ServiceHandler(serviceFlag)
 
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
+	// try to auto-start service if it's not running already
+	if !svc.Running() {
+		err := svc.Start()
+		if err != nil {
+			log.Error().Err(err).Msg("could not start service")
+		}
+	}
+
+	// start the tui
+	logDestinationPath := path.Join(mister.DataDir, config.LogFile)
+	app, err := simplegui.BuildTheUi(pl, svc.Running(), cfg, logDestinationPath)
 	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
+		log.Error().Msgf("error setting up UI: %s", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error setting up UI: %v\n", err)
 		os.Exit(1)
 	}
 
-	<-sigs
-	err = stop()
+	err = app.Run()
 	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
+		log.Error().Msgf("error running UI: %s", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %v\n", err)
 		os.Exit(1)
 	}
 

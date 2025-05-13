@@ -11,11 +11,11 @@ import (
 )
 
 // DEPRECATED
-func cmdKey(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
-		return fmt.Errorf("command cannot be run from a remote source")
+func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
 	}
-	return pl.KeyboardInput(env.Args)
+	return platforms.CmdResult{}, pl.KeyboardInput(env.Args)
 }
 
 // converts a string to a list of key symbols. long names are named inside
@@ -72,9 +72,9 @@ func readKeys(keys string) ([]string, error) {
 	return names, nil
 }
 
-func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
-		return fmt.Errorf("command cannot be run from a remote source")
+func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
 	}
 
 	log.Info().Msgf("keyboard input: %s", env.Args)
@@ -84,45 +84,45 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) error {
 
 	names, err := readKeys(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	for _, name := range names {
 		if err := pl.KeyboardPress(name); err != nil {
-			return err
+			return platforms.CmdResult{}, err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return nil
+	return platforms.CmdResult{}, nil
 }
 
-func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) error {
-	if env.Untrusted {
-		return fmt.Errorf("command cannot be run from a remote source")
+func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if env.Unsafe {
+		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
 	}
 
 	log.Info().Msgf("gamepad input: %s", env.Args)
 
 	names, err := readKeys(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	for _, name := range names {
 		if err := pl.GamepadPress(name); err != nil {
-			return err
+			return platforms.CmdResult{}, err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return nil
+	return platforms.CmdResult{}, nil
 }
 
-func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) error {
+func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platforms.CmdResult, error) {
 	amount, err := strconv.Atoi(env.Args)
 	if err != nil {
-		return err
+		return platforms.CmdResult{}, err
 	}
 
 	for i := 0; i < amount; i++ {
@@ -130,15 +130,15 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	return nil
+	return platforms.CmdResult{}, nil
 }
 
-func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 1: %s", env.Args)
 	return insertCoin(pl, env, "6")
 }
 
-func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) error {
+func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 2: %s", env.Args)
 	return insertCoin(pl, env, "7")
 }

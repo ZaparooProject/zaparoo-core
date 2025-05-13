@@ -16,32 +16,27 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Acr122Pcsc struct {
+type ACR122PCSC struct {
 	cfg     *config.Instance
-	device  string
+	device  config.ReadersConnect
 	name    string
 	polling bool
 	ctx     *scard.Context
 }
 
-func NewAcr122Pcsc(cfg *config.Instance) *Acr122Pcsc {
-	return &Acr122Pcsc{
+func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
+	return &ACR122PCSC{
 		cfg: cfg,
 	}
 }
 
-func (r *Acr122Pcsc) Ids() []string {
+func (r *ACR122PCSC) Ids() []string {
 	return []string{"acr122_pcsc"}
 }
 
-func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
-	ps := strings.SplitN(device, ":", 2)
-	if len(ps) != 2 {
-		return errors.New("invalid device string: " + device)
-	}
-
-	if !utils.Contains(r.Ids(), ps[0]) {
-		return errors.New("invalid reader id: " + ps[0])
+func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+	if !utils.Contains(r.Ids(), device.Driver) {
+		return errors.New("invalid reader id: " + device.Driver)
 	}
 
 	if r.ctx == nil {
@@ -57,12 +52,12 @@ func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
 		return err
 	}
 
-	if !utils.Contains(rls, ps[1]) {
-		return errors.New("reader not found: " + ps[1])
+	if !utils.Contains(rls, device.Path) {
+		return errors.New("reader not found: " + device.Path)
 	}
 
 	r.device = device
-	r.name = ps[1]
+	r.name = device.Path
 	r.polling = true
 
 	go func() {
@@ -166,12 +161,12 @@ func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
 			}
 
 			iq <- readers.Scan{
-				Source: r.device,
+				Source: r.device.ConnectionString(),
 				Token: &tokens.Token{
 					UID:      hex.EncodeToString(uid),
 					Text:     text,
 					ScanTime: time.Now(),
-					Source:   r.device,
+					Source:   r.device.ConnectionString(),
 				},
 			}
 
@@ -195,7 +190,7 @@ func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
 			}
 
 			iq <- readers.Scan{
-				Source: r.device,
+				Source: r.device.ConnectionString(),
 				Token:  nil,
 			}
 		}
@@ -204,7 +199,7 @@ func (r *Acr122Pcsc) Open(device string, iq chan<- readers.Scan) error {
 	return nil
 }
 
-func (r *Acr122Pcsc) Close() error {
+func (r *ACR122PCSC) Close() error {
 	r.polling = false
 	if r.ctx != nil {
 		err := r.ctx.Release()
@@ -219,7 +214,7 @@ func (r *Acr122Pcsc) Close() error {
 // functions on readers should actually return an error instead of ""
 var detectErrorOnce sync.Once
 
-func (r *Acr122Pcsc) Detect(connected []string) string {
+func (r *ACR122PCSC) Detect(connected []string) string {
 	ctx, err := scard.EstablishContext()
 	if err != nil {
 		return ""
@@ -254,18 +249,18 @@ func (r *Acr122Pcsc) Detect(connected []string) string {
 	return "acr122_pcsc:" + acrs[0]
 }
 
-func (r *Acr122Pcsc) Device() string {
-	return r.device
+func (r *ACR122PCSC) Device() string {
+	return r.device.ConnectionString()
 }
 
-func (r *Acr122Pcsc) Connected() bool {
+func (r *ACR122PCSC) Connected() bool {
 	return r.polling
 }
 
-func (r *Acr122Pcsc) Info() string {
+func (r *ACR122PCSC) Info() string {
 	return r.name
 }
 
-func (r *Acr122Pcsc) Write(_ string) (*tokens.Token, error) {
+func (r *ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }

@@ -42,7 +42,7 @@ type WriteRequest struct {
 
 type Reader struct {
 	cfg       *config.Instance
-	conn      string
+	conn      config.ReadersConnect
 	pnd       *nfc.Device
 	polling   bool
 	prevToken *tokens.Token
@@ -56,9 +56,9 @@ func NewReader(cfg *config.Instance) *Reader {
 	}
 }
 
-func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
-	connStr := device
-	if device == autoConnStr {
+func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
+	connStr := device.ConnectionString()
+	if connStr == autoConnStr {
 		connStr = ""
 	} else {
 		log.Debug().Msgf("opening device: %s", connStr)
@@ -66,7 +66,7 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 
 	pnd, err := openDeviceWithRetries(connStr)
 	if err != nil {
-		if device == autoConnStr {
+		if device.ConnectionString() == autoConnStr {
 			return nil
 		}
 
@@ -106,7 +106,7 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 			if removed {
 				log.Info().Msg("token removed, sending to input queue")
 				iq <- readers.Scan{
-					Source: r.conn,
+					Source: r.conn.ConnectionString(),
 					Token:  nil,
 				}
 				r.prevToken = nil
@@ -117,7 +117,7 @@ func (r *Reader) Open(device string, iq chan<- readers.Scan) error {
 
 				log.Info().Msg("new token detected, sending to input queue")
 				iq <- readers.Scan{
-					Source: r.conn,
+					Source: r.conn.ConnectionString(),
 					Token:  token,
 				}
 				r.prevToken = token
@@ -166,7 +166,7 @@ func (r *Reader) Detect(connected []string) string {
 }
 
 func (r *Reader) Device() string {
-	return r.conn
+	return r.conn.ConnectionString()
 }
 
 func (r *Reader) Connected() bool {
@@ -387,7 +387,7 @@ func (r *Reader) pollDevice(
 		Text:     tagText,
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
-		Source:   r.conn,
+		Source:   r.conn.ConnectionString(),
 	}
 
 	return card, removed, nil

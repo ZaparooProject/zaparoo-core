@@ -1,31 +1,47 @@
 package batocera
 
 import (
+	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
-	"github.com/adrg/xdg"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/bendahl/uinput"
+	"github.com/wizzomafizzo/mrext/pkg/input"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	AssetsDir            = "assets"
+	SuccessSoundFilename = "success.wav"
+	FailSoundFilename    = "fail.wav"
+	HomeDir              = "/userdata/system"
+	DataDir              = HomeDir + "/.local/share/" + config.AppName
+	ConfigDir            = HomeDir + "/.config/" + config.AppName
+)
+
 type Platform struct {
-	tempDir string
+	kbd input.Keyboard
+	gpd uinput.Gamepad
 }
 
 func (p *Platform) Id() string {
@@ -42,17 +58,49 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	tempDir, err := os.MkdirTemp("", "zaparoo-")
+	kbd, err := input.NewKeyboard()
 	if err != nil {
-		return fmt.Errorf("failed to create temp dir: %w", err)
+		return err
 	}
-	p.tempDir = tempDir
 
-	for _, dir := range []string{p.DataDir(), p.LogDir(), p.ConfigDir()} {
-		err := os.MkdirAll(dir, 0755)
+	p.kbd = kbd
+
+	gpd, err := uinput.CreateGamepad(
+		"/dev/uinput",
+		[]byte("Zaparoo"),
+		0x1234,
+		0x5678,
+	)
+	if err != nil {
+		return err
+	}
+	p.gpd = gpd
+
+	successPath := filepath.Join(p.DataDir(), AssetsDir, SuccessSoundFilename)
+	if _, err := os.Stat(successPath); err != nil {
+		sf, err := os.Create(successPath)
 		if err != nil {
-			return fmt.Errorf("failed to create dir: %w", err)
+			log.Error().Msgf("error creating success sound file: %s", err)
 		}
+		_, err = sf.Write(assets.SuccessSound)
+		if err != nil {
+			log.Error().Msgf("error writing success sound file: %s", err)
+		}
+		_ = sf.Close()
+	}
+
+	failPath := filepath.Join(p.DataDir(), AssetsDir, FailSoundFilename)
+	if _, err := os.Stat(failPath); err != nil {
+		// copy fail sound to temp
+		ff, err := os.Create(failPath)
+		if err != nil {
+			log.Error().Msgf("error creating fail sound file: %s", err)
+		}
+		_, err = ff.Write(assets.FailSound)
+		if err != nil {
+			log.Error().Msgf("error writing fail sound file: %s", err)
+		}
+		_ = ff.Close()
 	}
 
 	return nil
@@ -63,11 +111,12 @@ func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) e
 }
 
 func (p *Platform) Stop() error {
-	err := os.RemoveAll(p.TempDir())
-	if err != nil {
-		return err
+	if p.gpd != nil {
+		err := p.gpd.Close()
+		if err != nil {
+			return err
+		}
 	}
-	p.tempDir = ""
 
 	return nil
 }
@@ -81,9 +130,7 @@ func (p *Platform) ReadersUpdateHook(_ map[string]*readers.Reader) error {
 }
 
 func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{
-		"/userdata/roms",
-	}
+	return []string{"/userdata/roms"}
 }
 
 func (p *Platform) ZipsAsDirs() bool {
@@ -91,65 +138,188 @@ func (p *Platform) ZipsAsDirs() bool {
 }
 
 func (p *Platform) DataDir() string {
-	return filepath.Join(xdg.DataHome, config.AppName)
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
+	return DataDir
 }
 
 func (p *Platform) LogDir() string {
-	return filepath.Join(xdg.DataHome, config.AppName)
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
+	return DataDir
 }
 
 func (p *Platform) ConfigDir() string {
-	return filepath.Join(xdg.ConfigHome, config.AppName)
+	if v, ok := platforms.HasUserDir(); ok {
+		return v
+	}
+	return ConfigDir
 }
 
 func (p *Platform) TempDir() string {
-	if p.tempDir == "" {
-		log.Warn().Msg("temp dir not set")
-	}
-	return p.tempDir
+	return filepath.Join(os.TempDir(), config.AppName)
 }
 
 func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
-}
+	originalPath := path
+	newPath := strings.ReplaceAll(path, "\\", "/")
+	lowerPath := strings.ToLower(newPath)
 
-func LaunchMenu() error {
-	return nil
+	gotRoot := false
+	for _, rootDir := range p.RootDirs(nil) {
+		rootDir = strings.ReplaceAll(rootDir, "\\", "/")
+		rootDir = strings.ToLower(rootDir)
+		if strings.HasPrefix(lowerPath, rootDir) {
+			gotRoot = true
+			newPath = path[len(rootDir):]
+			if len(newPath) > 0 && newPath[0] == '/' {
+				newPath = newPath[1:]
+			}
+			break
+		}
+	}
+	if !gotRoot {
+		return originalPath
+	}
+
+	parts := strings.Split(newPath, "/")
+	if len(parts) < 2 {
+		return originalPath
+	}
+
+	system, err := fromBatoceraSystem(parts[0])
+	if err != nil || system == "" {
+		return originalPath
+	}
+
+	return system + "/" + strings.Join(parts[1:], "/")
 }
 
 func (p *Platform) KillLauncher() error {
-	return nil
+	tries := 0
+	maxTries := 10
+
+	for tries < maxTries {
+		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
+		err := apiEmuKill()
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+
+		_, running, err := apiRunningGame()
+		if err != nil {
+			return err
+		} else if !running {
+			return nil
+		}
+
+		tries++
+	}
+
+	return fmt.Errorf("failed to kill launcher")
 }
 
 func (p *Platform) GetActiveLauncher() string {
-	return ""
+	game, running, err := apiRunningGame()
+	if err != nil {
+		log.Error().Msgf("error getting running game: %s", err)
+		return ""
+	} else if !running {
+		return ""
+	} else {
+		system, err := fromBatoceraSystem(game.SystemName)
+		if err != nil {
+			log.Error().Msgf("error converting system name: %s", err)
+			return ""
+		}
+		return system
+	}
 }
 
-func (p *Platform) PlayFailSound(_ *config.Instance) {
+func (p *Platform) PlayFailSound(cfg *config.Instance) {
+	if !cfg.AudioFeedback() {
+		return
+	}
+	failPath := filepath.Join(p.DataDir(), AssetsDir, FailSoundFilename)
+	err := exec.Command("aplay", failPath).Start()
+	if err != nil {
+		log.Error().Msgf("error playing fail sound: %s", err)
+	}
 }
 
-func (p *Platform) PlaySuccessSound(_ *config.Instance) {
+func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
+	if !cfg.AudioFeedback() {
+		return
+	}
+	successPath := filepath.Join(p.DataDir(), AssetsDir, SuccessSoundFilename)
+	err := exec.Command("aplay", successPath).Start()
+	if err != nil {
+		log.Error().Msgf("error playing success sound: %s", err)
+	}
 }
 
 func (p *Platform) ActiveSystem() string {
-	return ""
+	game, running, err := apiRunningGame()
+	if err != nil {
+		log.Error().Msgf("error getting running game: %s", err)
+		return ""
+	} else if !running {
+		return ""
+	} else {
+		system, err := fromBatoceraSystem(game.SystemName)
+		if err != nil {
+			log.Error().Msgf("error converting system name: %s", err)
+			return ""
+		}
+		return system
+	}
 }
 
 func (p *Platform) ActiveGame() string {
-	return ""
+	game, running, err := apiRunningGame()
+	if err != nil {
+		log.Error().Msgf("error getting running game: %s", err)
+		return ""
+	} else if !running {
+		return ""
+	} else {
+		system, err := fromBatoceraSystem(game.SystemName)
+		if err != nil {
+			log.Error().Msgf("error converting system name: %s", err)
+			return ""
+		}
+		return system + "/" + game.Name
+	}
 }
 
 func (p *Platform) ActiveGameName() string {
-	return ""
+	game, running, err := apiRunningGame()
+	if err != nil {
+		log.Error().Msgf("error getting running game: %s", err)
+		return ""
+	} else if !running {
+		return ""
+	} else {
+		return game.Name
+	}
 }
 
 func (p *Platform) ActiveGamePath() string {
-	return ""
+	game, running, err := apiRunningGame()
+	if err != nil {
+		log.Error().Msgf("error getting running game: %s", err)
+		return ""
+	} else if !running {
+		return ""
+	} else {
+		return game.Path
+	}
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, id string) error {
-	log.Info().Msgf("launching system: %s", id)
-	return nil
+func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return fmt.Errorf("launching system not supported on batocera")
 }
 
 func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
@@ -163,32 +333,114 @@ func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
 		return errors.New("file not allowed: " + path)
 	}
 
+	// exit current media if one is running
+	_, running, err := apiRunningGame()
+	if err != nil {
+		return err
+	} else if running {
+		log.Info().Msg("exiting current media")
+		err = p.KillLauncher()
+		if err != nil {
+			return err
+		}
+		time.Sleep(2500 * time.Millisecond)
+	}
+
 	log.Info().Msgf("launching file with %s: %s", launcher.Id, path)
 	return launcher.Launch(cfg, path)
 }
 
-func (p *Platform) KeyboardInput(_ string) error {
+func (p *Platform) KeyboardInput(input string) error {
+	code, err := strconv.Atoi(input)
+	if err != nil {
+		return err
+	}
+
+	p.kbd.Press(code)
+
 	return nil
 }
 
-func (p *Platform) KeyboardPress(_ string) error {
+func (p *Platform) KeyboardPress(name string) error {
+	code, ok := KeyboardMap[name]
+	if !ok {
+		return fmt.Errorf("unknown key: %s", name)
+	}
+
+	if code < 0 {
+		p.kbd.Combo(42, -code)
+	} else {
+		p.kbd.Press(code)
+	}
+
 	return nil
 }
 
-func (p *Platform) GamepadPress(_ string) error {
+func (p *Platform) GamepadPress(name string) error {
+	code, ok := GamepadMap[name]
+	if !ok {
+		return fmt.Errorf("unknown button: %s", name)
+	}
+
+	err := p.gpd.ButtonDown(code)
+	if err != nil {
+		return err
+	}
+
+	time.Sleep(40 * time.Millisecond)
+
+	err = p.gpd.ButtonUp(code)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (p *Platform) ForwardCmd(_ platforms.CmdEnv) error {
-	return nil
+func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
 
 func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
+type ESGameList struct {
+	XMLName xml.Name `xml:"gameList"`
+	Games   []struct {
+		Name string `xml:"name"`
+		Path string `xml:"path"`
+	} `xml:"game"`
+}
+
+func readESGameListXML(path string) (ESGameList, error) {
+	xmlFile, err := os.Open(path)
+	if err != nil {
+		return ESGameList{}, err
+	}
+	defer func(xmlFile *os.File) {
+		err := xmlFile.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing xml file")
+		}
+	}(xmlFile)
+
+	data, err := io.ReadAll(xmlFile)
+	if err != nil {
+		return ESGameList{}, err
+	}
+
+	var gameList ESGameList
+	err = xml.Unmarshal(data, &gameList)
+	if err != nil {
+		return ESGameList{}, err
+	}
+
+	return gameList, nil
+}
+
 func (p *Platform) Launchers() []platforms.Launcher {
-	return []platforms.Launcher{
+	launchers := []platforms.Launcher{
 		{
 			Id:            "Generic",
 			Extensions:    []string{".sh"},
@@ -198,20 +450,90 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+
+	for k, v := range SystemMap {
+		launcherID, ok := LauncherMap[k]
+		if !ok {
+			log.Error().Msgf("unknown batocera launcher: %s", k)
+			continue
+		}
+
+		launchers = append(launchers, platforms.Launcher{
+			Id:       launcherID,
+			SystemID: v,
+			Folders:  []string{k},
+			Launch: func(cfg *config.Instance, path string) error {
+				return apiLaunch(path)
+			},
+			Scanner: func(
+				cfg *config.Instance,
+				systemID string,
+				results []platforms.ScanResult,
+			) ([]platforms.ScanResult, error) {
+				// drop existing results since they're just junk here
+				results = []platforms.ScanResult{}
+
+				batSysNames, err := toBatoceraSystems(systemID)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, batSysName := range batSysNames {
+					for _, rootDir := range p.RootDirs(cfg) {
+						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
+						gameList, err := readESGameListXML(gameListPath)
+						if err != nil {
+							log.Error().Msgf("error reading gamelist.xml: %s", err)
+							continue
+						}
+						for _, game := range gameList.Games {
+							results = append(results, platforms.ScanResult{
+								Name: game.Name,
+								Path: filepath.Join(rootDir, batSysName, game.Path),
+							})
+						}
+					}
+				}
+
+				return results, nil
+			},
+			Test: func(cfg *config.Instance, path string) bool {
+				path = filepath.Clean(path)
+				path = strings.ToLower(path)
+				for _, rootDir := range p.RootDirs(cfg) {
+					sysDir := filepath.Join(rootDir, k)
+					sysDir = filepath.Clean(sysDir)
+					sysDir = strings.ToLower(sysDir)
+					if strings.HasPrefix(path, sysDir) {
+						if filepath.Ext(path) == "" {
+							return false
+						}
+						if filepath.Ext(path) == ".txt" {
+							return false
+						}
+						return true
+					}
+				}
+				return false
+			},
+		})
+	}
+
+	return launchers
 }
 
 func (p *Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	args widgetModels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, nil
+	return nil, 0, apiNotify(args.Text)
 }
 
 func (p *Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	args widgetModels.NoticeArgs,
 ) (func() error, error) {
-	return nil, nil
+	return nil, apiNotify(args.Text)
 }
 
 func (p *Platform) ShowPicker(

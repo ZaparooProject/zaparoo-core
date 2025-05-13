@@ -27,6 +27,7 @@ var AcceptedMimeTypes = []string{
 }
 
 func maybeRemoteZapScript(s string) bool {
+	s = strings.ToLower(s)
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 		return true
 	} else {
@@ -150,7 +151,8 @@ func checkLink(
 			return "", fmt.Errorf("error unmarshalling picker args: %w", err)
 		}
 		pickerArgs := widgetModels.PickerArgs{
-			Items: cmdArgs.Items,
+			Items:  cmdArgs.Items,
+			Unsafe: true,
 		}
 		if cmd.Name != nil {
 			pickerArgs.Title = *cmd.Name

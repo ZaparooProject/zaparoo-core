@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,6 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
@@ -78,6 +79,10 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 		if !hasArg {
 			return nil, ErrInvalidParams
 		}
+
+		if params.Unsafe {
+			t.Unsafe = true
+		}
 	} else {
 		log.Debug().Msgf("could not unmarshal run params, trying string: %s", env.Params)
 
@@ -113,11 +118,21 @@ func HandleRunScript(env requests.RequestEnv) (any, error) {
 
 	var t tokens.Token
 
-	var zs zapScriptModels.ZapScript
-	err := json.Unmarshal(env.Params, &zs)
+	var zsrp models.RunScriptParams
+	err := json.Unmarshal(env.Params, &zsrp)
 	if err != nil {
-		log.Error().Msgf("error unmarshalling zapscript: %s", err)
+		log.Error().Msgf("error unmarshalling run zapscript: %s", err)
 		return nil, ErrInvalidParams
+	}
+
+	if zsrp.Unsafe {
+		t.Unsafe = true
+	}
+
+	zs := zapScriptModels.ZapScript{
+		ZapScript: zsrp.ZapScript,
+		Name:      zsrp.Name,
+		Cmds:      zsrp.Cmds,
 	}
 
 	if zs.ZapScript != 1 {
@@ -229,13 +244,13 @@ func InstallRunMedia(
 
 	var launchers []platforms.Launcher
 	for _, l := range pl.Launchers() {
-		if l.SystemId == system.Id {
+		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}
 	}
 
 	if len(launchers) == 0 {
-		return "", fmt.Errorf("no launchers for system: %s", system.Id)
+		return "", fmt.Errorf("no launchers for system: %s", system.ID)
 	}
 
 	// just use the first launcher for now

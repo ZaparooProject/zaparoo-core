@@ -3,6 +3,8 @@ package configui
 import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
+	"os"
 )
 
 func tryRunApp(
@@ -15,7 +17,13 @@ func tryRunApp(
 			return err
 		}
 
-		tty, err := tcell.NewDevTtyFromDev("/dev/tty2")
+		ttyPath := "/dev/tty2"
+		if os.Getenv("ZAPAROO_RUN_SCRIPT") == "2" {
+			log.Debug().Msg("alternate tty for widgets from zapscript")
+			ttyPath = "/dev/tty4"
+		}
+
+		tty, err := tcell.NewDevTtyFromDev(ttyPath)
 		if err != nil {
 			return err
 		}
