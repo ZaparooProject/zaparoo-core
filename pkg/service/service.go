@@ -140,11 +140,11 @@ func processTokenQueue(
 				}
 
 				he := database.HistoryEntry{
-					Time: t.ScanTime,
-					Type: t.Type,
-					UID:  t.UID,
-					Text: t.Text,
-					Data: t.Data,
+					Time:       t.ScanTime,
+					Type:       t.Type,
+					TokenID:    t.UID,
+					TokenValue: t.Text,
+					TokenData:  t.Data,
 				}
 				he.Success = err == nil
 				err = db.UserDB.AddHistory(he)
@@ -202,11 +202,11 @@ func processTokenQueue(
 			}
 
 			he := database.HistoryEntry{
-				Time: t.ScanTime,
-				Type: t.Type,
-				UID:  t.UID,
-				Text: t.Text,
-				Data: t.Data,
+				Time:       t.ScanTime,
+				Type:       t.Type,
+				TokenID:    t.UID,
+				TokenValue: t.Text,
+				TokenData:  t.Data,
 			}
 
 			if !st.RunZapScriptEnabled() {

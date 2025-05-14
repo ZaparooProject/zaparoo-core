@@ -57,9 +57,9 @@ func HandleHistory(env requests.RequestEnv) (any, error) {
 		resp.Entries[i] = models.HistoryReponseEntry{
 			Time:    e.Time,
 			Type:    e.Type,
-			UID:     e.UID,
-			Text:    e.Text,
-			Data:    e.Data,
+			UID:     e.TokenID,
+			Text:    e.TokenValue,
+			Data:    e.TokenData,
 			Success: e.Success,
 		}
 	}

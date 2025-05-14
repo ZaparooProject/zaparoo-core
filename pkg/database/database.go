@@ -24,13 +24,13 @@ type Database struct {
  */
 
 type HistoryEntry struct {
-	DBID    int64
-	Time    time.Time `json:"time"`
-	Type    string    `json:"type"`
-	UID     string    `json:"uid"`
-	Text    string    `json:"text"`
-	Data    string    `json:"data"`
-	Success bool      `json:"success"`
+	DBID       int64
+	Time       time.Time `json:"time"`
+	Type       string    `json:"type"`
+	TokenID    string    `json:"tokenId"`
+	TokenValue string    `json:"tokenValue"`
+	TokenData  string    `json:"tokenData"`
+	Success    bool      `json:"success"`
 }
 
 type Mapping struct {

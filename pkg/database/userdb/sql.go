@@ -33,9 +33,9 @@ func sqlAllocate(db *sql.DB) error {
 		DBID INTEGER PRIMARY KEY,
 		Time integer not null,
 		Type text not null,
-		UID text not null,
-		Text text not null,
-		Data text not null,
+		TokenID text not null,
+		TokenValue text not null,
+		TokenData text not null,
 		Success integer not null
 	);
 
@@ -78,7 +78,7 @@ func sqlVacuum(db *sql.DB) error {
 func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 	stmt, err := db.Prepare(`
 		insert into History(
-			Time, Type, UID, Text, Data, Success
+			Time, Type, TokenID, TokenValue, TokenData, Success
 		) values (?, ?, ?, ?, ?, ?);
 	`)
 	defer func(stmt *sql.Stmt) {
@@ -93,9 +93,9 @@ func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 	_, err = stmt.Exec(
 		entry.Time.Unix(),
 		entry.Type,
-		entry.UID,
-		entry.Text,
-		entry.Data,
+		entry.TokenID,
+		entry.TokenValue,
+		entry.TokenData,
 		entry.Success,
 	)
 	return err
@@ -109,7 +109,7 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 	}
 	q, err := db.Prepare(`
 		select 
-		DBID, Time, Type, UID, Text, Data, Success
+		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
 		from History
 		where DBID < ?
 		order by DBID DESC
@@ -138,9 +138,9 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 			&row.DBID,
 			&timeInt,
 			&row.Type,
-			&row.UID,
-			&row.Text,
-			&row.Data,
+			&row.TokenID,
+			&row.TokenValue,
+			&row.TokenData,
 			&row.Success,
 		)
 		if err != nil {

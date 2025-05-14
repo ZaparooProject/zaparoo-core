@@ -91,6 +91,13 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
+	// convert old type names
+	if params.Type == userdb.LegacyMappingTypeUID {
+		params.Type = userdb.MappingTypeID
+	} else if params.Type == userdb.LegacyMappingTypeText {
+		params.Type = userdb.MappingTypeValue
+	}
+
 	err = validateAddMappingParams(&params)
 	if err != nil {
 		log.Error().Err(err).Msg("invalid params")
@@ -173,6 +180,15 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	err := json.Unmarshal(env.Params, &params)
 	if err != nil {
 		return nil, ErrInvalidParams
+	}
+
+	// convert old type names
+	if params.Type != nil {
+		if *params.Type == userdb.LegacyMappingTypeUID {
+			*params.Type = userdb.MappingTypeID
+		} else if *params.Type == userdb.LegacyMappingTypeText {
+			*params.Type = userdb.MappingTypeValue
+		}
 	}
 
 	err = validateUpdateMappingParams(&params)

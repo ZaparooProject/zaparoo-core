@@ -48,7 +48,7 @@ func buildMifareAuthCommand(block byte, cardUid string) []byte {
 		// Using the NDEF well known private key
 		0xd3, 0xf7, 0xd3, 0xf7, 0xd3, 0xf7,
 	}
-	// And finally append the card UID to the end
+	// And finally append the tag UID to the end
 	uidBytes, _ := hex.DecodeString(cardUid)
 	return append(command, uidBytes...)
 }

@@ -11,17 +11,19 @@ import (
 )
 
 const (
-	MappingTypeUID   = "uid"
-	MappingTypeText  = "text"
-	MappingTypeData  = "data"
-	MatchTypeExact   = "exact"
-	MatchTypePartial = "partial"
-	MatchTypeRegex   = "regex"
+	MappingTypeID         = "id"
+	MappingTypeValue      = "value"
+	MappingTypeData       = "data"
+	MatchTypeExact        = "exact"
+	MatchTypePartial      = "partial"
+	MatchTypeRegex        = "regex"
+	LegacyMappingTypeUID  = "uid"
+	LegacyMappingTypeText = "text"
 )
 
 var AllowedMappingTypes = []string{
-	MappingTypeUID,
-	MappingTypeText,
+	MappingTypeID,
+	MappingTypeValue,
 	MappingTypeData,
 }
 
@@ -47,7 +49,7 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
-	if m.Type == MappingTypeUID {
+	if m.Type == MappingTypeID {
 		m.Pattern = NormalizeID(m.Pattern)
 	}
 
@@ -84,7 +86,7 @@ func (db *UserDB) UpdateMapping(id string, m database.Mapping) error {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
-	if m.Type == MappingTypeUID {
+	if m.Type == MappingTypeID {
 		m.Pattern = NormalizeID(m.Pattern)
 	}
 

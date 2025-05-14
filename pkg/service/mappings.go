@@ -111,9 +111,9 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 		if m.TokenKey == "data" {
 			dbm.Type = userdb.MappingTypeData
 		} else if m.TokenKey == "value" {
-			dbm.Type = userdb.MappingTypeText
+			dbm.Type = userdb.MappingTypeValue
 		} else {
-			dbm.Type = userdb.MappingTypeUID
+			dbm.Type = userdb.MappingTypeID
 		}
 
 		if isCfgRegex(m.MatchPattern) {
@@ -150,14 +150,14 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 
 	for _, m := range ms {
 		switch {
-		case m.Type == userdb.MappingTypeUID:
+		case m.Type == userdb.MappingTypeID:
 			if checkMappingUid(m, token) {
-				log.Info().Msg("launching with db/cfg uid match override")
+				log.Info().Msg("launching with db/cfg id match override")
 				return m.Override, true
 			}
-		case m.Type == userdb.MappingTypeText:
+		case m.Type == userdb.MappingTypeValue:
 			if checkMappingText(m, token) {
-				log.Info().Msg("launching with db/cfg text match override")
+				log.Info().Msg("launching with db/cfg value match override")
 				return m.Override, true
 			}
 		case m.Type == userdb.MappingTypeData:
