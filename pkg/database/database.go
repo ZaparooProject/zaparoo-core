@@ -1,140 +1,175 @@
 package database
 
 import (
-	"encoding/json"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"os"
-	"path/filepath"
+	"database/sql"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	bolt "go.etcd.io/bbolt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 )
 
-const (
-	BucketHistory  = "history"
-	BucketMappings = "mappings"
-	BucketClients  = "clients"
-)
+/*
+ * In attempting to correct circular import deps, these non-concrete
+ * interfaces were moves to this generic package level.
+ * Actual implementations found in userdb/mediadb
+ */
 
-func dbFile(pl platforms.Platform) string {
-	return filepath.Join(utils.DataDir(pl), config.TapToDbFile)
-}
-
-// Check if the db exists on disk.
-func DbExists(pl platforms.Platform) bool {
-	_, err := os.Stat(dbFile(pl))
-	return err == nil
-}
-
-// Open the db with the given options. If the database does not exist it
-// will be created and the buckets will be initialized.
-func open(pl platforms.Platform, options *bolt.Options) (*bolt.DB, error) {
-	err := os.MkdirAll(filepath.Dir(dbFile(pl)), 0755)
-	if err != nil {
-		return nil, err
-	}
-
-	db, err := bolt.Open(dbFile(pl), 0600, options)
-	if err != nil {
-		return nil, err
-	}
-
-	err = db.Update(func(txn *bolt.Tx) error {
-		for _, bucket := range []string{
-			BucketHistory,
-			BucketMappings,
-			BucketClients,
-		} {
-			_, err := txn.CreateBucketIfNotExists([]byte(bucket))
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return db, nil
-}
-
+// Database is a portable interface for ENV bindings
 type Database struct {
-	bdb *bolt.DB
+	UserDB  UserDBI
+	MediaDB MediaDBI
 }
 
-func Open(pl platforms.Platform) (*Database, error) {
-	db, err := open(pl, &bolt.Options{})
-	if err != nil {
-		return nil, err
-	}
+/*
+ * Structs for SQL records
+ */
 
-	return &Database{bdb: db}, nil
-}
-
-func (d *Database) Close() error {
-	return d.bdb.Close()
-}
-
-// TODO: reader source (physical reader vs web)
-// TODO: metadata
 type HistoryEntry struct {
-	Time    time.Time `json:"time"`
-	Type    string    `json:"type"`
-	UID     string    `json:"uid"`
-	Text    string    `json:"text"`
-	Data    string    `json:"data"`
-	Success bool      `json:"success"`
+	DBID       int64     `db:"DBID" json:"id"`
+	Time       time.Time `json:"time"`
+	Type       string    `json:"type"`
+	TokenID    string    `json:"tokenId"`
+	TokenValue string    `json:"tokenValue"`
+	TokenData  string    `json:"tokenData"`
+	Success    bool      `json:"success"`
 }
 
-func HistoryKey(entry HistoryEntry) string {
-	// TODO: web has no uid, this could collide, use autoincrement instead
-	return entry.Time.Format(time.RFC3339) + "-" + entry.UID
+type Mapping struct {
+	DBID     int64
+	Added    int64  `json:"added"`
+	Label    string `json:"label"`
+	Enabled  bool   `json:"enabled"`
+	Type     string `json:"type"`
+	Match    string `json:"match"`
+	Pattern  string `json:"pattern"`
+	Override string `json:"override"`
 }
 
-func (d *Database) AddHistory(entry HistoryEntry) error {
-	return d.bdb.Update(func(txn *bolt.Tx) error {
-		b := txn.Bucket([]byte(BucketHistory))
-
-		data, err := json.Marshal(entry)
-		if err != nil {
-			return err
-		}
-
-		return b.Put([]byte(HistoryKey(entry)), data)
-	})
+type System struct {
+	DBID     int64
+	SystemID string
+	Name     string
 }
 
-func (d *Database) GetHistory() ([]HistoryEntry, error) {
-	var entries []HistoryEntry
-	i := 0
-	maxResults := 25
+type MediaTitle struct {
+	DBID       int64
+	SystemDBID int64
+	Slug       string
+	Name       string
+}
 
-	err := d.bdb.View(func(txn *bolt.Tx) error {
-		b := txn.Bucket([]byte(BucketHistory))
+type Media struct {
+	DBID           int64
+	MediaTitleDBID int64
+	Path           string
+}
 
-		c := b.Cursor()
-		for k, v := c.Last(); k != nil; k, v = c.Prev() {
-			if i >= maxResults {
-				break
-			}
+type TagType struct {
+	DBID int64
+	Type string
+}
 
-			var entry HistoryEntry
-			err := json.Unmarshal(v, &entry)
-			if err != nil {
-				return err
-			}
+type Tag struct {
+	DBID     int64
+	TypeDBID int64
+	Tag      string
+}
 
-			entries = append(entries, entry)
+type MediaTag struct {
+	DBID      int64
+	MediaDBID int64
+	TagDBID   int64
+}
 
-			i++
-		}
+type SearchResult struct {
+	SystemID string
+	Name     string
+	Path     string
+}
 
-		return nil
-	})
+type FileInfo struct {
+	SystemID string
+	Path     string
+	Name     string
+}
 
-	return entries, err
+type ScanState struct {
+	SystemsIndex   int
+	SystemIDs      map[string]int
+	TitlesIndex    int
+	TitleIDs       map[string]int
+	MediaIndex     int
+	MediaIDs       map[string]int // Path
+	TagTypesIndex  int
+	TagTypeIDs     map[string]int
+	TagsIndex      int
+	TagIDs         map[string]int
+	MediaTagsIndex int
+}
+
+/*
+ * Interfaces for external deps
+ */
+
+type GenericDBI interface {
+	Open() error
+	UnsafeGetSqlDb() *sql.DB
+	Truncate() error
+	Allocate() error
+	Vacuum() error
+	Close() error
+	GetDBPath() string
+}
+
+type UserDBI interface {
+	GenericDBI
+	AddHistory(entry HistoryEntry) error
+	GetHistory(lastId int) ([]HistoryEntry, error)
+	AddMapping(m Mapping) error
+	GetMapping(id int64) (Mapping, error)
+	DeleteMapping(id int64) error
+	UpdateMapping(id int64, m Mapping) error
+	GetAllMappings() ([]Mapping, error)
+	GetEnabledMappings() ([]Mapping, error)
+}
+
+type MediaDBI interface {
+	GenericDBI
+	BeginTransaction() error
+	CommitTransaction() error
+	Exists() bool
+	UpdateLastGenerated() error
+	GetLastGenerated() (time.Time, error)
+
+	ReindexTables() error
+
+	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
+	IndexedSystems() ([]string, error)
+	SystemIndexed(system systemdefs.System) bool
+	RandomGame(systems []systemdefs.System) (SearchResult, error)
+
+	FindSystem(row System) (System, error)
+	InsertSystem(row System) (System, error)
+	FindOrInsertSystem(row System) (System, error)
+
+	FindMediaTitle(row MediaTitle) (MediaTitle, error)
+	InsertMediaTitle(row MediaTitle) (MediaTitle, error)
+	FindOrInsertMediaTitle(row MediaTitle) (MediaTitle, error)
+
+	FindMedia(row Media) (Media, error)
+	InsertMedia(row Media) (Media, error)
+	FindOrInsertMedia(row Media) (Media, error)
+
+	FindTagType(row TagType) (TagType, error)
+	InsertTagType(row TagType) (TagType, error)
+	FindOrInsertTagType(row TagType) (TagType, error)
+
+	FindTag(row Tag) (Tag, error)
+	InsertTag(row Tag) (Tag, error)
+	FindOrInsertTag(row Tag) (Tag, error)
+
+	FindMediaTag(row MediaTag) (MediaTag, error)
+	InsertMediaTag(row MediaTag) (MediaTag, error)
+	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
 }

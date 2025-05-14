@@ -39,26 +39,26 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/BossRighteous">
+                    <img src="https://avatars.githubusercontent.com/u/972810?v=4" width="100;" alt="BossRighteous"/>
+                    <br />
+                    <sub><b>BossRighteous</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/timwilsie">
                     <img src="https://avatars.githubusercontent.com/u/617551?v=4" width="100;" alt="timwilsie"/>
                     <br />
                     <sub><b>Tim Wilsie</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/theypsilon">
                     <img src="https://avatars.githubusercontent.com/u/852246?v=4" width="100;" alt="theypsilon"/>
                     <br />
                     <sub><b>José Manuel Barroso Galindo</b></sub>
-                </a>
-            </td>
-		</tr>
-		<tr>
-            <td align="center">
-                <a href="https://github.com/BossRighteous">
-                    <img src="https://avatars.githubusercontent.com/u/972810?v=4" width="100;" alt="BossRighteous"/>
-                    <br />
-                    <sub><b>BossRighteous</b></sub>
                 </a>
             </td>
             <td align="center">
