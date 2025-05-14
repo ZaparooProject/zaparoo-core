@@ -2,13 +2,15 @@ package userdb
 
 import (
 	"database/sql"
+	"github.com/rs/zerolog/log"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 )
 
 // Queries go here to keep the interface clean
-const UserDBVersion string = "1.0"
+
+const DBVersion string = "1.0"
 
 func sqlAllocate(db *sql.DB) error {
 	// ROWID is an internal subject to change on vacuum
@@ -40,7 +42,7 @@ func sqlAllocate(db *sql.DB) error {
 	drop table if exists Mappings;
 	create table Mappings (
 		DBID INTEGER PRIMARY KEY,
-		Id text not null,
+		ID text not null,
 		Added integer not null,
 		Label text not null,
 		Enabled integer not null,
@@ -50,10 +52,11 @@ func sqlAllocate(db *sql.DB) error {
 		Override text not null
 	);
 	`
-	_, err := db.Exec(sqlStmt, UserDBVersion)
+	_, err := db.Exec(sqlStmt, DBVersion)
 	return err
 }
 
+//goland:noinspection SqlWithoutWhere
 func sqlTruncate(db *sql.DB) error {
 	sqlStmt := `
 	delete from History;
@@ -78,7 +81,12 @@ func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 			Time, Type, UID, Text, Data, Success
 		) values (?, ?, ?, ?, ?, ?);
 	`)
-	defer stmt.Close()
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
 	if err != nil {
 		return err
 	}
@@ -95,7 +103,7 @@ func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 
 func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, error) {
 	var list []database.HistoryEntry
-	// Instead of offset use token based
+	// Instead of offset, use token-based
 	if lastId == 0 {
 		lastId = 2147483646
 	}
@@ -107,12 +115,22 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 		order by DBID DESC
 		limit 25;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		err := q.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(q)
 	rows, err := q.Query(lastId)
 	if err != nil {
 		return list, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		err := rows.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql rows")
+		}
+	}(rows)
 	for rows.Next() {
 		row := database.HistoryEntry{}
 		var timeInt int64
@@ -138,15 +156,20 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 	stmt, err := db.Prepare(`
 		insert into Mappings(
-			Id, Added, Label, Enabled, Type, Match, Pattern, Override
+			ID, Added, Label, Enabled, Type, Match, Pattern, Override
 		) values (?, ?, ?, ?, ?, ?, ?, ?);
 	`)
-	defer stmt.Close()
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
 	if err != nil {
 		return err
 	}
 	_, err = stmt.Exec(
-		m.Id,
+		m.ID,
 		m.Added,
 		m.Label,
 		m.Enabled,
@@ -162,17 +185,22 @@ func sqlGetMapping(db *sql.DB, id string) (database.Mapping, error) {
 	var row database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, Id, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
-		where Id = ?;
+		where ID = ?;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		err := q.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(q)
 	if err != nil {
 		return row, err
 	}
 	err = q.QueryRow(id).Scan(
 		&row.DBID,
-		&row.Id,
+		&row.ID,
 		&row.Added,
 		&row.Label,
 		&row.Enabled,
@@ -186,9 +214,14 @@ func sqlGetMapping(db *sql.DB, id string) (database.Mapping, error) {
 
 func sqlDeleteMapping(db *sql.DB, id string) error {
 	stmt, err := db.Prepare(`
-		delete from Mappings where Id = ?;
+		delete from Mappings where ID = ?;
 	`)
-	defer stmt.Close()
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
 	if err != nil {
 		return err
 	}
@@ -207,9 +240,14 @@ func sqlUpdateMapping(db *sql.DB, id string, m database.Mapping) error {
 			Pattern = ?,
 			Override = ?
 		where
-			Id = ?;
+			ID = ?;
 	`)
-	defer stmt.Close()
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
 	if err != nil {
 		return err
 	}
@@ -230,20 +268,30 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, Id, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings;
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		err := q.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(q)
 	rows, err := q.Query()
 	if err != nil {
 		return list, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		err := rows.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql rows")
+		}
+	}(rows)
 	for rows.Next() {
 		row := database.Mapping{}
 		err := rows.Scan(
 			&row.DBID,
-			&row.Id,
+			&row.ID,
 			&row.Added,
 			&row.Label,
 			&row.Enabled,
@@ -265,21 +313,31 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, Id, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
 		where Enabled = ?
 	`)
-	defer q.Close()
+	defer func(q *sql.Stmt) {
+		err := q.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(q)
 	rows, err := q.Query(true)
 	if err != nil {
 		return list, err
 	}
-	defer rows.Close()
+	defer func(rows *sql.Rows) {
+		err := rows.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql rows")
+		}
+	}(rows)
 	for rows.Next() {
 		row := database.Mapping{}
 		err := rows.Scan(
 			&row.DBID,
-			&row.Id,
+			&row.ID,
 			&row.Added,
 			&row.Label,
 			&row.Enabled,

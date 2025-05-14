@@ -8,14 +8,12 @@ import (
 )
 
 /*
- * In attempting to correct circular import deps these non-concrete
+ * In attempting to correct circular import deps, these non-concrete
  * interfaces were moves to this generic package level.
  * Actual implementations found in userdb/mediadb
  */
 
-/*
- * Portable interface for ENV bindings
- */
+// Database is a portable interface for ENV bindings
 type Database struct {
 	UserDB  UserDBI
 	MediaDB MediaDBI
@@ -24,6 +22,7 @@ type Database struct {
 /*
  * Structs for SQL records
  */
+
 type HistoryEntry struct {
 	DBID    int64
 	Time    time.Time `json:"time"`
@@ -36,7 +35,7 @@ type HistoryEntry struct {
 
 type Mapping struct {
 	DBID     int64
-	Id       string `json:"id"`
+	ID       string `json:"id"` // TODO: double check is this necessary?
 	Added    int64  `json:"added"`
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`

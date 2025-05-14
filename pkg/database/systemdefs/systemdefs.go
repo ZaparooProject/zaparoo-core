@@ -19,9 +19,9 @@ type System struct {
 	Aliases []string
 }
 
-// Copied from utils for circular
 // MapKeys returns a list of all keys in a map.
 func MapKeys[K comparable, V any](m map[K]V) []K {
+	// Copied from utils for circular
 	keys := make([]K, len(m))
 	i := 0
 	for k := range m {
@@ -31,8 +31,8 @@ func MapKeys[K comparable, V any](m map[K]V) []K {
 	return keys
 }
 
-// Copied from utils for circular
 func AlphaMapKeys[V any](m map[string]V) []string {
+	// Copied from utils for circular
 	keys := MapKeys(m)
 	sort.Strings(keys)
 	return keys

@@ -12,8 +12,9 @@ import (
 )
 
 // We can't batch effectively without a sense of relationships
-// Instead of indexing string columns use in-mem map to track records to
-// insert IDs. Batching should be able to run with assumed IDs
+// Instead of indexing string columns, use an in-memory map to track records to
+// insert IDs.
+// Batching should be able to run with an assumed IDs
 // database.ScanState and DB transactions allow accumulation
 
 func FlushScanStateMaps(ss *database.ScanState) {
@@ -132,7 +133,7 @@ type MediaPathFragments struct {
 }
 
 func getTagsFromFileName(filename string) []string {
-	re := regexp.MustCompile(`\(([\w\,\- ]*)\)|\[([\w\,\- ]*)\]`)
+	re := regexp.MustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
 	matches := re.FindAllString(filename, -1)
 	tags := make([]string, 0)
 	for _, padded := range matches {
@@ -146,7 +147,7 @@ func getTagsFromFileName(filename string) []string {
 }
 
 func getTitleFromFilename(filename string) string {
-	r := regexp.MustCompile(`^([^\(\[]*)`)
+	r := regexp.MustCompile(`^([^(\[]*)`)
 	title := r.FindString(filename)
 	return strings.TrimSpace(title)
 }
@@ -216,49 +217,73 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	}
 
 	ss.TagTypesIndex++
-	db.InsertTagType(database.TagType{
+	_, err := db.InsertTagType(database.TagType{
 		DBID: int64(ss.TagTypesIndex),
 		Type: "Unknown",
 	})
+	if err != nil {
+		log.Warn().Err(err).Msgf("error inserting tag type Unknown")
+		return
+	}
 
 	ss.TagsIndex++
 	ss.TagIDs["unknown"] = ss.TagsIndex
-	db.InsertTag(database.Tag{
+	_, err = db.InsertTag(database.Tag{
 		DBID:     int64(ss.TagsIndex),
 		Tag:      "unknown",
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
+	if err != nil {
+		log.Warn().Err(err).Msgf("error inserting tag unknown")
+		return
+	}
 
 	ss.TagTypesIndex++
-	db.InsertTagType(database.TagType{
+	_, err = db.InsertTagType(database.TagType{
 		DBID: int64(ss.TagTypesIndex),
 		Type: "Extension",
 	})
+	if err != nil {
+		log.Warn().Err(err).Msgf("error inserting tag type Extension")
+		return
+	}
 
 	ss.TagsIndex++
 	ss.TagIDs[".ext"] = ss.TagsIndex
-	db.InsertTag(database.Tag{
+	_, err = db.InsertTag(database.Tag{
 		DBID:     int64(ss.TagsIndex),
 		Tag:      ".ext",
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
+	if err != nil {
+		log.Warn().Err(err).Msgf("error inserting tag .ext")
+		return
+	}
 
 	for typeStr, tags := range typeMatches {
 		ss.TagTypesIndex++
 		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
-		db.InsertTagType(database.TagType{
+		_, err := db.InsertTagType(database.TagType{
 			DBID: int64(ss.TagTypesIndex),
 			Type: typeStr,
 		})
+		if err != nil {
+			log.Warn().Err(err).Msgf("error inserting tag type %s", typeStr)
+			return
+		}
 
 		for _, tag := range tags {
 			ss.TagsIndex++
 			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
-			db.InsertTag(database.Tag{
+			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
 				Tag:      strings.ToLower(tag),
 				TypeDBID: int64(ss.TagTypesIndex),
 			})
+			if err != nil {
+				log.Warn().Err(err).Msgf("error inserting tag %s", tag)
+				return
+			}
 		}
 	}
 	ss.TagTypeIDs = make(map[string]int)

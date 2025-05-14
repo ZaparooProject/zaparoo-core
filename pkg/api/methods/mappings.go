@@ -37,7 +37,7 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 		t := time.Unix(0, m.Added*int64(time.Millisecond))
 
 		mr := models.MappingResponse{
-			Id:       m.Id,
+			Id:       m.ID,
 			Added:    t.Format(time.RFC3339),
 			Label:    m.Label,
 			Enabled:  m.Enabled,

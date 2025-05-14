@@ -39,11 +39,11 @@ func (db *MediaDB) Open() error {
 			return err
 		}
 	}
-	sql, err := sql.Open("sqlite", dbPath)
+	sqlInstance, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
 	}
-	db.sql = sql
+	db.sql = sqlInstance
 	if !exists {
 		return db.Allocate()
 	}
@@ -102,7 +102,7 @@ func (db *MediaDB) ReindexTables() error {
 	return sqlIndexTables(db.sql)
 }
 
-// Return indexed names matching exact query (case insensitive).
+// SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
 func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
 		return make([]database.SearchResult, 0), ErrorNullSql
@@ -110,7 +110,7 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 	return sqlSearchMediaPathExact(db.sql, systems, query)
 }
 
-// Return indexed names that include every word in query (case insensitive).
+// SearchMediaPathWords returns indexed names that include every word in a query (case-insensitive).
 func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
 		return make([]database.SearchResult, 0), ErrorNullSql
@@ -119,8 +119,8 @@ func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query strin
 	return sqlSearchMediaPathParts(db.sql, systems, qWords)
 }
 
-// Glob pattern matching unclear on some patterns
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
+	// TODO: glob pattern matching unclear on some patterns
 	// query == path like with possible *
 	var nullResults []database.SearchResult
 	if db.sql == nil {
@@ -141,12 +141,12 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 		return []database.SearchResult{rnd}, nil
 	}
 
+	// TODO: since we approximated a glob, we should actually check
+	//       result paths against base glob to confirm
 	return sqlSearchMediaPathParts(db.sql, systems, parts)
-	// TODO since we approximated a glob, we should actually check
-	// result paths against base glob to confirm
 }
 
-// Return true if a specific system is indexed in the gamesdb
+// SystemIndexed returns true if a specific system is indexed in the media database.
 func (db *MediaDB) SystemIndexed(system systemdefs.System) bool {
 	if db.sql == nil {
 		return false
@@ -154,8 +154,9 @@ func (db *MediaDB) SystemIndexed(system systemdefs.System) bool {
 	return sqlSystemIndexed(db.sql, system)
 }
 
-// Return all systems indexed in the gamesdb
+// IndexedSystems returns all systems indexed in the media database.
 func (db *MediaDB) IndexedSystems() ([]string, error) {
+	// TODO: what is a JBONE??
 	// JBONE: return string map of Systems.Key, Systems.Indexed
 	var systems []string
 	if db.sql == nil {
@@ -164,7 +165,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	return sqlIndexedSystems(db.sql)
 }
 
-// Return a random game from specified systems.
+// RandomGame returns a random game from specified systems.
 func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
@@ -189,7 +190,7 @@ func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
 
 func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, error) {
 	system, err := db.FindSystem(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertSystem(row)
 	}
 	return system, err
@@ -205,7 +206,7 @@ func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitl
 
 func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
 	system, err := db.FindMediaTitle(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertMediaTitle(row)
 	}
 	return system, err
@@ -221,7 +222,7 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
 	system, err := db.FindMedia(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertMedia(row)
 	}
 	return system, err
@@ -237,7 +238,7 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 
 func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, error) {
 	system, err := db.FindTagType(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertTagType(row)
 	}
 	return system, err
@@ -253,7 +254,7 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 
 func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
 	system, err := db.FindTag(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertTag(row)
 	}
 	return system, err
@@ -269,7 +270,7 @@ func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, err
 
 func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
 	system, err := db.FindMediaTag(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertMediaTag(row)
 	}
 	return system, err

@@ -36,11 +36,11 @@ func (db *UserDB) Open() error {
 			return err
 		}
 	}
-	sql, err := sql.Open("sqlite", dbPath)
+	sqlInstance, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
 	}
-	db.sql = sql
+	db.sql = sqlInstance
 	if !exists {
 		return db.Allocate()
 	}

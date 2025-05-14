@@ -109,7 +109,7 @@ func (r *resultsStack) get() (*[]string, error) {
 	return &(*r)[len(*r)-1], nil
 }
 
-// GetFiles searches for all valid games in a given path and return a list of
+// GetFiles searches for all valid games in a given path and returns a list of
 // files. This function deep searches .zip files and handles symlinks at all
 // levels.
 func GetFiles(
@@ -197,6 +197,7 @@ func GetFiles(
 			zipFiles, err := utils.ListZip(path)
 			if err != nil {
 				// skip invalid zip files
+				log.Warn().Err(err).Msgf("error listing zip: %s", path)
 				return nil
 			}
 
@@ -229,7 +230,7 @@ func GetFiles(
 		return nil, err
 	}
 
-	// handle symlinks on root game folder because WalkDir fails silently on them
+	// handle symlinks on the root game folder because WalkDir fails silently on them
 	var realPath string
 	if root.Mode()&os.ModeSymlink == 0 {
 		realPath = path
@@ -283,9 +284,10 @@ type IndexStatus struct {
 	Files    int
 }
 
-// Given a list of systems, index all valid game files on disk and write a
-// names index to the DB. Overwrites any existing names index, but does not
-// clean up old missing files.
+// NewNamesIndex takes a list of systems, indexes all valid game files on disk
+// and writes a name index to the DB.
+//
+// Overwrites any existing names index but does not clean up old missing files.
 //
 // Takes a function which will be called with the current status of the index
 // during key steps.
@@ -300,8 +302,14 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 
-	db.Allocate()
-	db.BeginTransaction()
+	err := db.Allocate()
+	if err != nil {
+		return 0, err
+	}
+	err = db.BeginTransaction()
+	if err != nil {
+		return 0, err
+	}
 
 	status := IndexStatus{
 		Total: len(systems) + 2, // estimate steps
@@ -351,7 +359,7 @@ func NewNamesIndex(
 		status.Step++
 		update(status)
 
-		// scan using standard folder + extensions
+		// scan using standard folder and extensions
 		for _, path := range systemPaths[k] {
 			pathFiles, err := GetFiles(cfg, platform, k, path)
 			if err != nil {
@@ -363,7 +371,7 @@ func NewNamesIndex(
 			}
 		}
 
-		// for each system launcher in platform, run the results through its
+		// for each system launcher in a platform, run the results through its
 		// custom scan function if one exists
 		for _, l := range platform.Launchers() {
 			if l.SystemID == k && l.Scanner != nil {
@@ -394,7 +402,7 @@ func NewNamesIndex(
 	}
 
 	// run each custom scanner at least once, even if there are no paths
-	// defined or results from regular index
+	// defined or results from a regular index
 	for _, l := range platform.Launchers() {
 		systemId := l.SystemID
 		if !scanned[systemId] && l.Scanner != nil {
@@ -456,8 +464,11 @@ func NewNamesIndex(
 	update(status)
 
 	scanState.TagIDs = make(map[string]int)
-	db.ReindexTables()
-	err := db.CommitTransaction()
+	err = db.ReindexTables()
+	if err != nil {
+		return 0, err
+	}
+	err = db.CommitTransaction()
 	if err != nil {
 		log.Error().Err(err).Msg("MediaDB sqlite bulk insert failed")
 	}
