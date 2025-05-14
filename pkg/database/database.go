@@ -137,6 +137,8 @@ type MediaDBI interface {
 	BeginTransaction() error
 	CommitTransaction() error
 	Exists() bool
+	UpdateLastGenerated() error
+	GetLastGenerated() (time.Time, error)
 
 	ReindexTables() error
 

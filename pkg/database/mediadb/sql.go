@@ -25,13 +25,14 @@ func sqlAllocate(db *sql.DB) error {
 	drop table if exists DBInfo;
 	create table DBInfo (
 		DBID INTEGER PRIMARY KEY,
-		Version text
+		Version text,
+		LastGeneratedAt integer not null
 	);
 
 	insert into
 	DBInfo
-	(DBID, Version)
-	values (1, ?);
+	(DBID, Version, LastGeneratedAt)
+	values (1, ?, 0);
 
 	drop table if exists Systems;
 	create table Systems (

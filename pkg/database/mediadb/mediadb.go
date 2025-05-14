@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
@@ -56,6 +57,28 @@ func (db *MediaDB) GetDBPath() string {
 
 func (db *MediaDB) Exists() bool {
 	return db.sql != nil
+}
+
+func (db *MediaDB) UpdateLastGenerated() error {
+	if db.sql == nil {
+		return ErrorNullSql
+	}
+	_, err := db.sql.Exec("UPDATE DBInfo SET LastGeneratedAt = ? WHERE DBID = 1", time.Now().Unix())
+	return err
+}
+
+func (db *MediaDB) GetLastGenerated() (time.Time, error) {
+	if db.sql == nil {
+		return time.Time{}, ErrorNullSql
+	}
+
+	var timestamp int64
+	err := db.sql.QueryRow("SELECT LastGeneratedAt FROM DBInfo WHERE DBID = 1").Scan(&timestamp)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.Unix(timestamp, 0), nil
 }
 
 func (db *MediaDB) UnsafeGetSqlDb() *sql.DB {

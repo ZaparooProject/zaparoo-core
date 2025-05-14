@@ -478,11 +478,15 @@ func NewNamesIndex(
 	}
 	err = db.CommitTransaction()
 	if err != nil {
-		log.Error().Err(err).Msg("MediaDB sqlite bulk insert failed")
+		return 0, err
 	}
 	err = db.Vacuum()
 	if err != nil {
-		log.Error().Err(err).Msg("MediaDB sqlite vacuum failed")
+		return 0, err
+	}
+	err = db.UpdateLastGenerated()
+	if err != nil {
+		return 0, err
 	}
 
 	// MiSTer needs the love here

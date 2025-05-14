@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
@@ -239,7 +240,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	if env.Platform.ActiveGamePath() != "" {
 		system, err := assets.GetSystemMetadata(env.Platform.ActiveSystem())
 		if err != nil {
-			return nil, errors.New("error getting system metadata: " + err.Error())
+			return nil, fmt.Errorf("error getting system metadata: %w", err)
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
@@ -250,7 +251,11 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		})
 	}
 
-	resp.Database.Exists = env.Database.MediaDB.Exists()
+	lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
+	if err != nil {
+		return nil, fmt.Errorf("error getting last generated time: %w", err)
+	}
+	resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated)
 	resp.Database.Indexing = IndexingStatusInstance.Indexing
 
 	if resp.Database.Indexing {
