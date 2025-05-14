@@ -68,9 +68,9 @@ func (s *IndexingStatus) GenerateMediaDB(
 			} else if status.Step == status.Total {
 				s.CurrentDesc = "Writing database"
 			} else {
-				system, err := systemdefs.GetSystem(status.SystemId)
+				system, err := systemdefs.GetSystem(status.SystemID)
 				if err != nil {
-					s.CurrentDesc = status.SystemId
+					s.CurrentDesc = status.SystemID
 				} else {
 					md, err := assets.GetSystemMetadata(system.ID)
 					if err != nil {

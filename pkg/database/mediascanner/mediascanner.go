@@ -288,7 +288,7 @@ func GetFiles(
 type IndexStatus struct {
 	Total    int
 	Step     int
-	SystemId string
+	SystemID string
 	Files    int
 }
 
@@ -363,7 +363,7 @@ func NewNamesIndex(
 		systemId := k
 		files := make([]platforms.ScanResult, 0)
 
-		status.SystemId = systemId
+		status.SystemID = systemId
 		status.Step++
 		update(status)
 
@@ -468,7 +468,7 @@ func NewNamesIndex(
 	}
 
 	status.Step++
-	status.SystemId = ""
+	status.SystemID = ""
 	update(status)
 
 	scanState.TagIDs = make(map[string]int)

@@ -36,7 +36,7 @@ func sqlAllocate(db *sql.DB) error {
 	drop table if exists Systems;
 	create table Systems (
 		DBID INTEGER PRIMARY KEY,
-		SystemId text unique not null,
+		SystemID text unique not null,
 		Name text not null
 	);
 
@@ -589,14 +589,14 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	args = append(args, slug, path)
 	stmt, err := db.Prepare(`
 		select 
-			Systems.SystemId,
+			Systems.SystemID,
 			Media.Path
 		from Systems
 		inner join MediaTitles
 			on Systems.DBID = MediaTitles.SystemDBID
 		inner join Media
 			on MediaTitles.DBID = Media.MediaTitleDBID
-		where Systems.SystemId IN (` +
+		where Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
 		and MediaTitles.Slug = ?
@@ -645,14 +645,14 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	}
 	stmt, err := db.Prepare(`
 		select 
-			Systems.SystemId,
+			Systems.SystemID,
 			Media.Path
 		from Systems
 		inner join MediaTitles
 			on Systems.DBID = MediaTitles.SystemDBID
 		inner join Media
 			on MediaTitles.DBID = Media.MediaTitleDBID
-		where Systems.SystemId IN (` +
+		where Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
 		and ` +
@@ -694,9 +694,9 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 	systemId := ""
 	q, err := db.Prepare(`
 		select
-		SystemId
+		SystemID
 		from Systems
-		where SystemId = ?;
+		where SystemID = ?;
 	`)
 	defer func(q *sql.Stmt) {
 		err := q.Close()
@@ -717,7 +717,7 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	var list []string
 	q, err := db.Prepare(`
-		select SystemId from Systems;
+		select SystemID from Systems;
 	`)
 	defer func(q *sql.Stmt) {
 		err := q.Close()
@@ -751,11 +751,11 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 	var row database.SearchResult
 	q, err := db.Prepare(`
 		select
-		Systems.SystemId, Media.Path
+		Systems.SystemID, Media.Path
 		from Media
 		INNER JOIN MediaTitles on MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems on Systems.DBID = MediaTitles.SystemDBID
-		where Systems.SystemId = ?
+		where Systems.SystemID = ?
 		ORDER BY RANDOM() LIMIT 1;
 	`)
 	defer func(q *sql.Stmt) {
