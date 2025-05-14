@@ -339,7 +339,7 @@ func (r *Reader) pollDevice(
 
 	tagUid := tags.GetTagUID(target)
 	if tagUid == "" {
-		log.Warn().Msgf("unable to detect token UID: %s", target.String())
+		log.Warn().Msgf("unable to detect token ID: %s", target.String())
 	}
 
 	// no change in tag
@@ -347,7 +347,7 @@ func (r *Reader) pollDevice(
 		return activeToken, removed, nil
 	}
 
-	log.Info().Msgf("found token UID: %s", tagUid)
+	log.Info().Msgf("found token ID: %s", tagUid)
 
 	var record tags.TagData
 	cardType := tags.GetTagType(target)
@@ -428,7 +428,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	}
 
 	cardUid := tags.GetTagUID(target)
-	log.Info().Msgf("found tag with UID: %s", cardUid)
+	log.Info().Msgf("found tag with ID: %s", cardUid)
 
 	cardType := tags.GetTagType(target)
 	var bytesWritten []byte
@@ -470,9 +470,9 @@ func (r *Reader) writeTag(req WriteRequest) {
 	}
 
 	if t.UID != cardUid {
-		log.Error().Msgf("UID mismatch after write: %s != %s", t.UID, cardUid)
+		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUid)
 		req.Result <- WriteRequestResult{
-			Err: errors.New("UID mismatch after write"),
+			Err: errors.New("ID mismatch after write"),
 		}
 		return
 	}

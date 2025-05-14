@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
@@ -88,6 +90,7 @@ func launchToken(
 			cmd,
 			len(cmds),
 			i,
+			db,
 		)
 		if err != nil {
 			return err
@@ -137,14 +140,14 @@ func processTokenQueue(
 				}
 
 				he := database.HistoryEntry{
-					Time: t.ScanTime,
-					Type: t.Type,
-					UID:  t.UID,
-					Text: t.Text,
-					Data: t.Data,
+					Time:       t.ScanTime,
+					Type:       t.Type,
+					TokenID:    t.UID,
+					TokenValue: t.Text,
+					TokenData:  t.Data,
 				}
 				he.Success = err == nil
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
@@ -199,16 +202,16 @@ func processTokenQueue(
 			}
 
 			he := database.HistoryEntry{
-				Time: t.ScanTime,
-				Type: t.Type,
-				UID:  t.UID,
-				Text: t.Text,
-				Data: t.Data,
+				Time:       t.ScanTime,
+				Type:       t.Type,
+				TokenID:    t.UID,
+				TokenValue: t.Text,
+				TokenData:  t.Data,
 			}
 
 			if !st.RunZapScriptEnabled() {
 				log.Debug().Msg("ZapScript disabled, skipping run")
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
@@ -228,16 +231,34 @@ func processTokenQueue(
 				}
 
 				he.Success = err == nil
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
 			}()
 		case <-st.GetContext().Done():
 			log.Debug().Msg("Exiting Service worker via context cancellation")
-			break
+			return
 		}
 	}
+}
+
+func makeDatabase(pl platforms.Platform) (*database.Database, error) {
+	db := &database.Database{
+		MediaDB: nil,
+		UserDB:  nil,
+	}
+	mediaDB, err := mediadb.OpenMediaDB(pl)
+	if err != nil {
+		return db, err
+	}
+	db.MediaDB = mediaDB
+	userDB, err := userdb.OpenUserDB(pl)
+	if err != nil {
+		return db, err
+	}
+	db.UserDB = userDB
+	return db, nil
 }
 
 func Start(
@@ -281,7 +302,7 @@ func Start(
 	}
 
 	log.Info().Msg("opening user database")
-	db, err := database.Open(pl)
+	db, err := makeDatabase(pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening user database")
 		return nil, err
@@ -321,6 +342,8 @@ func Start(
 			log.Warn().Msgf("error stopping platform: %s", err)
 		}
 		st.StopService()
+		db.MediaDB.Close()
+		db.UserDB.Close()
 		close(plq)
 		close(lsq)
 		close(itq)

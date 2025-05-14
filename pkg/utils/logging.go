@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-func InitLogging(pl platforms.Platform, writers []io.Writer) error {
+type LoggingPlatform interface {
+	LogDir() string
+}
+
+func InitLogging(pl LoggingPlatform, writers []io.Writer) error {
 	err := os.MkdirAll(pl.LogDir(), 0755)
 	if err != nil {
 		return err

@@ -156,9 +156,9 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 				log.Error().Err(err).Msg("error unmarshalling token")
 				return nil
 			}
-			tagsReadMenu.AddTextView("UID", data.UID, 50, 1, true, false)
-			tagsReadMenu.AddTextView("data", data.Data, 50, 1, true, false)
-			tagsReadMenu.AddTextView("text", data.Text, 50, 4, true, false)
+			tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
+			tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
+			tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
 			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
 		}
 		if k == tcell.KeyEscape {

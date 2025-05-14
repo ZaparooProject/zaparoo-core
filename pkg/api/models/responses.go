@@ -36,7 +36,7 @@ type SystemsResponse struct {
 	Systems []System `json:"systems"`
 }
 
-type HistoryReponseEntry struct {
+type HistoryResponseEntry struct {
 	Time    time.Time `json:"time"`
 	Type    string    `json:"type"`
 	UID     string    `json:"uid"`
@@ -46,7 +46,7 @@ type HistoryReponseEntry struct {
 }
 
 type HistoryResponse struct {
-	Entries []HistoryReponseEntry `json:"entries"`
+	Entries []HistoryResponseEntry `json:"entries"`
 }
 
 type AllMappingsResponse struct {
@@ -54,7 +54,7 @@ type AllMappingsResponse struct {
 }
 
 type MappingResponse struct {
-	Id       string `json:"id"`
+	ID       string `json:"id"`
 	Added    string `json:"added"`
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`
