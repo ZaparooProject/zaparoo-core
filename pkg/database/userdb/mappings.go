@@ -69,15 +69,15 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 	return sqlAddMapping(db.sql, m)
 }
 
-func (db *UserDB) GetMapping(id string) (database.Mapping, error) {
+func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
 	return sqlGetMapping(db.sql, id)
 }
 
-func (db *UserDB) DeleteMapping(id string) error {
+func (db *UserDB) DeleteMapping(id int64) error {
 	return sqlDeleteMapping(db.sql, id)
 }
 
-func (db *UserDB) UpdateMapping(id string, m database.Mapping) error {
+func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
 	if !utils.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}

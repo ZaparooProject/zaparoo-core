@@ -36,8 +36,15 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 	for _, m := range mappings {
 		t := time.Unix(0, m.Added*int64(time.Millisecond))
 
+		// keep compatibility for v0.1 api
+		if m.Type == userdb.MappingTypeID {
+			m.Type = userdb.LegacyMappingTypeUID
+		} else if m.Type == userdb.MappingTypeValue {
+			m.Type = userdb.LegacyMappingTypeText
+		}
+
 		mr := models.MappingResponse{
-			Id:       m.ID,
+			ID:       strconv.FormatInt(m.DBID, 10),
 			Added:    t.Format(time.RFC3339),
 			Label:    m.Label,
 			Enabled:  m.Enabled,
@@ -134,7 +141,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	err = env.Database.UserDB.DeleteMapping(strconv.Itoa(params.Id))
+	err = env.Database.UserDB.DeleteMapping(int64(params.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +204,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	oldMapping, err := env.Database.UserDB.GetMapping(strconv.Itoa(params.Id))
+	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.Id))
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +235,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		newMapping.Override = *params.Override
 	}
 
-	err = env.Database.UserDB.UpdateMapping(strconv.Itoa(params.Id), newMapping)
+	err = env.Database.UserDB.UpdateMapping(int64(params.Id), newMapping)
 	if err != nil {
 		return nil, err
 	}

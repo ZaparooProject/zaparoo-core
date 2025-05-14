@@ -50,11 +50,11 @@ func HandleHistory(env requests.RequestEnv) (any, error) {
 	}
 
 	resp := models.HistoryResponse{
-		Entries: make([]models.HistoryReponseEntry, len(entries)),
+		Entries: make([]models.HistoryResponseEntry, len(entries)),
 	}
 
 	for i, e := range entries {
-		resp.Entries[i] = models.HistoryReponseEntry{
+		resp.Entries[i] = models.HistoryResponseEntry{
 			Time:    e.Time,
 			Type:    e.Type,
 			UID:     e.TokenID,

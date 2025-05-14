@@ -24,7 +24,7 @@ type Database struct {
  */
 
 type HistoryEntry struct {
-	DBID       int64
+	DBID       int64     `db:"DBID" json:"id"`
 	Time       time.Time `json:"time"`
 	Type       string    `json:"type"`
 	TokenID    string    `json:"tokenId"`
@@ -35,7 +35,6 @@ type HistoryEntry struct {
 
 type Mapping struct {
 	DBID     int64
-	ID       string `json:"id"` // TODO: double check is this necessary?
 	Added    int64  `json:"added"`
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`
@@ -126,9 +125,9 @@ type UserDBI interface {
 	AddHistory(entry HistoryEntry) error
 	GetHistory(lastId int) ([]HistoryEntry, error)
 	AddMapping(m Mapping) error
-	GetMapping(id string) (Mapping, error)
-	DeleteMapping(id string) error
-	UpdateMapping(id string, m Mapping) error
+	GetMapping(id int64) (Mapping, error)
+	DeleteMapping(id int64) error
+	UpdateMapping(id int64, m Mapping) error
 	GetAllMappings() ([]Mapping, error)
 	GetEnabledMappings() ([]Mapping, error)
 }

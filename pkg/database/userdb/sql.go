@@ -42,7 +42,6 @@ func sqlAllocate(db *sql.DB) error {
 	drop table if exists Mappings;
 	create table Mappings (
 		DBID INTEGER PRIMARY KEY,
-		ID text not null,
 		Added integer not null,
 		Label text not null,
 		Enabled integer not null,
@@ -156,8 +155,8 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 	stmt, err := db.Prepare(`
 		insert into Mappings(
-			ID, Added, Label, Enabled, Type, Match, Pattern, Override
-		) values (?, ?, ?, ?, ?, ?, ?, ?);
+			Added, Label, Enabled, Type, Match, Pattern, Override
+		) values (?, ?, ?, ?, ?, ?, ?);
 	`)
 	defer func(stmt *sql.Stmt) {
 		err := stmt.Close()
@@ -169,7 +168,6 @@ func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 		return err
 	}
 	_, err = stmt.Exec(
-		m.ID,
 		m.Added,
 		m.Label,
 		m.Enabled,
@@ -181,13 +179,13 @@ func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 	return err
 }
 
-func sqlGetMapping(db *sql.DB, id string) (database.Mapping, error) {
+func sqlGetMapping(db *sql.DB, id int64) (database.Mapping, error) {
 	var row database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
-		where ID = ?;
+		where DBID = ?;
 	`)
 	defer func(q *sql.Stmt) {
 		err := q.Close()
@@ -200,7 +198,6 @@ func sqlGetMapping(db *sql.DB, id string) (database.Mapping, error) {
 	}
 	err = q.QueryRow(id).Scan(
 		&row.DBID,
-		&row.ID,
 		&row.Added,
 		&row.Label,
 		&row.Enabled,
@@ -212,9 +209,9 @@ func sqlGetMapping(db *sql.DB, id string) (database.Mapping, error) {
 	return row, err
 }
 
-func sqlDeleteMapping(db *sql.DB, id string) error {
+func sqlDeleteMapping(db *sql.DB, id int64) error {
 	stmt, err := db.Prepare(`
-		delete from Mappings where ID = ?;
+		delete from Mappings where DBID = ?;
 	`)
 	defer func(stmt *sql.Stmt) {
 		err := stmt.Close()
@@ -229,7 +226,7 @@ func sqlDeleteMapping(db *sql.DB, id string) error {
 	return err
 }
 
-func sqlUpdateMapping(db *sql.DB, id string, m database.Mapping) error {
+func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
 	stmt, err := db.Prepare(`
 		update Mappings set
 			Added = ?,
@@ -240,7 +237,7 @@ func sqlUpdateMapping(db *sql.DB, id string, m database.Mapping) error {
 			Pattern = ?,
 			Override = ?
 		where
-			ID = ?;
+			DBID = ?;
 	`)
 	defer func(stmt *sql.Stmt) {
 		err := stmt.Close()
@@ -268,7 +265,7 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings;
 	`)
 	defer func(q *sql.Stmt) {
@@ -291,7 +288,6 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 		row := database.Mapping{}
 		err := rows.Scan(
 			&row.DBID,
-			&row.ID,
 			&row.Added,
 			&row.Label,
 			&row.Enabled,
@@ -313,7 +309,7 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 	q, err := db.Prepare(`
 		select
-		DBID, ID, Added, Label, Enabled, Type, Match, Pattern, Override
+		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
 		where Enabled = ?
 	`)
@@ -337,7 +333,6 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 		row := database.Mapping{}
 		err := rows.Scan(
 			&row.DBID,
-			&row.ID,
 			&row.Added,
 			&row.Label,
 			&row.Enabled,
