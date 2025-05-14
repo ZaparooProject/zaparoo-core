@@ -110,24 +110,24 @@ func sqlIndexTables(db *sql.DB) error {
 	create index supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
 	create index supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
 	create index supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
-	vacuum;
 	`
 	_, err := db.Exec(sqlStmt)
 	return err
 }
 
+//goland:noinspection SqlWithoutWhere
 func sqlTruncate(db *sql.DB) error {
 	// TODO: Consider deleting the sqlite db file and reallocating?
 	sqlStmt := `
-	delete from table DBInfo;
-	delete from table Systems;
-	delete from table MediaTitles;
-	delete from table Media;
-	delete from table TagTypes;
-	delete from table Tags;
-	delete from table MediaTags;
-	delete from table MediaTitleTags;
-	delete from table SupportingMedia;
+	delete from DBInfo;
+	delete from Systems;
+	delete from MediaTitles;
+	delete from Media;
+	delete from TagTypes;
+	delete from Tags;
+	delete from MediaTags;
+	delete from MediaTitleTags;
+	delete from SupportingMedia;
 	vacuum;
 	`
 	_, err := db.Exec(sqlStmt)

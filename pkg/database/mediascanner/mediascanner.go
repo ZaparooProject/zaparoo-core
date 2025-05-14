@@ -89,24 +89,32 @@ func GetSystemPaths(pl platforms.Platform, rootFolders []string, systems []syste
 	return matches
 }
 
-type resultsStack [][]string
+type resultsStack struct {
+	results [][]string
+}
 
-func (r *resultsStack) new() {
-	*r = append(*r, []string{})
+func newResultsStack() *resultsStack {
+	return &resultsStack{
+		results: make([][]string, 0),
+	}
+}
+
+func (r *resultsStack) push() {
+	r.results = append(r.results, make([]string, 0))
 }
 
 func (r *resultsStack) pop() {
-	if len(*r) == 0 {
+	if len(r.results) == 0 {
 		return
 	}
-	*r = (*r)[:len(*r)-1]
+	r.results = r.results[:len(r.results)-1]
 }
 
 func (r *resultsStack) get() (*[]string, error) {
-	if len(*r) == 0 {
+	if len(r.results) == 0 {
 		return nil, fmt.Errorf("nothing on stack")
 	}
-	return &(*r)[len(*r)-1], nil
+	return &r.results[len(r.results)-1], nil
 }
 
 // GetFiles searches for all valid games in a given path and returns a list of
@@ -119,7 +127,7 @@ func GetFiles(
 	path string,
 ) ([]string, error) {
 	var allResults []string
-	var stack resultsStack
+	stack := newResultsStack()
 	visited := make(map[string]struct{})
 
 	system, err := systemdefs.GetSystem(systemId)
@@ -166,7 +174,7 @@ func GetFiles(
 					return err
 				}
 
-				stack.new()
+				stack.push()
 				defer stack.pop()
 
 				err = filepath.WalkDir(realPath, scanner)
@@ -217,7 +225,7 @@ func GetFiles(
 		return nil
 	}
 
-	stack.new()
+	stack.push()
 	defer stack.pop()
 
 	root, err := os.Lstat(path)
@@ -471,6 +479,10 @@ func NewNamesIndex(
 	err = db.CommitTransaction()
 	if err != nil {
 		log.Error().Err(err).Msg("MediaDB sqlite bulk insert failed")
+	}
+	err = db.Vacuum()
+	if err != nil {
+		log.Error().Err(err).Msg("MediaDB sqlite vacuum failed")
 	}
 
 	// MiSTer needs the love here
