@@ -636,6 +636,12 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 
 func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []string) ([]database.SearchResult, error) {
 	var results []database.SearchResult
+
+	// search for anything in systems on blank query
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+
 	var args = make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
