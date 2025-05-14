@@ -45,7 +45,7 @@ func isProcessRunning(pid int) bool {
 }
 
 func pidPath(pl platforms.Platform) string {
-	return filepath.Join(pl.TempDir(), PIDFilename)
+	return filepath.Join(pl.Settings().TempDir, PIDFilename)
 }
 
 func createPIDFile(pl platforms.Platform) error {

@@ -88,8 +88,8 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 	if active {
 		return errors.New("a script is already running")
 	}
-  
-  if hidden {
+
+	if hidden {
 		// run the script directly
 		cmd := exec.Command(bin, args)
 		cmd.Env = os.Environ()
@@ -113,7 +113,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 	}
 
 	// run it on-screen like a regular script
-	err := openConsole(pl.kbd, "3")
+	err := openConsole(pl, "3")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening console for script")
 	}
@@ -168,12 +168,12 @@ cd $(dirname "%s")
 	)
 
 	exit := func() {
-		if pl.GetActiveLauncher() == "" {
+		if pl.activeMedia().LauncherID == "" {
 			// exit console
-		  err = pl.KeyboardPress("{f12}")
-		  if err != nil {
-			  return err
-		  }
+			err = pl.KeyboardPress("{f12}")
+			if err != nil {
+				return
+			}
 		} else {
 			return
 		}

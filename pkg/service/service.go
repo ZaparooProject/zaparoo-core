@@ -24,6 +24,8 @@ package service
 import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
@@ -93,6 +95,7 @@ func launchToken(
 			cmd,
 			len(cmds),
 			i,
+			db,
 		)
 		if err != nil {
 			return err
@@ -142,14 +145,14 @@ func processTokenQueue(
 				}
 
 				he := database.HistoryEntry{
-					Time: t.ScanTime,
-					Type: t.Type,
-					UID:  t.UID,
-					Text: t.Text,
-					Data: t.Data,
+					Time:       t.ScanTime,
+					Type:       t.Type,
+					TokenID:    t.UID,
+					TokenValue: t.Text,
+					TokenData:  t.Data,
 				}
 				he.Success = err == nil
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
@@ -204,16 +207,16 @@ func processTokenQueue(
 			}
 
 			he := database.HistoryEntry{
-				Time: t.ScanTime,
-				Type: t.Type,
-				UID:  t.UID,
-				Text: t.Text,
-				Data: t.Data,
+				Time:       t.ScanTime,
+				Type:       t.Type,
+				TokenID:    t.UID,
+				TokenValue: t.Text,
+				TokenData:  t.Data,
 			}
 
 			if !st.RunZapScriptEnabled() {
 				log.Debug().Msg("ZapScript disabled, skipping run")
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
@@ -233,7 +236,7 @@ func processTokenQueue(
 				}
 
 				he.Success = err == nil
-				err = db.AddHistory(he)
+				err = db.UserDB.AddHistory(he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}
@@ -304,6 +307,24 @@ func setupEnvironment(pl platforms.Platform) error {
 	return nil
 }
 
+func makeDatabase(pl platforms.Platform) (*database.Database, error) {
+	db := &database.Database{
+		MediaDB: nil,
+		UserDB:  nil,
+	}
+	mediaDB, err := mediadb.OpenMediaDB(pl)
+	if err != nil {
+		return db, err
+	}
+	db.MediaDB = mediaDB
+	userDB, err := userdb.OpenUserDB(pl)
+	if err != nil {
+		return db, err
+	}
+	db.UserDB = userDB
+	return db, nil
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -330,10 +351,10 @@ func Start(
 		return nil, err
 	}
 
-	log.Info().Msg("opening user database")
-	db, err := database.Open(pl)
+	log.Info().Msg("opening databases")
+	db, err := makeDatabase(pl)
 	if err != nil {
-		log.Error().Err(err).Msgf("error opening user database")
+		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
 

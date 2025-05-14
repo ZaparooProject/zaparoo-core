@@ -200,7 +200,7 @@ func GetFiles(
 			return err
 		}
 
-		if utils.IsZip(path) && platform.ZipsAsDirs() {
+		if utils.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
 			zipFiles, err := utils.ListZip(path)
 			if err != nil {
@@ -383,11 +383,11 @@ func NewNamesIndex(
 		// custom scan function if one exists
 		for _, l := range platform.Launchers() {
 			if l.SystemID == k && l.Scanner != nil {
-				log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
+				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
 				var err error
 				files, err = l.Scanner(cfg, systemId, files)
 				if err != nil {
-					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, systemId)
+					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
 					continue
 				}
 			}
@@ -414,10 +414,10 @@ func NewNamesIndex(
 	for _, l := range platform.Launchers() {
 		systemId := l.SystemID
 		if !scanned[systemId] && l.Scanner != nil {
-			log.Debug().Msgf("running %s scanner for system: %s", l.Id, systemId)
+			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
 			results, err := l.Scanner(cfg, systemId, []platforms.ScanResult{})
 			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, systemId)
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
 				continue
 			}
 
@@ -445,10 +445,10 @@ func NewNamesIndex(
 
 	for _, l := range anyScanners {
 		for _, s := range systems {
-			log.Debug().Msgf("running %s scanner for system: %s", l.Id, s.ID)
+			log.Debug().Msgf("running %s scanner for system: %s", l.ID, s.ID)
 			results, err := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
 			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.Id, s.ID)
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
 				continue
 			}
 

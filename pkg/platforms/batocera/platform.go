@@ -330,8 +330,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		}
 
 		launchers = append(launchers, platforms.Launcher{
-			ID:       v,
-			Id:       launcherID,
+			ID:       launcherID,
 			SystemID: v,
 			Folders:  []string{k},
 			Launch: func(cfg *config.Instance, path string) error {
