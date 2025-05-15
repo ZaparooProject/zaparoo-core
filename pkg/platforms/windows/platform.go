@@ -30,9 +30,11 @@ import (
 )
 
 type Platform struct {
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) Id() string {
+func (p *Platform) ID() string {
 	return platforms.PlatformIDWindows
 }
 
@@ -49,7 +51,13 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
-func (p *Platform) StartPost(_ *config.Instance, _ chan<- models.Notification) error {
+func (p *Platform) StartPost(
+	_ *config.Instance,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+) error {
+	p.activeMedia = activeMedia
+	p.setActiveMedia = setActiveMedia
 	return nil
 }
 
@@ -57,11 +65,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) AfterScanHook(token tokens.Token) error {
-	return nil
-}
-
-func (p *Platform) ReadersUpdateHook(readers map[string]*readers.Reader) error {
+func (p *Platform) ScanHook(token tokens.Token) error {
 	return nil
 }
 
@@ -69,90 +73,49 @@ func (p *Platform) RootDirs(cfg *config.Instance) []string {
 	return []string{}
 }
 
-func (p *Platform) ZipsAsDirs() bool {
-	return false
-}
-
-func (p *Platform) DataDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
+func (p *Platform) Settings() platforms.Settings {
+	return platforms.Settings{
+		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
+		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
+		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		ZipsAsDirs: false,
 	}
-	return filepath.Join(xdg.DataHome, config.AppName)
-}
-
-func (p *Platform) LogDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return filepath.Join(xdg.DataHome, config.AppName)
-}
-
-func (p *Platform) ConfigDir() string {
-	if v, ok := platforms.HasUserDir(); ok {
-		return v
-	}
-	return filepath.Join(xdg.ConfigHome, config.AppName)
-}
-
-func (p *Platform) TempDir() string {
-	return filepath.Join(os.TempDir(), config.AppName)
 }
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return path
 }
 
-func (p *Platform) KillLauncher() error {
+func (p *Platform) StopActiveLauncher() error {
+	p.setActiveMedia(nil)
 	return nil
 }
 
-func (p *Platform) GetActiveLauncher() string {
-	return ""
-}
+func (p *Platform) PlayAudio(path string) error {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.Settings().DataDir, path)
+	}
 
-func (p *Platform) PlayFailSound(cfg *config.Instance) {
-}
-
-func (p *Platform) PlaySuccessSound(cfg *config.Instance) {
-}
-
-func (p *Platform) ActiveSystem() string {
-	return ""
-}
-
-func (p *Platform) ActiveGame() string {
-	return ""
-}
-
-func (p *Platform) ActiveGameName() string {
-	return ""
-}
-
-func (p *Platform) ActiveGamePath() string {
-	return ""
-}
-
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	log.Info().Msgf("launching system: %s", id)
 	return nil
 }
 
-func (p *Platform) LaunchFile(cfg *config.Instance, path string) error {
-	launchers := utils.PathToLaunchers(cfg, p, path)
-	if len(launchers) == 0 {
-		return errors.New("no launcher found")
-	}
-	launcher := launchers[0]
-
-	if launcher.AllowListOnly && !cfg.IsLauncherFileAllowed(path) {
-		return errors.New("file not allowed: " + path)
-	}
-
-	log.Info().Msgf("launching file: %s", path)
-	return launcher.Launch(cfg, path)
+func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return fmt.Errorf("launching systems is not supported")
 }
 
-func (p *Platform) KeyboardInput(input string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+	log.Info().Msgf("launch media: %s", path)
+	launcher, err := utils.FindLauncher(cfg, p, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error finding launcher: %w", err)
+	}
+
+	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	if err != nil {
+		return fmt.Errorf("launch media: error launching: %w", err)
+	}
+
 	return nil
 }
 
@@ -401,7 +364,7 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 func (p *Platform) Launchers() []platforms.Launcher {
 	return []platforms.Launcher{
 		{
-			Id:       "Steam",
+			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
@@ -428,7 +391,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:       "Flashpoint",
+			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
 			Launch: func(cfg *config.Instance, path string) error {
@@ -442,7 +405,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:            "Generic",
+			ID:            "Generic",
 			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
@@ -450,7 +413,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 		{
-			Id:      "LaunchBox",
+			ID:      "LaunchBox",
 			Schemes: []string{"launchbox"},
 			Scanner: func(
 				cfg *config.Instance,

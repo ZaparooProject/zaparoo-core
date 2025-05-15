@@ -1,13 +1,14 @@
 import os
 import shutil
 import sys
+from typing import Dict, List
 import urllib.request
 import zipfile
 
 # IMPORTANT: This script must be run from the root of the repo!
 
 base_url: str = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
-platform_docs: dict[str, str] = {
+platform_docs: Dict[str, str] = {
     "batocera": "batocera.md",
     "bazzite": "bazzite.mdx",
     "chimeraos": "chimeraos.mdx",
@@ -22,7 +23,7 @@ platform_docs: dict[str, str] = {
 }
 # files will be copied to the root of the zip
 # dirs will copy the entire dir and preserve the structure
-extra_items: dict[str, list[str]] = {
+extra_items: Dict[str, List[str]] = {
     "batocera": ["cmd/batocera/scripts"]
 }
 

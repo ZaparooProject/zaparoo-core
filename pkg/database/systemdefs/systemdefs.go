@@ -2,9 +2,8 @@ package systemdefs
 
 import (
 	"fmt"
+	"sort"
 	"strings"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 )
 
 // The Systems list contains all the supported systems such as consoles,
@@ -18,6 +17,25 @@ import (
 type System struct {
 	ID      string
 	Aliases []string
+}
+
+// MapKeys returns a list of all keys in a map.
+func MapKeys[K comparable, V any](m map[K]V) []K {
+	// Copied from utils for circular
+	keys := make([]K, len(m))
+	i := 0
+	for k := range m {
+		keys[i] = k
+		i++
+	}
+	return keys
+}
+
+func AlphaMapKeys[V any](m map[string]V) []string {
+	// Copied from utils for circular
+	keys := MapKeys(m)
+	sort.Strings(keys)
+	return keys
 }
 
 // GetSystem looks up an exact system definition by ID.
@@ -49,7 +67,7 @@ func LookupSystem(id string) (*System, error) {
 func AllSystems() []System {
 	var systems []System
 
-	keys := utils.AlphaMapKeys(Systems)
+	keys := AlphaMapKeys(Systems)
 	for _, k := range keys {
 		systems = append(systems, Systems[k])
 	}

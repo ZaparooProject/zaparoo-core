@@ -4,25 +4,19 @@ package mister
 
 import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"os"
 	"strings"
 )
 
 const (
-	AssetsDir          = DataDir + "/" + platforms.AssetsDir
 	TempDir            = "/tmp/zaparoo"
-	DisableLaunchFile  = TempDir + "/zaparoo.disabled"
-	SuccessSoundFile   = AssetsDir + "/success.wav"
-	FailSoundFile      = AssetsDir + "/fail.wav"
-	SocketFile         = TempDir + "/core.sock"
 	LegacyMappingsPath = "/media/fat/nfc.csv"
-	TokenReadFile      = "/tmp/TOKENREAD" // TODO: remove this, use file driver
+	TokenReadFile      = "/tmp/TOKENREAD"
 	DataDir            = "/media/fat/zaparoo"
 	ArcadeDbUrl        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
-	ArcadeDbFile       = AssetsDir + "/ArcadeDatabase.csv"
-	ScriptsDir         = mrextConfig.ScriptsFolder
+	ArcadeDbFile       = "ArcadeDatabase.csv"
+	ScriptsDir         = "/media/fat/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
 	LinuxDir           = "/media/fat/linux"
 	MainPickerDir      = "/tmp/PICKERITEMS"
