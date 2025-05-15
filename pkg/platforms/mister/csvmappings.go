@@ -67,7 +67,7 @@ func LoadCsvMappings() (map[string]string, map[string]string, error) {
 	count := 0
 	for i, entry := range entries {
 		if entry.MatchUID == "" && entry.MatchText == "" {
-			log.Warn().Msgf("entry %d has no UID or text, skipping", i+1)
+			log.Warn().Msgf("entry %d has no ID or text, skipping", i+1)
 			continue
 		}
 

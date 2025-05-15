@@ -22,13 +22,15 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
@@ -131,6 +133,7 @@ func LaunchToken(
 	text string,
 	totalCommands int,
 	currentIndex int,
+	db *database.Database,
 ) (platforms.CmdResult, error) {
 	var unsafe bool
 	newText, err := checkLink(cfg, pl, text)
@@ -199,6 +202,7 @@ func LaunchToken(
 			TotalCommands: totalCommands,
 			CurrentIndex:  currentIndex,
 			Unsafe:        unsafe,
+			Database:      db,
 		}
 
 		if f, ok := cmdMap[cmd]; ok {
@@ -226,6 +230,7 @@ func LaunchToken(
 		TotalCommands: totalCommands,
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
+		Database:      db,
 	})
 
 	if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {

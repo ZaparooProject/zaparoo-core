@@ -1,12 +1,12 @@
 package utils
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
 )

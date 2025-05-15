@@ -34,7 +34,7 @@ type State struct {
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
-	ns := make(chan models.Notification)
+	ns := make(chan models.Notification, 100)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
 		runZapScript:  true,

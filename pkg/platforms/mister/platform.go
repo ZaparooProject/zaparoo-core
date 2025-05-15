@@ -19,7 +19,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/gamesdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -446,10 +446,10 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
-					tp, err := gamesdb.FindPath(filepath.Join(sf.Path, txt))
+					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
 					if err == nil {
 						f, err := os.Open(tp)
 						if err != nil {
@@ -511,9 +511,9 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := gamesdb.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
-				rsf, err := gamesdb.FindPath(filepath.Join(sf.Path, romsetsFilename))
+				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
 					romsets, err := readRomsets(rsf)
 					if err != nil {
