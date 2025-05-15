@@ -2,18 +2,17 @@
 
 ## Environment
 
-Zaparoo Core is written in Go, uses Task and Python for build scripts, and Docker for building all platforms which use Cgo.
+Zaparoo Core is written in Go, uses Task for build scripts, and Docker for building all platforms. All builds require Cgo.
 
-Build scripts work on Linux, Mac and Windows (natively or WSL). Just make sure all dependencies are installed and main binaries of them are available in your path.
+Build scripts work on Linux, Mac and Windows (natively or WSL). Just make sure all dependencies are installed with Go, Task and Docker binaries available in your path.
 
 ### Dependencies
 
 - [Go](https://go.dev/)
 
-  Version 1.23 or newer. The build script assumes your Go path is the default location: `$HOME/go` 
+  Version 1.23 or newer. The build script assumes your Go path is in the default location, for caching between Docker build environments: `$HOME/go` 
 
 - [Task](https://taskfile.dev/)
-- [Python](https://www.python.org/)
 - [Docker](https://www.docker.com/)
 
   On Linux, enable cross-platform builds with something like: `apt install qemu binfmt-support qemu-user-static`
