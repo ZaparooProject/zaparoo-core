@@ -4,15 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
@@ -23,33 +21,83 @@ import (
 
 const defaultMaxResults = 250
 
-type IndexingStatus struct {
-	mu          sync.Mutex
-	Indexing    bool
-	TotalSteps  int
-	CurrentStep int
-	CurrentDesc string
-	TotalFiles  int
+type indexingStatusVals struct {
+	indexing    bool
+	totalSteps  int
+	currentStep int
+	currentDesc string
+	totalFiles  int
 }
 
-func (s *IndexingStatus) GenerateMediaDB(
+type indexingStatus struct {
+	mu          sync.RWMutex
+	indexing    bool
+	totalSteps  int
+	currentStep int
+	currentDesc string
+	totalFiles  int
+}
+
+func (s *indexingStatus) get() indexingStatusVals {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return indexingStatusVals{
+		indexing:    s.indexing,
+		totalSteps:  s.totalSteps,
+		currentStep: s.currentStep,
+		currentDesc: s.currentDesc,
+		totalFiles:  s.totalFiles,
+	}
+}
+
+func (s *indexingStatus) start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexing = true
+	s.totalSteps = 0
+	s.currentStep = 0
+	s.currentDesc = ""
+	s.totalFiles = 0
+}
+
+func (s *indexingStatus) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexing = false
+	s.totalSteps = 0
+	s.currentStep = 0
+	s.currentDesc = ""
+	s.totalFiles = 0
+}
+
+func (s *indexingStatus) set(vals indexingStatusVals) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexing = vals.indexing
+	s.totalSteps = vals.totalSteps
+	s.currentStep = vals.currentStep
+	s.currentDesc = vals.currentDesc
+	s.totalFiles = vals.totalFiles
+}
+
+func newIndexingStatus() *indexingStatus {
+	return &indexingStatus{}
+}
+
+var statusInstance = newIndexingStatus()
+
+func generateMediaDB(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
 	systems []systemdefs.System,
 	db *database.Database,
-) {
-	// TODO: this function should block until index is complete
-	// confirm that concurrent requests is working
-
-	if s.Indexing {
-		// TODO: return an error to client
-		return
+) error {
+	if statusInstance.get().indexing {
+		return errors.New("indexing already in progress")
 	}
 
-	s.mu.Lock()
-	s.Indexing = true
-	s.TotalFiles = 0
+	statusInstance.start()
 
 	log.Info().Msg("generating media db")
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
@@ -58,63 +106,74 @@ func (s *IndexingStatus) GenerateMediaDB(
 	})
 
 	go func() {
-		defer s.mu.Unlock()
-
 		total, err := mediascanner.NewNamesIndex(pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
-			s.TotalSteps = status.Total
-			s.CurrentStep = status.Step
-			s.TotalFiles = status.Files
+			var desc string
 			if status.Step == 1 {
-				s.CurrentDesc = "Finding media folders"
+				desc = "Finding media folders"
 			} else if status.Step == status.Total {
-				s.CurrentDesc = "Writing database"
+				desc = "Writing database"
 			} else {
 				system, err := systemdefs.GetSystem(status.SystemID)
 				if err != nil {
-					s.CurrentDesc = status.SystemID
+					desc = status.SystemID
 				} else {
 					md, err := assets.GetSystemMetadata(system.ID)
 					if err != nil {
-						s.CurrentDesc = system.ID
+						desc = system.ID
 					} else {
-						s.CurrentDesc = md.Name
+						desc = md.Name
 					}
 				}
 			}
-			log.Debug().Msgf("indexing status: %v", s)
+			statusInstance.set(indexingStatusVals{
+				indexing:    true,
+				totalSteps:  status.Total,
+				currentStep: status.Step,
+				currentDesc: desc,
+				totalFiles:  status.Files,
+			})
+
 			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:             true,
+				Exists:             false,
 				Indexing:           true,
-				TotalSteps:         &s.TotalSteps,
-				CurrentStep:        &s.CurrentStep,
-				CurrentStepDisplay: &s.CurrentDesc,
-				TotalFiles:         &s.TotalFiles,
+				TotalSteps:         &status.Total,
+				CurrentStep:        &status.Step,
+				CurrentStepDisplay: &desc,
+				TotalFiles:         &status.Files,
+			})
+
+			log.Debug().Msgf("indexing status: %v", indexingStatusVals{
+				indexing:    true,
+				totalSteps:  status.Total,
+				currentStep: status.Step,
+				currentDesc: desc,
+				totalFiles:  status.Files,
 			})
 		})
 		if err != nil {
 			log.Error().Err(err).Msg("error generating media db")
+			// TODO: error notification to client
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     false,
+				Indexing:   false,
+				TotalFiles: &total,
+			})
+			statusInstance.clear()
+			return
+		} else {
+			log.Info().Msg("finished generating media db successfully")
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				TotalFiles: &total,
+			})
+			statusInstance.clear()
+			return
 		}
-
-		s.Indexing = false
-		s.TotalSteps = 0
-		s.CurrentStep = 0
-		s.CurrentDesc = ""
-		s.TotalFiles = 0
-
-		log.Info().Msg("finished generating media db")
-		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-			Exists:     true,
-			Indexing:   false,
-			TotalFiles: &total,
-		})
 	}()
-}
 
-func NewIndexingStatus() *IndexingStatus {
-	return &IndexingStatus{}
+	return nil
 }
-
-var IndexingStatusInstance = NewIndexingStatus()
 
 func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received generate media request")
@@ -143,14 +202,15 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
-	IndexingStatusInstance.GenerateMediaDB(
+	err := generateMediaDB(
 		env.Platform,
 		env.Config,
 		env.State.Notifications,
 		systems,
 		env.Database,
 	)
-	return nil, nil
+
+	return nil, err
 }
 
 func HandleMediaSearch(env requests.RequestEnv) (any, error) {
@@ -238,7 +298,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	activeMedia := env.State.ActiveMedia()
-	if activeMedia.Path != "" {
+	if activeMedia != nil && activeMedia.Path != "" {
 		system, err := assets.GetSystemMetadata(activeMedia.SystemID)
 		if err != nil {
 			return nil, fmt.Errorf("error getting system metadata: %w", err)
@@ -252,18 +312,20 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		})
 	}
 
+	status := statusInstance.get()
+	resp.Database.Indexing = status.indexing
+
 	lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
 	if err != nil {
 		return nil, fmt.Errorf("error getting last generated time: %w", err)
 	}
-	resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated)
-	resp.Database.Indexing = IndexingStatusInstance.Indexing
+	resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
 
 	if resp.Database.Indexing {
-		resp.Database.TotalSteps = &IndexingStatusInstance.TotalSteps
-		resp.Database.CurrentStep = &IndexingStatusInstance.CurrentStep
-		resp.Database.CurrentStepDisplay = &IndexingStatusInstance.CurrentDesc
-		resp.Database.TotalFiles = &IndexingStatusInstance.TotalFiles
+		resp.Database.TotalSteps = &status.totalSteps
+		resp.Database.CurrentStep = &status.currentStep
+		resp.Database.CurrentStepDisplay = &status.currentDesc
+		resp.Database.TotalFiles = &status.totalFiles
 	}
 
 	return resp, nil
