@@ -7,7 +7,7 @@ tasks:
       - task: :docker:build-image
         vars:
           IMAGE_NAME: zaparoo/linux-arm-build
-          DOCKERFILE: "./scripts/linux_arm/build"
+          DOCKERFILE: "./scripts/linux_arm"
           ARCH: arm/v7
 
   build-arm:

@@ -7,7 +7,7 @@ tasks:
       - task: :docker:build-image
         vars:
           IMAGE_NAME: zaparoo/linux-amd64-build
-          DOCKERFILE: "./scripts/linux_amd64/build"
+          DOCKERFILE: "./scripts/linux_amd64"
           ARCH: amd64
 
   build-amd64:
