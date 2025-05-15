@@ -32,7 +32,7 @@ includes:
 tasks:
   build:
     cmds:
-      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}' -linkmode external -extldflags -static -s -w" -tags netgo -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
+      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}' -linkmode external -extldflags -static -s -w" -tags "netgo,sqlite_omit_load_extension" -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
 
   build-basic:
     internal: true
