@@ -231,6 +231,10 @@ const (
 	SystemNAOMI      = "NAOMI"
 	SystemNAOMI2     = "NAOMI2"
 	SystemVideo      = "Video"
+  SystemAudio   = "Audio"
+	SystemMovie   = "Movie"
+	SystemTV      = "TV"
+	SystemMusic   = "Music"
 	SystemGroovy     = "Groovy"
 )
 
