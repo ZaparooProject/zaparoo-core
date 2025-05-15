@@ -331,14 +331,18 @@ func handleWSMessage(
 	state *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
-) func(
-	session *melody.Session,
-	msg []byte,
-) {
-	return func(
-		session *melody.Session,
-		msg []byte,
-	) {
+) func(session *melody.Session, msg []byte) {
+	return func(session *melody.Session, msg []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("panic in websocket handler")
+				err := sendWSError(session, uuid.Nil, JSONRPCErrorInternalError)
+				if err != nil {
+					log.Error().Err(err).Msg("error sending panic error response")
+				}
+			}
+		}()
+
 		// ping command for heartbeat operation
 		if bytes.Compare(msg, []byte("ping")) == 0 {
 			err := session.Write([]byte("pong"))

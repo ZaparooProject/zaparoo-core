@@ -23,14 +23,16 @@ package service
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
@@ -45,12 +47,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func inExitGameBlocklist(platform platforms.Platform, cfg *config.Instance) bool {
+func inExitGameBlocklist(
+	cfg *config.Instance,
+	state *state.State,
+) bool {
 	var blocklist []string
 	for _, v := range cfg.ReadersScan().IgnoreSystem {
 		blocklist = append(blocklist, strings.ToLower(v))
 	}
-	return slices.Contains(blocklist, strings.ToLower(platform.GetActiveLauncher()))
+	return slices.Contains(blocklist, strings.ToLower(state.ActiveMedia().SystemID))
 }
 
 func launchToken(
@@ -196,7 +201,7 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			err := platform.AfterScanHook(t)
+			err := platform.ScanHook(t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}
@@ -238,9 +243,68 @@ func processTokenQueue(
 			}()
 		case <-st.GetContext().Done():
 			log.Debug().Msg("Exiting Service worker via context cancellation")
-			return
+			break
 		}
 	}
+}
+
+func setupEnvironment(pl platforms.Platform) error {
+	if _, ok := utils.HasUserDir(); ok {
+		log.Info().Msg("using 'user' directory for storage")
+	}
+
+	log.Info().Msg("creating platform directories")
+	dirs := []string{
+		utils.ConfigDir(pl),
+		pl.Settings().TempDir,
+		utils.DataDir(pl),
+		filepath.Join(utils.DataDir(pl), platforms.MappingsDir),
+		filepath.Join(utils.DataDir(pl), platforms.AssetsDir),
+	}
+	for _, dir := range dirs {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	successSoundPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		config.SuccessSoundFilename,
+	)
+	if _, err := os.Stat(successSoundPath); err != nil {
+		// copy success sound to temp
+		sf, err := os.Create(successSoundPath)
+		if err != nil {
+			log.Error().Msgf("error creating success sound file: %s", err)
+		}
+		_, err = sf.Write(assets.SuccessSound)
+		if err != nil {
+			log.Error().Msgf("error writing success sound file: %s", err)
+		}
+		_ = sf.Close()
+	}
+
+	failSoundPath := filepath.Join(
+		utils.DataDir(pl),
+		platforms.AssetsDir,
+		config.FailSoundFilename,
+	)
+	if _, err := os.Stat(failSoundPath); err != nil {
+		// copy fail sound to temp
+		ff, err := os.Create(failSoundPath)
+		if err != nil {
+			log.Error().Msgf("error creating fail sound file: %s", err)
+		}
+		_, err = ff.Write(assets.FailSound)
+		if err != nil {
+			log.Error().Msgf("error writing fail sound file: %s", err)
+		}
+		_ = ff.Close()
+	}
+
+	return nil
 }
 
 func makeDatabase(pl platforms.Platform) (*database.Database, error) {
@@ -272,44 +336,30 @@ func Start(
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
-	plq := make(chan *playlists.Playlist) // playlist queue
+	plq := make(chan *playlists.Playlist) // playlist event queue
 
-	if _, ok := platforms.HasUserDir(); ok {
-		log.Info().Msg("using user directory for storage")
-	}
-
-	log.Info().Msg("creating platform directories")
-	dirs := []string{
-		pl.ConfigDir(),
-		pl.LogDir(),
-		pl.TempDir(),
-		pl.DataDir(),
-		filepath.Join(pl.DataDir(), platforms.MappingsDir),
-		filepath.Join(pl.DataDir(), platforms.AssetsDir),
-	}
-	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			return nil, err
-		}
+	err := setupEnvironment(pl)
+	if err != nil {
+		log.Error().Err(err).Msg("error setting up environment")
+		return nil, err
 	}
 
 	log.Info().Msg("running platform pre start")
-	err := pl.StartPre(cfg)
+	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
 		return nil, err
 	}
 
-	log.Info().Msg("opening user database")
+	log.Info().Msg("opening databases")
 	db, err := makeDatabase(pl)
 	if err != nil {
-		log.Error().Err(err).Msgf("error opening user database")
+		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
 
 	log.Info().Msg("loading mapping files")
-	err = cfg.LoadMappings(filepath.Join(pl.DataDir(), platforms.MappingsDir))
+	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), platforms.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 		return nil, err
@@ -330,7 +380,7 @@ func Start(
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
 
 	log.Info().Msg("running platform post start")
-	err = pl.StartPost(cfg, st.Notifications)
+	err = pl.StartPost(cfg, st.ActiveMedia, st.SetActiveMedia)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
 		return nil, err
@@ -342,8 +392,6 @@ func Start(
 			log.Warn().Msgf("error stopping platform: %s", err)
 		}
 		st.StopService()
-		db.MediaDB.Close()
-		db.UserDB.Close()
 		close(plq)
 		close(lsq)
 		close(itq)

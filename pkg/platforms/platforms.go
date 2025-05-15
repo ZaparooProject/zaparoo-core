@@ -33,6 +33,8 @@ const (
 	PlatformIDWindows   = "windows"
 )
 
+// CmdEnv is the local state of a scanned token, as it processes each ZapScript
+// command. Every command run has access to and can modify it.
 type CmdEnv struct {
 	Cmd           string
 	Args          string
@@ -59,14 +61,21 @@ type CmdResult struct {
 	Playlist *playlists.Playlist
 }
 
+// ScanResult is a result generated from a media database indexing files or
+// other media sources.
 type ScanResult struct {
+	// Path is the absolute path to this media.
 	Path string
+	// Name is the display name of the media, shown to the users and used for
+	// search queries.
 	Name string
 }
 
+// Launcher defines how a platform launcher can launch media and what media it
+// supports launching.
 type Launcher struct {
 	// Unique ID of the launcher, visible to user.
-	Id string
+	ID string
 	// Systems associated with this launcher.
 	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.
@@ -92,96 +101,105 @@ type Launcher struct {
 	AllowListOnly bool
 }
 
+// Settings defines all simple settings/configuration values available for a
+// platform.
+type Settings struct {
+	// DataDir returns the root folder where things like databases and
+	// downloaded assets are permanently stored. WARNING: This value should be
+	// accessed using the DataDir function in the utils package.
+	DataDir string
+	// ConfigDir returns the directory where the config file is stored.
+	// WARNING: This value should be accessed using the ConfigDir function in
+	// the utils package.
+	ConfigDir string
+	// TempDir returns a temporary directory where the logs are stored and any
+	// files used for inter-process communication. Expect it to be deleted.
+	TempDir string
+	// ZipsAsDir returns true if this platform treats .zip files as if they
+	// were directories for the purpose of launching media.
+	ZipsAsDirs bool
+}
+
+// Platform is the central interface that defines how Core interacts with a
+// supported platform.
 type Platform interface {
-	// Id returns the unique ID of this platform.
-	Id() string
-	// StartPre runs any necessary platform setup functions before the main
-	// service has started running.
+	// ID returns the unique ID of this platform.
+	ID() string
+	// StartPre runs any necessary platform setup BEFORE the main service has
+	// started running.
 	StartPre(*config.Instance) error
-	// StartPost runs any necessary platform setup function after the main
-	// service has started running.
-	StartPost(*config.Instance, chan<- models.Notification) error
+	// StartPost runs any necessary platform setup AFTER the main service has
+	// started running.
+	StartPost(
+		*config.Instance,
+		func() *models.ActiveMedia,
+		func(*models.ActiveMedia),
+	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
 	Stop() error
-	// AfterScanHook is run immediately after a successful scan, but before
-	// it is processed for launching.
-	AfterScanHook(tokens.Token) error
-	// ReadersUpdateHook runs after a change has occurred with the state of
-	// the connected readers (i.e. when a reader is connected or disconnected),
-	// and is given the current new state of readers connected.
-	// TODO: this hook isn't very useful without knowing what changed. it may be
-	// better to split it into 2 separate hooks for added/removed
-	ReadersUpdateHook(map[string]*readers.Reader) error
+	// Settings returns all simple platform-specific settings such as paths.
+	// NOTE: Some values on the Settings struct should be accessed using helper
+	// functions in the utils package instead of directly. Check comments.
+	Settings() Settings
+	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
+	// processed for launching.
+	ScanHook(tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
 	RootDirs(*config.Instance) []string
-	// ZipsAsDirs returns true if the platform treats .zip files as folders.
-	// TODO: this is just a mister thing. i wonder if it would be better to have
-	// some sort of single "config" value to look up things like this
-	// instead of implementing a method on every platform
-	ZipsAsDirs() bool
-	// DataDir returns the path to the configuration/database data for Core.
-	DataDir() string
-	// LogDir returns the path to the log folder for Zaparoo Core.
-	LogDir() string
-	// ConfigDir returns the path of the parent directory of the config file.
-	ConfigDir() string
-	// TempDir returns the path for storing temporary files. It may be called
-	// multiple times and must return the same path for the service lifetime.
-	TempDir() string
 	// NormalizePath convert a path to a normalized form for the platform, the
 	// shortest possible path that can interpreted and launched by Core. For
 	// writing to tokens.
 	NormalizePath(*config.Instance, string) string
-	// KillLauncher kills the currently running launcher process, if possible.
-	KillLauncher() error
-	// GetActiveLauncher returns the ID of the currently active launcher or an
-	// empty string if none.
-	GetActiveLauncher() string
-	// PlayFailSound plays a sound effect for error feedback.
-	// TODO: merge with PlaySuccessSound into single PlayAudio function?
-	PlayFailSound(*config.Instance)
-	// PlaySuccessSound plays a sound effect for success feedback.
-	PlaySuccessSound(*config.Instance)
-	// ActiveSystem returns the currently active system ID.
-	ActiveSystem() string
-	// ActiveGame returns the currently active game ID.
-	ActiveGame() string // TODO: check where this is used
-	// ActiveGameName returns the currently active game name.
-	ActiveGameName() string
-	// ActiveGamePath returns the currently active game file path.
-	ActiveGamePath() string
-	// LaunchSystem launches a system by ID, if possible for platform.
+	// StopActiveLauncher kills/exits the currently running launcher process
+	// and clears the active media if it was successful.
+	StopActiveLauncher() error
+	// PlayAudio plays an audio file at the given path. A relative path will be
+	// resolved using the data directory assets folder as the base. This
+	// function does not block until the audio finishes.
+	PlayAudio(string) error
+	// LaunchSystem launches a system by ID. This generally means, if a
+	// platform even has the capability, attempt to launch the default or most
+	// appropriate launcher for a given system, without any media loaded.
 	LaunchSystem(*config.Instance, string) error
-	// LaunchFile launches a file by path.
-	// TODO: i don't think this needs to exist now launch logic is on the
-	// launcher. better to be one func outside platform
-	LaunchFile(*config.Instance, string) error
-	KeyboardInput(string) error // DEPRECATED
+	// LaunchMedia launches some media by path and sets the active media if it
+	// was successful.
+	LaunchMedia(*config.Instance, string) error
+	// KeyboardPress presses and then releases a single keyboard button on a
+	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error
+	// GamepadPress presses and then releases a single gamepad button on a
+	// virtual gamepad, using a button name from the ZapScript format.
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
 	ForwardCmd(CmdEnv) (CmdResult, error)
-	LookupMapping(tokens.Token) (string, bool)
+	// LookupMapping is a platform-specific method of matching a token to a
+	// mapping. It takes last precedence when checking mapping sources.
+	LookupMapping(tokens.Token) (string, bool) // DEPRECATED
+	// Launchers is the complete list of all launchers available on this
+	// platform.
 	Launchers() []Launcher
 	// ShowNotice displays a string on-screen of the platform device. Returns
-	// a function that may be used to manually hide the notice.
-	ShowNotice(*config.Instance, widgetModels.NoticeArgs) (func() error, time.Duration, error)
+	// a function that may be used to manually hide the notice and a minimum
+	// amount of time that should be waited until trying to close the notice,
+	// for platforms where initializing a notice takes time.
+	// TODO: can this just block instead of returning a delay?
+	ShowNotice(
+		*config.Instance,
+		widgetModels.NoticeArgs,
+	) (func() error, time.Duration, error)
 	// ShowLoader displays a string on-screen of the platform device alongside
 	// an animation indicating something is in progress. Returns a function
 	// that may be used to manually hide the loader and an optional delay to
 	// wait before hiding.
+	// TODO: does this need a close delay returned as well?
 	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
 	// ShowPicker displays a list picker on-screen of the platform device with
 	// a list of Zap Link Cmds to choose from. The chosen action will be
 	// forwarded to the local API instance to be run. Returns a function that
 	// may be used to manually cancel and hide the picker.
+	// TODO: it appears to not return said function
 	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
-}
-
-type LaunchToken struct {
-	Token    tokens.Token
-	Launcher Launcher
 }

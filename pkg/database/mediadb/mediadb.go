@@ -52,7 +52,7 @@ func (db *MediaDB) Open() error {
 }
 
 func (db *MediaDB) GetDBPath() string {
-	return filepath.Join(db.pl.DataDir(), config.MediaDbFile)
+	return filepath.Join(db.pl.Settings().DataDir, config.MediaDbFile)
 }
 
 func (db *MediaDB) Exists() bool {

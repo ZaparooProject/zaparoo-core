@@ -20,7 +20,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if strings.EqualFold(env.Args, "menu") {
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, pl.KillLauncher()
+		}, pl.StopActiveLauncher()
 	}
 
 	return platforms.CmdResult{
@@ -149,7 +149,7 @@ func getAltLauncher(
 		var launcher platforms.Launcher
 
 		for _, l := range pl.Launchers() {
-			if l.Id == env.NamedArgs["launcher"] {
+			if l.ID == env.NamedArgs["launcher"] {
 				launcher = l
 				break
 			}
@@ -166,7 +166,7 @@ func getAltLauncher(
 		}, nil
 	} else {
 		return func(args string) error {
-			return pl.LaunchFile(env.Cfg, args)
+			return pl.LaunchMedia(env.Cfg, args)
 		}, nil
 	}
 }

@@ -5,6 +5,7 @@ package mister
 import (
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/input"
 )
 
 func getTTY() (string, error) {
@@ -39,7 +39,7 @@ func scriptIsActive() bool {
 	return strings.TrimSpace(string(output)) != ""
 }
 
-func openConsole(kbd input.Keyboard, vt string) error {
+func openConsole(pl platforms.Platform, vt string) error {
 	// we use the F9 key as a means to disable main's usage of the framebuffer and
 	// allow scripts to run unfortunately when the menu "sleeps". any key press will
 	// be eaten by main and not trigger the console switch. there's also no simple way
@@ -60,7 +60,11 @@ func openConsole(kbd input.Keyboard, vt string) error {
 		if tries > 10 {
 			return fmt.Errorf("open console: could not switch to tty1")
 		}
-		kbd.Console()
+		// switch to console
+		err := pl.KeyboardPress("{f9}")
+		if err != nil {
+			return err
+		}
 		time.Sleep(50 * time.Millisecond)
 		tty, err = getTTY()
 		if err != nil {
@@ -85,17 +89,6 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return errors.New("a script is already running")
 	}
 
-	if pl.GetActiveLauncher() != "" && !hidden {
-		// menu must be open to switch tty and launch script
-		log.Debug().Msg("killing launcher...")
-		err := pl.KillLauncher()
-		if err != nil {
-			return err
-		}
-		// wait for menu core
-		time.Sleep(1 * time.Second)
-	}
-
 	if hidden {
 		// run the script directly
 		cmd := exec.Command(bin, args)
@@ -108,8 +101,19 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return cmd.Run()
 	}
 
+	if pl.activeMedia().SystemID != "" {
+		// menu must be open to switch tty and launch script
+		log.Debug().Msg("killing launcher...")
+		err := pl.StopActiveLauncher()
+		if err != nil {
+			return err
+		}
+		// wait for menu core
+		time.Sleep(1 * time.Second)
+	}
+
 	// run it on-screen like a regular script
-	err := openConsole(pl.kbd, "3")
+	err := openConsole(pl, "3")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening console for script")
 	}
@@ -164,8 +168,12 @@ cd $(dirname "%s")
 	)
 
 	exit := func() {
-		if pl.GetActiveLauncher() == "" {
-			pl.kbd.ExitConsole()
+		if pl.activeMedia().LauncherID == "" {
+			// exit console
+			err = pl.KeyboardPress("{f12}")
+			if err != nil {
+				return
+			}
 		} else {
 			return
 		}

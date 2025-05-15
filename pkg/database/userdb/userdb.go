@@ -48,7 +48,7 @@ func (db *UserDB) Open() error {
 }
 
 func (db *UserDB) GetDBPath() string {
-	return filepath.Join(db.pl.DataDir(), config.UserDbFile)
+	return filepath.Join(db.pl.Settings().DataDir, config.UserDbFile)
 }
 
 func (db *UserDB) UnsafeGetSqlDb() *sql.DB {

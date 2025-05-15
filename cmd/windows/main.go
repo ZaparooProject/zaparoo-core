@@ -64,7 +64,7 @@ func main() {
 	defaults := config.BaseDefaults
 	defaults.DebugLogging = true
 	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
-	if migrate.Required(iniPath, filepath.Join(pl.ConfigDir(), config.CfgFile)) {
+	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
@@ -155,13 +155,13 @@ func onReady(cfg *config.Instance, ip net.IP, pl platforms.Platform) func() {
 						log.Error().Msgf("error opening web UI: %s", err)
 					}
 				case <-logs.ClickedCh:
-					logFile := filepath.Join(pl.LogDir(), "core.log")
+					logFile := filepath.Join(pl.Settings().TempDir, "core.log")
 					err := exec.Command("explorer", logFile).Start()
 					if err != nil {
 						log.Error().Msgf("error opening log file: %s", err)
 					}
 				case <-conf.ClickedCh:
-					folder := pl.ConfigDir()
+					folder := utils.ConfigDir(pl)
 					err := exec.Command("explorer", folder).Start()
 					if err != nil {
 						log.Error().Msgf("error opening config folder: %s", err)

@@ -27,7 +27,7 @@ func shouldExit(
 	}
 
 	// do not exit from menu, there is nowhere to go anyway
-	if pl.GetActiveLauncher() == "" {
+	if st.ActiveMedia().SystemID == "" {
 		return false
 	}
 
@@ -35,7 +35,7 @@ func shouldExit(
 		return false
 	}
 
-	if inExitGameBlocklist(pl, cfg) {
+	if inExitGameBlocklist(cfg, st) {
 		return false
 	}
 
@@ -137,10 +137,6 @@ func connectReaders(
 			rsm[id] = &r
 		}
 	}
-	err := pl.ReadersUpdateHook(rsm)
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -166,8 +162,14 @@ func readerManager(
 	stopService := make(chan bool)
 
 	playFail := func() {
+		if !cfg.AudioFeedback() {
+			return
+		}
 		if time.Since(lastError) > 1*time.Second {
-			pl.PlayFailSound(cfg)
+			err := pl.PlayAudio(config.FailSoundFilename)
+			if err != nil {
+				log.Warn().Msgf("error playing fail sound: %s", err)
+			}
 		}
 	}
 
@@ -193,7 +195,7 @@ func readerManager(
 				return
 			}
 
-			activeLauncher := pl.GetActiveLauncher()
+			activeLauncher := st.ActiveMedia().LauncherID
 			softToken := st.GetSoftwareToken()
 			if activeLauncher == "" || softToken == nil {
 				log.Debug().Msg("no active launcher, not exiting")
@@ -203,7 +205,7 @@ func readerManager(
 			// run before_exit hook if one exists for system
 			var systemIds []string
 			for _, l := range pl.Launchers() {
-				if l.Id == activeLauncher {
+				if l.ID == activeLauncher {
 					systemIds = append(systemIds, l.SystemID)
 					system, err := systemdefs.LookupSystem(l.SystemID)
 					if err == nil {
@@ -236,7 +238,7 @@ func readerManager(
 
 			// exit the media
 			log.Info().Msg("exiting media")
-			err := pl.KillLauncher()
+			err := pl.StopActiveLauncher()
 			if err != nil {
 				log.Warn().Msgf("error killing launcher: %s", err)
 			}
@@ -339,7 +341,14 @@ func readerManager(
 			}
 
 			log.Info().Msgf("sending token: %v", scan)
-			pl.PlaySuccessSound(cfg)
+
+			if cfg.AudioFeedback() {
+				err := pl.PlayAudio(config.SuccessSoundFilename)
+				if err != nil {
+					log.Warn().Msgf("error playing success sound: %s", err)
+				}
+			}
+
 			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")
