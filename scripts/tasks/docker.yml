@@ -20,13 +20,13 @@ tasks:
     internal: true
     vars:
       BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
+      APP_BIN: '{{default "zaparoo" .APP_BIN}}'
     cmds:
       - task: run
         vars:
           IMAGE_NAME: "{{.IMAGE_NAME}}"
           DOCKER_PLATFORM: "{{.DOCKER_PLATFORM}}"
           PLATFORM: "{{.PLATFORM}}"
-          APP_BIN: '{{default "zaparoo" .APP_BIN}}'
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
           BUILD_ARCH: "{{.BUILD_ARCH}}"
