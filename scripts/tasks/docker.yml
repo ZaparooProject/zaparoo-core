@@ -36,6 +36,7 @@ tasks:
           CC: "{{.CC}}"
           CXX: "{{.CXX}}"
           EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
+          APP_BIN: "{{.APP_BIN}}"
       - >-
         go run scripts/tasks/utils/makezip.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
