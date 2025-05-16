@@ -1,6 +1,13 @@
 version: "3"
 
 tasks:
+  setup:
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/zigcc-build
+          DOCKERFILE: "./scripts/zigcc"
+
   build-arm64:
     cmds:
       - task: :build

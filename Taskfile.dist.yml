@@ -5,9 +5,9 @@ env:
   APP_VERSION:
     sh: echo -n "$(git rev-parse --short HEAD)-dev"
   UID:
-    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -u{{end}}"
+    sh: '{{if ne OS "windows"}}id -u{{end}}'
   GID:
-    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -g{{end}}"
+    sh: '{{if ne OS "windows"}}id -g{{end}}'
 
 dotenv: [".env"]
 

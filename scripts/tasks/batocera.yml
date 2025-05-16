@@ -8,7 +8,7 @@ tasks:
         vars:
           IMAGE_NAME: zaparoo/linux-arm64-build
           DOCKERFILE: "./scripts/linux_arm64"
-          ARCH: arm64/v8
+          DOCKER_PLATFORM: linux/arm64/v8
 
   setup-arm:
     internal: true
@@ -17,7 +17,7 @@ tasks:
         vars:
           IMAGE_NAME: zaparoo/linux-arm-build
           DOCKERFILE: "./scripts/linux_arm"
-          ARCH: arm/v7
+          DOCKER_PLATFORM: linux/arm/v7
 
   setup-amd64:
     internal: true
@@ -26,7 +26,7 @@ tasks:
         vars:
           IMAGE_NAME: zaparoo/linux-amd64-build
           DOCKERFILE: "./scripts/linux_amd64"
-          ARCH: amd64
+          DOCKER_PLATFORM: linux/amd64
 
   build-arm64:
     cmds:
@@ -35,7 +35,7 @@ tasks:
         vars:
           PLATFORM: batocera
           BUILD_ARCH: arm64
-          DOCKER_ARCH: arm64/v8
+          DOCKER_PLATFORM: linux/arm64/v8
           IMAGE_NAME: zaparoo/linux-arm64-build
           APP_BIN: zaparoo
 
@@ -46,7 +46,7 @@ tasks:
         vars:
           PLATFORM: batocera
           BUILD_ARCH: amd64
-          DOCKER_ARCH: amd64
+          DOCKER_PLATFORM: linux/amd64
           IMAGE_NAME: zaparoo/linux-amd64-build
           APP_BIN: zaparoo
 
@@ -57,7 +57,7 @@ tasks:
         vars:
           PLATFORM: batocera
           BUILD_ARCH: arm
-          DOCKER_ARCH: arm/v7
+          DOCKER_PLATFORM: linux/arm/v7
           IMAGE_NAME: zaparoo/linux-arm-build
           APP_BIN: zaparoo
 
