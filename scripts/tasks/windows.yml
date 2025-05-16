@@ -1,24 +1,40 @@
 version: "3"
 
 tasks:
+  setup:
+    internal: true
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/zigcc-build
+          DOCKERFILE: "./scripts/zigcc"
+
   build-arm64:
     cmds:
-      - task: :build
+      - task: setup
+      - task: :docker:build-app
         vars:
           BUILD_OS: windows
           BUILD_ARCH: arm64
           PLATFORM: windows
-          APP_BIN: Zaparoo.exe
+          IMAGE_NAME: zaparoo/zigcc-build
           NO_LIBNFC: true
+          APP_BIN: Zaparoo.exe
           EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=aarch64-windows-gnu"
+          CXX: "zig c++ -w --target=aarch64-windows-gnu"
 
   build-amd64:
     cmds:
-      - task: :build
+      - task: setup
+      - task: :docker:build-app
         vars:
           BUILD_OS: windows
           BUILD_ARCH: amd64
           PLATFORM: windows
-          APP_BIN: Zaparoo.exe
+          IMAGE_NAME: zaparoo/zigcc-build
           NO_LIBNFC: true
+          APP_BIN: Zaparoo.exe
           EXTRA_LDFLAGS: -H=windowsgui
+          CC: "x86_64-w64-mingw32-gcc"
+          CXX: "x86_64-w64-mingw32-g++"

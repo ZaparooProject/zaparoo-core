@@ -2,6 +2,7 @@ version: "3"
 
 tasks:
   setup:
+    internal: true
     cmds:
       - task: :docker:build-image
         vars:
@@ -10,22 +11,44 @@ tasks:
 
   build-arm64:
     cmds:
-      - task: :build
+      - task: setup
+      - task: :docker:build-app
         vars:
           BUILD_OS: darwin
           BUILD_ARCH: arm64
           PLATFORM: mac
-          APP_BIN: zaparoo
+          IMAGE_NAME: zaparoo/zigcc-build
           NO_LIBNFC: true
           NO_STATIC: true
+          CC: >-
+            zig cc -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
 
   build-amd64:
     cmds:
-      - task: :build
+      - task: setup
+      - task: :docker:build-app
         vars:
           BUILD_OS: darwin
           BUILD_ARCH: amd64
           PLATFORM: mac
-          APP_BIN: zaparoo
+          IMAGE_NAME: zaparoo/zigcc-build
           NO_LIBNFC: true
           NO_STATIC: true
+          CC: >-
+            zig cc -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks

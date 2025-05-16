@@ -35,6 +35,7 @@ tasks:
       BUILD_ARCH: "{{default ARCH .BUILD_ARCH}}"
       PLATFORM: '{{default (OS | replace "darwin" "mac") .PLATFORM}}'
       BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
+      EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
     env:
       GO111MODULE: on
       CGO_ENABLED: 1
@@ -42,6 +43,8 @@ tasks:
       GOOS: "{{.BUILD_OS}}"
       CGO_LDFLAGS: '{{if not .NO_LIBNFC}}-lnfc -lusb{{end}}'
       PLATFORM: '{{.PLATFORM}}'
+      CC: "{{.CC}}"
+      CXX: "{{.CXX}}"
     cmds:
       - >-
         go build
@@ -53,10 +56,6 @@ tasks:
         -tags "netgo,sqlite_omit_load_extension"
         -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
         "./cmd/${PLATFORM}"
-      - >-
-        go run scripts/tasks/utils/makezip.go
-        {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
-        "zaparoo-{{.PLATFORM}}_{{.BUILD_ARCH}}.zip"
 
   clean: '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build'
 
