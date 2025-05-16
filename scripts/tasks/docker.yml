@@ -25,7 +25,6 @@ tasks:
           APP_BIN: "{{.APP_BIN}}"
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
-      - go run scripts/tasks/utils/makezip.go {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
 
   run:
     internal: true

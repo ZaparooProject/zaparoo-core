@@ -3,24 +3,22 @@ version: "3"
 tasks:
   build-arm64:
     cmds:
-      - task: :build-basic
+      - task: :build
         vars:
           BUILD_OS: windows
           BUILD_ARCH: arm64
-          GOOS: windows
           PLATFORM: windows
           APP_BIN: Zaparoo.exe
-          CGO_ENABLED: 0
-          BUILD_ARGS: -ldflags "-H=windowsgui"
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
 
   build-amd64:
     cmds:
-      - task: :build-basic
+      - task: :build
         vars:
           BUILD_OS: windows
           BUILD_ARCH: amd64
-          GOOS: windows
           PLATFORM: windows
           APP_BIN: Zaparoo.exe
-          CGO_ENABLED: 0
-          BUILD_ARGS: -ldflags "-H=windowsgui"
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
