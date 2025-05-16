@@ -6,8 +6,8 @@ tasks:
     cmds:
       - task: :docker:build-image
         vars:
-          IMAGE_NAME: zaparoo/zigcc-build
-          DOCKERFILE: "./scripts/zigcc"
+          IMAGE_NAME: zaparoo/cross-build
+          DOCKERFILE: "./scripts/cross"
 
   build-arm64:
     cmds:
@@ -17,7 +17,7 @@ tasks:
           BUILD_OS: darwin
           BUILD_ARCH: arm64
           PLATFORM: mac
-          IMAGE_NAME: zaparoo/zigcc-build
+          IMAGE_NAME: zaparoo/cross-build
           NO_LIBNFC: true
           NO_STATIC: true
           CC: >-
@@ -39,7 +39,7 @@ tasks:
           BUILD_OS: darwin
           BUILD_ARCH: amd64
           PLATFORM: mac
-          IMAGE_NAME: zaparoo/zigcc-build
+          IMAGE_NAME: zaparoo/cross-build
           NO_LIBNFC: true
           NO_STATIC: true
           CC: >-
