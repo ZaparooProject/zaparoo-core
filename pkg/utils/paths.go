@@ -78,7 +78,7 @@ func MatchSystemFile(
 	systemId string,
 	path string,
 ) bool {
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(cfg) {
 		if l.SystemID == systemId {
 			if PathIsLauncher(cfg, pl, l, path) {
 				return true
@@ -96,7 +96,7 @@ func PathToLaunchers(
 	path string,
 ) []platforms.Launcher {
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(cfg) {
 		if PathIsLauncher(cfg, pl, l, path) {
 			launchers = append(launchers, l)
 		}

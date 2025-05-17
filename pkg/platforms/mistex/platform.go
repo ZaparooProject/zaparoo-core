@@ -296,8 +296,8 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
-	return mister.Launchers
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), mister.Launchers...)
 }
 
 func (p *Platform) ShowNotice(

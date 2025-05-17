@@ -51,6 +51,13 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading mappings")
 	}
 
+	launchersDir := filepath.Join(utils.DataDir(env.Platform), platforms.LaunchersDir)
+	err = env.Config.LoadCustomLaunchers(launchersDir)
+	if err != nil {
+		log.Error().Err(err).Msg("error loading custom launchers")
+		return nil, errors.New("error loading custom launchers")
+	}
+
 	return nil, nil
 }
 

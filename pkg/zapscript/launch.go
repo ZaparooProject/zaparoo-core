@@ -148,7 +148,7 @@ func getAltLauncher(
 	if env.NamedArgs["launcher"] != "" {
 		var launcher platforms.Launcher
 
-		for _, l := range pl.Launchers() {
+		for _, l := range pl.Launchers(env.Cfg) {
 			if l.ID == env.NamedArgs["launcher"] {
 				launcher = l
 				break
@@ -222,7 +222,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	log.Info().Msgf("launching system: %s, path: %s", systemId, path)
 
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(env.Cfg) {
 		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}

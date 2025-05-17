@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	AssetsDir   = "assets"
-	MappingsDir = "mappings"
+	AssetsDir    = "assets"
+	MappingsDir  = "mappings"
+	LaunchersDir = "launchers"
 )
 
 const (
@@ -76,7 +77,7 @@ type ScanResult struct {
 type Launcher struct {
 	// Unique ID of the launcher, visible to user.
 	ID string
-	// Systems associated with this launcher.
+	// System associated with this launcher.
 	SystemID string
 	// Folders to scan for files, relative to the root folders of the platform.
 	// TODO: Support absolute paths?
@@ -180,7 +181,7 @@ type Platform interface {
 	LookupMapping(tokens.Token) (string, bool) // DEPRECATED
 	// Launchers is the complete list of all launchers available on this
 	// platform.
-	Launchers() []Launcher
+	Launchers(*config.Instance) []Launcher
 	// ShowNotice displays a string on-screen of the platform device. Returns
 	// a function that may be used to manually hide the notice and a minimum
 	// amount of time that should be waited until trying to close the notice,
