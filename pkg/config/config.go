@@ -87,11 +87,11 @@ type LaunchersDefault struct {
 }
 
 type LaunchersCustom struct {
-	ID         string   `toml:"id"`
-	System     string   `toml:"system"`
-	MediaDirs  []string `toml:"media_dirs"`
-	Extensions []string `toml:"extensions"`
-	Command    string   `toml:"command"`
+	ID        string   `toml:"id"`
+	System    string   `toml:"system"`
+	MediaDirs []string `toml:"media_dirs"`
+	FileExts  []string `toml:"file_exts"`
+	Execute   string   `toml:"execute"`
 }
 
 type ZapScript struct {

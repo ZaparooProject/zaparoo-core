@@ -73,6 +73,7 @@ func GetSystemPaths(
 			}
 		}
 
+		// check for <root>/<folder>
 		for _, folder := range rootFolders {
 			gf, err := FindPath(folder)
 			if err != nil {
@@ -86,6 +87,18 @@ func GetSystemPaths(
 					continue
 				}
 
+				matches = append(matches, PathResult{system, path})
+			}
+		}
+
+		// check for absolute paths
+		for _, folder := range folders {
+			if filepath.IsAbs(folder) {
+				systemFolder := folder
+				path, err := FindPath(systemFolder)
+				if err != nil {
+					continue
+				}
 				matches = append(matches, PathResult{system, path})
 			}
 		}

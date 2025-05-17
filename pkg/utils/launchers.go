@@ -45,7 +45,7 @@ func ParseCustomLaunchers(customLaunchers []config.LaunchersCustom) []platforms.
 			ID:         v.ID,
 			SystemID:   systemID,
 			Folders:    v.MediaDirs,
-			Extensions: formatExtensions(v.Extensions),
+			Extensions: formatExtensions(v.FileExts),
 			Launch: func(_ *config.Instance, path string) error {
 				data := struct {
 					MediaPath string
@@ -53,7 +53,7 @@ func ParseCustomLaunchers(customLaunchers []config.LaunchersCustom) []platforms.
 					MediaPath: path,
 				}
 
-				tmpl, err := template.New("command").Parse(v.Command)
+				tmpl, err := template.New("command").Parse(v.Execute)
 				if err != nil {
 					return err
 				}
