@@ -3,9 +3,18 @@ version: "3"
 tasks:
   build-app:
     cmds:
-      - rm -rf "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app"
-      - cp -r "./cmd/mac/app/Zaparoo Core.app" "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app"
-      - cp ./_build/mac_{{.BUILD_ARCH}}/zaparoo "./_build/mac_{{.BUILD_ARCH}}/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
+      - task: build-arm64
+      - task: build-amd64
+      - rm -rf "./_build/mac" && mkdir -p "./_build/mac"
+      - cp -r "./cmd/mac/app/Zaparoo Core.app" "./_build/mac/Zaparoo Core.app"
+      - task: :docker:run
+        vars:
+          BUILD_OS: darwin
+          BUILD_ARCH: arm64
+          PLATFORM: mac
+          IMAGE_NAME: zaparoo/cross-build
+          EXEC: lipo -output ./_build/mac/zaparoo -create ./_build/mac_arm64/zaparoo ./_build/mac_amd64/zaparoo
+      - cp ./_build/mac/zaparoo "./_build/mac/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
 
   setup:
     internal: true
