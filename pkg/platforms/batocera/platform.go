@@ -126,8 +126,8 @@ func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{"/userdata/roms"}
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	return append(cfg.IndexRoots(), "/userdata/roms")
 }
 
 func (p *Platform) Settings() platforms.Settings {

@@ -267,7 +267,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return games.GetGamesFolders(UserConfigToMrext(cfg))
+	return append(cfg.IndexRoots(), games.GetGamesFolders(UserConfigToMrext(cfg))...)
 }
 
 func (p *Platform) Settings() platforms.Settings {

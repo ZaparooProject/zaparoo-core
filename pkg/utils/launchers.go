@@ -65,11 +65,18 @@ func ParseCustomLaunchers(customLaunchers []config.LaunchersCustom) []platforms.
 
 				if runtime.GOOS == "windows" {
 					cmd := exec.Command("cmd", "/c", buf.String())
-					return cmd.Run()
+					err = cmd.Run()
 				} else {
 					cmd := exec.Command("sh", "-c", buf.String())
-					return cmd.Run()
+					err = cmd.Run()
 				}
+
+				if err != nil {
+					log.Error().Err(err).Msgf("error running custom launcher: %s", buf.String())
+					return err
+				}
+
+				return nil
 			},
 		})
 	}

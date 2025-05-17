@@ -61,7 +61,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return []string{}
+	return cfg.IndexRoots()
 }
 
 func (p *Platform) Settings() platforms.Settings {
