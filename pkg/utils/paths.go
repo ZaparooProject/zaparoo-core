@@ -42,6 +42,8 @@ func PathIsLauncher(
 	// check root folder if it's not a generic launcher
 	if len(l.Folders) > 0 {
 		inRoot := false
+		isAbs := false
+
 		for _, root := range pl.RootDirs(cfg) {
 			for _, folder := range l.Folders {
 				if strings.HasPrefix(lp, strings.ToLower(filepath.Join(root, folder))) {
@@ -52,13 +54,22 @@ func PathIsLauncher(
 		}
 
 		if !inRoot {
+			for _, folder := range l.Folders {
+				if filepath.IsAbs(folder) && strings.HasPrefix(lp, strings.ToLower(folder)) {
+					isAbs = true
+					break
+				}
+			}
+		}
+
+		if !inRoot && !isAbs {
 			return false
 		}
 	}
 
 	// check file extension
 	for _, ext := range l.Extensions {
-		if strings.HasSuffix(lp, ext) {
+		if strings.HasSuffix(lp, strings.ToLower(ext)) {
 			return true
 		}
 	}
@@ -78,7 +89,7 @@ func MatchSystemFile(
 	systemId string,
 	path string,
 ) bool {
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(cfg) {
 		if l.SystemID == systemId {
 			if PathIsLauncher(cfg, pl, l, path) {
 				return true
@@ -96,7 +107,7 @@ func PathToLaunchers(
 	path string,
 ) []platforms.Launcher {
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(cfg) {
 		if PathIsLauncher(cfg, pl, l, path) {
 			launchers = append(launchers, l)
 		}

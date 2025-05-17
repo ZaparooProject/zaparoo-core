@@ -260,6 +260,7 @@ func setupEnvironment(pl platforms.Platform) error {
 		utils.DataDir(pl),
 		filepath.Join(utils.DataDir(pl), platforms.MappingsDir),
 		filepath.Join(utils.DataDir(pl), platforms.AssetsDir),
+		filepath.Join(utils.DataDir(pl), platforms.LaunchersDir),
 	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
@@ -362,7 +363,12 @@ func Start(
 	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), platforms.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
-		return nil, err
+	}
+
+	log.Info().Msg("loading custom launchers")
+	err = cfg.LoadCustomLaunchers(filepath.Join(utils.DataDir(pl), platforms.LaunchersDir))
+	if err != nil {
+		log.Error().Err(err).Msgf("error loading custom launchers")
 	}
 
 	log.Info().Msg("starting API service")

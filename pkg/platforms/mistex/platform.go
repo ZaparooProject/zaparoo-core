@@ -164,7 +164,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return games.GetGamesFolders(mister.UserConfigToMrext(cfg))
+	return append(cfg.IndexRoots(), games.GetGamesFolders(mister.UserConfigToMrext(cfg))...)
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -296,8 +296,8 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
-	return mister.Launchers
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), mister.Launchers...)
 }
 
 func (p *Platform) ShowNotice(

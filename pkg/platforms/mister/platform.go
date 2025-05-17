@@ -267,7 +267,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return games.GetGamesFolders(UserConfigToMrext(cfg))
+	return append(cfg.IndexRoots(), games.GetGamesFolders(UserConfigToMrext(cfg))...)
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -416,7 +416,7 @@ func readRomsets(filepath string) ([]Romset, error) {
 	return romsets.Romsets, nil
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
@@ -446,7 +446,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
 					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
@@ -511,7 +511,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
@@ -572,7 +572,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	ls = append(ls, amiga)
 	ls = append(ls, neogeo)
 	ls = append(ls, mplayerVideo)
-	return ls
+
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), ls...)
 }
 
 func (p *Platform) ShowNotice(

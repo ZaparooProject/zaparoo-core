@@ -126,8 +126,8 @@ func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{"/userdata/roms"}
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	return append(cfg.IndexRoots(), "/userdata/roms")
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -310,7 +310,7 @@ func readESGameListXML(path string) (ESGameList, error) {
 	return gameList, nil
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		{
 			ID:            "Generic",
@@ -390,7 +390,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		})
 	}
 
-	return launchers
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

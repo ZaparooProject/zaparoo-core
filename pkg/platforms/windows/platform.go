@@ -70,7 +70,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return []string{}
+	return cfg.IndexRoots()
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -361,8 +361,8 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	return "", fmt.Errorf("launchbox directory not found")
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
-	return []platforms.Launcher{
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	launchers := []platforms.Launcher{
 		{
 			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
@@ -488,6 +488,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(
