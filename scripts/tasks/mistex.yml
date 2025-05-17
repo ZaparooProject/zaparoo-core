@@ -7,8 +7,8 @@ tasks:
       - task: :docker:build-image
         vars:
           IMAGE_NAME: zaparoo/linux-arm64-build
-          DOCKERFILE: "./scripts/linux_arm64/build"
-          ARCH: arm64/v8
+          DOCKERFILE: "./scripts/linux_arm64"
+          DOCKER_PLATFORM: linux/arm64/v8
 
   build-arm64:
     cmds:
@@ -17,7 +17,7 @@ tasks:
         vars:
           PLATFORM: mistex
           BUILD_ARCH: arm64
-          DOCKER_ARCH: arm64/v8
+          DOCKER_PLATFORM: linux/arm64/v8
           IMAGE_NAME: zaparoo/linux-arm64-build
           APP_BIN: zaparoo.sh
 

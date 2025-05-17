@@ -13,7 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var ErrorNullSql = errors.New("MediaDB is not connected")
@@ -40,7 +40,7 @@ func (db *MediaDB) Open() error {
 			return err
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite", dbPath)
+	sqlInstance, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return err
 	}
