@@ -8,33 +8,64 @@ tasks:
     status:
       - docker image inspect {{.IMAGE_NAME}}
     cmds:
-      - docker build --platform linux/{{.ARCH}} --build-arg UID=$UID --build-arg GID=$GID {{default "" .CACHE_ARGS}} -t {{.IMAGE_NAME}} {{.DOCKERFILE}}
+      - >-
+        docker build
+        {{if .DOCKER_PLATFORM}}--platform {{.DOCKER_PLATFORM}}{{end}}
+        --build-arg UID=$UID --build-arg GID=$GID
+        {{default "" .CACHE_ARGS}}
+        -t {{.IMAGE_NAME}}
+        {{.DOCKERFILE}}
 
   build-app:
     internal: true
     vars:
-      BUILD_NAME: "{{.PLATFORM}}{{if .BUILD_ARCH}}_{{.BUILD_ARCH}}{{end}}"
-      BUILD_DIR: "./_build/{{.BUILD_NAME}}"
+      BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
+      APP_BIN: '{{default "zaparoo" .APP_BIN}}'
     cmds:
       - task: run
         vars:
           IMAGE_NAME: "{{.IMAGE_NAME}}"
-          BUILD_DIR: "{{.BUILD_DIR}}"
-          DOCKER_ARCH: "{{.DOCKER_ARCH}}"
+          DOCKER_PLATFORM: "{{.DOCKER_PLATFORM}}"
           PLATFORM: "{{.PLATFORM}}"
-          APP_BIN: "{{.APP_BIN}}"
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
-      - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
+          BUILD_ARCH: "{{.BUILD_ARCH}}"
+          BUILD_OS: "{{.BUILD_OS}}"
+          NO_LIBNFC: "{{.NO_LIBNFC}}"
+          NO_STATIC: "{{.NO_STATIC}}"
+          CC: "{{.CC}}"
+          CXX: "{{.CXX}}"
+          EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
+          APP_BIN: "{{.APP_BIN}}"
+      - >-
+        go run scripts/tasks/utils/makezip.go
+        {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
+        "zaparoo-{{.PLATFORM}}_{{.BUILD_ARCH}}.zip"
 
   run:
     internal: true
     vars:
-      BUILDCACHE: "{{if eq OS \"windows\"}}{{.LOCALAPPDATA}}\\go-build{{else}}{{.HOME}}/.cache/go-build{{end}}"
-      GOCACHE: "{{if eq OS \"windows\"}}{{.USERPROFILE}}\\go{{else}}{{.HOME}}/go{{end}}"
+      BUILDCACHE: '{{if eq OS "windows"}}{{.LOCALAPPDATA}}\\go-build{{else}}{{.HOME}}/.cache/go-build{{end}}'
+      GOCACHE: '{{if eq OS "windows"}}{{.USERPROFILE}}\\go{{else}}{{.HOME}}/go{{end}}'
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:
-      - "{{if eq OS \"windows\"}}cmd /c if not exist \"{{.BUILDCACHE}}\" mkdir \"{{.BUILDCACHE}}\"{{else}}mkdir -p \"{{.BUILDCACHE}}\"{{end}}"
-      - "{{if eq OS \"windows\"}}cmd /c if not exist \"{{.GOCACHE}}\" mkdir \"{{.GOCACHE}}\"{{else}}mkdir -p \"{{.GOCACHE}}\"{{end}}"
-      - docker run --rm --platform linux/{{.DOCKER_ARCH}} -v "{{.BUILDCACHE}}:{{.IMG_BUILDCACHE}}" -v "{{.GOCACHE}}:{{.IMG_GOCACHE}}" -v "${PWD}:/build" -e PLATFORM={{.PLATFORM}} -e APP_BIN={{.APP_BIN}} {{.EXTRA_DOCKER_ARGS}} {{.IMAGE_NAME}} {{.EXEC}}
+      - '{{if eq OS "windows"}}cmd /c if not exist "{{.BUILDCACHE}}" mkdir "{{.BUILDCACHE}}"{{else}}mkdir -p "{{.BUILDCACHE}}"{{end}}'
+      - '{{if eq OS "windows"}}cmd /c if not exist "{{.GOCACHE}}" mkdir "{{.GOCACHE}}"{{else}}mkdir -p "{{.GOCACHE}}"{{end}}'
+      - >-
+        docker run --rm
+        {{if .DOCKER_PLATFORM}}--platform {{.DOCKER_PLATFORM}}{{end}}
+        -v "{{.BUILDCACHE}}:{{.IMG_BUILDCACHE}}"
+        -v "{{.GOCACHE}}:{{.IMG_GOCACHE}}"
+        -v "${PWD}:/build"
+        -e PLATFORM={{.PLATFORM}}
+        -e APP_BIN={{.APP_BIN}}
+        {{if .BUILD_ARCH}}-e BUILD_ARCH={{.BUILD_ARCH}}{{end}}
+        {{if .BUILD_OS}}-e BUILD_OS={{.BUILD_OS}}{{end}}
+        {{if .NO_LIBNFC}}-e NO_LIBNFC={{.NO_LIBNFC}}{{end}}
+        {{if .NO_STATIC}}-e NO_STATIC={{.NO_STATIC}}{{end}}
+        {{if .CC}}-e CC="{{.CC}}"{{end}}
+        {{if .CXX}}-e CXX="{{.CXX}}"{{end}}
+        {{if .EXTRA_LDFLAGS}}-e EXTRA_LDFLAGS="{{.EXTRA_LDFLAGS}}"{{end}}
+        {{.EXTRA_DOCKER_ARGS}}
+        {{.IMAGE_NAME}} {{.EXEC}}

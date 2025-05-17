@@ -98,6 +98,7 @@ func generateMediaDB(
 	}
 
 	statusInstance.start()
+	startTime := time.Now()
 
 	log.Info().Msg("generating media db")
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
@@ -168,6 +169,7 @@ func generateMediaDB(
 				TotalFiles: &total,
 			})
 			statusInstance.clear()
+			log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
 			return
 		}
 	}()
