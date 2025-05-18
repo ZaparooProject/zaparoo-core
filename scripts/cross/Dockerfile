@@ -21,6 +21,7 @@ RUN mkdir -p /opt/macosx-sdk && \
 # install build tools
 RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 RUN env GOBIN=/usr/local/bin go install github.com/konoui/lipo@v0.9.3
+RUN env GOBIN=/usr/local/bin go install github.com/tc-hib/go-winres@latest
 
 # match output file permissions with host
 ARG UID=1000

@@ -31,7 +31,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -45,7 +44,12 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+
+	_ "embed"
 )
+
+//go:embed systrayicon.ico
+var icon []byte
 
 func main() {
 	sigs := make(chan os.Signal, 1)
@@ -129,7 +133,7 @@ func main() {
 
 func onReady(cfg *config.Instance, ip net.IP, pl platforms.Platform) func() {
 	return func() {
-		systray.SetIcon(assets.Icon)
+		systray.SetIcon(icon)
 		systray.SetTitle("Zaparoo Core")
 		systray.SetTooltip("Zaparoo Core v" + config.AppVersion)
 
