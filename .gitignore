@@ -31,3 +31,4 @@ Taskfile.yml
 tmp/
 /cmd/scratch
 /cmd/windows/*.syso
+/cmd/windows/winres/winres.json

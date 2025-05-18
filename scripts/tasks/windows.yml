@@ -4,13 +4,15 @@ tasks:
   build-metadata:
     internal: true
     sources:
-      - cmd/windows/winres/winres.json
+      - cmd/windows/winres/winres.json.tmpl
       - cmd/windows/winres/*.png
     generate:
+      - cmd/windows/winres/winres.json
       - cmd/windows/rsrc_windows_386.sysro
       - cmd/windows/rsrc_windows_amd64.sysro
       - cmd/windows/rsrc_windows_arm64.sysro
     cmds:
+      - go run scripts/tasks/utils/windowsmeta.go -version "{{.APP_VERSION}}"
       - task: :docker:run
         vars:
           IMAGE_NAME: zaparoo/cross-build
