@@ -1,0 +1,50 @@
+#define MyAppName "Zaparoo Core"
+#define MyAppPublisher "Zaparoo"
+#define MyAppURL "https://zaparoo.org"
+#define MyAppExeName "Zaparoo.exe"
+
+[Setup]
+AppId={{"{{"}}0BB9CB87-754A-4FEF-8238-6D7F47CB0B14}
+AppName={#MyAppName}
+AppVersion={{.Version}}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}/support
+AppUpdatesURL={#MyAppURL}
+PrivilegesRequired=lowest
+DefaultDirName={userappdata}\{#MyAppName}
+DefaultGroupName={#MyAppName}
+AllowNoIcons=yes
+LicenseFile=LICENSE.txt
+OutputBaseFilename=zaparoo-{{.Version}}-{{.Arch}}-setup
+Compression=lzma
+SolidCompression=yes
+WizardStyle=modern
+{{if .ArchitecturesAllowed}}ArchitecturesAllowed={{.ArchitecturesAllowed}}{{end}}
+{{if .ArchitecturesInstall64}}ArchitecturesInstallIn64BitMode={{.ArchitecturesInstall64}}{{end}}
+SetupIconFile=icon.ico
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[Files]
+Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden
+
+[CustomMessages]
+LaunchAfterInstall=&Launch Zaparoo Core after installation
