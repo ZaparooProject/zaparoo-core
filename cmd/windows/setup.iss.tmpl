@@ -6,7 +6,8 @@
 [Setup]
 AppId={{"{{"}}0BB9CB87-754A-4FEF-8238-6D7F47CB0B14}
 AppName={#MyAppName}
-AppVersion={{.Version}}
+AppVerName=Zaparoo Core
+VersionInfoVersion={{.Version}}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/support
@@ -16,19 +17,33 @@ PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-OutputBaseFilename=zaparoo-v{{.Version}}-{{.Arch}}-setup
+OutputBaseFilename=zaparoo-{{.Arch}}-v{{.Version}}-setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 {{if .ArchitecturesAllowed}}ArchitecturesAllowed={{.ArchitecturesAllowed}}{{end}}
 {{if .ArchitecturesInstall64}}ArchitecturesInstallIn64BitMode={{.ArchitecturesInstall64}}{{end}}
 SetupIconFile=icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
+VersionInfoDescription=Zaparoo Core
+VersionInfoCopyright=Copyright © {{.Year}} Contributors to the Zaparoo project
+VersionInfoProductName=Zaparoo Core
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "runonstartup"; Description: "Run Zaparoo Core on startup"; GroupDescription: "Startup options:"
+Name: "addtopath"; Description: "Add Zaparoo Core to PATH"; GroupDescription: "System:"
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+  ValueType: string; ValueName: "ZaparooCore"; ValueData: """{app}\Zaparoo.exe"""; \
+  Tasks: runonstartup; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
+  ValueData: "{olddata};{app}"; Tasks: addtopath; \
+  Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -42,9 +57,25 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent
 
 [UninstallRun]
-Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden
+Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillService"
 
 [CustomMessages]
 LaunchAfterInstall=&Launch Zaparoo Core after installation
+
+[Code]
+function NeedsAddPath(Param: string): boolean;
+var
+  OrigPath: string;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER,
+    'Environment',
+    'Path', OrigPath)
+  then begin
+    Result := True;
+    exit;
+  end;
+  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+end;

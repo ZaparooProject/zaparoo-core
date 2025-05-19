@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
+	"time"
 )
 
 type InnoSetupData struct {
@@ -13,6 +15,7 @@ type InnoSetupData struct {
 	Arch                   string
 	ArchitecturesAllowed   string
 	ArchitecturesInstall64 string
+	Year                   string
 }
 
 func main() {
@@ -32,13 +35,13 @@ func main() {
 	var archAllowed, archInstall string
 	switch *arch {
 	case "amd64":
-		archAllowed = "x64"
-		archInstall = "x64"
+		archAllowed = "x64compatible"
+		archInstall = "x64compatible"
 	case "arm64":
 		archAllowed = "arm64"
 		archInstall = "arm64"
 	case "386":
-		archAllowed = "x86"
+		archAllowed = "x86compatible"
 		archInstall = "" // 32-bit doesn't need special install mode
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "Error: unsupported architecture: %s\n", *arch)
@@ -50,6 +53,7 @@ func main() {
 		Arch:                   *arch,
 		ArchitecturesAllowed:   archAllowed,
 		ArchitecturesInstall64: archInstall,
+		Year:                   strconv.Itoa(time.Now().Year()),
 	}
 
 	tmpl, err := template.ParseFiles("cmd/windows/setup.iss.tmpl")

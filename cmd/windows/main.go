@@ -22,6 +22,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -45,13 +46,29 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 
+	syscallWindows "golang.org/x/sys/windows"
+
 	_ "embed"
 )
 
-//go:embed systrayicon.ico
+//go:embed winres/icon.ico
 var icon []byte
 
+func alreadyRunning() bool {
+	_, err := syscallWindows.CreateMutex(
+		nil, false,
+		syscallWindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
+	)
+	if err != nil {
+		log.Fatal().Err(err).Msg("error creating mutex")
+	}
+	lastError := syscallWindows.GetLastError()
+	return errors.Is(lastError, syscallWindows.ERROR_ALREADY_EXISTS)
+}
+
 func main() {
+	// TODO: gracefully allow direct exe use without starting service
+
 	sigs := make(chan os.Signal, 1)
 	doStop := make(chan bool, 1)
 	stopped := make(chan bool, 1)
@@ -85,6 +102,12 @@ func main() {
 	)
 
 	flags.Post(cfg, pl)
+
+	if alreadyRunning() {
+		log.Error().Msg("service is already running")
+		fmt.Println("Zaparoo Core is already running")
+		os.Exit(1)
+	}
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
