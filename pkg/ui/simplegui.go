@@ -1,4 +1,4 @@
-package simplegui
+package ui
 
 /*
 Zaparoo Core
@@ -106,12 +106,12 @@ func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDe
 		statusText = "NOT RUNNING"
 	}
 
-	ip, err := utils.GetLocalIp()
+	ip := utils.GetLocalIP()
 	var ipDisplay string
-	if err != nil {
+	if ip == "" {
 		ipDisplay = "Unknown"
 	} else {
-		ipDisplay = ip.String()
+		ipDisplay = ip
 	}
 
 	// ugly text for the modal content. sorry.

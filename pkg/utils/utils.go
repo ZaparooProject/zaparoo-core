@@ -119,21 +119,22 @@ func WaitForInternet(maxTries int) bool {
 	return false
 }
 
-func GetLocalIp() (net.IP, error) {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+func GetLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	defer func(conn net.Conn) {
-		err := conn.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("close connection failed")
+
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok &&
+			!ipnet.IP.IsLoopback() && ipnet.IP.IsPrivate() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
 		}
-	}(conn)
+	}
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-
-	return localAddr.IP, nil
+	return ""
 }
 
 func IsZip(path string) bool {

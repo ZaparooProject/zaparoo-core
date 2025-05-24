@@ -29,7 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -101,6 +101,6 @@ func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *ut
 	// Asturur > Wizzo
 	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
-		return simplegui.BuildTheUi(pl, service.Running(), cfg, logDestinationPath)
+		return ui.BuildTheUi(pl, service.Running(), cfg, logDestinationPath)
 	})
 }

@@ -24,18 +24,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
 	"io"
-	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/getlantern/systray"
 	"github.com/rs/zerolog"
 
 	"github.com/rs/zerolog/log"
@@ -54,7 +51,7 @@ import (
 //go:embed winres/icon.ico
 var icon []byte
 
-func alreadyRunning() bool {
+func isServiceRunning() bool {
 	_, err := syscallWindows.CreateMutex(
 		nil, false,
 		syscallWindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
@@ -103,7 +100,7 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	if alreadyRunning() {
+	if isServiceRunning() {
 		log.Error().Msg("service is already running")
 		fmt.Println("Zaparoo Core is already running")
 		os.Exit(1)
@@ -134,15 +131,15 @@ func main() {
 		stopped <- true
 	}()
 
-	ip, err := utils.GetLocalIp()
-	if err != nil {
+	ip := utils.GetLocalIP()
+	if ip == "" {
 		fmt.Println("Device address: Unknown")
 	} else {
-		fmt.Println("Device address:", ip.String())
-		fmt.Printf("Web App: http://%s:%d/app/\n", ip.String(), cfg.ApiPort())
+		fmt.Println("Device address:", ip)
+		fmt.Printf("Web App: http://%s:%d/app/\n", ip, cfg.ApiPort())
 	}
 
-	systray.Run(onReady(cfg, ip, pl), func() {
+	systray.Run(cfg, pl, icon, func() {
 		os.Exit(0)
 	})
 
@@ -152,49 +149,4 @@ func main() {
 	<-stopped
 
 	os.Exit(0)
-}
-
-func onReady(cfg *config.Instance, ip net.IP, pl platforms.Platform) func() {
-	return func() {
-		systray.SetIcon(icon)
-		systray.SetTitle("Zaparoo Core")
-		systray.SetTooltip("Zaparoo Core v" + config.AppVersion)
-
-		addr := systray.AddMenuItem(fmt.Sprintf("Address: %s:%d", ip.String(), cfg.ApiPort()), "")
-		addr.Disable()
-
-		conf := systray.AddMenuItem("Open config folder", "Open config folder")
-		logs := systray.AddMenuItem("View log file", "View log file")
-		webui := systray.AddMenuItem("Open web UI", "Open web UI")
-		systray.AddSeparator()
-		quit := systray.AddMenuItem("Quit", "Stop the Zaparoo service")
-
-		go func() {
-			for {
-				select {
-				case <-quit.ClickedCh:
-					systray.Quit()
-					return
-				case <-webui.ClickedCh:
-					addr := fmt.Sprintf("http://%s:%d/app/", ip.String(), cfg.ApiPort())
-					err := exec.Command("explorer", addr).Start()
-					if err != nil {
-						log.Error().Msgf("error opening web UI: %s", err)
-					}
-				case <-logs.ClickedCh:
-					logFile := filepath.Join(pl.Settings().TempDir, "core.log")
-					err := exec.Command("explorer", logFile).Start()
-					if err != nil {
-						log.Error().Msgf("error opening log file: %s", err)
-					}
-				case <-conf.ClickedCh:
-					folder := utils.ConfigDir(pl)
-					err := exec.Command("explorer", folder).Start()
-					if err != nil {
-						log.Error().Msgf("error opening config folder: %s", err)
-					}
-				}
-			}
-		}()
-	}
 }

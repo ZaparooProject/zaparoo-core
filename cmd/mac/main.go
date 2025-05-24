@@ -28,27 +28,19 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
-	"github.com/ZaparooProject/zaparoo-core/pkg/simplegui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/nixinwang/dialog"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
 	"github.com/rs/zerolog/log"
-	"golang.design/x/clipboard"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 
 	_ "embed"
 )
-
-import "fyne.io/systray"
 
 //go:embed app/systrayicon.png
 var systrayIcon []byte
@@ -60,100 +52,6 @@ func isServiceRunning(cfg *config.Instance) bool {
 		return false
 	}
 	return true
-}
-
-func systrayOnReady(cfg *config.Instance, pl platforms.Platform) func() {
-	return func() {
-		systray.SetIcon(systrayIcon)
-
-		mWebUI := systray.AddMenuItem("Web UI", "Open Zaparoo web UI")
-		address := "Unknown"
-		ip, err := utils.GetLocalIp()
-		if err == nil {
-			address = ip.String()
-		}
-		mAddress := systray.AddMenuItem("Address: "+address, "")
-		systray.AddSeparator()
-
-		mEditConfig := systray.AddMenuItem("Edit Config", "Edit Core config file")
-		mReloadConfig := systray.AddMenuItem("Reload Config", "Reload Core config file and mappings")
-		mOpenMappings := systray.AddMenuItem("Open Mappings", "Open Core mappings directory")
-		mOpenLog := systray.AddMenuItem("Open Log", "Open Core log file")
-
-		if cfg.DebugLogging() {
-			systray.AddSeparator()
-		}
-		mOpenDataDir := systray.AddMenuItem("Open Data (Debug)", "Open Core data directory")
-		mOpenDataDir.Hide()
-		if cfg.DebugLogging() {
-			mOpenDataDir.Show()
-		}
-
-		systray.AddSeparator()
-		mVersion := systray.AddMenuItem("Version "+config.AppVersion, "")
-		mVersion.Disable()
-		mAbout := systray.AddMenuItem("About Zaparoo Core", "")
-
-		systray.AddSeparator()
-		mQuit := systray.AddMenuItem("Quit", "Quit and stop Zaparoo service")
-
-		go func() {
-			for {
-				select {
-				case <-mAddress.ClickedCh:
-					err := clipboard.Init()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to initialize clipboard")
-						continue
-					}
-					clipboard.Write(clipboard.FmtText, []byte(address))
-					// TODO: send notification
-				case <-mWebUI.ClickedCh:
-					url := fmt.Sprintf("http://localhost:%d/app/", cfg.ApiPort())
-					err := exec.Command("open", url).Start()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to open web page")
-					}
-				case <-mOpenLog.ClickedCh:
-					err := exec.Command("open", filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to open log file")
-					}
-				case <-mEditConfig.ClickedCh:
-					err := exec.Command("open", filepath.Join(pl.Settings().ConfigDir, config.CfgFile)).Start()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to open config file")
-					}
-				case <-mOpenMappings.ClickedCh:
-					err := exec.Command("open", filepath.Join(pl.Settings().DataDir, platforms.MappingsDir)).Start()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to open mappings dir")
-					}
-				case <-mReloadConfig.ClickedCh:
-					_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
-					if err != nil {
-						log.Error().Err(err).Msg("failed to reload config")
-					} else {
-						log.Info().Msg("reloaded config")
-					}
-				case <-mOpenDataDir.ClickedCh:
-					err := exec.Command("open", pl.Settings().DataDir).Start()
-					if err != nil {
-						log.Error().Err(err).Msg("failed to open data dir")
-					}
-				case <-mAbout.ClickedCh:
-					msg := "Zaparoo Core\n" +
-						"Version v%s\n\n" +
-						"© %d Zaparoo Contributors\n" +
-						"License: GPLv3\n\n" +
-						"www.zaparoo.org"
-					dialog.Message(msg, config.AppVersion, time.Now().Year()).Title("About Zaparoo Core").Info()
-				case <-mQuit.ClickedCh:
-					systray.Quit()
-				}
-			}
-		}()
-	}
 }
 
 func main() {
@@ -215,7 +113,7 @@ func main() {
 		}
 
 		if *appMode {
-			systray.Run(systrayOnReady(cfg, pl), func() {
+			systray.Run(cfg, pl, systrayIcon, func() {
 				exit <- true
 			})
 		}
@@ -251,7 +149,7 @@ func main() {
 		}()
 	}
 
-	app, err := simplegui.BuildTheUi(
+	app, err := ui.BuildTheUi(
 		pl, isServiceRunning(cfg), cfg,
 		filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 	)
