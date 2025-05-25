@@ -112,7 +112,7 @@ func main() {
 	if *daemonMode {
 		log.Info().Msg("started in daemon mode")
 	} else if *guiMode {
-		systray.Run(cfg, pl, systrayIcon, func() {
+		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
 			exit <- true
 		})
 	} else {

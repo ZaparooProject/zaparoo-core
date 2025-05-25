@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/gen2brain/beeep"
 	"io"
 	"os"
 	"os/signal"
@@ -48,6 +49,8 @@ import (
 
 //go:embed winres/icon.ico
 var icon []byte
+
+const notificationTitle = "Zaparoo Core"
 
 func isElevated() (bool, error) {
 	// https://github.com/golang/go/issues/28804#issuecomment-505326268
@@ -141,6 +144,7 @@ func main() {
 	if isRunning() {
 		log.Error().Msg("core is already running")
 		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo Core is already running\n")
+		_ = beeep.Notify(notificationTitle, "Zaparoo Core is already running.", "")
 		os.Exit(1)
 	}
 
@@ -150,6 +154,10 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
 		os.Exit(1)
 	}
+	err = beeep.Notify(notificationTitle, "Core service started.", "")
+	if err != nil {
+		log.Error().Msgf("error notifying: %s", err)
+	}
 
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
@@ -158,9 +166,17 @@ func main() {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	systray.Run(cfg, pl, icon, func() {
-		exit <- true
-	})
+	systray.Run(cfg, pl, icon,
+		func(msg string) {
+			err := beeep.Notify(notificationTitle, msg, "")
+			if err != nil {
+				log.Error().Msgf("error notifying: %s", err)
+			}
+		},
+		func() {
+			exit <- true
+		},
+	)
 
 	select {
 	case <-sigs:
@@ -170,6 +186,10 @@ func main() {
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)
+	}
+	err = beeep.Notify(notificationTitle, "Core service stopped.", "")
+	if err != nil {
+		log.Error().Msgf("error notifying: %s", err)
 	}
 
 	os.Exit(0)

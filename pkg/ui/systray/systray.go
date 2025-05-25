@@ -21,6 +21,7 @@ func systrayOnReady(
 	cfg *config.Instance,
 	pl platforms.Platform,
 	icon []byte,
+	notify func(string),
 ) func() {
 	return func() {
 		openCmd := ""
@@ -76,48 +77,56 @@ func systrayOnReady(
 					err := clipboard.Init()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to initialize clipboard")
+						notify("Error copying address to clipboard.")
 						continue
 					}
 					clipboard.Write(clipboard.FmtText, []byte(ip))
-					// TODO: send notification
+					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.ApiPort())
 					err := exec.Command(openCmd, url).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open web page")
+						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
 					err := exec.Command(openCmd, filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
+						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
 					err := exec.Command(openCmd, filepath.Join(pl.Settings().ConfigDir, config.CfgFile)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
+						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
 					err := exec.Command(openCmd, filepath.Join(pl.Settings().DataDir, platforms.MappingsDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
+						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
 					err := exec.Command(openCmd, filepath.Join(pl.Settings().DataDir, platforms.LaunchersDir)).Start()
 					if err != nil {
-						log.Error().Err(err).Msg("failed to open mappings dir")
+						log.Error().Err(err).Msg("failed to open launchers dir")
+						notify("Error opening launchers directory.")
 					}
 				case <-mReloadConfig.ClickedCh:
 					_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
 					if err != nil {
 						log.Error().Err(err).Msg("failed to reload config")
+						notify("Error reloading Core config.")
 					} else {
 						log.Info().Msg("reloaded config")
+						notify("Core config successfully reloaded.")
 					}
-					// TODO: send notification
 				case <-mOpenDataDir.ClickedCh:
 					err := exec.Command(openCmd, pl.Settings().DataDir).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
+						notify("Error opening data directory.")
 					}
 				case <-mAbout.ClickedCh:
 					msg := "Zaparoo Core\n" +
@@ -138,7 +147,8 @@ func Run(
 	cfg *config.Instance,
 	pl platforms.Platform,
 	icon []byte,
+	notify func(string),
 	exit func(),
 ) {
-	systray.Run(systrayOnReady(cfg, pl, icon), exit)
+	systray.Run(systrayOnReady(cfg, pl, icon, notify), exit)
 }
