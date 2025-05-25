@@ -23,9 +23,7 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
 	"io"
 	"os"
@@ -84,7 +82,7 @@ func isElevated() (bool, error) {
 	return token.IsElevated(), nil
 }
 
-func isGUIRunning() bool {
+func isRunning() bool {
 	_, err := syscallWindows.CreateMutex(
 		nil, false,
 		syscallWindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
@@ -97,6 +95,11 @@ func isGUIRunning() bool {
 }
 
 func main() {
+	pl := &windows.Platform{}
+	flags := cli.SetupFlags()
+
+	flags.Pre(pl)
+
 	elevated, err := isElevated()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error checking elevated rights: %s\n", err)
@@ -106,29 +109,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	pl := &windows.Platform{}
-	flags := cli.SetupFlags()
-
-	daemonMode := flag.Bool(
-		"daemon",
-		false,
-		"run service in foreground with no UI",
-	)
-	guiMode := flag.Bool(
-		"gui",
-		false,
-		"run service as daemon with GUI",
-	)
-
-	flags.Pre(pl)
-
-	var logWriters []io.Writer
-	if *daemonMode || *guiMode {
-		logWriters = []io.Writer{os.Stderr}
-	}
+	logWriters := []io.Writer{os.Stderr}
 
 	defaults := config.BaseDefaults
-	defaults.DebugLogging = true
 	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
@@ -155,20 +138,17 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	if !utils.IsServiceRunning(cfg) {
-		stopSvc, err := service.Start(pl, cfg)
-		if err != nil {
-			log.Error().Msgf("error starting service: %s", err)
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
-		}
+	if isRunning() {
+		log.Error().Msg("core is already running")
+		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo Core is already running\n")
+		os.Exit(1)
+	}
 
-		defer func() {
-			err := stopSvc()
-			if err != nil {
-				log.Error().Msgf("error stopping service: %s", err)
-			}
-		}()
+	stopSvc, err := service.Start(pl, cfg)
+	if err != nil {
+		log.Error().Msgf("error starting service: %s", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
+		os.Exit(1)
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -178,43 +158,18 @@ func main() {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	if *daemonMode {
-		log.Info().Msg("started in daemon mode")
-	} else if *guiMode {
-		if isGUIRunning() {
-			log.Error().Msg("gui is already running")
-			fmt.Println("Zaparoo Core GUI is already running")
-			os.Exit(1)
-		}
-
-		systray.Run(cfg, pl, icon, func() {
-			exit <- true
-		})
-	} else {
-		// default to showing the TUI
-		app, err := ui.BuildTheUi(
-			pl, utils.IsServiceRunning(cfg), cfg,
-			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
-		)
-		if err != nil {
-			log.Error().Err(err).Msgf("error building UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-			os.Exit(1)
-		}
-
-		err = app.Run()
-		if err != nil {
-			log.Error().Err(err).Msg("error running UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-			os.Exit(1)
-		}
-
+	systray.Run(cfg, pl, icon, func() {
 		exit <- true
-	}
+	})
 
 	select {
 	case <-sigs:
 	case <-exit:
+	}
+
+	err = stopSvc()
+	if err != nil {
+		log.Error().Msgf("error stopping service: %s", err)
 	}
 
 	os.Exit(0)
