@@ -3,12 +3,6 @@ version: "3"
 tasks:
   build-metadata:
     internal: true
-    sources:
-      - cmd/windows/winres/winres.json.tmpl
-      - cmd/windows/winres/*.png
-    generates:
-      - cmd/windows/winres/winres.json
-      - cmd/windows/rsrc_windows_{{ARCH}}.sysro
     cmds:
       - go run scripts/tasks/utils/windowsmeta.go -version "{{.APP_VERSION}}"
       - task: :docker:run
@@ -18,10 +12,6 @@ tasks:
 
   build-installer:
     internal: true
-    sources:
-      - cmd/windows/setup.iss.tmpl
-    generates:
-      - _build/windows_{{ARCH}}/setup.iss
     cmds:
       - go run scripts/tasks/utils/windowsiss.go -version "{{.APP_VERSION}}" -arch "{{ARCH}}"
       - cp "cmd/windows/winres/icon.ico" "_build/windows_{{ARCH}}"

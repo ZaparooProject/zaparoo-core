@@ -24,14 +24,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"io"
 	"os"
@@ -45,15 +44,6 @@ import (
 //go:embed app/systrayicon.png
 var systrayIcon []byte
 
-func isServiceRunning(cfg *config.Instance) bool {
-	_, err := client.LocalClient(cfg, models.MethodVersion, "")
-	if err != nil {
-		log.Debug().Err(err).Msg("error checking if service running")
-		return false
-	}
-	return true
-}
-
 func main() {
 	if os.Geteuid() == 0 {
 		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
@@ -66,18 +56,18 @@ func main() {
 	daemonMode := flag.Bool(
 		"daemon",
 		false,
-		"run Zaparoo service in foreground with no GUI",
+		"run service in foreground with no UI",
 	)
-	appMode := flag.Bool(
-		"app",
+	guiMode := flag.Bool(
+		"gui",
 		false,
-		"run Zaparoo service as daemon in menu bar",
+		"run service as daemon with GUI",
 	)
 
 	flags.Pre(pl)
 
 	var logWriters []io.Writer
-	if *daemonMode || *appMode {
+	if *daemonMode || *guiMode {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
@@ -96,44 +86,7 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	if *daemonMode || *appMode {
-		sigs := make(chan os.Signal, 1)
-		defer close(sigs)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
-		exit := make(chan bool, 1)
-		defer close(exit)
-
-		stopSvc, err := service.Start(pl, cfg)
-		if err != nil {
-			// TODO: send notification if failed or succeeded
-			log.Error().Err(err).Msg("error starting service")
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
-		}
-
-		if *appMode {
-			systray.Run(cfg, pl, systrayIcon, func() {
-				exit <- true
-			})
-		}
-
-		select {
-		case <-sigs:
-		case <-exit:
-		}
-
-		err = stopSvc()
-		if err != nil {
-			log.Error().Err(err).Msgf("error stopping service")
-			_, _ = fmt.Fprintf(os.Stderr, "Error stopping service: %s\n", err)
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
-
-	if !isServiceRunning(cfg) {
+	if !utils.IsServiceRunning(cfg) {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
@@ -149,21 +102,44 @@ func main() {
 		}()
 	}
 
-	app, err := ui.BuildTheUi(
-		pl, isServiceRunning(cfg), cfg,
-		filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
-	)
-	if err != nil {
-		log.Error().Err(err).Msgf("error building UI")
-		_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-		os.Exit(1)
+	sigs := make(chan os.Signal, 1)
+	defer close(sigs)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	exit := make(chan bool, 1)
+	defer close(exit)
+
+	if *daemonMode {
+		log.Info().Msg("started in daemon mode")
+	} else if *guiMode {
+		systray.Run(cfg, pl, systrayIcon, func() {
+			exit <- true
+		})
+	} else {
+		// default to showing the TUI
+		app, err := ui.BuildTheUi(
+			pl, utils.IsServiceRunning(cfg), cfg,
+			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
+		)
+		if err != nil {
+			log.Error().Err(err).Msgf("error building UI")
+			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
+			os.Exit(1)
+		}
+
+		err = app.Run()
+		if err != nil {
+			log.Error().Err(err).Msg("error running UI")
+			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
+			os.Exit(1)
+		}
+
+		exit <- true
 	}
 
-	err = app.Run()
-	if err != nil {
-		log.Error().Err(err).Msg("error running UI")
-		_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-		os.Exit(1)
+	select {
+	case <-sigs:
+	case <-exit:
 	}
 
 	os.Exit(0)

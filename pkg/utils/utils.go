@@ -25,6 +25,9 @@ import (
 	"bufio"
 	"crypto/md5"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"io"
 	"math/rand"
 	"net"
@@ -256,4 +259,13 @@ func FilenameFromPath(path string) string {
 func SlugifyPath(path string) string {
 	fn := FilenameFromPath(path)
 	return SlugifyString(fn)
+}
+
+func IsServiceRunning(cfg *config.Instance) bool {
+	_, err := client.LocalClient(cfg, models.MethodVersion, "")
+	if err != nil {
+		log.Debug().Err(err).Msg("error checking if service running")
+		return false
+	}
+	return true
 }
