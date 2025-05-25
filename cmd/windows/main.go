@@ -186,10 +186,11 @@ func main() {
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)
-	}
-	err = beeep.Notify(notificationTitle, "Core service stopped.", "")
-	if err != nil {
-		log.Error().Msgf("error notifying: %s", err)
+	} else {
+		err = beeep.Notify(notificationTitle, "Core service stopped.", "")
+		if err != nil {
+			log.Error().Msgf("error notifying: %s", err)
+		}
 	}
 
 	os.Exit(0)

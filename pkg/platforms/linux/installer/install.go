@@ -38,7 +38,7 @@ func CLIInstall() error {
 	} else {
 		err := Install()
 		if err != nil {
-			fmt.Println("Error during install: ", err)
+			fmt.Println("Error during install:", err)
 			return err
 		}
 		fmt.Println("Install complete. You may need to reboot for changes to take effect.")
@@ -82,7 +82,7 @@ func Install() error {
 func CLIUninstall() error {
 	err := Uninstall()
 	if err != nil {
-		fmt.Println("Error during uninstall: ", err)
+		fmt.Println("Error during uninstall:", err)
 		return err
 	}
 	fmt.Println("Uninstall complete. You may need to reboot for changes to take effect.")
