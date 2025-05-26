@@ -468,6 +468,10 @@ func Start(
 		ExposedHeaders: []string{},
 	}))
 
+	if strings.HasSuffix(config.AppVersion, "-dev") {
+		r.Mount("/debug", middleware.Profiler())
+	}
+
 	methodMap := NewMethodMap()
 
 	session := melody.New()
