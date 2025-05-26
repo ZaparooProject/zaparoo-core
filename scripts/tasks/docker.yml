@@ -40,7 +40,7 @@ tasks:
       - >-
         go run scripts/tasks/utils/makezip.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
-        "zaparoo-{{.PLATFORM}}_{{.BUILD_ARCH}}.zip"
+        "zaparoo-{{.PLATFORM}}_{{.BUILD_ARCH}}-${APP_VERSION}.zip"
 
   run:
     internal: true
