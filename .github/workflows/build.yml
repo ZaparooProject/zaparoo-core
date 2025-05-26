@@ -45,6 +45,8 @@ jobs:
             arch: arm64
           - platform: batocera
             arch: arm
+          - platform: windows
+            arch: 386
     steps:
       - uses: actions/checkout@v4
       - id: zaparooapprel
@@ -89,7 +91,6 @@ jobs:
       - name: Set up Docker CLI
         uses: docker/setup-buildx-action@v3
         with:
-          platforms: linux/amd64,linux/arm64,linux/arm
           use: true
           install: true
       - name: Expose GitHub Runtime
@@ -105,3 +106,69 @@ jobs:
         run: |
           mv _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}.zip _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip
           gh release upload "$tag" _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip
+      - name: Add Windows setup release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        if: matrix.platform == 'windows'
+        run: |
+          gh release upload "$tag" _build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe
+
+#  build_mac_app:
+#    runs-on: macos-12
+#    name: Package and release Mac app
+#    needs:
+#      - build
+#    steps:
+#      - uses: actions/checkout@master
+#      - name: Download core arm64
+#        uses: actions/download-artifact@v3
+#        with:
+#          name: core-arm64
+#          path: FranzCocoa/resources/
+#      - name: Download core x86_64
+#        uses: actions/download-artifact@v3
+#        with:
+#          name: core-x86_64
+#          path: FranzCocoa/resources/
+#      - name: Install Certificates
+#        run: |
+#          # https://docs.github.com/en/actions/deployment/deploying-xcode-applications/installing-an-apple-certificate-on-macos-runners-for-xcode-development
+#          MAC_DEV_CER_PATH=$RUNNER_TEMP/madev.p12
+#          DEVELOPER_ID_CER_PATH=$RUNNER_TEMP/devid.p12
+#          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+#          echo -n "$MAC_DEV_CER" | base64 --decode -o $MAC_DEV_CER_PATH
+#          echo -n "$DEVELOPER_ID_CER" | base64 --decode -o $DEVELOPER_ID_CER_PATH
+#          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+#          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+#          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+#          security import $MAC_DEV_CER_PATH -P "$MAC_DEV_CER_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+#          security import $DEVELOPER_ID_CER_PATH -P "$DEVELOPER_ID_CER_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+#          security list-keychain -d user -s $KEYCHAIN_PATH
+#        env:
+#          DEVELOPER_ID_CER: ${{ secrets.DEVELOPER_ID_CER }}
+#          DEVELOPER_ID_CER_PASSWORD: ${{ secrets.DEVELOPER_ID_CER_PASSWORD }}
+#          MAC_DEV_CER: ${{ secrets.MAC_DEV_CER }}
+#          MAC_DEV_CER_PASSWORD: ${{ secrets.MAC_DEV_CER_PASSWORD }}
+#          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+#      - name: Build Franz.app
+#        run: |
+#          mkdir -p dist
+#          npx create-dmg dist/Franz.app dist/
+#          mv dist/Franz*.dmg dist/Franz.dmg
+#      - name: Notarize Franz.dmg
+#        run: |
+#          xcrun notarytool submit \
+#            --team-id 'H3YE679B58' \
+#            --apple-id 'bogdan@defn.io' \
+#            --password "$NOTARY_PASSWORD" \
+#            --wait \
+#            dist/Franz.dmg
+#          xcrun stapler staple dist/Franz.dmg
+#        env:
+#          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+#      - name: Upload Franz.dmg
+#        uses: actions/upload-artifact@v3
+#        with:
+#          name: Franz.dmg
+#          path: dist/Franz.dmg

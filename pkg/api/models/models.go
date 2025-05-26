@@ -13,7 +13,7 @@ const (
 	NotificationTokensRemoved       = "tokens.removed"
 	NotificationStopped             = "media.stopped"
 	NotificationStarted             = "media.started"
-	NotificationMediaIndexing       = "media.indexing"
+	NotificationMediaIndexing       = "media.indexing" // TODO: rename to generating
 )
 
 const (

@@ -29,25 +29,35 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/rs/zerolog"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 )
 
 func main() {
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
 	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
-	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
+	doInstall := flag.Bool(
+		"install",
+		false,
+		"configure system for Zaparoo",
+	)
+	doUninstall := flag.Bool(
+		"uninstall",
+		false,
+		"revert Zaparoo system configuration",
+	)
+	daemonMode := flag.Bool(
+		"daemon",
+		false,
+		"run service in foreground with no UI",
+	)
 
 	flags.Pre(pl)
 
@@ -68,15 +78,12 @@ func main() {
 	}
 
 	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo must not be run as root\n")
+		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
 		os.Exit(1)
 	}
 
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
-	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
-	if *asDaemon {
+	var logWriters []io.Writer
+	if *daemonMode {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
@@ -86,19 +93,65 @@ func main() {
 		logWriters,
 	)
 
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %s\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
+
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
-		os.Exit(1)
+	if !utils.IsServiceRunning(cfg) {
+		stopSvc, err := service.Start(pl, cfg)
+		if err != nil {
+			log.Error().Msgf("error starting service: %s", err)
+			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
+			os.Exit(1)
+		}
+
+		defer func() {
+			err := stopSvc()
+			if err != nil {
+				log.Error().Msgf("error stopping service: %s", err)
+			}
+		}()
 	}
 
-	<-sigs
-	err = stop()
-	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
-		os.Exit(1)
+	sigs := make(chan os.Signal, 1)
+	defer close(sigs)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	exit := make(chan bool, 1)
+	defer close(exit)
+
+	if *daemonMode {
+		log.Info().Msg("started in daemon mode")
+	} else {
+		// default to showing the TUI
+		app, err := ui.BuildTheUi(
+			pl, utils.IsServiceRunning(cfg), cfg,
+			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
+		)
+		if err != nil {
+			log.Error().Err(err).Msgf("error building UI")
+			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
+			os.Exit(1)
+		}
+
+		err = app.Run()
+		if err != nil {
+			log.Error().Err(err).Msg("error running UI")
+			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
+			os.Exit(1)
+		}
+
+		exit <- true
+	}
+
+	select {
+	case <-sigs:
+	case <-exit:
 	}
 
 	os.Exit(0)

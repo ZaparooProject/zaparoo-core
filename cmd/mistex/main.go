@@ -164,10 +164,10 @@ func main() {
 		fmt.Println("Zaparoo service is running.")
 	}
 
-	ip, err := utils.GetLocalIp()
-	if err != nil {
+	ip := utils.GetLocalIP()
+	if ip == "" {
 		fmt.Println("Device address: Unknown")
 	} else {
-		fmt.Println("Device address:", ip.String())
+		fmt.Println("Device address:", ip)
 	}
 }
