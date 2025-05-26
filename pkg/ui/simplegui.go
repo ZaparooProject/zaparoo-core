@@ -21,13 +21,13 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/configui"
 	"os/exec"
 	"path"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"

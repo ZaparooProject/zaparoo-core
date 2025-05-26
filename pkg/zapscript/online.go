@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"io"
 	"net/http"

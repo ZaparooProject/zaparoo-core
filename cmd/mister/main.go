@@ -24,13 +24,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 
