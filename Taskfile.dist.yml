@@ -25,6 +25,7 @@ includes:
   retropie: ./scripts/tasks/retropie.yml
   steamos: ./scripts/tasks/steamos.yml
   windows: ./scripts/tasks/windows.yml
+  test: ./scripts/tasks/test.yml
 
 tasks:
   build:

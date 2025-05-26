@@ -81,6 +81,10 @@ func main() {
 	appBin := os.Args[3]
 	zipName := os.Args[4]
 
+	if strings.HasPrefix(platform, "test") {
+		os.Exit(0)
+	}
+
 	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
 		fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
 		os.Exit(1)
