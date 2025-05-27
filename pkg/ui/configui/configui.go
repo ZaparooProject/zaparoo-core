@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -138,7 +139,7 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			// if we don't force a redraw, the waitNotification will keep the thread busy
 			// and the app won't update the screen
 			app.ForceDraw()
-			resp, _ := client.WaitNotification(cfg, models.NotificationTokensAdded)
+			resp, _ := client.WaitNotification(context.Background(), cfg, models.NotificationTokensAdded)
 			var data models.TokenResponse
 			err := json.Unmarshal([]byte(resp), &data)
 			if err != nil {
@@ -170,59 +171,6 @@ func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	name := ""
 	filterSystem := ""
 	searching := false
-	search := func() {
-		if searching {
-			return
-		}
-
-		params := models.SearchParams{
-			Query: name,
-		}
-
-		if filterSystem != "" {
-			systems := []string{filterSystem}
-			params.Systems = &systems
-		}
-
-		payload, err := json.Marshal(params)
-		if err != nil {
-			log.Error().Err(err).Msg("error marshalling search params")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		searchButton.SetLabel("Searching...")
-		searching = true
-		app.ForceDraw()
-		defer func() {
-			searchButton.SetLabel("Search")
-			searching = false
-		}()
-
-		resp, err := client.LocalClient(cfg, models.MethodMediaSearch, string(payload))
-		if err != nil {
-			log.Error().Err(err).Msg("error executing search query")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		var results models.SearchResults
-		err = json.Unmarshal([]byte(resp), &results)
-		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling search results")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		mediaList.Clear()
-		mediaList.SetCurrentItem(0)
-		for _, result := range results.Results {
-			mediaList.AddItem(result.Name, result.System.Name, 0, nil)
-		}
-
-		statusText.SetText(fmt.Sprintf("Found %d results.", len(results.Results)))
-		app.SetFocus(mediaList)
-	}
 
 	tsm := tview.NewFlex()
 	tsm.SetTitle("Search Media")
@@ -241,7 +189,7 @@ func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	})
 	systemDropdown.SetLabelWidth(7)
 
-	resp, err := client.LocalClient(cfg, models.MethodSystems, "")
+	resp, err := client.LocalClient(context.Background(), cfg, models.MethodSystems, "")
 	if err != nil {
 		log.Error().Err(err).Msg("error getting system list")
 	} else {
@@ -261,11 +209,8 @@ func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 		}
 	}
 
-	systemDropdown.AddOption("something else", nil)
 	systemDropdown.SetCurrentOption(0)
 	systemDropdown.SetFieldWidth(0)
-
-	searchButton.SetSelectedFunc(search)
 
 	mediaList.SetWrapAround(false)
 	mediaList.SetSelectedFocusOnly(true)
@@ -347,7 +292,138 @@ func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	tsm.AddItem(controls, 1, 1, false)
 	tsm.AddItem(statusText, 1, 1, false)
 	tsm.AddItem(tview.NewTextView(), 1, 1, false)
-	tsm.AddItem(mediaList, 0, 1, false)
+
+	mediaPages := tview.NewPages()
+
+	writeModal := tview.NewModal().
+		AddButtons([]string{"Cancel"}).
+		SetText("Place tag on reader...")
+
+	successModal := tview.NewModal().
+		AddButtons([]string{"OK"}).
+		SetText("Tag written successfully.").
+		SetDoneFunc(func(_ int, _ string) {
+			mediaPages.SwitchToPage("media_list")
+			app.SetFocus(mediaList)
+		})
+
+	errorModal := tview.NewModal().
+		AddButtons([]string{"OK"}).
+		SetText("Error writing to tag.").
+		SetDoneFunc(func(_ int, _ string) {
+			mediaPages.SwitchToPage("media_list")
+			app.SetFocus(mediaList)
+		})
+
+	mediaPages.AddPage("media_list", mediaList, true, true)
+	mediaPages.AddPage("write_modal", writeModal, true, false)
+	mediaPages.AddPage("success_modal", successModal, true, false)
+	mediaPages.AddPage("error_modal", errorModal, true, false)
+
+	tsm.AddItem(mediaPages, 0, 1, false)
+
+	writeTag := func(value string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		writeModal.SetDoneFunc(func(_ int, _ string) {
+			log.Info().Msg("user cancelled write")
+			cancel()
+			_, err := client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
+			if err != nil {
+				log.Error().Err(err).Msg("error cancelling write")
+			}
+			mediaPages.SwitchToPage("media_list")
+			app.SetFocus(mediaList)
+		})
+
+		mediaPages.ShowPage("write_modal")
+		app.SetFocus(writeModal)
+
+		go func() {
+			data, err := json.Marshal(&models.ReaderWriteParams{
+				Text: value,
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("error marshalling write params")
+				errorModal.SetText("Error writing to tag.")
+				mediaPages.HidePage("write_modal")
+				mediaPages.ShowPage("error_modal")
+				app.SetFocus(errorModal).ForceDraw()
+				return
+			}
+
+			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
+			if err != nil {
+				log.Error().Err(err).Msg("error writing tag")
+				errorModal.SetText("Error writing to tag:\n" + err.Error())
+				mediaPages.HidePage("write_modal")
+				mediaPages.ShowPage("error_modal")
+				app.SetFocus(errorModal).ForceDraw()
+				return
+			}
+
+			mediaPages.HidePage("write_modal")
+			mediaPages.ShowPage("success_modal")
+			app.SetFocus(successModal).ForceDraw()
+		}()
+	}
+
+	search := func() {
+		if searching {
+			return
+		}
+
+		params := models.SearchParams{
+			Query: name,
+		}
+
+		if filterSystem != "" {
+			systems := []string{filterSystem}
+			params.Systems = &systems
+		}
+
+		payload, err := json.Marshal(params)
+		if err != nil {
+			log.Error().Err(err).Msg("error marshalling search params")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		searchButton.SetLabel("Searching...")
+		searching = true
+		app.ForceDraw()
+		defer func() {
+			searchButton.SetLabel("Search")
+			searching = false
+		}()
+
+		resp, err := client.LocalClient(context.Background(), cfg, models.MethodMediaSearch, string(payload))
+		if err != nil {
+			log.Error().Err(err).Msg("error executing search query")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		var results models.SearchResults
+		err = json.Unmarshal([]byte(resp), &results)
+		if err != nil {
+			log.Error().Err(err).Msg("error unmarshalling search results")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		mediaList.Clear()
+		mediaList.SetCurrentItem(0)
+		for _, result := range results.Results {
+			mediaList.AddItem(result.Name, result.System.Name, 0, func() {
+				writeTag(result.Path)
+			})
+		}
+
+		statusText.SetText(fmt.Sprintf("Found %d results.", len(results.Results)))
+		app.SetFocus(mediaList)
+	}
+
+	searchButton.SetSelectedFunc(search)
 
 	tsm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
@@ -380,7 +456,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Appli
 			data, _ := json.Marshal(&models.ReaderWriteParams{
 				Text: text,
 			})
-			_, _ = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
+			_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 			zapScriptTextArea.SetText("", true)
 		} else if k == tcell.KeyEscape {
 			pages.SwitchToPage("tags")

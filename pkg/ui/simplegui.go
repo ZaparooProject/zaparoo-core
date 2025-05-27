@@ -167,7 +167,7 @@ func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDe
 				app.Stop()
 			}
 			if buttonLabel == "Config" {
-				enabler := client.ZapScriptWrapper(cfg)
+				enabler := client.PauseZapScript(cfg)
 				configui.ConfigUiBuilder(cfg, app, pages, func() {
 					enabler()
 					pages.SwitchToPage("main")

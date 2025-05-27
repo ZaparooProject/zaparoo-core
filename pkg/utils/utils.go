@@ -23,6 +23,7 @@ package utils
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"crypto/md5"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -262,7 +263,7 @@ func SlugifyPath(path string) string {
 }
 
 func IsServiceRunning(cfg *config.Instance) bool {
-	_, err := client.LocalClient(cfg, models.MethodVersion, "")
+	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
 	if err != nil {
 		log.Debug().Err(err).Msg("error checking if service running")
 		return false

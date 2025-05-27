@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -109,7 +110,7 @@ func runFlag(cfg *config.Instance, value string) {
 		os.Exit(1)
 	}
 
-	_, err = client.LocalClient(cfg, models.MethodRun, string(data))
+	_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(data))
 	if err != nil {
 		log.Error().Err(err).Msg("error running")
 		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
@@ -123,7 +124,7 @@ func runFlag(cfg *config.Instance, value string) {
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
-		enabler := client.ZapScriptWrapper(cfg)
+		enabler := client.PauseZapScript(cfg)
 		err := configui.ConfigUi(cfg, pl)
 		if err != nil {
 			log.Error().Err(err).Msg("error starting config ui")
@@ -146,7 +147,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}
 
-		enableRun := client.ZapScriptWrapper(cfg)
+		enableRun := client.PauseZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
@@ -158,7 +159,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}()
 
-		_, err = client.LocalClient(cfg, models.MethodReadersWrite, string(data))
+		_, err = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
@@ -170,7 +171,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}
 	} else if *f.Read {
-		enableRun := client.ZapScriptWrapper(cfg)
+		enableRun := client.PauseZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
@@ -182,7 +183,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}()
 
-		resp, err := client.WaitNotification(cfg, models.NotificationTokensAdded)
+		resp, err := client.WaitNotification(context.Background(), cfg, models.NotificationTokensAdded)
 		if err != nil {
 			log.Error().Err(err).Msg("error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
@@ -217,7 +218,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			params = ps[1]
 		}
 
-		resp, err := client.LocalClient(cfg, method, params)
+		resp, err := client.LocalClient(context.Background(), cfg, method, params)
 		if err != nil {
 			log.Error().Err(err).Msg("error calling API")
 			_, _ = fmt.Fprintf(os.Stderr, "Error calling API: %v\n", err)
@@ -227,7 +228,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 		fmt.Println(resp)
 		os.Exit(0)
 	} else if *f.Reload {
-		_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
+		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
 			log.Error().Err(err).Msg("error reloading settings")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)

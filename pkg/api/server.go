@@ -136,7 +136,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodMappingsUpdate: methods.HandleUpdateMapping,
 		models.MethodMappingsReload: methods.HandleReloadMappings,
 		// readers
-		models.MethodReadersWrite: methods.HandleReaderWrite,
+		models.MethodReadersWrite:       methods.HandleReaderWrite,
+		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// utils
 		models.MethodVersion: methods.HandleVersion,
 	}

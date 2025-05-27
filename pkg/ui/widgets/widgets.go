@@ -1,6 +1,7 @@
 package widgets
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -318,7 +319,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 			log.Error().Err(err).Msg("error creating run params")
 		}
 
-		_, err = client.LocalClient(cfg, models.MethodRunScript, string(ps))
+		_, err = client.LocalClient(context.Background(), cfg, models.MethodRunScript, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}

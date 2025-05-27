@@ -264,3 +264,7 @@ func (r *ACR122PCSC) Info() string {
 func (r *ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
+
+func (r *ACR122PCSC) CancelWrite() {
+	return
+}

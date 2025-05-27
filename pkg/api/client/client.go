@@ -1,11 +1,10 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"time"
 
@@ -17,37 +16,38 @@ import (
 )
 
 var (
-	ErrRequestTimeout = errors.New("request timed out")
-	ErrInvalidParams  = errors.New("invalid params")
+	ErrRequestTimeout   = errors.New("request timed out")
+	ErrInvalidParams    = errors.New("invalid params")
+	ErrRequestCancelled = errors.New("request cancelled")
 )
 
 const ApiPath = "/api/v0.1"
 
-// Disable runZapScript and returns a function that enables it back
-func ZapScriptWrapper(cfg *config.Instance) func() {
+// PauseZapScript disables the service running any processed ZapScript from
+// tokens, and returns a function to re-enable it.
+// The returned function must be run even if there is an error so the service
+// isn't left in an unusable state.
+func PauseZapScript(cfg *config.Instance) func() {
 	_, err := LocalClient(
+		context.Background(),
 		cfg,
 		models.MethodSettingsUpdate,
 		"{\"runZapScript\":false}",
 	)
 	if err != nil {
-		log.Error().Err(err).Msg("error disabling run")
-		_, _ = fmt.Fprintf(os.Stderr, "Error disabling run: %v\n", err)
-		os.Exit(1)
+		log.Error().Err(err).Msg("error disabling runZapScript")
+		return func() {}
 	}
 
 	return func() {
-		// TODO: this should be in a defer or signal handler to or else it won't
-		// run if there was a crash or unhandled error
 		_, err = LocalClient(
+			context.Background(),
 			cfg,
 			models.MethodSettingsUpdate,
 			"{\"runZapScript\":true}",
 		)
 		if err != nil {
-			log.Error().Err(err).Msg("error enabling run")
-			_, _ = fmt.Fprintf(os.Stderr, "Error enabling run: %v\n", err)
-			os.Exit(1)
+			log.Error().Err(err).Msg("error enabling runZapScript")
 		}
 	}
 
@@ -56,6 +56,7 @@ func ZapScriptWrapper(cfg *config.Instance) func() {
 // LocalClient sends a single unauthenticated method with params to the local
 // running API service, waits for a response until timeout then disconnects.
 func LocalClient(
+	ctx context.Context,
 	cfg *config.Instance,
 	method string,
 	params string,
@@ -138,7 +139,17 @@ func LocalClient(
 	case <-done:
 		break
 	case <-timer.C:
+		err := c.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing websocket")
+		}
 		return "", ErrRequestTimeout
+	case <-ctx.Done():
+		err := c.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing websocket")
+		}
+		return "", ErrRequestCancelled
 	}
 
 	if resp == nil {
@@ -159,6 +170,7 @@ func LocalClient(
 }
 
 func WaitNotification(
+	ctx context.Context,
 	cfg *config.Instance,
 	id string,
 ) (string, error) {
@@ -221,7 +233,17 @@ func WaitNotification(
 	case <-done:
 		break
 	case <-timer.C:
+		err := c.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing websocket")
+		}
 		return "", ErrRequestTimeout
+	case <-ctx.Done():
+		err := c.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing websocket")
+		}
+		return "", ErrRequestCancelled
 	}
 
 	if resp == nil {

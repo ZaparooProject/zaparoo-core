@@ -1,6 +1,7 @@
 package mister
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -71,7 +72,7 @@ func showNotice(
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
 		}
-		_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
+		_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
@@ -170,7 +171,7 @@ func showPicker(
 		log.Error().Err(err).Msg("error creating run params")
 	}
 
-	_, err = client.LocalClient(cfg, models.MethodRun, string(ps))
+	_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
 	if err != nil {
 		log.Error().Err(err).Msg("error running local client")
 	}
