@@ -2,7 +2,9 @@ package configui
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,19 +50,6 @@ func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, wid
 	pages.AddAndSwitchToPage(name, widget, true)
 	return widget
 }
-
-/*
-	DebugLogging bool      `toml:"debug_logging"`
-	Audio        Audio     `toml:"audio,omitempty"`
-	Readers      Readers   `toml:"readers,omitempty"`
-	Scan       ReadersScan      `toml:"scan,omitempty"`
-	Systems      Systems   `toml:"systems,omitempty"`
-	Launchers    Launchers `toml:"launchers,omitempty"`
-	ZapScript    ZapScript `toml:"zapscript,omitempty"`
-	Service      Service   `toml:"service,omitempty"`
-	Mappings     Mappings  `toml:"mappings,omitempty"`
-	Groovy       Groovy    `toml:"groovy:omitempty"`
-*/
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
 	debugLogging := "DISABLED"
@@ -170,26 +159,205 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return tagsReadMenu
 }
 
-func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
-	tagsSearchMenu := tview.NewForm()
-	dropdown := tview.NewDropDown()
-	tagsSearchMenu.AddInputField("Search param", "", 20, func(value string, lastChar rune) bool {
-		var params models.SearchParams
-		params.Query = value
-		payload, _ := json.Marshal(params)
-		resp, _ := client.LocalClient(cfg, models.MethodMediaSearch, string(payload))
-		var response models.SearchResults
-		json.Unmarshal([]byte(resp), &response)
-		for _, result := range response.Results {
-			dropdown.AddOption(result.Name, func() {
+func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
+	mediaList := tview.NewList()
+	searchButton := tview.NewButton("Search")
+	statusText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText("Enter a name to search and select below to write tag.")
+	systemDropdown := tview.NewDropDown()
 
-			})
+	name := ""
+	filterSystem := ""
+	searching := false
+	search := func() {
+		if searching {
+			return
 		}
-		return true
-	}, func(value string) {})
-	tagsSearchMenu.AddFormItem(dropdown)
-	pageDefaults("tags_search", pages, tagsSearchMenu)
-	return tagsSearchMenu
+
+		params := models.SearchParams{
+			Query: name,
+		}
+
+		if filterSystem != "" {
+			systems := []string{filterSystem}
+			params.Systems = &systems
+		}
+
+		payload, err := json.Marshal(params)
+		if err != nil {
+			log.Error().Err(err).Msg("error marshalling search params")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		searchButton.SetLabel("Searching...")
+		searching = true
+		app.ForceDraw()
+		defer func() {
+			searchButton.SetLabel("Search")
+			searching = false
+		}()
+
+		resp, err := client.LocalClient(cfg, models.MethodMediaSearch, string(payload))
+		if err != nil {
+			log.Error().Err(err).Msg("error executing search query")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		var results models.SearchResults
+		err = json.Unmarshal([]byte(resp), &results)
+		if err != nil {
+			log.Error().Err(err).Msg("error unmarshalling search results")
+			statusText.SetText("An error occurred during search.")
+			return
+		}
+
+		mediaList.Clear()
+		mediaList.SetCurrentItem(0)
+		for _, result := range results.Results {
+			mediaList.AddItem(result.Name, result.System.Name, 0, nil)
+		}
+
+		statusText.SetText(fmt.Sprintf("Found %d results.", len(results.Results)))
+		app.SetFocus(mediaList)
+	}
+
+	tsm := tview.NewFlex()
+	tsm.SetTitle("Search Media")
+	tsm.SetDirection(tview.FlexRow)
+
+	searchInput := tview.NewInputField()
+	searchInput.SetLabel("Name")
+	searchInput.SetLabelWidth(7)
+	searchInput.SetChangedFunc(func(value string) {
+		name = value
+	})
+
+	systemDropdown.SetLabel("System")
+	systemDropdown.AddOption("All", func() {
+		filterSystem = ""
+	})
+	systemDropdown.SetLabelWidth(7)
+
+	resp, err := client.LocalClient(cfg, models.MethodSystems, "")
+	if err != nil {
+		log.Error().Err(err).Msg("error getting system list")
+	} else {
+		var results models.SystemsResponse
+		err = json.Unmarshal([]byte(resp), &results)
+		if err != nil {
+			log.Error().Err(err).Msg("error unmarshalling system results")
+		} else {
+			sort.Slice(results.Systems, func(i, j int) bool {
+				return results.Systems[i].Name < results.Systems[j].Name
+			})
+			for _, v := range results.Systems {
+				systemDropdown.AddOption(v.Name, func() {
+					filterSystem = v.Id
+				})
+			}
+		}
+	}
+
+	systemDropdown.AddOption("something else", nil)
+	systemDropdown.SetCurrentOption(0)
+	systemDropdown.SetFieldWidth(0)
+
+	searchButton.SetSelectedFunc(search)
+
+	mediaList.SetWrapAround(false)
+	mediaList.SetSelectedFocusOnly(true)
+
+	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyTab || k == tcell.KeyDown {
+			app.SetFocus(systemDropdown)
+			return nil
+		} else if k == tcell.KeyBacktab || k == tcell.KeyUp {
+			if mediaList.GetItemCount() > 0 {
+				mediaList.SetCurrentItem(-1)
+				app.SetFocus(mediaList)
+			} else {
+				app.SetFocus(searchButton)
+			}
+			return nil
+		} else if k == tcell.KeyEnter {
+			app.SetFocus(searchButton)
+		}
+		return event
+	})
+	systemDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if systemDropdown.IsOpen() {
+			return event
+		}
+		k := event.Key()
+		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+			app.SetFocus(searchButton)
+			return nil
+		} else if k == tcell.KeyBacktab || k == tcell.KeyLeft || k == tcell.KeyUp {
+			app.SetFocus(searchInput)
+			return nil
+		}
+		return event
+	})
+	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+			if mediaList.GetItemCount() > 0 {
+				mediaList.SetCurrentItem(0)
+				app.SetFocus(mediaList)
+			} else {
+				app.SetFocus(searchInput)
+			}
+			return nil
+		} else if k == tcell.KeyBacktab || k == tcell.KeyUp || k == tcell.KeyLeft {
+			app.SetFocus(systemDropdown)
+			return nil
+		}
+		return event
+	})
+	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyRight {
+			app.SetFocus(searchInput)
+			return nil
+		} else if k == tcell.KeyLeft {
+			app.SetFocus(searchButton)
+			return nil
+		} else if k == tcell.KeyUp && mediaList.GetCurrentItem() == 0 {
+			app.SetFocus(searchButton)
+			return nil
+		} else if k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1 {
+			app.SetFocus(searchInput)
+			return nil
+		}
+		return event
+	})
+
+	tsm.AddItem(searchInput, 1, 1, true)
+	tsm.AddItem(systemDropdown, 1, 1, false)
+	tsm.AddItem(tview.NewTextView(), 1, 1, false)
+
+	controls := tview.NewFlex().
+		AddItem(tview.NewTextView(), 0, 1, false).
+		AddItem(searchButton, 0, 1, true).
+		AddItem(tview.NewTextView(), 0, 1, false)
+	tsm.AddItem(controls, 1, 1, false)
+	tsm.AddItem(statusText, 1, 1, false)
+	tsm.AddItem(tview.NewTextView(), 1, 1, false)
+	tsm.AddItem(mediaList, 0, 1, false)
+
+	tsm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEscape && !systemDropdown.IsOpen() {
+			pages.SwitchToPage("tags")
+		}
+		return event
+	})
+
+	pageDefaults("tags_search", pages, tsm)
 }
 
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
@@ -223,12 +391,6 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Appli
 	return tagsWriteMenu
 }
 
-/*
-type Audio struct {
-	ScanFeedback bool `toml:"scan_feedback,omitempty"`
-}
-*/
-
 func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
 	audioFeedback := " "
 	if cfg.AudioFeedback() {
@@ -248,13 +410,6 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 	pageDefaults("audio", pages, audioMenu)
 	return audioMenu
 }
-
-/*
-type Readers struct {
-	AutoDetect bool             `toml:"auto_detect"`
-	Connect    []ReadersConnect `toml:"connect,omitempty"`
-}
-*/
 
 func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
@@ -293,12 +448,6 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 	pageDefaults("readers", pages, readersMenu)
 	return readersMenu
 }
-
-/* type ReadersScan struct {
-	Mode         string   `toml:"mode"`
-	ExitDelay    float32  `toml:"exit_delay,omitempty"`
-	IgnoreSystem []string `toml:"ignore_system,omitempty"`
-} */
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
 
@@ -353,11 +502,10 @@ func SetTheme(theme *tview.Theme) {
 	theme.PrimaryTextColor = tcell.ColorWhite
 	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
 	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	theme.ContrastBackgroundColor = tcell.ColorFuchsia
+	theme.ContrastBackgroundColor = tcell.ColorBlack
 }
 
 func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.Pages, exitFunc func()) (*tview.Application, error) {
-
 	SetTheme(&tview.Styles)
 
 	BuildMainMenu(cfg, pages, app, exitFunc)
@@ -374,7 +522,7 @@ func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.
 	return app.SetRoot(centeredPages, true).EnableMouse(true), nil
 }
 
-func ConfigUi(cfg *config.Instance, pl platforms.Platform) error {
+func ConfigUi(cfg *config.Instance, _ platforms.Platform) error {
 	return BuildAppAndRetry(func() (*tview.Application, error) {
 		app := tview.NewApplication()
 		pages := tview.NewPages()
