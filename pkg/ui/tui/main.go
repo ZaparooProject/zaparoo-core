@@ -87,7 +87,7 @@ func BuildMain(
 		SetTitleAlign(tview.AlignCenter)
 
 	modal.SetText(text).
-		AddButtons([]string{"Settings", "Export log", "Exit", "Settings", "Export log", "Exit"}).
+		AddButtons([]string{"Settings", "Export log", "Exit"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Exit" {
 				app.Stop()
