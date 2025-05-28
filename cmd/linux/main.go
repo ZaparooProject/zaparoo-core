@@ -29,7 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"io"
@@ -129,7 +129,7 @@ func main() {
 		log.Info().Msg("started in daemon mode")
 	} else {
 		// default to showing the TUI
-		app, err := ui.BuildTheUi(
+		app, err := tui.BuildTheUi(
 			pl, utils.IsServiceRunning(cfg), cfg,
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 		)

@@ -1,4 +1,4 @@
-package configui
+package tui
 
 import (
 	"github.com/gdamore/tcell/v2"

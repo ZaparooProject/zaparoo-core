@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/configui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
@@ -157,7 +157,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	}
 
 	app := tview.NewApplication()
-	configui.SetTheme(&tview.Styles)
+	tui.SetTheme(&tview.Styles)
 
 	view := tview.NewTextView().
 		SetText(noticeArgs.Text).
@@ -258,7 +258,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 		}()
 	}
 
-	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -302,7 +302,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	app := tview.NewApplication()
-	configui.SetTheme(&tview.Styles)
+	tui.SetTheme(&tview.Styles)
 
 	run := func(action zapScriptModels.ZapScript) {
 		log.Info().Msgf("running picker selection: %v", action)
@@ -439,7 +439,7 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		}()
 	}
 
-	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAppAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

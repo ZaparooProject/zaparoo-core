@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/configui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"io"
 	"os"
 	"os/signal"
@@ -125,7 +125,7 @@ func runFlag(cfg *config.Instance, value string) {
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
 		enabler := client.PauseZapScript(cfg)
-		err := configui.ConfigUi(cfg, pl)
+		err := tui.ConfigUi(cfg, pl)
 		if err != nil {
 			log.Error().Err(err).Msg("error starting config ui")
 			_, _ = fmt.Fprintf(os.Stderr, "Error starting config UI: %v\n", err)

@@ -1,9 +1,10 @@
-package configui
+package tui
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"slices"
 	"sort"
 	"strconv"
@@ -18,39 +19,6 @@ import (
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
-
-type PrimitiveWithSetBorder interface {
-	tview.Primitive
-	SetBorder(arg bool) *tview.Box
-}
-
-func BuildAppAndRetry(
-	builder func() (*tview.Application, error),
-) error {
-	app, err := builder()
-	if err != nil {
-		return err
-	}
-	return tryRunApp(app, builder)
-}
-
-func centerWidget(width, height int, p tview.Primitive) tview.Primitive {
-	return tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().
-			SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(p, height, 1, true).
-			AddItem(nil, 0, 1, false), width, 1, true).
-		AddItem(nil, 0, 1, false)
-}
-
-func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) tview.Primitive {
-	widget.SetBorder(true)
-	pages.RemovePage(name)
-	pages.AddAndSwitchToPage(name, widget, true)
-	return widget
-}
 
 func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
 	debugLogging := "DISABLED"
@@ -573,14 +541,6 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	return scanMenu
 }
 
-func SetTheme(theme *tview.Theme) {
-	theme.BorderColor = tcell.ColorLightYellow
-	theme.PrimaryTextColor = tcell.ColorWhite
-	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
-	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	theme.ContrastBackgroundColor = tcell.ColorBlack
-}
-
 func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.Pages, exitFunc func()) (*tview.Application, error) {
 	SetTheme(&tview.Styles)
 
@@ -605,4 +565,92 @@ func ConfigUi(cfg *config.Instance, _ platforms.Platform) error {
 		exitFunc := func() { app.Stop() }
 		return ConfigUiBuilder(cfg, app, pages, exitFunc)
 	})
+}
+
+func BuildTheUi(pl platforms.Platform, running bool, cfg *config.Instance, logDestinationPath string) (*tview.Application, error) {
+	app := tview.NewApplication()
+	modal := tview.NewModal()
+	logExport := tview.NewList()
+
+	var statusText string
+	if running {
+		statusText = "RUNNING"
+	} else {
+		statusText = "NOT RUNNING"
+	}
+
+	ip := utils.GetLocalIP()
+	var ipDisplay string
+	if ip == "" {
+		ipDisplay = "Unknown"
+	} else {
+		ipDisplay = ip
+	}
+
+	// ugly text for the modal content. sorry.
+	text := ""
+	text = text + "  Visit zaparoo.org for guides and help!  \n"
+	text = text + "──────────────────────────────────────────\n"
+	text = text + "  Service:        " + statusText + "\n"
+	text = text + "  Device address: " + ipDisplay + "\n"
+	text = text + "──────────────────────────────────────────\n"
+
+	pages := tview.NewPages().
+		AddPage("main", modal, true, true)
+
+	// create the small log export modal
+	logExport.
+		AddItem("Upload to termbin.com", "", 'a', func() {
+			pages.RemovePage("export")
+			outcome := uploadLog(pl, pages, app)
+			modal := genericModal(outcome, "Log upload", func(buttonIndex int, buttonLabel string) {
+				pages.RemovePage("upload")
+			}, true)
+			pages.AddPage("upload", modal, true, true)
+		})
+	if logDestinationPath != "" {
+		logExport.AddItem("Copy to SD card", "", 'b', func() {
+			pages.RemovePage("export")
+			outcome := copyLogToSd(pl, logDestinationPath)
+			modal := genericModal(outcome, "Log copy", func(buttonIndex int, buttonLabel string) {
+				pages.RemovePage("copy")
+			}, true)
+			pages.AddPage("copy", modal, true, true)
+		})
+	}
+	logExport.AddItem("Cancel", "", 'q', func() {
+		pages.RemovePage("export")
+	}).
+		ShowSecondaryText(false)
+	// Coloring will require some effort
+	// SetBackgroundColor(modal.GetBackgroundColor())
+	logExport.
+		SetBorder(true).
+		SetBorderPadding(1, 1, 1, 1).
+		SetTitle("Log export")
+
+	// create the main modal
+	modal.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ")").
+		SetBorder(true).
+		SetTitleAlign(tview.AlignCenter)
+	modal.SetText(text).
+		AddButtons([]string{"Config", "Export log", "Exit"}).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Exit" {
+				app.Stop()
+			}
+			if buttonLabel == "Config" {
+				enabler := client.PauseZapScript(cfg)
+				ConfigUiBuilder(cfg, app, pages, func() {
+					enabler()
+					pages.SwitchToPage("main")
+				})
+			}
+			if buttonLabel == "Export log" {
+				widget := modalBuilder(logExport, 42, 8)
+				pages.AddPage("export", widget, true, true)
+			}
+		})
+
+	return app.SetRoot(pages, true).EnableMouse(true), nil
 }

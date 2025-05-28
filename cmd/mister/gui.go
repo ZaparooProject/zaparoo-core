@@ -22,14 +22,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/configui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"os"
 	"path"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -86,7 +85,7 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+		err := tui.BuildAppAndRetry(func() (*tview.Application, error) {
 			return buildTheInstallRequestApp(pl, service)
 		})
 		if err != nil {
@@ -99,8 +98,8 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
 	// Asturur > Wizzo
-	return configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	return tui.BuildAppAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
-		return ui.BuildTheUi(pl, service.Running(), cfg, logDestinationPath)
+		return tui.BuildTheUi(pl, service.Running(), cfg, logDestinationPath)
 	})
 }
