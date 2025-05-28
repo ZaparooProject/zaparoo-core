@@ -35,7 +35,7 @@ import (
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) (*tview.Application, error) {
+func buildTheInstallRequestApp() (*tview.Application, error) {
 	var startup mrextMister.Startup
 	app := tview.NewApplication()
 	// create the main modal
@@ -68,7 +68,7 @@ func buildTheInstallRequestApp(pl platforms.Platform, service *utils.Service) (*
 	return app.SetRoot(modal, true).EnableMouse(true), nil
 }
 
-func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
+func tryAddStartup() error {
 	var startup mrextMister.Startup
 
 	err := startup.Load()
@@ -85,8 +85,8 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		err := tui.BuildAppAndRetry(func() (*tview.Application, error) {
-			return buildTheInstallRequestApp(pl, service)
+		err := tui.BuildAndRetry(func() (*tview.Application, error) {
+			return buildTheInstallRequestApp()
 		})
 		if err != nil {
 			log.Error().Msgf("failed to build app: %s", err)
@@ -98,8 +98,8 @@ func tryAddStartup(pl platforms.Platform, service *utils.Service) error {
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
 	// Asturur > Wizzo
-	return tui.BuildAppAndRetry(func() (*tview.Application, error) {
+	return tui.BuildAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
-		return tui.BuildTheUi(pl, service.Running(), cfg, logDestinationPath)
+		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
 }

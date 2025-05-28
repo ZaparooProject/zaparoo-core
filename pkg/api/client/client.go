@@ -23,11 +23,11 @@ var (
 
 const ApiPath = "/api/v0.1"
 
-// PauseZapScript disables the service running any processed ZapScript from
+// DisableZapScript disables the service running any processed ZapScript from
 // tokens, and returns a function to re-enable it.
 // The returned function must be run even if there is an error so the service
 // isn't left in an unusable state.
-func PauseZapScript(cfg *config.Instance) func() {
+func DisableZapScript(cfg *config.Instance) func() {
 	_, err := LocalClient(
 		context.Background(),
 		cfg,

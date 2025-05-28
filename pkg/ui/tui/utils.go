@@ -1,15 +1,8 @@
 package tui
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"github.com/rs/zerolog/log"
-	"os/exec"
-	"path"
-	"strings"
 )
 
 func centerWidget(width, height int, p tview.Primitive) tview.Primitive {
@@ -38,40 +31,11 @@ func SetTheme(theme *tview.Theme) {
 	theme.ContrastBackgroundColor = tcell.ColorBlack
 }
 
-func copyLogToSd(pl platforms.Platform, logDestinationPath string) string {
-	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
-	newPath := logDestinationPath
-	err := utils.CopyFile(logPath, newPath)
-	outcome := ""
-	if err != nil {
-		outcome = "Unable to copy log file to SD card."
-		log.Error().Err(err).Msgf("error copying log file")
-	} else {
-		outcome = "Copied " + config.LogFile + " to SD card."
-	}
-	return outcome
-}
-
-func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
-	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
-	pages.RemovePage("export")
-	// fixme: this is not updating, too busy
-	pages.AddPage("temp_upload", modal, true, true)
-	app.ForceDraw()
-	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
-	out, err := exec.Command("bash", "-c", uploadCmd).Output()
-	pages.RemovePage("temp_upload")
-	if err != nil {
-		log.Error().Err(err).Msgf("error uploading log file to termbin")
-		return "Unable to upload log file."
-	} else {
-		return "Log file URL:\n" + strings.TrimSpace(string(out))
-	}
-}
-
-func modalBuilder(content tview.Primitive, width int, height int) tview.Primitive {
-
+func modalBuilder(
+	content tview.Primitive,
+	width int,
+	height int,
+) tview.Primitive {
 	itemHeight := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(nil, 0, 1, false).
@@ -84,7 +48,12 @@ func modalBuilder(content tview.Primitive, width int, height int) tview.Primitiv
 		AddItem(nil, 0, 1, false)
 }
 
-func genericModal(message string, title string, action func(buttonIndex int, buttonLabel string), withButton bool) *tview.Modal {
+func genericModal(
+	message string,
+	title string,
+	action func(buttonIndex int, buttonLabel string),
+	withButton bool,
+) *tview.Modal {
 	modal := tview.NewModal()
 	modal.SetTitle(title).
 		SetBorder(true).
@@ -103,7 +72,11 @@ type PrimitiveWithSetBorder interface {
 	SetBorder(arg bool) *tview.Box
 }
 
-func BuildAppAndRetry(
+// BuildAndRetry attempts to build and display a TUI dialog, retrying with
+// alternate settings on error.
+// It's used to work around issues on MiSTer, which has an unusual setup for
+// showing TUI applications.
+func BuildAndRetry(
 	builder func() (*tview.Application, error),
 ) error {
 	app, err := builder()

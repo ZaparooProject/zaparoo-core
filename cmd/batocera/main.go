@@ -27,7 +27,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -130,8 +129,11 @@ func main() {
 	}
 
 	// start the tui
-	logDestinationPath := path.Join(mister.DataDir, config.LogFile)
-	app, err := tui.BuildTheUi(pl, svc.Running(), cfg, logDestinationPath)
+	app, err := tui.BuildMain(
+		cfg, pl,
+		svc.Running,
+		path.Join(pl.Settings().DataDir, config.LogFile),
+		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)
 		_, _ = fmt.Fprintf(os.Stderr, "Error setting up UI: %v\n", err)

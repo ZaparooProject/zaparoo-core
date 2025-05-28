@@ -117,9 +117,11 @@ func main() {
 		})
 	} else {
 		// default to showing the TUI
-		app, err := tui.BuildTheUi(
-			pl, utils.IsServiceRunning(cfg), cfg,
+		app, err := tui.BuildMain(
+			cfg, pl,
+			func() bool { return utils.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
+			"desktop",
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")

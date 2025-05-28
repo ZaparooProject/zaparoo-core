@@ -181,7 +181,7 @@ func main() {
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
-	err = tryAddStartup(pl, svc)
+	err = tryAddStartup()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
 		os.Exit(1)

@@ -124,7 +124,7 @@ func runFlag(cfg *config.Instance, value string) {
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	if *f.Config {
-		enabler := client.PauseZapScript(cfg)
+		enabler := client.DisableZapScript(cfg)
 		err := tui.ConfigUi(cfg, pl)
 		if err != nil {
 			log.Error().Err(err).Msg("error starting config ui")
@@ -147,7 +147,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(1)
 		}
 
-		enableRun := client.PauseZapScript(cfg)
+		enableRun := client.DisableZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
@@ -171,7 +171,7 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 			os.Exit(0)
 		}
 	} else if *f.Read {
-		enableRun := client.PauseZapScript(cfg)
+		enableRun := client.DisableZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
