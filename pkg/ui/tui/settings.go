@@ -3,88 +3,74 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-func BuildMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application, exitFunc func()) *tview.List {
-	debugLogging := "DISABLED"
+func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+	debugLogging := "Enable"
 	if cfg.DebugLogging() {
-		debugLogging = "ENABLED"
+		debugLogging = "Disable"
 	}
+
 	mainMenu := tview.NewList().
-		AddItem("Debug Logging", "Change the status of debug logging currently "+debugLogging, '1', func() {
+		AddItem("Manage NFC tags", "Read and write NFC tags", '1', func() {
+			pages.SwitchToPage(PageSettingsTags)
+		}).
+		AddItem("Scanning", "Manage reader scan behavior", '2', func() {
+			pages.SwitchToPage(PageSettingsScanMode)
+		}).
+		AddItem("Readers", "Manage connected readers", '3', func() {
+			pages.SwitchToPage(PageSettingsReaders)
+		}).
+		AddItem("Audio", "Set audio options", '4', func() {
+			pages.SwitchToPage(PageSettingsAudio)
+		}).
+		AddItem("Debug", debugLogging+" debug logging mode", '5', func() {
 			cfg.SetDebugLogging(!cfg.DebugLogging())
-			BuildMainMenu(cfg, pages, app, exitFunc)
+			BuildSettingsMainMenu(cfg, pages, app)
 		}).
-		AddItem("Audio", "Set audio options like the feedback", '2', func() {
-			pages.SwitchToPage("audio")
-		}).
-		AddItem("Readers", "Set nfc readers options", '3', func() {
-			pages.SwitchToPage("readers")
-		}).
-		AddItem("Scan mode", "Set scanning options", '4', func() {
-			pages.SwitchToPage("scan")
-		}).
-		AddItem("Manage tags", "Read and write nfc tags", '5', func() {
-			pages.SwitchToPage("tags")
-		}).
-		// AddItem("Systems", "Not implemented yet", '6', func() {
-		// }).
-		// AddItem("Launchers", "Not implemented yet", '7', func() {
-		// }).
-		// AddItem("ZapScript", "Not implemented yet", '8', func() {
-		// }).
-		// AddItem("Service", "Not implemented yet", '9', func() {
-		// }).
-		// AddItem("Mappings", "Not implemented yet", '0', func() {
-		// }).
-		// AddItem("Groovy", "Not implemented yet", 'g', func() {
-		// }).
-		AddItem("Save and exit", "Press to save", 's', func() {
+		AddItem("Save", "Save changes to config file", 's', func() {
 			err := cfg.Save()
 			if err != nil {
 				log.Error().Err(err).Msg("error saving config")
 			}
-			exitFunc()
 		}).
-		AddItem("Quit Without saving", "Press to exit", 'q', func() {
-			exitFunc()
+		AddItem("Go back", "Back to main menu", 'q', func() {
+			pages.SwitchToPage(PageMain)
 		})
-	mainMenu.SetTitle(" Zaparoo config editor - Main menu ")
+
+	mainMenu.SetTitle("Settings")
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("mainconfig", pages, mainMenu)
+
+	pageDefaults(PageSettingsMain, pages, mainMenu)
 	return mainMenu
 }
 
 func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.List {
 	tagsMenu := tview.NewList().
 		AddItem("Read", "Check the content of a tag", '1', func() {
-			pages.SwitchToPage("tags_read")
+			pages.SwitchToPage(PageSettingsTagsRead)
 		}).
 		AddItem("Write", "Write a tag without running it", '2', func() {
-			pages.SwitchToPage("tags_write")
+			pages.SwitchToPage(PageSettingsTagsWrite)
 		}).
-		AddItem("Search", "Search a game and write it", '3', func() {
-			pages.SwitchToPage("tags_search")
-		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("mainconfig")
+		AddItem("Go back", "Back to settings menu", 'b', func() {
+			pages.SwitchToPage(PageSettingsMain)
 		})
-	tagsMenu.SetTitle(" Zaparoo config editor - Tags menu ")
+
+	tagsMenu.SetTitle("Settings - NFC Tags")
 	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("tags", pages, tagsMenu)
+
+	pageDefaults(PageSettingsTags, pages, tagsMenu)
 	return tagsMenu
 }
 
@@ -95,7 +81,8 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 
 	tagsReadMenu := tview.NewForm().
 		AddFormItem(topTextView)
-	tagsReadMenu.SetTitle(" Zaparoo config editor - Read Tags ")
+	tagsReadMenu.SetTitle("Settings - NFC Tags - Read")
+
 	tagsReadMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEnter {
@@ -118,288 +105,13 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
 		}
 		if k == tcell.KeyEscape {
-			pages.SwitchToPage("tags")
+			pages.SwitchToPage(PageSettingsTags)
 		}
 		return event
 	})
-	pageDefaults("tags_read", pages, tagsReadMenu)
+
+	pageDefaults(PageSettingsTagsRead, pages, tagsReadMenu)
 	return tagsReadMenu
-}
-
-func BuildTagsSearchMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
-	mediaList := tview.NewList()
-	searchButton := tview.NewButton("Search")
-	statusText := tview.NewTextView().
-		SetTextAlign(tview.AlignCenter).
-		SetText("Enter a name to search and select below to write tag.")
-	systemDropdown := tview.NewDropDown()
-
-	name := ""
-	filterSystem := ""
-	searching := false
-
-	tsm := tview.NewFlex()
-	tsm.SetTitle("Search Media")
-	tsm.SetDirection(tview.FlexRow)
-
-	searchInput := tview.NewInputField()
-	searchInput.SetLabel("Name")
-	searchInput.SetLabelWidth(7)
-	searchInput.SetChangedFunc(func(value string) {
-		name = value
-	})
-
-	systemDropdown.SetLabel("System")
-	systemDropdown.AddOption("All", func() {
-		filterSystem = ""
-	})
-	systemDropdown.SetLabelWidth(7)
-
-	resp, err := client.LocalClient(context.Background(), cfg, models.MethodSystems, "")
-	if err != nil {
-		log.Error().Err(err).Msg("error getting system list")
-	} else {
-		var results models.SystemsResponse
-		err = json.Unmarshal([]byte(resp), &results)
-		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling system results")
-		} else {
-			sort.Slice(results.Systems, func(i, j int) bool {
-				return results.Systems[i].Name < results.Systems[j].Name
-			})
-			for _, v := range results.Systems {
-				systemDropdown.AddOption(v.Name, func() {
-					filterSystem = v.Id
-				})
-			}
-		}
-	}
-
-	systemDropdown.SetCurrentOption(0)
-	systemDropdown.SetFieldWidth(0)
-
-	mediaList.SetWrapAround(false)
-	mediaList.SetSelectedFocusOnly(true)
-
-	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyDown {
-			app.SetFocus(systemDropdown)
-			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp {
-			if mediaList.GetItemCount() > 0 {
-				mediaList.SetCurrentItem(-1)
-				app.SetFocus(mediaList)
-			} else {
-				app.SetFocus(searchButton)
-			}
-			return nil
-		} else if k == tcell.KeyEnter {
-			app.SetFocus(searchButton)
-		}
-		return event
-	})
-	systemDropdown.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if systemDropdown.IsOpen() {
-			return event
-		}
-		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
-			app.SetFocus(searchButton)
-			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyLeft || k == tcell.KeyUp {
-			app.SetFocus(searchInput)
-			return nil
-		}
-		return event
-	})
-	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
-			if mediaList.GetItemCount() > 0 {
-				mediaList.SetCurrentItem(0)
-				app.SetFocus(mediaList)
-			} else {
-				app.SetFocus(searchInput)
-			}
-			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(systemDropdown)
-			return nil
-		}
-		return event
-	})
-	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyRight {
-			app.SetFocus(searchInput)
-			return nil
-		} else if k == tcell.KeyLeft {
-			app.SetFocus(searchButton)
-			return nil
-		} else if k == tcell.KeyUp && mediaList.GetCurrentItem() == 0 {
-			app.SetFocus(searchButton)
-			return nil
-		} else if k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1 {
-			app.SetFocus(searchInput)
-			return nil
-		}
-		return event
-	})
-
-	tsm.AddItem(searchInput, 1, 1, true)
-	tsm.AddItem(systemDropdown, 1, 1, false)
-	tsm.AddItem(tview.NewTextView(), 1, 1, false)
-
-	controls := tview.NewFlex().
-		AddItem(tview.NewTextView(), 0, 1, false).
-		AddItem(searchButton, 0, 1, true).
-		AddItem(tview.NewTextView(), 0, 1, false)
-	tsm.AddItem(controls, 1, 1, false)
-	tsm.AddItem(statusText, 1, 1, false)
-	tsm.AddItem(tview.NewTextView(), 1, 1, false)
-
-	mediaPages := tview.NewPages()
-
-	writeModal := tview.NewModal().
-		AddButtons([]string{"Cancel"}).
-		SetText("Place tag on reader...")
-
-	successModal := tview.NewModal().
-		AddButtons([]string{"OK"}).
-		SetText("Tag written successfully.").
-		SetDoneFunc(func(_ int, _ string) {
-			mediaPages.SwitchToPage("media_list")
-			app.SetFocus(mediaList)
-		})
-
-	errorModal := tview.NewModal().
-		AddButtons([]string{"OK"}).
-		SetText("Error writing to tag.").
-		SetDoneFunc(func(_ int, _ string) {
-			mediaPages.SwitchToPage("media_list")
-			app.SetFocus(mediaList)
-		})
-
-	mediaPages.AddPage("media_list", mediaList, true, true)
-	mediaPages.AddPage("write_modal", writeModal, true, false)
-	mediaPages.AddPage("success_modal", successModal, true, false)
-	mediaPages.AddPage("error_modal", errorModal, true, false)
-
-	tsm.AddItem(mediaPages, 0, 1, false)
-
-	writeTag := func(value string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		writeModal.SetDoneFunc(func(_ int, _ string) {
-			log.Info().Msg("user cancelled write")
-			cancel()
-			_, err := client.LocalClient(context.Background(), cfg, models.MethodReadersWriteCancel, "")
-			if err != nil {
-				log.Error().Err(err).Msg("error cancelling write")
-			}
-			mediaPages.SwitchToPage("media_list")
-			app.SetFocus(mediaList)
-		})
-
-		mediaPages.ShowPage("write_modal")
-		app.SetFocus(writeModal)
-
-		go func() {
-			data, err := json.Marshal(&models.ReaderWriteParams{
-				Text: value,
-			})
-			if err != nil {
-				log.Error().Err(err).Msg("error marshalling write params")
-				errorModal.SetText("Error writing to tag.")
-				mediaPages.HidePage("write_modal")
-				mediaPages.ShowPage("error_modal")
-				app.SetFocus(errorModal).ForceDraw()
-				return
-			}
-
-			_, err = client.LocalClient(ctx, cfg, models.MethodReadersWrite, string(data))
-			if err != nil {
-				log.Error().Err(err).Msg("error writing tag")
-				errorModal.SetText("Error writing to tag:\n" + err.Error())
-				mediaPages.HidePage("write_modal")
-				mediaPages.ShowPage("error_modal")
-				app.SetFocus(errorModal).ForceDraw()
-				return
-			}
-
-			mediaPages.HidePage("write_modal")
-			mediaPages.ShowPage("success_modal")
-			app.SetFocus(successModal).ForceDraw()
-		}()
-	}
-
-	search := func() {
-		if searching {
-			return
-		}
-
-		params := models.SearchParams{
-			Query: name,
-		}
-
-		if filterSystem != "" {
-			systems := []string{filterSystem}
-			params.Systems = &systems
-		}
-
-		payload, err := json.Marshal(params)
-		if err != nil {
-			log.Error().Err(err).Msg("error marshalling search params")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		searchButton.SetLabel("Searching...")
-		searching = true
-		app.ForceDraw()
-		defer func() {
-			searchButton.SetLabel("Search")
-			searching = false
-		}()
-
-		resp, err := client.LocalClient(context.Background(), cfg, models.MethodMediaSearch, string(payload))
-		if err != nil {
-			log.Error().Err(err).Msg("error executing search query")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		var results models.SearchResults
-		err = json.Unmarshal([]byte(resp), &results)
-		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling search results")
-			statusText.SetText("An error occurred during search.")
-			return
-		}
-
-		mediaList.Clear()
-		mediaList.SetCurrentItem(0)
-		for _, result := range results.Results {
-			mediaList.AddItem(result.Name, result.System.Name, 0, func() {
-				writeTag(result.Path)
-			})
-		}
-
-		statusText.SetText(fmt.Sprintf("Found %d results.", len(results.Results)))
-		app.SetFocus(mediaList)
-	}
-
-	searchButton.SetSelectedFunc(search)
-
-	tsm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape && !systemDropdown.IsOpen() {
-			pages.SwitchToPage("tags")
-		}
-		return event
-	})
-
-	pageDefaults("tags_search", pages, tsm)
 }
 
 func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
@@ -412,8 +124,10 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Appli
 	tagsWriteMenu := tview.NewForm().
 		AddFormItem(topTextView).
 		AddFormItem(zapScriptTextArea)
-	tagsWriteMenu.SetTitle(" Zaparoo config editor - Write Tags ")
+
+	tagsWriteMenu.SetTitle("Settings - NFC Tags - Write")
 	tagsWriteMenu.SetFocus(1)
+
 	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEnter {
@@ -425,15 +139,16 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Appli
 			_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 			zapScriptTextArea.SetText("", true)
 		} else if k == tcell.KeyEscape {
-			pages.SwitchToPage("tags")
+			pages.SwitchToPage(PageSettingsTags)
 		}
 		return event
 	})
-	pageDefaults("tags_write", pages, tagsWriteMenu)
+
+	pageDefaults(PageSettingsTagsWrite, pages, tagsWriteMenu)
 	return tagsWriteMenu
 }
 
-func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
+func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
 	audioFeedback := " "
 	if cfg.AudioFeedback() {
 		audioFeedback = "X"
@@ -442,14 +157,16 @@ func BuildAudionMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applic
 	audioMenu := tview.NewList().
 		AddItem("["+audioFeedback+"] Audio feedback", "Enable or disable the audio notification on scan", '1', func() {
 			cfg.SetAudioFeedback(!cfg.AudioFeedback())
-			BuildAudionMenu(cfg, pages, app)
+			BuildAudioMenu(cfg, pages, app)
 		}).
 		AddItem("Go back", "Go back to main menu", 'b', func() {
-			pages.SwitchToPage("mainconfig")
+			pages.SwitchToPage(PageSettingsMain)
 		})
-	audioMenu.SetTitle(" Zaparoo config editor - Audio menu ")
+
+	audioMenu.SetTitle("Settings - Audio")
 	audioMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	pageDefaults("audio", pages, audioMenu)
+
+	pageDefaults(PageSettingsAudio, pages, audioMenu)
 	return audioMenu
 }
 
@@ -468,7 +185,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 		SetMaxLength(200)
 
 	readersMenu := tview.NewForm()
-	readersMenu.AddCheckbox("Autodetect reader", autoDetect, func(checked bool) {
+	readersMenu.AddCheckbox("Auto-detect readers", autoDetect, func(checked bool) {
 		cfg.SetAutoDetect(checked)
 	}).
 		AddFormItem(textArea).
@@ -483,11 +200,12 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 			}
 
 			cfg.SetReaderConnections(newConnect)
-			pages.SwitchToPage("mainconfig")
+			pages.SwitchToPage(PageSettingsMain)
 		})
 
-	readersMenu.SetTitle(" Zaparoo config editor - Readers menu ")
-	pageDefaults("readers", pages, readersMenu)
+	readersMenu.SetTitle("Settings - Readers")
+
+	pageDefaults(PageSettingsReaders, pages, readersMenu)
 	return readersMenu
 }
 
@@ -507,10 +225,10 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	exitDelay := cfg.ReadersScan().ExitDelay
 
 	scanMenu := tview.NewForm()
-	scanMenu.AddDropDown("Scan Mode", scanModes, scanMode, func(option string, optionIndex int) {
+	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, optionIndex int) {
 		cfg.SetScanMode(option)
 	}).
-		AddInputField("Exit Delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
+		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
 			delay, _ := strconv.ParseFloat(value, 32)
 			cfg.SetScanExitDelay(float32(delay))
 		}).
@@ -531,35 +249,11 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 		}).
 		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
 		AddButton("Confirm", func() {
-			pages.SwitchToPage("mainconfig")
+			pages.SwitchToPage(PageSettingsMain)
 		})
-	scanMenu.SetTitle(" Zaparoo config editor - Scan mode menu ")
-	pageDefaults("scan", pages, scanMenu)
+
+	scanMenu.SetTitle("Settings - Scanning")
+
+	pageDefaults(PageSettingsScanMode, pages, scanMenu)
 	return scanMenu
-}
-
-func ConfigUiBuilder(cfg *config.Instance, app *tview.Application, pages *tview.Pages, exitFunc func()) (*tview.Application, error) {
-	SetTheme(&tview.Styles)
-
-	BuildMainMenu(cfg, pages, app, exitFunc)
-	BuildTagsMenu(cfg, pages, app)
-	BuildTagsReadMenu(cfg, pages, app)
-	BuildTagsSearchMenu(cfg, pages, app)
-	BuildTagsWriteMenu(cfg, pages, app)
-	BuildAudionMenu(cfg, pages, app)
-	BuildReadersMenu(cfg, pages, app)
-	BuildScanModeMenu(cfg, pages, app)
-
-	pages.SwitchToPage("mainconfig")
-	centeredPages := centerWidget(70, 20, pages)
-	return app.SetRoot(centeredPages, true).EnableMouse(true), nil
-}
-
-func ConfigUi(cfg *config.Instance, _ platforms.Platform) error {
-	return BuildAndRetry(func() (*tview.Application, error) {
-		app := tview.NewApplication()
-		pages := tview.NewPages()
-		exitFunc := func() { app.Stop() }
-		return ConfigUiBuilder(cfg, app, pages, exitFunc)
-	})
 }

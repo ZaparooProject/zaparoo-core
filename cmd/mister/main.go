@@ -24,6 +24,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"os"
 	"os/exec"
@@ -196,9 +197,12 @@ func main() {
 	}
 
 	// display main info gui
+	enableZapScript := client.DisableZapScript(cfg)
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
+		enableZapScript()
 		_, _ = fmt.Fprintf(os.Stderr, "Error displaying service info: %v\n", err)
 		os.Exit(1)
 	}
+	enableZapScript()
 }

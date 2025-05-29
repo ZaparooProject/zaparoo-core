@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"io"
 	"os"
 	"os/signal"
@@ -122,18 +121,8 @@ func runFlag(cfg *config.Instance, value string) {
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
-func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
-	if *f.Config {
-		enabler := client.DisableZapScript(cfg)
-		err := tui.ConfigUi(cfg, pl)
-		if err != nil {
-			log.Error().Err(err).Msg("error starting config ui")
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting config UI: %v\n", err)
-			os.Exit(1)
-		}
-		enabler()
-		os.Exit(0)
-	} else if isFlagPassed("write") {
+func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
+	if isFlagPassed("write") {
 		if *f.Write == "" {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: write flag requires a value\n")
 			os.Exit(1)
