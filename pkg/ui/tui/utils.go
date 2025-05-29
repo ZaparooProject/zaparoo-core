@@ -18,8 +18,7 @@ func centerWidget(width, height int, p tview.Primitive) tview.Primitive {
 
 func pageDefaults[S PrimitiveWithSetBorder](name string, pages *tview.Pages, widget S) tview.Primitive {
 	widget.SetBorder(true)
-	pages.RemovePage(name)
-	pages.AddAndSwitchToPage(name, widget, true)
+	pages.AddPage(name, widget, true, false)
 	return widget
 }
 

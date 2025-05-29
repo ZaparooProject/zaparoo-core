@@ -93,6 +93,13 @@ func BuildMain(
 		helpText.SetText("Search for media and write to an NFC tag.")
 	})
 
+	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
+		pages.SwitchToPage(PageSettingsTagsWrite)
+	})
+	writeButton.SetFocusFunc(func() {
+		helpText.SetText("Write custom ZapScript to an NFC tag.")
+	})
+
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
 		app.Stop()
 	})
@@ -108,8 +115,7 @@ func BuildMain(
 	})
 
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
-		widget := modalBuilder(BuildExportLog(pl, app, pages, logDestPath, logDestName), 42, 8)
-		pages.AddPage(PageExportLog, widget, true, true)
+		pages.SwitchToPage(PageExportLog)
 	})
 	exportButton.SetFocusFunc(func() {
 		helpText.SetText("Export Core log file for support.")
@@ -128,6 +134,17 @@ func BuildMain(
 			app.SetFocus(exitButton)
 			return event
 		} else if k == tcell.KeyDown || k == tcell.KeyRight {
+			app.SetFocus(writeButton)
+			return event
+		}
+		return event
+	})
+	writeButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyUp || k == tcell.KeyLeft {
+			app.SetFocus(searchButton)
+			return event
+		} else if k == tcell.KeyDown || k == tcell.KeyRight {
 			app.SetFocus(updateDBButton)
 			return event
 		}
@@ -136,7 +153,7 @@ func BuildMain(
 	updateDBButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(searchButton)
+			app.SetFocus(writeButton)
 			return event
 		} else if k == tcell.KeyDown || k == tcell.KeyRight {
 			app.SetFocus(settingsButton)
@@ -188,6 +205,7 @@ func BuildMain(
 
 	buttonRowTop := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(searchButton, 0, 1, true).
+		AddItem(writeButton, 0, 1, false).
 		AddItem(updateDBButton, 0, 1, false).
 		AddItem(settingsButton, 0, 1, false).
 		AddItem(exportButton, 0, 1, false).
@@ -203,6 +221,8 @@ func BuildMain(
 	BuildAudioMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
+	BuildExportLog(pl, app, pages, logDestPath, logDestName)
+
 	pages.SwitchToPage(PageMain)
 
 	centeredPages := centerWidget(70, 20, pages)

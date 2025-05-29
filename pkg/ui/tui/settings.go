@@ -3,6 +3,10 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strconv"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -10,9 +14,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"slices"
-	"strconv"
-	"strings"
 )
 
 func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
@@ -226,7 +227,7 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 
 	scanMenu := tview.NewForm()
 	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, optionIndex int) {
-		cfg.SetScanMode(option)
+		cfg.SetScanMode(strings.ToLower(option))
 	}).
 		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
 			delay, _ := strconv.ParseFloat(value, 32)

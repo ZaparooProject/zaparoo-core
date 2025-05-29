@@ -2,14 +2,16 @@ package tui
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rivo/tview"
-	"github.com/rs/zerolog/log"
 	"os/exec"
 	"path"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
 )
 
 func BuildExportLog(
@@ -22,35 +24,32 @@ func BuildExportLog(
 	logExport := tview.NewList()
 
 	logExport.
-		AddItem("Upload to termbin.com", "", 'a', func() {
-			pages.RemovePage("export")
+		AddItem("Upload to termbin.com", "", '1', func() {
 			outcome := uploadLog(pl, pages, app)
-			modal := genericModal(outcome, "Log upload", func(buttonIndex int, buttonLabel string) {
+			modal := genericModal(outcome, "Upload Log File", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("upload")
 			}, true)
 			pages.AddPage("upload", modal, true, true)
 		})
 
 	if logDestPath != "" {
-		logExport.AddItem("Copy to "+logDestName, "", 'b', func() {
-			pages.RemovePage("export")
+		logExport.AddItem("Copy to "+logDestName, "", '2', func() {
 			outcome := copyLogToSd(pl, logDestPath, logDestName)
-			modal := genericModal(outcome, "Log copy", func(buttonIndex int, buttonLabel string) {
+			modal := genericModal(outcome, "Copy Log File", func(buttonIndex int, buttonLabel string) {
 				pages.RemovePage("copy")
 			}, true)
 			pages.AddPage("copy", modal, true, true)
 		})
 	}
 
-	logExport.AddItem("Cancel", "", 'q', func() {
-		pages.RemovePage("export")
-	}).ShowSecondaryText(false)
+	logExport.AddItem("Go back", "Back to main menu", 'b', func() {
+		pages.SwitchToPage(PageMain)
+	})
 
-	logExport.
-		SetBorder(true).
-		SetBorderPadding(1, 1, 1, 1).
-		SetTitle("Log export")
+	logExport.SetTitle("Export Log File")
+	logExport.SetSecondaryTextColor(tcell.ColorYellow)
 
+	pageDefaults(PageExportLog, pages, logExport)
 	return logExport
 }
 
@@ -72,7 +71,6 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
 	pages.RemovePage("export")
-	// FIXME: this is not updating, too busy
 	pages.AddPage("temp_upload", modal, true, true)
 	app.ForceDraw()
 	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
@@ -80,8 +78,8 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	pages.RemovePage("temp_upload")
 	if err != nil {
 		log.Error().Err(err).Msgf("error uploading log file to termbin")
-		return "Unable to upload log file."
+		return "Error uploading log file."
 	} else {
-		return "Log file URL:\n" + strings.TrimSpace(string(out))
+		return "Log file URL:\n\n" + strings.TrimSpace(string(out))
 	}
 }
