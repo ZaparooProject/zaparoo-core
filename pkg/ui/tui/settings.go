@@ -492,7 +492,6 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 }
 
 func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
-
 	scanMode := 0
 	if cfg.ReadersScan().Mode == config.ScanModeHold {
 		scanMode = 1
