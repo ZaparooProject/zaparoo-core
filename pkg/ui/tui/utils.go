@@ -27,7 +27,8 @@ func SetTheme(theme *tview.Theme) {
 	theme.PrimaryTextColor = tcell.ColorWhite
 	theme.ContrastSecondaryTextColor = tcell.ColorFuchsia
 	theme.PrimitiveBackgroundColor = tcell.ColorDarkBlue
-	theme.ContrastBackgroundColor = tcell.ColorBlack
+	theme.ContrastBackgroundColor = tcell.ColorBlue
+	theme.InverseTextColor = tcell.ColorDarkBlue
 }
 
 func genericModal(

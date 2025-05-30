@@ -171,6 +171,7 @@ func LocalClient(
 
 func WaitNotification(
 	ctx context.Context,
+	timeout time.Duration,
 	cfg *config.Instance,
 	id string,
 ) (string, error) {
@@ -228,7 +229,7 @@ func WaitNotification(
 		}
 	}()
 
-	timer := time.NewTimer(config.ApiRequestTimeout)
+	timer := time.NewTimer(timeout)
 	select {
 	case <-done:
 		break

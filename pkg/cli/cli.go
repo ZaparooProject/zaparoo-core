@@ -172,7 +172,11 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			os.Exit(0)
 		}()
 
-		resp, err := client.WaitNotification(context.Background(), cfg, models.NotificationTokensAdded)
+		resp, err := client.WaitNotification(
+			context.Background(),
+			config.ApiRequestTimeout,
+			cfg, models.NotificationTokensAdded,
+		)
 		if err != nil {
 			log.Error().Err(err).Msg("error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)

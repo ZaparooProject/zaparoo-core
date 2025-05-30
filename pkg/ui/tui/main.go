@@ -1,8 +1,13 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -22,6 +27,19 @@ const (
 	PageSearchMedia       = "search_media"
 	PageExportLog         = "export_log"
 )
+
+func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
+	resp, err := client.LocalClient(ctx, cfg, models.MethodTokens, "")
+	if err != nil {
+		return models.TokensResponse{}, err
+	}
+	var tokens models.TokensResponse
+	err = json.Unmarshal([]byte(resp), &tokens)
+	if err != nil {
+		return models.TokensResponse{}, err
+	}
+	return tokens, nil
+}
 
 func setupButtonNavigation(app *tview.Application, buttons ...*tview.Button) {
 	for i, button := range buttons {
@@ -54,11 +72,14 @@ func BuildMain(
 
 	main := tview.NewFlex()
 
-	introText := tview.NewTextView().SetText("Visit zaparoo.org for guides and support.")
-	statusText := tview.NewTextView()
+	introText := tview.NewTextView().SetText(
+		"Visit [::bu:https://zaparoo.org]zaparoo.org[::-:-] for guides and support.",
+	).SetDynamicColors(true)
+	statusText := tview.NewTextView().SetDynamicColors(true)
 
+	svcRunning := isRunning()
 	var svcStatus string
-	if isRunning() {
+	if svcRunning {
 		svcStatus = "RUNNING"
 	} else {
 		svcStatus = "NOT RUNNING"
@@ -72,23 +93,80 @@ func BuildMain(
 		ipDisplay = ip
 	}
 
+	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.ApiPort())
+
 	statusText.SetText(
 		fmt.Sprintf(
-			"Service status: %s\nDevice address: %s",
+			"Status:  %s\nAddress: %s\nWeb UI:  [:::%s]%s[:::-]",
 			svcStatus,
 			ipDisplay,
+			webUI, webUI,
 		),
 	)
 
 	helpText := tview.NewTextView()
-	helpText.SetBorder(true)
+	lastScanned := tview.NewTextView()
+
+	if svcRunning {
+		lastScanned.SetBorder(true).SetTitle("Last Scanned")
+		tokens, err := getTokens(context.Background(), cfg)
+		if err != nil {
+			lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+		} else {
+			if tokens.Last != nil {
+				lastScanned.SetText(fmt.Sprintf(
+					"Time:  %s\nID:    %s\nValue: %s",
+					tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
+					tokens.Last.UID,
+					tokens.Last.Text,
+				))
+			} else {
+				lastScanned.SetText("Time:  -\nID:    -\nValue: -")
+			}
+
+			go func() {
+				for {
+					resp, err := client.WaitNotification(
+						context.Background(),
+						1*time.Hour,
+						cfg, models.NotificationTokensAdded,
+					)
+					if err != nil {
+						app.QueueUpdateDraw(func() {
+							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+						})
+						return
+					}
+
+					var token models.TokenResponse
+					err = json.Unmarshal([]byte(resp), &token)
+					if err != nil {
+						app.QueueUpdateDraw(func() {
+							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+						})
+						return
+					}
+
+					app.QueueUpdateDraw(func() {
+						lastScanned.SetText(fmt.Sprintf(
+							"Time:  %s\nID:    %s\nValue: %s",
+							token.ScanTime.Format("2006-01-02 15:04:05"),
+							token.UID,
+							token.Text,
+						))
+					})
+				}
+			}()
+		}
+	}
 
 	displayCol := tview.NewFlex().SetDirection(tview.FlexRow)
 	displayCol.AddItem(introText, 1, 1, false)
 	displayCol.AddItem(tview.NewTextView(), 1, 1, false)
-	displayCol.AddItem(statusText, 0, 1, false)
+	displayCol.AddItem(statusText, 3, 1, false)
 	displayCol.AddItem(tview.NewTextView(), 0, 1, false)
-	displayCol.AddItem(helpText, 3, 1, false)
+	displayCol.AddItem(lastScanned, 9, 1, false)
+	displayCol.AddItem(helpText, 1, 1, false)
 
 	pages := tview.NewPages().
 		AddPage(PageMain, main, true, true)
@@ -103,6 +181,7 @@ func BuildMain(
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSearchMedia)
 	})
+	searchButton.SetBorder(true)
 	searchButton.SetFocusFunc(func() {
 		helpText.SetText("Search for media and write to an NFC tag.")
 	})
@@ -110,6 +189,7 @@ func BuildMain(
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsTagsWrite)
 	})
+	writeButton.SetBorder(true)
 	writeButton.SetFocusFunc(func() {
 		helpText.SetText("Write custom ZapScript to an NFC tag.")
 	})
@@ -117,6 +197,7 @@ func BuildMain(
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
 		app.Stop()
 	})
+	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
 		helpText.SetText("Update Core media database.")
 	})
@@ -124,6 +205,7 @@ func BuildMain(
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsMain)
 	})
+	settingsButton.SetBorder(true)
 	settingsButton.SetFocusFunc(func() {
 		helpText.SetText("Manage settings for Core service.")
 	})
@@ -131,6 +213,7 @@ func BuildMain(
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageExportLog)
 	})
+	exportButton.SetBorder(true)
 	exportButton.SetFocusFunc(func() {
 		helpText.SetText("Export Core log file for support.")
 	})
@@ -138,6 +221,7 @@ func BuildMain(
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
 		app.Stop()
 	})
+	exitButton.SetBorder(true)
 	exitButton.SetFocusFunc(func() {
 		helpText.SetText("Exit app. (Service will keep running)")
 	})
@@ -159,6 +243,8 @@ func BuildMain(
 		}
 		return event
 	})
+
+	main.AddItem(tview.NewTextView(), 1, 1, false)
 
 	buttonNav := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(searchButton, 0, 1, true).

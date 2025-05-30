@@ -45,7 +45,7 @@ func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.
 				log.Error().Err(err).Msg("error saving config")
 			}
 		}).
-		AddItem("Go back", "Back to main menu", 'q', func() {
+		AddItem("Go back", "Back to main menu", 'b', func() {
 			pages.SwitchToPage(PageMain)
 		})
 
@@ -93,7 +93,11 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			// if we don't force a redraw, the waitNotification will keep the thread busy
 			// and the app won't update the screen
 			app.ForceDraw()
-			resp, _ := client.WaitNotification(context.Background(), cfg, models.NotificationTokensAdded)
+			resp, _ := client.WaitNotification(
+				context.Background(),
+				config.ApiRequestTimeout,
+				cfg, models.NotificationTokensAdded,
+			)
 			var data models.TokenResponse
 			err := json.Unmarshal([]byte(resp), &data)
 			if err != nil {
