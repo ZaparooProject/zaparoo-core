@@ -14,43 +14,62 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func BuildExportLog(
+func BuildExportLogModal(
 	pl platforms.Platform,
 	app *tview.Application,
 	pages *tview.Pages,
 	logDestPath string,
 	logDestName string,
-) *tview.List {
-	logExport := tview.NewList()
+) tview.Primitive {
+	exportPages := tview.NewPages()
 
-	logExport.
-		AddItem("Upload to termbin.com", "", '1', func() {
-			outcome := uploadLog(pl, pages, app)
-			modal := genericModal(outcome, "Upload Log File", func(buttonIndex int, buttonLabel string) {
-				pages.RemovePage("upload")
-			}, true)
-			pages.AddPage("upload", modal, true, true)
+	exportMenu := tview.NewList()
+	exportPages.AddAndSwitchToPage("export", exportMenu, true)
+
+	exportMenu.AddItem(
+		"Upload to termbin.com",
+		"Upload log file to termbin.com and display URL",
+		'1', func() {
+			outcome := uploadLog(pl, exportPages, app)
+			resultModal := genericModal(outcome, "Upload Log File",
+				func(buttonIndex int, buttonLabel string) {
+					exportPages.RemovePage("upload")
+				}, true)
+			exportPages.AddPage("upload", resultModal, true, true)
+			app.SetFocus(resultModal)
 		})
-
 	if logDestPath != "" {
-		logExport.AddItem("Copy to "+logDestName, "", '2', func() {
-			outcome := copyLogToSd(pl, logDestPath, logDestName)
-			modal := genericModal(outcome, "Copy Log File", func(buttonIndex int, buttonLabel string) {
-				pages.RemovePage("copy")
-			}, true)
-			pages.AddPage("copy", modal, true, true)
-		})
+		exportMenu.AddItem(
+			"Copy to "+logDestName,
+			"Copy log file to a permanent location on disk",
+			'2',
+			func() {
+				outcome := copyLogToSd(pl, logDestPath, logDestName)
+				resultModal := genericModal(outcome, "Copy Log File",
+					func(buttonIndex int, buttonLabel string) {
+						exportPages.RemovePage("copy")
+					}, true)
+				exportPages.AddPage("copy", resultModal, true, true)
+				app.SetFocus(resultModal)
+			})
 	}
-
-	logExport.AddItem("Go back", "Back to main menu", 'b', func() {
+	exportMenu.AddItem("Go back", "Go back to main menu", 'b', func() {
 		pages.SwitchToPage(PageMain)
 	})
+	exportMenu.SetTitle("Export Log File")
+	exportMenu.SetSecondaryTextColor(tcell.ColorYellow)
+	exportMenu.SetBorder(true)
 
-	logExport.SetTitle("Export Log File")
-	logExport.SetSecondaryTextColor(tcell.ColorYellow)
+	exportPages.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			pages.SwitchToPage(PageMain)
+			return nil
+		}
+		return event
+	})
 
-	pageDefaults(PageExportLog, pages, logExport)
-	return logExport
+	pages.AddPage(PageExportLog, exportPages, true, false)
+	return exportMenu
 }
 
 func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) string {
@@ -70,9 +89,10 @@ func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
-	pages.RemovePage("export")
 	pages.AddPage("temp_upload", modal, true, true)
+	app.SetFocus(modal)
 	app.ForceDraw()
+
 	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
 	out, err := exec.Command("bash", "-c", uploadCmd).Output()
 	pages.RemovePage("temp_upload")

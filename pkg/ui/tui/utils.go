@@ -30,23 +30,6 @@ func SetTheme(theme *tview.Theme) {
 	theme.ContrastBackgroundColor = tcell.ColorBlack
 }
 
-func modalBuilder(
-	content tview.Primitive,
-	width int,
-	height int,
-) tview.Primitive {
-	itemHeight := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(nil, 0, 1, false).
-		AddItem(content, height, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	return tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(itemHeight, width, 1, true).
-		AddItem(nil, 0, 1, false)
-}
-
 func genericModal(
 	message string,
 	title string,
@@ -62,7 +45,6 @@ func genericModal(
 		modal.AddButtons([]string{"OK"}).
 			SetDoneFunc(action)
 	}
-
 	return modal
 }
 

@@ -2,12 +2,12 @@ package tui
 
 import (
 	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"time"
 )
 
 const (
@@ -23,6 +23,25 @@ const (
 	PageExportLog         = "export_log"
 )
 
+func setupButtonNavigation(app *tview.Application, buttons ...*tview.Button) {
+	for i, button := range buttons {
+		prevIndex := (i - 1 + len(buttons)) % len(buttons)
+		nextIndex := (i + 1) % len(buttons)
+
+		button.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			k := event.Key()
+			if k == tcell.KeyUp || k == tcell.KeyLeft {
+				app.SetFocus(buttons[prevIndex])
+				return event
+			} else if k == tcell.KeyDown || k == tcell.KeyRight {
+				app.SetFocus(buttons[nextIndex])
+				return event
+			}
+			return event
+		})
+	}
+}
+
 func BuildMain(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -37,34 +56,29 @@ func BuildMain(
 
 	introText := tview.NewTextView().SetText("Visit zaparoo.org for guides and support.")
 	statusText := tview.NewTextView()
-	go func() {
-		for {
-			var svcStatus string
-			if isRunning() {
-				svcStatus = "RUNNING"
-			} else {
-				svcStatus = "NOT RUNNING"
-			}
 
-			ip := utils.GetLocalIP()
-			var ipDisplay string
-			if ip == "" {
-				ipDisplay = "Unknown"
-			} else {
-				ipDisplay = ip
-			}
+	var svcStatus string
+	if isRunning() {
+		svcStatus = "RUNNING"
+	} else {
+		svcStatus = "NOT RUNNING"
+	}
 
-			statusText.SetText(
-				fmt.Sprintf(
-					"Service status: %s\nDevice address: %s",
-					svcStatus,
-					ipDisplay,
-				),
-			)
+	ip := utils.GetLocalIP()
+	var ipDisplay string
+	if ip == "" {
+		ipDisplay = "Unknown"
+	} else {
+		ipDisplay = ip
+	}
 
-			time.Sleep(1 * time.Second)
-		}
-	}()
+	statusText.SetText(
+		fmt.Sprintf(
+			"Service status: %s\nDevice address: %s",
+			svcStatus,
+			ipDisplay,
+		),
+	)
 
 	helpText := tview.NewTextView()
 	helpText.SetBorder(true)
@@ -128,72 +142,15 @@ func BuildMain(
 		helpText.SetText("Exit app. (Service will keep running)")
 	})
 
-	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(exitButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(writeButton)
-			return event
-		}
-		return event
-	})
-	writeButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(searchButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(updateDBButton)
-			return event
-		}
-		return event
-	})
-	updateDBButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(writeButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(settingsButton)
-			return event
-		}
-		return event
-	})
-	settingsButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(updateDBButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(exportButton)
-			return event
-		}
-		return event
-	})
-	exportButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(settingsButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(exitButton)
-			return event
-		}
-		return event
-	})
-	exitButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyUp || k == tcell.KeyLeft {
-			app.SetFocus(exportButton)
-			return event
-		} else if k == tcell.KeyDown || k == tcell.KeyRight {
-			app.SetFocus(searchButton)
-			return event
-		}
-		return event
-	})
+	setupButtonNavigation(
+		app,
+		searchButton,
+		writeButton,
+		updateDBButton,
+		settingsButton,
+		exportButton,
+		exitButton,
+	)
 
 	main.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
@@ -203,16 +160,16 @@ func BuildMain(
 		return event
 	})
 
-	buttonRowTop := tview.NewFlex().SetDirection(tview.FlexRow).
+	buttonNav := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(searchButton, 0, 1, true).
 		AddItem(writeButton, 0, 1, false).
 		AddItem(updateDBButton, 0, 1, false).
 		AddItem(settingsButton, 0, 1, false).
 		AddItem(exportButton, 0, 1, false).
 		AddItem(exitButton, 0, 1, false)
+	main.AddItem(buttonNav, 20, 1, true)
 
-	main.AddItem(buttonRowTop, 20, 1, true)
-
+	BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
 	BuildSettingsMainMenu(cfg, pages, app)
 	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
@@ -221,10 +178,10 @@ func BuildMain(
 	BuildAudioMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
-	BuildExportLog(pl, app, pages, logDestPath, logDestName)
 
 	pages.SwitchToPage(PageMain)
 
 	centeredPages := centerWidget(70, 20, pages)
-	return app.SetRoot(centeredPages, true).EnableMouse(true), nil
+	return app.SetRoot(centeredPages, true).
+		EnableMouse(true), nil
 }
