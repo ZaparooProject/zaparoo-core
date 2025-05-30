@@ -97,7 +97,7 @@ func BuildMain(
 
 	statusText.SetText(
 		fmt.Sprintf(
-			"Status:  %s\nAddress: %s\nWeb UI:  [:::%s]%s[:::-]",
+			"[::b]Status:[::-]  %s\n[::b]Address:[::-] %s\n[::b]Web UI:[::-]  [:::%s]%s[:::-]",
 			svcStatus,
 			ipDisplay,
 			webUI, webUI,
@@ -106,6 +106,7 @@ func BuildMain(
 
 	helpText := tview.NewTextView()
 	lastScanned := tview.NewTextView()
+	lastScanned.SetDynamicColors(true)
 
 	if svcRunning {
 		lastScanned.SetBorder(true).SetTitle("Last Scanned")
@@ -115,13 +116,13 @@ func BuildMain(
 		} else {
 			if tokens.Last != nil {
 				lastScanned.SetText(fmt.Sprintf(
-					"Time:  %s\nID:    %s\nValue: %s",
+					"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
 					tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
 					tokens.Last.UID,
 					tokens.Last.Text,
 				))
 			} else {
-				lastScanned.SetText("Time:  -\nID:    -\nValue: -")
+				lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 			}
 
 			go func() {
@@ -149,7 +150,7 @@ func BuildMain(
 
 					app.QueueUpdateDraw(func() {
 						lastScanned.SetText(fmt.Sprintf(
-							"Time:  %s\nID:    %s\nValue: %s",
+							"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
 							token.ScanTime.Format("2006-01-02 15:04:05"),
 							token.UID,
 							token.Text,
@@ -183,7 +184,11 @@ func BuildMain(
 	})
 	searchButton.SetBorder(true)
 	searchButton.SetFocusFunc(func() {
+		searchButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Search for media and write to an NFC tag.")
+	})
+	searchButton.SetBlurFunc(func() {
+		searchButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
@@ -191,7 +196,11 @@ func BuildMain(
 	})
 	writeButton.SetBorder(true)
 	writeButton.SetFocusFunc(func() {
+		writeButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Write custom ZapScript to an NFC tag.")
+	})
+	writeButton.SetBlurFunc(func() {
+		writeButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
@@ -199,7 +208,11 @@ func BuildMain(
 	})
 	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
+		updateDBButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Update Core media database.")
+	})
+	updateDBButton.SetBlurFunc(func() {
+		updateDBButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
@@ -207,7 +220,11 @@ func BuildMain(
 	})
 	settingsButton.SetBorder(true)
 	settingsButton.SetFocusFunc(func() {
+		settingsButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Manage settings for Core service.")
+	})
+	settingsButton.SetBlurFunc(func() {
+		settingsButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
@@ -215,7 +232,11 @@ func BuildMain(
 	})
 	exportButton.SetBorder(true)
 	exportButton.SetFocusFunc(func() {
+		exportButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Export Core log file for support.")
+	})
+	exportButton.SetBlurFunc(func() {
+		exportButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
@@ -223,7 +244,11 @@ func BuildMain(
 	})
 	exitButton.SetBorder(true)
 	exitButton.SetFocusFunc(func() {
-		helpText.SetText("Exit app. (Service will keep running)")
+		exitButton.SetBorderColor(tcell.ColorDarkBlue)
+		helpText.SetText("Exit app. (service will continue running)")
+	})
+	exitButton.SetBlurFunc(func() {
+		exitButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	setupButtonNavigation(
