@@ -1,6 +1,7 @@
 package systray
 
 import (
+	"context"
 	"fmt"
 	"fyne.io/systray"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
@@ -114,7 +115,7 @@ func systrayOnReady(
 						notify("Error opening launchers directory.")
 					}
 				case <-mReloadConfig.ClickedCh:
-					_, err := client.LocalClient(cfg, models.MethodSettingsReload, "")
+					_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 					if err != nil {
 						log.Error().Err(err).Msg("failed to reload config")
 						notify("Error reloading Core config.")

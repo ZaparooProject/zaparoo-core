@@ -350,3 +350,7 @@ func (r *PN532UARTReader) Info() string {
 func (r *PN532UARTReader) Write(text string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
+
+func (r *PN532UARTReader) CancelWrite() {
+	return
+}

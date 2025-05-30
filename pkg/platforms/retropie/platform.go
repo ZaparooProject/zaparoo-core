@@ -22,7 +22,7 @@ package retropie
 
 import (
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"os"
 	"os/exec"
 	"path/filepath"

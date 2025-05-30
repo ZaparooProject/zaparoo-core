@@ -4,7 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"io"
 	"os"
 	"os/exec"

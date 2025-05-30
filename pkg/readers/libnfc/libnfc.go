@@ -31,28 +31,33 @@ const (
 )
 
 type WriteRequestResult struct {
-	Token *tokens.Token
-	Err   error
+	Token     *tokens.Token
+	Err       error
+	Cancelled bool
 }
 
 type WriteRequest struct {
 	Text   string
 	Result chan WriteRequestResult
+	Cancel chan bool
 }
 
 type Reader struct {
-	cfg       *config.Instance
-	conn      config.ReadersConnect
-	pnd       *nfc.Device
-	polling   bool
-	prevToken *tokens.Token
-	write     chan WriteRequest
+	cfg           *config.Instance
+	conn          config.ReadersConnect
+	pnd           *nfc.Device
+	polling       bool
+	prevToken     *tokens.Token
+	write         chan WriteRequest
+	activeWrite   *WriteRequest
+	activeWriteMu sync.RWMutex
 }
 
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg:   cfg,
-		write: make(chan WriteRequest),
+		cfg:           cfg,
+		write:         make(chan WriteRequest),
+		activeWriteMu: sync.RWMutex{},
 	}
 }
 
@@ -186,20 +191,38 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 		return nil, errors.New("not connected")
 	}
 
+	r.activeWriteMu.RLock()
+	if r.activeWrite != nil {
+		r.activeWriteMu.RUnlock()
+		return nil, errors.New("write already in progress")
+	}
+	r.activeWriteMu.RUnlock()
+
 	req := WriteRequest{
 		Text:   text,
 		Result: make(chan WriteRequestResult),
+		Cancel: make(chan bool),
 	}
 
 	r.write <- req
 
 	res := <-req.Result
-	if res.Err != nil {
+	if res.Cancelled {
+		return nil, nil
+	} else if res.Err != nil {
 		log.Error().Msgf("error writing to tag: %s", res.Err)
 		return nil, res.Err
 	}
 
 	return res.Token, nil
+}
+
+func (r *Reader) CancelWrite() {
+	r.activeWriteMu.RLock()
+	defer r.activeWriteMu.RUnlock()
+	if r.activeWrite != nil {
+		r.activeWrite.Cancel <- true
+	}
 }
 
 // keep track of serial devices that had failed opens
@@ -396,12 +419,41 @@ func (r *Reader) pollDevice(
 func (r *Reader) writeTag(req WriteRequest) {
 	log.Info().Msgf("libnfc write request: %s", req.Text)
 
+	r.activeWriteMu.Lock()
+	if r.activeWrite != nil {
+		log.Error().Msgf("write already in progress")
+		req.Result <- WriteRequestResult{
+			Err: errors.New("write already in progress"),
+		}
+		r.activeWriteMu.Unlock()
+		return
+	} else {
+		r.activeWrite = &req
+		r.activeWriteMu.Unlock()
+	}
+	defer func() {
+		r.activeWriteMu.Lock()
+		r.activeWrite = nil
+		r.activeWriteMu.Unlock()
+	}()
+
 	var count int
 	var target nfc.Target
 	var err error
 	tries := 4 * 30 // ~30 seconds
 
 	for tries > 0 {
+		select {
+		case <-req.Cancel:
+			log.Info().Msgf("write cancelled by user")
+			req.Result <- WriteRequestResult{
+				Cancelled: true,
+			}
+			return
+		case <-time.After(periodBetweenLoop):
+			// continue with reading
+		}
+
 		count, target, err = r.pnd.InitiatorPollTarget(
 			tags.SupportedCardTypes,
 			timesToPoll,

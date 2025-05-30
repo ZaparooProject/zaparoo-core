@@ -51,3 +51,22 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) {
 
 	return nil, nil
 }
+
+func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received reader write cancel request")
+
+	rs := env.State.ListReaders()
+	if len(rs) == 0 {
+		return nil, errors.New("no readers connected")
+	}
+
+	rid := rs[0]
+	reader, ok := env.State.GetReader(rid)
+	if !ok || reader == nil {
+		return nil, errors.New("reader not connected: " + rs[0])
+	}
+
+	reader.CancelWrite()
+
+	return nil, nil
+}

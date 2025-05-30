@@ -136,7 +136,7 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 
 		for _, v := range ports {
-			if !strings.HasPrefix(v, "/dev/tty.") {
+			if !strings.HasPrefix(v, "/dev/tty.usbserial") {
 				continue
 			}
 

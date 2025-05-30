@@ -270,13 +270,22 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 			continue
 		}
 
+		resultSystem := models.System{
+			Id: system.ID,
+		}
+
+		metadata, err := assets.GetSystemMetadata(system.ID)
+		if err != nil {
+			resultSystem.Id = system.ID
+			log.Err(err).Msg("error getting system metadata")
+		} else {
+			resultSystem.Name = metadata.Name
+		}
+
 		results = append(results, models.SearchResultMedia{
-			System: models.System{
-				Id:   system.ID,
-				Name: system.ID,
-			},
-			Name: result.Name,
-			Path: env.Platform.NormalizePath(env.Config, result.Path),
+			System: resultSystem,
+			Name:   result.Name,
+			Path:   env.Platform.NormalizePath(env.Config, result.Path),
 		})
 	}
 
