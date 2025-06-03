@@ -94,8 +94,7 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			// and the app won't update the screen
 			app.ForceDraw()
 			resp, _ := client.WaitNotification(
-				context.Background(),
-				config.ApiRequestTimeout,
+				context.Background(), 0,
 				cfg, models.NotificationTokensAdded,
 			)
 			var data models.TokenResponse

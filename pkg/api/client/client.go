@@ -229,11 +229,20 @@ func WaitNotification(
 		}
 	}()
 
-	timer := time.NewTimer(timeout)
+	var timerChan <-chan time.Time
+	if timeout == 0 {
+		timer := time.NewTimer(config.ApiRequestTimeout)
+		timerChan = timer.C
+	} else if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		timerChan = timer.C
+	}
+	// or else leave chan nil, which will never receive
+
 	select {
 	case <-done:
 		break
-	case <-timer.C:
+	case <-timerChan:
 		err := c.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("error closing websocket")

@@ -173,8 +173,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		}()
 
 		resp, err := client.WaitNotification(
-			context.Background(),
-			config.ApiRequestTimeout,
+			context.Background(), 0,
 			cfg, models.NotificationTokensAdded,
 		)
 		if err != nil {

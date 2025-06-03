@@ -1,0 +1,274 @@
+package tui
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+	"github.com/rs/zerolog/log"
+)
+
+func getMediaState(ctx context.Context, cfg *config.Instance) (models.MediaResponse, error) {
+	resp, err := client.LocalClient(ctx, cfg, models.MethodMedia, "")
+	if err != nil {
+		return models.MediaResponse{}, err
+	}
+	var tokens models.MediaResponse
+	err = json.Unmarshal([]byte(resp), &tokens)
+	if err != nil {
+		return models.MediaResponse{}, err
+	}
+	return tokens, nil
+}
+
+func waitGenerateUpdate(ctx context.Context, cfg *config.Instance) (models.IndexingStatusResponse, error) {
+	resp, err := client.WaitNotification(
+		ctx, -1,
+		cfg, models.NotificationMediaIndexing,
+	)
+	if err != nil {
+		return models.IndexingStatusResponse{}, nil
+	}
+	var status models.IndexingStatusResponse
+	err = json.Unmarshal([]byte(resp), &status)
+	if err != nil {
+		return models.IndexingStatusResponse{}, err
+	}
+	return status, nil
+}
+
+type ProgressBar struct {
+	*tview.Box
+	progress   float64
+	emptyRune  rune
+	filledRune rune
+}
+
+func NewProgressBar() *ProgressBar {
+	return &ProgressBar{
+		Box:        tview.NewBox(),
+		progress:   0,
+		emptyRune:  tcell.RuneBoard,
+		filledRune: tcell.RuneBlock,
+	}
+}
+
+func (p *ProgressBar) SetProgress(progress float64) *ProgressBar {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	p.progress = progress
+	return p
+}
+
+func (p *ProgressBar) GetProgress() float64 {
+	return p.progress
+}
+
+func (p *ProgressBar) Draw(screen tcell.Screen) {
+	p.Box.DrawForSubclass(screen, p)
+
+	x, y, width, height := p.GetInnerRect()
+
+	if height > 0 {
+		barWidth := width
+		filled := int(float64(barWidth) * p.progress)
+
+		for i := 0; i < filled; i++ {
+			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGreen))
+		}
+
+		for i := filled; i < barWidth; i++ {
+			screen.SetContent(x+i, y, p.emptyRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGray))
+		}
+	}
+}
+
+func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Application) tview.Primitive {
+	generateDB := tview.NewPages()
+	generateDB.SetTitle("Update Media DB")
+	generateDB.SetBorder(true)
+
+	initialState := tview.NewFlex().SetDirection(tview.FlexRow)
+	explanationText := tview.NewTextView().
+		SetText("Update Core's internal database of media files.").
+		SetTextAlign(tview.AlignCenter).
+		SetWordWrap(true)
+
+	buttonFlex := tview.NewFlex().
+		SetDirection(tview.FlexColumn)
+
+	startButton := tview.NewButton("Update")
+
+	backButton := tview.NewButton("Go back").
+		SetSelectedFunc(func() {
+			pages.SwitchToPage(PageMain)
+		})
+
+	initialStateNav := func(b1 tview.Primitive, b2 tview.Primitive) func(event *tcell.EventKey) *tcell.EventKey {
+		return func(event *tcell.EventKey) *tcell.EventKey {
+			k := event.Key()
+			if k == tcell.KeyRight || k == tcell.KeyDown || k == tcell.KeyTab {
+				log.Debug().Msg("navigating KEY RIGHT")
+				app.SetFocus(b1)
+			} else if k == tcell.KeyLeft || k == tcell.KeyUp || k == tcell.KeyBacktab {
+				log.Debug().Msg("navigating KEY LEFT")
+				app.SetFocus(b2)
+			}
+			return event
+		}
+	}
+	startButton.SetInputCapture(initialStateNav(startButton, backButton))
+	startButton.SetSelectedFunc(func() {
+		log.Debug().Msg("HAS FOCUS")
+	})
+	backButton.SetInputCapture(initialStateNav(backButton, startButton))
+
+	buttonFlex.AddItem(nil, 0, 1, false)
+	buttonFlex.AddItem(startButton, 0, 1, false)
+	buttonFlex.AddItem(nil, 1, 0, false)
+	buttonFlex.AddItem(backButton, 0, 1, false)
+	buttonFlex.AddItem(nil, 0, 1, false)
+
+	initialState.AddItem(nil, 0, 1, false)
+	initialState.AddItem(explanationText, 0, 2, false)
+	initialState.AddItem(buttonFlex, 3, 1, false)
+	initialState.AddItem(nil, 0, 1, false)
+
+	generateDB.AddPage("initial", initialState, true, true)
+
+	progressState := tview.NewFlex().SetDirection(tview.FlexRow)
+	progressText := tview.NewTextView().
+		SetText("Scanning media files...").
+		SetTextAlign(tview.AlignCenter)
+
+	progress := NewProgressBar()
+	progress.SetBorder(true)
+	progress.SetTitle("Progress")
+
+	statusText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter).
+		SetText("Starting scan...")
+
+	hideButton := tview.NewButton("Hide").
+		SetSelectedFunc(func() {
+			pages.SwitchToPage(PageMain)
+		})
+
+	progressState.AddItem(nil, 0, 1, false)
+	progressState.AddItem(progressText, 2, 0, false)
+	progressState.AddItem(nil, 1, 0, false)
+	progressState.AddItem(progress, 3, 0, false)
+	progressState.AddItem(nil, 1, 0, false)
+	progressState.AddItem(statusText, 2, 0, false)
+	progressState.AddItem(nil, 1, 0, false)
+	progressState.AddItem(hideButton, 1, 0, false)
+	progressState.AddItem(nil, 0, 1, false)
+
+	generateDB.AddPage("progress", progressState, true, false)
+
+	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
+	completeText := tview.NewTextView().
+		SetTextAlign(tview.AlignCenter)
+
+	doneButton := tview.NewButton("Done").
+		SetSelectedFunc(func() {
+			pages.SwitchToPage(PageMain)
+		})
+
+	completeState.AddItem(nil, 0, 1, false)
+	completeState.AddItem(completeText, 0, 2, false)
+	completeState.AddItem(nil, 1, 0, false)
+	completeState.AddItem(doneButton, 1, 0, false)
+	completeState.AddItem(nil, 0, 1, false)
+
+	generateDB.AddPage("complete", completeState, true, false)
+
+	showProgressState := func() {
+		generateDB.SwitchToPage("progress")
+	}
+
+	updateProgress := func(current, total int, status string) {
+		app.QueueUpdateDraw(func() {
+			progress.SetProgress(float64(current) / float64(total))
+			statusText.SetText(status)
+		})
+	}
+
+	showComplete := func(filesFound int) {
+		app.QueueUpdateDraw(func() {
+			completeText.SetText(fmt.Sprintf("Database update complete!\n%d files processed.", filesFound))
+			generateDB.SwitchToPage("complete")
+		})
+	}
+
+	startButton.SetSelectedFunc(func() {
+		showProgressState()
+		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
+		if err != nil {
+			log.Error().Err(err).Msg("error generating media db")
+			return
+		}
+	})
+
+	generateDB.SwitchToPage("initial")
+
+	media, err := getMediaState(context.Background(), cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("error getting media state")
+	} else if media.Database.Indexing {
+		showProgressState()
+		updateProgress(
+			*media.Database.CurrentStep,
+			*media.Database.TotalSteps,
+			*media.Database.CurrentStepDisplay,
+		)
+		app.SetFocus(hideButton)
+	}
+
+	go func() {
+		var lastUpdate *models.IndexingStatusResponse
+		for {
+			indexing, err := waitGenerateUpdate(context.Background(), cfg)
+			if errors.Is(client.ErrRequestTimeout, err) {
+				continue
+			} else if err != nil {
+				log.Error().Err(err).Msg("error waiting for indexing update")
+				return
+			}
+			log.Debug().Msgf("indexing update: %+v", indexing)
+
+			if lastUpdate != nil &&
+				lastUpdate.Indexing == true &&
+				indexing.Indexing == false &&
+				indexing.TotalFiles != nil {
+				showComplete(*indexing.TotalFiles)
+				app.SetFocus(doneButton)
+			} else if indexing.Indexing &&
+				indexing.CurrentStep != nil &&
+				indexing.TotalSteps != nil &&
+				indexing.CurrentStepDisplay != nil {
+				updateProgress(
+					*indexing.CurrentStep,
+					*indexing.TotalSteps,
+					*indexing.CurrentStepDisplay,
+				)
+				app.SetFocus(hideButton)
+			}
+			lastUpdate = &indexing
+		}
+	}()
+
+	generateDB.SetBorder(true)
+
+	return generateDB
+}

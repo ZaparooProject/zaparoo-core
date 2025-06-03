@@ -3,8 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -26,6 +26,7 @@ const (
 	PageSettingsScanMode  = "settings_readers_scanMode"
 	PageSearchMedia       = "search_media"
 	PageExportLog         = "export_log"
+	PageGenerateDB        = "generate_db"
 )
 
 func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
@@ -128,11 +129,12 @@ func BuildMain(
 			go func() {
 				for {
 					resp, err := client.WaitNotification(
-						context.Background(),
-						1*time.Hour,
+						context.Background(), -1,
 						cfg, models.NotificationTokensAdded,
 					)
-					if err != nil {
+					if errors.Is(client.ErrRequestTimeout, err) {
+						continue
+					} else if err != nil {
 						app.QueueUpdateDraw(func() {
 							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
 						})
@@ -204,12 +206,12 @@ func BuildMain(
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
-		app.Stop()
+		pages.AddAndSwitchToPage(PageGenerateDB, BuildGenerateDBPage(cfg, pages, app), true)
 	})
 	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
 		updateDBButton.SetBorderColor(tcell.ColorDarkBlue)
-		helpText.SetText("Update Core media database.")
+		helpText.SetText("Scan disk to create index of games.")
 	})
 	updateDBButton.SetBlurFunc(func() {
 		updateDBButton.SetBorderColor(tcell.ColorWhite)
