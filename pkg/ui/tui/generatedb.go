@@ -93,11 +93,12 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 	}
 }
 
-func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Application) tview.Primitive {
-	generateDB := tview.NewPages()
-	generateDB.SetTitle("Update Media DB")
-	generateDB.SetBorder(true)
-
+func initStatePage(
+	cfg *config.Instance,
+	_ *tview.Application,
+	appPages *tview.Pages,
+	parentPages *tview.Pages,
+) tview.Primitive {
 	initialState := tview.NewFlex().SetDirection(tview.FlexRow)
 	explanationText := tview.NewTextView().
 		SetText("Update Core's internal database of media files.").
@@ -111,27 +112,17 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 
 	backButton := tview.NewButton("Go back").
 		SetSelectedFunc(func() {
-			pages.SwitchToPage(PageMain)
+			appPages.SwitchToPage(PageMain)
 		})
 
-	initialStateNav := func(b1 tview.Primitive, b2 tview.Primitive) func(event *tcell.EventKey) *tcell.EventKey {
-		return func(event *tcell.EventKey) *tcell.EventKey {
-			k := event.Key()
-			if k == tcell.KeyRight || k == tcell.KeyDown || k == tcell.KeyTab {
-				log.Debug().Msg("navigating KEY RIGHT")
-				app.SetFocus(b1)
-			} else if k == tcell.KeyLeft || k == tcell.KeyUp || k == tcell.KeyBacktab {
-				log.Debug().Msg("navigating KEY LEFT")
-				app.SetFocus(b2)
-			}
-			return event
-		}
-	}
-	startButton.SetInputCapture(initialStateNav(startButton, backButton))
 	startButton.SetSelectedFunc(func() {
-		log.Debug().Msg("HAS FOCUS")
+		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
+		if err != nil {
+			log.Error().Err(err).Msg("error generating media db")
+			return
+		}
+		parentPages.SwitchToPage("progress")
 	})
-	backButton.SetInputCapture(initialStateNav(backButton, startButton))
 
 	buttonFlex.AddItem(nil, 0, 1, false)
 	buttonFlex.AddItem(startButton, 0, 1, false)
@@ -144,8 +135,14 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	initialState.AddItem(buttonFlex, 3, 1, false)
 	initialState.AddItem(nil, 0, 1, false)
 
-	generateDB.AddPage("initial", initialState, true, true)
+	return initialState
+}
 
+func progressStatePage(
+	_ *tview.Application,
+	appPages *tview.Pages,
+	_ *tview.Pages,
+) (tview.Primitive, *ProgressBar, *tview.TextView) {
 	progressState := tview.NewFlex().SetDirection(tview.FlexRow)
 	progressText := tview.NewTextView().
 		SetText("Scanning media files...").
@@ -153,7 +150,6 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 
 	progress := NewProgressBar()
 	progress.SetBorder(true)
-	progress.SetTitle("Progress")
 
 	statusText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
@@ -161,7 +157,7 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 
 	hideButton := tview.NewButton("Hide").
 		SetSelectedFunc(func() {
-			pages.SwitchToPage(PageMain)
+			appPages.SwitchToPage(PageMain)
 		})
 
 	progressState.AddItem(nil, 0, 1, false)
@@ -174,15 +170,21 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	progressState.AddItem(hideButton, 1, 0, false)
 	progressState.AddItem(nil, 0, 1, false)
 
-	generateDB.AddPage("progress", progressState, true, false)
+	return progressState, progress, statusText
+}
 
+func completeStatePage(
+	_ *tview.Application,
+	appPages *tview.Pages,
+	_ *tview.Pages,
+) (tview.Primitive, *tview.TextView) {
 	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
 	completeText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter)
 
 	doneButton := tview.NewButton("Done").
 		SetSelectedFunc(func() {
-			pages.SwitchToPage(PageMain)
+			appPages.SwitchToPage(PageMain)
 		})
 
 	completeState.AddItem(nil, 0, 1, false)
@@ -191,15 +193,30 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 	completeState.AddItem(doneButton, 1, 0, false)
 	completeState.AddItem(nil, 0, 1, false)
 
-	generateDB.AddPage("complete", completeState, true, false)
+	return completeState, completeText
+}
 
-	showProgressState := func() {
-		generateDB.SwitchToPage("progress")
-	}
+func BuildGenerateDBPage(
+	cfg *config.Instance,
+	pages *tview.Pages,
+	app *tview.Application,
+) tview.Primitive {
+	generateDB := tview.NewPages()
+	generateDB.SetTitle("Update Media DB")
+	generateDB.SetBorder(true)
+
+	progressState, progressBar, statusText := progressStatePage(app, pages, generateDB)
+	generateDB.AddPage("progress", progressState, true, false)
+
+	initialState := initStatePage(cfg, app, pages, generateDB)
+	generateDB.AddPage("initial", initialState, true, false)
+
+	completeState, completeText := completeStatePage(app, pages, generateDB)
+	generateDB.AddPage("complete", completeState, true, false)
 
 	updateProgress := func(current, total int, status string) {
 		app.QueueUpdateDraw(func() {
-			progress.SetProgress(float64(current) / float64(total))
+			progressBar.SetProgress(float64(current) / float64(total))
 			statusText.SetText(status)
 		})
 	}
@@ -211,28 +228,18 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 		})
 	}
 
-	startButton.SetSelectedFunc(func() {
-		showProgressState()
-		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
-		if err != nil {
-			log.Error().Err(err).Msg("error generating media db")
-			return
-		}
-	})
-
-	generateDB.SwitchToPage("initial")
-
 	media, err := getMediaState(context.Background(), cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error getting media state")
 	} else if media.Database.Indexing {
-		showProgressState()
 		updateProgress(
 			*media.Database.CurrentStep,
 			*media.Database.TotalSteps,
 			*media.Database.CurrentStepDisplay,
 		)
-		app.SetFocus(hideButton)
+		generateDB.SwitchToPage("progress")
+	} else {
+		generateDB.SwitchToPage("initial")
 	}
 
 	go func() {
@@ -252,7 +259,6 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 				indexing.Indexing == false &&
 				indexing.TotalFiles != nil {
 				showComplete(*indexing.TotalFiles)
-				app.SetFocus(doneButton)
 			} else if indexing.Indexing &&
 				indexing.CurrentStep != nil &&
 				indexing.TotalSteps != nil &&
@@ -262,13 +268,10 @@ func BuildGenerateDBPage(cfg *config.Instance, pages *tview.Pages, app *tview.Ap
 					*indexing.TotalSteps,
 					*indexing.CurrentStepDisplay,
 				)
-				app.SetFocus(hideButton)
 			}
 			lastUpdate = &indexing
 		}
 	}()
-
-	generateDB.SetBorder(true)
 
 	return generateDB
 }
