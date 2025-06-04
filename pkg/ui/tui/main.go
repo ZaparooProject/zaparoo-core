@@ -206,7 +206,7 @@ func BuildMain(
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
-		pages.AddAndSwitchToPage(PageGenerateDB, BuildGenerateDBPage(cfg, pages, app), true)
+		pages.SwitchToPage(PageGenerateDB)
 	})
 	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
@@ -291,6 +291,7 @@ func BuildMain(
 	BuildAudioMenu(cfg, pages, app)
 	BuildReadersMenu(cfg, pages, app)
 	BuildScanModeMenu(cfg, pages, app)
+	pages.AddPage(PageGenerateDB, BuildGenerateDBPage(cfg, pages, app), true, false)
 
 	pages.SwitchToPage(PageMain)
 

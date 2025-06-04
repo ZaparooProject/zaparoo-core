@@ -167,16 +167,28 @@ func progressStatePage(
 	progressState.AddItem(nil, 1, 0, false)
 	progressState.AddItem(statusText, 2, 0, false)
 	progressState.AddItem(nil, 1, 0, false)
-	progressState.AddItem(hideButton, 1, 0, false)
+
+	buttonFlex := tview.NewFlex().
+		SetDirection(tview.FlexColumn).
+		AddItem(nil, 0, 1, false).
+		AddItem(hideButton, 0, 1, true).
+		AddItem(nil, 0, 1, false)
+	progressState.AddItem(buttonFlex, 1, 0, false)
+
 	progressState.AddItem(nil, 0, 1, false)
 
-	return progressState, progress, statusText
+	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(nil, 5, 0, false).
+		AddItem(progressState, 0, 1, true).
+		AddItem(nil, 5, 0, false)
+
+	return layout, progress, statusText
 }
 
 func completeStatePage(
 	_ *tview.Application,
 	appPages *tview.Pages,
-	_ *tview.Pages,
+	parentPages *tview.Pages,
 ) (tview.Primitive, *tview.TextView) {
 	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
 	completeText := tview.NewTextView().
@@ -185,15 +197,28 @@ func completeStatePage(
 	doneButton := tview.NewButton("Done").
 		SetSelectedFunc(func() {
 			appPages.SwitchToPage(PageMain)
+			parentPages.SwitchToPage("initial")
 		})
 
 	completeState.AddItem(nil, 0, 1, false)
 	completeState.AddItem(completeText, 0, 2, false)
 	completeState.AddItem(nil, 1, 0, false)
-	completeState.AddItem(doneButton, 1, 0, false)
+
+	buttonFlex := tview.NewFlex().
+		SetDirection(tview.FlexColumn).
+		AddItem(nil, 0, 1, false).
+		AddItem(doneButton, 0, 1, true).
+		AddItem(nil, 0, 1, false)
+	completeState.AddItem(buttonFlex, 1, 0, false)
+
 	completeState.AddItem(nil, 0, 1, false)
 
-	return completeState, completeText
+	layout := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(nil, 5, 0, false).
+		AddItem(completeState, 0, 1, true).
+		AddItem(nil, 5, 0, false)
+
+	return layout, completeText
 }
 
 func BuildGenerateDBPage(
@@ -259,6 +284,7 @@ func BuildGenerateDBPage(
 				indexing.Indexing == false &&
 				indexing.TotalFiles != nil {
 				showComplete(*indexing.TotalFiles)
+				updateProgress(0, 1, "")
 			} else if indexing.Indexing &&
 				indexing.CurrentStep != nil &&
 				indexing.TotalSteps != nil &&
