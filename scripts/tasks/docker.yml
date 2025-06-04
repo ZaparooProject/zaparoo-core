@@ -19,7 +19,7 @@ tasks:
   build-app:
     internal: true
     vars:
-      BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
+      BUILD_DIR: "_build/{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}"
       APP_BIN: '{{default "zaparoo" .APP_BIN}}'
     cmds:
       - task: run
@@ -29,7 +29,7 @@ tasks:
           PLATFORM: "{{.PLATFORM}}"
           EXEC: '{{default "task build" .EXEC}}'
           EXTRA_DOCKER_ARGS: '{{default "" .EXTRA_DOCKER_ARGS}}'
-          BUILD_ARCH: "{{.BUILD_ARCH}}"
+          BUILD_ARCH: "{{default ARCH .BUILD_ARCH}}"
           BUILD_OS: "{{.BUILD_OS}}"
           NO_LIBNFC: "{{.NO_LIBNFC}}"
           NO_STATIC: "{{.NO_STATIC}}"
@@ -40,7 +40,7 @@ tasks:
       - >-
         go run scripts/tasks/utils/makezip.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
-        "zaparoo-{{.PLATFORM}}_{{.BUILD_ARCH}}-${APP_VERSION}.zip"
+        "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.zip"
 
   run:
     internal: true
