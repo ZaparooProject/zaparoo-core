@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"sync"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
@@ -270,13 +271,22 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 			continue
 		}
 
+		resultSystem := models.System{
+			Id: system.ID,
+		}
+
+		metadata, err := assets.GetSystemMetadata(system.ID)
+		if err != nil {
+			resultSystem.Id = system.ID
+			log.Err(err).Msg("error getting system metadata")
+		} else {
+			resultSystem.Name = metadata.Name
+		}
+
 		results = append(results, models.SearchResultMedia{
-			System: models.System{
-				Id:   system.ID,
-				Name: system.ID,
-			},
-			Name: result.Name,
-			Path: env.Platform.NormalizePath(env.Config, result.Path),
+			System: resultSystem,
+			Name:   result.Name,
+			Path:   env.Platform.NormalizePath(env.Config, result.Path),
 		})
 	}
 
@@ -317,17 +327,19 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	status := statusInstance.get()
 	resp.Database.Indexing = status.indexing
 
-	lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
-	if err != nil {
-		return nil, fmt.Errorf("error getting last generated time: %w", err)
-	}
-	resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
-
 	if resp.Database.Indexing {
+		resp.Database.Exists = false
 		resp.Database.TotalSteps = &status.totalSteps
 		resp.Database.CurrentStep = &status.currentStep
 		resp.Database.CurrentStepDisplay = &status.currentDesc
 		resp.Database.TotalFiles = &status.totalFiles
+	} else {
+		lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
+		if err != nil {
+			return nil, fmt.Errorf("error getting last generated time: %w", err)
+		}
+
+		resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
 	}
 
 	return resp, nil

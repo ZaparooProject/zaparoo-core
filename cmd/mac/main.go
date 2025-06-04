@@ -28,8 +28,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"io"
@@ -117,9 +117,11 @@ func main() {
 		})
 	} else {
 		// default to showing the TUI
-		app, err := ui.BuildTheUi(
-			pl, utils.IsServiceRunning(cfg), cfg,
+		app, err := tui.BuildMain(
+			cfg, pl,
+			func() bool { return utils.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
+			"desktop",
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")

@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"context"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"os"
@@ -396,7 +397,7 @@ func (tr *Tracker) runPickerSelection(name string) {
 		if err != nil {
 			log.Error().Msgf("error reading main picker selected path: %s", err)
 		} else {
-			_, err = client.LocalClient(tr.cfg, models.MethodRunScript, string(pickerContents))
+			_, err = client.LocalClient(context.Background(), tr.cfg, models.MethodRunScript, string(pickerContents))
 			if err != nil {
 				log.Error().Err(err).Msg("error running local client")
 			}

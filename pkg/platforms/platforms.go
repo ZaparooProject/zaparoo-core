@@ -1,6 +1,7 @@
 package platforms
 
 import (
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -9,8 +10,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 )
 
 const (

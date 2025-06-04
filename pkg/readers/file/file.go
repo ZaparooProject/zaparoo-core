@@ -147,3 +147,7 @@ func (r *Reader) Info() string {
 func (r *Reader) Write(text string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
+
+func (r *Reader) CancelWrite() {
+	return
+}

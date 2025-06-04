@@ -199,3 +199,7 @@ func (r *SimpleSerialReader) Info() string {
 func (r *SimpleSerialReader) Write(text string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
+
+func (r *SimpleSerialReader) CancelWrite() {
+	return
+}

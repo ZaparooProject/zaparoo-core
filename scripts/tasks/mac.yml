@@ -70,4 +70,4 @@ tasks:
 
   dev:
     cmds:
-      - air --build.cmd "task mac:build-{{.CLI_ARGS}}" --build.bin "./_build/mac_{{.CLI_ARGS}}/zaparoo -gui"
+      - air --build.cmd "task mac:build-{{.CLI_ARGS}}" --build.bin "./_build/mac_{{.CLI_ARGS}}/zaparoo -daemon"

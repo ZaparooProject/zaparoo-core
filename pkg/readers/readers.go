@@ -33,4 +33,6 @@ type Reader interface {
 	// Write sends a string to the device to be written to a token, if
 	// that device supports writing. Blocks until completion or timeout.
 	Write(string) (*tokens.Token, error)
+	// CancelWrite sends a request to cancel an active write request.
+	CancelWrite()
 }
