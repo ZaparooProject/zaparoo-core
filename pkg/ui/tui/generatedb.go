@@ -95,7 +95,7 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 
 func initStatePage(
 	cfg *config.Instance,
-	_ *tview.Application,
+	app *tview.Application,
 	appPages *tview.Pages,
 	parentPages *tview.Pages,
 ) tview.Primitive {
@@ -115,6 +115,23 @@ func initStatePage(
 			appPages.SwitchToPage(PageMain)
 		})
 
+	backButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
+			app.SetFocus(startButton)
+			return nil
+		}
+		return event
+	})
+	startButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyRight || k == tcell.KeyLeft || k == tcell.KeyTab || k == tcell.KeyBacktab {
+			app.SetFocus(backButton)
+			return nil
+		}
+		return event
+	})
+
 	startButton.SetSelectedFunc(func() {
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodMediaGenerate, "")
 		if err != nil {
@@ -125,15 +142,24 @@ func initStatePage(
 	})
 
 	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(startButton, 0, 1, false)
+	buttonFlex.AddItem(startButton, 0, 1, true)
 	buttonFlex.AddItem(nil, 1, 0, false)
 	buttonFlex.AddItem(backButton, 0, 1, false)
 	buttonFlex.AddItem(nil, 0, 1, false)
 
 	initialState.AddItem(nil, 0, 1, false)
 	initialState.AddItem(explanationText, 0, 2, false)
-	initialState.AddItem(buttonFlex, 3, 1, false)
+	initialState.AddItem(buttonFlex, 1, 1, true)
 	initialState.AddItem(nil, 0, 1, false)
+
+	initialState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEscape {
+			appPages.SwitchToPage(PageMain)
+			return nil
+		}
+		return event
+	})
 
 	return initialState
 }
@@ -173,7 +199,7 @@ func progressStatePage(
 		AddItem(nil, 0, 1, false).
 		AddItem(hideButton, 0, 1, true).
 		AddItem(nil, 0, 1, false)
-	progressState.AddItem(buttonFlex, 1, 0, false)
+	progressState.AddItem(buttonFlex, 1, 0, true)
 
 	progressState.AddItem(nil, 0, 1, false)
 
@@ -181,6 +207,15 @@ func progressStatePage(
 		AddItem(nil, 5, 0, false).
 		AddItem(progressState, 0, 1, true).
 		AddItem(nil, 5, 0, false)
+
+	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEscape {
+			appPages.SwitchToPage(PageMain)
+			return nil
+		}
+		return event
+	})
 
 	return layout, progress, statusText
 }
@@ -209,7 +244,7 @@ func completeStatePage(
 		AddItem(nil, 0, 1, false).
 		AddItem(doneButton, 0, 1, true).
 		AddItem(nil, 0, 1, false)
-	completeState.AddItem(buttonFlex, 1, 0, false)
+	completeState.AddItem(buttonFlex, 1, 0, true)
 
 	completeState.AddItem(nil, 0, 1, false)
 
@@ -217,6 +252,15 @@ func completeStatePage(
 		AddItem(nil, 5, 0, false).
 		AddItem(completeState, 0, 1, true).
 		AddItem(nil, 5, 0, false)
+
+	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		k := event.Key()
+		if k == tcell.KeyEscape {
+			appPages.SwitchToPage(PageMain)
+			return nil
+		}
+		return event
+	})
 
 	return layout, completeText
 }

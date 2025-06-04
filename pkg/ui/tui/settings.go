@@ -17,62 +17,53 @@ import (
 )
 
 func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
-	debugLogging := "Enable"
-	if cfg.DebugLogging() {
-		debugLogging = "Disable"
+	debugLabel := func() string {
+		debugLogging := "Enable"
+		if cfg.DebugLogging() {
+			debugLogging = "Disable"
+		}
+		return debugLogging
 	}
 
 	mainMenu := tview.NewList().
-		AddItem("Manage NFC tags", "Read and write NFC tags", '1', func() {
-			pages.SwitchToPage(PageSettingsTags)
-		}).
-		AddItem("Scanning", "Manage reader scan behavior", '2', func() {
+		AddItem("Scanning", "Change reader scan behavior", '1', func() {
 			pages.SwitchToPage(PageSettingsScanMode)
 		}).
-		AddItem("Readers", "Manage connected readers", '3', func() {
+		AddItem("Readers", "Manage connected readers", '2', func() {
 			pages.SwitchToPage(PageSettingsReaders)
 		}).
-		AddItem("Audio", "Set audio options", '4', func() {
+		AddItem("Audio", "Set audio options", '3', func() {
 			pages.SwitchToPage(PageSettingsAudio)
-		}).
-		AddItem("Debug", debugLogging+" debug logging mode", '5', func() {
-			cfg.SetDebugLogging(!cfg.DebugLogging())
-			BuildSettingsMainMenu(cfg, pages, app)
-		}).
-		AddItem("Save", "Save changes to config file", 's', func() {
-			err := cfg.Save()
-			if err != nil {
-				log.Error().Err(err).Msg("error saving config")
-			}
-		}).
-		AddItem("Go back", "Back to main menu", 'b', func() {
-			pages.SwitchToPage(PageMain)
 		})
+
+	mainMenu.AddItem("Debug", debugLabel()+" debug logging mode", '4', func() {
+		cfg.SetDebugLogging(!cfg.DebugLogging())
+		mainMenu.SetItemText(3, "Debug", debugLabel()+" debug logging mode")
+	})
+
+	mainMenu.AddItem("Save", "Save changes", 's', func() {
+		err := cfg.Save()
+		if err != nil {
+			log.Error().Err(err).Msg("error saving config")
+		}
+	})
+
+	mainMenu.AddItem("Go back", "Back to main menu", 'b', func() {
+		pages.SwitchToPage(PageMain)
+	})
 
 	mainMenu.SetTitle("Settings")
 	mainMenu.SetSecondaryTextColor(tcell.ColorYellow)
 
+	mainMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			pages.SwitchToPage(PageMain)
+		}
+		return event
+	})
+
 	pageDefaults(PageSettingsMain, pages, mainMenu)
 	return mainMenu
-}
-
-func BuildTagsMenu(_ *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.List {
-	tagsMenu := tview.NewList().
-		AddItem("Read", "Check the content of a tag", '1', func() {
-			pages.SwitchToPage(PageSettingsTagsRead)
-		}).
-		AddItem("Write", "Write a tag without running it", '2', func() {
-			pages.SwitchToPage(PageSettingsTagsWrite)
-		}).
-		AddItem("Go back", "Back to settings menu", 'b', func() {
-			pages.SwitchToPage(PageSettingsMain)
-		})
-
-	tagsMenu.SetTitle("Settings - NFC Tags")
-	tagsMenu.SetSecondaryTextColor(tcell.ColorYellow)
-
-	pageDefaults(PageSettingsTags, pages, tagsMenu)
-	return tagsMenu
 }
 
 func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
@@ -106,50 +97,16 @@ func BuildTagsReadMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			tagsReadMenu.AddTextView("ID", data.UID, 50, 1, true, false)
 			tagsReadMenu.AddTextView("Data", data.Data, 50, 1, true, false)
 			tagsReadMenu.AddTextView("Value", data.Text, 50, 4, true, false)
-			topTextView.SetText("Press Enter to scan another card, Esc to Exit")
+			topTextView.SetText("Press ENTER to scan another card. ESC to exit")
 		}
 		if k == tcell.KeyEscape {
-			pages.SwitchToPage(PageSettingsTags)
+			pages.SwitchToPage(PageSettingsMain)
 		}
 		return event
 	})
 
 	pageDefaults(PageSettingsTagsRead, pages, tagsReadMenu)
 	return tagsReadMenu
-}
-
-func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
-	topTextView := tview.NewTextView().
-		SetLabel("").
-		SetText("Put a card on the reader, type or paste your text record and press enter to write. Esc to exit")
-	zapScriptTextArea := tview.NewTextArea().
-		SetLabel("ZapScript")
-
-	tagsWriteMenu := tview.NewForm().
-		AddFormItem(topTextView).
-		AddFormItem(zapScriptTextArea)
-
-	tagsWriteMenu.SetTitle("Settings - NFC Tags - Write")
-	tagsWriteMenu.SetFocus(1)
-
-	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEnter {
-			text := zapScriptTextArea.GetText()
-			strings.Trim(text, "\r\n ")
-			data, _ := json.Marshal(&models.ReaderWriteParams{
-				Text: text,
-			})
-			_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
-			zapScriptTextArea.SetText("", true)
-		} else if k == tcell.KeyEscape {
-			pages.SwitchToPage(PageSettingsTags)
-		}
-		return event
-	})
-
-	pageDefaults(PageSettingsTagsWrite, pages, tagsWriteMenu)
-	return tagsWriteMenu
 }
 
 func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.List {
@@ -163,12 +120,19 @@ func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applica
 			cfg.SetAudioFeedback(!cfg.AudioFeedback())
 			BuildAudioMenu(cfg, pages, app)
 		}).
-		AddItem("Go back", "Go back to main menu", 'b', func() {
+		AddItem("Go back", "Back to main menu", 'b', func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})
 
 	audioMenu.SetTitle("Settings - Audio")
 	audioMenu.SetSecondaryTextColor(tcell.ColorYellow)
+
+	audioMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			pages.SwitchToPage(PageSettingsMain)
+		}
+		return event
+	})
 
 	pageDefaults(PageSettingsAudio, pages, audioMenu)
 	return audioMenu
@@ -193,7 +157,7 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 		cfg.SetAutoDetect(checked)
 	}).
 		AddFormItem(textArea).
-		AddButton("Confirm", func() {
+		AddButton("Go back", func() {
 			var newConnect []config.ReadersConnect
 			connStrings := strings.Split(textArea.GetText(), "\n")
 			for _, item := range connStrings {
@@ -206,6 +170,13 @@ func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Applica
 			cfg.SetReaderConnections(newConnect)
 			pages.SwitchToPage(PageSettingsMain)
 		})
+
+	readersMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			pages.SwitchToPage(PageSettingsMain)
+		}
+		return event
+	})
 
 	readersMenu.SetTitle("Settings - Readers")
 
@@ -252,9 +223,16 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			}
 		}).
 		AddTextView("Ignored system list", strings.Join(cfg.ReadersScan().IgnoreSystem, ", "), 30, 2, false, false).
-		AddButton("Confirm", func() {
+		AddButton("Go back", func() {
 			pages.SwitchToPage(PageSettingsMain)
 		})
+
+	scanMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			pages.SwitchToPage(PageSettingsMain)
+		}
+		return event
+	})
 
 	scanMenu.SetTitle("Settings - Scanning")
 

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"sort"
 )
 
 func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Application) {
@@ -18,7 +19,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searchButton := tview.NewButton("Search")
 	statusText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
-		SetText("Enter a name to search and select below to write tag.")
+		SetText("Enter name to search and select to write tag. ESC to exit.")
 	systemDropdown := tview.NewDropDown()
 
 	name := ""

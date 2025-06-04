@@ -53,7 +53,7 @@ func BuildExportLogModal(
 				app.SetFocus(resultModal)
 			})
 	}
-	exportMenu.AddItem("Go back", "Go back to main menu", 'b', func() {
+	exportMenu.AddItem("Go back", "Back to main menu", 'b', func() {
 		pages.SwitchToPage(PageMain)
 	})
 	exportMenu.SetTitle("Export Log File")

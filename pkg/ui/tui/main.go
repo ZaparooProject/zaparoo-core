@@ -18,7 +18,6 @@ import (
 const (
 	PageMain              = "main"
 	PageSettingsMain      = "settings_main"
-	PageSettingsTags      = "settings_tags"
 	PageSettingsTagsRead  = "settings_tags_read"
 	PageSettingsTagsWrite = "settings_tags_write"
 	PageSettingsAudio     = "settings_audio"
@@ -247,7 +246,7 @@ func BuildMain(
 	exitButton.SetBorder(true)
 	exitButton.SetFocusFunc(func() {
 		exitButton.SetBorderColor(tcell.ColorDarkBlue)
-		helpText.SetText("Exit app. (service will continue running)")
+		helpText.SetText("Exit TUI app. (service will continue running)")
 	})
 	exitButton.SetBlurFunc(func() {
 		exitButton.SetBorderColor(tcell.ColorWhite)
@@ -284,7 +283,6 @@ func BuildMain(
 
 	BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
 	BuildSettingsMainMenu(cfg, pages, app)
-	BuildTagsMenu(cfg, pages, app)
 	BuildTagsReadMenu(cfg, pages, app)
 	BuildSearchMedia(cfg, pages, app)
 	BuildTagsWriteMenu(cfg, pages, app)
