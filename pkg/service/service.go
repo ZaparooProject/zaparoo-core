@@ -343,7 +343,7 @@ func makeDatabase(pl platforms.Platform) (*database.Database, error) {
 	// migrate old boltdb mappings if required
 	err = boltmigration.MaybeMigrate(pl, userDB)
 	if err != nil {
-		return db, err
+		return db, fmt.Errorf("error migrating old boltdb mappings: %w", err)
 	}
 
 	return db, nil
