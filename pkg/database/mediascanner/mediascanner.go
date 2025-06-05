@@ -328,7 +328,7 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 
-	err := db.Allocate()
+	err := db.Truncate()
 	if err != nil {
 		return 0, err
 	}

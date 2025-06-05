@@ -77,18 +77,18 @@ func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
 
 func sqlIndexTables(db *sql.DB) error {
 	sqlStmt := `
-	create index mediatitles_slug_idx on MediaTitles (Slug);
-	create index mediatitles_system_idx on MediaTitles (SystemDBID);
-	create index media_mediatitle_idx on Media (MediaTitleDBID);
-	create index tags_tag_idx on Tags (Tag);
-	create index tags_tagtype_idx on Tags (TypeDBID);
-	create index mediatags_media_idx on MediaTags (MediaDBID);
-	create index mediatags_tag_idx on MediaTags (TagDBID);
-	create index mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
-	create index mediatitletags_tag_idx on MediaTitleTags (TagDBID);
-	create index supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
-	create index supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
-	create index supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
+	create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
+	create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
+	create index if not exists media_mediatitle_idx on Media (MediaTitleDBID);
+	create index if not exists tags_tag_idx on Tags (Tag);
+	create index if not exists tags_tagtype_idx on Tags (TypeDBID);
+	create index if not exists mediatags_media_idx on MediaTags (MediaDBID);
+	create index if not exists mediatags_tag_idx on MediaTags (TagDBID);
+	create index if not exists mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
+	create index if not exists mediatitletags_tag_idx on MediaTitleTags (TagDBID);
+	create index if not exists supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	`
 	_, err := db.Exec(sqlStmt)
 	return err
@@ -96,9 +96,7 @@ func sqlIndexTables(db *sql.DB) error {
 
 //goland:noinspection SqlWithoutWhere
 func sqlTruncate(db *sql.DB) error {
-	// TODO: Consider deleting the sqlite db file and reallocating?
 	sqlStmt := `
-	delete from DBInfo;
 	delete from Systems;
 	delete from MediaTitles;
 	delete from Media;
