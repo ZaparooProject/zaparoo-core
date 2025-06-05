@@ -141,16 +141,16 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 		}
 	}
 
-	dbFile := dbFile(pl)
+	oldDBPath := dbFile(pl)
 	if errors > 0 {
 		log.Warn().Msgf("%d errors migrating old mappings", errors)
-		err := utils.MoveFile(dbFile, dbFile+".error")
+		err := utils.MoveFile(oldDBPath, oldDBPath+".error")
 		if err != nil {
 			return err
 		}
 	} else {
 		log.Info().Msg("successfully migrated old mappings")
-		err := utils.MoveFile(dbFile, dbFile+".migrated")
+		err := utils.MoveFile(oldDBPath, oldDBPath+".migrated")
 		if err != nil {
 			return err
 		}
