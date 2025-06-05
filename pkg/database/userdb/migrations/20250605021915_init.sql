@@ -1,10 +1,10 @@
 -- +goose Up
 -- +goose StatementBegin
+
 -- ROWID is an internal subject to change on vacuum
 -- DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 -- persistent between vacuums
 
-drop table if exists History;
 create table History
 (
     DBID       INTEGER PRIMARY KEY,
@@ -16,7 +16,6 @@ create table History
     Success    integer not null
 );
 
-drop table if exists Mappings;
 create table Mappings
 (
     DBID     INTEGER PRIMARY KEY,

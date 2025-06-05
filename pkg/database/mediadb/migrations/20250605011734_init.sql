@@ -5,7 +5,6 @@ journal_mode = OFF;
 PRAGMA
 synchronous = OFF;
 
-drop table if exists DBConfig;
 create table DBConfig
 (
     Name  text PRIMARY KEY,
@@ -16,7 +15,6 @@ create table DBConfig
 -- DBID INTEGER PRIMARY KEY aliases ROWID and makes it
 -- persistent between vacuums
 
-drop table if exists Systems;
 create table Systems
 (
     DBID     INTEGER PRIMARY KEY,
@@ -24,7 +22,6 @@ create table Systems
     Name     text        not null
 );
 
-drop table if exists MediaTitles;
 create table MediaTitles
 (
     DBID       INTEGER PRIMARY KEY,
@@ -33,7 +30,6 @@ create table MediaTitles
     Name       text    not null
 );
 
-drop table if exists Media;
 create table Media
 (
     DBID           INTEGER PRIMARY KEY,
@@ -41,14 +37,12 @@ create table Media
     Path           text    not null
 );
 
-drop table if exists TagTypes;
 create table TagTypes
 (
     DBID INTEGER PRIMARY KEY,
     Type text unique not null
 );
 
-drop table if exists Tags;
 create table Tags
 (
     DBID     INTEGER PRIMARY KEY,
@@ -56,7 +50,6 @@ create table Tags
     Tag      text    not null
 );
 
-drop table if exists MediaTags;
 create table MediaTags
 (
     DBID      INTEGER PRIMARY KEY,
@@ -64,7 +57,6 @@ create table MediaTags
     TagDBID   integer not null
 );
 
-drop table if exists MediaTitleTags;
 create table MediaTitleTags
 (
     DBID           INTEGER PRIMARY KEY,
@@ -72,7 +64,6 @@ create table MediaTitleTags
     MediaTitleDBID integer not null
 );
 
-drop table if exists SupportingMedia;
 create table SupportingMedia
 (
     DBID           INTEGER PRIMARY KEY,
