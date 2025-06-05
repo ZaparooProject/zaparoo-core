@@ -69,6 +69,13 @@ func (db *UserDB) Allocate() error {
 	return sqlAllocate(db.sql)
 }
 
+func (db *UserDB) MigrateUp() error {
+	if db.sql == nil {
+		return ErrorNullSql
+	}
+	return sqlMigrateUp(db.sql)
+}
+
 func (db *UserDB) Vacuum() error {
 	if db.sql == nil {
 		return ErrorNullSql
