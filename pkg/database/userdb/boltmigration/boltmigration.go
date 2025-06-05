@@ -65,6 +65,9 @@ func (d *Database) GetMappings() ([]Mapping, error) {
 
 	err := d.bdb.View(func(txn *bolt.Tx) error {
 		b := txn.Bucket([]byte(BucketMappings))
+		if b == nil {
+			return fmt.Errorf("bucket %q does not exist", BucketMappings)
+		}
 
 		c := b.Cursor()
 		prefix := []byte("mappings:")
