@@ -126,7 +126,7 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 		if oldMapping.Type == MappingTypeText {
 			newMapping.Type = userdb.MappingTypeValue
 		} else if oldMapping.Type == MappingTypeUID {
-			newMapping.Type = userdb.MappingTypeValue
+			newMapping.Type = userdb.MappingTypeUID
 		} else {
 			newMapping.Type = oldMapping.Type
 		}
