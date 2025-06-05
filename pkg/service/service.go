@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
@@ -314,24 +315,37 @@ func makeDatabase(pl platforms.Platform) (*database.Database, error) {
 		MediaDB: nil,
 		UserDB:  nil,
 	}
+
 	mediaDB, err := mediadb.OpenMediaDB(pl)
 	if err != nil {
 		return db, err
 	}
+
 	err = mediaDB.MigrateUp()
 	if err != nil {
 		return db, fmt.Errorf("error migrating mediadb: %w", err)
 	}
+
 	db.MediaDB = mediaDB
+
 	userDB, err := userdb.OpenUserDB(pl)
 	if err != nil {
 		return db, err
 	}
+
 	err = userDB.MigrateUp()
 	if err != nil {
 		return db, fmt.Errorf("error migrating userdb: %w", err)
 	}
+
 	db.UserDB = userDB
+
+	// migrate old boltdb mappings if required
+	err = boltmigration.MaybeMigrate(pl, userDB)
+	if err != nil {
+		return db, err
+	}
+
 	return db, nil
 }
 
