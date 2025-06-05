@@ -26,13 +26,13 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/rivo/tview v0.0.0-20250501113434-0c592cd31026
 	github.com/rs/zerolog v1.31.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/wizzomafizzo/mrext v0.1.3
 	go.bug.st/serial v1.6.2
 	golang.design/x/clipboard v0.7.0
-	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394
+	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
 	golang.org/x/sys v0.33.0
-	golang.org/x/text v0.24.0
+	golang.org/x/text v0.25.0
 	gopkg.in/ini.v1 v1.67.0
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
@@ -49,19 +49,23 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/miekg/dns v1.1.55 // indirect
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pressly/goose/v3 v3.24.3 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	github.com/txn2/txeh v1.4.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/image v0.20.0 // indirect
 	golang.org/x/mobile v0.0.0-20231127183840-76ac6878050a // indirect
 	golang.org/x/mod v0.24.0 // indirect
-	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sync v0.13.0 // indirect
-	golang.org/x/term v0.30.0 // indirect
-	golang.org/x/tools v0.31.0 // indirect
+	golang.org/x/net v0.40.0 // indirect
+	golang.org/x/sync v0.14.0 // indirect
+	golang.org/x/term v0.32.0 // indirect
+	golang.org/x/tools v0.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

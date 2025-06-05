@@ -2,8 +2,15 @@ package mediadb
 
 import (
 	"database/sql"
-	"github.com/rs/zerolog/log"
+	"embed"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
@@ -12,89 +19,60 @@ import (
 
 // Queries go here to keep the interface clean
 
-const DBVersion string = "1.0"
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+const DBConfigLastGeneratedAt = "LastGeneratedAt"
+
+func sqlMigrateUp(db *sql.DB) error {
+	goose.SetBaseFS(migrationFiles)
+
+	if err := goose.SetDialect("sqlite"); err != nil {
+		return fmt.Errorf("error setting goose dialect: %w", err)
+	}
+
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("error running migrations up: %w", err)
+	}
+
+	return nil
+}
 
 func sqlAllocate(db *sql.DB) error {
-	// ROWID is an internal subject to change on vacuum
-	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
-	// persistent between vacuums
-	sqlStmt := `
-	PRAGMA journal_mode = OFF;
-	PRAGMA synchronous = OFF;
+	return sqlMigrateUp(db)
+}
 
-	drop table if exists DBInfo;
-	create table DBInfo (
-		DBID INTEGER PRIMARY KEY,
-		Version text,
-		LastGeneratedAt integer not null
-	);
-
-	insert into
-	DBInfo
-	(DBID, Version, LastGeneratedAt)
-	values (1, ?, 0);
-
-	drop table if exists Systems;
-	create table Systems (
-		DBID INTEGER PRIMARY KEY,
-		SystemID text unique not null,
-		Name text not null
-	);
-
-	drop table if exists MediaTitles;
-	create table MediaTitles (
-		DBID INTEGER PRIMARY KEY,
-		SystemDBID integer not null,
-		Slug text not null,
-		Name text not null
-	);
-
-	drop table if exists Media;
-	create table Media (
-		DBID INTEGER PRIMARY KEY,
-		MediaTitleDBID integer not null,
-		Path text not null
-	);
-
-	drop table if exists TagTypes;
-	create table TagTypes (
-		DBID INTEGER PRIMARY KEY,
-		Type text unique not null
-	);
-
-	drop table if exists Tags;
-	create table Tags (
-		DBID INTEGER PRIMARY KEY,
-		TypeDBID integer not null,
-		Tag text not null
-	);
-
-	drop table if exists MediaTags;
-	create table MediaTags (
-		DBID INTEGER PRIMARY KEY,
-		MediaDBID integer not null,
-		TagDBID integer not null
-	);
-
-	drop table if exists MediaTitleTags;
-	create table MediaTitleTags (
-		DBID INTEGER PRIMARY KEY,
-		TagDBID integer not null,
-		MediaTitleDBID integer not null
-	);
-
-	drop table if exists SupportingMedia;
-	create table SupportingMedia (
-		DBID INTEGER PRIMARY KEY,
-		MediaTitleDBID integer not null,
-		TypeTagDBID integer not null,
-		Path string not null,
-		ContentType text not null,
-		Binary blob
-	);
-	`
-	_, err := db.Exec(sqlStmt, DBVersion)
+func sqlUpdateLastGenerated(db *sql.DB) error {
+	_, err := db.Exec(
+		fmt.Sprintf(
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('%s', ?)",
+			DBConfigLastGeneratedAt,
+		),
+		strconv.FormatInt(time.Now().Unix(), 10),
+	)
 	return err
+}
+
+func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
+	var rawTimestamp string
+	err := db.QueryRow(
+		fmt.Sprintf(
+			"SELECT Value FROM DBConfig WHERE Name = '%s'",
+			DBConfigLastGeneratedAt,
+		),
+	).Scan(&rawTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	} else if err != nil {
+		return time.Time{}, err
+	}
+
+	timestamp, err := strconv.Atoi(rawTimestamp)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.Unix(int64(timestamp), 0), nil
 }
 
 func sqlIndexTables(db *sql.DB) error {
