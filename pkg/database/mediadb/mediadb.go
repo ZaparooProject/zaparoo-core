@@ -63,22 +63,14 @@ func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	_, err := db.sql.Exec("UPDATE DBInfo SET LastGeneratedAt = ? WHERE DBID = 1", time.Now().Unix())
-	return err
+	return sqlUpdateLastGenerated(db.sql)
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 	if db.sql == nil {
 		return time.Time{}, ErrorNullSql
 	}
-
-	var timestamp int64
-	err := db.sql.QueryRow("SELECT LastGeneratedAt FROM DBInfo WHERE DBID = 1").Scan(&timestamp)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	return time.Unix(timestamp, 0), nil
+	return sqlGetLastGenerated(db.sql)
 }
 
 func (db *MediaDB) UnsafeGetSqlDb() *sql.DB {
@@ -97,6 +89,13 @@ func (db *MediaDB) Allocate() error {
 		return ErrorNullSql
 	}
 	return sqlAllocate(db.sql)
+}
+
+func (db *MediaDB) MigrateUp() error {
+	if db.sql == nil {
+		return ErrorNullSql
+	}
+	return sqlMigrateUp(db.sql)
 }
 
 func (db *MediaDB) Vacuum() error {

@@ -115,6 +115,7 @@ type GenericDBI interface {
 	UnsafeGetSqlDb() *sql.DB
 	Truncate() error
 	Allocate() error
+	MigrateUp() error
 	Vacuum() error
 	Close() error
 	GetDBPath() string

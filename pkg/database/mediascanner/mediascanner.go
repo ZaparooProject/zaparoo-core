@@ -1,6 +1,7 @@
 package mediascanner
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -285,6 +286,9 @@ func GetFiles(
 	if err != nil {
 		return nil, err
 	}
+	if results == nil {
+		return nil, errors.New("results stack is nil")
+	}
 
 	allResults = append(allResults, *results...)
 
@@ -328,7 +332,7 @@ func NewNamesIndex(
 ) (int, error) {
 	db := fdb.MediaDB
 
-	err := db.Allocate()
+	err := db.Truncate()
 	if err != nil {
 		return 0, err
 	}
