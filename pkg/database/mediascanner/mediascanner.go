@@ -1,6 +1,7 @@
 package mediascanner
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -284,6 +285,9 @@ func GetFiles(
 	results, err := stack.get()
 	if err != nil {
 		return nil, err
+	}
+	if results == nil {
+		return nil, errors.New("results stack is nil")
 	}
 
 	allResults = append(allResults, *results...)

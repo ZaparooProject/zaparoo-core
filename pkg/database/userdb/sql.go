@@ -88,6 +88,7 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 	if lastId == 0 {
 		lastId = 2147483646
 	}
+
 	q, err := db.Prepare(`
 		select 
 		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
@@ -96,12 +97,16 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 		order by DBID DESC
 		limit 25;
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query(lastId)
 	if err != nil {
 		return list, err
@@ -245,17 +250,22 @@ func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
 
 func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
+
 	q, err := db.Prepare(`
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings;
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query()
 	if err != nil {
 		return list, err
@@ -289,18 +299,23 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 
 func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
+
 	q, err := db.Prepare(`
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
 		where Enabled = ?
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query(true)
 	if err != nil {
 		return list, err

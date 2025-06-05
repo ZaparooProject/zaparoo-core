@@ -564,6 +564,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		args = append(args, sys.ID)
 	}
 	args = append(args, slug, path)
+
 	stmt, err := db.Prepare(`
 		select 
 			Systems.SystemID,
@@ -580,6 +581,10 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		and Media.Path = ?
 		LIMIT 1
 	`)
+	if err != nil {
+		return results, err
+	}
+
 	rows, err := stmt.Query(
 		args...,
 	)
@@ -626,6 +631,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	for _, p := range parts {
 		args = append(args, "%"+p+"%")
 	}
+
 	stmt, err := db.Prepare(`
 		select 
 			Systems.SystemID,
@@ -642,6 +648,10 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		prepareVariadic(" Media.Path like ? ", " and ", len(parts)) +
 		` LIMIT 250
 	`)
+	if err != nil {
+		return results, err
+	}
+
 	rows, err := stmt.Query(
 		args...,
 	)
@@ -699,6 +709,7 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 
 func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	var list []string
+
 	q, err := db.Prepare(`
 		select SystemID from Systems;
 	`)
@@ -708,6 +719,10 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+	if err != nil {
+		return list, err
+	}
+
 	rows, err := q.Query()
 	if err != nil {
 		return list, err
