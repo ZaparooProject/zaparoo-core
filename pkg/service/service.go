@@ -23,14 +23,15 @@ package service
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
@@ -317,10 +318,18 @@ func makeDatabase(pl platforms.Platform) (*database.Database, error) {
 	if err != nil {
 		return db, err
 	}
+	err = mediaDB.MigrateUp()
+	if err != nil {
+		return db, fmt.Errorf("error migrating mediadb: %w", err)
+	}
 	db.MediaDB = mediaDB
 	userDB, err := userdb.OpenUserDB(pl)
 	if err != nil {
 		return db, err
+	}
+	err = userDB.MigrateUp()
+	if err != nil {
+		return db, fmt.Errorf("error migrating userdb: %w", err)
 	}
 	db.UserDB = userDB
 	return db, nil
