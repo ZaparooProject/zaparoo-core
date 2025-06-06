@@ -141,6 +141,86 @@ func connectReaders(
 	return nil
 }
 
+func startTimedExit(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+	db *database.Database,
+	lsq chan *tokens.Token,
+	plq chan *playlists.Playlist,
+	exitTimer *time.Timer,
+) {
+	if exitTimer != nil {
+		stopped := exitTimer.Stop()
+		if stopped {
+			log.Debug().Msg("cancelling previous exit timer")
+		}
+	}
+
+	timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
+	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
+	exitTimer = time.NewTimer(timerLen)
+
+	go func() {
+		<-exitTimer.C
+
+		if !cfg.HoldModeEnabled() {
+			log.Debug().Msg("exit timer expired, but hold mode disabled")
+			return
+		}
+
+		activeLauncher := st.ActiveMedia().LauncherID
+		softToken := st.GetSoftwareToken()
+		if activeLauncher == "" || softToken == nil {
+			log.Debug().Msg("no active launcher, not exiting")
+			return
+		}
+
+		// run before_exit hook if one exists for system
+		var systemIds []string
+		for _, l := range pl.Launchers(cfg) {
+			if l.ID == activeLauncher {
+				systemIds = append(systemIds, l.SystemID)
+				system, err := systemdefs.LookupSystem(l.SystemID)
+				if err == nil {
+					systemIds = append(systemIds, system.Aliases...)
+				}
+				break
+			}
+		}
+		if len(systemIds) > 0 {
+			for _, systemId := range systemIds {
+				defaults, ok := cfg.LookupSystemDefaults(systemId)
+				if ok && defaults.BeforeExit != "" {
+					log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
+					plsc := playlists.PlaylistController{
+						Active: st.GetActivePlaylist(),
+						Queue:  plq,
+					}
+					t := tokens.Token{
+						ScanTime: time.Now(),
+						Text:     defaults.BeforeExit,
+					}
+					err := launchToken(pl, cfg, t, db, lsq, plsc)
+					if err != nil {
+						log.Error().Msgf("error launching on remove script: %s", err)
+					}
+					break
+				}
+			}
+		}
+
+		// exit the media
+		log.Info().Msg("exiting media")
+		err := pl.StopActiveLauncher()
+		if err != nil {
+			log.Warn().Msgf("error killing launcher: %s", err)
+		}
+
+		lsq <- nil
+	}()
+}
+
 func readerManager(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -159,7 +239,6 @@ func readerManager(
 	var exitTimer *time.Timer
 
 	readerTicker := time.NewTicker(1 * time.Second)
-	stopService := make(chan bool)
 
 	playFail := func() {
 		if !cfg.AudioFeedback() {
@@ -173,85 +252,11 @@ func readerManager(
 		}
 	}
 
-	startTimedExit := func() {
-		// TODO: this should be moved to processTokenQueue
-
-		if exitTimer != nil {
-			stopped := exitTimer.Stop()
-			if stopped {
-				log.Info().Msg("cancelling previous exit timer")
-			}
-		}
-
-		timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
-		log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
-		exitTimer = time.NewTimer(timerLen)
-
-		go func() {
-			<-exitTimer.C
-
-			if !cfg.HoldModeEnabled() {
-				log.Debug().Msg("exit timer expired, but hold mode disabled")
-				return
-			}
-
-			activeLauncher := st.ActiveMedia().LauncherID
-			softToken := st.GetSoftwareToken()
-			if activeLauncher == "" || softToken == nil {
-				log.Debug().Msg("no active launcher, not exiting")
-				return
-			}
-
-			// run before_exit hook if one exists for system
-			var systemIds []string
-			for _, l := range pl.Launchers(cfg) {
-				if l.ID == activeLauncher {
-					systemIds = append(systemIds, l.SystemID)
-					system, err := systemdefs.LookupSystem(l.SystemID)
-					if err == nil {
-						systemIds = append(systemIds, system.Aliases...)
-					}
-					break
-				}
-			}
-			if len(systemIds) > 0 {
-				for _, systemId := range systemIds {
-					defaults, ok := cfg.LookupSystemDefaults(systemId)
-					if ok && defaults.BeforeExit != "" {
-						log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
-						plsc := playlists.PlaylistController{
-							Active: st.GetActivePlaylist(),
-							Queue:  plq,
-						}
-						t := tokens.Token{
-							ScanTime: time.Now(),
-							Text:     defaults.BeforeExit,
-						}
-						err := launchToken(pl, cfg, t, db, lsq, plsc)
-						if err != nil {
-							log.Error().Msgf("error launching on remove script: %s", err)
-						}
-						break
-					}
-				}
-			}
-
-			// exit the media
-			log.Info().Msg("exiting media")
-			err := pl.StopActiveLauncher()
-			if err != nil {
-				log.Warn().Msgf("error killing launcher: %s", err)
-			}
-
-			lsq <- nil
-		}()
-	}
-
 	// manage reader connections
 	go func() {
 		for {
 			select {
-			case <-stopService:
+			case <-st.GetContext().Done():
 				return
 			case <-readerTicker.C:
 				rs := st.ListReaders()
@@ -272,14 +277,14 @@ func readerManager(
 	}()
 
 	// token pre-processing loop
-	isStopped := false
-	for !isStopped {
+preprocessing:
+	for {
 		var scan *tokens.Token
 
 		select {
 		case <-st.GetContext().Done():
-			log.Debug().Msg("Closing Readers via context cancellation")
-			isStopped = true
+			log.Debug().Msg("closing reader manager via context cancellation")
+			break preprocessing
 		case t := <-scanQueue:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
@@ -327,7 +332,7 @@ func readerManager(
 					continue
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
-					startTimedExit()
+					startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 				}
 			}
 
@@ -354,13 +359,12 @@ func readerManager(
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})
 			if shouldExit(cfg, pl, st) {
-				startTimedExit()
+				startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 			}
 		}
 	}
 
 	// daemon shutdown
-	stopService <- true
 	rs := st.ListReaders()
 	for _, device := range rs {
 		r, ok := st.GetReader(device)
