@@ -13,19 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/exp/slices"
 )
-
-func inExitGameBlocklist(
-	cfg *config.Instance,
-	state *state.State,
-) bool {
-	var blocklist []string
-	for _, v := range cfg.ReadersScan().IgnoreSystem {
-		blocklist = append(blocklist, strings.ToLower(v))
-	}
-	return slices.Contains(blocklist, strings.ToLower(state.ActiveMedia().SystemID))
-}
 
 func launchToken(
 	platform platforms.Platform,
@@ -134,7 +122,7 @@ func handlePlaylist(
 	activePlaylist := st.GetActivePlaylist()
 
 	if pls == nil {
-		// playlist is cleared
+		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Msg("clearing playlist")
 		}

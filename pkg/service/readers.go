@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
@@ -16,31 +17,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
-
-func shouldExit(
-	cfg *config.Instance,
-	pl platforms.Platform,
-	st *state.State,
-) bool {
-	if !cfg.HoldModeEnabled() {
-		return false
-	}
-
-	// do not exit from menu, there is nowhere to go anyway
-	if st.ActiveMedia().SystemID == "" {
-		return false
-	}
-
-	if st.GetLastScanned().FromAPI {
-		return false
-	}
-
-	if inExitGameBlocklist(cfg, st) {
-		return false
-	}
-
-	return true
-}
 
 type toConnectDevice struct {
 	connectionString string
@@ -141,6 +117,54 @@ func connectReaders(
 	return nil
 }
 
+func runSystemBeforeExit(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+	db *database.Database,
+	lsq chan *tokens.Token,
+	plq chan *playlists.Playlist,
+	activeMedia models.ActiveMedia,
+) {
+	var systemIDs []string
+	for _, l := range pl.Launchers(cfg) {
+		if l.ID == activeMedia.SystemID {
+			systemIDs = append(systemIDs, l.SystemID)
+			system, err := systemdefs.LookupSystem(l.SystemID)
+			if err == nil {
+				systemIDs = append(systemIDs, system.Aliases...)
+			}
+			break
+		}
+	}
+
+	if len(systemIDs) > 0 {
+		for _, systemID := range systemIDs {
+			defaults, ok := cfg.LookupSystemDefaults(systemID)
+			if ok && defaults.BeforeExit != "" {
+				log.Info().Msgf("running before_exit script: %s", defaults.BeforeExit)
+
+				plsc := playlists.PlaylistController{
+					Active: st.GetActivePlaylist(),
+					Queue:  plq,
+				}
+
+				t := tokens.Token{
+					ScanTime: time.Now(),
+					Text:     defaults.BeforeExit,
+				}
+
+				err := launchToken(pl, cfg, t, db, lsq, plsc)
+				if err != nil {
+					log.Error().Msgf("error running before_exit script: %s", err)
+				}
+
+				break
+			}
+		}
+	}
+}
+
 func startTimedExit(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -157,6 +181,10 @@ func startTimedExit(
 		}
 	}
 
+	if !cfg.HoldModeEnabled() || st.GetLastScanned().FromAPI {
+		return
+	}
+
 	timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
 	log.Debug().Msgf("exit timer set to: %s seconds", timerLen)
 	exitTimer = time.NewTimer(timerLen)
@@ -169,48 +197,24 @@ func startTimedExit(
 			return
 		}
 
-		activeLauncher := st.ActiveMedia().LauncherID
-		softToken := st.GetSoftwareToken()
-		if activeLauncher == "" || softToken == nil {
-			log.Debug().Msg("no active launcher, not exiting")
+		activeMedia := st.ActiveMedia()
+		if activeMedia == nil {
+			log.Debug().Msg("no active media, cancelling exit")
 			return
 		}
 
-		// run before_exit hook if one exists for system
-		var systemIds []string
-		for _, l := range pl.Launchers(cfg) {
-			if l.ID == activeLauncher {
-				systemIds = append(systemIds, l.SystemID)
-				system, err := systemdefs.LookupSystem(l.SystemID)
-				if err == nil {
-					systemIds = append(systemIds, system.Aliases...)
-				}
-				break
-			}
-		}
-		if len(systemIds) > 0 {
-			for _, systemId := range systemIds {
-				defaults, ok := cfg.LookupSystemDefaults(systemId)
-				if ok && defaults.BeforeExit != "" {
-					log.Info().Msgf("running on remove script: %s", defaults.BeforeExit)
-					plsc := playlists.PlaylistController{
-						Active: st.GetActivePlaylist(),
-						Queue:  plq,
-					}
-					t := tokens.Token{
-						ScanTime: time.Now(),
-						Text:     defaults.BeforeExit,
-					}
-					err := launchToken(pl, cfg, t, db, lsq, plsc)
-					if err != nil {
-						log.Error().Msgf("error launching on remove script: %s", err)
-					}
-					break
-				}
-			}
+		if st.GetSoftwareToken() == nil {
+			log.Debug().Msg("no active software token, cancelling exit")
+			return
 		}
 
-		// exit the media
+		if cfg.IsHoldModeIgnoredSystem(activeMedia.SystemID) {
+			log.Debug().Msg("active system ignored in config, cancelling exit")
+			return
+		}
+
+		runSystemBeforeExit(pl, cfg, st, db, lsq, plq, *activeMedia)
+
 		log.Info().Msg("exiting media")
 		err := pl.StopActiveLauncher()
 		if err != nil {
@@ -221,6 +225,15 @@ func startTimedExit(
 	}()
 }
 
+// readerManager is the main service loop to manage active reader hardware
+// connections and dispatch token scans from those readers to the token
+// input queue.
+//
+// When a user scans or removes a token with a reader, the reader instance
+// forwards it to the "scan queue" which is consumed by this manager.
+// The manager will then, if necessary, dispatch the token object to the
+// token input queue where it may be run.
+// This manager also handles the logic of what to do when a token is removed.
 func readerManager(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -281,6 +294,7 @@ preprocessing:
 	for {
 		var scan *tokens.Token
 
+	queue:
 		select {
 		case <-st.GetContext().Done():
 			log.Debug().Msg("closing reader manager via context cancellation")
@@ -292,26 +306,24 @@ preprocessing:
 				log.Error().Msgf("error reading card: %s", err)
 				playFail()
 				lastError = time.Now()
-				continue
+				continue queue
 			}
 			scan = t.Token
 		case stoken := <-lsq:
-			// a token has been launched that starts software
+			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", st)
-
 			if exitTimer != nil && !utils.TokensEqual(stoken, st.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
 				}
 			}
-
 			st.SetSoftwareToken(stoken)
-			continue
+			continue queue
 		}
 
 		if utils.TokensEqual(scan, prevToken) {
 			log.Debug().Msg("ignoring duplicate scan")
-			continue
+			continue preprocessing
 		}
 
 		prevToken = scan
@@ -322,30 +334,31 @@ preprocessing:
 
 			if !st.RunZapScriptEnabled() {
 				log.Debug().Msg("skipping token, run ZapScript disabled")
-				continue
+				continue preprocessing
 			}
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
 				if stopped && utils.TokensEqual(scan, st.GetSoftwareToken()) {
 					log.Info().Msg("same token reinserted, cancelling exit")
-					continue
+					continue preprocessing
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
 					startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 				}
 			}
 
+			// avoid launching a token that was just written by a reader
 			wt := st.GetWroteToken()
 			if wt != nil && utils.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
 				st.SetWroteToken(nil)
-				continue
+				continue preprocessing
 			} else {
 				st.SetWroteToken(nil)
 			}
 
-			log.Info().Msgf("sending token: %v", scan)
+			log.Info().Msgf("sending token to queue: %v", scan)
 
 			if cfg.AudioFeedback() {
 				err := pl.PlayAudio(config.SuccessSoundFilename)
@@ -358,9 +371,7 @@ preprocessing:
 		} else {
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})
-			if shouldExit(cfg, pl, st) {
-				startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
-			}
+			startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 		}
 	}
 
