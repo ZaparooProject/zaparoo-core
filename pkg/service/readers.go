@@ -338,6 +338,23 @@ preprocessing:
 				continue preprocessing
 			}
 
+			onScanScript := cfg.ReadersScan().OnScan
+			if onScanScript != "" {
+				log.Info().Msgf("running on_scan script: %s", onScanScript)
+				plsc := playlists.PlaylistController{
+					Active: st.GetActivePlaylist(),
+					Queue:  plq,
+				}
+				t := tokens.Token{
+					ScanTime: time.Now(),
+					Text:     onScanScript,
+				}
+				err := runToken(pl, cfg, t, db, lsq, plsc)
+				if err != nil {
+					log.Error().Msgf("error running on_scan script: %s", err)
+				}
+			}
+
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
 				activeToken := st.GetActiveCard()
