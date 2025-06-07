@@ -154,7 +154,7 @@ func runBeforeExitHook(
 				ScanTime: time.Now(),
 				Text:     defaults.BeforeExit,
 			}
-			err := runToken(pl, cfg, t, db, lsq, plsc)
+			err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
 			if err != nil {
 				log.Error().Msgf("error running before_exit script: %s", err)
 			}
@@ -333,11 +333,6 @@ preprocessing:
 			log.Info().Msgf("new token scanned: %v", scan)
 			st.SetActiveCard(*scan)
 
-			if !st.RunZapScriptEnabled() {
-				log.Debug().Msg("skipping token, run ZapScript disabled")
-				continue preprocessing
-			}
-
 			onScanScript := cfg.ReadersScan().OnScan
 			if onScanScript != "" {
 				log.Info().Msgf("running on_scan script: %s", onScanScript)
@@ -349,7 +344,7 @@ preprocessing:
 					ScanTime: time.Now(),
 					Text:     onScanScript,
 				}
-				err := runToken(pl, cfg, t, db, lsq, plsc)
+				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Msgf("error running on_scan script: %s", err)
 				}
@@ -401,7 +396,7 @@ preprocessing:
 					ScanTime: time.Now(),
 					Text:     onRemoveScript,
 				}
-				err := runToken(pl, cfg, t, db, lsq, plsc)
+				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Msgf("error running on_remove script: %s", err)
 				}

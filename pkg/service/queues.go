@@ -15,14 +15,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func runToken(
+func runTokenZapScript(
 	platform platforms.Platform,
 	cfg *config.Instance,
+	st *state.State,
 	token tokens.Token,
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,
 ) error {
+	if !st.RunZapScriptEnabled() {
+		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
+		return nil
+	}
+
 	text := token.Text
 
 	mappingText, mapped := getMapping(cfg, db, platform, token)
@@ -74,6 +80,7 @@ func runToken(
 func launchPlaylistMedia(
 	platform platforms.Platform,
 	cfg *config.Instance,
+	st *state.State,
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	pls *playlists.Playlist,
@@ -90,7 +97,7 @@ func launchPlaylistMedia(
 		Queue:  plq,
 	}
 
-	err := runToken(platform, cfg, t, db, lsq, plsc)
+	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
 	}
@@ -132,7 +139,7 @@ func handlePlaylist(
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("setting new playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, db, lsq, pls, plq, activePlaylist)
+			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist)
 		} else {
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
@@ -148,7 +155,7 @@ func handlePlaylist(
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
 			log.Info().Any("pls", pls).Msg("updating playlist, launching token")
-			go launchPlaylistMedia(pl, cfg, db, lsq, pls, plq, activePlaylist)
+			go launchPlaylistMedia(pl, cfg, st, db, lsq, pls, plq, activePlaylist)
 		} else {
 			log.Info().Any("pls", pls).Msg("updating playlist")
 		}
@@ -192,15 +199,6 @@ func processTokenQueue(
 				TokenData:  t.Data,
 			}
 
-			if !st.RunZapScriptEnabled() {
-				log.Debug().Msg("ZapScript disabled, skipping run")
-				err = db.UserDB.AddHistory(he)
-				if err != nil {
-					log.Error().Err(err).Msgf("error adding history")
-				}
-				continue
-			}
-
 			// launch tokens in a separate thread
 			go func() {
 				plsc := playlists.PlaylistController{
@@ -208,7 +206,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = runToken(platform, cfg, t, db, lsq, plsc)
+				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}
