@@ -52,6 +52,7 @@ type ReadersScan struct {
 	Mode         string   `toml:"mode"`
 	ExitDelay    float32  `toml:"exit_delay,omitempty"`
 	IgnoreSystem []string `toml:"ignore_system,omitempty"`
+	OnRemove     string   `toml:"on_remove,omitempty"`
 }
 
 type ReadersConnect struct {

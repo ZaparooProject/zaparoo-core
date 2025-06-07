@@ -117,7 +117,7 @@ func connectReaders(
 	return nil
 }
 
-func runSystemBeforeExit(
+func runBeforeExitHook(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
@@ -141,31 +141,30 @@ func runSystemBeforeExit(
 	if len(systemIDs) > 0 {
 		for _, systemID := range systemIDs {
 			defaults, ok := cfg.LookupSystemDefaults(systemID)
-			if ok && defaults.BeforeExit != "" {
-				log.Info().Msgf("running before_exit script: %s", defaults.BeforeExit)
-
-				plsc := playlists.PlaylistController{
-					Active: st.GetActivePlaylist(),
-					Queue:  plq,
-				}
-
-				t := tokens.Token{
-					ScanTime: time.Now(),
-					Text:     defaults.BeforeExit,
-				}
-
-				err := launchToken(pl, cfg, t, db, lsq, plsc)
-				if err != nil {
-					log.Error().Msgf("error running before_exit script: %s", err)
-				}
-
-				break
+			if !ok || defaults.BeforeExit == "" {
+				continue
 			}
+
+			log.Info().Msgf("running before_exit script: %s", defaults.BeforeExit)
+			plsc := playlists.PlaylistController{
+				Active: st.GetActivePlaylist(),
+				Queue:  plq,
+			}
+			t := tokens.Token{
+				ScanTime: time.Now(),
+				Text:     defaults.BeforeExit,
+			}
+			err := runToken(pl, cfg, t, db, lsq, plsc)
+			if err != nil {
+				log.Error().Msgf("error running before_exit script: %s", err)
+			}
+
+			break
 		}
 	}
 }
 
-func startTimedExit(
+func timedExit(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
@@ -173,7 +172,7 @@ func startTimedExit(
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
 	exitTimer *time.Timer,
-) {
+) *time.Timer {
 	if exitTimer != nil {
 		stopped := exitTimer.Stop()
 		if stopped {
@@ -182,7 +181,7 @@ func startTimedExit(
 	}
 
 	if !cfg.HoldModeEnabled() || st.GetLastScanned().FromAPI {
-		return
+		return exitTimer
 	}
 
 	timerLen := time.Second * time.Duration(cfg.ReadersScan().ExitDelay)
@@ -195,6 +194,24 @@ func startTimedExit(
 		if !cfg.HoldModeEnabled() {
 			log.Debug().Msg("exit timer expired, but hold mode disabled")
 			return
+		}
+
+		// on_remove hook script runs even if no media active
+		onRemoveScript := cfg.ReadersScan().OnRemove
+		if onRemoveScript != "" {
+			log.Info().Msgf("running on_remove script: %s", onRemoveScript)
+			plsc := playlists.PlaylistController{
+				Active: st.GetActivePlaylist(),
+				Queue:  plq,
+			}
+			t := tokens.Token{
+				ScanTime: time.Now(),
+				Text:     onRemoveScript,
+			}
+			err := runToken(pl, cfg, t, db, lsq, plsc)
+			if err != nil {
+				log.Error().Msgf("error running on_remove script: %s", err)
+			}
 		}
 
 		activeMedia := st.ActiveMedia()
@@ -213,7 +230,7 @@ func startTimedExit(
 			return
 		}
 
-		runSystemBeforeExit(pl, cfg, st, db, lsq, plq, *activeMedia)
+		runBeforeExitHook(pl, cfg, st, db, lsq, plq, *activeMedia)
 
 		log.Info().Msg("exiting media")
 		err := pl.StopActiveLauncher()
@@ -223,6 +240,8 @@ func startTimedExit(
 
 		lsq <- nil
 	}()
+
+	return exitTimer
 }
 
 // readerManager is the main service loop to manage active reader hardware
@@ -232,8 +251,9 @@ func startTimedExit(
 // When a user scans or removes a token with a reader, the reader instance
 // forwards it to the "scan queue" which is consumed by this manager.
 // The manager will then, if necessary, dispatch the token object to the
-// token input queue where it may be run.
-// This manager also handles the logic of what to do when a token is removed.
+// "token input queue" where it may be run.
+// This manager also handles the logic of what to do when a token is removed
+// from the reader.
 func readerManager(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -294,7 +314,6 @@ preprocessing:
 	for {
 		var scan *tokens.Token
 
-	queue:
 		select {
 		case <-st.GetContext().Done():
 			log.Debug().Msg("closing reader manager via context cancellation")
@@ -306,7 +325,7 @@ preprocessing:
 				log.Error().Msgf("error reading card: %s", err)
 				playFail()
 				lastError = time.Now()
-				continue queue
+				continue preprocessing
 			}
 			scan = t.Token
 		case stoken := <-lsq:
@@ -318,7 +337,7 @@ preprocessing:
 				}
 			}
 			st.SetSoftwareToken(stoken)
-			continue queue
+			continue preprocessing
 		}
 
 		if utils.TokensEqual(scan, prevToken) {
@@ -339,12 +358,13 @@ preprocessing:
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
-				if stopped && utils.TokensEqual(scan, st.GetSoftwareToken()) {
+				activeToken := st.GetActiveCard()
+				if stopped && utils.TokensEqual(scan, &activeToken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
 					log.Info().Msg("new token inserted, restarting exit timer")
-					startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+					exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 				}
 			}
 
@@ -371,7 +391,7 @@ preprocessing:
 		} else {
 			log.Info().Msg("token was removed")
 			st.SetActiveCard(tokens.Token{})
-			startTimedExit(pl, cfg, st, db, lsq, plq, exitTimer)
+			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 		}
 	}
 

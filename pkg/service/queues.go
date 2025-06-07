@@ -1,7 +1,7 @@
 package service
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 	"time"
 
@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func launchToken(
+func runToken(
 	platform platforms.Platform,
 	cfg *config.Instance,
 	token tokens.Token,
@@ -31,17 +31,13 @@ func launchToken(
 		text = mappingText
 	}
 
-	if text == "" {
-		return fmt.Errorf("no ZapScript in token")
-	}
-
-	log.Info().Msgf("launching ZapScript: %s", text)
 	cmds := strings.Split(text, "||")
+	log.Info().Msgf("running ZapScript (%d commands): %s", len(cmds), text)
 
 	pls := plsc.Active
 
 	for i, cmd := range cmds {
-		result, err := zapscript.LaunchToken(
+		result, err := zapscript.RunCommand(
 			platform,
 			cfg,
 			playlists.PlaylistController{
@@ -54,7 +50,10 @@ func launchToken(
 			i,
 			db,
 		)
-		if err != nil {
+		if errors.Is(err, zapscript.ErrEmptyCmd) {
+			log.Warn().Msg("command is empty")
+			return nil
+		} else if err != nil {
 			return err
 		}
 
@@ -91,7 +90,7 @@ func launchPlaylistMedia(
 		Queue:  plq,
 	}
 
-	err := launchToken(platform, cfg, t, db, lsq, plsc)
+	err := runToken(platform, cfg, t, db, lsq, plsc)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
 	}
@@ -209,7 +208,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = launchToken(platform, cfg, t, db, lsq, plsc)
+				err = runToken(platform, cfg, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}

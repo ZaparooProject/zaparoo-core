@@ -21,6 +21,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package zapscript
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -38,6 +39,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
+
+var ErrEmptyCmd = errors.New("command is empty")
 
 var cmdMap = map[string]func(
 	platforms.Platform,
@@ -124,8 +127,8 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("file not found: %s", path)
 }
 
-// LaunchToken parses and runs a single ZapScript command.
-func LaunchToken(
+// RunCommand parses and runs a single ZapScript command.
+func RunCommand(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
@@ -135,6 +138,10 @@ func LaunchToken(
 	currentIndex int,
 	db *database.Database,
 ) (platforms.CmdResult, error) {
+	if text == "" {
+		return platforms.CmdResult{}, ErrEmptyCmd
+	}
+
 	var unsafe bool
 	newText, err := checkLink(cfg, pl, text)
 	if err != nil {
@@ -168,7 +175,7 @@ func LaunchToken(
 			namedArgs[k] = v[0]
 		}
 	}
-	log.Debug().Msgf("named args: %v", namedArgs)
+	//log.Debug().Msgf("named args: %v", namedArgs)
 
 	// explicit commands must begin with **
 	if strings.HasPrefix(text, "**") {
