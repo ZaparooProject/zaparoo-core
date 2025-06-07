@@ -386,7 +386,7 @@ preprocessing:
 			log.Info().Msg("token was removed")
 
 			onRemoveScript := cfg.ReadersScan().OnRemove
-			if onRemoveScript != "" {
+			if cfg.HoldModeEnabled() && onRemoveScript != "" {
 				log.Info().Msgf("running on_remove script: %s", onRemoveScript)
 				plsc := playlists.PlaylistController{
 					Active: st.GetActivePlaylist(),
