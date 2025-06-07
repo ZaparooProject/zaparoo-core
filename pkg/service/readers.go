@@ -196,24 +196,6 @@ func timedExit(
 			return
 		}
 
-		// on_remove hook script runs even if no media active
-		onRemoveScript := cfg.ReadersScan().OnRemove
-		if onRemoveScript != "" {
-			log.Info().Msgf("running on_remove script: %s", onRemoveScript)
-			plsc := playlists.PlaylistController{
-				Active: st.GetActivePlaylist(),
-				Queue:  plq,
-			}
-			t := tokens.Token{
-				ScanTime: time.Now(),
-				Text:     onRemoveScript,
-			}
-			err := runToken(pl, cfg, t, db, lsq, plsc)
-			if err != nil {
-				log.Error().Msgf("error running on_remove script: %s", err)
-			}
-		}
-
 		activeMedia := st.ActiveMedia()
 		if activeMedia == nil {
 			log.Debug().Msg("no active media, cancelling exit")
@@ -390,6 +372,24 @@ preprocessing:
 			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")
+
+			onRemoveScript := cfg.ReadersScan().OnRemove
+			if onRemoveScript != "" {
+				log.Info().Msgf("running on_remove script: %s", onRemoveScript)
+				plsc := playlists.PlaylistController{
+					Active: st.GetActivePlaylist(),
+					Queue:  plq,
+				}
+				t := tokens.Token{
+					ScanTime: time.Now(),
+					Text:     onRemoveScript,
+				}
+				err := runToken(pl, cfg, t, db, lsq, plsc)
+				if err != nil {
+					log.Error().Msgf("error running on_remove script: %s", err)
+				}
+			}
+
 			st.SetActiveCard(tokens.Token{})
 			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 		}
