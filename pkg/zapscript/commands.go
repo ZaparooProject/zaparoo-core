@@ -63,6 +63,7 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdExecute: cmdExecute,
 	models.ZapScriptCmdDelay:   cmdDelay,
 	models.ZapScriptCmdStop:    cmdStop,
+	models.ZapScriptCmdEcho:    cmdEcho,
 
 	models.ZapScriptCmdMisterINI:    forwardCmd,
 	models.ZapScriptCmdMisterCore:   forwardCmd,
@@ -95,7 +96,6 @@ func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 // Check all games folders for a relative path to a file
 func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string, error) {
-	// TODO: can do basic file exists check here too
 	if filepath.IsAbs(path) {
 		return path, nil
 	}
@@ -213,7 +213,7 @@ func RunCommand(
 		}
 
 		if f, ok := cmdMap[cmd]; ok {
-			log.Info().Msgf("launching command: %s", cmd)
+			log.Info().Msgf("running command: %s", cmd)
 			res, err := f(pl, env)
 
 			if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {

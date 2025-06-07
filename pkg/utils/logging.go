@@ -1,10 +1,13 @@
 package utils
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/pkgerrors"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog/log"
@@ -26,6 +29,8 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	if len(writers) > 0 {
 		logWriters = append(logWriters, writers...)
 	}
+
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
 	log.Logger = log.Output(io.MultiWriter(logWriters...))
 

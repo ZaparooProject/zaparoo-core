@@ -21,6 +21,7 @@ const (
 	ZapScriptCmdDelay    = "delay"
 	ZapScriptCmdEvaluate = "evaluate"
 	ZapScriptCmdStop     = "stop"
+	ZapScriptCmdEcho     = "echo"
 
 	ZapScriptCmdMisterINI    = "mister.ini"
 	ZapScriptCmdMisterCore   = "mister.core"
