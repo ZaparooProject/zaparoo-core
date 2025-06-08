@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -51,6 +52,8 @@ type ReadersScan struct {
 	Mode         string   `toml:"mode"`
 	ExitDelay    float32  `toml:"exit_delay,omitempty"`
 	IgnoreSystem []string `toml:"ignore_system,omitempty"`
+	OnScan       string   `toml:"on_scan,omitempty"`
+	OnRemove     string   `toml:"on_remove,omitempty"`
 }
 
 type ReadersConnect struct {
@@ -335,6 +338,16 @@ func (c *Instance) ReadersScan() ReadersScan {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Readers.Scan
+}
+
+func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var blocklist []string
+	for _, v := range c.vals.Readers.Scan.IgnoreSystem {
+		blocklist = append(blocklist, strings.ToLower(v))
+	}
+	return slices.Contains(blocklist, strings.ToLower(systemID))
 }
 
 func (c *Instance) TapModeEnabled() bool {

@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
@@ -137,7 +138,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				continue
 			}
 
-			log.Debug().Msgf("target: %s", tgt.Uid)
+			//log.Debug().Msgf("target: %s", tgt.Uid)
 
 			errCount = 0
 			zeroScans = 0

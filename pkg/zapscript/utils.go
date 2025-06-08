@@ -12,6 +12,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
+func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	log.Info().Msg(env.Args)
+	return platforms.CmdResult{}, nil
+}
+
 func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg("stopping media")
 	return platforms.CmdResult{
@@ -42,6 +47,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// very basic support for treating quoted strings as a single field
 	// probably needs to be expanded to include single quotes and
 	// escaped characters
+	// TODO: this probably doesn't work on windows?
 	sb := &strings.Builder{}
 	quoted := false
 	var tokenArgs []string

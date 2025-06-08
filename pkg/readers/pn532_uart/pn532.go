@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -257,7 +258,7 @@ retry:
 	// get frame data
 	off++
 
-	log.Debug().Msgf("received frame data: %x", buf[off:off+frameLen-1])
+	// log.Debug().Msgf("received frame data: %x", buf[off:off+frameLen-1])
 
 	// return data part of frame
 	data := make([]byte, frameLen-1)
