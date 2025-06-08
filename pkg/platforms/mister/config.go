@@ -3,22 +3,24 @@
 package mister
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"os"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 )
 
 const (
+	SDRootDir          = "/media/fat"
 	TempDir            = "/tmp/zaparoo"
-	LegacyMappingsPath = "/media/fat/nfc.csv"
+	LegacyMappingsPath = SDRootDir + "/nfc.csv"
 	TokenReadFile      = "/tmp/TOKENREAD"
-	DataDir            = "/media/fat/zaparoo"
+	DataDir            = SDRootDir + "/zaparoo"
 	ArcadeDbUrl        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
-	ScriptsDir         = "/media/fat/Scripts"
+	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
-	LinuxDir           = "/media/fat/linux"
+	LinuxDir           = SDRootDir + "/linux"
 	MainPickerDir      = "/tmp/PICKERITEMS"
 	MainPickerSelected = "/tmp/PICKERSELECTED"
 	MainFeaturesFile   = "/tmp/MAINFEATURES"
