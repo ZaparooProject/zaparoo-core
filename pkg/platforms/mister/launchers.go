@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build !windows
 
 package mister
 
@@ -113,7 +113,21 @@ func launchSinden(
 		path = checkInZip(path)
 
 		sn := *s
-		sn.Rbf = "_Sinden/" + rbfName + "_Sinden"
+
+		newRBF := "Light Gun/" + rbfName + "-Sinden"
+		oldRBF := "_Sinden/" + rbfName + "_Sinden"
+
+		newMatches, err := filepath.Glob(filepath.Join(SDRootDir, newRBF) + "*")
+		if err != nil {
+			log.Debug().Err(err).Msg("error checking for new Sinden RBF")
+		}
+		if len(newMatches) > 0 {
+			sn.Rbf = newRBF
+		} else {
+			// just fallback on trying the old path
+			sn.Rbf = oldRBF
+		}
+
 		sn.SetName = rbfName + "_Sinden"
 		sn.SetNameSameDir = true
 
