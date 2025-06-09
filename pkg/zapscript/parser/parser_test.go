@@ -1,0 +1,123 @@
+package parser_test
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
+	"github.com/google/go-cmp/cmp"
+)
+
+func TestParse(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    parser.Script
+		wantErr error
+	}{
+		{
+			name:  "single command with no args",
+			input: `**hello`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "hello"},
+				},
+			},
+		},
+		{
+			name:  "multiple commands with no args",
+			input: `**hello||**goodbye||**world`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "hello"},
+					{Name: "goodbye"},
+					{Name: "world"},
+				},
+			},
+		},
+		{
+			name:  "single command with args",
+			input: `**greet:hi,there`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "greet", Args: []string{"hi", "there"}},
+				},
+			},
+		},
+		{
+			name:  "two commands separated",
+			input: `**first:1,2||**second:3,4`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "first", Args: []string{"1", "2"}},
+					{Name: "second", Args: []string{"3", "4"}},
+				},
+			},
+		},
+		{
+			name:  "whitespace is ignored",
+			input: `  **trim:  a , b `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "trim", Args: []string{"  a ", " b "}},
+				},
+			},
+		},
+		{
+			name:    "missing command name",
+			input:   `**:x,y`,
+			wantErr: parser.ErrEmptyCmdName,
+		},
+		{
+			name:    "invalid character in command name",
+			input:   `**he@llo`,
+			wantErr: parser.ErrInvalidCmdName,
+		},
+		{
+			name:    "unexpected EOF after asterisk",
+			input:   `*`,
+			wantErr: parser.ErrUnexpectedEOF,
+		},
+		{
+			name:  "command with trailing ||",
+			input: `**cmd:1,2||`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cmd", Args: []string{"1", "2"}},
+				},
+			},
+		},
+		{
+			name:  "command with colon but no args",
+			input: `**doit:`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "doit"},
+				},
+			},
+		},
+		{
+			name:  "command with single argument",
+			input: `**run:onlyone`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "run", Args: []string{"onlyone"}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := parser.NewScriptReader(tt.input)
+			got, err := p.Parse()
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Parse() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("Parse() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
