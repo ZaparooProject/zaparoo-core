@@ -105,6 +105,71 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "command with escaped args 1",
+			input: `**test.escaped:one\,two`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test.escaped", Args: []string{`one,two`}},
+				},
+			},
+		},
+		{
+			name:  "command with escaped args 2",
+			input: `**test.escaped:one\,two,th\|ree\|`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test.escaped", Args: []string{`one,two`, `th|ree|`}},
+				},
+			},
+		},
+		{
+			name:  "command with escaped args 3",
+			input: `**test.escaped:one\\,two,a\\\\b`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test.escaped", Args: []string{`one\`, `two`, `a\\b`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch 1",
+			input: `DOS/some/game/to/play.iso`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`DOS/some/game/to/play.iso`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch 2",
+			input: `/media/fat/games/DOS/some/game/to/play.iso`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`/media/fat/games/DOS/some/game/to/play.iso`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch 3",
+			input: `C:\game\to\to\play.iso`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\game\to\to\play.iso`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch multi 1",
+			input: `C:\game\to\to\play.iso||**http.get:https://google.com/||MegaDrive/something.bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\game\to\to\play.iso`}},
+					{Name: "http.get", Args: []string{`https://google.com/`}},
+					{Name: "launch", Args: []string{`MegaDrive/something.bin`}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

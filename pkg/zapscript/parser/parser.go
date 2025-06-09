@@ -6,13 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"unicode/utf8"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 )
 
 var (
 	ErrUnexpectedEOF  = errors.New("unexpected end of file")
 	ErrInvalidCmdName = errors.New("invalid characters in command name")
 	ErrEmptyCmdName   = errors.New("command name is empty")
+	ErrEmptyZapScript = errors.New("zap script is empty")
 )
 
 type Command struct {
@@ -111,6 +115,31 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 	return true, nil
 }
 
+func (sr *ScriptReader) parseGenericLaunchArg() (string, error) {
+	arg := ""
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return arg, err
+		} else if ch == eof {
+			// an eof is effectively the same as || here
+			break
+		}
+
+		eoc, err := sr.checkEndOfCmd(ch)
+		if err != nil {
+			return arg, err
+		} else if eoc {
+			break
+		}
+
+		arg = arg + string(ch)
+	}
+
+	return arg, nil
+}
+
 func (sr *ScriptReader) parseArgs() ([]string, error) {
 	args := make([]string, 0)
 	currentArg := ""
@@ -124,15 +153,28 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			break
 		}
 
-		//if ch == '\\' {
-		//	// escaping next character
-		//	next, _, err := reader.ReadRune()
-		//	if errors.Is(err, io.EOF) {
-		//		break
-		//	} else if err != nil {
-		//		return []string{}, err
-		//	}
-		//}
+		if ch == '\\' {
+			// escaping next character
+			next, err := sr.read()
+			if err != nil {
+				return args, err
+			} else if next == eof {
+				break
+			}
+
+			if slices.Contains(
+				[]rune{'\\', ',', '|', '?', '"'},
+				next,
+			) {
+				// insert escaped char are continue
+				currentArg = currentArg + string(next)
+				continue
+			} else {
+				// insert literal \<char> and continue
+				currentArg = currentArg + "\\" + string(next)
+				continue
+			}
+		}
 
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
@@ -196,9 +238,11 @@ func (sr *ScriptReader) parseCommand() (Command, error) {
 			break
 		} else {
 			// might be a launch cmd
-			err := sr.unread()
-			if err != nil {
-				return cmd, err
+			for i := 0; i < len(cmd.Name)+1; i++ {
+				err := sr.unread()
+				if err != nil {
+					return cmd, err
+				}
 			}
 			return cmd, ErrInvalidCmdName
 		}
@@ -222,15 +266,12 @@ func (sr *ScriptReader) Parse() (Script, error) {
 			break
 		}
 
-		// TODO: newlines should count as a end cmd?
-		// TODO: support escaping *
-
 		if isWhitespace(ch) {
 			continue
 		} else if ch == '*' {
 			next, err := sr.peek()
 			if err != nil {
-				return script, err
+				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
 			}
 
 			if next == eof {
@@ -238,19 +279,63 @@ func (sr *ScriptReader) Parse() (Script, error) {
 			} else if next == '*' {
 				err := sr.skip()
 				if err != nil {
-					return script, err
+					return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
 				}
 			}
 
 			cmd, err := sr.parseCommand()
-			if err != nil {
-				return script, err
+			if errors.Is(err, ErrInvalidCmdName) {
+				// assume it's actually a generic launch cmd
+				arg, err := sr.parseGenericLaunchArg()
+				if err != nil {
+					return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+				}
+
+				if arg == "" {
+					continue
+				}
+
+				cmd := Command{
+					Name: models.ZapScriptCmdLaunch,
+					Args: []string{arg},
+				}
+
+				script.Cmds = append(script.Cmds, cmd)
+			} else if err != nil {
+				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
 			} else {
 				script.Cmds = append(script.Cmds, cmd)
 			}
+
+			continue
 		} else {
-			// TODO: is a launch command
+			err := sr.unread()
+			if err != nil {
+				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+			}
+
+			arg, err := sr.parseGenericLaunchArg()
+			if err != nil {
+				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+			}
+
+			if arg == "" {
+				continue
+			}
+
+			cmd := Command{
+				Name: models.ZapScriptCmdLaunch,
+				Args: []string{arg},
+			}
+
+			script.Cmds = append(script.Cmds, cmd)
+
+			continue
 		}
+	}
+
+	if len(script.Cmds) == 0 {
+		return script, ErrEmptyZapScript
 	}
 
 	return script, nil
