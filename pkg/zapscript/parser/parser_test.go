@@ -55,11 +55,38 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:  "whitespace is ignored",
+			name:  "whitespace is trimmed in args 1",
 			input: `  **trim:  a , b `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "trim", Args: []string{"  a ", " b "}},
+					{Name: "trim", Args: []string{"a", "b"}},
+				},
+			},
+		},
+		{
+			name:  "whitespace is trimmed in args 2",
+			input: `  **trim:  a , b ,,   `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "trim", Args: []string{"a", "b", "", ""}},
+				},
+			},
+		},
+		{
+			name:  "whitespace is trimmed in args 3",
+			input: `  **trim:a, b,,`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "trim", Args: []string{"a", "b", "", ""}},
+				},
+			},
+		},
+		{
+			name:  "whitespace is trimmed in args 4",
+			input: `  **trim:`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "trim", Args: []string{""}},
 				},
 			},
 		},
@@ -96,7 +123,7 @@ func TestParse(t *testing.T) {
 			input: `**doit:`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "doit"},
+					{Name: "doit", Args: []string{""}},
 				},
 			},
 		},
@@ -256,6 +283,143 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "env", AdvArgs: map[string]string{"debug": "1", "trace": "0"}},
+				},
+			},
+		},
+		{
+			name:  "adv arg missing equals sign (ignored value)",
+			input: `**conf:dev?debug`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "conf", Args: []string{"dev"}, AdvArgs: map[string]string{"debug": ""}},
+				},
+			},
+		},
+		{
+			name:  "adv arg with equals but no key (empty key)",
+			input: `**bad:input?=oops`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "bad", Args: []string{"input"}, AdvArgs: nil},
+				},
+			},
+		},
+		{
+			name:  "adv arg with multiple equals signs",
+			input: `**env:prod?path=/bin:/usr/bin&cfg=foo=bar`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "env", Args: []string{"prod"}, AdvArgs: map[string]string{
+						"path": "/bin:/usr/bin",
+						"cfg":  "foo=bar",
+					}},
+				},
+			},
+		},
+		{
+			name:  "adv arg ends with ampersand",
+			input: `**launch?devmode=on&`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", AdvArgs: map[string]string{
+						"devmode": "on",
+					}},
+				},
+			},
+		},
+		{
+			name:  "adv arg starts with ampersand",
+			input: `**boot?&init=1`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "boot", AdvArgs: map[string]string{
+						"init": "1",
+					}},
+				},
+			},
+		},
+		{
+			name:  "escaped equals sign in value",
+			input: `**cfg:file.cfg?env=dev\=beta`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", Args: []string{"file.cfg"}, AdvArgs: map[string]string{
+						"env": "dev=beta",
+					}},
+				},
+			},
+		},
+		{
+			name:  "escaped ampersand in middle of value",
+			input: `**test:yes?data=foo\&bar\&baz`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test", Args: []string{"yes"}, AdvArgs: map[string]string{
+						"data": "foo&bar&baz",
+					}},
+				},
+			},
+		},
+		{
+			name:  "escaped backslash before special",
+			input: `**safe:ok?path=c:\\windows\\system32`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "safe", Args: []string{"ok"}, AdvArgs: map[string]string{
+						"path": `c:\windows\system32`,
+					}},
+				},
+			},
+		},
+		{
+			name:  "invalid spacing before ? triggers fallback",
+			input: `**opt ? a = b & c = d `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{"**opt ? a = b & c = d "}},
+				},
+			},
+		},
+		{
+			name:  "only advanced args with weird spacing 2",
+			input: `**opt? a = b & c = d `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "opt", AdvArgs: map[string]string{
+						"a": "b",
+						"c": "d",
+					}},
+				},
+			},
+		},
+		{
+			name:  "empty adv args section (just ?)",
+			input: `**nada?`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "nada"},
+				},
+			},
+		},
+		{
+			name:  "adv args terminated early with ||",
+			input: `**snap?mode=auto||**zap`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "snap", AdvArgs: map[string]string{"mode": "auto"}},
+					{Name: "zap"},
+				},
+			},
+		},
+		{
+			name:  "multiple commands with messy syntax",
+			input: `**alpha:one,two?x=1&y=2||**beta?z=9 `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "alpha", Args: []string{"one", "two"}, AdvArgs: map[string]string{
+						"x": "1", "y": "2",
+					}},
+					{Name: "beta", AdvArgs: map[string]string{"z": "9"}},
 				},
 			},
 		},

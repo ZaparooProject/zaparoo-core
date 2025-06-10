@@ -135,7 +135,11 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	currentValue := ""
 
 	storeArg := func() {
-		advArgs[currentArg] = currentValue
+		if currentArg != "" {
+			currentArg = strings.TrimSpace(currentArg)
+			currentValue = strings.TrimSpace(currentValue)
+			advArgs[currentArg] = currentValue
+		}
 		currentArg = ""
 		currentValue = ""
 	}
@@ -189,30 +193,25 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			break
 		}
 
-		if inValue {
-			if ch == SymAdvArgSep {
-				storeArg()
-				inValue = false
-				continue
-			} else {
-				currentValue = currentValue + string(ch)
-				continue
-			}
+		if ch == SymAdvArgSep {
+			storeArg()
+			inValue = false
+			continue
+		} else if ch == SymAdvArgEq && !inValue {
+			inValue = true
+			continue
+		}
 
+		if inValue {
+			currentValue = currentValue + string(ch)
+			continue
 		} else {
-			if ch == SymAdvArgEq {
-				inValue = true
-				continue
-			} else {
-				currentArg = currentArg + string(ch)
-				continue
-			}
+			currentArg = currentArg + string(ch)
+			continue
 		}
 	}
 
-	if inValue {
-		storeArg()
-	}
+	storeArg()
 
 	return advArgs, nil
 }
@@ -241,7 +240,7 @@ func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, error) {
 	return arg, nil
 }
 
-func (sr *ScriptReader) parseArgs() ([]string, map[string]string, error) {
+func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string, error) {
 	args := make([]string, 0)
 	advArgs := make(map[string]string)
 	currentArg := ""
@@ -289,6 +288,7 @@ func (sr *ScriptReader) parseArgs() ([]string, map[string]string, error) {
 
 		if ch == SymArgSep {
 			// new argument
+			currentArg = strings.TrimSpace(currentArg)
 			args = append(args, currentArg)
 			currentArg = ""
 			continue
@@ -308,7 +308,9 @@ func (sr *ScriptReader) parseArgs() ([]string, map[string]string, error) {
 		}
 	}
 
-	if currentArg != "" {
+	if !onlyAdvArgs {
+		// if a cmd was called with ":" it will always have at least 1 blank arg
+		currentArg = strings.TrimSpace(currentArg)
 		args = append(args, currentArg)
 	}
 
@@ -344,15 +346,17 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 				break
 			}
 
+			onlyAdvArgs := false
 			if ch == SymAdvArgStart {
 				// roll it back to trigger adv arg parsing in parseArgs
 				err := sr.unread()
 				if err != nil {
 					return cmd, string(buf), err
 				}
+				onlyAdvArgs = true
 			}
 
-			args, advArgs, err := sr.parseArgs()
+			args, advArgs, err := sr.parseArgs(onlyAdvArgs)
 			if err != nil {
 				return cmd, string(buf), err
 			}
