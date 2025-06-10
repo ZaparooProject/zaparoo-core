@@ -69,9 +69,13 @@ func TestParse(t *testing.T) {
 			wantErr: parser.ErrEmptyCmdName,
 		},
 		{
-			name:    "invalid character in command name",
-			input:   `**he@llo`,
-			wantErr: parser.ErrInvalidCmdName,
+			name:  "invalid character in command name",
+			input: `**he@llo`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`**he@llo`}},
+				},
+			},
 		},
 		{
 			name:    "unexpected EOF after asterisk",

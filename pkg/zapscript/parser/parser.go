@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
@@ -127,15 +128,69 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 	return true, nil
 }
 
-func (sr *ScriptReader) parseGenericLaunchArg() (string, error) {
-	arg := ""
+func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
+	advArgs := make(map[string]string)
+	inValue := false
+	currentArg := ""
+	currentValue := ""
+
+	storeArg := func() {
+		advArgs[currentArg] = currentValue
+		currentArg = ""
+		currentValue = ""
+	}
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return advArgs, err
+		} else if ch == eof {
+			break
+		}
+
+		eoc, err := sr.checkEndOfCmd(ch)
+		if err != nil {
+			return advArgs, err
+		} else if eoc {
+			break
+		}
+
+		if inValue {
+			if ch == SymAdvArgSep {
+				storeArg()
+				inValue = false
+				continue
+			} else {
+				currentValue = currentValue + string(ch)
+				continue
+			}
+
+		} else {
+			if ch == SymAdvArgEq {
+				inValue = true
+				continue
+			} else {
+				currentArg = currentArg + string(ch)
+				continue
+			}
+		}
+	}
+
+	if inValue {
+		storeArg()
+	}
+
+	return advArgs, nil
+}
+
+func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, error) {
+	arg := prefix + ""
 
 	for {
 		ch, err := sr.read()
 		if err != nil {
 			return arg, err
 		} else if ch == eof {
-			// an eof is effectively the same as || here
 			break
 		}
 
@@ -152,16 +207,16 @@ func (sr *ScriptReader) parseGenericLaunchArg() (string, error) {
 	return arg, nil
 }
 
-func (sr *ScriptReader) parseArgs() ([]string, error) {
+func (sr *ScriptReader) parseArgs() ([]string, map[string]string, error) {
 	args := make([]string, 0)
+	advArgs := make(map[string]string)
 	currentArg := ""
 
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return args, err
+			return args, advArgs, err
 		} else if ch == eof {
-			// an eof is effectively the same as || here
 			break
 		}
 
@@ -169,7 +224,7 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			// escaping next character
 			next, err := sr.read()
 			if err != nil {
-				return args, err
+				return args, advArgs, err
 			} else if next == eof {
 				break
 			}
@@ -193,7 +248,7 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
-			return args, err
+			return args, advArgs, err
 		} else if eoc {
 			break
 		}
@@ -203,6 +258,16 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			args = append(args, currentArg)
 			currentArg = ""
 			continue
+		} else if ch == SymAdvArgStart {
+			newAdvArgs, err := sr.parseAdvArgs()
+			if err != nil {
+				return args, advArgs, err
+			}
+
+			advArgs = newAdvArgs
+
+			// advanced args are always the last part of a command
+			return args, advArgs, nil
 		} else {
 			currentArg = currentArg + string(ch)
 			continue
@@ -213,24 +278,26 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 		args = append(args, currentArg)
 	}
 
-	return args, nil
+	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseCommand() (Command, error) {
+func (sr *ScriptReader) parseCommand() (Command, string, error) {
 	cmd := Command{}
+	var buf []rune
 
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return cmd, err
+			return cmd, "", err
 		} else if ch == eof {
-			// an eof is effectively the same as || here
 			break
 		}
 
+		buf = append(buf, ch)
+
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
-			return cmd, err
+			return cmd, "", err
 		} else if eoc {
 			break
 		}
@@ -243,31 +310,33 @@ func (sr *ScriptReader) parseCommand() (Command, error) {
 				break
 			}
 
-			args, err := sr.parseArgs()
+			args, advArgs, err := sr.parseArgs()
 			if err != nil {
-				return cmd, err
-			} else if len(args) > 0 {
+				return cmd, "", err
+			}
+
+			if len(args) > 0 {
 				cmd.Args = args
+			}
+
+			if len(advArgs) > 0 {
+				cmd.AdvArgs = advArgs
 			}
 
 			break
 		} else {
 			// might be a launch cmd
-			for i := 0; i < len(cmd.Name)+1; i++ {
-				err := sr.unread()
-				if err != nil {
-					return cmd, err
-				}
-			}
-			return cmd, ErrInvalidCmdName
+			return cmd, string(buf), ErrInvalidCmdName
 		}
 	}
 
 	if cmd.Name == "" {
-		return cmd, ErrEmptyCmdName
+		return cmd, "", ErrEmptyCmdName
 	}
 
-	return cmd, nil
+	cmd.Name = strings.ToLower(cmd.Name)
+
+	return cmd, "", nil
 }
 
 func (sr *ScriptReader) Parse() (Script, error) {
@@ -277,8 +346,8 @@ func (sr *ScriptReader) Parse() (Script, error) {
 		return fmt.Errorf("parse error at %d: %w", sr.pos, err)
 	}
 
-	parseGenericLaunchCmd := func() error {
-		arg, err := sr.parseGenericLaunchArg()
+	parseGenericLaunchCmd := func(prefix string) error {
+		arg, err := sr.parseGenericLaunchArg(prefix)
 		if err != nil {
 			return fmt.Errorf("parse error at %d: %w", sr.pos, err)
 		}
@@ -303,6 +372,7 @@ func (sr *ScriptReader) Parse() (Script, error) {
 		if isWhitespace(ch) {
 			continue
 		} else if ch == SymCmdStart {
+			pre := "*"
 			next, err := sr.peek()
 			if err != nil {
 				return script, parseErr(err)
@@ -311,16 +381,17 @@ func (sr *ScriptReader) Parse() (Script, error) {
 			if next == eof {
 				return script, ErrUnexpectedEOF
 			} else if next == SymCmdStart {
+				pre = "**"
 				err := sr.skip()
 				if err != nil {
 					return script, parseErr(err)
 				}
 			}
 
-			cmd, err := sr.parseCommand()
+			cmd, buf, err := sr.parseCommand()
 			if errors.Is(err, ErrInvalidCmdName) {
 				// assume it's actually a generic launch cmd
-				err := parseGenericLaunchCmd()
+				err := parseGenericLaunchCmd(pre + buf)
 				if err != nil {
 					return script, parseErr(err)
 				}
@@ -337,7 +408,7 @@ func (sr *ScriptReader) Parse() (Script, error) {
 				return script, parseErr(err)
 			}
 
-			err = parseGenericLaunchCmd()
+			err = parseGenericLaunchCmd("")
 			if err != nil {
 				return script, parseErr(err)
 			}
