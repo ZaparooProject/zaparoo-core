@@ -519,6 +519,119 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "single quoted arg",
+			input: `**say:"hello, world"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "say", Args: []string{"hello, world"}},
+				},
+			},
+		},
+		{
+			name:  "multiple quoted args",
+			input: `**msg:"hello, world","123"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "msg", Args: []string{"hello, world", "123"}},
+				},
+			},
+		},
+		{
+			name:  "quoted with internal escaped quote",
+			input: `**echo:"she said \"hello\""`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "echo", Args: []string{`she said "hello"`}},
+				},
+			},
+		},
+		{
+			name:  "quoted arg with escaped backslash",
+			input: `**path:"C:\\Games\\Test"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "path", Args: []string{`C:\Games\Test`}},
+				},
+			},
+		},
+		{
+			name:  "quoted arg with unescaped backslash",
+			input: `**path:"C:\Games\Test"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "path", Args: []string{`C:\Games\Test`}},
+				},
+			},
+		},
+		{
+			name:  "quoted arg followed by unquoted",
+			input: `**mix:"hello, world",next`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mix", Args: []string{"hello, world", "next"}},
+				},
+			},
+		},
+		{
+			name:    "unmatched quote in arg",
+			input:   `**fail:"unterminated`,
+			wantErr: parser.ErrUnmatchedQuote,
+		},
+		{
+			name:  "quoted arg with adv arg",
+			input: `**cmd:"hello, world"?env=prod`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cmd", Args: []string{"hello, world"}, AdvArgs: map[string]string{"env": "prod"}},
+				},
+			},
+		},
+		{
+			name:  "quoted key in adv args",
+			input: `**cfg?env="prod build"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", AdvArgs: map[string]string{"env": "prod build"}},
+				},
+			},
+		},
+		{
+			name:  "quoted val in adv args with escaped quote",
+			input: `**cfg?note="he said \"hello\""`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", AdvArgs: map[string]string{"note": `he said "hello"`}},
+				},
+			},
+		},
+		{
+			name:  "quoted generic launch path",
+			input: `"MegaDrive/games/abc,def.bin"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`MegaDrive/games/abc,def.bin`}},
+				},
+			},
+		},
+		{
+			name:  "quoted generic launch path with adv args",
+			input: `"DOS/Games/test,123.iso"?lang=en`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`DOS/Games/test,123.iso`}, AdvArgs: map[string]string{"lang": "en"}},
+				},
+			},
+		},
+		{
+			name:  "escaped and quoted together",
+			input: `**weird:"hello\, world",foo\|bar`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "weird", Args: []string{"hello\\, world", "foo|bar"}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

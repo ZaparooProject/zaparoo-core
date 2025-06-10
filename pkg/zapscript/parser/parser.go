@@ -17,7 +17,8 @@ var (
 	ErrUnexpectedEOF  = errors.New("unexpected end of file")
 	ErrInvalidCmdName = errors.New("invalid characters in command name")
 	ErrEmptyCmdName   = errors.New("command name is empty")
-	ErrEmptyZapScript = errors.New("zap script is empty")
+	ErrEmptyZapScript = errors.New("script is empty")
+	ErrUnmatchedQuote = errors.New("unmatched quote")
 )
 
 const (
@@ -30,6 +31,13 @@ const (
 	SymAdvArgStart = '?'
 	SymAdvArgSep   = '&'
 	SymAdvArgEq    = '='
+)
+
+var (
+	QuoteEscape         = []rune{SymEscapeSeq, SymArgQuote}
+	GenericLaunchEscape = []rune{SymEscapeSeq, SymCmdSep, SymAdvArgStart, SymArgQuote}
+	ArgsEscape          = []rune{SymEscapeSeq, SymCmdSep, SymArgSep, SymAdvArgStart, SymArgQuote}
+	AdvArgsEscape       = []rune{SymEscapeSeq, SymCmdSep, SymAdvArgSep, SymAdvArgEq, SymArgQuote}
 )
 
 type Command struct {
@@ -128,11 +136,53 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 	return true, nil
 }
 
+func (sr *ScriptReader) parseQuotedArg() (string, error) {
+	arg := ""
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return arg, err
+		} else if ch == eof {
+			return arg, ErrUnmatchedQuote
+		}
+
+		if ch == SymEscapeSeq {
+			// escaping next character
+			next, err := sr.read()
+			if err != nil {
+				return arg, err
+			} else if next == eof {
+				return arg, ErrUnmatchedQuote
+			}
+
+			if slices.Contains(QuoteEscape, next) {
+				// insert escaped char and continue
+				arg = arg + string(next)
+				continue
+			} else {
+				// insert literal \<char> and continue
+				arg = arg + string(SymEscapeSeq) + string(next)
+				continue
+			}
+		}
+
+		if ch == SymArgQuote {
+			break
+		}
+
+		arg = arg + string(ch)
+	}
+
+	return arg, nil
+}
+
 func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	advArgs := make(map[string]string)
 	inValue := false
 	currentArg := ""
 	currentValue := ""
+	valueStart := int64(-1)
 
 	storeArg := func() {
 		if currentArg != "" {
@@ -151,7 +201,14 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			break
 		}
 
-		if ch == SymEscapeSeq {
+		if inValue && ch == SymArgQuote && valueStart == sr.pos-1 {
+			quotedValue, err := sr.parseQuotedArg()
+			if err != nil {
+				return advArgs, err
+			}
+			currentValue = quotedValue
+			continue
+		} else if ch == SymEscapeSeq {
 			// escaping next character
 			next, err := sr.read()
 			if err != nil {
@@ -165,13 +222,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 				break
 			}
 
-			if slices.Contains(
-				[]rune{
-					SymEscapeSeq, SymCmdSep,
-					SymAdvArgSep, SymAdvArgEq,
-				},
-				next,
-			) {
+			if slices.Contains(AdvArgsEscape, next) {
 				// insert escaped char and continue
 				if inValue {
 					currentValue = currentValue + string(next)
@@ -202,6 +253,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			inValue = false
 			continue
 		} else if ch == SymAdvArgEq && !inValue {
+			valueStart = sr.pos
 			inValue = true
 			continue
 		}
@@ -223,6 +275,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, map[string]string, error) {
 	arg := prefix + ""
 	advArgs := make(map[string]string)
+	argStart := sr.pos
 
 	for {
 		ch, err := sr.read()
@@ -232,7 +285,14 @@ func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, map[string
 			break
 		}
 
-		if ch == SymEscapeSeq {
+		if argStart == sr.pos-1 && ch == SymArgQuote {
+			quotedArg, err := sr.parseQuotedArg()
+			if err != nil {
+				return arg, advArgs, err
+			}
+			arg = quotedArg
+			continue
+		} else if ch == SymEscapeSeq {
 			// escaping next character
 			next, err := sr.read()
 			if err != nil {
@@ -242,10 +302,7 @@ func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, map[string
 				break
 			}
 
-			if slices.Contains(
-				[]rune{SymEscapeSeq, SymAdvArgStart, SymCmdSep},
-				next,
-			) {
+			if slices.Contains(GenericLaunchEscape, next) {
 				// insert escaped char and continue
 				arg = arg + string(next)
 				continue
@@ -285,6 +342,7 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 	args := make([]string, 0)
 	advArgs := make(map[string]string)
 	currentArg := ""
+	argStart := sr.pos
 
 	for {
 		ch, err := sr.read()
@@ -294,7 +352,14 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 			break
 		}
 
-		if ch == SymEscapeSeq {
+		if argStart == sr.pos-1 && ch == SymArgQuote {
+			quotedArg, err := sr.parseQuotedArg()
+			if err != nil {
+				return args, advArgs, err
+			}
+			currentArg = quotedArg
+			continue
+		} else if ch == SymEscapeSeq {
 			// escaping next character
 			next, err := sr.read()
 			if err != nil {
@@ -304,13 +369,7 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 				break
 			}
 
-			if slices.Contains(
-				[]rune{
-					SymEscapeSeq, SymArgSep, SymCmdSep,
-					SymAdvArgStart, SymArgQuote,
-				},
-				next,
-			) {
+			if slices.Contains(ArgsEscape, next) {
 				// insert escaped char and continue
 				currentArg = currentArg + string(next)
 				continue
@@ -333,6 +392,7 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 			currentArg = strings.TrimSpace(currentArg)
 			args = append(args, currentArg)
 			currentArg = ""
+			argStart = sr.pos
 			continue
 		} else if ch == SymAdvArgStart {
 			newAdvArgs, err := sr.parseAdvArgs()
@@ -437,7 +497,7 @@ func (sr *ScriptReader) Parse() (Script, error) {
 	parseGenericLaunchCmd := func(prefix string) error {
 		arg, advArgs, err := sr.parseGenericLaunchArg(prefix)
 		if err != nil {
-			return fmt.Errorf("parse error at %d: %w", sr.pos, err)
+			return parseErr(err)
 		}
 		if arg == "" {
 			return nil
