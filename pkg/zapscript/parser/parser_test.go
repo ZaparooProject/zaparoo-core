@@ -632,6 +632,78 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "quoted and escaped mix",
+			input: `**mix:"a\,b",c\,d,e\|f,"g\"h"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mix", Args: []string{"a\\,b", "c,d", "e|f", `g"h`}},
+				},
+			},
+		},
+		{
+			name:  "json-like but not json",
+			input: `**cfg:map:{key=value}?debug=true`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", Args: []string{"map:{key=value}"}, AdvArgs: map[string]string{"debug": "true"}},
+				},
+			},
+		},
+		{
+			name:  "escaped trailing special chars",
+			input: `**data:end\,\|\?\\`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "data", Args: []string{"end,|?\\"}},
+				},
+			},
+		},
+		{
+			name:  "run http.get",
+			input: `**http.get:https://zapa.roo/stuff\?id=5`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.get", Args: []string{`https://zapa.roo/stuff?id=5`}},
+				},
+			},
+		},
+		{
+			name:  "template-ish content",
+			input: `**render:level-[[difficulty]]?fx=true`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "render", Args: []string{"level-[[difficulty]]"}, AdvArgs: map[string]string{"fx": "true"}},
+				},
+			},
+		},
+		{
+			name:  "quoted value with escaped quote and equals",
+			input: `**info?text="he said \"foo=bar\""`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "info", AdvArgs: map[string]string{"text": `he said "foo=bar"`}},
+				},
+			},
+		},
+		{
+			name:  "quoted path with trailing escaped backslash",
+			input: `"C:\\Games\\End\\"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\Games\End\`}},
+				},
+			},
+		},
+		{
+			name:  "adv args with json-like garbage",
+			input: `**launch:game.exe?{bad}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{"{bad}": ""}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
