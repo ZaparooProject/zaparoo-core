@@ -19,6 +19,18 @@ var (
 	ErrEmptyZapScript = errors.New("zap script is empty")
 )
 
+const (
+	SymCmdStart    = '*'
+	SymCmdSep      = '|'
+	SymEscapeSeq   = '\\'
+	SymArgStart    = ':'
+	SymArgSep      = ','
+	SymArgQuote    = '"'
+	SymAdvArgStart = '?'
+	SymAdvArgSep   = '&'
+	SymAdvArgEq    = '='
+)
+
 type Command struct {
 	Name    string
 	Args    []string
@@ -94,7 +106,7 @@ func (sr *ScriptReader) skip() error {
 }
 
 func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
-	if ch != '|' {
+	if ch != SymCmdSep {
 		return false, nil
 	}
 
@@ -105,7 +117,7 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 
 	if next == eof {
 		return true, nil
-	} else if next == '|' {
+	} else if next == SymCmdSep {
 		err := sr.skip()
 		if err != nil {
 			return false, err
@@ -153,7 +165,7 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			break
 		}
 
-		if ch == '\\' {
+		if ch == SymEscapeSeq {
 			// escaping next character
 			next, err := sr.read()
 			if err != nil {
@@ -163,15 +175,18 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			}
 
 			if slices.Contains(
-				[]rune{'\\', ',', '|', '?', '"'},
+				[]rune{
+					SymEscapeSeq, SymArgSep, SymCmdSep,
+					SymAdvArgStart, SymArgQuote,
+				},
 				next,
 			) {
-				// insert escaped char are continue
+				// insert escaped char and continue
 				currentArg = currentArg + string(next)
 				continue
 			} else {
 				// insert literal \<char> and continue
-				currentArg = currentArg + "\\" + string(next)
+				currentArg = currentArg + string(SymEscapeSeq) + string(next)
 				continue
 			}
 		}
@@ -183,7 +198,7 @@ func (sr *ScriptReader) parseArgs() ([]string, error) {
 			break
 		}
 
-		if ch == ',' {
+		if ch == SymArgSep {
 			// new argument
 			args = append(args, currentArg)
 			currentArg = ""
@@ -222,7 +237,7 @@ func (sr *ScriptReader) parseCommand() (Command, error) {
 
 		if isCmdName(ch) {
 			cmd.Name = cmd.Name + string(ch)
-		} else if ch == ':' {
+		} else if ch == SymArgStart {
 			// parse arguments
 			if cmd.Name == "" {
 				break
@@ -258,6 +273,25 @@ func (sr *ScriptReader) parseCommand() (Command, error) {
 func (sr *ScriptReader) Parse() (Script, error) {
 	script := Script{}
 
+	parseErr := func(err error) error {
+		return fmt.Errorf("parse error at %d: %w", sr.pos, err)
+	}
+
+	parseGenericLaunchCmd := func() error {
+		arg, err := sr.parseGenericLaunchArg()
+		if err != nil {
+			return fmt.Errorf("parse error at %d: %w", sr.pos, err)
+		}
+		if arg == "" {
+			return nil
+		}
+		script.Cmds = append(script.Cmds, Command{
+			Name: models.ZapScriptCmdLaunch,
+			Args: []string{arg},
+		})
+		return nil
+	}
+
 	for {
 		ch, err := sr.read()
 		if err != nil {
@@ -268,41 +302,30 @@ func (sr *ScriptReader) Parse() (Script, error) {
 
 		if isWhitespace(ch) {
 			continue
-		} else if ch == '*' {
+		} else if ch == SymCmdStart {
 			next, err := sr.peek()
 			if err != nil {
-				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+				return script, parseErr(err)
 			}
 
 			if next == eof {
 				return script, ErrUnexpectedEOF
-			} else if next == '*' {
+			} else if next == SymCmdStart {
 				err := sr.skip()
 				if err != nil {
-					return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+					return script, parseErr(err)
 				}
 			}
 
 			cmd, err := sr.parseCommand()
 			if errors.Is(err, ErrInvalidCmdName) {
 				// assume it's actually a generic launch cmd
-				arg, err := sr.parseGenericLaunchArg()
+				err := parseGenericLaunchCmd()
 				if err != nil {
-					return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+					return script, parseErr(err)
 				}
-
-				if arg == "" {
-					continue
-				}
-
-				cmd := Command{
-					Name: models.ZapScriptCmdLaunch,
-					Args: []string{arg},
-				}
-
-				script.Cmds = append(script.Cmds, cmd)
 			} else if err != nil {
-				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+				return script, parseErr(err)
 			} else {
 				script.Cmds = append(script.Cmds, cmd)
 			}
@@ -311,24 +334,13 @@ func (sr *ScriptReader) Parse() (Script, error) {
 		} else {
 			err := sr.unread()
 			if err != nil {
-				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+				return script, parseErr(err)
 			}
 
-			arg, err := sr.parseGenericLaunchArg()
+			err = parseGenericLaunchCmd()
 			if err != nil {
-				return script, fmt.Errorf("parse error at %d: %w", sr.pos, err)
+				return script, parseErr(err)
 			}
-
-			if arg == "" {
-				continue
-			}
-
-			cmd := Command{
-				Name: models.ZapScriptCmdLaunch,
-				Args: []string{arg},
-			}
-
-			script.Cmds = append(script.Cmds, cmd)
 
 			continue
 		}
