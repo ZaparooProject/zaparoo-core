@@ -376,7 +376,10 @@ func TestParse(t *testing.T) {
 			input: `**opt ? a = b & c = d `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"**opt ? a = b & c = d "}},
+					{Name: "launch", Args: []string{"**opt "}, AdvArgs: map[string]string{
+						" a ": "b",
+						" c ": "d",
+					}},
 				},
 			},
 		},
@@ -386,8 +389,8 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "opt", AdvArgs: map[string]string{
-						"a": "b",
-						"c": "d",
+						" a ": "b",
+						" c ": "d",
 					}},
 				},
 			},
@@ -420,6 +423,99 @@ func TestParse(t *testing.T) {
 						"x": "1", "y": "2",
 					}},
 					{Name: "beta", AdvArgs: map[string]string{"z": "9"}},
+				},
+			},
+		},
+		{
+			name:  "arg with dangling backslash at end",
+			input: `**echo:hello\`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "echo", Args: []string{`hello\`}},
+				},
+			},
+		},
+		{
+			name:  "adv arg with invalid escape in key",
+			input: `**cfg?pa\th=/bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", AdvArgs: map[string]string{"pa\\th": "/bin"}},
+				},
+			},
+		},
+		{
+			name:  "adv arg with dangling backslash in value",
+			input: `**cfg?path=C:\bin\`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", AdvArgs: map[string]string{"path": `C:\bin\`}},
+				},
+			},
+		},
+		{
+			name:  "adv arg with final backslash",
+			input: `**log?file=trace\`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "log", AdvArgs: map[string]string{"file": `trace\`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with windows path",
+			input: `C:\games\doom\doom.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\games\doom\doom.exe`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with escaped pipe",
+			input: `MegaDrive\|Game.bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`MegaDrive|Game.bin`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with escaped question mark",
+			input: `launch\?param=value`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`launch?param=value`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with escaped backslashes",
+			input: `path\\with\\ending\\`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`path\with\ending\`}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with url and query params",
+			input: `https://google.com/stuff?some=args&q=something`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`https://google.com/stuff`}, AdvArgs: map[string]string{
+						"some": `args`,
+						"q":    `something`,
+					}},
+				},
+			},
+		},
+		{
+			name:  "generic launch with url and escaped query params",
+			input: `https://google.com/stuff\?some=args&q=something`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`https://google.com/stuff?some=args&q=something`}},
 				},
 			},
 		},

@@ -136,7 +136,6 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 
 	storeArg := func() {
 		if currentArg != "" {
-			currentArg = strings.TrimSpace(currentArg)
 			currentValue = strings.TrimSpace(currentValue)
 			advArgs[currentArg] = currentValue
 		}
@@ -158,6 +157,11 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			if err != nil {
 				return advArgs, err
 			} else if next == eof {
+				if inValue {
+					currentValue = currentValue + string(SymEscapeSeq)
+				} else {
+					currentArg = currentArg + string(SymEscapeSeq)
+				}
 				break
 			}
 
@@ -216,28 +220,65 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	return advArgs, nil
 }
 
-func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, error) {
+func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, map[string]string, error) {
 	arg := prefix + ""
+	advArgs := make(map[string]string)
 
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return arg, err
+			return arg, advArgs, err
 		} else if ch == eof {
 			break
 		}
 
+		if ch == SymEscapeSeq {
+			// escaping next character
+			next, err := sr.read()
+			if err != nil {
+				return arg, advArgs, err
+			} else if next == eof {
+				arg = arg + string(SymEscapeSeq)
+				break
+			}
+
+			if slices.Contains(
+				[]rune{SymEscapeSeq, SymAdvArgStart, SymCmdSep},
+				next,
+			) {
+				// insert escaped char and continue
+				arg = arg + string(next)
+				continue
+			} else {
+				// insert literal \<char> and continue
+				arg = arg + string(SymEscapeSeq) + string(next)
+				continue
+			}
+		}
+
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
-			return arg, err
+			return arg, advArgs, err
 		} else if eoc {
+			break
+		}
+
+		if ch == SymAdvArgStart {
+			newAdvArgs, err := sr.parseAdvArgs()
+			if err != nil {
+				return arg, advArgs, err
+			}
+
+			advArgs = newAdvArgs
+
+			// advanced args are always the last part of a command
 			break
 		}
 
 		arg = arg + string(ch)
 	}
 
-	return arg, nil
+	return arg, advArgs, nil
 }
 
 func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string, error) {
@@ -259,6 +300,7 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 			if err != nil {
 				return args, advArgs, err
 			} else if next == eof {
+				currentArg = currentArg + string(SymEscapeSeq)
 				break
 			}
 
@@ -393,17 +435,21 @@ func (sr *ScriptReader) Parse() (Script, error) {
 	}
 
 	parseGenericLaunchCmd := func(prefix string) error {
-		arg, err := sr.parseGenericLaunchArg(prefix)
+		arg, advArgs, err := sr.parseGenericLaunchArg(prefix)
 		if err != nil {
 			return fmt.Errorf("parse error at %d: %w", sr.pos, err)
 		}
 		if arg == "" {
 			return nil
 		}
-		script.Cmds = append(script.Cmds, Command{
+		cmd := Command{
 			Name: models.ZapScriptCmdLaunch,
 			Args: []string{arg},
-		})
+		}
+		if len(advArgs) > 0 {
+			cmd.AdvArgs = advArgs
+		}
+		script.Cmds = append(script.Cmds, cmd)
 		return nil
 	}
 
