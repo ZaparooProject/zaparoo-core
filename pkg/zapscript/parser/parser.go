@@ -148,6 +148,40 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			break
 		}
 
+		if ch == SymEscapeSeq {
+			// escaping next character
+			next, err := sr.read()
+			if err != nil {
+				return advArgs, err
+			} else if next == eof {
+				break
+			}
+
+			if slices.Contains(
+				[]rune{
+					SymEscapeSeq, SymCmdSep,
+					SymAdvArgSep, SymAdvArgEq,
+				},
+				next,
+			) {
+				// insert escaped char and continue
+				if inValue {
+					currentValue = currentValue + string(next)
+				} else {
+					currentArg = currentArg + string(next)
+				}
+				continue
+			} else {
+				// insert literal \<char> and continue
+				if inValue {
+					currentValue = currentValue + string(SymEscapeSeq) + string(next)
+				} else {
+					currentArg = currentArg + string(SymEscapeSeq) + string(next)
+				}
+				continue
+			}
+		}
+
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
 			return advArgs, err
@@ -267,7 +301,7 @@ func (sr *ScriptReader) parseArgs() ([]string, map[string]string, error) {
 			advArgs = newAdvArgs
 
 			// advanced args are always the last part of a command
-			return args, advArgs, nil
+			break
 		} else {
 			currentArg = currentArg + string(ch)
 			continue
@@ -288,7 +322,7 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return cmd, "", err
+			return cmd, string(buf), err
 		} else if ch == eof {
 			break
 		}
@@ -297,22 +331,30 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
-			return cmd, "", err
+			return cmd, string(buf), err
 		} else if eoc {
 			break
 		}
 
 		if isCmdName(ch) {
 			cmd.Name = cmd.Name + string(ch)
-		} else if ch == SymArgStart {
+		} else if ch == SymArgStart || ch == SymAdvArgStart {
 			// parse arguments
 			if cmd.Name == "" {
 				break
 			}
 
+			if ch == SymAdvArgStart {
+				// roll it back to trigger adv arg parsing in parseArgs
+				err := sr.unread()
+				if err != nil {
+					return cmd, string(buf), err
+				}
+			}
+
 			args, advArgs, err := sr.parseArgs()
 			if err != nil {
-				return cmd, "", err
+				return cmd, string(buf), err
 			}
 
 			if len(args) > 0 {
@@ -331,12 +373,12 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 	}
 
 	if cmd.Name == "" {
-		return cmd, "", ErrEmptyCmdName
+		return cmd, string(buf), ErrEmptyCmdName
 	}
 
 	cmd.Name = strings.ToLower(cmd.Name)
 
-	return cmd, "", nil
+	return cmd, string(buf), nil
 }
 
 func (sr *ScriptReader) Parse() (Script, error) {
