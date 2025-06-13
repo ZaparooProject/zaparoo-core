@@ -818,6 +818,120 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "simple json argument",
+			input: `**config:{"key": "value"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "config", Args: []string{`{"key":"value"}`}},
+				},
+			},
+		},
+		{
+			name:  "json argument with multiple fields",
+			input: `**setup:{"name": "test", "count": 42, "enabled": true}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "setup", Args: []string{`{"count":42,"enabled":true,"name":"test"}`}},
+				},
+			},
+		},
+		{
+			name:  "nested json argument",
+			input: `**deploy:{"config": {"env": "prod", "replicas": 3}, "name": "app"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "deploy", Args: []string{`{"config":{"env":"prod","replicas":3},"name":"app"}`}},
+				},
+			},
+		},
+		{
+			name:  "json argument with array",
+			input: `**process:{"items": [1, 2, 3], "type": "batch"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "process", Args: []string{`{"items":[1,2,3],"type":"batch"}`}},
+				},
+			},
+		},
+		{
+			name:  "json argument with escaped quotes",
+			input: `**message:{"text": "he said \"hello\"", "sender": "user"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "message", Args: []string{`{"sender":"user","text":"he said \"hello\""}`}},
+				},
+			},
+		},
+		{
+			name:  "json argument mixed with regular args",
+			input: `**run:{"port": 8080, "host": "localhost"},normal_arg`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "run", Args: []string{`{"host":"localhost","port":8080}`, "normal_arg"}},
+				},
+			},
+		},
+		{
+			name:  "json argument with advanced args",
+			input: `**api:{"endpoint": "/users", "method": "GET"}?timeout=30`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "api", Args: []string{`{"endpoint":"/users","method":"GET"}`}, AdvArgs: map[string]string{"timeout": "30"}},
+				},
+			},
+		},
+		{
+			name:  "json in advanced arg value",
+			input: `**configure?data={"debug": true, "level": "info"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "configure", AdvArgs: map[string]string{"data": `{"debug":true,"level":"info"}`}},
+				},
+			},
+		},
+		{
+			name:  "multiple json arguments",
+			input: `**merge:{"a": 1},{"b": 2}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "merge", Args: []string{`{"a":1}`, `{"b":2}`}},
+				},
+			},
+		},
+		{
+			name:    "start script with json argument",
+			input:   `{"game": "chess", "difficulty": "hard"}`,
+			wantErr: parser.ErrInvalidJSON,
+		},
+		{
+			name:    "invalid json argument - missing closing brace",
+			input:   `**config:{"key": "value"`,
+			wantErr: parser.ErrInvalidJSON,
+		},
+		{
+			name:    "invalid json argument - malformed",
+			input:   `**config:{"key": value}`,
+			wantErr: parser.ErrInvalidJSON,
+		},
+		{
+			name:  "empty json object",
+			input: `**init:{}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "init", Args: []string{`{}`}},
+				},
+			},
+		},
+		{
+			name:  "json with complex nested structure",
+			input: `**complex:{"users": [{"id": 1, "meta": {"active": true}}], "total": 1}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "complex", Args: []string{`{"total":1,"users":[{"id":1,"meta":{"active":true}}]}`}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

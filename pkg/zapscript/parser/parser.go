@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ var (
 	ErrEmptyCmdName   = errors.New("command name is empty")
 	ErrEmptyZapScript = errors.New("script is empty")
 	ErrUnmatchedQuote = errors.New("unmatched quote")
+	ErrInvalidJSON    = errors.New("invalid JSON argument")
 )
 
 const (
@@ -30,6 +32,7 @@ const (
 	SymAdvArgStart = '?'
 	SymAdvArgSep   = '&'
 	SymAdvArgEq    = '='
+	SymJSONStart   = '{'
 )
 
 type Command struct {
@@ -149,6 +152,61 @@ func (sr *ScriptReader) parseQuotedArg() (string, error) {
 	return arg, nil
 }
 
+func (sr *ScriptReader) parseJSONArg() (string, error) {
+	jsonStr := "{"
+	braceCount := 1
+	inString := false
+	escaped := false
+
+	for braceCount > 0 {
+		ch, err := sr.read()
+		if err != nil {
+			return "", err
+		} else if ch == eof {
+			return "", ErrInvalidJSON
+		}
+
+		jsonStr += string(ch)
+
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+
+		if !inString {
+			if ch == '{' {
+				braceCount++
+			} else if ch == '}' {
+				braceCount--
+			}
+		}
+	}
+
+	// validate json
+	var jsonObj interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &jsonObj); err != nil {
+		return "", ErrInvalidJSON
+	}
+
+	// convert back to string
+	normalizedJSON, err := json.Marshal(jsonObj)
+	if err != nil {
+		return "", ErrInvalidJSON
+	}
+
+	return string(normalizedJSON), nil
+}
+
 func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	advArgs := make(map[string]string)
 	inValue := false
@@ -180,6 +238,13 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 					return advArgs, err
 				}
 				currentValue = quotedValue
+				continue
+			} else if ch == SymJSONStart && valueStart == sr.pos-1 {
+				jsonValue, err := sr.parseJSONArg()
+				if err != nil {
+					return advArgs, err
+				}
+				currentValue = jsonValue
 				continue
 			} else if ch == SymEscapeSeq {
 				// escaping next character
@@ -249,6 +314,13 @@ func (sr *ScriptReader) parseArgs(
 				return args, advArgs, err
 			}
 			currentArg = quotedArg
+			continue
+		} else if argStart == sr.pos-1 && ch == SymJSONStart {
+			jsonArg, err := sr.parseJSONArg()
+			if err != nil {
+				return args, advArgs, err
+			}
+			currentArg = jsonArg
 			continue
 		} else if ch == SymEscapeSeq {
 			// escaping next character
@@ -403,6 +475,9 @@ func (sr *ScriptReader) Parse() (Script, error) {
 
 		if isWhitespace(ch) {
 			continue
+		} else if sr.pos == 1 && ch == SymJSONStart {
+			// reserve starting { as json script for later
+			return Script{}, ErrInvalidJSON
 		} else if ch == SymCmdStart {
 			pre := "*"
 			next, err := sr.peek()
