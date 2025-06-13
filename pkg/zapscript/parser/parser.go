@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -24,20 +23,13 @@ var (
 const (
 	SymCmdStart    = '*'
 	SymCmdSep      = '|'
-	SymEscapeSeq   = '\\'
+	SymEscapeSeq   = '%'
 	SymArgStart    = ':'
 	SymArgSep      = ','
 	SymArgQuote    = '"'
 	SymAdvArgStart = '?'
 	SymAdvArgSep   = '&'
 	SymAdvArgEq    = '='
-)
-
-var (
-	QuoteEscape         = []rune{SymEscapeSeq, SymArgQuote}
-	GenericLaunchEscape = []rune{SymEscapeSeq, SymCmdSep, SymAdvArgStart, SymArgQuote}
-	ArgsEscape          = []rune{SymEscapeSeq, SymCmdSep, SymArgSep, SymAdvArgStart, SymArgQuote}
-	AdvArgsEscape       = []rune{SymEscapeSeq, SymCmdSep, SymAdvArgSep, SymAdvArgEq, SymArgQuote}
 )
 
 type Command struct {
@@ -147,26 +139,6 @@ func (sr *ScriptReader) parseQuotedArg() (string, error) {
 			return arg, ErrUnmatchedQuote
 		}
 
-		if ch == SymEscapeSeq {
-			// escaping next character
-			next, err := sr.read()
-			if err != nil {
-				return arg, err
-			} else if next == eof {
-				return arg, ErrUnmatchedQuote
-			}
-
-			if slices.Contains(QuoteEscape, next) {
-				// insert escaped char and continue
-				arg = arg + string(next)
-				continue
-			} else {
-				// insert literal \<char> and continue
-				arg = arg + string(SymEscapeSeq) + string(next)
-				continue
-			}
-		}
-
 		if ch == SymArgQuote {
 			break
 		}
@@ -201,42 +173,24 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			break
 		}
 
-		if inValue && ch == SymArgQuote && valueStart == sr.pos-1 {
-			quotedValue, err := sr.parseQuotedArg()
-			if err != nil {
-				return advArgs, err
-			}
-			currentValue = quotedValue
-			continue
-		} else if ch == SymEscapeSeq {
-			// escaping next character
-			next, err := sr.read()
-			if err != nil {
-				return advArgs, err
-			} else if next == eof {
-				if inValue {
-					currentValue = currentValue + string(SymEscapeSeq)
-				} else {
-					currentArg = currentArg + string(SymEscapeSeq)
+		if inValue {
+			if ch == SymArgQuote && valueStart == sr.pos-1 {
+				quotedValue, err := sr.parseQuotedArg()
+				if err != nil {
+					return advArgs, err
 				}
-				break
-			}
-
-			if slices.Contains(AdvArgsEscape, next) {
-				// insert escaped char and continue
-				if inValue {
-					currentValue = currentValue + string(next)
-				} else {
-					currentArg = currentArg + string(next)
-				}
+				currentValue = quotedValue
 				continue
-			} else {
-				// insert literal \<char> and continue
-				if inValue {
-					currentValue = currentValue + string(SymEscapeSeq) + string(next)
-				} else {
-					currentArg = currentArg + string(SymEscapeSeq) + string(next)
+			} else if ch == SymEscapeSeq {
+				// escaping next character
+				next, err := sr.read()
+				if err != nil {
+					return advArgs, err
+				} else if next == eof {
+					currentValue = currentValue + string(SymEscapeSeq)
 				}
+
+				currentValue = currentValue + string(next)
 				continue
 			}
 		}
@@ -272,76 +226,13 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	return advArgs, nil
 }
 
-func (sr *ScriptReader) parseGenericLaunchArg(prefix string) (string, map[string]string, error) {
-	arg := prefix + ""
-	advArgs := make(map[string]string)
-	argStart := sr.pos
-
-	for {
-		ch, err := sr.read()
-		if err != nil {
-			return arg, advArgs, err
-		} else if ch == eof {
-			break
-		}
-
-		if argStart == sr.pos-1 && ch == SymArgQuote {
-			quotedArg, err := sr.parseQuotedArg()
-			if err != nil {
-				return arg, advArgs, err
-			}
-			arg = quotedArg
-			continue
-		} else if ch == SymEscapeSeq {
-			// escaping next character
-			next, err := sr.read()
-			if err != nil {
-				return arg, advArgs, err
-			} else if next == eof {
-				arg = arg + string(SymEscapeSeq)
-				break
-			}
-
-			if slices.Contains(GenericLaunchEscape, next) {
-				// insert escaped char and continue
-				arg = arg + string(next)
-				continue
-			} else {
-				// insert literal \<char> and continue
-				arg = arg + string(SymEscapeSeq) + string(next)
-				continue
-			}
-		}
-
-		eoc, err := sr.checkEndOfCmd(ch)
-		if err != nil {
-			return arg, advArgs, err
-		} else if eoc {
-			break
-		}
-
-		if ch == SymAdvArgStart {
-			newAdvArgs, err := sr.parseAdvArgs()
-			if err != nil {
-				return arg, advArgs, err
-			}
-
-			advArgs = newAdvArgs
-
-			// advanced args are always the last part of a command
-			break
-		}
-
-		arg = arg + string(ch)
-	}
-
-	return arg, advArgs, nil
-}
-
-func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string, error) {
+func (sr *ScriptReader) parseArgs(
+	prefix string,
+	onlyAdvArgs bool,
+) ([]string, map[string]string, error) {
 	args := make([]string, 0)
 	advArgs := make(map[string]string)
-	currentArg := ""
+	currentArg := prefix
 	argStart := sr.pos
 
 	for {
@@ -366,18 +257,10 @@ func (sr *ScriptReader) parseArgs(onlyAdvArgs bool) ([]string, map[string]string
 				return args, advArgs, err
 			} else if next == eof {
 				currentArg = currentArg + string(SymEscapeSeq)
-				break
 			}
 
-			if slices.Contains(ArgsEscape, next) {
-				// insert escaped char and continue
-				currentArg = currentArg + string(next)
-				continue
-			} else {
-				// insert literal \<char> and continue
-				currentArg = currentArg + string(SymEscapeSeq) + string(next)
-				continue
-			}
+			currentArg = currentArg + string(next)
+			continue
 		}
 
 		eoc, err := sr.checkEndOfCmd(ch)
@@ -458,7 +341,7 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 				onlyAdvArgs = true
 			}
 
-			args, advArgs, err := sr.parseArgs(onlyAdvArgs)
+			args, advArgs, err := sr.parseArgs("", onlyAdvArgs)
 			if err != nil {
 				return cmd, string(buf), err
 			}
@@ -495,16 +378,13 @@ func (sr *ScriptReader) Parse() (Script, error) {
 	}
 
 	parseGenericLaunchCmd := func(prefix string) error {
-		arg, advArgs, err := sr.parseGenericLaunchArg(prefix)
+		args, advArgs, err := sr.parseArgs(prefix, false)
 		if err != nil {
 			return parseErr(err)
 		}
-		if arg == "" {
-			return nil
-		}
 		cmd := Command{
 			Name: models.ZapScriptCmdLaunch,
-			Args: []string{arg},
+			Args: args,
 		}
 		if len(advArgs) > 0 {
 			cmd.AdvArgs = advArgs

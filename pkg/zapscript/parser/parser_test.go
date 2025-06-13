@@ -138,7 +138,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 1",
-			input: `**test.escaped:one\,two`,
+			input: `**test.escaped:one%,two`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test.escaped", Args: []string{`one,two`}},
@@ -147,7 +147,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 2",
-			input: `**test.escaped:one\,two,th\|ree\|`,
+			input: `**test.escaped:one%,two,th%|ree%|`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test.escaped", Args: []string{`one,two`, `th|ree|`}},
@@ -156,10 +156,10 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 3",
-			input: `**test.escaped:one\\,two,a\\\\b`,
+			input: `**test.escaped:one%%,two,a%%%%b`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "test.escaped", Args: []string{`one\`, `two`, `a\\b`}},
+					{Name: "test.escaped", Args: []string{`one%`, `two`, `a%%b`}},
 				},
 			},
 		},
@@ -261,7 +261,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped question mark in arg (not adv arg)",
-			input: `**print:Hello\?World`,
+			input: `**print:Hello%?World`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "print", Args: []string{"Hello?World"}},
@@ -270,7 +270,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped ampersand in adv arg value",
-			input: `**go:main?cmd=build\&run`,
+			input: `**go:main?cmd=build%&run`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "go", Args: []string{"main"}, AdvArgs: map[string]string{"cmd": "build&run"}},
@@ -340,7 +340,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped equals sign in value",
-			input: `**cfg:file.cfg?env=dev\=beta`,
+			input: `**cfg:file.cfg?env=dev%=beta`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "cfg", Args: []string{"file.cfg"}, AdvArgs: map[string]string{
@@ -351,7 +351,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped ampersand in middle of value",
-			input: `**test:yes?data=foo\&bar\&baz`,
+			input: `**test:yes?data=foo%&bar%&baz`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test", Args: []string{"yes"}, AdvArgs: map[string]string{
@@ -362,7 +362,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped backslash before special",
-			input: `**safe:ok?path=c:\\windows\\system32`,
+			input: `**safe:ok?path=c:%\windows%\system32`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "safe", Args: []string{"ok"}, AdvArgs: map[string]string{
@@ -376,7 +376,7 @@ func TestParse(t *testing.T) {
 			input: `**opt ? a = b & c = d `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"**opt "}, AdvArgs: map[string]string{
+					{Name: "launch", Args: []string{"**opt"}, AdvArgs: map[string]string{
 						" a ": "b",
 						" c ": "d",
 					}},
@@ -473,7 +473,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped pipe",
-			input: `MegaDrive\|Game.bin`,
+			input: `MegaDrive%|Game.bin`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`MegaDrive|Game.bin`}},
@@ -482,7 +482,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped question mark",
-			input: `launch\?param=value`,
+			input: `launch%?param=value`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`launch?param=value`}},
@@ -491,7 +491,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped backslashes",
-			input: `path\\with\\ending\\`,
+			input: `path%\with%\ending%\`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`path\with\ending\`}},
@@ -512,7 +512,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with url and escaped query params",
-			input: `https://google.com/stuff\?some=args&q=something`,
+			input: `https://google.com/stuff%?some=args&q=something`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`https://google.com/stuff?some=args&q=something`}},
@@ -538,29 +538,20 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:  "quoted with internal escaped quote",
-			input: `**echo:"she said \"hello\""`,
+			name:  "quoted with internal quotes",
+			input: `**echo:"she said "hello""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "echo", Args: []string{`she said "hello"`}},
+					{Name: "echo", Args: []string{`she said hello""`}},
 				},
 			},
 		},
 		{
 			name:  "quoted arg with escaped backslash",
-			input: `**path:"C:\\Games\\Test"`,
+			input: `**path:"C:%\Games%\Test"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:\Games\Test`}},
-				},
-			},
-		},
-		{
-			name:  "quoted arg with unescaped backslash",
-			input: `**path:"C:\Games\Test"`,
-			want: parser.Script{
-				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:\Games\Test`}},
+					{Name: "path", Args: []string{`C:%\Games%\Test`}},
 				},
 			},
 		},
@@ -598,10 +589,10 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "quoted val in adv args with escaped quote",
-			input: `**cfg?note="he said \"hello\""`,
+			input: `**cfg?note="he said "hello""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", AdvArgs: map[string]string{"note": `he said "hello"`}},
+					{Name: "cfg", AdvArgs: map[string]string{"note": `he said hello""`}},
 				},
 			},
 		},
@@ -625,19 +616,19 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped and quoted together",
-			input: `**weird:"hello\, world",foo\|bar`,
+			input: `**weird:"hello%, world",foo%|bar`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "weird", Args: []string{"hello\\, world", "foo|bar"}},
+					{Name: "weird", Args: []string{"hello%, world", "foo|bar"}},
 				},
 			},
 		},
 		{
 			name:  "quoted and escaped mix",
-			input: `**mix:"a\,b",c\,d,e\|f,"g\"h"`,
+			input: `**mix:"a%,b",c%,d,e%|f,"g%"h"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mix", Args: []string{"a\\,b", "c,d", "e|f", `g"h`}},
+					{Name: "mix", Args: []string{"a%,b", "c,d", "e|f", `g%h"`}},
 				},
 			},
 		},
@@ -652,16 +643,16 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped trailing special chars",
-			input: `**data:end\,\|\?\\`,
+			input: `**data:end%,%|%?%%`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "data", Args: []string{"end,|?\\"}},
+					{Name: "data", Args: []string{"end,|?%"}},
 				},
 			},
 		},
 		{
 			name:  "run http.get",
-			input: `**http.get:https://zapa.roo/stuff\?id=5`,
+			input: `**http.get:https://zapa.roo/stuff%?id=5`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "http.get", Args: []string{`https://zapa.roo/stuff?id=5`}},
@@ -679,19 +670,12 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "quoted value with escaped quote and equals",
-			input: `**info?text="he said \"foo=bar\""`,
+			input: `**info?text="he said %"foo=bar%""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "info", AdvArgs: map[string]string{"text": `he said "foo=bar"`}},
-				},
-			},
-		},
-		{
-			name:  "quoted path with trailing escaped backslash",
-			input: `"C:\\Games\\End\\"`,
-			want: parser.Script{
-				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`C:\Games\End\`}},
+					{Name: "info", AdvArgs: map[string]string{
+						"text": `he said %foo=bar""`,
+					}},
 				},
 			},
 		},
@@ -701,6 +685,136 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{"{bad}": ""}},
+				},
+			},
+		},
+		{
+			name:    "empty script",
+			input:   "",
+			want:    parser.Script{},
+			wantErr: parser.ErrEmptyZapScript,
+		},
+		{
+			name:    "empty command name",
+			input:   "**",
+			want:    parser.Script{},
+			wantErr: parser.ErrEmptyCmdName,
+		},
+		{
+			name:  "advanced args only",
+			input: `**config?key1=val1&key2=val2`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "config",
+						AdvArgs: map[string]string{
+							"key1": "val1",
+							"key2": "val2",
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "mixed args and advanced args",
+			input: `**do:foo,bar?flag=on&mode=test`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name:    "do",
+						Args:    []string{"foo", "bar"},
+						AdvArgs: map[string]string{"flag": "on", "mode": "test"},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted argument with comma",
+			input: `**echo:"foo,bar",baz`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "echo",
+						Args: []string{`foo,bar`, "baz"},
+					},
+				},
+			},
+		},
+		{
+			name:    "unmatched quote in argument",
+			input:   `**bad:"abc,def`,
+			want:    parser.Script{},
+			wantErr: parser.ErrUnmatchedQuote,
+		},
+		{
+			name:  "command with escape sequences",
+			input: `**say:hello%|world`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "say",
+						Args: []string{"hello|world"},
+					},
+				},
+			},
+		},
+		{
+			name:  "multiple commands with mix of args and adv args",
+			input: `**a:1,2?x=1&y=2||**b?f=ok||**c`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name:    "a",
+						Args:    []string{"1", "2"},
+						AdvArgs: map[string]string{"x": "1", "y": "2"},
+					},
+					{
+						Name:    "b",
+						AdvArgs: map[string]string{"f": "ok"},
+					},
+					{
+						Name: "c",
+					},
+				},
+			},
+		},
+		{
+			name:  "generic launch with bad name",
+			input: `C:\some\path\100% completed\file.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "launch",
+						Args: []string{"C:\\some\\path\\100 completed\\file.exe"},
+					},
+				},
+			},
+		},
+		{
+			name:  "generic launch with escaped bad name",
+			input: `C:\some\path\100%% completed\file.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "launch",
+						Args: []string{"C:\\some\\path\\100% completed\\file.exe"},
+					},
+				},
+			},
+		},
+		{
+			name:  "generic launch with escaped bad name",
+			input: `C:\some\path\200%% completed\file.exe||C:\some 200%%\path\100%% completed\file.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{
+						Name: "launch",
+						Args: []string{"C:\\some\\path\\200% completed\\file.exe"},
+					},
+					{
+						Name: "launch",
+						Args: []string{"C:\\some 200%\\path\\100% completed\\file.exe"},
+					},
 				},
 			},
 		},
