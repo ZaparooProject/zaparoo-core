@@ -126,9 +126,10 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		return true, nil
+	} else {
+		return false, nil
 	}
-
-	return true, nil
 }
 
 func (sr *ScriptReader) parseQuotedArg() (string, error) {
@@ -479,7 +480,6 @@ func (sr *ScriptReader) Parse() (Script, error) {
 			// reserve starting { as json script for later
 			return Script{}, ErrInvalidJSON
 		} else if ch == SymCmdStart {
-			pre := "*"
 			next, err := sr.peek()
 			if err != nil {
 				return script, parseErr(err)
@@ -488,20 +488,27 @@ func (sr *ScriptReader) Parse() (Script, error) {
 			if next == eof {
 				return script, ErrUnexpectedEOF
 			} else if next == SymCmdStart {
-				pre = "**"
 				err := sr.skip()
 				if err != nil {
 					return script, parseErr(err)
 				}
+			} else {
+				// assume it's actually a generic launch cmd
+				err := parseGenericLaunchCmd("*")
+				if err != nil {
+					return script, parseErr(err)
+				}
+				continue
 			}
 
 			cmd, buf, err := sr.parseCommand()
 			if errors.Is(err, ErrInvalidCmdName) {
 				// assume it's actually a generic launch cmd
-				err := parseGenericLaunchCmd(pre + buf)
+				err := parseGenericLaunchCmd("**" + buf)
 				if err != nil {
 					return script, parseErr(err)
 				}
+				continue
 			} else if err != nil {
 				return script, parseErr(err)
 			} else {
