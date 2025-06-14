@@ -14,27 +14,34 @@ import (
 )
 
 var (
-	ErrUnexpectedEOF     = errors.New("unexpected end of file")
-	ErrInvalidCmdName    = errors.New("invalid characters in command name")
-	ErrInvalidAdvArgName = errors.New("invalid characters in advanced arg name")
-	ErrEmptyCmdName      = errors.New("command name is empty")
-	ErrEmptyZapScript    = errors.New("script is empty")
-	ErrUnmatchedQuote    = errors.New("unmatched quote")
-	ErrInvalidJSON       = errors.New("invalid JSON argument")
+	ErrUnexpectedEOF          = errors.New("unexpected end of file")
+	ErrInvalidCmdName         = errors.New("invalid characters in command name")
+	ErrInvalidAdvArgName      = errors.New("invalid characters in advanced arg name")
+	ErrEmptyCmdName           = errors.New("command name is empty")
+	ErrEmptyZapScript         = errors.New("script is empty")
+	ErrUnmatchedQuote         = errors.New("unmatched quote")
+	ErrInvalidJSON            = errors.New("invalid JSON argument")
+	ErrUnmatchedInputMacroExt = errors.New("unmatched input macro extension")
 )
 
 const (
-	SymCmdStart       = '*'
-	SymCmdSep         = '|'
-	SymEscapeSeq      = '%'
-	SymArgStart       = ':'
-	SymArgSep         = ','
-	SymArgDoubleQuote = '"'
-	SymArgSingleQuote = '\''
-	SymAdvArgStart    = '?'
-	SymAdvArgSep      = '&'
-	SymAdvArgEq       = '='
-	SymJSONStart      = '{'
+	SymCmdStart            = '*'
+	SymCmdSep              = '|'
+	SymEscapeSeq           = '^'
+	SymArgStart            = ':'
+	SymArgSep              = ','
+	SymArgDoubleQuote      = '"'
+	SymArgSingleQuote      = '\''
+	SymAdvArgStart         = '?'
+	SymAdvArgSep           = '&'
+	SymAdvArgEq            = '='
+	SymJSONStart           = '{'
+	SymJSONEnd             = '}'
+	SymJSONEscapeSeq       = '\\'
+	SymJSONString          = '"'
+	SymInputMacroEscapeSeq = '\\'
+	SymInputMacroExtStart  = '{'
+	SymInputMacroExtEnd    = '}'
 )
 
 type Command struct {
@@ -57,6 +64,16 @@ func isAdvArgName(ch rune) bool {
 
 func isWhitespace(ch rune) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
+}
+
+func isInputMacroCmd(name string) bool {
+	if name == models.ZapScriptCmdInputKeyboard {
+		return true
+	} else if name == models.ZapScriptCmdInputGamepad {
+		return true
+	} else {
+		return false
+	}
 }
 
 var eof = rune(0)
@@ -160,7 +177,7 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 }
 
 func (sr *ScriptReader) parseJSONArg() (string, error) {
-	jsonStr := "{"
+	jsonStr := string(SymJSONStart)
 	braceCount := 1
 	inString := false
 	escaped := false
@@ -180,20 +197,20 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 			continue
 		}
 
-		if ch == '\\' {
+		if ch == SymJSONEscapeSeq {
 			escaped = true
 			continue
 		}
 
-		if ch == '"' {
+		if ch == SymJSONString {
 			inString = !inString
 			continue
 		}
 
 		if !inString {
-			if ch == '{' {
+			if ch == SymJSONStart {
 				braceCount++
-			} else if ch == '}' {
+			} else if ch == SymJSONEnd {
 				braceCount--
 			}
 		}
@@ -212,6 +229,80 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 	}
 
 	return string(normalizedJSON), nil
+}
+
+func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error) {
+	args := make([]string, 0)
+	advArgs := make(map[string]string)
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return args, advArgs, err
+		} else if ch == eof {
+			break
+		}
+
+		if ch == SymInputMacroEscapeSeq {
+			next, err := sr.read()
+			if err != nil {
+				return args, advArgs, err
+			} else if next == eof {
+				args = append(args, string(SymEscapeSeq))
+			}
+
+			args = append(args, string(next))
+			continue
+		}
+
+		eoc, err := sr.checkEndOfCmd(ch)
+		if err != nil {
+			return args, advArgs, err
+		} else if eoc {
+			break
+		}
+
+		if ch == SymInputMacroExtStart {
+			extName := string(ch)
+			for {
+				next, err := sr.read()
+				if err != nil {
+					return args, advArgs, err
+				} else if next == eof {
+					return args, advArgs, ErrUnmatchedInputMacroExt
+				}
+
+				extName = extName + string(next)
+
+				if next == SymInputMacroExtEnd {
+					break
+				}
+			}
+			args = append(args, extName)
+			continue
+		} else if ch == SymAdvArgStart {
+			newAdvArgs, buf, err := sr.parseAdvArgs()
+			if errors.Is(err, ErrInvalidAdvArgName) {
+				// if an adv arg name is invalid, fallback on treating it
+				// as a list of input args
+				for _, ch := range string(SymAdvArgStart) + buf {
+					args = append(args, string(ch))
+				}
+				continue
+			} else if err != nil {
+				return args, advArgs, err
+			}
+
+			advArgs = newAdvArgs
+
+			// advanced args are always the last part of a command
+			break
+		}
+
+		args = append(args, string(ch))
+	}
+
+	return args, advArgs, nil
 }
 
 func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
@@ -434,9 +525,20 @@ func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 				onlyAdvArgs = true
 			}
 
-			args, advArgs, err := sr.parseArgs("", onlyAdvArgs, onlyOneArg)
-			if err != nil {
-				return cmd, string(buf), err
+			var args []string
+			var advArgs map[string]string
+			var err error
+
+			if isInputMacroCmd(cmd.Name) {
+				args, advArgs, err = sr.parseInputMacroArg()
+				if err != nil {
+					return cmd, string(buf), err
+				}
+			} else {
+				args, advArgs, err = sr.parseArgs("", onlyAdvArgs, onlyOneArg)
+				if err != nil {
+					return cmd, string(buf), err
+				}
 			}
 
 			if len(args) > 0 {

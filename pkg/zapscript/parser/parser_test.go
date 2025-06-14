@@ -138,7 +138,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 1",
-			input: `**test.escaped:one%,two`,
+			input: `**test.escaped:one^,two`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test.escaped", Args: []string{`one,two`}},
@@ -147,7 +147,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 2",
-			input: `**test.escaped:one%,two,th%|ree%|`,
+			input: `**test.escaped:one^,two,th^|ree^|`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test.escaped", Args: []string{`one,two`, `th|ree|`}},
@@ -156,10 +156,10 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escaped args 3",
-			input: `**test.escaped:one%%,two,a%%%%b`,
+			input: `**test.escaped:one^^,two,a^^^^b`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "test.escaped", Args: []string{`one%`, `two`, `a%%b`}},
+					{Name: "test.escaped", Args: []string{`one^`, `two`, `a^^b`}},
 				},
 			},
 		},
@@ -261,7 +261,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped question mark in arg (not adv arg)",
-			input: `**print:Hello%?World`,
+			input: `**print:Hello^?World`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "print", Args: []string{"Hello?World"}},
@@ -270,7 +270,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped ampersand in adv arg value",
-			input: `**go:main?cmd=build%&run`,
+			input: `**go:main?cmd=build^&run`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "go", Args: []string{"main"}, AdvArgs: map[string]string{"cmd": "build&run"}},
@@ -340,7 +340,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped equals sign in value",
-			input: `**cfg:file.cfg?env=dev%=beta`,
+			input: `**cfg:file.cfg?env=dev^=beta`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "cfg", Args: []string{"file.cfg"}, AdvArgs: map[string]string{
@@ -351,7 +351,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped ampersand in middle of value",
-			input: `**test:yes?data=foo%&bar%&baz`,
+			input: `**test:yes?data=foo^&bar^&baz`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test", Args: []string{"yes"}, AdvArgs: map[string]string{
@@ -362,7 +362,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped backslash before special",
-			input: `**safe:ok?path=c:%\windows%\system32`,
+			input: `**safe:ok?path=c:^\windows^\system32`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "safe", Args: []string{"ok"}, AdvArgs: map[string]string{
@@ -485,7 +485,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped pipe",
-			input: `MegaDrive%|Game.bin`,
+			input: `MegaDrive^|Game.bin`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`MegaDrive|Game.bin`}},
@@ -494,7 +494,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped question mark",
-			input: `launch%?param=value`,
+			input: `launch^?param=value`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`launch?param=value`}},
@@ -503,7 +503,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped backslashes",
-			input: `path%\with%\ending%\`,
+			input: `path^\with^\ending^\`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`path\with\ending\`}},
@@ -524,7 +524,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with url and escaped query params",
-			input: `https://google.com/stuff%?some=args&q=something`,
+			input: `https://google.com/stuff^?some=args&q=something`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{`https://google.com/stuff?some=args&q=something`}},
@@ -560,10 +560,10 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "quoted arg with escaped backslash",
-			input: `**path:"C:%\Games%\Test"`,
+			input: `**path:"C:^\Games^\Test"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:%\Games%\Test`}},
+					{Name: "path", Args: []string{`C:^\Games^\Test`}},
 				},
 			},
 		},
@@ -628,19 +628,19 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped and quoted together",
-			input: `**weird:"hello%, world",foo%|bar`,
+			input: `**weird:"hello^, world",foo^|bar`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "weird", Args: []string{"hello%, world", "foo|bar"}},
+					{Name: "weird", Args: []string{"hello^, world", "foo|bar"}},
 				},
 			},
 		},
 		{
 			name:  "quoted and escaped mix",
-			input: `**mix:"a%,b",c%,d,e%|f,"g%"h"`,
+			input: `**mix:"a^,b",c^,d,e^|f,"g^"h"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mix", Args: []string{"a%,b", "c,d", "e|f", `g%h"`}},
+					{Name: "mix", Args: []string{"a^,b", "c,d", "e|f", `g^h"`}},
 				},
 			},
 		},
@@ -655,16 +655,16 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "escaped trailing special chars",
-			input: `**data:end%,%|%?%%`,
+			input: `**data:end^,^|^?^^`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "data", Args: []string{"end,|?%"}},
+					{Name: "data", Args: []string{"end,|?^"}},
 				},
 			},
 		},
 		{
 			name:  "run http.get",
-			input: `**http.get:https://zapa.roo/stuff%?id=5`,
+			input: `**http.get:https://zapa.roo/stuff^?id=5`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "http.get", Args: []string{`https://zapa.roo/stuff?id=5`}},
@@ -682,11 +682,11 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "quoted value with escaped quote and equals",
-			input: `**info?text="he said %"foo=bar%""`,
+			input: `**info?text="he said ^"foo=bar^""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "info", AdvArgs: map[string]string{
-						"text": `he said %foo=bar""`,
+						"text": `he said ^foo=bar""`,
 					}},
 				},
 			},
@@ -760,7 +760,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "command with escape sequences",
-			input: `**say:hello%|world`,
+			input: `**say:hello^|world`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
@@ -792,7 +792,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with bad name",
-			input: `C:\some\path\100% completed\file.exe`,
+			input: `C:\some\path\100^ completed\file.exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
@@ -804,28 +804,28 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "generic launch with escaped bad name",
-			input: `C:\some\path\100%% completed\file.exe`,
+			input: `C:\some\path\100^^ completed\file.exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
 						Name: "launch",
-						Args: []string{"C:\\some\\path\\100% completed\\file.exe"},
+						Args: []string{"C:\\some\\path\\100^ completed\\file.exe"},
 					},
 				},
 			},
 		},
 		{
 			name:  "generic launch with escaped bad name",
-			input: `C:\some\path\200%% completed\file.exe||C:\some 200%%\path\100%% completed\file.exe`,
+			input: `C:\some\path\200^^ completed\file.exe||C:\some 200^^\path\100^^ completed\file.exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
 						Name: "launch",
-						Args: []string{"C:\\some\\path\\200% completed\\file.exe"},
+						Args: []string{"C:\\some\\path\\200^ completed\\file.exe"},
 					},
 					{
 						Name: "launch",
-						Args: []string{"C:\\some 200%\\path\\100% completed\\file.exe"},
+						Args: []string{"C:\\some 200^\\path\\100^ completed\\file.exe"},
 					},
 				},
 			},
@@ -975,7 +975,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:  "single quotes 3",
-			input: `**stuff:%'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
+			input: `**stuff:^'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "stuff", Args: []string{`'C:\some\path\completed?\usa`, `games/file.exe'`}, AdvArgs: map[string]string{
@@ -988,6 +988,174 @@ func TestParse(t *testing.T) {
 			name:    "single quotes 4",
 			input:   `**stuff:'C:\some\path\completed?\usa, games/file.exe?doot=doot`,
 			wantErr: parser.ErrUnmatchedQuote,
+		},
+		{
+			name:  "input.keyboard basic characters",
+			input: `**input.keyboard:abcXYZ123`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"a", "b", "c", "X", "Y", "Z", "1", "2", "3",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard basic characters and auto launch",
+			input: `**input.keyboard:abcXYZ123||/testing/test.bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"a", "b", "c", "X", "Y", "Z", "1", "2", "3",
+					}},
+					{Name: "launch", Args: []string{"/testing/test.bin"}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard special characters",
+			input: `**input.keyboard:!@#$%^&*()_+-=`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "-", "=",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard escape sequences 1",
+			input: `**input.keyboard:{enter}{esc}{tab}{backspace}{space}{up}{down}{left}{right}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"{enter}", "{esc}", "{tab}", "{backspace}", "{space}",
+						"{up}", "{down}", "{left}", "{right}",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard escape sequences 2",
+			input: `**input.keyboard:\{enter}{esc}{tab}{backspace}{space}\{up\}{down}{left}{right}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"{", "e", "n", "t", "e", "r", "}",
+						"{esc}", "{tab}", "{backspace}", "{space}",
+						"{", "u", "p", "}",
+						"{down}", "{left}", "{right}",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard mixed content",
+			input: `**input.keyboard:Hello{space}World!{enter}123{backspace}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{
+						"H", "e", "l", "l", "o",
+						"{space}",
+						"W", "o", "r", "l", "d", "!",
+						"{enter}",
+						"1", "2", "3",
+						"{backspace}",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.gamepad basic directions",
+			input: `**input.gamepad:^^VV<><>`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad", Args: []string{
+						"^", "^", "V", "V", "<", ">", "<", ">",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.gamepad buttons",
+			input: `**input.gamepad:ABXYRLZC`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad", Args: []string{
+						"A", "B", "X", "Y", "R", "L", "Z", "C",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.gamepad special buttons",
+			input: `**input.gamepad:{start}{select}{mode}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad", Args: []string{
+						"{start}", "{select}", "{mode}",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.gamepad complex sequence",
+			input: `**input.gamepad:^^VV<><>BA{start}XY{select}RL`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad", Args: []string{
+						"^", "^", "V", "V", "<", ">", "<", ">",
+						"B", "A", "{start}", "X", "Y", "{select}", "R", "L",
+					}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard with advanced args",
+			input: `**input.keyboard:Hello{enter}World?delay=100`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard",
+						Args: []string{
+							"H", "e", "l", "l", "o",
+							"{enter}",
+							"W", "o", "r", "l", "d",
+						},
+						AdvArgs: map[string]string{"delay": "100"}},
+				},
+			},
+		},
+		{
+			name:  "input.keyboard with advanced args escaped",
+			input: `**input.keyboard:Hello{enter}World\?delay=1\\00`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard",
+						Args: []string{
+							"H", "e", "l", "l", "o",
+							"{enter}",
+							"W", "o", "r", "l", "d",
+							"?", "d", "e", "l", "a", "y", "=", "1", "\\", "0", "0",
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "input.gamepad with advanced args",
+			input: `**input.gamepad:AB{start}XY?repeat=2&interval=500`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad",
+						Args: []string{
+							"A", "B", "{start}", "X", "Y",
+						},
+						AdvArgs: map[string]string{
+							"repeat":   "2",
+							"interval": "500",
+						}},
+				},
+			},
 		},
 		{
 			name:  "ignore 1 star",
@@ -1115,7 +1283,12 @@ func TestParse(t *testing.T) {
 			input: `**input.keyboard:qWeRty{enter}{up}aaa`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.keyboard", Args: []string{`qWeRty{enter}{up}aaa`}},
+					{Name: "input.keyboard", Args: []string{
+						"q", "W", "e", "R", "t", "y",
+						"{enter}",
+						"{up}",
+						"a", "a", "a",
+					}},
 				},
 			},
 		},
@@ -1124,7 +1297,11 @@ func TestParse(t *testing.T) {
 			input: `**input.gamepad:^^VV<><>BA{start}{select}`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.gamepad", Args: []string{`^^VV<><>BA{start}{select}`}},
+					{Name: "input.gamepad", Args: []string{
+						"^", "^", "V", "V", "<", ">", "<", ">", "B", "A",
+						"{start}",
+						"{select}",
+					}},
 				},
 			},
 		},
