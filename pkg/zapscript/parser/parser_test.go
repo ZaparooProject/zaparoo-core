@@ -1522,6 +1522,198 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "mister docs example 1",
+			input: `**mister.ini:1`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mister.ini", Args: []string{`1`}},
+				},
+			},
+		},
+		{
+			name:  "mister docs example 2",
+			input: `**mister.core:_Console/SNES`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mister.core", Args: []string{`_Console/SNES`}},
+				},
+			},
+		},
+		{
+			name:  "mister docs example 3",
+			input: `**mister.core:_Console/PSX_20220518`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mister.core", Args: []string{`_Console/PSX_20220518`}},
+				},
+			},
+		},
+		{
+			name:  "mister docs example 4",
+			input: `**mister.script:update_all.sh`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mister.script", Args: []string{`update_all.sh`}},
+				},
+			},
+		},
+		{
+			name:  "mister docs example 5",
+			input: `**mister.script:update_all.sh?hidden=yes`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mister.script", Args: []string{`update_all.sh`},
+						AdvArgs: map[string]string{"hidden": "yes"}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 1",
+			input: `**playlist.play:/media/fat/games/Genesis`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.play", Args: []string{`/media/fat/games/Genesis`}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 2",
+			input: `**playlist.play:/media/fat/playlist.pls`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.play", Args: []string{`/media/fat/playlist.pls`}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 3",
+			input: `**playlist.load:/media/fat/playlist.pls`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.load", Args: []string{`/media/fat/playlist.pls`}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 4",
+			input: `**playlist.load:/media/fat/playlist.pls?mode=shuffle`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.load", Args: []string{`/media/fat/playlist.pls`}, AdvArgs: map[string]string{"mode": "shuffle"}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 5",
+			input: `**playlist.play:/media/fat/_@Favorites`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.play", Args: []string{`/media/fat/_@Favorites`}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 6",
+			input: `**playlist.play`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.play"},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 7",
+			input: `**playlist.stop`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.stop"},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 8",
+			input: `**playlist.next`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.next"},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 9",
+			input: `**playlist.previous`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.previous"},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 10",
+			input: `**playlist.pause`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.pause"},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 11",
+			input: `**playlist.goto:2`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.goto", Args: []string{`2`}},
+				},
+			},
+		},
+		{
+			name:  "playlist docs example 12",
+			input: `**playlist.open:/media/fat/playlist.pls`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "playlist.open", Args: []string{`/media/fat/playlist.pls`}},
+				},
+			},
+		},
+		{
+			name:  "stop command",
+			input: `**stop`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "stop"},
+				},
+			},
+		},
+		{
+			name:  "execute command",
+			input: `**execute:reboot`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "execute", Args: []string{`reboot`}},
+				},
+			},
+		},
+		{
+			name:  "delay command",
+			input: `**delay:500`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "delay", Args: []string{`500`}},
+				},
+			},
+		},
+		{
+			name:  "delay combined with other commands",
+			input: `_Console/SNES||**delay:10000||**input.key:88`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`_Console/SNES`}},
+					{Name: "delay", Args: []string{`10000`}},
+					{Name: "input.key", Args: []string{`88`}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
