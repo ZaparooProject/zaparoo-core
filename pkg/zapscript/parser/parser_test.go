@@ -376,22 +376,25 @@ func TestParse(t *testing.T) {
 			input: `**opt ? a = b & c = d `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"**opt"}, AdvArgs: map[string]string{
-						" a ": "b",
-						" c ": "d",
-					}},
+					{Name: "launch", Args: []string{"**opt ? a = b & c = d"}},
 				},
 			},
 		},
 		{
-			name:  "only advanced args with weird spacing 2",
+			name:  "only advanced args with invalid spacing 2",
 			input: `**opt? a = b & c = d `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "opt", AdvArgs: map[string]string{
-						" a ": "b",
-						" c ": "d",
-					}},
+					{Name: "opt"},
+				},
+			},
+		},
+		{
+			name:  "only advanced args with invalid spacing 3",
+			input: `**opt:? a = b & c = d `,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "opt", Args: []string{"? a = b & c = d"}},
 				},
 			},
 		},
@@ -436,11 +439,20 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:  "adv arg with invalid escape in key",
+			name:  "adv arg with invalid escape in key 1",
 			input: `**cfg?pa\th=/bin`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", AdvArgs: map[string]string{"pa\\th": "/bin"}},
+					{Name: "cfg"},
+				},
+			},
+		},
+		{
+			name:  "adv arg with invalid escape in key 2",
+			input: `**cfg:?pa\th=/bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "cfg", Args: []string{"?pa\\th=/bin"}},
 				},
 			},
 		},
@@ -684,7 +696,7 @@ func TestParse(t *testing.T) {
 			input: `**launch:game.exe?{bad}`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{"{bad}": ""}},
+					{Name: "launch", Args: []string{"game.exe?{bad}"}},
 				},
 			},
 		},
@@ -929,6 +941,371 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "complex", Args: []string{`{"total":1,"users":[{"id":1,"meta":{"active":true}}]}`}},
+				},
+			},
+		},
+		{
+			name:  "auto launch with normally invalid chars",
+			input: `C:\some\path\completed?\usa, games/file.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\some\path\completed?\usa, games/file.exe`}},
+				},
+			},
+		},
+		{
+			name:  "ignore 1 star",
+			input: `*testtest/ASFd/sfasafsfd.bin`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`*testtest/ASFd/sfasafsfd.bin`}},
+				},
+			},
+		},
+		{
+			name:  "ignore 1 pipe",
+			input: `*testtest/ASFd/sfasafsfd.bin|otherstuff`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`*testtest/ASFd/sfasafsfd.bin|otherstuff`}},
+				},
+			},
+		},
+		{
+			name:  "docs example 1",
+			input: `**launch:PCEngine/Another Game`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`PCEngine/Another Game`}},
+				},
+			},
+		},
+		{
+			name:  "docs example 2",
+			input: `PCEngine/Another Game`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`PCEngine/Another Game`}},
+				},
+			},
+		},
+		{
+			name:  "docs example 3",
+			input: `**delay:1000||PCEngine/Another Game`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "delay", Args: []string{`1000`}},
+					{Name: "launch", Args: []string{`PCEngine/Another Game`}},
+				},
+			},
+		},
+		{
+			name:  "docs example 4",
+			input: `**http.get:https://api.example.com/hello||**launch.random:Genesis`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.get", Args: []string{`https://api.example.com/hello`}},
+					{Name: "launch.random", Args: []string{`Genesis`}},
+				},
+			},
+		},
+		{
+			name:  "docs example 4 quotes",
+			input: `**http.get:"https://api.example.com/hello?stuff=thing"?other=stuff||**launch.random:Genesis`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
+						AdvArgs: map[string]string{"other": "stuff"}},
+					{Name: "launch.random", Args: []string{`Genesis`}},
+				},
+			},
+		},
+		{
+			name:  "http docs example 1",
+			input: `**http.get:https://example.com`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.get", Args: []string{`https://example.com`}},
+				},
+			},
+		},
+		{
+			name:  "http docs example 2",
+			input: `**http.get:https://example.com||_Console/SNES`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.get", Args: []string{`https://example.com`}},
+					{Name: "launch", Args: []string{`_Console/SNES`}},
+				},
+			},
+		},
+		{
+			name:  "http docs example 3",
+			input: `**http.post:https://example.com,application/json,{"key":"value"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.post", Args: []string{
+						`https://example.com`,
+						`application/json`,
+						`{"key":"value"}`,
+					}},
+				},
+			},
+		},
+		{
+			name:  "http docs example 4",
+			input: `**http.post:http://localhost:8182/api/scripts/launch/update_all.sh,application/json,`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "http.post", Args: []string{
+						`http://localhost:8182/api/scripts/launch/update_all.sh`,
+						`application/json`,
+						``,
+					}},
+				},
+			},
+		},
+		{
+			name:  "input docs example 1",
+			input: `**input.keyboard:@`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{`@`}},
+				},
+			},
+		},
+		{
+			name:  "input docs example 2",
+			input: `**input.keyboard:qWeRty{enter}{up}aaa`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.keyboard", Args: []string{`qWeRty{enter}{up}aaa`}},
+				},
+			},
+		},
+		{
+			name:  "input docs example 3",
+			input: `**input.gamepad:^^VV<><>BA{start}{select}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.gamepad", Args: []string{`^^VV<><>BA{start}{select}`}},
+				},
+			},
+		},
+		{
+			name:  "input docs example 4",
+			input: `**input.coinp1:1`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.coinp1", Args: []string{`1`}},
+				},
+			},
+		},
+		{
+			name:  "input docs example 5",
+			input: `**input.coinp2:3`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "input.coinp2", Args: []string{`3`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 1",
+			input: `/media/fat/games/Genesis/1 US - Q-Z/Some Game (USA, Europe).md`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`/media/fat/games/Genesis/1 US - Q-Z/Some Game (USA, Europe).md`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 2",
+			input: `Genesis/1 US - Q-Z/Some Game (USA, Europe).md?launcher=LLAPIMegaDrive`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
+						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 3",
+			input: `N64/1 US - A-M/Another Game (USA).z64`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`N64/1 US - A-M/Another Game (USA).z64`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 4",
+			input: `TurboGrafx16/Another Game (USA).pce`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`TurboGrafx16/Another Game (USA).pce`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 5",
+			input: `tgfx16/Another Game (USA).pce`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`tgfx16/Another Game (USA).pce`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 6",
+			input: `PCEngine/Another Game (USA).pce`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`PCEngine/Another Game (USA).pce`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 7",
+			input: `/media/fat/games/Genesis/1 US - Q-Z/Some Game (USA, Europe).md`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`/media/fat/games/Genesis/1 US - Q-Z/Some Game (USA, Europe).md`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 8",
+			input: `Genesis/1 US - Q-Z/Some Game (USA, Europe).md`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 9",
+			input: `_Arcade/Some Arcade Game.mra`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`_Arcade/Some Arcade Game.mra`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 10",
+			input: `_@Favorites/My Favorite Game.mgl`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`_@Favorites/My Favorite Game.mgl`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 11",
+			input: `Genesis/@Genesis - 2022-05-18.zip/1 US - Q-Z/Some Game (USA, Europe).md`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`Genesis/@Genesis - 2022-05-18.zip/1 US - Q-Z/Some Game (USA, Europe).md`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 12",
+			input: `PCEngine/Another Game`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`PCEngine/Another Game`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 13",
+			input: `N64/Some Game (USA)`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`N64/Some Game (USA)`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 14",
+			input: `**launch.system:Atari2600`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.system", Args: []string{`Atari2600`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 15",
+			input: `**launch.system:WonderSwanColor`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.system", Args: []string{`WonderSwanColor`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 16",
+			input: `**launch.random:snes`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.random", Args: []string{`snes`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 17",
+			input: `**launch.random:snes,nes`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.random", Args: []string{`snes`, `nes`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 18",
+			input: `**launch.random:/media/fat/_#Favorites`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.random", Args: []string{`/media/fat/_#Favorites`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 19",
+			input: `**launch.random:Genesis/*sonic*`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.random", Args: []string{`Genesis/*sonic*`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 20",
+			input: `**launch.random:all/*mario*`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.random", Args: []string{`all/*mario*`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 21",
+			input: `**launch.search:SNES/*mario*`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.search", Args: []string{`SNES/*mario*`}},
+				},
+			},
+		},
+		{
+			name:  "launch docs example 22",
+			input: `**launch.search:SNES/super mario*(*usa*`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch.search", Args: []string{`SNES/super mario*(*usa*`}},
 				},
 			},
 		},

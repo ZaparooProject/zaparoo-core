@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	ErrUnexpectedEOF  = errors.New("unexpected end of file")
-	ErrInvalidCmdName = errors.New("invalid characters in command name")
-	ErrEmptyCmdName   = errors.New("command name is empty")
-	ErrEmptyZapScript = errors.New("script is empty")
-	ErrUnmatchedQuote = errors.New("unmatched quote")
-	ErrInvalidJSON    = errors.New("invalid JSON argument")
+	ErrUnexpectedEOF     = errors.New("unexpected end of file")
+	ErrInvalidCmdName    = errors.New("invalid characters in command name")
+	ErrInvalidAdvArgName = errors.New("invalid characters in advanced arg name")
+	ErrEmptyCmdName      = errors.New("command name is empty")
+	ErrEmptyZapScript    = errors.New("script is empty")
+	ErrUnmatchedQuote    = errors.New("unmatched quote")
+	ErrInvalidJSON       = errors.New("invalid JSON argument")
 )
 
 const (
@@ -47,6 +48,10 @@ type Script struct {
 
 func isCmdName(ch rune) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.'
+}
+
+func isAdvArgName(ch rune) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'
 }
 
 func isWhitespace(ch rune) bool {
@@ -208,12 +213,13 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 	return string(normalizedJSON), nil
 }
 
-func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
+func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 	advArgs := make(map[string]string)
 	inValue := false
 	currentArg := ""
 	currentValue := ""
 	valueStart := int64(-1)
+	var buf []rune
 
 	storeArg := func() {
 		if currentArg != "" {
@@ -227,23 +233,25 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return advArgs, err
+			return advArgs, string(buf), err
 		} else if ch == eof {
 			break
 		}
+
+		buf = append(buf, ch)
 
 		if inValue {
 			if ch == SymArgQuote && valueStart == sr.pos-1 {
 				quotedValue, err := sr.parseQuotedArg()
 				if err != nil {
-					return advArgs, err
+					return advArgs, string(buf), err
 				}
 				currentValue = quotedValue
 				continue
 			} else if ch == SymJSONStart && valueStart == sr.pos-1 {
 				jsonValue, err := sr.parseJSONArg()
 				if err != nil {
-					return advArgs, err
+					return advArgs, string(buf), err
 				}
 				currentValue = jsonValue
 				continue
@@ -251,7 +259,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 				// escaping next character
 				next, err := sr.read()
 				if err != nil {
-					return advArgs, err
+					return advArgs, string(buf), err
 				} else if next == eof {
 					currentValue = currentValue + string(SymEscapeSeq)
 				}
@@ -263,7 +271,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
-			return advArgs, err
+			return advArgs, string(buf), err
 		} else if eoc {
 			break
 		}
@@ -282,6 +290,9 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 			currentValue = currentValue + string(ch)
 			continue
 		} else {
+			if !isAdvArgName(ch) {
+				return advArgs, string(buf), ErrInvalidAdvArgName
+			}
 			currentArg = currentArg + string(ch)
 			continue
 		}
@@ -289,12 +300,13 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, error) {
 
 	storeArg()
 
-	return advArgs, nil
+	return advArgs, string(buf), nil
 }
 
 func (sr *ScriptReader) parseArgs(
 	prefix string,
 	onlyAdvArgs bool,
+	onlyOneArg bool,
 ) ([]string, map[string]string, error) {
 	args := make([]string, 0)
 	advArgs := make(map[string]string)
@@ -343,7 +355,7 @@ func (sr *ScriptReader) parseArgs(
 			break
 		}
 
-		if ch == SymArgSep {
+		if !onlyOneArg && ch == SymArgSep {
 			// new argument
 			currentArg = strings.TrimSpace(currentArg)
 			args = append(args, currentArg)
@@ -351,8 +363,13 @@ func (sr *ScriptReader) parseArgs(
 			argStart = sr.pos
 			continue
 		} else if ch == SymAdvArgStart {
-			newAdvArgs, err := sr.parseAdvArgs()
-			if err != nil {
+			newAdvArgs, buf, err := sr.parseAdvArgs()
+			if errors.Is(err, ErrInvalidAdvArgName) {
+				// if an adv arg name is invalid, fallback on treating it
+				// as a positional arg with a ? in it
+				currentArg = currentArg + string(SymAdvArgStart) + buf
+				continue
+			} else if err != nil {
 				return args, advArgs, err
 			}
 
@@ -375,7 +392,7 @@ func (sr *ScriptReader) parseArgs(
 	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseCommand() (Command, string, error) {
+func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 	cmd := Command{}
 	var buf []rune
 
@@ -414,7 +431,7 @@ func (sr *ScriptReader) parseCommand() (Command, string, error) {
 				onlyAdvArgs = true
 			}
 
-			args, advArgs, err := sr.parseArgs("", onlyAdvArgs)
+			args, advArgs, err := sr.parseArgs("", onlyAdvArgs, onlyOneArg)
 			if err != nil {
 				return cmd, string(buf), err
 			}
@@ -450,8 +467,8 @@ func (sr *ScriptReader) Parse() (Script, error) {
 		return fmt.Errorf("parse error at %d: %w", sr.pos, err)
 	}
 
-	parseGenericLaunchCmd := func(prefix string) error {
-		args, advArgs, err := sr.parseArgs(prefix, false)
+	parseAutoLaunchCmd := func(prefix string) error {
+		args, advArgs, err := sr.parseArgs(prefix, false, true)
 		if err != nil {
 			return parseErr(err)
 		}
@@ -493,18 +510,18 @@ func (sr *ScriptReader) Parse() (Script, error) {
 					return script, parseErr(err)
 				}
 			} else {
-				// assume it's actually a generic launch cmd
-				err := parseGenericLaunchCmd("*")
+				// assume it's actually an auto launch cmd
+				err := parseAutoLaunchCmd("*")
 				if err != nil {
 					return script, parseErr(err)
 				}
 				continue
 			}
 
-			cmd, buf, err := sr.parseCommand()
+			cmd, buf, err := sr.parseCommand(false)
 			if errors.Is(err, ErrInvalidCmdName) {
-				// assume it's actually a generic launch cmd
-				err := parseGenericLaunchCmd("**" + buf)
+				// assume it's actually an auto launch cmd
+				err := parseAutoLaunchCmd("**" + buf)
 				if err != nil {
 					return script, parseErr(err)
 				}
@@ -522,7 +539,7 @@ func (sr *ScriptReader) Parse() (Script, error) {
 				return script, parseErr(err)
 			}
 
-			err = parseGenericLaunchCmd("")
+			err = parseAutoLaunchCmd("")
 			if err != nil {
 				return script, parseErr(err)
 			}
