@@ -24,16 +24,17 @@ var (
 )
 
 const (
-	SymCmdStart    = '*'
-	SymCmdSep      = '|'
-	SymEscapeSeq   = '%'
-	SymArgStart    = ':'
-	SymArgSep      = ','
-	SymArgQuote    = '"'
-	SymAdvArgStart = '?'
-	SymAdvArgSep   = '&'
-	SymAdvArgEq    = '='
-	SymJSONStart   = '{'
+	SymCmdStart       = '*'
+	SymCmdSep         = '|'
+	SymEscapeSeq      = '%'
+	SymArgStart       = ':'
+	SymArgSep         = ','
+	SymArgDoubleQuote = '"'
+	SymArgSingleQuote = '\''
+	SymAdvArgStart    = '?'
+	SymAdvArgSep      = '&'
+	SymAdvArgEq       = '='
+	SymJSONStart      = '{'
 )
 
 type Command struct {
@@ -137,7 +138,7 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 	}
 }
 
-func (sr *ScriptReader) parseQuotedArg() (string, error) {
+func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	arg := ""
 
 	for {
@@ -148,7 +149,7 @@ func (sr *ScriptReader) parseQuotedArg() (string, error) {
 			return arg, ErrUnmatchedQuote
 		}
 
-		if ch == SymArgQuote {
+		if ch == start {
 			break
 		}
 
@@ -241,8 +242,9 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 		buf = append(buf, ch)
 
 		if inValue {
-			if ch == SymArgQuote && valueStart == sr.pos-1 {
-				quotedValue, err := sr.parseQuotedArg()
+			if valueStart == sr.pos-1 &&
+				(ch == SymArgDoubleQuote || ch == SymArgSingleQuote) {
+				quotedValue, err := sr.parseQuotedArg(ch)
 				if err != nil {
 					return advArgs, string(buf), err
 				}
@@ -321,8 +323,9 @@ func (sr *ScriptReader) parseArgs(
 			break
 		}
 
-		if argStart == sr.pos-1 && ch == SymArgQuote {
-			quotedArg, err := sr.parseQuotedArg()
+		if argStart == sr.pos-1 &&
+			(ch == SymArgDoubleQuote || ch == SymArgSingleQuote) {
+			quotedArg, err := sr.parseQuotedArg(ch)
 			if err != nil {
 				return args, advArgs, err
 			}

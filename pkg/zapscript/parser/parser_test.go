@@ -954,6 +954,42 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:  "single quotes 1",
+			input: `'C:\some\path\completed?\usa, games/file.exe'`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{`C:\some\path\completed?\usa, games/file.exe`}},
+				},
+			},
+		},
+		{
+			name:  "single quotes 2",
+			input: `**stuff:'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "stuff", Args: []string{`C:\some\path\completed?\usa, games/file.exe`}, AdvArgs: map[string]string{
+						"doot": "doot",
+					}},
+				},
+			},
+		},
+		{
+			name:  "single quotes 3",
+			input: `**stuff:%'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "stuff", Args: []string{`'C:\some\path\completed?\usa`, `games/file.exe'`}, AdvArgs: map[string]string{
+						"doot": "doot",
+					}},
+				},
+			},
+		},
+		{
+			name:    "single quotes 4",
+			input:   `**stuff:'C:\some\path\completed?\usa, games/file.exe?doot=doot`,
+			wantErr: parser.ErrUnmatchedQuote,
+		},
+		{
 			name:  "ignore 1 star",
 			input: `*testtest/ASFd/sfasafsfd.bin`,
 			want: parser.Script{
