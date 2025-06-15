@@ -1714,6 +1714,191 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "simple expression in arg",
+			input: `**greet:Hello [[name]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "greet", Args: []string{"Hello [[name]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression at start of arg",
+			input: `**load:[[filename]].exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "load", Args: []string{"[[filename]].exe"}},
+				},
+			},
+		},
+		{
+			name:  "expression at end of arg",
+			input: `**save:backup-[[timestamp]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "save", Args: []string{"backup-[[timestamp]]"}},
+				},
+			},
+		},
+		{
+			name:  "multiple expressions in single arg",
+			input: `**config:[[env]]-[[version]]-[[build]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "config", Args: []string{"[[env]]-[[version]]-[[build]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression in multiple args",
+			input: `**connect:[[host]],[[port]],[[user]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "connect", Args: []string{"[[host]]", "[[port]]", "[[user]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression in advanced arg value",
+			input: `**launch:game.exe?platform=[[system]]&debug=[[debug_mode]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{
+						"platform": "[[system]]",
+						"debug":    "[[debug_mode]]",
+					}},
+				},
+			},
+		},
+		{
+			name:  "expression with dots and underscores",
+			input: `**deploy:[[app.name]],[[build_number]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "deploy", Args: []string{"[[app.name]]", "[[build_number]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression with numbers",
+			input: `**level:[[level1]],[[player2_score]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "level", Args: []string{"[[level1]]", "[[player2_score]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression in quoted arg",
+			input: `**say:"Hello [[user]], welcome to [[game]]"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "say", Args: []string{"Hello [[user]], welcome to [[game]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression with escaped characters around it",
+			input: `**path:C:^\Games^\[[system]]^\game.exe`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "path", Args: []string{`C:\Games\[[system]]\game.exe`}},
+				},
+			},
+		},
+		{
+			name:  "complex expression with special chars",
+			input: `**url:https://api.example.com/[[endpoint]]?key=[[api_key]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "url", Args: []string{"https://api.example.com/[[endpoint]]"}, AdvArgs: map[string]string{
+						"key": "[[api_key]]",
+					}},
+				},
+			},
+		},
+		{
+			name:  "expression in JSON-like arg",
+			input: `**config:{"user": "[[username]]", "env": "[[environment]]"}`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "config", Args: []string{`{"env":"[[environment]]","user":"[[username]]"}`}},
+				},
+			},
+		},
+		{
+			name:  "expression in generic launch",
+			input: `[[system]]/games/[[game_name]].rom`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "launch", Args: []string{"[[system]]/games/[[game_name]].rom"}},
+				},
+			},
+		},
+		{
+			name:  "empty expression",
+			input: `**test:prefix[[]]suffix`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test", Args: []string{"prefix[[]]suffix"}},
+				},
+			},
+		},
+		{
+			name:  "expression with spaces inside",
+			input: `**format:[[first name]] [[last name]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "format", Args: []string{"[[first name]] [[last name]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression mixed with other features",
+			input: `**run:"[[app_path]]",arg2?env=[[environment]]&debug=[[debug]]||**cleanup:[[temp_dir]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "run", Args: []string{"[[app_path]]", "arg2"}, AdvArgs: map[string]string{
+						"env":   "[[environment]]",
+						"debug": "[[debug]]",
+					}},
+					{Name: "cleanup", Args: []string{"[[temp_dir]]"}},
+				},
+			},
+		},
+		{
+			name:    "unmatched expression - missing closing bracket",
+			input:   `**test:[[variable`,
+			wantErr: parser.ErrUnmatchedExpression,
+		},
+		{
+			name:  "unmatched expression - missing opening bracket",
+			input: `**test:variable]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test", Args: []string{"variable]]"}},
+				},
+			},
+		},
+		{
+			name:  "expression with nested brackets (should not parse as expression)",
+			input: `**test:[[outer[[inner]]outer]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test", Args: []string{"[[outer[[inner]]outer]]"}},
+				},
+			},
+		},
+		{
+			name:  "single brackets (not expressions)",
+			input: `**test:[single],bracket]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "test", Args: []string{"[single]", "bracket]"}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -22,6 +22,7 @@ var (
 	ErrUnmatchedQuote         = errors.New("unmatched quote")
 	ErrInvalidJSON            = errors.New("invalid JSON argument")
 	ErrUnmatchedInputMacroExt = errors.New("unmatched input macro extension")
+	ErrUnmatchedExpression    = errors.New("unmatched expression")
 )
 
 const (
@@ -42,6 +43,8 @@ const (
 	SymInputMacroEscapeSeq = '\\'
 	SymInputMacroExtStart  = '{'
 	SymInputMacroExtEnd    = '}'
+	SymExpressionStart     = '['
+	SymExpressionEnd       = ']'
 )
 
 type Command struct {
@@ -174,6 +177,45 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	}
 
 	return arg, nil
+}
+
+func (sr *ScriptReader) parseExpression() (string, error) {
+	expr := string(SymExpressionStart)
+
+	next, err := sr.peek()
+	if err != nil {
+		return expr, err
+	} else if next != SymExpressionStart {
+		return expr, nil
+	}
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return expr, err
+		} else if ch == eof {
+			return expr, ErrUnmatchedExpression
+		}
+
+		if ch == SymExpressionEnd {
+			next, err := sr.peek()
+			if err != nil {
+				return expr, err
+			} else if next == SymExpressionEnd {
+				expr = expr + string(SymExpressionEnd)
+				expr = expr + string(SymExpressionEnd)
+				err := sr.skip()
+				if err != nil {
+					return expr, err
+				}
+				break
+			}
+		}
+
+		expr = expr + string(ch)
+	}
+
+	return expr, nil
 }
 
 func (sr *ScriptReader) parseJSONArg() (string, error) {
@@ -380,7 +422,15 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 		}
 
 		if inValue {
-			currentValue = currentValue + string(ch)
+			if ch == SymExpressionStart {
+				exprValue, err := sr.parseExpression()
+				if err != nil {
+					return advArgs, string(buf), err
+				}
+				currentValue = currentValue + exprValue
+			} else {
+				currentValue = currentValue + string(ch)
+			}
 			continue
 		} else {
 			if !isAdvArgName(ch) {
@@ -471,6 +521,13 @@ func (sr *ScriptReader) parseArgs(
 
 			// advanced args are always the last part of a command
 			break
+		} else if ch == SymExpressionStart {
+			exprValue, err := sr.parseExpression()
+			if err != nil {
+				return args, advArgs, err
+			}
+			currentArg = currentArg + exprValue
+			continue
 		} else {
 			currentArg = currentArg + string(ch)
 			continue
