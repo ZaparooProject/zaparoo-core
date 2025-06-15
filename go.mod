@@ -17,6 +17,7 @@ require (
 	github.com/go-chi/chi/v5 v5.0.12
 	github.com/go-chi/cors v1.2.1
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
+	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hsanjuan/go-ndef v0.0.1
