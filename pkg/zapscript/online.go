@@ -7,6 +7,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"io"
 	"net/http"
 	"strings"
@@ -103,8 +104,13 @@ func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
 func checkLink(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	value string,
+	cmd parser.Command,
 ) (string, error) {
+	if len(cmd.Args) == 0 {
+		return "", errors.New("no args")
+	}
+	value := cmd.Args[0]
+
 	if !maybeRemoteZapScript(value) {
 		return "", nil
 	}
@@ -121,20 +127,20 @@ func checkLink(
 		log.Warn().Msgf("multiple commands in link, using first: %v", zl.Cmds[0])
 	}
 
-	cmd := zl.Cmds[0]
-	cmdName := strings.ToLower(cmd.Cmd)
+	newCmd := zl.Cmds[0]
+	cmdName := strings.ToLower(newCmd.Cmd)
 
 	switch cmdName {
 	case zapScriptModels.ZapScriptCmdEvaluate:
 		var args zapScriptModels.CmdEvaluateArgs
-		err = json.Unmarshal(cmd.Args, &args)
+		err = json.Unmarshal(newCmd.Args, &args)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling evaluate params: %w", err)
 		}
 		return args.ZapScript, nil
 	case zapScriptModels.ZapScriptCmdLaunch:
 		var args zapScriptModels.CmdLaunchArgs
-		err = json.Unmarshal(cmd.Args, &args)
+		err = json.Unmarshal(newCmd.Args, &args)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling launch args: %w", err)
 		}
@@ -146,7 +152,7 @@ func checkLink(
 		}
 	case zapScriptModels.ZapScriptCmdUIPicker:
 		var cmdArgs zapScriptModels.CmdPicker
-		err = json.Unmarshal(cmd.Args, &cmdArgs)
+		err = json.Unmarshal(newCmd.Args, &cmdArgs)
 		if err != nil {
 			return "", fmt.Errorf("error unmarshalling picker args: %w", err)
 		}
@@ -154,14 +160,13 @@ func checkLink(
 			Items:  cmdArgs.Items,
 			Unsafe: true,
 		}
-		if cmd.Name != nil {
-			pickerArgs.Title = *cmd.Name
+		if newCmd.Name != nil {
+			pickerArgs.Title = *newCmd.Name
 		}
 		err := pl.ShowPicker(cfg, pickerArgs)
 		if err != nil {
 			return "", fmt.Errorf("error showing picker: %w", err)
 		} else {
-			// TODO: this results in an error even though it's valid
 			return "", nil
 		}
 	default:

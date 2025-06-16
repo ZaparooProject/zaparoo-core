@@ -2,6 +2,7 @@ package platforms
 
 import (
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -36,12 +37,9 @@ const (
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
-	Cmd           string
-	Args          string
-	NamedArgs     map[string]string
+	Cmd           parser.Command
 	Cfg           *config.Instance
 	Playlist      playlists.PlaylistController
-	Text          string
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool

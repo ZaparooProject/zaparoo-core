@@ -1,8 +1,7 @@
 package service
 
 import (
-	"errors"
-	"strings"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -29,20 +28,23 @@ func runTokenZapScript(
 		return nil
 	}
 
-	text := token.Text
-
-	mappingText, mapped := getMapping(cfg, db, platform, token)
-	if mapped {
-		log.Info().Msgf("found mapping: %s", mappingText)
-		text = mappingText
+	mappedValue, hasMapping := getMapping(cfg, db, platform, token)
+	if hasMapping {
+		log.Info().Msgf("found mapping: %s", mappedValue)
+		token.Text = mappedValue
 	}
 
-	cmds := strings.Split(text, "||")
-	log.Info().Msgf("running ZapScript (%d commands): %s", len(cmds), text)
+	reader := parser.NewScriptReader(token.Text)
+	script, err := reader.Parse()
+	if err != nil {
+		return err
+	}
+
+	log.Info().Msgf("running script (%d cmds): %s", len(script.Cmds), token.Text)
 
 	pls := plsc.Active
 
-	for i, cmd := range cmds {
+	for i, cmd := range script.Cmds {
 		result, err := zapscript.RunCommand(
 			platform,
 			cfg,
@@ -52,14 +54,11 @@ func runTokenZapScript(
 			},
 			token,
 			cmd,
-			len(cmds),
+			len(script.Cmds),
 			i,
 			db,
 		)
-		if errors.Is(err, zapscript.ErrEmptyCmd) {
-			log.Warn().Msg("command is empty")
-			return nil
-		} else if err != nil {
+		if err != nil {
 			return err
 		}
 

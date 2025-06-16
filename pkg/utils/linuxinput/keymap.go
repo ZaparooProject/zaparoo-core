@@ -3,16 +3,13 @@
 package linuxinput
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 	"github.com/bendahl/uinput"
-	"strings"
 )
 
 // ToKeyboardCode converts a single ZapScript key symbol to a uinput code.
 func ToKeyboardCode(name string) (int, bool) {
-	if len(name) > 2 && name[0] == '{' && name[len(name)-1] == '}' {
-		name = strings.ToLower(name)
-	}
-	if v, ok := GamepadMap[name]; ok {
+	if v, ok := keyboardmap.KeyboardMap[name]; ok {
 		return v, ok
 	} else {
 		return 0, false
@@ -56,9 +53,6 @@ var GamepadMap = map[string]int{
 
 // ToGamepadCode converts a single ZapScript button symbol to a uinput code.
 func ToGamepadCode(name string) (int, bool) {
-	if len(name) > 2 && name[0] == '{' && name[len(name)-1] == '}' {
-		name = strings.ToLower(name)
-	}
 	if v, ok := GamepadMap[name]; ok {
 		return v, ok
 	} else {
