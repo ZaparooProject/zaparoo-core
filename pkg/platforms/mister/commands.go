@@ -25,7 +25,11 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, er
 		return platforms.CmdResult{}, fmt.Errorf("no ini files found")
 	}
 
-	id, err := strconv.Atoi(env.Args)
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, fmt.Errorf("no ini specified")
+	}
+
+	id, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
@@ -51,17 +55,25 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, er
 }
 
 func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, fmt.Errorf("no core specified")
+	}
+
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, mister.LaunchShortCore(env.Args)
+	}, mister.LaunchShortCore(env.Cmd.Args[0])
 }
 
 func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error) {
 	return func(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 		// TODO: generic read bool function
-		hidden := env.NamedArgs["hidden"] == "true" || env.NamedArgs["hidden"] == "yes"
+		hidden := env.Cmd.AdvArgs["hidden"] == "true" || env.Cmd.AdvArgs["hidden"] == "yes"
 
-		args := strings.Fields(env.Args)
+		if len(env.Cmd.Args) == 0 {
+			return platforms.CmdResult{}, fmt.Errorf("no script specified")
+		}
+
+		args := strings.Fields(env.Cmd.Args[0])
 
 		if len(args) == 0 {
 			return platforms.CmdResult{}, fmt.Errorf("no script specified")
@@ -112,7 +124,11 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (
 }
 
 func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Args == "" {
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, fmt.Errorf("no mgl specified")
+	}
+
+	if env.Cmd.Args[0] == "" {
 		return platforms.CmdResult{}, fmt.Errorf("no mgl specified")
 	}
 
@@ -121,7 +137,7 @@ func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 		return platforms.CmdResult{}, err
 	}
 
-	_, err = tmpFile.WriteString(env.Args)
+	_, err = tmpFile.WriteString(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

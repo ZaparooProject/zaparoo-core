@@ -344,7 +344,7 @@ func (p *Platform) GamepadPress(name string) error {
 }
 
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if f, ok := p.cmdMappings[env.Cmd]; ok {
+	if f, ok := p.cmdMappings[env.Cmd.Name]; ok {
 		return f(p, env)
 	} else {
 		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)

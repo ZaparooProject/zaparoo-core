@@ -23,7 +23,7 @@ package zapscript
 import (
 	"errors"
 	"fmt"
-	"net/url"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +40,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
-var ErrEmptyCmd = errors.New("command is empty")
+var (
+	ErrInvalidArgs  = errors.New("invalid arguments")
+	ErrArgCount     = errors.New("invalid number of arguments")
+	ErrRequiredArgs = errors.New("arguments are required")
+	ErrRemoteSource = errors.New("cannot run from remote source")
+)
 
 var cmdMap = map[string]func(
 	platforms.Platform,
@@ -132,118 +137,62 @@ func RunCommand(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
-	t tokens.Token,
-	text string,
-	totalCommands int,
+	token tokens.Token,
+	cmd parser.Command,
+	totalCmds int,
 	currentIndex int,
 	db *database.Database,
 ) (platforms.CmdResult, error) {
-	if text == "" {
-		return platforms.CmdResult{}, ErrEmptyCmd
-	}
-
 	var unsafe bool
-	newText, err := checkLink(cfg, pl, text)
+	linkValue, err := checkLink(cfg, pl, cmd)
 	if err != nil {
 		log.Error().Err(err).Msgf("error checking link, continuing")
-	} else if newText != "" {
-		log.Info().Msgf("valid zap link, replacing text: %s", newText)
-		text = newText
+	} else if linkValue != "" {
+		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
+		reader := parser.NewScriptReader(linkValue)
+		script, err := reader.Parse()
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", err)
+		} else if len(script.Cmds) == 0 {
+			return platforms.CmdResult{}, fmt.Errorf("zap link is empty")
+		} else if len(script.Cmds) > 1 {
+			log.Warn().Msgf("zap link has multiple commands, using first: %v", script.Cmds[0])
+		}
+		cmd = script.Cmds[0]
 		unsafe = true
 	}
 
-	if t.Unsafe {
+	if token.Unsafe {
 		unsafe = true
 	}
 
-	// parse advanced args
-	namedArgs := make(map[string]string)
-	if i := strings.LastIndex(text, "?"); i != -1 {
-		u, err := url.Parse(text[i:])
-		if err != nil {
-			return platforms.CmdResult{}, err
-		}
-
-		qs, err := url.ParseQuery(u.RawQuery)
-		if err != nil {
-			return platforms.CmdResult{}, err
-		}
-
-		text = text[:i]
-
-		for k, v := range qs {
-			namedArgs[k] = v[0]
-		}
-	}
-	//log.Debug().Msgf("named args: %v", namedArgs)
-
-	// explicit commands must begin with **
-	if strings.HasPrefix(text, "**") {
-		if t.Source == tokens.SourcePlaylist {
-			// TODO: why not? why did i write this?
-			log.Error().Str("text", text).Msgf("playlists cannot run commands, skipping")
-			return platforms.CmdResult{}, err
-		}
-
-		text = strings.TrimPrefix(text, "**")
-		ps := strings.SplitN(text, ":", 2)
-
-		var cmd string
-		var args string
-
-		if len(ps) < 2 {
-			cmd = strings.ToLower(strings.TrimSpace(ps[0]))
-			args = ""
-		} else {
-			cmd = strings.ToLower(strings.TrimSpace(ps[0]))
-			args = strings.TrimSpace(ps[1])
-		}
-
-		env := platforms.CmdEnv{
-			Cmd:           cmd,
-			Args:          args,
-			NamedArgs:     namedArgs,
-			Cfg:           cfg,
-			Playlist:      plsc,
-			Text:          text,
-			TotalCommands: totalCommands,
-			CurrentIndex:  currentIndex,
-			Unsafe:        unsafe,
-			Database:      db,
-		}
-
-		if f, ok := cmdMap[cmd]; ok {
-			log.Info().Msgf("running command: %s", cmd)
-			res, err := f(pl, env)
-
-			if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {
-				log.Debug().Any("token", t).Msg("cmd launch: clearing current playlist")
-				plsc.Queue <- nil
-			}
-
-			return res, err
-		} else {
-			return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
-		}
+	if token.Source == tokens.SourcePlaylist {
+		// TODO: why not? why did i write this?
+		log.Error().Msgf("playlists cannot run commands, skipping")
+		return platforms.CmdResult{}, err
 	}
 
-	// if it's not a command, treat it as a generic launch command
-	res, err := cmdLaunch(pl, platforms.CmdEnv{
-		Cmd:           "launch",
-		Args:          text,
-		NamedArgs:     namedArgs,
+	env := platforms.CmdEnv{
+		Cmd:           cmd,
 		Cfg:           cfg,
-		Text:          text,
-		TotalCommands: totalCommands,
+		Playlist:      plsc,
+		TotalCommands: totalCmds,
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
 		Database:      db,
-	})
-
-	if err == nil && res.MediaChanged && t.Source != tokens.SourcePlaylist {
-		log.Debug().Msg("generic launch: clearing current playlist")
-		plsc.Queue <- nil
 	}
 
-	return res, err
+	if f, ok := cmdMap[cmd.Name]; ok {
+		log.Info().Msgf("running command: %s", cmd)
+		res, err := f(pl, env)
+
+		if err == nil && res.MediaChanged && token.Source != tokens.SourcePlaylist {
+			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
+			plsc.Queue <- nil
+		}
+
+		return res, err
+	} else {
+		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
+	}
 }

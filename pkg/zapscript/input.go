@@ -14,89 +14,33 @@ import (
 // DEPRECATED
 func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("input.key cannot be run from a remote source")
+		return platforms.CmdResult{}, ErrRemoteSource
 	}
-	legacyCode, err := strconv.Atoi(env.Args)
+	if len(env.Cmd.Args) != 1 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+	legacyCode, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Args)
+		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
 	}
 	code := keyboardmap.GetLegacyKey(legacyCode)
 	if code == "" {
-		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Args)
+		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
 	}
 	return platforms.CmdResult{}, pl.KeyboardPress(code)
 }
 
-// converts a string to a list of key symbols. long names are named inside
-// curly braces and characters can be escaped with a backslash
-func readKeys(keys string) ([]string, error) {
-	var names []string
-	inEscape := false
-	inName := false
-	var name string
-
-	for _, c := range keys {
-		if inEscape {
-			name += string(c)
-			inEscape = false
-			continue
-		}
-
-		if c == '\\' {
-			inEscape = true
-			continue
-		}
-
-		if c == '{' {
-			if inName {
-				return nil, fmt.Errorf("unexpected {")
-			}
-
-			inName = true
-			continue
-		}
-
-		if c == '}' {
-			if !inName {
-				return nil, fmt.Errorf("unexpected }")
-			}
-
-			names = append(names, name)
-			name = ""
-			inName = false
-			continue
-		}
-
-		if inName {
-			name += string(c)
-		} else {
-			names = append(names, string(c))
-		}
-	}
-
-	if inName {
-		return nil, fmt.Errorf("missing }")
-	}
-
-	return names, nil
-}
-
 func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+		return platforms.CmdResult{}, ErrRemoteSource
 	}
 
-	log.Info().Msgf("keyboard input: %s", env.Args)
+	log.Info().Msgf("keyboard input: %v", env.Cmd.Args)
 
 	// TODO: stuff like adjust delay, only press, etc.
 	//	     basically a filled out mini macro language for key presses
 
-	names, err := readKeys(env.Args)
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
-
-	for _, name := range names {
+	for _, name := range env.Cmd.Args {
 		if err := pl.KeyboardPress(name); err != nil {
 			return platforms.CmdResult{}, err
 		}
@@ -108,17 +52,12 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 
 func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+		return platforms.CmdResult{}, ErrRemoteSource
 	}
 
-	log.Info().Msgf("gamepad input: %s", env.Args)
+	log.Info().Msgf("gamepad input: %v", env.Cmd.Args)
 
-	names, err := readKeys(env.Args)
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
-
-	for _, name := range names {
+	for _, name := range env.Cmd.Args {
 		if err := pl.GamepadPress(name); err != nil {
 			return platforms.CmdResult{}, err
 		}
@@ -129,9 +68,16 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 }
 
 func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platforms.CmdResult, error) {
-	amount, err := strconv.Atoi(env.Args)
-	if err != nil {
-		return platforms.CmdResult{}, err
+	var amount int
+
+	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] != "" {
+		amount = 1
+	} else {
+		var err error
+		amount, err = strconv.Atoi(env.Cmd.Args[0])
+		if err != nil {
+			return platforms.CmdResult{}, err
+		}
 	}
 
 	for i := 0; i < amount; i++ {
@@ -143,11 +89,11 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 }
 
 func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	log.Info().Msgf("inserting coin for player 1: %s", env.Args)
+	log.Info().Msgf("inserting coin for player 1: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "5")
 }
 
 func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	log.Info().Msgf("inserting coin for player 2: %s", env.Args)
+	log.Info().Msgf("inserting coin for player 2: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "6")
 }

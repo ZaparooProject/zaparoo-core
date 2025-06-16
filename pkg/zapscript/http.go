@@ -1,7 +1,6 @@
 package zapscript
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -11,10 +10,18 @@ import (
 )
 
 func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if len(env.Cmd.Args) != 1 {
+		return platforms.CmdResult{}, ErrArgCount
+	} else if env.Cmd.Args[0] == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
+	}
+
+	url := env.Cmd.Args[0]
+
 	go func() {
-		resp, err := http.Get(env.Args)
+		resp, err := http.Get(url)
 		if err != nil {
-			log.Error().Err(err).Msgf("getting url: %s", env.Args)
+			log.Error().Err(err).Msgf("getting url: %s", url)
 			return
 		}
 		err = resp.Body.Close()
@@ -27,18 +34,19 @@ func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{}, nil
 }
 
-func cmdHttpPost(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	parts := strings.SplitN(env.Args, ",", 3)
-	if len(parts) < 3 {
-		return platforms.CmdResult{}, fmt.Errorf("invalid post format: %s", env.Args)
+func cmdHttpPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if len(env.Cmd.Args) != 3 {
+		return platforms.CmdResult{}, ErrArgCount
 	}
 
-	url, format, data := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+	url := env.Cmd.Args[0]
+	mime := env.Cmd.Args[1]
+	payload := env.Cmd.Args[2]
 
 	go func() {
-		resp, err := http.Post(url, format, strings.NewReader(data))
+		resp, err := http.Post(url, mime, strings.NewReader(payload))
 		if err != nil {
-			log.Error().Err(err).Msgf("error posting to url: %s", env.Args)
+			log.Error().Err(err).Msgf("error posting to url: %s", url)
 			return
 		}
 		err = resp.Body.Close()
