@@ -277,7 +277,7 @@ func (p *Platform) KeyboardPress(name string) error {
 }
 
 func (p *Platform) GamepadPress(name string) error {
-	code, ok := linuxinput.GamepadMap[name]
+	code, ok := linuxinput.ToGamepadCode(name)
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
