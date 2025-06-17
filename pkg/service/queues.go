@@ -34,8 +34,8 @@ func runTokenZapScript(
 		token.Text = mappedValue
 	}
 
-	reader := parser.NewScriptReader(token.Text)
-	script, err := reader.Parse()
+	reader := parser.NewParser(token.Text)
+	script, err := reader.ParseScript()
 	if err != nil {
 		return err
 	}

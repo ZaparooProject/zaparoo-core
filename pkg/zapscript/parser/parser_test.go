@@ -1903,14 +1903,112 @@ func TestParse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := parser.NewScriptReader(tt.input)
-			got, err := p.Parse()
+			p := parser.NewParser(tt.input)
+			got, err := p.ParseScript()
 			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("Parse() error = %v, wantErr = %v", err, tt.wantErr)
+				t.Errorf("ParseScript() error = %v, wantErr = %v", err, tt.wantErr)
 				return
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Parse() mismatch (-want +got):\n%s", diff)
+				t.Errorf("ParseScript() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestPostProcess(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr error
+	}{
+		{
+			name:  "empty arg",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "value only",
+			input: "test",
+			want:  "test",
+		},
+		{
+			name:  "expression only",
+			input: "[[ 2 + 2 + 2 ]]",
+			want:  "6",
+		},
+		{
+			name:  "test expression 1",
+			input: `something [[test]]`,
+			want:  `something test`,
+		},
+		{
+			name:  "test expression 2",
+			input: `something [[2+2]]`,
+			want:  `something 4`,
+		},
+		{
+			name:  "test expression 2 with spacing",
+			input: `something [[ 2 + 2 ]]`,
+			want:  `something 4`,
+		},
+		{
+			name:  "test expression bool 1",
+			input: `something [[true]]`,
+			want:  `something true`,
+		},
+		{
+			name:  "test expression bool 2",
+			input: `something [[ true == false ]]`,
+			want:  `something false`,
+		},
+		{
+			name:  "test expression bool 3",
+			input: `[[ "test1" in a_list ]]`,
+			want:  `true`,
+		},
+		{
+			name:    "bad return type",
+			input:   `[[a_list]]`,
+			wantErr: parser.ErrBadExpressionReturn,
+		},
+		{
+			name:  "test expression int",
+			input: `[[5+5]]`,
+			want:  `10`,
+		},
+		{
+			name:  "test expression float 1",
+			input: `[[2.5]]`,
+			want:  `2.5`,
+		},
+		{
+			name:  "test expression float 2 precision",
+			input: `[[1/5]]`,
+			want:  `0.2`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := map[string]any{
+				"test":     "test",
+				"a_bool":   true,
+				"a_number": 1,
+				"a_string": "test",
+				"a_list":   []string{"test1", "test2"},
+			}
+
+			p := parser.NewParser(tt.input)
+			got, err := p.PostProcess(env)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("PostProcess() error = %v, wantErr = %v", err, tt.wantErr)
+				return
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("PostProcess() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
