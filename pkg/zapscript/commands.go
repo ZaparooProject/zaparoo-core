@@ -23,6 +23,7 @@ package zapscript
 import (
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
@@ -41,7 +42,6 @@ import (
 )
 
 var (
-	ErrInvalidArgs  = errors.New("invalid arguments")
 	ErrArgCount     = errors.New("invalid number of arguments")
 	ErrRequiredArgs = errors.New("arguments are required")
 	ErrRemoteSource = errors.New("cannot run from remote source")
@@ -142,6 +142,7 @@ func RunCommand(
 	totalCmds int,
 	currentIndex int,
 	db *database.Database,
+	st *state.State,
 ) (platforms.CmdResult, error) {
 	var unsafe bool
 	linkValue, err := checkLink(cfg, pl, cmd)
@@ -170,6 +171,36 @@ func RunCommand(
 		// TODO: why not? why did i write this?
 		log.Error().Msgf("playlists cannot run commands, skipping")
 		return platforms.CmdResult{}, err
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Debug().Err(err).Msgf("error getting hostname, continuing")
+	}
+
+	exprEnv := map[string]any{
+		"platform":      pl.ID(),
+		"media_playing": st.ActiveMedia() != nil,
+		"scan_mode":     strings.ToLower(cfg.ReadersScan().Mode),
+		"hostname":      hostname,
+	}
+
+	for i, arg := range cmd.Args {
+		reader := parser.NewParser(arg)
+		output, err := reader.PostProcess(exprEnv)
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", err)
+		}
+		cmd.Args[i] = output
+	}
+
+	for k, arg := range cmd.AdvArgs {
+		reader := parser.NewParser(arg)
+		output, err := reader.PostProcess(exprEnv)
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", err)
+		}
+		cmd.AdvArgs[k] = output
 	}
 
 	env := platforms.CmdEnv{
