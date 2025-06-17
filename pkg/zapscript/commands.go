@@ -203,6 +203,13 @@ func RunCommand(
 		cmd.AdvArgs[k] = output
 	}
 
+	if when, ok := cmd.AdvArgs["when"]; ok {
+		if !strings.EqualFold(when, "true") && !strings.EqualFold(when, "yes") {
+			log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
+			return platforms.CmdResult{}, nil
+		}
+	}
+
 	env := platforms.CmdEnv{
 		Cmd:           cmd,
 		Cfg:           cfg,
