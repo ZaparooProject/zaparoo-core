@@ -34,8 +34,8 @@ func runTokenZapScript(
 		token.Text = mappedValue
 	}
 
-	reader := parser.NewScriptReader(token.Text)
-	script, err := reader.Parse()
+	reader := parser.NewParser(token.Text)
+	script, err := reader.ParseScript()
 	if err != nil {
 		return err
 	}
@@ -46,17 +46,14 @@ func runTokenZapScript(
 
 	for i, cmd := range script.Cmds {
 		result, err := zapscript.RunCommand(
-			platform,
-			cfg,
+			platform, cfg,
 			playlists.PlaylistController{
 				Active: pls,
 				Queue:  plsc.Queue,
 			},
-			token,
-			cmd,
-			len(script.Cmds),
-			i,
-			db,
+			token, cmd,
+			len(script.Cmds), i,
+			db, st,
 		)
 		if err != nil {
 			return err

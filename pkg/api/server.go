@@ -33,7 +33,7 @@ import (
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
-	Message: "Parse error",
+	Message: "ParseScript error",
 }
 var JSONRPCErrorInvalidRequest = models.ErrorObject{
 	Code:    -32600,

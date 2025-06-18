@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/expr-lang/expr"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -23,6 +25,7 @@ var (
 	ErrInvalidJSON            = errors.New("invalid JSON argument")
 	ErrUnmatchedInputMacroExt = errors.New("unmatched input macro extension")
 	ErrUnmatchedExpression    = errors.New("unmatched expression")
+	ErrBadExpressionReturn    = errors.New("expression return type not supported")
 )
 
 const (
@@ -57,6 +60,19 @@ type Script struct {
 	Cmds []Command
 }
 
+type PostArgPartType int
+
+const (
+	ArgPartTypeUnknown PostArgPartType = iota
+	ArgPartTypeString
+	ArgPartTypeExpression
+)
+
+type PostArgPart struct {
+	Type  PostArgPartType
+	Value string
+}
+
 func isCmdName(ch rune) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '.'
 }
@@ -86,9 +102,9 @@ type ScriptReader struct {
 	pos int64
 }
 
-func NewScriptReader(script string) *ScriptReader {
+func NewParser(value string) *ScriptReader {
 	return &ScriptReader{
-		r: bufio.NewReader(bytes.NewReader([]byte(script))),
+		r: bufio.NewReader(bytes.NewReader([]byte(value))),
 	}
 }
 
@@ -179,43 +195,60 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	return arg, nil
 }
 
-func (sr *ScriptReader) parseExpression() (string, error) {
-	expr := string(SymExpressionStart)
+func (sr *ScriptReader) parseExpression(outputBrackets bool) (string, error) {
+	rawExpr := ""
+	if outputBrackets {
+		rawExpr = string(SymExpressionStart)
+	}
 
-	next, err := sr.peek()
+	next, err := sr.read()
 	if err != nil {
-		return expr, err
+		return rawExpr, err
 	} else if next != SymExpressionStart {
-		return expr, nil
+		err := sr.unread()
+		if err != nil {
+			return rawExpr, err
+		}
+		return rawExpr, nil
+	}
+
+	if outputBrackets {
+		rawExpr = rawExpr + string(SymExpressionStart)
 	}
 
 	for {
 		ch, err := sr.read()
 		if err != nil {
-			return expr, err
+			return rawExpr, err
 		} else if ch == eof {
-			return expr, ErrUnmatchedExpression
+			return rawExpr, ErrUnmatchedExpression
 		}
 
 		if ch == SymExpressionEnd {
 			next, err := sr.peek()
 			if err != nil {
-				return expr, err
+				return rawExpr, err
 			} else if next == SymExpressionEnd {
-				expr = expr + string(SymExpressionEnd)
-				expr = expr + string(SymExpressionEnd)
+				if outputBrackets {
+					rawExpr = rawExpr + string(SymExpressionEnd)
+					rawExpr = rawExpr + string(SymExpressionEnd)
+				}
 				err := sr.skip()
 				if err != nil {
-					return expr, err
+					return rawExpr, err
 				}
 				break
 			}
 		}
 
-		expr = expr + string(ch)
+		rawExpr = rawExpr + string(ch)
 	}
 
-	return expr, nil
+	if !outputBrackets {
+		rawExpr = strings.TrimSpace(rawExpr)
+	}
+
+	return rawExpr, nil
 }
 
 func (sr *ScriptReader) parseJSONArg() (string, error) {
@@ -423,7 +456,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 
 		if inValue {
 			if ch == SymExpressionStart {
-				exprValue, err := sr.parseExpression()
+				exprValue, err := sr.parseExpression(true)
 				if err != nil {
 					return advArgs, string(buf), err
 				}
@@ -522,7 +555,7 @@ func (sr *ScriptReader) parseArgs(
 			// advanced args are always the last part of a command
 			break
 		} else if ch == SymExpressionStart {
-			exprValue, err := sr.parseExpression()
+			exprValue, err := sr.parseExpression(true)
 			if err != nil {
 				return args, advArgs, err
 			}
@@ -622,7 +655,7 @@ func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 	return cmd, string(buf), nil
 }
 
-func (sr *ScriptReader) Parse() (Script, error) {
+func (sr *ScriptReader) ParseScript() (Script, error) {
 	script := Script{}
 
 	parseErr := func(err error) error {
@@ -715,4 +748,102 @@ func (sr *ScriptReader) Parse() (Script, error) {
 	}
 
 	return script, nil
+}
+
+type ExprEnvDevice struct {
+	Hostname string `expr:"hostname"`
+	OS       string `expr:"os"`
+	Arch     string `expr:"arch"`
+}
+
+type ExprEnvLastScanned struct {
+	ID    string `expr:"id"`
+	Value string `expr:"value"`
+	Data  string `expr:"data"`
+}
+
+type ExprEnvActiveMedia struct {
+	LauncherID string `expr:"launcher_id"`
+	SystemID   string `expr:"system_id"`
+	SystemName string `expr:"system_name"`
+	Path       string `expr:"path"`
+	Name       string `expr:"name"`
+}
+
+type ExprEnv struct {
+	Platform     string             `expr:"platform"`
+	Version      string             `expr:"version"`
+	ScanMode     string             `expr:"scan_mode"`
+	Device       ExprEnvDevice      `expr:"device"`
+	LastScanned  ExprEnvLastScanned `expr:"last_scanned"`
+	MediaPlaying bool               `expr:"media_playing"`
+	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
+}
+
+func (sr *ScriptReader) PostProcess(exprEnv ExprEnv) (string, error) {
+	parts := make([]PostArgPart, 0)
+	currentPart := PostArgPart{}
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return "", err
+		} else if ch == eof {
+			break
+		}
+
+		if ch == SymExpressionStart {
+			if currentPart.Type != ArgPartTypeUnknown {
+				parts = append(parts, currentPart)
+				currentPart = PostArgPart{}
+			}
+
+			currentPart.Type = ArgPartTypeExpression
+			exprValue, err := sr.parseExpression(false)
+			if err != nil {
+				return "", err
+			}
+			currentPart.Value = exprValue
+
+			parts = append(parts, currentPart)
+			currentPart = PostArgPart{}
+
+			continue
+		} else {
+			currentPart.Type = ArgPartTypeString
+			currentPart.Value = currentPart.Value + string(ch)
+			continue
+		}
+	}
+
+	if currentPart.Type != ArgPartTypeUnknown {
+		parts = append(parts, currentPart)
+	}
+
+	arg := ""
+	for _, part := range parts {
+		if part.Type == ArgPartTypeExpression {
+			output, err := expr.Eval(part.Value, exprEnv)
+			if err != nil {
+				return "", err
+			}
+
+			switch v := output.(type) {
+			case string:
+				arg = arg + v
+			case bool:
+				arg = arg + strconv.FormatBool(v)
+			case int:
+				arg = arg + strconv.Itoa(v)
+			case float64:
+				arg = arg + strconv.FormatFloat(v, 'f', -1, 64)
+			default:
+				return "", fmt.Errorf("%w: %v (%T)", ErrBadExpressionReturn, v, v)
+			}
+		} else {
+			arg = arg + part.Value
+		}
+	}
+
+	return arg, nil
 }
