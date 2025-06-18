@@ -137,7 +137,7 @@ func getExprEnv(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
-) parser.ExprEnv {
+) parser.ArgExprEnv {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Debug().Err(err).Msgf("error getting hostname, continuing")
@@ -146,7 +146,7 @@ func getExprEnv(
 	lastScanned := st.GetLastScanned()
 	activeMedia := st.ActiveMedia()
 
-	env := parser.ExprEnv{
+	env := parser.ArgExprEnv{
 		Platform: pl.ID(),
 		Version:  config.AppVersion,
 		ScanMode: strings.ToLower(cfg.ReadersScan().Mode),
@@ -220,7 +220,7 @@ func RunCommand(
 
 	for i, arg := range cmd.Args {
 		reader := parser.NewParser(arg)
-		output, err := reader.PostProcess(exprEnv)
+		output, err := reader.EvalExpressions(exprEnv)
 		if err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", err)
 		}
@@ -229,7 +229,7 @@ func RunCommand(
 
 	for k, arg := range cmd.AdvArgs {
 		reader := parser.NewParser(arg)
-		output, err := reader.PostProcess(exprEnv)
+		output, err := reader.EvalExpressions(exprEnv)
 		if err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", err)
 		}

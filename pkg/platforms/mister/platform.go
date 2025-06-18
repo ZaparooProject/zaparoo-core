@@ -572,7 +572,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls = append(ls, neogeo)
 	ls = append(ls, mplayerVideo)
 
-	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), ls...)
+	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }
 
 func (p *Platform) ShowNotice(

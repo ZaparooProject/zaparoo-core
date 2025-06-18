@@ -770,7 +770,7 @@ type ExprEnvActiveMedia struct {
 	Name       string `expr:"name"`
 }
 
-type ExprEnv struct {
+type ArgExprEnv struct {
 	Platform     string             `expr:"platform"`
 	Version      string             `expr:"version"`
 	ScanMode     string             `expr:"scan_mode"`
@@ -780,7 +780,14 @@ type ExprEnv struct {
 	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
 }
 
-func (sr *ScriptReader) PostProcess(exprEnv ExprEnv) (string, error) {
+type CustomLauncherExprEnv struct {
+	Platform  string        `expr:"platform"`
+	Version   string        `expr:"version"`
+	Device    ExprEnvDevice `expr:"device"`
+	MediaPath string        `expr:"media_path"`
+}
+
+func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 	parts := make([]PostArgPart, 0)
 	currentPart := PostArgPart{}
 
