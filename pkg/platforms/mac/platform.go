@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"os"
@@ -61,7 +61,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return []string{}
+	return cfg.IndexRoots()
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -126,8 +126,8 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
-	return []platforms.Launcher{
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	launchers := []platforms.Launcher{
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
@@ -137,6 +137,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

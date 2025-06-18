@@ -2,8 +2,15 @@ package mediadb
 
 import (
 	"database/sql"
-	"github.com/rs/zerolog/log"
+	"embed"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
@@ -12,105 +19,76 @@ import (
 
 // Queries go here to keep the interface clean
 
-const DBVersion string = "1.0"
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+const DBConfigLastGeneratedAt = "LastGeneratedAt"
+
+func sqlMigrateUp(db *sql.DB) error {
+	goose.SetBaseFS(migrationFiles)
+
+	if err := goose.SetDialect("sqlite"); err != nil {
+		return fmt.Errorf("error setting goose dialect: %w", err)
+	}
+
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("error running migrations up: %w", err)
+	}
+
+	return nil
+}
 
 func sqlAllocate(db *sql.DB) error {
-	// ROWID is an internal subject to change on vacuum
-	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
-	// persistent between vacuums
-	sqlStmt := `
-	PRAGMA journal_mode = OFF;
-	PRAGMA synchronous = OFF;
+	return sqlMigrateUp(db)
+}
 
-	drop table if exists DBInfo;
-	create table DBInfo (
-		DBID INTEGER PRIMARY KEY,
-		Version text,
-		LastGeneratedAt integer not null
-	);
-
-	insert into
-	DBInfo
-	(DBID, Version, LastGeneratedAt)
-	values (1, ?, 0);
-
-	drop table if exists Systems;
-	create table Systems (
-		DBID INTEGER PRIMARY KEY,
-		SystemID text unique not null,
-		Name text not null
-	);
-
-	drop table if exists MediaTitles;
-	create table MediaTitles (
-		DBID INTEGER PRIMARY KEY,
-		SystemDBID integer not null,
-		Slug text not null,
-		Name text not null
-	);
-
-	drop table if exists Media;
-	create table Media (
-		DBID INTEGER PRIMARY KEY,
-		MediaTitleDBID integer not null,
-		Path text not null
-	);
-
-	drop table if exists TagTypes;
-	create table TagTypes (
-		DBID INTEGER PRIMARY KEY,
-		Type text unique not null
-	);
-
-	drop table if exists Tags;
-	create table Tags (
-		DBID INTEGER PRIMARY KEY,
-		TypeDBID integer not null,
-		Tag text not null
-	);
-
-	drop table if exists MediaTags;
-	create table MediaTags (
-		DBID INTEGER PRIMARY KEY,
-		MediaDBID integer not null,
-		TagDBID integer not null
-	);
-
-	drop table if exists MediaTitleTags;
-	create table MediaTitleTags (
-		DBID INTEGER PRIMARY KEY,
-		TagDBID integer not null,
-		MediaTitleDBID integer not null
-	);
-
-	drop table if exists SupportingMedia;
-	create table SupportingMedia (
-		DBID INTEGER PRIMARY KEY,
-		MediaTitleDBID integer not null,
-		TypeTagDBID integer not null,
-		Path string not null,
-		ContentType text not null,
-		Binary blob
-	);
-	`
-	_, err := db.Exec(sqlStmt, DBVersion)
+func sqlUpdateLastGenerated(db *sql.DB) error {
+	_, err := db.Exec(
+		fmt.Sprintf(
+			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('%s', ?)",
+			DBConfigLastGeneratedAt,
+		),
+		strconv.FormatInt(time.Now().Unix(), 10),
+	)
 	return err
+}
+
+func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
+	var rawTimestamp string
+	err := db.QueryRow(
+		fmt.Sprintf(
+			"SELECT Value FROM DBConfig WHERE Name = '%s'",
+			DBConfigLastGeneratedAt,
+		),
+	).Scan(&rawTimestamp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, nil
+	} else if err != nil {
+		return time.Time{}, err
+	}
+
+	timestamp, err := strconv.Atoi(rawTimestamp)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.Unix(int64(timestamp), 0), nil
 }
 
 func sqlIndexTables(db *sql.DB) error {
 	sqlStmt := `
-	create index mediatitles_slug_idx on MediaTitles (Slug);
-	create index mediatitles_system_idx on MediaTitles (SystemDBID);
-	create index media_mediatitle_idx on Media (MediaTitleDBID);
-	create index tags_tag_idx on Tags (Tag);
-	create index tags_tagtype_idx on Tags (TypeDBID);
-	create index mediatags_media_idx on MediaTags (MediaDBID);
-	create index mediatags_tag_idx on MediaTags (TagDBID);
-	create index mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
-	create index mediatitletags_tag_idx on MediaTitleTags (TagDBID);
-	create index supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
-	create index supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
-	create index supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
+	create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
+	create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
+	create index if not exists media_mediatitle_idx on Media (MediaTitleDBID);
+	create index if not exists tags_tag_idx on Tags (Tag);
+	create index if not exists tags_tagtype_idx on Tags (TypeDBID);
+	create index if not exists mediatags_media_idx on MediaTags (MediaDBID);
+	create index if not exists mediatags_tag_idx on MediaTags (TagDBID);
+	create index if not exists mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
+	create index if not exists mediatitletags_tag_idx on MediaTitleTags (TagDBID);
+	create index if not exists supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	`
 	_, err := db.Exec(sqlStmt)
 	return err
@@ -118,9 +96,7 @@ func sqlIndexTables(db *sql.DB) error {
 
 //goland:noinspection SqlWithoutWhere
 func sqlTruncate(db *sql.DB) error {
-	// TODO: Consider deleting the sqlite db file and reallocating?
 	sqlStmt := `
-	delete from DBInfo;
 	delete from Systems;
 	delete from MediaTitles;
 	delete from Media;
@@ -588,6 +564,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		args = append(args, sys.ID)
 	}
 	args = append(args, slug, path)
+
 	stmt, err := db.Prepare(`
 		select 
 			Systems.SystemID,
@@ -604,6 +581,10 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		and Media.Path = ?
 		LIMIT 1
 	`)
+	if err != nil {
+		return results, err
+	}
+
 	rows, err := stmt.Query(
 		args...,
 	)
@@ -650,6 +631,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	for _, p := range parts {
 		args = append(args, "%"+p+"%")
 	}
+
 	stmt, err := db.Prepare(`
 		select 
 			Systems.SystemID,
@@ -666,6 +648,10 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		prepareVariadic(" Media.Path like ? ", " and ", len(parts)) +
 		` LIMIT 250
 	`)
+	if err != nil {
+		return results, err
+	}
+
 	rows, err := stmt.Query(
 		args...,
 	)
@@ -723,6 +709,7 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 
 func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	var list []string
+
 	q, err := db.Prepare(`
 		select SystemID from Systems;
 	`)
@@ -732,6 +719,10 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+	if err != nil {
+		return list, err
+	}
+
 	rows, err := q.Query()
 	if err != nil {
 		return list, err

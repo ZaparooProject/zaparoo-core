@@ -3,9 +3,9 @@ package zapscript
 import (
 	"encoding/json"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/rs/zerolog/log"
 	"math/rand"
@@ -131,6 +131,7 @@ func readPlsFile(path string) ([]playlists.PlaylistMedia, error) {
 			testFile := filepath.Base(entry.file)
 
 			// check name without advanced args if they're there
+			// TODO: use parser
 			if strings.Contains(testFile, "?") {
 				last := strings.LastIndex(testFile, "?")
 				noArgs := testFile[:last]
@@ -205,7 +206,13 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistMedia, error) {
 }
 
 func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playlist, error) {
-	path, err := findFile(pl, env.Cfg, env.Args)
+	if len(env.Cmd.Args) == 0 {
+		return nil, ErrArgCount
+	} else if env.Cmd.Args[0] == "" {
+		return nil, ErrRequiredArgs
+	}
+
+	path, err := findFile(pl, env.Cfg, env.Cmd.Args[0])
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +230,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 	}
 
-	if v, ok := env.NamedArgs["mode"]; ok && strings.EqualFold(v, "shuffle") {
-		log.Info().Msgf("shuffling playlist: %s", env.Args)
+	if v, ok := env.Cmd.AdvArgs["mode"]; ok && strings.EqualFold(v, "shuffle") {
+		log.Info().Msgf("shuffling playlist: %s", env.Cmd.Args[0])
 		if len(media) == 0 {
 			log.Warn().Msgf("playlist is empty: %s", path)
 		} else {
@@ -234,11 +241,12 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 	}
 
-	return playlists.NewPlaylist(env.Args, media), nil
+	return playlists.NewPlaylist(env.Cmd.Args[0], media), nil
 }
 
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Playlist.Active != nil && env.Args == "" {
+	if env.Playlist.Active != nil &&
+		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
 		log.Info().Msg("starting paused playlist")
 		pls := playlists.Play(*env.Playlist.Active)
 		env.Playlist.Queue <- pls
@@ -253,7 +261,7 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("play playlist: %s", env.Args)
+	log.Info().Any("media", pls.Media).Msgf("play playlist: %v", env.Cmd.Args)
 	pls = playlists.Play(*pls)
 	env.Playlist.Queue <- pls
 
@@ -269,7 +277,7 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("load playlist: %s", env.Args)
+	log.Info().Any("media", pls.Media).Msgf("load playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
 	return platforms.CmdResult{
@@ -289,7 +297,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Index = env.Playlist.Active.Index
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("open playlist: %s", env.Args)
+	log.Info().Any("media", pls.Media).Msgf("open playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
 	var items []models.ZapScript
@@ -370,7 +378,11 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
 	}
 
-	index, err := strconv.Atoi(env.Args)
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+
+	index, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

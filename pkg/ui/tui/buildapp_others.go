@@ -1,4 +1,6 @@
-package configui
+//go:build !linux
+
+package tui
 
 import (
 	"github.com/rivo/tview"

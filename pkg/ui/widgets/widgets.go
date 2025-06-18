@@ -1,10 +1,12 @@
 package widgets
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
 	"os/signal"
@@ -17,7 +19,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/configui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -156,7 +157,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	}
 
 	app := tview.NewApplication()
-	configui.SetTheme(&tview.Styles)
+	tui.SetTheme(&tview.Styles)
 
 	view := tview.NewTextView().
 		SetText(noticeArgs.Text).
@@ -257,7 +258,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 		}()
 	}
 
-	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(func() (*tview.Application, error) {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
@@ -301,7 +302,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	app := tview.NewApplication()
-	configui.SetTheme(&tview.Styles)
+	tui.SetTheme(&tview.Styles)
 
 	run := func(action zapScriptModels.ZapScript) {
 		log.Info().Msgf("running picker selection: %v", action)
@@ -318,7 +319,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 			log.Error().Err(err).Msg("error creating run params")
 		}
 
-		_, err = client.LocalClient(cfg, models.MethodRunScript, string(ps))
+		_, err = client.LocalClient(context.Background(), cfg, models.MethodRunScript, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
@@ -438,7 +439,7 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		}()
 	}
 
-	err := configui.BuildAppAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(func() (*tview.Application, error) {
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")

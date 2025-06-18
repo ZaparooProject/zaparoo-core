@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
@@ -243,7 +243,7 @@ func InstallRunMedia(
 	}
 
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(cfg) {
 		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}

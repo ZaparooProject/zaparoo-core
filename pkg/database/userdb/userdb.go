@@ -9,7 +9,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 var ErrorNullSql = errors.New("UserDB is not connected")
@@ -36,7 +36,7 @@ func (db *UserDB) Open() error {
 			return err
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite", dbPath)
+	sqlInstance, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return err
 	}
@@ -67,6 +67,13 @@ func (db *UserDB) Allocate() error {
 		return ErrorNullSql
 	}
 	return sqlAllocate(db.sql)
+}
+
+func (db *UserDB) MigrateUp() error {
+	if db.sql == nil {
+		return ErrorNullSql
+	}
+	return sqlMigrateUp(db.sql)
 }
 
 func (db *UserDB) Vacuum() error {

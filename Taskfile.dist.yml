@@ -1,16 +1,13 @@
 version: "3"
 
 env:
+  GOPROXY: https://goproxy.io,direct
   APP_VERSION:
     sh: echo -n "$(git rev-parse --short HEAD)-dev"
-  GO111MODULE: on
-  GOPROXY: https://goproxy.io,direct
-  CGO_ENABLED: 1
-  CGO_LDFLAGS: -lnfc -lusb
   UID:
-    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -u{{end}}"
+    sh: '{{if ne OS "windows"}}id -u{{end}}'
   GID:
-    sh: "{{if eq OS \"windows\"}}echo -n 1000{{else}}id -g{{end}}"
+    sh: '{{if ne OS "windows"}}id -g{{end}}'
 
 dotenv: [".env"]
 
@@ -28,26 +25,40 @@ includes:
   retropie: ./scripts/tasks/retropie.yml
   steamos: ./scripts/tasks/steamos.yml
   windows: ./scripts/tasks/windows.yml
+  test: ./scripts/tasks/test.yml
 
 tasks:
   build:
-    cmds:
-      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}' -linkmode external -extldflags -static -s -w" -tags netgo -o _build/${PLATFORM}_{{ARCH}}/${APP_BIN} ./cmd/$PLATFORM
-
-  build-basic:
-    internal: true
     vars:
-      BUILD_NAME: "{{if .ARCHLESS}}{{.PLATFORM}}{{else}}{{.PLATFORM}}_{{.BUILD_ARCH}}{{end}}"
-      BUILD_DIR: "./_build/{{.BUILD_NAME}}"
+      APP_BIN: '{{default "zaparoo" .APP_BIN}}'
+      BUILD_OS: "{{default OS .BUILD_OS}}"
+      BUILD_ARCH: "{{default ARCH .BUILD_ARCH}}"
+      PLATFORM: '{{default (OS | replace "darwin" "mac") .PLATFORM}}'
+      BUILD_DIR: "_build/{{.PLATFORM}}_{{.BUILD_ARCH}}"
+      EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
     env:
-      GOARCH: "{{default .ARCH .BUILD_ARCH}}"
-      GOOS: '{{default "windows" .BUILD_OS}}'
-      CGO_ENABLED: 0
+      GO111MODULE: on
+      CGO_ENABLED: 1
+      GOARCH: "{{.BUILD_ARCH}}"
+      GOOS: "{{.BUILD_OS}}"
+      CGO_LDFLAGS: '{{if not .NO_LIBNFC}}-lnfc -lusb{{end}}'
+      PLATFORM: '{{.PLATFORM}}'
+      CC: "{{.CC}}"
+      CXX: "{{.CXX}}"
+      APP_VERSION: '{{default "dev" .APP_VERSION}}'
     cmds:
-      - go build -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion={{.APP_VERSION}}'" {{.BUILD_ARGS}} -o {{.BUILD_DIR}}/{{.APP_BIN}} ./cmd/{{.PLATFORM}}
-      - python3 scripts/tasks/makezip.py {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}} "zaparoo-{{.BUILD_NAME}}.zip"
+      - >-
+        go build
+        -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion=${APP_VERSION}'
+        -linkmode external -extldflags
+        '{{if not .NO_LIBNFC}}${CGO_LDFLAGS}{{end}}
+        {{if not .NO_STATIC}}-static{{end}}'
+        -s -w {{.EXTRA_LDFLAGS}}"
+        -tags "netgo,sqlite_omit_load_extension"
+        -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
+        "./cmd/${PLATFORM}"
 
-  clean: "{{if eq OS \"windows\"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build"
+  clean: '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build'
 
   test: go test ./...
 
@@ -55,4 +66,4 @@ tasks:
     cmds:
       - go test -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out
-      - "{{if eq OS \"windows\"}}powershell rm {{else}}rm {{end}} coverage.out"
+      - '{{if eq OS "windows"}}powershell rm {{else}}rm {{end}} coverage.out'

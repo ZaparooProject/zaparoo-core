@@ -2,57 +2,39 @@ package userdb
 
 import (
 	"database/sql"
-	"github.com/rs/zerolog/log"
+	"fmt"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+
+	"embed"
+
+	"github.com/pressly/goose/v3"
 )
 
 // Queries go here to keep the interface clean
 
-const DBVersion string = "1.0"
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+func sqlMigrateUp(db *sql.DB) error {
+	goose.SetBaseFS(migrationFiles)
+
+	if err := goose.SetDialect("sqlite"); err != nil {
+		return fmt.Errorf("error setting goose dialect: %w", err)
+	}
+
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("error running migrations up: %w", err)
+	}
+
+	return nil
+}
 
 func sqlAllocate(db *sql.DB) error {
-	// ROWID is an internal subject to change on vacuum
-	// DBID INTEGER PRIMARY KEY aliases ROWID and makes it
-	// persistent between vacuums
-	sqlStmt := `
-	drop table if exists DBInfo;
-	create table DBInfo (
-		DBID INTEGER PRIMARY KEY,
-		Version text
-	);
-
-	insert into
-	DBInfo
-	(DBID, Version)
-	values (1, ?);
-
-	drop table if exists History;
-	create table History (
-		DBID INTEGER PRIMARY KEY,
-		Time integer not null,
-		Type text not null,
-		TokenID text not null,
-		TokenValue text not null,
-		TokenData text not null,
-		Success integer not null
-	);
-
-	drop table if exists Mappings;
-	create table Mappings (
-		DBID INTEGER PRIMARY KEY,
-		Added integer not null,
-		Label text not null,
-		Enabled integer not null,
-		Type text not null,
-		Match text not null,
-		Pattern text not null,
-		Override text not null
-	);
-	`
-	_, err := db.Exec(sqlStmt, DBVersion)
-	return err
+	return sqlMigrateUp(db)
 }
 
 //goland:noinspection SqlWithoutWhere
@@ -106,6 +88,7 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 	if lastId == 0 {
 		lastId = 2147483646
 	}
+
 	q, err := db.Prepare(`
 		select 
 		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
@@ -114,12 +97,16 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 		order by DBID DESC
 		limit 25;
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query(lastId)
 	if err != nil {
 		return list, err
@@ -263,17 +250,22 @@ func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
 
 func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
+
 	q, err := db.Prepare(`
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings;
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query()
 	if err != nil {
 		return list, err
@@ -307,18 +299,23 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 
 func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
+
 	q, err := db.Prepare(`
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
 		where Enabled = ?
 	`)
+	if err != nil {
+		return list, err
+	}
 	defer func(q *sql.Stmt) {
 		err := q.Close()
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to close sql statement")
 		}
 	}(q)
+
 	rows, err := q.Query(true)
 	if err != nil {
 		return list, err

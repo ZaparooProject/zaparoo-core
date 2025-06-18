@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"os"
 	"os/exec"
@@ -14,8 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -267,7 +266,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 }
 
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return games.GetGamesFolders(UserConfigToMrext(cfg))
+	return append(cfg.IndexRoots(), games.GetGamesFolders(UserConfigToMrext(cfg))...)
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -337,7 +336,7 @@ func (p *Platform) KeyboardPress(name string) error {
 }
 
 func (p *Platform) GamepadPress(name string) error {
-	code, ok := linuxinput.GamepadMap[name]
+	code, ok := linuxinput.ToGamepadCode(name)
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
@@ -345,7 +344,7 @@ func (p *Platform) GamepadPress(name string) error {
 }
 
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if f, ok := p.cmdMappings[env.Cmd]; ok {
+	if f, ok := p.cmdMappings[env.Cmd.Name]; ok {
 		return f(p, env)
 	} else {
 		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
@@ -416,7 +415,7 @@ func readRomsets(filepath string) ([]Romset, error) {
 	return romsets.Romsets, nil
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
@@ -446,7 +445,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
 					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
@@ -511,7 +510,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 				return results, err
 			}
 
-			sfs := mediascanner.GetSystemPaths(p, p.RootDirs(cfg), []systemdefs.System{*s})
+			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			for _, sf := range sfs {
 				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
@@ -572,7 +571,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 	ls = append(ls, amiga)
 	ls = append(ls, neogeo)
 	ls = append(ls, mplayerVideo)
-	return ls
+
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), ls...)
 }
 
 func (p *Platform) ShowNotice(

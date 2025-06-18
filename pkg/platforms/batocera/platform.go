@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"io"
@@ -126,8 +126,8 @@ func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{"/userdata/roms"}
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	return append(cfg.IndexRoots(), "/userdata/roms")
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -261,7 +261,7 @@ func (p *Platform) KeyboardPress(name string) error {
 }
 
 func (p *Platform) GamepadPress(name string) error {
-	code, ok := linuxinput.GamepadMap[name]
+	code, ok := linuxinput.ToGamepadCode(name)
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
@@ -310,7 +310,7 @@ func readESGameListXML(path string) (ESGameList, error) {
 	return gameList, nil
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		{
 			ID:            "Generic",
@@ -390,7 +390,7 @@ func (p *Platform) Launchers() []platforms.Launcher {
 		})
 	}
 
-	return launchers
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

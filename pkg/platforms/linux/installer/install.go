@@ -20,11 +20,12 @@ const (
 	modprobePath = "/etc/modprobe.d/blacklist-zaparoo.conf"
 	udevPath     = "/etc/udev/rules.d/60-zaparoo.rules"
 	installMsg   = `Zaparoo will perform the following steps if required:
-- Add udev rules which allow user access to common NFC reader devices.
+- Add udev rules which allow user access to common NFC reader devices and
+  create virtual keyboards/gamepads.
 - Block certain NFC kernel modules from loading that prevent access to much
   more common readers.
 
-These steps are completely safe and can be reverted with the uninstall command.
+These steps are safe and can be reverted with the uninstall command.
 You may need to reboot for the changes to take effect or unplug and replug any
 NFC readers that were already connected.
 
@@ -38,7 +39,7 @@ func CLIInstall() error {
 	} else {
 		err := Install()
 		if err != nil {
-			fmt.Println("Error during install: ", err)
+			fmt.Println("Error during install:", err)
 			return err
 		}
 		fmt.Println("Install complete. You may need to reboot for changes to take effect.")
@@ -82,7 +83,7 @@ func Install() error {
 func CLIUninstall() error {
 	err := Uninstall()
 	if err != nil {
-		fmt.Println("Error during uninstall: ", err)
+		fmt.Println("Error during uninstall:", err)
 		return err
 	}
 	fmt.Println("Uninstall complete. You may need to reboot for changes to take effect.")

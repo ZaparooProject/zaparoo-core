@@ -180,3 +180,7 @@ func (r *FileReader) Info() string {
 func (r *FileReader) Write(_ string) (*tokens.Token, error) {
 	return nil, nil
 }
+
+func (r *FileReader) CancelWrite() {
+	return
+}

@@ -10,6 +10,7 @@ go.work
 
 .vscode/
 .idea/
+qodana.yaml
 
 *.db
 *.tar
@@ -30,3 +31,5 @@ Taskfile.yml
 .DS_Store
 tmp/
 /cmd/scratch
+/cmd/windows/*.syso
+/cmd/windows/winres/winres.json

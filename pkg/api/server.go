@@ -14,9 +14,11 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -31,7 +33,7 @@ import (
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
-	Message: "Parse error",
+	Message: "ParseScript error",
 }
 var JSONRPCErrorInvalidRequest = models.ErrorObject{
 	Code:    -32600,
@@ -134,7 +136,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodMappingsUpdate: methods.HandleUpdateMapping,
 		models.MethodMappingsReload: methods.HandleReloadMappings,
 		// readers
-		models.MethodReadersWrite: methods.HandleReaderWrite,
+		models.MethodReadersWrite:       methods.HandleReaderWrite,
+		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// utils
 		models.MethodVersion: methods.HandleVersion,
 	}
@@ -220,6 +223,34 @@ func handleResponse(resp models.ResponseObject) error {
 	return nil
 }
 
+func fsCustom404(root http.FileSystem) http.Handler {
+	appFS := http.FileServer(root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f, err := root.Open(r.URL.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				index, err := root.Open("index.html")
+				if err != nil {
+					log.Error().Err(err).Msg("error opening index.html")
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				http.ServeContent(w, r, "index.html", time.Now(), index)
+				return
+			} else {
+				log.Error().Err(err).Str("path", r.URL.Path).Msg("error opening file")
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		err = f.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("error closing file")
+		}
+		appFS.ServeHTTP(w, r)
+	})
+}
+
 // handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
 	appFs, err := fs.Sub(assets.App, "_app/dist")
@@ -228,8 +259,7 @@ func handleApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	http.StripPrefix("/app", http.FileServer(http.FS(appFs))).ServeHTTP(w, r)
+	http.StripPrefix("/app", fsCustom404(http.FS(appFs))).ServeHTTP(w, r)
 }
 
 // broadcastNotifications consumes and broadcasts all incoming API
@@ -467,6 +497,10 @@ func Start(
 		AllowedHeaders: []string{"Accept"},
 		ExposedHeaders: []string{},
 	}))
+
+	if strings.HasSuffix(config.AppVersion, "-dev") {
+		r.Mount("/debug", middleware.Profiler())
+	}
 
 	methodMap := NewMethodMap()
 

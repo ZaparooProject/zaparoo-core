@@ -15,9 +15,13 @@ import (
 )
 
 func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	// TODO: launcher named arg support
+	if len(env.Cmd.Args) != 1 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
 
-	if strings.EqualFold(env.Args, "menu") {
+	systemID := env.Cmd.Args[0]
+
+	if strings.EqualFold(systemID, "menu") {
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, pl.StopActiveLauncher()
@@ -25,12 +29,18 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, pl.LaunchSystem(env.Cfg, env.Args)
+	}, pl.LaunchSystem(env.Cfg, systemID)
 }
 
 func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Args == "" {
-		return platforms.CmdResult{}, fmt.Errorf("no system specified")
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+
+	query := env.Cmd.Args[0]
+
+	if query == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
 	launch, err := getAltLauncher(pl, env)
@@ -40,7 +50,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	gamesdb := env.Database.MediaDB
 
-	if env.Args == "all" {
+	if strings.EqualFold(query, "all") {
 		game, err := gamesdb.RandomGame(systemdefs.AllSystems())
 		if err != nil {
 			return platforms.CmdResult{}, err
@@ -54,18 +64,18 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// absolute path, try read dir and pick random file
 	// TODO: won't work for zips, switch to using gamesdb when it indexes paths
 	// TODO: doesn't filter on extensions
-	if filepath.IsAbs(env.Args) {
-		if _, err := os.Stat(env.Args); err != nil {
+	if filepath.IsAbs(query) {
+		if _, err := os.Stat(query); err != nil {
 			return platforms.CmdResult{}, err
 		}
 
-		files, err := filepath.Glob(filepath.Join(env.Args, "*"))
+		files, err := filepath.Glob(filepath.Join(query, "*"))
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}
 
 		if len(files) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", env.Args)
+			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", query)
 		}
 
 		file, err := utils.RandomElem(files)
@@ -80,7 +90,8 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	// perform a search similar to launch.search and pick randomly
 	// looking for <system>/<query> format
-	ps := strings.SplitN(env.Args, "/", 2)
+	// TODO: use parser for launch command
+	ps := strings.SplitN(query, "/", 2)
 	if len(ps) == 2 {
 		systemId, query := ps[0], ps[1]
 
@@ -118,10 +129,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, launch(game.Path)
 	}
 
-	systemIds := strings.Split(env.Args, ",")
-	systems := make([]systemdefs.System, 0, len(systemIds))
+	// assume given a list of system ids
+	systems := make([]systemdefs.System, 0, len(env.Cmd.Args))
 
-	for _, id := range systemIds {
+	for _, id := range env.Cmd.Args {
 		system, err := systemdefs.LookupSystem(id)
 		if err != nil {
 			log.Error().Err(err).Msgf("error looking up system: %s", id)
@@ -145,21 +156,21 @@ func getAltLauncher(
 	pl platforms.Platform,
 	env platforms.CmdEnv,
 ) (func(args string) error, error) {
-	if env.NamedArgs["launcher"] != "" {
+	if env.Cmd.AdvArgs["launcher"] != "" {
 		var launcher platforms.Launcher
 
-		for _, l := range pl.Launchers() {
-			if l.ID == env.NamedArgs["launcher"] {
+		for _, l := range pl.Launchers(env.Cfg) {
+			if l.ID == env.Cmd.AdvArgs["launcher"] {
 				launcher = l
 				break
 			}
 		}
 
 		if launcher.Launch == nil {
-			return nil, fmt.Errorf("alt launcher not found: %s", env.NamedArgs["launcher"])
+			return nil, fmt.Errorf("alt launcher not found: %s", env.Cmd.AdvArgs["launcher"])
 		}
 
-		log.Info().Msgf("launching with alt launcher: %s", env.NamedArgs["launcher"])
+		log.Info().Msgf("launching with alt launcher: %s", env.Cmd.AdvArgs["launcher"])
 
 		return func(args string) error {
 			return launcher.Launch(env.Cfg, args)
@@ -174,55 +185,61 @@ func getAltLauncher(
 var reUri = regexp.MustCompile(`^.+://`)
 
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+
+	path := env.Cmd.Args[0]
+
 	launch, err := getAltLauncher(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 
 	// if it's an absolute path, just try launch it
-	if filepath.IsAbs(env.Args) {
-		log.Debug().Msgf("launching absolute path: %s", env.Args)
+	if filepath.IsAbs(path) {
+		log.Debug().Msgf("launching absolute path: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(env.Args)
+		}, launch(path)
 	}
 
 	// match for uri style launch syntax
-	if reUri.MatchString(env.Args) {
-		log.Debug().Msgf("launching uri: %s", env.Args)
+	if reUri.MatchString(path) {
+		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(env.Args)
+		}, launch(path)
 	}
 
 	// for relative paths, perform a basic check if the file exists in a games folder
 	// this always takes precedence over the system/path format (but is not totally cross platform)
-	if p, err := findFile(pl, env.Cfg, env.Args); err == nil {
+	if p, err := findFile(pl, env.Cfg, path); err == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, launch(p)
 	} else {
-		log.Debug().Err(err).Msgf("error finding file: %s", env.Args)
+		log.Debug().Err(err).Msgf("error finding file: %s", path)
 	}
 
 	// attempt to parse the <system>/<path> format
-	ps := strings.SplitN(env.Text, "/", 2)
+	ps := strings.SplitN(path, "/", 2)
 	if len(ps) < 2 {
-		return platforms.CmdResult{}, fmt.Errorf("invalid launch format: %s", env.Text)
+		return platforms.CmdResult{}, fmt.Errorf("invalid launch format: %s", path)
 	}
 
-	systemId, path := ps[0], ps[1]
+	systemID, lookupPath := ps[0], ps[1]
 
-	system, err := systemdefs.LookupSystem(systemId)
+	system, err := systemdefs.LookupSystem(systemID)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Msgf("launching system: %s, path: %s", systemId, path)
+	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers() {
+	for _, l := range pl.Launchers(env.Cfg) {
 		if l.SystemID == system.ID {
 			launchers = append(launchers, l)
 		}
@@ -238,7 +255,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	for _, f := range folders {
-		systemPath := filepath.Join(f, path)
+		systemPath := filepath.Join(f, lookupPath)
 		log.Debug().Msgf("checking system path: %s", systemPath)
 		if fp, err := findFile(pl, env.Cfg, systemPath); err == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
@@ -246,30 +263,30 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				MediaChanged: true,
 			}, launch(fp)
 		} else {
-			log.Debug().Err(err).Msgf("error finding system file: %s", path)
+			log.Debug().Err(err).Msgf("error finding system file: %s", lookupPath)
 		}
 	}
 
 	gamesdb := env.Database.MediaDB
 
 	// search if the path contains no / or file extensions
-	if !strings.Contains(path, "/") && filepath.Ext(path) == "" {
-		if strings.Contains(path, "*") {
+	if !strings.Contains(lookupPath, "/") && filepath.Ext(lookupPath) == "" {
+		if strings.Contains(lookupPath, "*") {
 			// treat as a search
 			// TODO: passthrough advanced args
 			return cmdSearch(pl, env)
 		} else {
-			log.Info().Msgf("searching in %s: %s", system.ID, path)
+			log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
 			// treat as a direct title launch
 			res, err := gamesdb.SearchMediaPathExact(
 				[]systemdefs.System{*system},
-				path,
+				lookupPath,
 			)
 
 			if err != nil {
 				return platforms.CmdResult{}, err
 			} else if len(res) == 0 {
-				return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", path)
+				return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
 			}
 
 			log.Info().Msgf("found result: %s", res[0].Path)
@@ -281,12 +298,18 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 	}
 
-	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", env.Args)
+	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", path)
 }
 
 func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	if env.Args == "" {
-		return platforms.CmdResult{}, fmt.Errorf("no query specified")
+	if len(env.Cmd.Args) == 0 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+
+	query := env.Cmd.Args[0]
+
+	if query == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
 	launch, err := getAltLauncher(pl, env)
@@ -294,12 +317,12 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, err
 	}
 
-	query := strings.ToLower(env.Args)
+	query = strings.ToLower(query)
 	query = strings.TrimSpace(query)
 
 	gamesdb := env.Database.MediaDB
 
-	if !strings.Contains(env.Args, "/") {
+	if !strings.Contains(query, "/") {
 		// search all systems
 		res, err := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
 		if err != nil {
@@ -320,7 +343,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("invalid search format: %s", query)
 	}
 
-	systemId, query := ps[0], ps[1]
+	systemID, query := ps[0], ps[1]
 
 	if query == "" {
 		return platforms.CmdResult{}, fmt.Errorf("no query specified")
@@ -328,10 +351,10 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	systems := make([]systemdefs.System, 0)
 
-	if strings.EqualFold(systemId, "all") {
+	if strings.EqualFold(systemID, "all") {
 		systems = systemdefs.AllSystems()
 	} else {
-		system, err := systemdefs.LookupSystem(systemId)
+		system, err := systemdefs.LookupSystem(systemID)
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}

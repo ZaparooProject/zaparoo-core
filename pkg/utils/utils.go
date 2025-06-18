@@ -23,8 +23,12 @@ package utils
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"crypto/md5"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"io"
 	"math/rand"
 	"net"
@@ -119,21 +123,22 @@ func WaitForInternet(maxTries int) bool {
 	return false
 }
 
-func GetLocalIp() (net.IP, error) {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+func GetLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	defer func(conn net.Conn) {
-		err := conn.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("close connection failed")
+
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok &&
+			!ipnet.IP.IsLoopback() && ipnet.IP.IsPrivate() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
 		}
-	}(conn)
+	}
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-
-	return localAddr.IP, nil
+	return ""
 }
 
 func IsZip(path string) bool {
@@ -255,4 +260,13 @@ func FilenameFromPath(path string) string {
 func SlugifyPath(path string) string {
 	fn := FilenameFromPath(path)
 	return SlugifyString(fn)
+}
+
+func IsServiceRunning(cfg *config.Instance) bool {
+	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
+	if err != nil {
+		log.Debug().Err(err).Msg("error checking if service running")
+		return false
+	}
+	return true
 }

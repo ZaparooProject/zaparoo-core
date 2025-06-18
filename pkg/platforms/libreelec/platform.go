@@ -22,6 +22,10 @@ package libreelec
 
 import (
 	"fmt"
+<<<<<<< otaku/kodi
+=======
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+>>>>>>> main
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,10 +96,15 @@ func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
+<<<<<<< otaku/kodi
 func (p *Platform) RootDirs(_ *config.Instance) []string {
 	return []string{
 		"/storage",
 	}
+=======
+func (p *Platform) RootDirs(cfg *config.Instance) []string {
+	return cfg.IndexRoots()
+>>>>>>> main
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -160,8 +169,8 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
-func (p *Platform) Launchers() []platforms.Launcher {
-	return []platforms.Launcher{
+func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	launchers := []platforms.Launcher{
 		{
 			ID:         "KodiLocal",
 			SystemID:   systemdefs.SystemVideo,
@@ -185,6 +194,8 @@ func (p *Platform) Launchers() []platforms.Launcher {
 			},
 		},
 	}
+
+	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

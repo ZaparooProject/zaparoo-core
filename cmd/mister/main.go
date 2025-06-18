@@ -24,13 +24,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 
@@ -181,7 +182,7 @@ func main() {
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
-	err = tryAddStartup(pl, svc)
+	err = tryAddStartup()
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
 		os.Exit(1)
@@ -196,9 +197,12 @@ func main() {
 	}
 
 	// display main info gui
+	enableZapScript := client.DisableZapScript(cfg)
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
+		enableZapScript()
 		_, _ = fmt.Fprintf(os.Stderr, "Error displaying service info: %v\n", err)
 		os.Exit(1)
 	}
+	enableZapScript()
 }

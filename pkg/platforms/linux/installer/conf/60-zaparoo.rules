@@ -1,4 +1,8 @@
 # Allow user access access to NFC readers which use the CH340 USB serial chip
 SUBSYSTEMS=="usb", ATTRS{idProduct}=="7523", ATTRS{idVendor}=="1a86", MODE="0660", TAG+="uaccess"
+
 # Example of allowing user access to all USB serial devices
 # SUBSYSTEMS=="usb-serial", TAG+="uaccess"
+
+# Allow user access to create uinput devices (keyboard, gamepad, etc.)
+KERNEL=="uinput", TAG+="uaccess"
