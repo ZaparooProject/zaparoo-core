@@ -20,6 +20,7 @@ var SystemMap = map[string]string{
 	"apple2": systemdefs.SystemAppleII,
 	//"apple2gs": systemdefs.SystemAppleII,
 	"arcadia": systemdefs.SystemArcadia,
+	"arcade":  systemdefs.SystemArcade,
 	//"archimedes":   systemdefs.SystemPC,
 	"arduboy": systemdefs.SystemArduboy,
 	//"astrocde":     systemdefs.SystemAstrocade,
