@@ -62,6 +62,13 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/Anime0t4ku">
+                    <img src="https://avatars.githubusercontent.com/u/72316217?v=4" width="100;" alt="Anime0t4ku"/>
+                    <br />
+                    <sub><b>Bjorn Logan</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/TheTrainGoes">
                     <img src="https://avatars.githubusercontent.com/u/32771064?v=4" width="100;" alt="TheTrainGoes"/>
                     <br />
@@ -89,6 +96,8 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>Andrea Bogazzi @ Shutterstock</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/fayep">
                     <img src="https://avatars.githubusercontent.com/u/565311?v=4" width="100;" alt="fayep"/>
@@ -96,8 +105,6 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
                     <sub><b>fayep</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/Spice-King">
                     <img src="https://avatars.githubusercontent.com/u/590498?v=4" width="100;" alt="Spice-King"/>
