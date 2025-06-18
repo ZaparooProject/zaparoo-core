@@ -1987,7 +1987,7 @@ func TestPostProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := parser.ExprEnv{
+			env := parser.ArgExprEnv{
 				Platform:     "mister",
 				Version:      "1.2.3",
 				MediaPlaying: true,
@@ -2000,14 +2000,14 @@ func TestPostProcess(t *testing.T) {
 			}
 
 			p := parser.NewParser(tt.input)
-			got, err := p.PostProcess(env)
+			got, err := p.EvalExpressions(env)
 			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("PostProcess() error = %v, wantErr = %v", err, tt.wantErr)
+				t.Errorf("EvalExpressions() error = %v, wantErr = %v", err, tt.wantErr)
 				return
 			}
 
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("PostProcess() mismatch (-want +got):\n%s", diff)
+				t.Errorf("EvalExpressions() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

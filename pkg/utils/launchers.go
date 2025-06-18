@@ -1,15 +1,16 @@
 package utils
 
 import (
-	"bytes"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
-	"text/template"
 )
 
 func formatExtensions(exts []string) []string {
@@ -28,7 +29,10 @@ func formatExtensions(exts []string) []string {
 	return newExts
 }
 
-func ParseCustomLaunchers(customLaunchers []config.LaunchersCustom) []platforms.Launcher {
+func ParseCustomLaunchers(
+	pl platforms.Platform,
+	customLaunchers []config.LaunchersCustom,
+) []platforms.Launcher {
 	launchers := make([]platforms.Launcher, 0)
 	for _, v := range customLaunchers {
 		systemID := ""
@@ -47,32 +51,38 @@ func ParseCustomLaunchers(customLaunchers []config.LaunchersCustom) []platforms.
 			Folders:    v.MediaDirs,
 			Extensions: formatExtensions(v.FileExts),
 			Launch: func(_ *config.Instance, path string) error {
-				data := struct {
-					MediaPath string
-				}{
+				hostname, err := os.Hostname()
+				if err != nil {
+					log.Debug().Err(err).Msgf("error getting hostname, continuing")
+				}
+
+				exprEnv := parser.CustomLauncherExprEnv{
+					Platform: pl.ID(),
+					Version:  config.AppVersion,
+					Device: parser.ExprEnvDevice{
+						Hostname: hostname,
+						OS:       runtime.GOOS,
+						Arch:     runtime.GOARCH,
+					},
 					MediaPath: path,
 				}
 
-				tmpl, err := template.New("command").Parse(v.Execute)
+				reader := parser.NewParser(v.Execute)
+				output, err := reader.EvalExpressions(exprEnv)
 				if err != nil {
-					return err
-				}
-
-				var buf bytes.Buffer
-				if err := tmpl.Execute(&buf, data); err != nil {
-					return err
+					return fmt.Errorf("error evaluating execute expression: %w", err)
 				}
 
 				if runtime.GOOS == "windows" {
-					cmd := exec.Command("cmd", "/c", buf.String())
+					cmd := exec.Command("cmd", "/c", output)
 					err = cmd.Run()
 				} else {
-					cmd := exec.Command("sh", "-c", buf.String())
+					cmd := exec.Command("sh", "-c", output)
 					err = cmd.Run()
 				}
 
 				if err != nil {
-					log.Error().Err(err).Msgf("error running custom launcher: %s", buf.String())
+					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
 					return err
 				}
 
