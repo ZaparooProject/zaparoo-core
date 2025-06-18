@@ -1940,8 +1940,8 @@ func TestPostProcess(t *testing.T) {
 		},
 		{
 			name:  "test expression 1",
-			input: `something [[test]]`,
-			want:  `something test`,
+			input: `something [[platform]]`,
+			want:  `something mister`,
 		},
 		{
 			name:  "test expression 2",
@@ -1964,13 +1964,8 @@ func TestPostProcess(t *testing.T) {
 			want:  `something false`,
 		},
 		{
-			name:  "test expression bool 3",
-			input: `[[ "test1" in a_list ]]`,
-			want:  `true`,
-		},
-		{
 			name:    "bad return type",
-			input:   `[[a_list]]`,
+			input:   `[[device]]`,
 			wantErr: parser.ErrBadExpressionReturn,
 		},
 		{
@@ -1992,12 +1987,16 @@ func TestPostProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := map[string]any{
-				"test":     "test",
-				"a_bool":   true,
-				"a_number": 1,
-				"a_string": "test",
-				"a_list":   []string{"test1", "test2"},
+			env := parser.ExprEnv{
+				Platform:     "mister",
+				Version:      "1.2.3",
+				MediaPlaying: true,
+				ScanMode:     "tap",
+				Device: parser.ExprEnvDevice{
+					Hostname: "test-device",
+					OS:       "linux",
+					Arch:     "arm",
+				},
 			}
 
 			p := parser.NewParser(tt.input)

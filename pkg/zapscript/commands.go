@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
@@ -132,6 +133,48 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("file not found: %s", path)
 }
 
+func getExprEnv(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	st *state.State,
+) parser.ExprEnv {
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Debug().Err(err).Msgf("error getting hostname, continuing")
+	}
+
+	lastScanned := st.GetLastScanned()
+	activeMedia := st.ActiveMedia()
+
+	env := parser.ExprEnv{
+		Platform: pl.ID(),
+		Version:  config.AppVersion,
+		ScanMode: strings.ToLower(cfg.ReadersScan().Mode),
+		Device: parser.ExprEnvDevice{
+			Hostname: hostname,
+			OS:       runtime.GOOS,
+			Arch:     runtime.GOARCH,
+		},
+		LastScanned: parser.ExprEnvLastScanned{
+			ID:    lastScanned.UID,
+			Value: lastScanned.Text,
+			Data:  lastScanned.Data,
+		},
+		MediaPlaying: activeMedia != nil,
+		ActiveMedia:  parser.ExprEnvActiveMedia{},
+	}
+
+	if activeMedia != nil {
+		env.ActiveMedia.LauncherID = activeMedia.LauncherID
+		env.ActiveMedia.SystemID = activeMedia.SystemID
+		env.ActiveMedia.SystemName = activeMedia.SystemName
+		env.ActiveMedia.Path = activeMedia.Path
+		env.ActiveMedia.Name = activeMedia.Name
+	}
+
+	return env
+}
+
 // RunCommand parses and runs a single ZapScript command.
 func RunCommand(
 	pl platforms.Platform,
@@ -173,17 +216,7 @@ func RunCommand(
 		return platforms.CmdResult{}, err
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		log.Debug().Err(err).Msgf("error getting hostname, continuing")
-	}
-
-	exprEnv := map[string]any{
-		"platform":      pl.ID(),
-		"media_playing": st.ActiveMedia() != nil,
-		"scan_mode":     strings.ToLower(cfg.ReadersScan().Mode),
-		"hostname":      hostname,
-	}
+	exprEnv := getExprEnv(pl, cfg, st)
 
 	for i, arg := range cmd.Args {
 		reader := parser.NewParser(arg)

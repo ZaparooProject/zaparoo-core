@@ -750,7 +750,37 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 	return script, nil
 }
 
-func (sr *ScriptReader) PostProcess(exprEnv map[string]any) (string, error) {
+type ExprEnvDevice struct {
+	Hostname string `expr:"hostname"`
+	OS       string `expr:"os"`
+	Arch     string `expr:"arch"`
+}
+
+type ExprEnvLastScanned struct {
+	ID    string `expr:"id"`
+	Value string `expr:"value"`
+	Data  string `expr:"data"`
+}
+
+type ExprEnvActiveMedia struct {
+	LauncherID string `expr:"launcher_id"`
+	SystemID   string `expr:"system_id"`
+	SystemName string `expr:"system_name"`
+	Path       string `expr:"path"`
+	Name       string `expr:"name"`
+}
+
+type ExprEnv struct {
+	Platform     string             `expr:"platform"`
+	Version      string             `expr:"version"`
+	ScanMode     string             `expr:"scan_mode"`
+	Device       ExprEnvDevice      `expr:"device"`
+	LastScanned  ExprEnvLastScanned `expr:"last_scanned"`
+	MediaPlaying bool               `expr:"media_playing"`
+	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
+}
+
+func (sr *ScriptReader) PostProcess(exprEnv ExprEnv) (string, error) {
 	parts := make([]PostArgPart, 0)
 	currentPart := PostArgPart{}
 
