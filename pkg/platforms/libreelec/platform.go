@@ -22,22 +22,18 @@ package libreelec
 
 import (
 	"fmt"
-<<<<<<< otaku/kodi
-=======
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
->>>>>>> main
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/adrg/xdg"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/configui/widgets/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -47,8 +43,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 )
 
 const (
@@ -96,15 +90,8 @@ func (p *Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-<<<<<<< otaku/kodi
-func (p *Platform) RootDirs(_ *config.Instance) []string {
-	return []string{
-		"/storage",
-	}
-=======
 func (p *Platform) RootDirs(cfg *config.Instance) []string {
-	return cfg.IndexRoots()
->>>>>>> main
+	return append(cfg.IndexRoots(), "/storage")
 }
 
 func (p *Platform) Settings() platforms.Settings {
@@ -153,11 +140,11 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (p *Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (p *Platform) GamepadPress(_ string) error {
 	return nil
 }
 
@@ -195,7 +182,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	return append(utils.ParseCustomLaunchers(cfg.CustomLaunchers()), launchers...)
+	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

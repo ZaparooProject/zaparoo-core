@@ -40,3 +40,9 @@ tasks:
           DOCKER_PLATFORM: linux/amd64
           IMAGE_NAME: zaparoo/linux-amd64-build
           APP_BIN: zaparoo
+
+  deploy:
+    cmds:
+      - task: build-{{.CLI_ARGS}}
+      - scp _build/libreelec_{{.CLI_ARGS}}/zaparoo root@${LIBREELEC_IP}:/storage/zaparoo
+      - ssh root@${LIBREELEC_IP} /storage/zaparoo -service restart

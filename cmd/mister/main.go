@@ -201,7 +201,7 @@ func main() {
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
 		enableZapScript()
-		_, _ = fmt.Fprintf(os.Stderr, "Error displaying service info: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
 		os.Exit(1)
 	}
 	enableZapScript()

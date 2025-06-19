@@ -33,7 +33,7 @@ type KodiAPIPayload struct {
 	Params  any           `json:"params"`
 }
 
-func apiRequest(cfg *config.Instance, method KodiAPIMethod, params any) ([]byte, error) {
+func apiRequest(_ *config.Instance, method KodiAPIMethod, params any) ([]byte, error) {
 	req := KodiAPIPayload{
 		JsonRPC: "2.0",
 		ID:      1,
@@ -87,8 +87,6 @@ func kodiLaunchRequest(cfg *config.Instance, path string) error {
 }
 
 func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
-	// in this case, path would be something like kodi.move://some_id
-	// so we'll just trim that off and use the remaining text as the id
 	id := strings.TrimPrefix("kodi.movie://", path)
 
 	_, err := apiRequest(
@@ -106,15 +104,9 @@ type KodiMovieScanResults struct {
 
 func kodiScanMovies(
 	cfg *config.Instance,
-	systemId string, // the system id of the launcher this was called from
-	// results is any scan results which were found using the folder/extension
-	// scanning, which is run before the Scanner method. you must return this
-	// list with your own results appended. we pass these through in case a
-	// scanner method needs to process/modify existing scan results
-	// in this case, it will be empty, but it's good practice to handle it
+	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	// query for the list of movies available
 	resp, err := apiRequest(
 		cfg,
 		"",  // TODO: replace with the correct method
@@ -124,7 +116,6 @@ func kodiScanMovies(
 		return nil, err
 	}
 
-	// the apiRequest function return raw bytes, so we parse them here (from json)
 	var scanResults KodiMovieScanResults
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
@@ -132,16 +123,9 @@ func kodiScanMovies(
 	}
 
 	for _, movie := range scanResults.Results {
-		// here we are parsing the json result object, and creating a new set
-		// of objects that are suitable to be inserted into the media database
-		// and just appending them to the existing results list
 		results = append(results, platforms.ScanResult{
-			// this is the display name which will show in the app, be searchable
-			// and be queried from **launch.search commands
-			Name: movie, // TODO: come up with your own
-			// this is the path which should be stored on the card and will be
-			// forwarded to the launcher
-			Path: SchemeKodiMovie + "://" + movie, // TODO: come up with your own
+			Name: movie,
+			Path: SchemeKodiMovie + "://" + movie,
 		})
 	}
 
