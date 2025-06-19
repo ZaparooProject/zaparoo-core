@@ -231,10 +231,10 @@ const (
 	SystemNAOMI      = "NAOMI"
 	SystemNAOMI2     = "NAOMI2"
 	SystemVideo      = "Video"
-  SystemAudio   = "Audio"
-	SystemMovie   = "Movie"
-	SystemTV      = "TV"
-	SystemMusic   = "Music"
+	SystemAudio      = "Audio"
+	SystemMovie      = "Movie"
+	SystemTV         = "TV"
+	SystemMusic      = "Music"
 	SystemGroovy     = "Groovy"
 )
 
@@ -731,5 +731,17 @@ var Systems = map[string]System{
 	},
 	SystemVideo: {
 		ID: SystemVideo,
+	},
+	SystemAudio: {
+		ID: SystemAudio,
+	},
+	SystemMovie: {
+		ID: SystemMovie,
+	},
+	SystemTV: {
+		ID: SystemTV,
+	},
+	SystemMusic: {
+		ID: SystemMusic,
 	},
 }

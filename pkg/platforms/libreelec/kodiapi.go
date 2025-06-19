@@ -6,37 +6,80 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
 type KodiAPIMethod string
 
 const (
-	KodiAPIMethodPlayerOpen KodiAPIMethod = "Player.Open"
+	KodiAPIMethodPlayerOpen              KodiAPIMethod = "Player.Open"
+	KodiAPIMethodPlayerStop              KodiAPIMethod = "Player.Stop"
+	KodiAPIMethodPlayerGetActivePlayers  KodiAPIMethod = "Player.GetActivePlayers"
+	KodiAPIMethodVideoLibraryGetMovies   KodiAPIMethod = "VideoLibrary.GetMovies"
+	KodiAPIMethodVideoLibraryGetTVShows  KodiAPIMethod = "VideoLibrary.GetTVShows"
+	KodiAPIMethodVideoLibraryGetEpisodes KodiAPIMethod = "VideoLibrary.GetEpisodes"
 )
 
-type KodiPlayerOpenItemParams struct {
-	File string `json:"file"`
+type KodiItem struct {
+	Label     string `json:"label,omitempty"`
+	File      string `json:"file,omitempty"`
+	MovieID   int    `json:"movieid,omitempty"`
+	TVShowID  int    `json:"tvshowid,omitempty"`
+	EpisodeID int    `json:"episodeid,omitempty"`
+	Resume    bool   `json:"resume,omitempty"`
 }
 
 type KodiPlayerOpenParams struct {
-	Item KodiPlayerOpenItemParams `json:"item"`
+	Item KodiItem `json:"item"`
+}
+
+type KodiPlayerStopParams struct {
+	PlayerID int `json:"playerid"`
+}
+
+type KodiPlayer struct {
+	ID   int    `json:"playerid"`
+	Type string `json:"type"`
+}
+
+type KodiPlayerGetActivePlayersResponse []KodiPlayer
+
+type KodiVideoLibraryGetMoviesResponse struct {
+	Movies []KodiItem `json:"movies"`
 }
 
 type KodiAPIPayload struct {
-	JsonRPC string        `json:"jsonrpc"`
-	ID      int           `json:"id"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      string        `json:"id"`
 	Method  KodiAPIMethod `json:"method"`
-	Params  any           `json:"params"`
+	Params  any           `json:"params,omitempty"`
 }
 
-func apiRequest(_ *config.Instance, method KodiAPIMethod, params any) ([]byte, error) {
+type KodiAPIError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type KodiAPIResponse struct {
+	ID      string          `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *KodiAPIError   `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+}
+
+func apiRequest(
+	_ *config.Instance,
+	method KodiAPIMethod,
+	params any,
+) (json.RawMessage, error) {
 	req := KodiAPIPayload{
-		JsonRPC: "2.0",
-		ID:      1,
+		JSONRPC: "2.0",
+		ID:      uuid.New().String(),
 		Method:  method,
 		Params:  params,
 	}
@@ -45,6 +88,7 @@ func apiRequest(_ *config.Instance, method KodiAPIMethod, params any) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	log.Debug().Msgf("request: %s", string(reqJson))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
 	kodiReq, err := http.NewRequest("POST", kodiURL, bytes.NewBuffer(reqJson))
@@ -72,34 +116,42 @@ func apiRequest(_ *config.Instance, method KodiAPIMethod, params any) ([]byte, e
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return body, nil
-}
-
-func kodiLaunchRequest(cfg *config.Instance, path string) error {
-	params := KodiPlayerOpenParams{
-		Item: KodiPlayerOpenItemParams{
-			File: path,
-		},
+	var apiResp KodiAPIResponse
+	err = json.Unmarshal(body, &apiResp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	if apiResp.Error != nil {
+		return nil, fmt.Errorf("error from kodi api: %s", apiResp.Error.Message)
 	}
 
+	return apiResp.Result, nil
+}
+
+func kodiLaunchFileRequest(cfg *config.Instance, path string) error {
+	params := KodiPlayerOpenParams{
+		Item: KodiItem{
+			File:   path,
+			Resume: true,
+		},
+	}
 	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
 	return err
 }
 
-func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
-	id := strings.TrimPrefix("kodi.movie://", path)
-
-	_, err := apiRequest(
-		cfg,
-		"", // TODO: replace with the correct method
-		id, // TODO: replace with your own params
-	)
+func kodiLaunchMovieRequest(cfg *config.Instance, movieID string) error {
+	id, err := strconv.Atoi(strings.TrimPrefix(movieID, SchemeKodiMovie+"://"))
+	if err != nil {
+		return err
+	}
+	params := KodiPlayerOpenParams{
+		Item: KodiItem{
+			MovieID: id,
+			Resume:  true,
+		},
+	}
+	_, err = apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
 	return err
-}
-
-type KodiMovieScanResults struct {
-	// TODO: just using a fake response for the example, change this
-	Results []string `json:"results"`
 }
 
 func kodiScanMovies(
@@ -107,25 +159,24 @@ func kodiScanMovies(
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	resp, err := apiRequest(
-		cfg,
-		"",  // TODO: replace with the correct method
-		nil, // TODO: replace with your own params
-	)
+	resp, err := apiRequest(cfg, KodiAPIMethodVideoLibraryGetMovies, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var scanResults KodiMovieScanResults
+	var scanResults KodiVideoLibraryGetMoviesResponse
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, movie := range scanResults.Results {
+	log.Debug().Msgf("found %d movies", len(scanResults.Movies))
+
+	for _, movie := range scanResults.Movies {
 		results = append(results, platforms.ScanResult{
-			Name: movie,
-			Path: SchemeKodiMovie + "://" + movie,
+			Name: movie.Label,
+			Path: SchemeKodiMovie + "://" + strconv.FormatInt(
+				int64(movie.MovieID), 10),
 		})
 	}
 
