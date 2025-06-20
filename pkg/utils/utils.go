@@ -241,9 +241,10 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
+var reSlug = regexp.MustCompile(`(\(.*\))|(\[.*])|[^a-z0-9A-Z]`)
+
 func SlugifyString(input string) string {
-	r := regexp.MustCompile(`(\(.*\))|(\[.*\])|[^a-z0-9A-Z]`)
-	rep := r.ReplaceAllStringFunc(input, func(m string) string {
+	rep := reSlug.ReplaceAllStringFunc(input, func(m string) string {
 		return ""
 	})
 	return strings.ToLower(rep)

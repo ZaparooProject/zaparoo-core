@@ -31,7 +31,6 @@ type KodiItem struct {
 	MovieID   int    `json:"movieid,omitempty"`
 	TVShowID  int    `json:"tvshowid,omitempty"`
 	EpisodeID int    `json:"episodeid,omitempty"`
-	Resume    bool   `json:"resume,omitempty"`
 }
 
 type KodiPlayerOpenParams struct {
@@ -129,28 +128,31 @@ func apiRequest(
 }
 
 func kodiLaunchFileRequest(cfg *config.Instance, path string) error {
-	params := KodiPlayerOpenParams{
+	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, KodiPlayerOpenParams{
 		Item: KodiItem{
-			File:   path,
-			Resume: true,
+			File: path,
 		},
-	}
-	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
+	})
 	return err
 }
 
-func kodiLaunchMovieRequest(cfg *config.Instance, movieID string) error {
-	id, err := strconv.Atoi(strings.TrimPrefix(movieID, SchemeKodiMovie+"://"))
+func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
+	pathID := strings.TrimPrefix(path, SchemeKodiMovie+"://")
+	pathID = strings.SplitN(pathID, "/", 2)[0]
+
+	movieID, err := strconv.Atoi(pathID)
 	if err != nil {
 		return err
 	}
+
 	params := KodiPlayerOpenParams{
 		Item: KodiItem{
-			MovieID: id,
-			Resume:  true,
+			MovieID: movieID,
 		},
 	}
+
 	_, err = apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
+
 	return err
 }
 
@@ -170,13 +172,15 @@ func kodiScanMovies(
 		return nil, err
 	}
 
-	log.Debug().Msgf("found %d movies", len(scanResults.Movies))
-
 	for _, movie := range scanResults.Movies {
 		results = append(results, platforms.ScanResult{
 			Name: movie.Label,
-			Path: SchemeKodiMovie + "://" + strconv.FormatInt(
-				int64(movie.MovieID), 10),
+			Path: fmt.Sprintf(
+				"%s://%d/%s",
+				SchemeKodiMovie,
+				movie.MovieID,
+				movie.Label,
+			),
 		})
 	}
 

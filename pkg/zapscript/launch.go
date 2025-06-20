@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -182,8 +181,6 @@ func getAltLauncher(
 	}
 }
 
-var reUri = regexp.MustCompile(`^.+://`)
-
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
@@ -205,7 +202,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	// match for uri style launch syntax
-	if reUri.MatchString(path) {
+	if utils.ReURI.MatchString(path) {
 		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,

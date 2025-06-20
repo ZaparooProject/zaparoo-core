@@ -291,7 +291,11 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 
 func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
-	f.Path = filepath.Clean(path)
+	if utils.ReURI.MatchString(path) {
+		f.Path = path
+	} else {
+		f.Path = filepath.Clean(path)
+	}
 	fileBase := filepath.Base(f.Path)
 	f.Ext = strings.ToLower(filepath.Ext(f.Path))
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)

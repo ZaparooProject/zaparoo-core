@@ -46,8 +46,8 @@ import (
 )
 
 const (
-	SchemeKodiMovie = "kodi.movie"
-	SchemeKodiTV    = "kodi.tv"
+	SchemeKodiMovie = "kodi-movie"
+	SchemeKodiTV    = "kodi-tv"
 )
 
 type Platform struct {
@@ -161,7 +161,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		{
 			ID:         "KodiLocal",
 			SystemID:   systemdefs.SystemVideo,
-			Folders:    []string{"videos"},
+			Folders:    []string{"videos", "tvshows"},
 			Extensions: []string{".avi", ".mp4", ".mkv"},
 			Launch:     kodiLaunchFileRequest,
 		},

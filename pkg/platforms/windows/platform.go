@@ -383,6 +383,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(cfg *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
+				id = strings.SplitN(id, "/", 2)[0]
 				return exec.Command(
 					"cmd", "/c",
 					"start",
@@ -397,6 +398,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(cfg *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "flashpoint://")
 				id = strings.TrimPrefix(id, "run/")
+				id = strings.SplitN(id, "/", 2)[0]
 				return exec.Command(
 					"cmd", "/c",
 					"start",
@@ -465,7 +467,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				for _, game := range lbXml.Games {
 					results = append(results, platforms.ScanResult{
-						Path: "launchbox://" + game.ID,
+						Path: "launchbox://" + game.ID + "/" + game.Title,
 						Name: game.Title,
 					})
 				}
@@ -484,6 +486,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				id := strings.TrimPrefix(path, "launchbox://")
+				id = strings.SplitN(id, "/", 2)[0]
 				return exec.Command(cliLauncher, "launch_by_id", id).Start()
 			},
 		},
