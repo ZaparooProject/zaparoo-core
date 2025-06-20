@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -176,10 +177,9 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			appState := am["AppState"].(map[string]interface{})
-			log.Debug().Msgf("app name: %v", appState["name"])
 
 			results = append(results, platforms.ScanResult{
-				Path: "steam://" + appState["appid"].(string),
+				Path: "steam://" + appState["appid"].(string) + "/" + appState["name"].(string),
 				Name: appState["name"].(string),
 			})
 		}
@@ -305,3 +305,5 @@ func DataDir(pl platforms.Platform) string {
 		return pl.Settings().DataDir
 	}
 }
+
+var ReURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)

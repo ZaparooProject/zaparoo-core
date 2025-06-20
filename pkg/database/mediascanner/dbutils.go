@@ -291,12 +291,26 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 
 func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
-	f.Path = filepath.Clean(path)
+
+	// don't clean the :// in custom scheme paths
+	if utils.ReURI.MatchString(path) {
+		f.Path = path
+	} else {
+		f.Path = filepath.Clean(path)
+	}
+
 	fileBase := filepath.Base(f.Path)
+
 	f.Ext = strings.ToLower(filepath.Ext(f.Path))
+	if utils.HasSpace(f.Ext) {
+		f.Ext = ""
+	}
+
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
+
 	f.Title = getTitleFromFilename(f.FileName)
 	f.Slug = utils.SlugifyString(f.Title)
 	f.Tags = getTagsFromFileName(f.FileName)
+
 	return f
 }

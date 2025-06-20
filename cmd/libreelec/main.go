@@ -23,85 +23,76 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/libreelec"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/rs/zerolog"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"io"
 	"os"
-	"os/signal"
-	"syscall"
+	"path"
 )
 
-// ssh disabled by default
-// probably need arm32 build
-// default user root/libreelec
-// home folder is /storage
-// api is available for indexing and launching. may need to be turned on
-// pn532 and acr122u work out of box
-// https://wiki.libreelec.tv/configuration/startup-shutdown
-
 func main() {
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	flags := cli.SetupFlags()
+	serviceFlag := flag.String(
+		"service",
+		"",
+		"manage Zaparoo service (start|stop|restart|status)",
+	)
 
 	pl := &libreelec.Platform{}
-	flags := cli.SetupFlags()
-
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
-	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
-
 	flags.Pre(pl)
 
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
-		}
-	}
+	cfg := cli.Setup(pl, config.BaseDefaults, nil)
 
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
-	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
-	if *asDaemon {
-		logWriters = []io.Writer{os.Stderr}
-	}
+	defer func() {
+		if err := recover(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
+			log.Fatal().Msgf("panic: %v", err)
+		}
+	}()
 
-	cfg := cli.Setup(
-		pl,
-		config.BaseDefaults,
-		logWriters,
-	)
+	svc, err := utils.NewService(utils.ServiceArgs{
+		Entry: func() (func() error, error) {
+			return service.Start(pl, cfg)
+		},
+		Platform: pl,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("error creating service")
+		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
+		os.Exit(1)
+	}
+	svc.ServiceHandler(serviceFlag)
 
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
-		os.Exit(1)
+	// try to auto-start service if it's not running already
+	if !svc.Running() {
+		err := svc.Start()
+		if err != nil {
+			log.Error().Err(err).Msg("could not start service")
+		}
 	}
 
-	<-sigs
-	err = stop()
+	// display main info gui
+	enableZapScript := client.DisableZapScript(cfg)
+	err = tui.BuildAndRetry(func() (*tview.Application, error) {
+		logDestinationPath := path.Join("/storage", config.LogFile)
+		return tui.BuildMain(
+			cfg, pl, svc.Running,
+			logDestinationPath, "storage",
+		)
+	})
 	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
+		enableZapScript()
+		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
 		os.Exit(1)
 	}
-
-	os.Exit(0)
+	enableZapScript()
 }

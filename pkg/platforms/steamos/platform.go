@@ -173,6 +173,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(cfg *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
+				id = strings.SplitN(id, "/", 2)[0]
 				return exec.Command(
 					"steam",
 					"steam://rungameid/"+id,
