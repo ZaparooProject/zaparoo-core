@@ -37,14 +37,6 @@ import (
 	"path"
 )
 
-// ssh disabled by default
-// probably need arm32 build
-// default user root/libreelec
-// home folder is /storage
-// api is available for indexing and launching. may need to be turned on
-// pn532 and acr122u work out of box
-// https://wiki.libreelec.tv/configuration/startup-shutdown
-
 func main() {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(

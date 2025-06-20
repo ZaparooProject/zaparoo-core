@@ -254,6 +254,9 @@ func FilenameFromPath(path string) string {
 	p := filepath.Clean(path)
 	b := filepath.Base(p)
 	e := filepath.Ext(p)
+	if HasSpace(e) {
+		e = ""
+	}
 	r, _ := strings.CutSuffix(b, e)
 	return r
 }
@@ -261,6 +264,15 @@ func FilenameFromPath(path string) string {
 func SlugifyPath(path string) string {
 	fn := FilenameFromPath(path)
 	return SlugifyString(fn)
+}
+
+func HasSpace(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' {
+			return true
+		}
+	}
+	return false
 }
 
 func IsServiceRunning(cfg *config.Instance) bool {

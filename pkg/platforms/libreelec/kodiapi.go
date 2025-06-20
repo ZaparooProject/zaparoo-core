@@ -33,8 +33,13 @@ type KodiItem struct {
 	EpisodeID int    `json:"episodeid,omitempty"`
 }
 
+type KodiItemOptions struct {
+	Resume bool `json:"resume"`
+}
+
 type KodiPlayerOpenParams struct {
-	Item KodiItem `json:"item"`
+	Item    KodiItem        `json:"item"`
+	Options KodiItemOptions `json:"options,omitempty"`
 }
 
 type KodiPlayerStopParams struct {
@@ -50,6 +55,18 @@ type KodiPlayerGetActivePlayersResponse []KodiPlayer
 
 type KodiVideoLibraryGetMoviesResponse struct {
 	Movies []KodiItem `json:"movies"`
+}
+
+type KodiVideoLibraryGetTVShowsResponse struct {
+	TVShows []KodiItem `json:"tvshows"`
+}
+
+type KodiVideoLibraryGetEpisodesParams struct {
+	TVShowID int `json:"tvshowid"`
+}
+
+type KodiVideoLibraryGetEpisodesResponse struct {
+	Episodes []KodiItem `json:"episodes"`
 }
 
 type KodiAPIPayload struct {
@@ -132,6 +149,9 @@ func kodiLaunchFileRequest(cfg *config.Instance, path string) error {
 		Item: KodiItem{
 			File: path,
 		},
+		Options: KodiItemOptions{
+			Resume: true,
+		},
 	})
 	return err
 }
@@ -149,9 +169,38 @@ func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
 		Item: KodiItem{
 			MovieID: movieID,
 		},
+		Options: KodiItemOptions{
+			Resume: true,
+		},
 	}
 
 	_, err = apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
+
+	return err
+}
+
+func kodiLaunchTVRequest(cfg *config.Instance, path string) error {
+	var params KodiPlayerOpenParams
+	if strings.HasPrefix(path, SchemeKodiEpisode+"://") {
+		id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
+		id = strings.SplitN(id, "/", 2)[0]
+		intID, err := strconv.Atoi(id)
+		if err != nil {
+			return err
+		}
+		params = KodiPlayerOpenParams{
+			Item: KodiItem{
+				EpisodeID: intID,
+			},
+			Options: KodiItemOptions{
+				Resume: true,
+			},
+		}
+	} else {
+		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
 
 	return err
 }
@@ -185,4 +234,76 @@ func kodiScanMovies(
 	}
 
 	return results, nil
+}
+
+func kodiScanTV(
+	cfg *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	resp, err := apiRequest(cfg, KodiAPIMethodVideoLibraryGetTVShows, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var scanResults KodiVideoLibraryGetTVShowsResponse
+	err = json.Unmarshal(resp, &scanResults)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, show := range scanResults.TVShows {
+		epsResp, err := apiRequest(cfg, KodiAPIMethodVideoLibraryGetEpisodes,
+			KodiVideoLibraryGetEpisodesParams{
+				TVShowID: show.TVShowID,
+			})
+		if err != nil {
+			return nil, err
+		}
+
+		var epsResults KodiVideoLibraryGetEpisodesResponse
+		err = json.Unmarshal(epsResp, &epsResults)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, ep := range epsResults.Episodes {
+			label := show.Label + " - " + ep.Label
+			results = append(results, platforms.ScanResult{
+				Name: label,
+				Path: fmt.Sprintf(
+					"%s://%d/%s",
+					SchemeKodiEpisode,
+					ep.EpisodeID,
+					label,
+				),
+			})
+		}
+	}
+
+	return results, nil
+}
+
+func kodiStop(cfg *config.Instance) error {
+	playersResp, err := apiRequest(cfg, KodiAPIMethodPlayerGetActivePlayers, nil)
+	if err != nil {
+		return err
+	}
+
+	var players KodiPlayerGetActivePlayersResponse
+	err = json.Unmarshal(playersResp, &players)
+	if err != nil {
+		return err
+	}
+
+	if len(players) == 0 {
+		return nil
+	}
+
+	playerID := players[0].ID
+
+	_, err = apiRequest(cfg, KodiAPIMethodPlayerStop, KodiPlayerStopParams{
+		PlayerID: playerID,
+	})
+	return err
 }

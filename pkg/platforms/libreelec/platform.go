@@ -46,11 +46,12 @@ import (
 )
 
 const (
-	SchemeKodiMovie = "kodi-movie"
-	SchemeKodiTV    = "kodi-tv"
+	SchemeKodiMovie   = "kodi-movie"
+	SchemeKodiEpisode = "kodi-episode"
 )
 
 type Platform struct {
+	cfg            *config.Instance
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 }
@@ -68,7 +69,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (p *Platform) StartPre(cfg *config.Instance) error {
+	p.cfg = cfg
 	return nil
 }
 
@@ -109,7 +111,7 @@ func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
 
 func (p *Platform) StopActiveLauncher() error {
 	p.setActiveMedia(nil)
-	return nil
+	return kodiStop(p.cfg)
 }
 
 func (p *Platform) PlayAudio(path string) error {
@@ -171,6 +173,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:  []string{SchemeKodiMovie},
 			Launch:   kodiLaunchMovieRequest,
 			Scanner:  kodiScanMovies,
+		},
+		{
+			ID:       "KodiTV",
+			SystemID: systemdefs.SystemTV,
+			Schemes:  []string{SchemeKodiEpisode},
+			Launch:   kodiLaunchTVRequest,
+			Scanner:  kodiScanTV,
 		},
 		{
 			ID:            "Generic",
