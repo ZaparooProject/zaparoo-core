@@ -33,6 +33,7 @@ jobs:
           - mac
           - batocera
           - linux
+          - libreelec
         arch:
           - amd64
           - arm64
@@ -47,6 +48,8 @@ jobs:
             arch: arm
           - platform: windows
             arch: 386
+          - platform: libreelec
+            arch: arm
     steps:
       - uses: actions/checkout@v4
       - id: zaparooapprel
