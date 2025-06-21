@@ -19,7 +19,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	searchButton := tview.NewButton("Search")
 	statusText := tview.NewTextView().
 		SetTextAlign(tview.AlignCenter).
-		SetText("Enter name to search and select to write tag. ESC to exit.")
+		SetText("Search and select media to write. ESC to exit.")
 	systemDropdown := tview.NewDropDown()
 
 	name := ""
@@ -135,17 +135,25 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		return event
 	})
 
-	tsm.AddItem(searchInput, 1, 1, true)
-	tsm.AddItem(systemDropdown, 1, 1, false)
-	tsm.AddItem(tview.NewTextView(), 1, 1, false)
+	searchArea := tview.NewFlex()
+	searchArea.SetDirection(tview.FlexColumn)
+
+	searchForm := tview.NewFlex()
+	searchForm.SetDirection(tview.FlexRow)
+
+	searchForm.AddItem(searchInput, 1, 1, true)
+	searchForm.AddItem(systemDropdown, 1, 1, false)
+
+	searchArea.AddItem(searchForm, 0, 2, true)
+	searchArea.AddItem(statusText, 0, 1, false)
+
+	tsm.AddItem(searchArea, 2, 1, true)
 
 	controls := tview.NewFlex().
 		AddItem(tview.NewTextView(), 0, 1, false).
 		AddItem(searchButton, 0, 1, true).
 		AddItem(tview.NewTextView(), 0, 1, false)
 	tsm.AddItem(controls, 1, 1, false)
-	tsm.AddItem(statusText, 1, 1, false)
-	tsm.AddItem(tview.NewTextView(), 1, 1, false)
 
 	mediaPages := tview.NewPages()
 

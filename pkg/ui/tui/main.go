@@ -41,8 +41,17 @@ func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse
 	return tokens, nil
 }
 
-func setupButtonNavigation(app *tview.Application, buttons ...*tview.Button) {
+func setupButtonNavigation(
+	app *tview.Application,
+	svcRunning bool,
+	buttons ...*tview.Button,
+) {
 	for i, button := range buttons {
+		if !svcRunning {
+			button.SetDisabled(true)
+			continue
+		}
+
 		prevIndex := (i - 1 + len(buttons)) % len(buttons)
 		nextIndex := (i + 1) % len(buttons)
 
@@ -82,7 +91,7 @@ func BuildMain(
 	if svcRunning {
 		svcStatus = "RUNNING"
 	} else {
-		svcStatus = "NOT RUNNING"
+		svcStatus = "NOT RUNNING\nThe Zaparoo Core service may not have started. Check logs for more information."
 	}
 
 	ip := utils.GetLocalIP()
@@ -107,9 +116,9 @@ func BuildMain(
 	helpText := tview.NewTextView()
 	lastScanned := tview.NewTextView()
 	lastScanned.SetDynamicColors(true)
+	lastScanned.SetBorder(true).SetTitle("Last Scanned")
 
 	if svcRunning {
-		lastScanned.SetBorder(true).SetTitle("Last Scanned")
 		tokens, err := getTokens(context.Background(), cfg)
 		if err != nil {
 			lastScanned.SetText("Error checking last scanned:\n" + err.Error())
@@ -160,14 +169,14 @@ func BuildMain(
 				}
 			}()
 		}
+	} else {
+		lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 	}
 
 	displayCol := tview.NewFlex().SetDirection(tview.FlexRow)
 	displayCol.AddItem(introText, 1, 1, false)
-	displayCol.AddItem(tview.NewTextView(), 1, 1, false)
-	displayCol.AddItem(statusText, 3, 1, false)
-	displayCol.AddItem(tview.NewTextView(), 0, 1, false)
-	displayCol.AddItem(lastScanned, 9, 1, false)
+	displayCol.AddItem(statusText, 0, 1, false)
+	displayCol.AddItem(lastScanned, 6, 1, false)
 	displayCol.AddItem(helpText, 1, 1, false)
 
 	pages := tview.NewPages().
@@ -183,77 +192,52 @@ func BuildMain(
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSearchMedia)
 	})
-	searchButton.SetBorder(true)
 	searchButton.SetFocusFunc(func() {
-		searchButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Search for media and write to an NFC tag.")
-	})
-	searchButton.SetBlurFunc(func() {
-		searchButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsTagsWrite)
 	})
-	writeButton.SetBorder(true)
 	writeButton.SetFocusFunc(func() {
-		writeButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Write custom ZapScript to an NFC tag.")
-	})
-	writeButton.SetBlurFunc(func() {
-		writeButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageGenerateDB)
 	})
-	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
-		updateDBButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Scan disk to create index of games.")
-	})
-	updateDBButton.SetBlurFunc(func() {
-		updateDBButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsMain)
 	})
-	settingsButton.SetBorder(true)
 	settingsButton.SetFocusFunc(func() {
-		settingsButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Manage settings for Core service.")
-	})
-	settingsButton.SetBlurFunc(func() {
-		settingsButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageExportLog)
 	})
-	exportButton.SetBorder(true)
 	exportButton.SetFocusFunc(func() {
-		exportButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Export Core log file for support.")
-	})
-	exportButton.SetBlurFunc(func() {
-		exportButton.SetBorderColor(tcell.ColorWhite)
 	})
 
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
 		app.Stop()
 	})
-	exitButton.SetBorder(true)
 	exitButton.SetFocusFunc(func() {
-		exitButton.SetBorderColor(tcell.ColorDarkBlue)
-		helpText.SetText("Exit TUI app. (service will continue running)")
-	})
-	exitButton.SetBlurFunc(func() {
-		exitButton.SetBorderColor(tcell.ColorWhite)
+		if svcRunning {
+			helpText.SetText("Exit TUI app. (service will continue running)")
+		} else {
+			helpText.SetText("Exit TUI app.")
+		}
 	})
 
 	setupButtonNavigation(
 		app,
+		svcRunning,
 		searchButton,
 		writeButton,
 		updateDBButton,
@@ -261,6 +245,9 @@ func BuildMain(
 		exportButton,
 		exitButton,
 	)
+	if !svcRunning {
+		exitButton.SetDisabled(false)
+	}
 
 	main.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
@@ -273,12 +260,19 @@ func BuildMain(
 	main.AddItem(tview.NewTextView(), 1, 1, false)
 
 	buttonNav := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(searchButton, 0, 1, true).
-		AddItem(writeButton, 0, 1, false).
-		AddItem(updateDBButton, 0, 1, false).
-		AddItem(settingsButton, 0, 1, false).
-		AddItem(exportButton, 0, 1, false).
-		AddItem(exitButton, 0, 1, false)
+		AddItem(tview.NewTextView(), 0, 1, false).
+		AddItem(searchButton, 1, 1, svcRunning).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(writeButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(updateDBButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(settingsButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(exportButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(exitButton, 1, 1, !svcRunning).
+		AddItem(tview.NewTextView(), 0, 1, false)
 	main.AddItem(buttonNav, 20, 1, true)
 
 	BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
@@ -293,7 +287,6 @@ func BuildMain(
 
 	pages.SwitchToPage(PageMain)
 
-	centeredPages := centerWidget(70, 20, pages)
-	return app.SetRoot(centeredPages, true).
-		EnableMouse(true), nil
+	centeredPages := centerWidget(75, 15, pages)
+	return app.SetRoot(centeredPages, true), nil
 }
