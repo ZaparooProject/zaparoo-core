@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
@@ -194,6 +195,7 @@ func main() {
 		if err != nil {
 			log.Error().Err(err).Msg("could not start service")
 		}
+		time.Sleep(1 * time.Second)
 	}
 
 	// display main info gui

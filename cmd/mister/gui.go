@@ -40,7 +40,7 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 	app := tview.NewApplication()
 	// create the main modal
 	modal := tview.NewModal()
-	modal.SetTitle("Install service").
+	modal.SetTitle("Autostart Service").
 		SetBorder(true).
 		SetTitleAlign(tview.AlignCenter)
 	modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
