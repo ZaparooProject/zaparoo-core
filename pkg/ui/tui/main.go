@@ -183,7 +183,6 @@ func BuildMain(
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSearchMedia)
 	})
-	searchButton.SetBorder(true)
 	searchButton.SetFocusFunc(func() {
 		searchButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Search for media and write to an NFC tag.")
@@ -195,7 +194,6 @@ func BuildMain(
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsTagsWrite)
 	})
-	writeButton.SetBorder(true)
 	writeButton.SetFocusFunc(func() {
 		writeButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Write custom ZapScript to an NFC tag.")
@@ -207,7 +205,6 @@ func BuildMain(
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageGenerateDB)
 	})
-	updateDBButton.SetBorder(true)
 	updateDBButton.SetFocusFunc(func() {
 		updateDBButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Scan disk to create index of games.")
@@ -219,7 +216,6 @@ func BuildMain(
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageSettingsMain)
 	})
-	settingsButton.SetBorder(true)
 	settingsButton.SetFocusFunc(func() {
 		settingsButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Manage settings for Core service.")
@@ -231,7 +227,6 @@ func BuildMain(
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
 		pages.SwitchToPage(PageExportLog)
 	})
-	exportButton.SetBorder(true)
 	exportButton.SetFocusFunc(func() {
 		exportButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Export Core log file for support.")
@@ -243,7 +238,6 @@ func BuildMain(
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
 		app.Stop()
 	})
-	exitButton.SetBorder(true)
 	exitButton.SetFocusFunc(func() {
 		exitButton.SetBorderColor(tcell.ColorDarkBlue)
 		helpText.SetText("Exit TUI app. (service will continue running)")
@@ -273,12 +267,19 @@ func BuildMain(
 	main.AddItem(tview.NewTextView(), 1, 1, false)
 
 	buttonNav := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(searchButton, 0, 1, true).
-		AddItem(writeButton, 0, 1, false).
-		AddItem(updateDBButton, 0, 1, false).
-		AddItem(settingsButton, 0, 1, false).
-		AddItem(exportButton, 0, 1, false).
-		AddItem(exitButton, 0, 1, false)
+		AddItem(tview.NewTextView(), 0, 1, false).
+		AddItem(searchButton, 1, 1, true).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(writeButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(updateDBButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(settingsButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(exportButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 1, 1, false).
+		AddItem(exitButton, 1, 1, false).
+		AddItem(tview.NewTextView(), 0, 1, false)
 	main.AddItem(buttonNav, 20, 1, true)
 
 	BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
@@ -293,7 +294,7 @@ func BuildMain(
 
 	pages.SwitchToPage(PageMain)
 
-	centeredPages := centerWidget(70, 20, pages)
+	centeredPages := centerWidget(75, 15, pages)
 	return app.SetRoot(centeredPages, true).
 		EnableMouse(true), nil
 }
