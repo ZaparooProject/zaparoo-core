@@ -327,12 +327,35 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
-	code, ok := linuxinput.ToKeyboardCode(name)
-	if !ok {
-		return fmt.Errorf("unknown keyboard key: %s", name)
+func (p *Platform) KeyboardPress(arg string) error {
+	var names []string
+	if len(arg) > 1 {
+		arg = strings.TrimLeft(arg, "{")
+		arg = strings.TrimRight(arg, "}")
+		names = strings.Split(arg, "+")
+		for i, name := range names {
+			if len(name) > 1 {
+				names[i] = "{" + name + "}"
+			}
+		}
+	} else {
+		names = []string{arg}
 	}
-	return p.kbd.Press(code)
+
+	var codes []int
+	for _, name := range names {
+		code, ok := linuxinput.ToKeyboardCode(name)
+		if !ok {
+			return fmt.Errorf("unknown keyboard key: %s", name)
+		}
+		codes = append(codes, code)
+	}
+
+	if len(codes) == 1 {
+		return p.kbd.Press(codes[0])
+	} else {
+		return p.kbd.Combo(codes...)
+	}
 }
 
 func (p *Platform) GamepadPress(name string) error {
