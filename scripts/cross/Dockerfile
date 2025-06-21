@@ -7,7 +7,7 @@ RUN apt-get install build-essential git curl golang-go gcc-mingw-w64 -y
 # install zig
 RUN mkdir -p /opt/zig && \
     curl -sSL -o /tmp/zig.tar.xz \
-    "https://ziglang.org/builds/zig-linux-$(uname -m)-0.15.0-dev.552+bc2f7c754.tar.xz" && \
+    "https://ziglang.org/builds/zig-$(uname -m | sed 's/arm64/aarch64/g')-linux-0.15.0-dev.847+850655f06.tar.xz" && \
     tar --strip-components=1 -C /opt/zig -xf /tmp/zig.tar.xz && \
     rm /tmp/zig.tar.xz
 
