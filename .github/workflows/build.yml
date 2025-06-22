@@ -107,7 +107,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
         run: |
-          mv _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}.zip _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip
           gh release upload "$tag" _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip
       - name: Add Windows setup release
         env:

@@ -23,8 +23,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// If version contains -dev, use 0.0.0
-	if strings.Contains(*version, "-dev") {
+	if strings.Contains(*version, "-") {
 		*version = "0.0.0"
 	}
 
