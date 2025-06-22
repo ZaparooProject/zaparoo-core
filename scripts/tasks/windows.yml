@@ -13,8 +13,8 @@ tasks:
   build-installer:
     internal: true
     cmds:
-      - go run scripts/tasks/utils/windowsiss.go -version "${APP_VERSION}" -arch "{{ARCH}}"
-      - cp "cmd/windows/winres/icon.ico" "_build/windows_{{ARCH}}"
+      - go run scripts/tasks/utils/windowsiss.go -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
+      - cp "cmd/windows/winres/icon.ico" "_build/windows_{{.BUILD_ARCH}}"
       - >-
         docker run --rm -i -v "${PWD}:/work" 
         amake/innosetup 
@@ -43,6 +43,9 @@ tasks:
           EXTRA_LDFLAGS: -H=windowsgui
           CC: zig cc -w --target=aarch64-windows-gnu
           CXX: zig c++ -w --target=aarch64-windows-gnu
+      - task: build-installer
+        vars:
+          BUILD_ARCH: arm64
 
   build-amd64:
     cmds:
@@ -78,3 +81,6 @@ tasks:
           EXTRA_LDFLAGS: -H=windowsgui
           CC: i686-w64-mingw32-gcc-win32
           CXX: i686-w64-mingw32-g++-win32
+      - task: build-installer
+        vars:
+          BUILD_ARCH: 386

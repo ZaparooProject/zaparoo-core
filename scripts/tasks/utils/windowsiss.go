@@ -12,6 +12,7 @@ import (
 
 type InnoSetupData struct {
 	Version                string
+	OutputVersion          string
 	Arch                   string
 	ArchitecturesAllowed   string
 	ArchitecturesInstall64 string
@@ -28,6 +29,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	outputVersion := *version
 	if strings.Contains(*version, "-") {
 		*version = "0.0.0"
 	}
@@ -50,6 +52,7 @@ func main() {
 
 	data := InnoSetupData{
 		Version:                *version,
+		OutputVersion:          outputVersion,
 		Arch:                   *arch,
 		ArchitecturesAllowed:   archAllowed,
 		ArchitecturesInstall64: archInstall,
