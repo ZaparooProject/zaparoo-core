@@ -15,10 +15,22 @@ tasks:
     cmds:
       - go run scripts/tasks/utils/windowsiss.go -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
       - cp "cmd/windows/winres/icon.ico" "_build/windows_{{.BUILD_ARCH}}"
-      - >-
-        docker run --rm -i -v "${PWD}:/work" 
-        amake/innosetup 
-        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
+      - docker container create --name zaparoo-innosetup amake/innosetup setup.iss
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/setup.iss" zaparoo-innosetup:/work/
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/Zaparoo.exe" zaparoo-innosetup:/work/
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/LICENSE.txt" zaparoo-innosetup:/work/
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/README.txt" zaparoo-innosetup:/work/
+      - docker cp "_build/windows_{{.BUILD_ARCH}}/icon.ico" zaparoo-innosetup:/work/
+      - docker start -i -a zaparoo-innosetup
+      - mkdir "_build/windows_{{.BUILD_ARCH}}/Output"
+      - docker cp zaparoo-innosetup:/work/Output/. "_build/windows_{{.BUILD_ARCH}}/Output"
+      - docker rm zaparoo-innosetup
+# this docker image has a permissions bug when running on github CI so we're
+# we're working around it atm by manually copying everything in and out of the image
+#      - >-
+#        docker run --rm -i -v "${PWD}:/work"
+#        amake/innosetup
+#        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
 
   setup:
     internal: true
