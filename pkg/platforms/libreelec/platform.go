@@ -164,7 +164,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:         "KodiLocal",
 			SystemID:   systemdefs.SystemVideo,
 			Folders:    []string{"videos", "tvshows"},
-			Extensions: []string{".avi", ".mp4", ".mkv"},
+			Extensions: []string{".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo"},
 			Launch:     kodiLaunchFileRequest,
 		},
 		{
