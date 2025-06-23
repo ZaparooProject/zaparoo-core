@@ -22,7 +22,7 @@ tasks:
       - docker cp "_build/windows_{{.BUILD_ARCH}}/README.txt" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/icon.ico" zaparoo-innosetup:/work/
       - docker start -i -a zaparoo-innosetup
-      - mkdir "_build/windows_{{.BUILD_ARCH}}/Output"
+      - mkdir -p "_build/windows_{{.BUILD_ARCH}}/Output"
       - docker cp zaparoo-innosetup:/work/Output/. "_build/windows_{{.BUILD_ARCH}}/Output"
       - docker rm zaparoo-innosetup
 # this docker image has a permissions bug when running on github CI so we're

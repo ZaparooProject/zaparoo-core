@@ -12,8 +12,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/utils"
-
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -141,16 +139,21 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 		}
 	}
 
+	err = oldDB.Close()
+	if err != nil {
+		log.Warn().Msgf("error closing old DB: %s", err)
+	}
+
 	oldDBPath := dbFile(pl)
 	if errors > 0 {
 		log.Warn().Msgf("%d errors migrating old mappings", errors)
-		err := utils.MoveFile(oldDBPath, oldDBPath+".error")
+		err := os.Rename(oldDBPath, oldDBPath+".error")
 		if err != nil {
 			return err
 		}
 	} else {
 		log.Info().Msg("successfully migrated old mappings")
-		err := utils.MoveFile(oldDBPath, oldDBPath+".migrated")
+		err := os.Rename(oldDBPath, oldDBPath+".migrated")
 		if err != nil {
 			return err
 		}
