@@ -3,6 +3,7 @@ package userdb
 import (
 	"database/sql"
 	"errors"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 
@@ -48,7 +49,7 @@ func (db *UserDB) Open() error {
 }
 
 func (db *UserDB) GetDBPath() string {
-	return filepath.Join(db.pl.Settings().DataDir, config.UserDbFile)
+	return filepath.Join(utils.DataDir(db.pl), config.UserDbFile)
 }
 
 func (db *UserDB) UnsafeGetSqlDb() *sql.DB {

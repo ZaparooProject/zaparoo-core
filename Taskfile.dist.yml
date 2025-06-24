@@ -3,7 +3,7 @@ version: "3"
 env:
   GOPROXY: https://goproxy.io,direct
   APP_VERSION:
-    sh: echo -n "$(git rev-parse --short HEAD)-dev"
+    sh: echo -n "${APP_VERSION:-$(git rev-parse --short HEAD)-dev}"
   UID:
     sh: '{{if ne OS "windows"}}id -u{{end}}'
   GID:

@@ -294,7 +294,7 @@ func (p *Platform) PlayAudio(path string) error {
 	}
 
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.Settings().DataDir, path)
+		path = filepath.Join(utils.DataDir(p), path)
 	}
 
 	return exec.Command("aplay", path).Start()

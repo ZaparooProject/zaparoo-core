@@ -55,7 +55,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return err
 	}
 
-	err = os.MkdirAll(mister.DataDir, 0755)
+	err = os.MkdirAll(utils.DataDir(p), 0755)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func (p *Platform) PlayAudio(path string) error {
 	}
 
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.Settings().DataDir, path)
+		path = filepath.Join(utils.DataDir(p), path)
 	}
 
 	return exec.Command("aplay", path).Start()
