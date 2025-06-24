@@ -97,19 +97,19 @@ func systrayOnReady(
 						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(pl.Settings().ConfigDir, config.CfgFile)).Start()
+					err := exec.Command(openCmd, filepath.Join(utils.ConfigDir(pl), config.CfgFile)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(pl.Settings().DataDir, platforms.MappingsDir)).Start()
+					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), platforms.MappingsDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(pl.Settings().DataDir, platforms.LaunchersDir)).Start()
+					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), platforms.LaunchersDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")
@@ -124,7 +124,7 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
-					err := exec.Command(openCmd, pl.Settings().DataDir).Start()
+					err := exec.Command(openCmd, utils.DataDir(pl)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")

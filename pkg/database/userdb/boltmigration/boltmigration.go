@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ type Mapping struct {
 }
 
 func dbFile(pl platforms.Platform) string {
-	return filepath.Join(pl.Settings().DataDir, "tapto.db")
+	return filepath.Join(utils.DataDir(pl), "tapto.db")
 }
 
 func Exists(pl platforms.Platform) bool {

@@ -132,7 +132,7 @@ func main() {
 	app, err := tui.BuildMain(
 		cfg, pl,
 		svc.Running,
-		path.Join(pl.Settings().DataDir, config.LogFile),
+		path.Join(utils.DataDir(pl), config.LogFile),
 		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)
