@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
@@ -93,17 +92,17 @@ func isZapLink(link string) bool {
 	return true
 }
 
-func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
+func getRemoteZapScript(url string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return zapScriptModels.ZapScript{}, err
+		return nil, err
 	}
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return zapScriptModels.ZapScript{}, err
+		return nil, err
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -114,12 +113,12 @@ func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
 
 	if resp.StatusCode != 200 {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
-		return zapScriptModels.ZapScript{}, errors.New("invalid status code")
+		return nil, errors.New("invalid status code")
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		return zapScriptModels.ZapScript{}, errors.New("content type is empty")
+		return nil, errors.New("content type is empty")
 	}
 
 	content := ""
@@ -131,31 +130,35 @@ func getRemoteZapScript(url string) (zapScriptModels.ZapScript, error) {
 	}
 
 	if content == "" {
-		return zapScriptModels.ZapScript{}, errors.New("no valid content type")
+		return nil, errors.New("no valid content type")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return zapScriptModels.ZapScript{}, fmt.Errorf("error reading body: %w", err)
+		return nil, fmt.Errorf("error reading body: %w", err)
 	}
 
 	if content != MIMEZaparooZapScript {
-		return zapScriptModels.ZapScript{}, errors.New("invalid content type")
+		return nil, errors.New("invalid content type")
 	}
 
 	log.Debug().Msgf("zap link body: %s", string(body))
 
-	var zl zapScriptModels.ZapScript
-	err = json.Unmarshal(body, &zl)
-	if err != nil {
-		return zl, fmt.Errorf("error unmarshalling body: %w", err)
-	}
+	return body, nil
+}
 
-	if zl.ZapScript != 1 {
-		return zl, errors.New("invalid zapscript version")
+func isZapScriptJSON(data []byte) bool {
+	for _, b := range data {
+		switch b {
+		case ' ', '\n', '\t', '\r':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
 	}
-
-	return zl, nil
+	return false
 }
 
 func checkZapLink(
@@ -172,10 +175,24 @@ func checkZapLink(
 		return "", nil
 	}
 
-	log.Info().Msgf("checking link: %s", value)
-	zl, err := getRemoteZapScript(value)
+	log.Info().Msgf("checking zap link: %s", value)
+	body, err := getRemoteZapScript(value)
 	if err != nil {
 		return "", err
+	}
+
+	if !isZapScriptJSON(body) {
+		return string(body), nil
+	}
+
+	var zl zapScriptModels.ZapScript
+	err = json.Unmarshal(body, &zl)
+	if err != nil {
+		return "", fmt.Errorf("error unmarshalling zap link body: %w", err)
+	}
+
+	if zl.ZapScript != 1 {
+		return "", errors.New("invalid zapscript version")
 	}
 
 	if len(zl.Cmds) == 0 {
@@ -195,18 +212,6 @@ func checkZapLink(
 			return "", fmt.Errorf("error unmarshalling evaluate params: %w", err)
 		}
 		return args.ZapScript, nil
-	case zapScriptModels.ZapScriptCmdLaunch:
-		var args zapScriptModels.CmdLaunchArgs
-		err = json.Unmarshal(newCmd.Args, &args)
-		if err != nil {
-			return "", fmt.Errorf("error unmarshalling launch args: %w", err)
-		}
-		if args.URL != nil && *args.URL != "" {
-			return methods.InstallRunMedia(cfg, pl, args)
-		} else {
-			// TODO: missing stuff like launcher arg
-			return args.Path, nil
-		}
 	case zapScriptModels.ZapScriptCmdUIPicker:
 		var cmdArgs zapScriptModels.CmdPicker
 		err = json.Unmarshal(newCmd.Args, &cmdArgs)
