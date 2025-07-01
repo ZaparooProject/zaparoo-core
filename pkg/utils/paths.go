@@ -238,6 +238,8 @@ func DoLaunch(
 	launcher platforms.Launcher,
 	path string,
 ) error {
+	log.Debug().Msgf("launching with: %v", launcher)
+
 	err := launcher.Launch(cfg, path)
 	if err != nil {
 		return err
@@ -245,7 +247,7 @@ func DoLaunch(
 
 	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)
 	if err != nil {
-		return err
+		log.Warn().Err(err).Msgf("no system metadata for: %s", launcher.SystemID)
 	}
 
 	setActiveMedia(&models.ActiveMedia{

@@ -405,18 +405,6 @@ func killMPlayer(_ *config.Instance) error {
 }
 
 var Launchers = []platforms.Launcher{
-	{
-		ID:         "Generic",
-		Extensions: []string{".mgl", ".rbf", ".mra"},
-		Launch: func(cfg *config.Instance, path string) error {
-			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
-			if err != nil {
-				return err
-			}
-			log.Debug().Msgf("setting active game: %s", path)
-			return mister.SetActiveGame(path)
-		},
-	},
 	// Consoles
 	{
 		ID:         systemdefs.SystemAdventureVision,
@@ -1329,5 +1317,17 @@ var Launchers = []platforms.Launcher{
 		Folders:    []string{"Groovy"},
 		Extensions: []string{".gmc"},
 		Launch:     launch(systemdefs.SystemGroovy),
+	},
+	{
+		ID:         "Generic",
+		Extensions: []string{".mgl", ".rbf", ".mra"},
+		Launch: func(cfg *config.Instance, path string) error {
+			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			if err != nil {
+				return err
+			}
+			log.Debug().Msgf("setting active game: %s", path)
+			return mister.SetActiveGame(path)
+		},
 	},
 }
