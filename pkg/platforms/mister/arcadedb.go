@@ -3,16 +3,18 @@
 package mister
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/gocarina/gocsv"
+	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/gocarina/gocsv"
 )
 
 type GithubContentsItem struct {
@@ -56,6 +58,34 @@ type ArcadeDbEntry struct {
 	NumButtons      string `csv:"num_buttons"`
 }
 
+func getGitBlobSha1(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close file")
+		}
+	}(file)
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+
+	size := info.Size()
+	header := fmt.Sprintf("blob %d\x00", size)
+
+	hasher := sha1.New()
+	hasher.Write([]byte(header))
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
 func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	arcadeDBPath := filepath.Join(
 		utils.DataDir(pl),
@@ -89,24 +119,11 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, err
 	}
 
-	dbAge := time.Time{}
-	if dbFile, err := os.Stat(arcadeDBPath); err == nil {
-		dbAge = dbFile.ModTime()
-	}
-
-	// skip if current file is less than a day old
-	if time.Since(dbAge) < 24*time.Hour {
-		return false, nil
-	}
-
 	latestFile := contents[len(contents)-1]
+	latestSha := latestFile.Sha
 
-	latestFileDate, err := time.Parse("ArcadeDatabase060102.csv", latestFile.Name)
-	if err != nil {
-		return false, err
-	}
-
-	if latestFileDate.Before(dbAge) {
+	localSha, err := getGitBlobSha1(arcadeDBPath)
+	if err == nil && localSha == latestSha {
 		return false, nil
 	}
 
