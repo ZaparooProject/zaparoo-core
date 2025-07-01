@@ -219,6 +219,13 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 			}
 			arg = arg + next
 			continue
+		} else if ch == SymExpressionStart {
+			exprValue, err := sr.parseExpression()
+			if err != nil {
+				return arg, err
+			}
+			arg = arg + exprValue
+			continue
 		}
 
 		if ch == start {

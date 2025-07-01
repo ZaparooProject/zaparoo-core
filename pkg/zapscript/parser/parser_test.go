@@ -1795,7 +1795,7 @@ func TestParse(t *testing.T) {
 			input: `**say:"Hello [[user]], welcome to [[game]]"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "say", Args: []string{"Hello [[user]], welcome to [[game]]"}},
+					{Name: "say", Args: []string{"Hello " + parser.TokExpressionStart + "user" + parser.TokExpressionEnd + ", welcome to " + parser.TokExpressionStart + "game" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1860,7 +1860,7 @@ func TestParse(t *testing.T) {
 			input: `**run:"[[app_path]]",arg2?env=[[environment]]&debug=[[debug]]||**cleanup:[[temp_dir]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "run", Args: []string{"[[app_path]]", "arg2"}, AdvArgs: map[string]string{
+					{Name: "run", Args: []string{parser.TokExpressionStart + "app_path" + parser.TokExpressionEnd, "arg2"}, AdvArgs: map[string]string{
 						"env":   parser.TokExpressionStart + "environment" + parser.TokExpressionEnd,
 						"debug": parser.TokExpressionStart + "debug" + parser.TokExpressionEnd,
 					}},
