@@ -7,6 +7,7 @@ import (
 	"fmt"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -183,6 +184,20 @@ func HandleRunScript(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
+func isLocalRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+
+	return ip.IsLoopback()
+}
+
 func HandleRunRest(
 	cfg *config.Instance,
 	st *state.State,
@@ -192,14 +207,8 @@ func HandleRunRest(
 		log.Info().Msg("received REST run request")
 
 		text := chi.URLParam(r, "*")
-		text, err := url.QueryUnescape(text)
-		if err != nil {
-			log.Error().Msgf("error decoding request: %s", err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
 
-		if !cfg.IsRunAllowed(text) {
+		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
 			log.Error().Msgf("run not allowed: %s", text)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
