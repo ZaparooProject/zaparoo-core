@@ -48,6 +48,8 @@ const (
 	SymInputMacroExtEnd    = '}'
 	SymExpressionStart     = '['
 	SymExpressionEnd       = ']'
+	TokExpressionStart     = "\uE000"
+	TokExpressionEnd       = "\uE001"
 )
 
 type Command struct {
@@ -229,11 +231,8 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	return arg, nil
 }
 
-func (sr *ScriptReader) parseExpression(outputBrackets bool) (string, error) {
-	rawExpr := ""
-	if outputBrackets {
-		rawExpr = string(SymExpressionStart)
-	}
+func (sr *ScriptReader) parseExpression() (string, error) {
+	rawExpr := TokExpressionStart
 
 	next, err := sr.read()
 	if err != nil {
@@ -243,11 +242,7 @@ func (sr *ScriptReader) parseExpression(outputBrackets bool) (string, error) {
 		if err != nil {
 			return rawExpr, err
 		}
-		return rawExpr, nil
-	}
-
-	if outputBrackets {
-		rawExpr = rawExpr + string(SymExpressionStart)
+		return string(SymExpressionStart), nil
 	}
 
 	for {
@@ -263,10 +258,7 @@ func (sr *ScriptReader) parseExpression(outputBrackets bool) (string, error) {
 			if err != nil {
 				return rawExpr, err
 			} else if next == SymExpressionEnd {
-				if outputBrackets {
-					rawExpr = rawExpr + string(SymExpressionEnd)
-					rawExpr = rawExpr + string(SymExpressionEnd)
-				}
+				rawExpr = rawExpr + TokExpressionEnd
 				err := sr.skip()
 				if err != nil {
 					return rawExpr, err
@@ -278,8 +270,26 @@ func (sr *ScriptReader) parseExpression(outputBrackets bool) (string, error) {
 		rawExpr = rawExpr + string(ch)
 	}
 
-	if !outputBrackets {
-		rawExpr = strings.TrimSpace(rawExpr)
+	return rawExpr, nil
+}
+
+func (sr *ScriptReader) parsePostExpression() (string, error) {
+	rawExpr := ""
+	exprEndToken := []rune(TokExpressionEnd)[0]
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return rawExpr, err
+		} else if ch == eof {
+			return rawExpr, ErrUnmatchedExpression
+		}
+
+		if ch == exprEndToken {
+			break
+		}
+
+		rawExpr = rawExpr + string(ch)
 	}
 
 	return rawExpr, nil
@@ -490,7 +500,7 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 
 		if inValue {
 			if ch == SymExpressionStart {
-				exprValue, err := sr.parseExpression(true)
+				exprValue, err := sr.parseExpression()
 				if err != nil {
 					return advArgs, string(buf), err
 				}
@@ -589,7 +599,7 @@ func (sr *ScriptReader) parseArgs(
 			// advanced args are always the last part of a command
 			break
 		} else if ch == SymExpressionStart {
-			exprValue, err := sr.parseExpression(true)
+			exprValue, err := sr.parseExpression()
 			if err != nil {
 				return args, advArgs, err
 			}
@@ -825,6 +835,8 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 	parts := make([]PostArgPart, 0)
 	currentPart := PostArgPart{}
 
+	exprStartToken := []rune(TokExpressionStart)[0]
+
 	for {
 		ch, err := sr.read()
 		if err != nil {
@@ -833,14 +845,14 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 			break
 		}
 
-		if ch == SymExpressionStart {
+		if ch == exprStartToken {
 			if currentPart.Type != ArgPartTypeUnknown {
 				parts = append(parts, currentPart)
 				currentPart = PostArgPart{}
 			}
 
 			currentPart.Type = ArgPartTypeExpression
-			exprValue, err := sr.parseExpression(false)
+			exprValue, err := sr.parsePostExpression()
 			if err != nil {
 				return "", err
 			}
