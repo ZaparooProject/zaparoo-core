@@ -188,7 +188,7 @@ func RunCommand(
 	st *state.State,
 ) (platforms.CmdResult, error) {
 	var unsafe bool
-	linkValue, err := checkLink(cfg, pl, cmd)
+	linkValue, err := checkZapLink(cfg, pl, cmd)
 	if err != nil {
 		log.Error().Err(err).Msgf("error checking link, continuing")
 	} else if linkValue != "" {
