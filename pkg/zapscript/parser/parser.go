@@ -174,9 +174,33 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 	}
 }
 
+func (sr *ScriptReader) parseEscapeSeq() (string, error) {
+	ch, err := sr.read()
+	if err != nil {
+		return "", err
+	}
+	switch ch {
+	case eof:
+		return "", nil
+	case 'n':
+		return "\n", nil
+	case 'r':
+		return "\r", nil
+	case 't':
+		return "\t", nil
+	case SymEscapeSeq:
+		return string(SymEscapeSeq), nil
+	case SymArgDoubleQuote:
+		return string(SymArgDoubleQuote), nil
+	case SymArgSingleQuote:
+		return string(SymArgSingleQuote), nil
+	default:
+		return string(ch), nil
+	}
+}
+
 func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	arg := ""
-	escaped := false
 
 	for {
 		ch, err := sr.read()
@@ -186,14 +210,12 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 			return arg, ErrUnmatchedQuote
 		}
 
-		if escaped {
-			arg += string(ch)
-			escaped = false
-			continue
-		}
-
 		if ch == SymEscapeSeq {
-			escaped = true
+			next, err := sr.parseEscapeSeq()
+			if err != nil {
+				return arg, err
+			}
+			arg = arg + next
 			continue
 		}
 
@@ -335,7 +357,7 @@ func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error
 			if err != nil {
 				return args, advArgs, err
 			} else if next == eof {
-				args = append(args, string(SymEscapeSeq))
+				args = append(args, string(SymInputMacroEscapeSeq))
 			}
 
 			args = append(args, string(next))
@@ -437,14 +459,14 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 				continue
 			} else if ch == SymEscapeSeq {
 				// escaping next character
-				next, err := sr.read()
+				next, err := sr.parseEscapeSeq()
 				if err != nil {
 					return advArgs, string(buf), err
-				} else if next == eof {
+				} else if next == "" {
 					currentValue = currentValue + string(SymEscapeSeq)
+					continue
 				}
-
-				currentValue = currentValue + string(next)
+				currentValue = currentValue + next
 				continue
 			}
 		}
@@ -526,14 +548,14 @@ func (sr *ScriptReader) parseArgs(
 			continue
 		} else if ch == SymEscapeSeq {
 			// escaping next character
-			next, err := sr.read()
+			next, err := sr.parseEscapeSeq()
 			if err != nil {
 				return args, advArgs, err
-			} else if next == eof {
+			} else if next == "" {
 				currentArg = currentArg + string(SymEscapeSeq)
+				continue
 			}
-
-			currentArg = currentArg + string(next)
+			currentArg = currentArg + next
 			continue
 		}
 

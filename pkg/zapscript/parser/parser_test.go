@@ -1899,6 +1899,96 @@ func TestParse(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "escaped newline in arg",
+			input: `**echo:hello^nworld`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "echo", Args: []string{"hello\nworld"}},
+				},
+			},
+		},
+		{
+			name:  "escaped carriage return in arg",
+			input: `**msg:line1^rline2`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "msg", Args: []string{"line1\rline2"}},
+				},
+			},
+		},
+		{
+			name:  "escaped tab in arg",
+			input: `**tabby:one^ttwo`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "tabby", Args: []string{"one\ttwo"}},
+				},
+			},
+		},
+		{
+			name:  "escaped newline and tab",
+			input: `**fancy:begin^nmid^tend`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "fancy", Args: []string{"begin\nmid\tend"}},
+				},
+			},
+		},
+		{
+			name:  "escaped values in quoted string",
+			input: `**q:"line^n^t1"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "q", Args: []string{"line\n\t1"}},
+				},
+			},
+		},
+		{
+			name:  "mixed escapes and normal values, trimmed args",
+			input: `**mix:plain,^n,^t,^r,bar`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mix", Args: []string{"plain", "", "", "", "bar"}},
+				},
+			},
+		},
+		{
+			name:  "escaped caret itself",
+			input: `**self:"^^^n^t^^"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "self", Args: []string{"^\n\t^"}},
+				},
+			},
+		},
+		{
+			name:  "escaped whitespace between commas",
+			input: `**spaces:foo^n,bar^t,baz^r,qux`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "spaces", Args: []string{"foo", "bar", "baz", "qux"}},
+				},
+			},
+		},
+		{
+			name:  "escaped quotes in quoted arg",
+			input: `**quote:"a^"b^'c"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "quote", Args: []string{`a"b'c`}},
+				},
+			},
+		},
+		{
+			name:  "escaped whitespace at start/end",
+			input: `**pad:^nfoo^t`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "pad", Args: []string{"foo"}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
