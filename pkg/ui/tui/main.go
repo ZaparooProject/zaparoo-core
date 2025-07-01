@@ -287,6 +287,6 @@ func BuildMain(
 
 	pages.SwitchToPage(PageMain)
 
-	centeredPages := centerWidget(75, 15, pages)
+	centeredPages := CenterWidget(75, 15, pages)
 	return app.SetRoot(centeredPages, true), nil
 }

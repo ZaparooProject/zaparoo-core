@@ -101,7 +101,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		return cmd.Run()
 	}
 
-	if pl.activeMedia().SystemID != "" {
+	if pl.activeMedia() != nil {
 		// menu must be open to switch tty and launch script
 		log.Debug().Msg("killing launcher...")
 		err := pl.StopActiveLauncher()
@@ -168,7 +168,7 @@ cd $(dirname "%s")
 	)
 
 	exit := func() {
-		if pl.activeMedia().SystemID == "" {
+		if pl.activeMedia() == nil {
 			// exit console
 			err = pl.KeyboardPress("{f12}")
 			if err != nil {

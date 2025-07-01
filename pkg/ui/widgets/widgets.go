@@ -162,6 +162,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	view := tview.NewTextView().
 		SetText(noticeArgs.Text).
 		SetTextAlign(tview.AlignCenter)
+	view.SetBorder(true)
 
 	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		y += h / 2
@@ -212,7 +213,8 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 		return event
 	})
 
-	return app.SetRoot(view, true), nil
+	centeredPages := tui.CenterWidget(75, 15, view)
+	return app.SetRoot(centeredPages, true), nil
 }
 
 // NoticeUI is a simple TUI screen that displays a message on screen. It can
@@ -328,6 +330,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
+	flex.SetBorder(true)
 
 	title := pickerArgs.Title
 	if title == "" {
@@ -394,7 +397,8 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return event
 	})
 
-	return app.SetRoot(flex, true), nil
+	centeredPages := tui.CenterWidget(75, 15, flex)
+	return app.SetRoot(centeredPages, true), nil
 }
 
 // PickerUI displays a list picker of Zap Link Cmds to run via the API.
