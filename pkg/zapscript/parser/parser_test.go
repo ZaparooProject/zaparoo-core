@@ -563,7 +563,7 @@ func TestParse(t *testing.T) {
 			input: `**path:"C:^\Games^\Test"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:^\Games^\Test`}},
+					{Name: "path", Args: []string{`C:\Games\Test`}},
 				},
 			},
 		},
@@ -631,7 +631,7 @@ func TestParse(t *testing.T) {
 			input: `**weird:"hello^, world",foo^|bar`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "weird", Args: []string{"hello^, world", "foo|bar"}},
+					{Name: "weird", Args: []string{"hello, world", "foo|bar"}},
 				},
 			},
 		},
@@ -640,7 +640,7 @@ func TestParse(t *testing.T) {
 			input: `**mix:"a^,b",c^,d,e^|f,"g^"h"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mix", Args: []string{"a^,b", "c,d", "e|f", `g^h"`}},
+					{Name: "mix", Args: []string{"a,b", "c,d", "e|f", `g"h`}},
 				},
 			},
 		},
@@ -676,7 +676,8 @@ func TestParse(t *testing.T) {
 			input: `**render:level-[[difficulty]]?fx=true`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "render", Args: []string{"level-[[difficulty]]"}, AdvArgs: map[string]string{"fx": "true"}},
+					{Name: "render", Args: []string{"level-" + parser.TokExpressionStart + "difficulty" + parser.TokExpressionEnd},
+						AdvArgs: map[string]string{"fx": "true"}},
 				},
 			},
 		},
@@ -686,7 +687,7 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "info", AdvArgs: map[string]string{
-						"text": `he said ^foo=bar""`,
+						"text": `he said "foo=bar"`,
 					}},
 				},
 			},
@@ -1719,7 +1720,7 @@ func TestParse(t *testing.T) {
 			input: `**greet:Hello [[name]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "greet", Args: []string{"Hello [[name]]"}},
+					{Name: "greet", Args: []string{"Hello " + parser.TokExpressionStart + "name" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1728,7 +1729,7 @@ func TestParse(t *testing.T) {
 			input: `**load:[[filename]].exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "load", Args: []string{"[[filename]].exe"}},
+					{Name: "load", Args: []string{parser.TokExpressionStart + "filename" + parser.TokExpressionEnd + ".exe"}},
 				},
 			},
 		},
@@ -1737,7 +1738,7 @@ func TestParse(t *testing.T) {
 			input: `**save:backup-[[timestamp]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "save", Args: []string{"backup-[[timestamp]]"}},
+					{Name: "save", Args: []string{"backup-" + parser.TokExpressionStart + "timestamp" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1746,7 +1747,7 @@ func TestParse(t *testing.T) {
 			input: `**config:[[env]]-[[version]]-[[build]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "config", Args: []string{"[[env]]-[[version]]-[[build]]"}},
+					{Name: "config", Args: []string{parser.TokExpressionStart + "env" + parser.TokExpressionEnd + "-" + parser.TokExpressionStart + "version" + parser.TokExpressionEnd + "-" + parser.TokExpressionStart + "build" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1755,7 +1756,7 @@ func TestParse(t *testing.T) {
 			input: `**connect:[[host]],[[port]],[[user]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "connect", Args: []string{"[[host]]", "[[port]]", "[[user]]"}},
+					{Name: "connect", Args: []string{parser.TokExpressionStart + "host" + parser.TokExpressionEnd, parser.TokExpressionStart + "port" + parser.TokExpressionEnd, parser.TokExpressionStart + "user" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1765,8 +1766,8 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{
-						"platform": "[[system]]",
-						"debug":    "[[debug_mode]]",
+						"platform": parser.TokExpressionStart + "system" + parser.TokExpressionEnd,
+						"debug":    parser.TokExpressionStart + "debug_mode" + parser.TokExpressionEnd,
 					}},
 				},
 			},
@@ -1776,7 +1777,7 @@ func TestParse(t *testing.T) {
 			input: `**deploy:[[app.name]],[[build_number]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "deploy", Args: []string{"[[app.name]]", "[[build_number]]"}},
+					{Name: "deploy", Args: []string{parser.TokExpressionStart + "app.name" + parser.TokExpressionEnd, parser.TokExpressionStart + "build_number" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1785,7 +1786,7 @@ func TestParse(t *testing.T) {
 			input: `**level:[[level1]],[[player2_score]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "level", Args: []string{"[[level1]]", "[[player2_score]]"}},
+					{Name: "level", Args: []string{parser.TokExpressionStart + "level1" + parser.TokExpressionEnd, parser.TokExpressionStart + "player2_score" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1803,7 +1804,7 @@ func TestParse(t *testing.T) {
 			input: `**path:C:^\Games^\[[system]]^\game.exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:\Games\[[system]]\game.exe`}},
+					{Name: "path", Args: []string{"C:\\Games\\" + parser.TokExpressionStart + "system" + parser.TokExpressionEnd + "\\game.exe"}},
 				},
 			},
 		},
@@ -1812,8 +1813,8 @@ func TestParse(t *testing.T) {
 			input: `**url:https://api.example.com/[[endpoint]]?key=[[api_key]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "url", Args: []string{"https://api.example.com/[[endpoint]]"}, AdvArgs: map[string]string{
-						"key": "[[api_key]]",
+					{Name: "url", Args: []string{"https://api.example.com/" + parser.TokExpressionStart + "endpoint" + parser.TokExpressionEnd}, AdvArgs: map[string]string{
+						"key": parser.TokExpressionStart + "api_key" + parser.TokExpressionEnd,
 					}},
 				},
 			},
@@ -1832,7 +1833,7 @@ func TestParse(t *testing.T) {
 			input: `[[system]]/games/[[game_name]].rom`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"[[system]]/games/[[game_name]].rom"}},
+					{Name: "launch", Args: []string{parser.TokExpressionStart + "system" + parser.TokExpressionEnd + "/games/" + parser.TokExpressionStart + "game_name" + parser.TokExpressionEnd + ".rom"}},
 				},
 			},
 		},
@@ -1841,7 +1842,7 @@ func TestParse(t *testing.T) {
 			input: `**test:prefix[[]]suffix`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "test", Args: []string{"prefix[[]]suffix"}},
+					{Name: "test", Args: []string{"prefix" + parser.TokExpressionStart + parser.TokExpressionEnd + "suffix"}},
 				},
 			},
 		},
@@ -1850,7 +1851,7 @@ func TestParse(t *testing.T) {
 			input: `**format:[[first name]] [[last name]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "format", Args: []string{"[[first name]] [[last name]]"}},
+					{Name: "format", Args: []string{parser.TokExpressionStart + "first name" + parser.TokExpressionEnd + " " + parser.TokExpressionStart + "last name" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1860,10 +1861,10 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "run", Args: []string{"[[app_path]]", "arg2"}, AdvArgs: map[string]string{
-						"env":   "[[environment]]",
-						"debug": "[[debug]]",
+						"env":   parser.TokExpressionStart + "environment" + parser.TokExpressionEnd,
+						"debug": parser.TokExpressionStart + "debug" + parser.TokExpressionEnd,
 					}},
-					{Name: "cleanup", Args: []string{"[[temp_dir]]"}},
+					{Name: "cleanup", Args: []string{parser.TokExpressionStart + "temp_dir" + parser.TokExpressionEnd}},
 				},
 			},
 		},
@@ -1886,7 +1887,7 @@ func TestParse(t *testing.T) {
 			input: `**test:[[outer[[inner]]outer]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "test", Args: []string{"[[outer[[inner]]outer]]"}},
+					{Name: "test", Args: []string{parser.TokExpressionStart + "outer[[inner" + parser.TokExpressionEnd + "outer]]"}},
 				},
 			},
 		},
@@ -1896,6 +1897,114 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "test", Args: []string{"[single]", "bracket]"}},
+				},
+			},
+		},
+		{
+			name:  "escaped newline in arg",
+			input: `**echo:hello^nworld`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "echo", Args: []string{"hello\nworld"}},
+				},
+			},
+		},
+		{
+			name:  "escaped carriage return in arg",
+			input: `**msg:line1^rline2`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "msg", Args: []string{"line1\rline2"}},
+				},
+			},
+		},
+		{
+			name:  "escaped tab in arg",
+			input: `**tabby:one^ttwo`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "tabby", Args: []string{"one\ttwo"}},
+				},
+			},
+		},
+		{
+			name:  "escaped newline and tab",
+			input: `**fancy:begin^nmid^tend`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "fancy", Args: []string{"begin\nmid\tend"}},
+				},
+			},
+		},
+		{
+			name:  "escaped values in quoted string",
+			input: `**q:"line^n^t1"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "q", Args: []string{"line\n\t1"}},
+				},
+			},
+		},
+		{
+			name:  "mixed escapes and normal values, trimmed args",
+			input: `**mix:plain,^n,^t,^r,bar`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "mix", Args: []string{"plain", "", "", "", "bar"}},
+				},
+			},
+		},
+		{
+			name:  "escaped caret itself",
+			input: `**self:"^^^n^t^^"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "self", Args: []string{"^\n\t^"}},
+				},
+			},
+		},
+		{
+			name:  "escaped whitespace between commas",
+			input: `**spaces:foo^n,bar^t,baz^r,qux`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "spaces", Args: []string{"foo", "bar", "baz", "qux"}},
+				},
+			},
+		},
+		{
+			name:  "escaped quotes in quoted arg",
+			input: `**quote:"a^"b^'c"`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "quote", Args: []string{`a"b'c`}},
+				},
+			},
+		},
+		{
+			name:  "escaped whitespace at start/end",
+			input: `**pad:^nfoo^t`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "pad", Args: []string{"foo"}},
+				},
+			},
+		},
+		{
+			name:  "escaped start expression in argument",
+			input: `**print:it looks like ^[[brackets^]]`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "print", Args: []string{`it looks like [[brackets]]`}},
+				},
+			},
+		},
+		{
+			name:  "escaped start with other escapes",
+			input: `**notify:[^[:start^,]]end`,
+			want: parser.Script{
+				Cmds: []parser.Command{
+					{Name: "notify", Args: []string{`[[:start,]]end`}},
 				},
 			},
 		},
@@ -1935,52 +2044,52 @@ func TestPostProcess(t *testing.T) {
 		},
 		{
 			name:  "expression only",
-			input: "[[ 2 + 2 + 2 ]]",
+			input: parser.TokExpressionStart + " 2 + 2 + 2 " + " " + parser.TokExpressionEnd,
 			want:  "6",
 		},
 		{
 			name:  "test expression 1",
-			input: `something [[platform]]`,
+			input: "something " + parser.TokExpressionStart + "platform" + parser.TokExpressionEnd,
 			want:  `something mister`,
 		},
 		{
 			name:  "test expression 2",
-			input: `something [[2+2]]`,
+			input: "something " + parser.TokExpressionStart + "2+2" + parser.TokExpressionEnd,
 			want:  `something 4`,
 		},
 		{
 			name:  "test expression 2 with spacing",
-			input: `something [[ 2 + 2 ]]`,
+			input: "something " + parser.TokExpressionStart + " 2 + 2 " + parser.TokExpressionEnd,
 			want:  `something 4`,
 		},
 		{
 			name:  "test expression bool 1",
-			input: `something [[true]]`,
+			input: "something " + parser.TokExpressionStart + "true" + parser.TokExpressionEnd,
 			want:  `something true`,
 		},
 		{
 			name:  "test expression bool 2",
-			input: `something [[ true == false ]]`,
+			input: "something " + parser.TokExpressionStart + " true == false " + parser.TokExpressionEnd,
 			want:  `something false`,
 		},
 		{
 			name:    "bad return type",
-			input:   `[[device]]`,
+			input:   parser.TokExpressionStart + "device" + parser.TokExpressionEnd,
 			wantErr: parser.ErrBadExpressionReturn,
 		},
 		{
 			name:  "test expression int",
-			input: `[[5+5]]`,
+			input: parser.TokExpressionStart + "5+5" + parser.TokExpressionEnd,
 			want:  `10`,
 		},
 		{
 			name:  "test expression float 1",
-			input: `[[2.5]]`,
+			input: parser.TokExpressionStart + "2.5" + parser.TokExpressionEnd,
 			want:  `2.5`,
 		},
 		{
 			name:  "test expression float 2 precision",
-			input: `[[1/5]]`,
+			input: parser.TokExpressionStart + "1/5" + parser.TokExpressionEnd,
 			want:  `0.2`,
 		},
 	}
