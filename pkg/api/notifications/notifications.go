@@ -7,6 +7,7 @@ import (
 )
 
 func sendNotification(ns chan<- models.Notification, method string, payload any) {
+	log.Debug().Msgf("sending notification: %s, %v", method, payload)
 	if payload != nil {
 		params, err := json.Marshal(payload)
 		if err != nil {

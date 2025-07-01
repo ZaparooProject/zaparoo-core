@@ -290,12 +290,14 @@ func (tr *Tracker) loadGame() {
 		log.Warn().Msgf("no launchers found for %s", path)
 		return
 	}
+	log.Debug().Msgf("tracker detected launchers: %v", launchers)
 
 	system, err := systemdefs.GetSystem(launchers[0].SystemID)
 	if err != nil {
 		log.Error().Msgf("error getting system %s", err)
 		return
 	}
+	log.Debug().Msgf("tracker detected system: %v", system)
 
 	meta, err := assets.GetSystemMetadata(system.ID)
 	if err != nil {
