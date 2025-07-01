@@ -563,7 +563,7 @@ func TestParse(t *testing.T) {
 			input: `**path:"C:^\Games^\Test"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{`C:^\Games^\Test`}},
+					{Name: "path", Args: []string{`C:\Games\Test`}},
 				},
 			},
 		},
@@ -631,7 +631,7 @@ func TestParse(t *testing.T) {
 			input: `**weird:"hello^, world",foo^|bar`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "weird", Args: []string{"hello^, world", "foo|bar"}},
+					{Name: "weird", Args: []string{"hello, world", "foo|bar"}},
 				},
 			},
 		},
@@ -640,7 +640,7 @@ func TestParse(t *testing.T) {
 			input: `**mix:"a^,b",c^,d,e^|f,"g^"h"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mix", Args: []string{"a^,b", "c,d", "e|f", `g^h"`}},
+					{Name: "mix", Args: []string{"a,b", "c,d", "e|f", `g"h`}},
 				},
 			},
 		},
@@ -686,7 +686,7 @@ func TestParse(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{Name: "info", AdvArgs: map[string]string{
-						"text": `he said ^foo=bar""`,
+						"text": `he said "foo=bar"`,
 					}},
 				},
 			},

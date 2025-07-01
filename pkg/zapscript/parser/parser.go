@@ -176,6 +176,7 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 
 func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 	arg := ""
+	escaped := false
 
 	for {
 		ch, err := sr.read()
@@ -185,11 +186,22 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 			return arg, ErrUnmatchedQuote
 		}
 
+		if escaped {
+			arg += string(ch)
+			escaped = false
+			continue
+		}
+
+		if ch == SymEscapeSeq {
+			escaped = true
+			continue
+		}
+
 		if ch == start {
 			break
 		}
 
-		arg = arg + string(ch)
+		arg += string(ch)
 	}
 
 	return arg, nil
