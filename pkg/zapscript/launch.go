@@ -2,6 +2,9 @@ package zapscript
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,12 +184,52 @@ func getAltLauncher(
 	}
 }
 
+func isValidHttpUrl(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")
+}
+
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
 
 	path := env.Cmd.Args[0]
+	if path == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
+	}
+
+	systemArg := env.Cmd.AdvArgs["system"]
+	if isValidHttpUrl(path) && systemArg != "" {
+		name := env.Cmd.AdvArgs["name"]
+		preNotice := env.Cmd.AdvArgs["pre_notice"]
+
+		args := models.CmdLaunchArgs{
+			System: &systemArg,
+			URL:    &path,
+		}
+
+		if name != "" {
+			args.Name = &name
+		}
+
+		if preNotice != "" {
+			args.PreNotice = &preNotice
+		}
+
+		installPath, err := methods.InstallRunMedia(env.Cfg, pl, args)
+		if err != nil {
+			return platforms.CmdResult{}, err
+		}
+
+		path = installPath
+	}
 
 	launch, err := getAltLauncher(pl, env)
 	if err != nil {

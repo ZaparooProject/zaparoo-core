@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -222,6 +223,21 @@ func HandleStop(env requests.RequestEnv) (any, error) {
 	return nil, env.Platform.StopActiveLauncher()
 }
 
+func displayNameFromURL(rawurl string) string {
+	u, err := url.Parse(rawurl)
+	if err != nil || u.Path == "" {
+		return rawurl
+	}
+	file := path.Base(u.Path)
+	decoded, err := url.PathUnescape(file)
+	if err != nil {
+		decoded = file
+	}
+	ext := path.Ext(decoded)
+	name := strings.TrimSuffix(decoded, ext)
+	return name
+}
+
 func InstallRunMedia(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -275,12 +291,12 @@ func InstallRunMedia(
 
 	root := "/media/fat/games" // TODO: this is hardcoded for now
 
-	path := filepath.Join(root, folder, name)
+	localPath := filepath.Join(root, folder, name)
 
-	log.Debug().Msgf("media path: %s", path)
+	log.Debug().Msgf("media localPath: %s", localPath)
 
 	// check if the file already exists
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(localPath); err == nil {
 		if launchArgs.PreNotice != nil && *launchArgs.PreNotice != "" {
 			hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
 				Text: *launchArgs.PreNotice,
@@ -299,7 +315,7 @@ func InstallRunMedia(
 				return "", fmt.Errorf("error hiding pre-notice: %w", err)
 			}
 		}
-		return path, nil
+		return localPath, nil
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("error checking file: %w", err)
 	}
@@ -307,7 +323,7 @@ func InstallRunMedia(
 	// download the file
 	log.Info().Msgf("downloading media: %s", *launchArgs.URL)
 
-	itemDisplay := *launchArgs.URL
+	itemDisplay := displayNameFromURL(*launchArgs.URL)
 	if launchArgs.Name != nil && *launchArgs.Name != "" {
 		itemDisplay = *launchArgs.Name
 	}
@@ -334,7 +350,7 @@ func InstallRunMedia(
 		return "", fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
-	file, err := os.Create(path)
+	file, err := os.Create(localPath)
 	if err != nil {
 		return "", fmt.Errorf("error creating file: %w", err)
 	}
@@ -374,5 +390,5 @@ func InstallRunMedia(
 		}
 	}
 
-	return path, nil
+	return localPath, nil
 }

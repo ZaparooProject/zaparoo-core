@@ -163,6 +163,8 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 		SetText(noticeArgs.Text).
 		SetTextAlign(tview.AlignCenter)
 	view.SetBorder(true)
+	view.SetWrap(true)
+	view.SetWordWrap(true)
 
 	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		y += h / 2
