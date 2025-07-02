@@ -15,4 +15,8 @@ const (
 	ApiRequestTimeout    = 30 * time.Second
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
+	AssetsDir            = "assets"
+	MappingsDir          = "mappings"
+	LaunchersDir         = "launchers"
+	MediaDir             = "media"
 )

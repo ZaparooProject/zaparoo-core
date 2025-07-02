@@ -103,13 +103,13 @@ func systrayOnReady(
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), platforms.MappingsDir)).Start()
+					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.MappingsDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), platforms.LaunchersDir)).Start()
+					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.LaunchersDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")

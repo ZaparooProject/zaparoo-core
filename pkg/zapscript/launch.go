@@ -183,7 +183,7 @@ func getAltLauncher(
 	}
 }
 
-func isValidHttpUrl(s string) bool {
+func isValidHTTPUrl(s string) bool {
 	u, err := url.Parse(s)
 	if err != nil {
 		return false
@@ -205,7 +205,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	systemArg := env.Cmd.AdvArgs["system"]
-	if isValidHttpUrl(path) && systemArg != "" {
+	if isValidHTTPUrl(path) && systemArg != "" {
 		name := env.Cmd.AdvArgs["name"]
 		preNotice := env.Cmd.AdvArgs["pre_notice"]
 		installPath, err := installer.HTTPMediaFile(

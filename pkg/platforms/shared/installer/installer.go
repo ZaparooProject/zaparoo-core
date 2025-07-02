@@ -7,6 +7,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"io"
 	"io/fs"
@@ -23,6 +24,7 @@ import (
 type mediaNames struct {
 	display  string
 	filename string
+	ext      string
 }
 
 func namesFromURL(rawURL string, defaultName string) mediaNames {
@@ -37,6 +39,7 @@ func namesFromURL(rawURL string, defaultName string) mediaNames {
 		return mediaNames{
 			display:  name,
 			filename: file,
+			ext:      ext,
 		}
 	}
 
@@ -53,6 +56,7 @@ func namesFromURL(rawURL string, defaultName string) mediaNames {
 	return mediaNames{
 		display:  name,
 		filename: decoded,
+		ext:      ext,
 	}
 }
 
@@ -78,6 +82,29 @@ func showPreNotice(cfg *config.Instance, pl platforms.Platform, text string) err
 	return nil
 }
 
+func findInstallDir(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	systemID string,
+	names mediaNames,
+) (string, error) {
+	system, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return "", fmt.Errorf("error getting system: %w", err)
+	}
+
+	fallbackDir := filepath.Join(utils.DataDir(pl), config.MediaDir, system.ID)
+
+	// TODO: this would be better if it could auto-detect the existing preferred
+	//       platform games folder, but there's currently no shared mechanism to
+	//       work out the correct root folder for a platform
+	// TODO: config override to set explicit fallback/default media folder
+
+	localPath := filepath.Clean(filepath.Join(fallbackDir, names.filename))
+
+	return localPath, nil
+}
+
 func HTTPMediaFile(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -86,57 +113,20 @@ func HTTPMediaFile(
 	preNotice string,
 	displayName string,
 ) (string, error) {
-	if pl.ID() != platforms.PlatformIDMister {
-		return "", errors.New("media install only supported for mister")
-	}
-
 	if fileURL == "" {
 		return "", errors.New("media download url is empty")
 	}
-
 	if systemID == "" {
 		return "", errors.New("media system id is empty")
 	}
 
-	system, err := systemdefs.LookupSystem(systemID)
-	if err != nil {
-		return "", fmt.Errorf("error getting system: %w", err)
-	}
-
-	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers(cfg) {
-		if l.SystemID == system.ID {
-			launchers = append(launchers, l)
-		}
-	}
-
-	if len(launchers) == 0 {
-		return "", fmt.Errorf("no launchers for system: %s", system.ID)
-	}
-
-	// just use the first launcher for now
-	launcher := launchers[0]
-
-	if launcher.Folders == nil {
-		return "", errors.New("no folders for launcher")
-	}
-
-	// just use the first folder for now
-	folder := launcher.Folders[0]
-
 	names := namesFromURL(fileURL, displayName)
 
-	// roots := pl.RootDirs(cfg)
+	localPath, err := findInstallDir(cfg, pl, systemID, names)
+	if err != nil {
+		return "", fmt.Errorf("error finding install dir: %w", err)
+	}
 
-	// if len(roots) == 0 {
-	// 	return "", errors.New("no root dirs")
-	// }
-
-	// root := roots[0]
-
-	root := "/media/fat/games" // TODO: this is hardcoded for now
-
-	localPath := filepath.Clean(filepath.Join(root, folder, names.filename))
 	tempPath := localPath + ".part"
 
 	log.Debug().Msgf("media local path: %s", localPath)

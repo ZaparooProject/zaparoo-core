@@ -54,9 +54,10 @@ func setupEnvironment(pl platforms.Platform) error {
 		utils.ConfigDir(pl),
 		pl.Settings().TempDir,
 		utils.DataDir(pl),
-		filepath.Join(utils.DataDir(pl), platforms.MappingsDir),
-		filepath.Join(utils.DataDir(pl), platforms.AssetsDir),
-		filepath.Join(utils.DataDir(pl), platforms.LaunchersDir),
+		filepath.Join(utils.DataDir(pl), config.MappingsDir),
+		filepath.Join(utils.DataDir(pl), config.AssetsDir),
+		filepath.Join(utils.DataDir(pl), config.LaunchersDir),
+		filepath.Join(utils.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0755)
@@ -67,7 +68,7 @@ func setupEnvironment(pl platforms.Platform) error {
 
 	successSoundPath := filepath.Join(
 		utils.DataDir(pl),
-		platforms.AssetsDir,
+		config.AssetsDir,
 		config.SuccessSoundFilename,
 	)
 	if _, err := os.Stat(successSoundPath); err != nil {
@@ -85,7 +86,7 @@ func setupEnvironment(pl platforms.Platform) error {
 
 	failSoundPath := filepath.Join(
 		utils.DataDir(pl),
-		platforms.AssetsDir,
+		config.AssetsDir,
 		config.FailSoundFilename,
 	)
 	if _, err := os.Stat(failSoundPath); err != nil {
@@ -177,13 +178,13 @@ func Start(
 	}
 
 	log.Info().Msg("loading mapping files")
-	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), platforms.MappingsDir))
+	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), config.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 	}
 
 	log.Info().Msg("loading custom launchers")
-	err = cfg.LoadCustomLaunchers(filepath.Join(utils.DataDir(pl), platforms.LaunchersDir))
+	err = cfg.LoadCustomLaunchers(filepath.Join(utils.DataDir(pl), config.LaunchersDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}

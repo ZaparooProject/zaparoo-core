@@ -14,12 +14,6 @@ import (
 )
 
 const (
-	AssetsDir    = "assets"
-	MappingsDir  = "mappings"
-	LaunchersDir = "launchers"
-)
-
-const (
 	PlatformIDBatocera  = "batocera"
 	PlatformIDBazzite   = "bazzite"
 	PlatformIDChimeraOS = "chimeraos"

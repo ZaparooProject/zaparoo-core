@@ -3,6 +3,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -10,10 +11,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
@@ -246,7 +245,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reload mappings request")
 
-	mapDir := filepath.Join(utils.DataDir(env.Platform), platforms.MappingsDir)
+	mapDir := filepath.Join(utils.DataDir(env.Platform), config.MappingsDir)
 	err := env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")

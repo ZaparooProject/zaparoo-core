@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gocarina/gocsv"
@@ -89,7 +90,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	arcadeDBPath := filepath.Join(
 		utils.DataDir(pl),
-		platforms.AssetsDir,
+		config.AssetsDir,
 		ArcadeDbFile,
 	)
 
@@ -151,7 +152,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	arcadeDBPath := filepath.Join(
 		utils.DataDir(pl),
-		platforms.AssetsDir,
+		config.AssetsDir,
 		ArcadeDbFile,
 	)
 

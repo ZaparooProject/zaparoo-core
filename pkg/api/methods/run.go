@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
 	"net"
 	"net/http"
 	"strings"
@@ -153,40 +152,6 @@ func HandleRunScript(env requests.RequestEnv) (any, error) {
 			return nil, fmt.Errorf("error unmarshalling evaluate params: %w", err)
 		}
 		t.Text = args.ZapScript
-	case zapScriptModels.ZapScriptCmdLaunch:
-		var args zapScriptModels.CmdLaunchArgs
-		err = json.Unmarshal(cmd.Args, &args)
-		if err != nil {
-			return nil, fmt.Errorf("error unmarshalling evaluate params: %w", err)
-		}
-		fileURL := ""
-		if args.URL != nil {
-			fileURL = *args.URL
-		}
-		systemID := ""
-		if args.System != nil {
-			systemID = *args.System
-		}
-		preNotice := ""
-		if args.PreNotice != nil {
-			preNotice = *args.PreNotice
-		}
-		name := ""
-		if args.Name != nil {
-			name = *args.Name
-		}
-		// TODO: this will timeout on large downloads
-		t.Text, err = installer.HTTPMediaFile(
-			env.Config,
-			env.Platform,
-			fileURL,
-			systemID,
-			preNotice,
-			name,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("error installing and running media: %w", err)
-		}
 	default:
 		return "", fmt.Errorf("unsupported cmd: %s", cmdName)
 	}
