@@ -198,7 +198,7 @@ func checkZapLink(
 	if len(zl.Cmds) == 0 {
 		return "", errors.New("no commands")
 	} else if len(zl.Cmds) > 1 {
-		log.Warn().Msgf("multiple commands in link, using first: %v", zl.Cmds[0])
+		log.Warn().Msgf("multiple commands in json link, using first: %v", zl.Cmds[0])
 	}
 
 	newCmd := zl.Cmds[0]

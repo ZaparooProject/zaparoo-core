@@ -2,8 +2,7 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -209,25 +208,16 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if isValidHttpUrl(path) && systemArg != "" {
 		name := env.Cmd.AdvArgs["name"]
 		preNotice := env.Cmd.AdvArgs["pre_notice"]
-
-		args := models.CmdLaunchArgs{
-			System: &systemArg,
-			URL:    &path,
-		}
-
-		if name != "" {
-			args.Name = &name
-		}
-
-		if preNotice != "" {
-			args.PreNotice = &preNotice
-		}
-
-		installPath, err := methods.InstallRunMedia(env.Cfg, pl, args)
+		installPath, err := installer.HTTPMediaFile(
+			env.Cfg, pl,
+			path,
+			systemArg,
+			preNotice,
+			name,
+		)
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}
-
 		path = installPath
 	}
 
