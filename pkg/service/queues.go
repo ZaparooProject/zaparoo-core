@@ -44,16 +44,22 @@ func runTokenZapScript(
 
 	pls := plsc.Active
 
-	for i, cmd := range script.Cmds {
+	cmds := script.Cmds
+	for i := 0; i < len(cmds); i++ {
+		cmd := cmds[i]
+
 		result, err := zapscript.RunCommand(
 			platform, cfg,
 			playlists.PlaylistController{
 				Active: pls,
 				Queue:  plsc.Queue,
 			},
-			token, cmd,
-			len(script.Cmds), i,
-			db, st,
+			token,
+			cmd,
+			len(script.Cmds),
+			i,
+			db,
+			st,
 		)
 		if err != nil {
 			return err
@@ -67,6 +73,20 @@ func runTokenZapScript(
 
 		if result.PlaylistChanged {
 			pls = result.Playlist
+		}
+
+		if result.Unsafe {
+			log.Warn().Msg("token has been flagged as unsafe")
+			token.Unsafe = true
+		}
+
+		// if a command results in additional commands to run (like from a
+		// remote query) inject them to be run immediately after this command
+		if len(result.NewCommands) > 0 {
+			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
+			before := cmds[:i+1]
+			after := cmds[i+1:]
+			cmds = append(before, append(result.NewCommands, after...)...)
 		}
 	}
 

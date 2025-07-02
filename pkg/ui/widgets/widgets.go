@@ -291,7 +291,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	var actions []pickerAction
-	for _, la := range pickerArgs.Items {
+	for i, la := range pickerArgs.Items {
 		action := pickerAction{
 			action: la,
 		}
@@ -299,7 +299,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		if la.Name != nil && *la.Name != "" {
 			action.label = *la.Name
 		} else {
-			continue
+			action.label = "Item #" + strconv.Itoa(i+1)
 		}
 
 		actions = append(actions, action)

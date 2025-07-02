@@ -283,3 +283,11 @@ func IsServiceRunning(cfg *config.Instance) bool {
 	}
 	return true
 }
+
+func IsTrue(s string) bool {
+	return strings.EqualFold(s, "true") || strings.EqualFold(s, "yes")
+}
+
+func IsFalse(s string) bool {
+	return strings.EqualFold(s, "false") || strings.EqualFold(s, "no")
+}
