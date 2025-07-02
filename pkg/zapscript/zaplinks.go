@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
@@ -11,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -31,16 +31,14 @@ type WellKnown struct {
 	ZapScript int `json:"zapscript"`
 }
 
-var zapLinkHost sync.Map
-
-func queryZapLinkSupport(u *url.URL) (bool, error) {
+func queryZapLinkSupport(u *url.URL) (int, error) {
 	baseURL := u.Scheme + "://" + u.Host
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
 	resp, err := http.Get(wellKnownURL)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -50,20 +48,20 @@ func queryZapLinkSupport(u *url.URL) (bool, error) {
 	}(resp.Body)
 
 	if resp.StatusCode != 200 {
-		return false, errors.New("invalid status code")
+		return 0, errors.New("invalid status code")
 	}
 
 	var wellKnown WellKnown
 	err = json.NewDecoder(resp.Body).Decode(&wellKnown)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 
 	log.Debug().Msgf("zap link well known result for %s: %v", wellKnownURL, wellKnown)
-	return wellKnown.ZapScript == 1, nil
+	return wellKnown.ZapScript, nil
 }
 
-func isZapLink(link string) bool {
+func isZapLink(link string, db *database.Database) bool {
 	u, err := url.Parse(link)
 	if err != nil {
 		return false
@@ -73,19 +71,29 @@ func isZapLink(link string) bool {
 		return false
 	}
 
-	supported, ok := zapLinkHost.Load(u.Host)
+	supported, ok, err := db.UserDB.GetZapLinkHost(u.Host)
+	if err != nil {
+		log.Error().Err(err).Msgf("error checking db for zap link support: %s", link)
+		return false
+	}
 	if !ok {
 		result, err := queryZapLinkSupport(u)
 		if err != nil {
 			log.Debug().Err(err).Msgf("error querying zap link support: %s", link)
-			zapLinkHost.Store(u.Host, false)
+			err := db.UserDB.UpdateZapLinkHost(u.Host, result)
+			if err != nil {
+				log.Error().Err(err).Msgf("error updating zap link support: %s", link)
+			}
 			return false
 		}
-		zapLinkHost.Store(u.Host, result)
-		supported = result
+		err = db.UserDB.UpdateZapLinkHost(u.Host, result)
+		if err != nil {
+			log.Error().Err(err).Msgf("error updating zap link support: %s", link)
+		}
+		supported = result > 0
 	}
 
-	if !supported.(bool) {
+	if !supported {
 		return false
 	}
 
@@ -164,6 +172,7 @@ func isZapScriptJSON(data []byte) bool {
 func checkZapLink(
 	cfg *config.Instance,
 	pl platforms.Platform,
+	db *database.Database,
 	cmd parser.Command,
 ) (string, error) {
 	if len(cmd.Args) == 0 {
@@ -171,7 +180,7 @@ func checkZapLink(
 	}
 	value := cmd.Args[0]
 
-	if !isZapLink(value) {
+	if !isZapLink(value, db) {
 		return "", nil
 	}
 

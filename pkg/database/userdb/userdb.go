@@ -101,3 +101,11 @@ func (db *UserDB) AddHistory(entry database.HistoryEntry) error {
 func (db *UserDB) GetHistory(lastId int) ([]database.HistoryEntry, error) {
 	return sqlGetHistoryWithOffset(db.sql, lastId)
 }
+
+func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
+	return sqlUpdateZapLinkHost(db.sql, host, zapscript)
+}
+
+func (db *UserDB) GetZapLinkHost(host string) (bool, bool, error) {
+	return sqlGetZapLinkHost(db.sql, host)
+}

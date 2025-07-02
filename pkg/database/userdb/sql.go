@@ -2,6 +2,7 @@ package userdb
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -345,4 +346,42 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	}
 	err = rows.Err()
 	return list, err
+}
+
+func sqlUpdateZapLinkHost(db *sql.DB, host string, zapscript int) error {
+	stmt, err := db.Prepare(`
+		INSERT INTO ZapLinkHosts (Host, ZapScript, CheckedAt)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(Host) DO UPDATE SET
+			ZapScript = excluded.ZapScript,
+			CheckedAt = CURRENT_TIMESTAMP;
+	`)
+	if err != nil {
+		return err
+	}
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
+
+	_, err = stmt.Exec(host, zapscript)
+	return err
+}
+
+func sqlGetZapLinkHost(db *sql.DB, host string) (supported bool, ok bool, err error) {
+	row := db.QueryRow(`
+		SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?;
+	`, host)
+
+	var zapscript int
+	err = row.Scan(&zapscript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	} else if err != nil {
+		return false, false, err
+	}
+
+	return zapscript != 0, true, nil
 }
