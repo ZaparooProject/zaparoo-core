@@ -104,7 +104,7 @@ func launchPlaylistMedia(
 	activePlaylist *playlists.Playlist,
 ) {
 	t := tokens.Token{
-		Text:     pls.Current().Path,
+		Text:     pls.Current().ZapScript,
 		ScanTime: time.Now(),
 		Source:   tokens.SourcePlaylist,
 	}

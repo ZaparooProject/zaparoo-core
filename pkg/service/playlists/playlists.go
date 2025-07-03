@@ -1,21 +1,23 @@
 package playlists
 
-type PlaylistMedia struct {
-	Path string
-	Name string
+type PlaylistEntry struct {
+	ZapScript string
+	Name      string
 }
 
 type Playlist struct {
 	ID      string
-	Media   []PlaylistMedia
+	Name    string
+	Entries []PlaylistEntry
 	Index   int
 	Playing bool
 }
 
-func NewPlaylist(id string, media []PlaylistMedia) *Playlist {
+func NewPlaylist(id string, name string, media []PlaylistEntry) *Playlist {
 	return &Playlist{
 		ID:      id,
-		Media:   media,
+		Name:    name,
+		Entries: media,
 		Index:   0,
 		Playing: false,
 	}
@@ -23,12 +25,12 @@ func NewPlaylist(id string, media []PlaylistMedia) *Playlist {
 
 func Next(p Playlist) *Playlist {
 	idx := p.Index + 1
-	if idx >= len(p.Media) {
+	if idx >= len(p.Entries) {
 		idx = 0
 	}
 	return &Playlist{
 		ID:      p.ID,
-		Media:   p.Media,
+		Entries: p.Entries,
 		Index:   idx,
 		Playing: p.Playing,
 	}
@@ -37,26 +39,26 @@ func Next(p Playlist) *Playlist {
 func Previous(p Playlist) *Playlist {
 	idx := p.Index - 1
 	if idx < 0 {
-		idx = len(p.Media) - 1
+		idx = len(p.Entries) - 1
 	}
 	return &Playlist{
 		ID:      p.ID,
-		Media:   p.Media,
+		Entries: p.Entries,
 		Index:   idx,
 		Playing: p.Playing,
 	}
 }
 
 func Goto(p Playlist, idx int) *Playlist {
-	if idx >= len(p.Media) {
-		idx = len(p.Media) - 1
+	if idx >= len(p.Entries) {
+		idx = len(p.Entries) - 1
 	} else if idx < 0 {
 		idx = 0
 	}
 	p.Index = idx
 	return &Playlist{
 		ID:      p.ID,
-		Media:   p.Media,
+		Entries: p.Entries,
 		Index:   idx,
 		Playing: p.Playing,
 	}
@@ -65,7 +67,7 @@ func Goto(p Playlist, idx int) *Playlist {
 func Play(p Playlist) *Playlist {
 	return &Playlist{
 		ID:      p.ID,
-		Media:   p.Media,
+		Entries: p.Entries,
 		Index:   p.Index,
 		Playing: true,
 	}
@@ -74,14 +76,14 @@ func Play(p Playlist) *Playlist {
 func Pause(p Playlist) *Playlist {
 	return &Playlist{
 		ID:      p.ID,
-		Media:   p.Media,
+		Entries: p.Entries,
 		Index:   p.Index,
 		Playing: false,
 	}
 }
 
-func (p *Playlist) Current() PlaylistMedia {
-	return p.Media[p.Index]
+func (p *Playlist) Current() PlaylistEntry {
+	return p.Entries[p.Index]
 }
 
 type PlaylistController struct {

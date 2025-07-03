@@ -6,6 +6,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/rs/zerolog/log"
 	"math/rand"
@@ -31,7 +32,18 @@ type plsEntry struct {
 	title string
 }
 
-func readPlsFile(path string) ([]playlists.PlaylistMedia, error) {
+type ArgPlaylistEntry struct {
+	Name      string `json:"name"`
+	ZapScript string `json:"zapscript"`
+}
+
+type ArgPlaylist struct {
+	ID      string             `json:"id"`
+	Name    string             `json:"name"`
+	Entries []ArgPlaylistEntry `json:"entries"`
+}
+
+func readPlsFile(path string) ([]playlists.PlaylistEntry, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -108,7 +120,7 @@ func readPlsFile(path string) ([]playlists.PlaylistMedia, error) {
 		return nil, fmt.Errorf("no entries found in pls file: %s", path)
 	}
 
-	media := make([]playlists.PlaylistMedia, 0)
+	media := make([]playlists.PlaylistEntry, 0)
 
 	// sort items by number in fileX/titleX
 	sorted := make([]int, 0, len(entries))
@@ -154,16 +166,16 @@ func readPlsFile(path string) ([]playlists.PlaylistMedia, error) {
 			}
 		}
 
-		media = append(media, playlists.PlaylistMedia{
-			Name: entry.title,
-			Path: entry.file,
+		media = append(media, playlists.PlaylistEntry{
+			Name:      entry.title,
+			ZapScript: entry.file,
 		})
 	}
 
 	return media, nil
 }
 
-func readPlaylistFolder(path string) ([]playlists.PlaylistMedia, error) {
+func readPlaylistFolder(path string) ([]playlists.PlaylistEntry, error) {
 	if path == "" {
 		return nil, fmt.Errorf("no playlist path specified")
 	}
@@ -192,13 +204,13 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistMedia, error) {
 		return nil, fmt.Errorf("no valid files found in: %s", path)
 	}
 
-	media := make([]playlists.PlaylistMedia, 0)
+	media := make([]playlists.PlaylistEntry, 0)
 	for _, file := range files {
 		name := filepath.Base(file)
 		name = strings.TrimSuffix(name, filepath.Ext(name))
-		media = append(media, playlists.PlaylistMedia{
-			Name: name,
-			Path: file,
+		media = append(media, playlists.PlaylistEntry{
+			Name:      name,
+			ZapScript: file,
 		})
 	}
 
@@ -212,12 +224,29 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, ErrRequiredArgs
 	}
 
+	if utils.MaybeJSON([]byte(env.Cmd.Args[0])) {
+		var plsArg ArgPlaylist
+		if err := json.Unmarshal([]byte(env.Cmd.Args[0]), &plsArg); err != nil {
+			return nil, fmt.Errorf("invalid playlist json: %w", err)
+		}
+
+		var media []playlists.PlaylistEntry
+		for _, entry := range plsArg.Entries {
+			media = append(media, playlists.PlaylistEntry{
+				Name:      entry.Name,
+				ZapScript: entry.ZapScript,
+			})
+		}
+
+		return playlists.NewPlaylist(plsArg.ID, plsArg.Name, media), nil
+	}
+
 	path, err := findFile(pl, env.Cfg, env.Cmd.Args[0])
 	if err != nil {
 		return nil, err
 	}
 
-	var media []playlists.PlaylistMedia
+	var media []playlists.PlaylistEntry
 	if isPlsFile(path) {
 		media, err = readPlsFile(path)
 		if err != nil {
@@ -230,6 +259,9 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 	}
 
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+
 	if v, ok := env.Cmd.AdvArgs["mode"]; ok && strings.EqualFold(v, "shuffle") {
 		log.Info().Msgf("shuffling playlist: %s", env.Cmd.Args[0])
 		if len(media) == 0 {
@@ -241,7 +273,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		}
 	}
 
-	return playlists.NewPlaylist(env.Cmd.Args[0], media), nil
+	return playlists.NewPlaylist(env.Cmd.Args[0], name, media), nil
 }
 
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -261,7 +293,7 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("play playlist: %v", env.Cmd.Args)
+	log.Info().Any("media", pls.Entries).Msgf("play playlist: %v", env.Cmd.Args)
 	pls = playlists.Play(*pls)
 	env.Playlist.Queue <- pls
 
@@ -277,7 +309,7 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		return platforms.CmdResult{}, err
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("load playlist: %s", env.Cmd.Args)
+	log.Info().Any("media", pls.Entries).Msgf("load playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
 	return platforms.CmdResult{
@@ -297,15 +329,15 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Index = env.Playlist.Active.Index
 	}
 
-	log.Info().Any("media", pls.Media).Msgf("open playlist: %s", env.Cmd.Args)
+	log.Info().Any("media", pls.Entries).Msgf("open playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
 	var items []models.ZapScript
-	for i, m := range pls.Media {
+	for i, m := range pls.Entries {
 		var name string
 
 		if m.Name == "" {
-			name = filepath.Base(m.Path)
+			name = filepath.Base(m.ZapScript)
 			name = strings.TrimSuffix(name, filepath.Ext(name))
 		} else {
 			name = m.Name
@@ -340,6 +372,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 			PlaylistChanged: true,
 			Playlist:        pls,
 		}, pl.ShowPicker(env.Cfg, widgetModels.PickerArgs{
+			Title:    pls.Name,
 			Items:    items,
 			Selected: pls.Index,
 		})
