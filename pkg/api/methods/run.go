@@ -4,13 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
 	"time"
-
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
@@ -97,68 +94,6 @@ func HandleRun(env requests.RequestEnv) (any, error) {
 	t.FromAPI = true
 
 	// TODO: how do we report back errors? put channel in queue
-	env.State.SetActiveCard(t)
-	env.TokenQueue <- t
-
-	return nil, nil
-}
-
-func HandleRunScript(env requests.RequestEnv) (any, error) {
-	log.Info().Msg("received run script request")
-
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
-	var t tokens.Token
-
-	var zsrp models.RunScriptParams
-	err := json.Unmarshal(env.Params, &zsrp)
-	if err != nil {
-		log.Error().Msgf("error unmarshalling run zapscript: %s", err)
-		return nil, ErrInvalidParams
-	}
-
-	if zsrp.Unsafe {
-		t.Unsafe = true
-	}
-
-	zs := zapScriptModels.ZapScript{
-		ZapScript: zsrp.ZapScript,
-		Name:      zsrp.Name,
-		Cmds:      zsrp.Cmds,
-	}
-
-	if zs.ZapScript != 1 {
-		log.Error().Msgf("invalid zapscript version: %d", zs.ZapScript)
-		return nil, ErrInvalidParams
-	}
-
-	if len(zs.Cmds) == 0 {
-		log.Error().Msg("no commands in zapscript")
-		return nil, ErrInvalidParams
-	} else if len(zs.Cmds) > 1 {
-		log.Warn().Msg("too many commands in zapscript, using first")
-	}
-
-	cmd := zs.Cmds[0]
-
-	cmdName := strings.ToLower(cmd.Cmd)
-	switch cmdName {
-	case zapScriptModels.ZapScriptCmdEvaluate:
-		var args zapScriptModels.CmdEvaluateArgs
-		err = json.Unmarshal(cmd.Args, &args)
-		if err != nil {
-			return nil, fmt.Errorf("error unmarshalling evaluate params: %w", err)
-		}
-		t.Text = args.ZapScript
-	default:
-		return "", fmt.Errorf("unsupported cmd: %s", cmdName)
-	}
-
-	t.ScanTime = time.Now()
-	t.FromAPI = true
-
 	env.State.SetActiveCard(t)
 	env.TokenQueue <- t
 
