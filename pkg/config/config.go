@@ -246,6 +246,8 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = Mappings{}
 	tmpCustomLauncher := c.vals.Launchers.Custom
 	c.vals.Launchers.Custom = []LaunchersCustom{}
+	tmpAuth := c.vals.Auth
+	c.vals.Auth = map[string]CredentialEntry{}
 
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
@@ -254,6 +256,7 @@ func (c *Instance) Save() error {
 
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
+	c.vals.Auth = tmpAuth
 
 	return os.WriteFile(c.cfgPath, data, 0644)
 }
