@@ -1,7 +1,9 @@
 package installer
 
 import (
+	"encoding/base64"
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog/log"
 	"io"
 	"net"
@@ -10,21 +12,47 @@ import (
 	"time"
 )
 
+type AuthTransport struct {
+	Base http.RoundTripper
+}
+
+func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.Base == nil {
+		t.Base = http.DefaultTransport
+	}
+
+	creds := config.LookupAuth(config.GetAuthCfg(), req.URL.String())
+	if creds != nil {
+		if creds.Bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+creds.Bearer)
+		} else if creds.Username != "" {
+			user := creds.Username
+			pass := creds.Password
+			auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			req.Header.Set("Authorization", "Basic "+auth)
+		}
+	}
+
+	return t.Base.RoundTrip(req)
+}
+
+var timeoutTr = &http.Transport{
+	DialContext: (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ResponseHeaderTimeout: 30 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+}
+
+var httpClient = &http.Client{
+	Transport: &AuthTransport{
+		Base: timeoutTr,
+	},
+}
+
 func DownloadHTTPFile(opts DownloaderArgs) error {
-	tr := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ResponseHeaderTimeout: 30 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-	}
-
-	client := &http.Client{
-		Transport: tr,
-	}
-
-	resp, err := client.Get(opts.url)
+	resp, err := httpClient.Get(opts.url)
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
 	}

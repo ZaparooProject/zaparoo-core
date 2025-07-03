@@ -241,7 +241,7 @@ func RunCommand(
 		cmd.AdvArgs[k] = output
 	}
 
-	if when, ok := cmd.AdvArgs["when"]; ok && !utils.IsTrue(when) {
+	if when, ok := cmd.AdvArgs["when"]; ok && !utils.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,

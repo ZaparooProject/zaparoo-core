@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/pelletier/go-toml/v2"
@@ -25,17 +26,16 @@ const (
 )
 
 type Values struct {
-	ConfigSchema int                        `toml:"config_schema"`
-	DebugLogging bool                       `toml:"debug_logging"`
-	Audio        Audio                      `toml:"audio,omitempty"`
-	Readers      Readers                    `toml:"readers,omitempty"`
-	Systems      Systems                    `toml:"systems,omitempty"`
-	Launchers    Launchers                  `toml:"launchers,omitempty"`
-	ZapScript    ZapScript                  `toml:"zapscript,omitempty"`
-	Service      Service                    `toml:"service,omitempty"`
-	Mappings     Mappings                   `toml:"mappings,omitempty"`
-	Groovy       Groovy                     `toml:"groovy,omitempty"`
-	Auth         map[string]CredentialEntry `toml:"auth,omitempty"`
+	ConfigSchema int       `toml:"config_schema"`
+	DebugLogging bool      `toml:"debug_logging"`
+	Audio        Audio     `toml:"audio,omitempty"`
+	Readers      Readers   `toml:"readers,omitempty"`
+	Systems      Systems   `toml:"systems,omitempty"`
+	Launchers    Launchers `toml:"launchers,omitempty"`
+	ZapScript    ZapScript `toml:"zapscript,omitempty"`
+	Service      Service   `toml:"service,omitempty"`
+	Mappings     Mappings  `toml:"mappings,omitempty"`
+	Groovy       Groovy    `toml:"groovy,omitempty"`
 }
 
 type Audio struct {
@@ -52,6 +52,10 @@ type Service struct {
 	DeviceId   string   `toml:"device_id"`
 	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe []*regexp.Regexp
+}
+
+type Auth struct {
+	Creds map[string]CredentialEntry `toml:"creds,omitempty"`
 }
 
 type CredentialEntry struct {
@@ -87,6 +91,16 @@ type Instance struct {
 	cfgPath  string
 	authPath string
 	vals     Values
+}
+
+var authCfg atomic.Value
+
+func GetAuthCfg() Auth {
+	val := authCfg.Load()
+	if val == nil {
+		return Auth{}
+	}
+	return val.(Auth)
 }
 
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
@@ -170,13 +184,15 @@ func (c *Instance) Load() error {
 			return err
 		}
 
-		var authVals Values
+		var authVals Auth
 		err = toml.Unmarshal(authData, &authVals)
 		if err != nil {
 			return err
 		}
 
-		c.vals.Auth = authVals.Auth
+		log.Info().Msgf("loaded %d auth entries", len(authVals.Creds))
+
+		authCfg.Store(authVals)
 	}
 
 	// prepare allow files regexes
@@ -246,8 +262,6 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = Mappings{}
 	tmpCustomLauncher := c.vals.Launchers.Custom
 	c.vals.Launchers.Custom = []LaunchersCustom{}
-	tmpAuth := c.vals.Auth
-	c.vals.Auth = map[string]CredentialEntry{}
 
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
@@ -256,7 +270,6 @@ func (c *Instance) Save() error {
 
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
-	c.vals.Auth = tmpAuth
 
 	return os.WriteFile(c.cfgPath, data, 0644)
 }
@@ -323,26 +336,33 @@ func (c *Instance) IsRunAllowed(s string) bool {
 	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
 }
 
-func (c *Instance) LookupAuth(reqURL *url.URL) *CredentialEntry {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func LookupAuth(authCfg Auth, reqURL string) *CredentialEntry {
+	if len(authCfg.Creds) == 0 {
+		return nil
+	}
 
-	for k, v := range c.vals.Auth {
+	u, err := url.Parse(reqURL)
+	if err != nil {
+		log.Warn().Msgf("invalid auth request url: %s", reqURL)
+		return nil
+	}
+
+	for k, v := range authCfg.Creds {
 		defURL, err := url.Parse(k)
 		if err != nil {
-			log.Error().Msgf("invalid auth url: %s", k)
+			log.Error().Msgf("invalid auth config url: %s", k)
 			continue
 		}
 
-		if !strings.EqualFold(defURL.Scheme, reqURL.Scheme) {
+		if !strings.EqualFold(defURL.Scheme, u.Scheme) {
 			continue
 		}
 
-		if !strings.EqualFold(defURL.Host, reqURL.Host) {
+		if !strings.EqualFold(defURL.Host, u.Host) {
 			continue
 		}
 
-		if !strings.HasPrefix(reqURL.Path, defURL.Path) {
+		if !strings.HasPrefix(u.Path, defURL.Path) {
 			continue
 		}
 

@@ -2,6 +2,7 @@ package installer
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/cloudsoda/go-smb2"
 	"github.com/rs/zerolog/log"
 	"io"
@@ -32,7 +33,7 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 
 	username := ""
 	password := ""
-	creds := opts.cfg.LookupAuth(u)
+	creds := config.LookupAuth(config.GetAuthCfg(), opts.url)
 	if creds != nil {
 		username = creds.Username
 		password = creds.Password
@@ -55,6 +56,7 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 			log.Warn().Err(err).Msg("error logging off SMB session")
 		}
 	}(session)
+	// TODO: on mister if this fails it the loader may get stuck
 
 	fs, err := session.Mount(shareName)
 	if err != nil {

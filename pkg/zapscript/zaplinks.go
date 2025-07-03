@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -31,12 +35,34 @@ type WellKnown struct {
 	ZapScript int `json:"zapscript"`
 }
 
+var zapFetchTransport = &http.Transport{
+	DialContext: (&net.Dialer{
+		Timeout:   1 * time.Second,
+		KeepAlive: 10 * time.Second,
+	}).DialContext,
+	TLSHandshakeTimeout:   1 * time.Second,
+	ResponseHeaderTimeout: 1 * time.Second,
+	ExpectContinueTimeout: 500 * time.Millisecond,
+}
+
+var zapFetchClient = &http.Client{
+	Transport: &installer.AuthTransport{
+		Base: zapFetchTransport,
+	},
+	Timeout: 2 * time.Second,
+}
+
 func queryZapLinkSupport(u *url.URL) (int, error) {
 	baseURL := u.Scheme + "://" + u.Host
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
-	resp, err := http.Get(wellKnownURL)
+	req, err := http.NewRequest("GET", wellKnownURL, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := zapFetchClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -108,7 +134,7 @@ func getRemoteZapScript(url string) ([]byte, error) {
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := zapFetchClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -155,20 +181,6 @@ func getRemoteZapScript(url string) ([]byte, error) {
 	return body, nil
 }
 
-func isZapScriptJSON(data []byte) bool {
-	for _, b := range data {
-		switch b {
-		case ' ', '\n', '\t', '\r':
-			continue
-		case '{':
-			return true
-		default:
-			return false
-		}
-	}
-	return false
-}
-
 func checkZapLink(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -190,7 +202,7 @@ func checkZapLink(
 		return "", err
 	}
 
-	if !isZapScriptJSON(body) {
+	if !utils.MaybeJSON(body) {
 		return string(body), nil
 	}
 
