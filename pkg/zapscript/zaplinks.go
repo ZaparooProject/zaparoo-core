@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"io"
 	"net"
@@ -204,55 +202,7 @@ func checkZapLink(
 
 	if !utils.MaybeJSON(body) {
 		return string(body), nil
-	}
-
-	var zl zapScriptModels.ZapScript
-	err = json.Unmarshal(body, &zl)
-	if err != nil {
-		return "", fmt.Errorf("error unmarshalling zap link body: %w", err)
-	}
-
-	if zl.ZapScript != 1 {
-		return "", errors.New("invalid zapscript version")
-	}
-
-	if len(zl.Cmds) == 0 {
-		return "", errors.New("no commands")
-	} else if len(zl.Cmds) > 1 {
-		log.Warn().Msgf("multiple commands in json link, using first: %v", zl.Cmds[0])
-	}
-
-	newCmd := zl.Cmds[0]
-	cmdName := strings.ToLower(newCmd.Cmd)
-
-	switch cmdName {
-	case zapScriptModels.ZapScriptCmdEvaluate:
-		var args zapScriptModels.CmdEvaluateArgs
-		err = json.Unmarshal(newCmd.Args, &args)
-		if err != nil {
-			return "", fmt.Errorf("error unmarshalling evaluate params: %w", err)
-		}
-		return args.ZapScript, nil
-	case zapScriptModels.ZapScriptCmdUIPicker:
-		var cmdArgs zapScriptModels.CmdPicker
-		err = json.Unmarshal(newCmd.Args, &cmdArgs)
-		if err != nil {
-			return "", fmt.Errorf("error unmarshalling picker args: %w", err)
-		}
-		pickerArgs := widgetModels.PickerArgs{
-			Items:  cmdArgs.Items,
-			Unsafe: true,
-		}
-		if newCmd.Name != nil {
-			pickerArgs.Title = *newCmd.Name
-		}
-		err := pl.ShowPicker(cfg, pickerArgs)
-		if err != nil {
-			return "", fmt.Errorf("error showing picker: %w", err)
-		} else {
-			return "", nil
-		}
-	default:
-		return "", fmt.Errorf("unknown cmdName: %s", cmdName)
+	} else {
+		return "", fmt.Errorf("zapscript JSON not supported")
 	}
 }
