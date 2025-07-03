@@ -212,15 +212,6 @@ func RunCommand(
 		unsafe = true
 	}
 
-	if token.Source == tokens.SourcePlaylist && cmd.Name != models.ZapScriptCmdLaunch {
-		// TODO: why not? what's the risk?
-		log.Error().Msgf("playlists cannot run commands, skipping")
-		return platforms.CmdResult{
-			Unsafe:      unsafe,
-			NewCommands: newCmds,
-		}, nil
-	}
-
 	exprEnv := getExprEnv(pl, cfg, st)
 
 	for i, arg := range cmd.Args {

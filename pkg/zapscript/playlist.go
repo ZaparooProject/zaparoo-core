@@ -415,12 +415,19 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 		return platforms.CmdResult{}, ErrArgCount
 	}
 
-	index, err := strconv.Atoi(env.Cmd.Args[0])
+	indexArg, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 
-	pls := playlists.Goto(*env.Playlist.Active, index-1)
+	newIndex := indexArg - 1
+
+	if env.Playlist.Active.Index == newIndex {
+		log.Warn().Msgf("playlist is already at index %d, not changing", indexArg)
+		return platforms.CmdResult{}, nil
+	}
+
+	pls := playlists.Goto(*env.Playlist.Active, newIndex)
 	env.Playlist.Queue <- pls
 
 	return platforms.CmdResult{
