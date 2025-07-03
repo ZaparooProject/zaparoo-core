@@ -91,7 +91,11 @@ func findInstallDir(
 		return "", fmt.Errorf("error getting system: %w", err)
 	}
 
-	fallbackDir := filepath.Join(utils.DataDir(pl), config.MediaDir, system.ID)
+	fallbackDir := cfg.DefaultMediaDir()
+	if fallbackDir == "" {
+		fallbackDir = filepath.Join(utils.DataDir(pl), config.MediaDir)
+	}
+	fallbackDir = filepath.Join(fallbackDir, system.ID)
 
 	// TODO: this would be better if it could auto-detect the existing preferred
 	//       platform games folder, but there's currently no shared mechanism to

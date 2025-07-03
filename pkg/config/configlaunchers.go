@@ -13,6 +13,7 @@ type Launchers struct {
 	IndexRoot   []string `toml:"index_root,omitempty,multiline"`
 	AllowFile   []string `toml:"allow_file,omitempty,multiline"`
 	allowFileRe []*regexp.Regexp
+	MediaDir    string             `toml:"media_dir,omitempty"`
 	Default     []LaunchersDefault `toml:"default,omitempty"`
 	Custom      []LaunchersCustom  `toml:"custom,omitempty"`
 }
@@ -28,6 +29,12 @@ type LaunchersCustom struct {
 	MediaDirs []string `toml:"media_dirs"`
 	FileExts  []string `toml:"file_exts"`
 	Execute   string   `toml:"execute"`
+}
+
+func (c *Instance) DefaultMediaDir() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Launchers.MediaDir
 }
 
 func (c *Instance) IsLauncherFileAllowed(s string) bool {
@@ -117,4 +124,15 @@ func (c *Instance) CustomLaunchers() []LaunchersCustom {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Launchers.Custom
+}
+
+func (c *Instance) IndexRoots() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.vals.Launchers.MediaDir != "" {
+		return append([]string{c.vals.Launchers.MediaDir}, c.vals.Launchers.IndexRoot...)
+	} else {
+		return c.vals.Launchers.IndexRoot
+	}
 }

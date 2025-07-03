@@ -290,12 +290,6 @@ func (c *Instance) SetDebugLogging(enabled bool) {
 	}
 }
 
-func (c *Instance) IndexRoots() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.vals.Launchers.IndexRoot
-}
-
 func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	if s == "" {
 		return false
