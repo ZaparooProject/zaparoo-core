@@ -183,15 +183,23 @@ func getAltLauncher(
 	}
 }
 
-func isValidHTTPUrl(s string) bool {
+func isValidRemoteFileUrl(s string) (func(installer.DownloaderArgs) error, bool) {
 	u, err := url.Parse(s)
 	if err != nil {
-		return false
+		return nil, false
 	}
+
 	if u.Scheme == "" || u.Host == "" {
-		return false
+		return nil, false
 	}
-	return strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")
+
+	if strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https") {
+		return installer.DownloadHTTPFile, true
+	} else if strings.EqualFold(u.Scheme, "smb") {
+		return installer.DownloadSMBFile, true
+	}
+
+	return nil, false
 }
 
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -205,15 +213,16 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	systemArg := env.Cmd.AdvArgs["system"]
-	if isValidHTTPUrl(path) && systemArg != "" {
+	if dler, ok := isValidRemoteFileUrl(path); ok && systemArg != "" {
 		name := env.Cmd.AdvArgs["name"]
 		preNotice := env.Cmd.AdvArgs["pre_notice"]
-		installPath, err := installer.HTTPMediaFile(
+		installPath, err := installer.InstallRemoteFile(
 			env.Cfg, pl,
 			path,
 			systemArg,
 			preNotice,
 			name,
+			dler,
 		)
 		if err != nil {
 			return platforms.CmdResult{}, err
