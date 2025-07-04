@@ -13,7 +13,7 @@ func TestReadPlsFile(t *testing.T) {
 	tests := []struct {
 		name           string
 		plsContent     string
-		expectedMedia  []playlists.PlaylistEntry
+		expectedMedia  []playlists.PlaylistItem
 		expectedErrMsg string
 	}{
 		{
@@ -23,7 +23,7 @@ File1=/path/to/song1.mp3
 Title1=Song 1
 File2=/path/to/song2.mp3
 Title2=Song 2`,
-			expectedMedia: []playlists.PlaylistEntry{
+			expectedMedia: []playlists.PlaylistItem{
 				{Name: "Song 1", ZapScript: "/path/to/song1.mp3"},
 				{Name: "Song 2", ZapScript: "/path/to/song2.mp3"},
 			},
@@ -34,7 +34,7 @@ Title2=Song 2`,
 			plsContent: `[playlist]
 File1=/path/to/song1.mp3
 File2=/path/to/song2.mp3`,
-			expectedMedia: []playlists.PlaylistEntry{
+			expectedMedia: []playlists.PlaylistItem{
 				{Name: "", ZapScript: "/path/to/song1.mp3"},
 				{Name: "", ZapScript: "/path/to/song2.mp3"},
 			},
@@ -45,7 +45,7 @@ File2=/path/to/song2.mp3`,
 			plsContent: `[playlist]
 Title1=Song 1
 File2=/path/to/song2.mp3`,
-			expectedMedia: []playlists.PlaylistEntry{
+			expectedMedia: []playlists.PlaylistItem{
 				{Name: "", ZapScript: "/path/to/song2.mp3"},
 			},
 			expectedErrMsg: "",

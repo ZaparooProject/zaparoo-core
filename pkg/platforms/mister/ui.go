@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -111,8 +112,13 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 
 	// write items to dir
 	for _, item := range args.Items {
-		if item.Name == nil || *item.Name == "" {
-			continue
+		name := item.Name
+		if strings.TrimSpace(item.Name) == "" {
+			name = item.ZapScript
+		}
+
+		if len(name) > 25 {
+			name = name[:25] + "..."
 		}
 
 		contents, err := json.Marshal(item)
@@ -120,7 +126,7 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 			return err
 		}
 
-		path := filepath.Join(MainPickerDir, *item.Name+".txt")
+		path := filepath.Join(MainPickerDir, name+".txt")
 		err = os.WriteFile(path, contents, 0644)
 		if err != nil {
 			return err
