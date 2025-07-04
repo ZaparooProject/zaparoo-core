@@ -385,3 +385,40 @@ func sqlGetZapLinkHost(db *sql.DB, host string) (supported bool, ok bool, err er
 
 	return zapscript != 0, true, nil
 }
+
+func sqlUpdateZapLinkCache(db *sql.DB, url string, zapscript string) error {
+	stmt, err := db.Prepare(`
+		INSERT INTO ZapLinkCache (URL, ZapScript, UpdatedAt)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(URL) DO UPDATE SET
+			ZapScript = excluded.ZapScript,
+			UpdatedAt = CURRENT_TIMESTAMP;
+	`)
+	if err != nil {
+		return err
+	}
+	defer func(stmt *sql.Stmt) {
+		err := stmt.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to close sql statement")
+		}
+	}(stmt)
+
+	_, err = stmt.Exec(url, zapscript)
+	return err
+}
+
+func sqlGetZapLinkCache(db *sql.DB, url string) (string, error) {
+	var zapscript string
+	err := db.QueryRow(
+		`SELECT ZapScript FROM ZapLinkCache WHERE URL = ?;`,
+		url,
+	).Scan(&zapscript)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return zapscript, nil
+}

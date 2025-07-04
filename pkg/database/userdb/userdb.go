@@ -109,3 +109,11 @@ func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
 func (db *UserDB) GetZapLinkHost(host string) (bool, bool, error) {
 	return sqlGetZapLinkHost(db.sql, host)
 }
+
+func (db *UserDB) UpdateZapLinkCache(url string, zapscript string) error {
+	return sqlUpdateZapLinkCache(db.sql, url, zapscript)
+}
+
+func (db *UserDB) GetZapLinkCache(url string) (string, error) {
+	return sqlGetZapLinkCache(db.sql, url)
+}

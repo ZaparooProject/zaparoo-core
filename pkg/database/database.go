@@ -133,6 +133,8 @@ type UserDBI interface {
 	GetEnabledMappings() ([]Mapping, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
+	UpdateZapLinkCache(url string, zapscript string) error
+	GetZapLinkCache(url string) (string, error)
 }
 
 type MediaDBI interface {

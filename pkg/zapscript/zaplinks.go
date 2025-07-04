@@ -12,7 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -102,6 +104,10 @@ func isZapLink(link string, db *database.Database) bool {
 	}
 	if !ok {
 		result, err := queryZapLinkSupport(u)
+		if isOfflineError(err) {
+			// don't permanently log as not supported if it may be temp internet access
+			return false
+		}
 		if err != nil {
 			log.Debug().Err(err).Msgf("error querying zap link support: %s", link)
 			err := db.UserDB.UpdateZapLinkHost(u.Host, result)
@@ -179,6 +185,53 @@ func getRemoteZapScript(url string) ([]byte, error) {
 	return body, nil
 }
 
+// isOfflineError returns true if the error is some network connectivity
+// related error. Explicit error responses from a server will still return
+// false.
+func isOfflineError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() || netErr.Temporary() {
+			return true
+		}
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		var t *os.SyscallError
+		switch {
+		case errors.As(opErr.Err, &t):
+			if errors.Is(t.Err, syscall.ECONNREFUSED) || errors.Is(t.Err, syscall.ENETUNREACH) ||
+				errors.Is(t.Err, syscall.EHOSTUNREACH) || errors.Is(t.Err, syscall.ETIMEDOUT) {
+				return true
+			}
+		default:
+			if strings.Contains(opErr.Err.Error(), "connection refused") ||
+				strings.Contains(opErr.Err.Error(), "no such host") ||
+				strings.Contains(opErr.Err.Error(), "network is unreachable") ||
+				strings.Contains(opErr.Err.Error(), "host is down") {
+				return true
+			}
+		}
+	}
+
+	lowerErrStr := strings.ToLower(err.Error())
+	if strings.Contains(lowerErrStr, "no such host") ||
+		strings.Contains(lowerErrStr, "network is unreachable") ||
+		strings.Contains(lowerErrStr, "connection refused") ||
+		strings.Contains(lowerErrStr, "host is down") ||
+		strings.Contains(lowerErrStr, "i/o timeout") ||
+		strings.Contains(lowerErrStr, "tls handshake timeout") {
+		return true
+	}
+
+	return false
+}
+
 func checkZapLink(
 	cfg *config.Instance,
 	pl platforms.Platform,
@@ -196,8 +249,22 @@ func checkZapLink(
 
 	log.Info().Msgf("checking zap link: %s", value)
 	body, err := getRemoteZapScript(value)
+	if isOfflineError(err) {
+		zapscript, err := db.UserDB.GetZapLinkCache(value)
+		if err != nil {
+			return "", err
+		}
+		if zapscript != "" {
+			return zapscript, nil
+		}
+	}
 	if err != nil {
 		return "", err
+	}
+
+	err = db.UserDB.UpdateZapLinkCache(value, string(body))
+	if err != nil {
+		log.Error().Err(err).Msgf("error updating zap link cache")
 	}
 
 	if !utils.MaybeJSON(body) {
