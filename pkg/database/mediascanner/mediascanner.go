@@ -154,30 +154,32 @@ func GetFiles(
 		return nil, err
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-
 	var scanner func(path string, file fs.DirEntry, err error) error
 	scanner = func(path string, file fs.DirEntry, _ error) error {
 		// avoid recursive symlinks
 		if file.IsDir() {
-			if _, ok := visited[path]; ok {
-				return filepath.SkipDir
-			} else {
-				visited[path] = struct{}{}
+			key := path
+			if file.Type()&os.ModeSymlink != 0 {
+				realPath, err := filepath.EvalSymlinks(path)
+				if err != nil {
+					return err
+				}
+				key = realPath
 			}
+			if _, seen := visited[key]; seen {
+				return filepath.SkipDir
+			}
+			visited[key] = struct{}{}
 		}
 
 		// handle symlinked directories
 		if file.Type()&os.ModeSymlink != 0 {
-			err = os.Chdir(filepath.Dir(path))
+			absSym, err := filepath.Abs(path)
 			if err != nil {
 				return err
 			}
 
-			realPath, err := filepath.EvalSymlinks(path)
+			realPath, err := filepath.EvalSymlinks(absSym)
 			if err != nil {
 				return err
 			}
@@ -188,11 +190,6 @@ func GetFiles(
 			}
 
 			if file.IsDir() {
-				err = os.Chdir(path)
-				if err != nil {
-					return err
-				}
-
 				stack.push()
 				defer stack.pop()
 
@@ -252,11 +249,6 @@ func GetFiles(
 		return nil, err
 	}
 
-	err = os.Chdir(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-
 	// handle symlinks on the root game folder because WalkDir fails silently on them
 	var realPath string
 	if root.Mode()&os.ModeSymlink == 0 {
@@ -297,11 +289,6 @@ func GetFiles(
 		for i := range allResults {
 			allResults[i] = strings.Replace(allResults[i], realPath, path, 1)
 		}
-	}
-
-	err = os.Chdir(cwd)
-	if err != nil {
-		return nil, err
 	}
 
 	return allResults, nil
