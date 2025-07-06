@@ -27,13 +27,13 @@ func BuildSettingsMainMenu(cfg *config.Instance, pages *tview.Pages, app *tview.
 
 	mainMenu := tview.NewList().
 		AddItem("Scanning", "Change reader scan behavior", '1', func() {
-			pages.SwitchToPage(PageSettingsScanMode)
+			BuildScanModeMenu(cfg, pages, app)
 		}).
 		AddItem("Readers", "Manage connected readers", '2', func() {
-			pages.SwitchToPage(PageSettingsReaders)
+			BuildReadersMenu(cfg, pages, app)
 		}).
 		AddItem("Audio", "Set audio options", '3', func() {
-			pages.SwitchToPage(PageSettingsAudio)
+			BuildAudioMenu(cfg, pages, app)
 		})
 
 	mainMenu.AddItem("Debug", debugLabel()+" debug logging mode", '4', func() {

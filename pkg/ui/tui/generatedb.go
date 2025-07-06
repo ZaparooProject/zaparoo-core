@@ -343,5 +343,6 @@ func BuildGenerateDBPage(
 		}
 	}()
 
+	pageDefaults(PageGenerateDB, pages, generateDB)
 	return generateDB
 }

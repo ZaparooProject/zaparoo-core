@@ -22,6 +22,7 @@ func BuildExportLogModal(
 	logDestName string,
 ) tview.Primitive {
 	exportPages := tview.NewPages()
+	exportPages.SetTitle("Export Log File")
 
 	exportMenu := tview.NewList()
 	exportPages.AddAndSwitchToPage("export", exportMenu, true)
@@ -56,9 +57,7 @@ func BuildExportLogModal(
 	exportMenu.AddItem("Go back", "Back to main menu", 'b', func() {
 		pages.SwitchToPage(PageMain)
 	})
-	exportMenu.SetTitle("Export Log File")
 	exportMenu.SetSecondaryTextColor(tcell.ColorYellow)
-	exportMenu.SetBorder(true)
 
 	exportPages.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
@@ -68,7 +67,7 @@ func BuildExportLogModal(
 		return event
 	})
 
-	pages.AddPage(PageExportLog, exportPages, true, false)
+	pageDefaults(PageExportLog, pages, exportPages)
 	return exportMenu
 }
 
