@@ -63,22 +63,24 @@ func setupButtonNavigation(
 			} else if k == tcell.KeyDown || k == tcell.KeyRight {
 				app.SetFocus(buttons[nextIndex])
 				return event
+			} else if k == tcell.KeyEscape {
+				app.Stop()
+				return nil
 			}
 			return event
 		})
 	}
 }
 
-func BuildMain(
+func BuildMainPage(
 	cfg *config.Instance,
+	pages *tview.Pages,
+	app *tview.Application,
 	pl platforms.Platform,
 	isRunning func() bool,
 	logDestPath string,
 	logDestName string,
-) (*tview.Application, error) {
-	app := tview.NewApplication()
-	SetTheme(&tview.Styles)
-
+) tview.Primitive {
 	main := tview.NewFlex()
 
 	introText := tview.NewTextView().SetText(
@@ -179,9 +181,6 @@ func BuildMain(
 	displayCol.AddItem(lastScanned, 6, 1, false)
 	displayCol.AddItem(helpText, 1, 1, false)
 
-	pages := tview.NewPages().
-		AddPage(PageMain, main, true, true)
-
 	// create the main modal
 	main.SetTitle("Zaparoo Core v" + config.AppVersion + " (" + pl.ID() + ")").
 		SetBorder(true).
@@ -190,35 +189,35 @@ func BuildMain(
 	main.AddItem(displayCol, 0, 1, false)
 
 	searchButton := tview.NewButton("Search media").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageSearchMedia)
+		BuildSearchMedia(cfg, pages, app)
 	})
 	searchButton.SetFocusFunc(func() {
 		helpText.SetText("Search for media and write to an NFC tag.")
 	})
 
 	writeButton := tview.NewButton("Custom write").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageSettingsTagsWrite)
+		BuildTagsWriteMenu(cfg, pages, app)
 	})
 	writeButton.SetFocusFunc(func() {
 		helpText.SetText("Write custom ZapScript to an NFC tag.")
 	})
 
 	updateDBButton := tview.NewButton("Update media DB").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageGenerateDB)
+		BuildGenerateDBPage(cfg, pages, app)
 	})
 	updateDBButton.SetFocusFunc(func() {
 		helpText.SetText("Scan disk to create index of games.")
 	})
 
 	settingsButton := tview.NewButton("Settings").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageSettingsMain)
+		BuildSettingsMainMenu(cfg, pages, app)
 	})
 	settingsButton.SetFocusFunc(func() {
 		helpText.SetText("Manage settings for Core service.")
 	})
 
 	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
-		pages.SwitchToPage(PageExportLog)
+		BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
 	})
 	exportButton.SetFocusFunc(func() {
 		helpText.SetText("Export Core log file for support.")
@@ -249,14 +248,6 @@ func BuildMain(
 		exitButton.SetDisabled(false)
 	}
 
-	main.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		k := event.Key()
-		if k == tcell.KeyEscape {
-			app.Stop()
-		}
-		return event
-	})
-
 	main.AddItem(tview.NewTextView(), 1, 1, false)
 
 	buttonNav := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -275,17 +266,22 @@ func BuildMain(
 		AddItem(tview.NewTextView(), 0, 1, false)
 	main.AddItem(buttonNav, 20, 1, true)
 
-	BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
-	BuildSettingsMainMenu(cfg, pages, app)
-	BuildTagsReadMenu(cfg, pages, app)
-	BuildSearchMedia(cfg, pages, app)
-	BuildTagsWriteMenu(cfg, pages, app)
-	BuildAudioMenu(cfg, pages, app)
-	BuildReadersMenu(cfg, pages, app)
-	BuildScanModeMenu(cfg, pages, app)
-	pages.AddPage(PageGenerateDB, BuildGenerateDBPage(cfg, pages, app), true, false)
+	pageDefaults(PageMain, pages, main)
+	return main
+}
 
-	pages.SwitchToPage(PageMain)
+func BuildMain(
+	cfg *config.Instance,
+	pl platforms.Platform,
+	isRunning func() bool,
+	logDestPath string,
+	logDestName string,
+) (*tview.Application, error) {
+	app := tview.NewApplication()
+	SetTheme(&tview.Styles)
+
+	pages := tview.NewPages()
+	BuildMainPage(cfg, pages, app, pl, isRunning, logDestPath, logDestName)
 
 	centeredPages := CenterWidget(75, 15, pages)
 	return app.SetRoot(centeredPages, true), nil
