@@ -40,8 +40,18 @@ func PathIsLauncher(
 		}
 	}
 
+	// check for data dir media folder
+	inDataDir := false
+	if l.SystemID != "" {
+		zaparooMedia := filepath.Join(DataDir(pl), config.MediaDir, l.SystemID)
+		zaparooMedia = strings.ToLower(zaparooMedia)
+		if strings.HasPrefix(lp, zaparooMedia) {
+			inDataDir = true
+		}
+	}
+
 	// check root folder if it's not a generic launcher
-	if len(l.Folders) > 0 {
+	if !inDataDir && len(l.Folders) > 0 {
 		inRoot := false
 		isAbs := false
 

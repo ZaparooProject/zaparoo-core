@@ -2,6 +2,8 @@ package zapscript
 
 import (
 	"fmt"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,12 +183,52 @@ func getAltLauncher(
 	}
 }
 
+func isValidRemoteFileUrl(s string) (func(installer.DownloaderArgs) error, bool) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil, false
+	}
+
+	if u.Scheme == "" || u.Host == "" {
+		return nil, false
+	}
+
+	if strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https") {
+		return installer.DownloadHTTPFile, true
+	} else if strings.EqualFold(u.Scheme, "smb") {
+		return installer.DownloadSMBFile, true
+	}
+
+	return nil, false
+}
+
 func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
 
 	path := env.Cmd.Args[0]
+	if path == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
+	}
+
+	systemArg := env.Cmd.AdvArgs["system"]
+	if dler, ok := isValidRemoteFileUrl(path); ok && systemArg != "" {
+		name := env.Cmd.AdvArgs["name"]
+		preNotice := env.Cmd.AdvArgs["pre_notice"]
+		installPath, err := installer.InstallRemoteFile(
+			env.Cfg, pl,
+			path,
+			systemArg,
+			preNotice,
+			name,
+			dler,
+		)
+		if err != nil {
+			return platforms.CmdResult{}, err
+		}
+		path = installPath
+	}
 
 	launch, err := getAltLauncher(pl, env)
 	if err != nil {

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
@@ -187,8 +188,10 @@ func RunCommand(
 	db *database.Database,
 	st *state.State,
 ) (platforms.CmdResult, error) {
-	var unsafe bool
-	linkValue, err := checkLink(cfg, pl, cmd)
+	unsafe := token.Unsafe
+	newCmds := make([]parser.Command, 0)
+
+	linkValue, err := checkZapLink(cfg, pl, db, cmd)
 	if err != nil {
 		log.Error().Err(err).Msgf("error checking link, continuing")
 	} else if linkValue != "" {
@@ -200,20 +203,13 @@ func RunCommand(
 		} else if len(script.Cmds) == 0 {
 			return platforms.CmdResult{}, fmt.Errorf("zap link is empty")
 		} else if len(script.Cmds) > 1 {
-			log.Warn().Msgf("zap link has multiple commands, using first: %v", script.Cmds[0])
+			log.Warn().Msgf("zap link has multiple commands, queueing rest")
+			// TODO: this could result in a recursive scan
+			newCmds = append(newCmds, script.Cmds[1:]...)
 		}
+
 		cmd = script.Cmds[0]
 		unsafe = true
-	}
-
-	if token.Unsafe {
-		unsafe = true
-	}
-
-	if token.Source == tokens.SourcePlaylist {
-		// TODO: why not? why did i write this?
-		log.Error().Msgf("playlists cannot run commands, skipping")
-		return platforms.CmdResult{}, err
 	}
 
 	exprEnv := getExprEnv(pl, cfg, st)
@@ -236,11 +232,12 @@ func RunCommand(
 		cmd.AdvArgs[k] = output
 	}
 
-	if when, ok := cmd.AdvArgs["when"]; ok {
-		if !strings.EqualFold(when, "true") && !strings.EqualFold(when, "yes") {
-			log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
-			return platforms.CmdResult{}, nil
-		}
+	if when, ok := cmd.AdvArgs["when"]; ok && !utils.IsTruthy(when) {
+		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
+		return platforms.CmdResult{
+			Unsafe:      unsafe,
+			NewCommands: newCmds,
+		}, nil
 	}
 
 	env := platforms.CmdEnv{
@@ -253,17 +250,24 @@ func RunCommand(
 		Database:      db,
 	}
 
-	if f, ok := cmdMap[cmd.Name]; ok {
-		log.Info().Msgf("running command: %s", cmd)
-		res, err := f(pl, env)
-
-		if err == nil && res.MediaChanged && token.Source != tokens.SourcePlaylist {
-			log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
-			plsc.Queue <- nil
-		}
-
-		return res, err
-	} else {
+	cmdFunc, ok := cmdMap[cmd.Name]
+	if !ok {
 		return platforms.CmdResult{}, fmt.Errorf("unknown command: %s", cmd)
 	}
+
+	log.Info().Msgf("running command: %s", cmd)
+	res, err := cmdFunc(pl, env)
+	if err != nil {
+		log.Error().Err(err).Msgf("error running command: %s", cmd)
+		return platforms.CmdResult{}, err
+	}
+
+	if res.MediaChanged && token.Source != tokens.SourcePlaylist {
+		log.Debug().Any("token", token).Msg("cmd launch: clearing current playlist")
+		plsc.Queue <- nil
+	}
+
+	res.Unsafe = unsafe
+	res.NewCommands = newCmds
+	return res, nil
 }

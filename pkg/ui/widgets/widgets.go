@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	zapScriptModels "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -162,6 +162,9 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	view := tview.NewTextView().
 		SetText(noticeArgs.Text).
 		SetTextAlign(tview.AlignCenter)
+	view.SetBorder(true)
+	view.SetWrap(true)
+	view.SetWordWrap(true)
 
 	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		y += h / 2
@@ -212,7 +215,8 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 		return event
 	})
 
-	return app.SetRoot(view, true), nil
+	centeredPages := tui.CenterWidget(75, 15, view)
+	return app.SetRoot(centeredPages, true), nil
 }
 
 // NoticeUI is a simple TUI screen that displays a message on screen. It can
@@ -265,11 +269,6 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 	return err
 }
 
-type pickerAction struct {
-	label  string
-	action zapScriptModels.ZapScript
-}
-
 func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -283,35 +282,18 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	if len(pickerArgs.Items) < 1 {
-		return nil, errors.New("no actions were specified")
-	}
-
-	var actions []pickerAction
-	for _, la := range pickerArgs.Items {
-		action := pickerAction{
-			action: la,
-		}
-
-		if la.Name != nil && *la.Name != "" {
-			action.label = *la.Name
-		} else {
-			continue
-		}
-
-		actions = append(actions, action)
+		return nil, errors.New("no items were specified")
 	}
 
 	app := tview.NewApplication()
 	tui.SetTheme(&tview.Styles)
 
-	run := func(action zapScriptModels.ZapScript) {
-		log.Info().Msgf("running picker selection: %v", action)
+	run := func(item widgetModels.PickerItem) {
+		log.Info().Msgf("running picker selection: %v", item)
 
-		zsrp := models.RunScriptParams{
-			ZapScript: action.ZapScript,
-			Name:      action.Name,
-			Cmds:      action.Cmds,
-			Unsafe:    pickerArgs.Unsafe,
+		zsrp := models.RunParams{
+			Text:   &item.ZapScript,
+			Unsafe: pickerArgs.Unsafe,
 		}
 
 		ps, err := json.Marshal(zsrp)
@@ -319,7 +301,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 			log.Error().Err(err).Msg("error creating run params")
 		}
 
-		_, err = client.LocalClient(context.Background(), cfg, models.MethodRunScript, string(ps))
+		_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
 		if err != nil {
 			log.Error().Err(err).Msg("error running local client")
 		}
@@ -328,10 +310,18 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	}
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
+	flex.SetBorder(true)
 
 	title := pickerArgs.Title
-	if title == "" {
-		title = "Select Action"
+
+	for i, v := range pickerArgs.Items {
+		if strings.TrimSpace(v.Name) == "" {
+			pickerArgs.Items[i].Name = v.ZapScript
+		}
+
+		if len(pickerArgs.Items[i].Name) > 60 {
+			pickerArgs.Items[i].Name = pickerArgs.Items[i].Name[:57] + "..."
+		}
 	}
 
 	titleText := tview.NewTextView().
@@ -341,15 +331,19 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	list := tview.NewList()
 
 	flex.AddItem(padding, 1, 0, false)
-	flex.AddItem(titleText, 1, 0, false)
+
+	if strings.TrimSpace(title) != "" {
+		flex.AddItem(titleText, 1, 0, false)
+	}
+
 	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
 
 	list.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		longest := 2
-		for _, action := range actions {
-			if len(action.label) > longest {
-				longest = len(action.label)
+		for _, item := range pickerArgs.Items {
+			if len(item.Name) > longest {
+				longest = len(item.Name)
 			}
 		}
 
@@ -362,17 +356,13 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return x, y, w, h
 	})
 
-	for _, action := range actions {
-		if action.label == "" {
-			continue
-		}
-
-		list.AddItem(action.label, "", 0, func() {
-			run(action.action)
+	for _, item := range pickerArgs.Items {
+		list.AddItem(item.Name, "", 0, func() {
+			run(item)
 		})
 	}
 
-	if pickerArgs.Selected < 0 || pickerArgs.Selected >= len(actions) {
+	if pickerArgs.Selected < 0 || pickerArgs.Selected >= len(pickerArgs.Items) {
 		pickerArgs.Selected = 0
 	} else {
 		list.SetCurrentItem(pickerArgs.Selected)
@@ -394,7 +384,8 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return event
 	})
 
-	return app.SetRoot(flex, true), nil
+	centeredPages := tui.CenterWidget(75, 15, flex)
+	return app.SetRoot(centeredPages, true), nil
 }
 
 // PickerUI displays a list picker of Zap Link Cmds to run via the API.

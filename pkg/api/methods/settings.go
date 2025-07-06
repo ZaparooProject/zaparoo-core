@@ -6,7 +6,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"path/filepath"
@@ -44,14 +43,14 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading settings")
 	}
 
-	mapDir := filepath.Join(utils.DataDir(env.Platform), platforms.MappingsDir)
+	mapDir := filepath.Join(utils.DataDir(env.Platform), config.MappingsDir)
 	err = env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")
 		return nil, errors.New("error loading mappings")
 	}
 
-	launchersDir := filepath.Join(utils.DataDir(env.Platform), platforms.LaunchersDir)
+	launchersDir := filepath.Join(utils.DataDir(env.Platform), config.LaunchersDir)
 	err = env.Config.LoadCustomLaunchers(launchersDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading custom launchers")

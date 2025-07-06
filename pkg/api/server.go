@@ -109,10 +109,9 @@ func NewMethodMap() *MethodMap {
 
 	defaultMethods := map[string]func(requests.RequestEnv) (any, error){
 		// run
-		models.MethodLaunch:    methods.HandleRun,
-		models.MethodRun:       methods.HandleRun,
-		models.MethodRunScript: methods.HandleRunScript,
-		models.MethodStop:      methods.HandleStop,
+		models.MethodLaunch: methods.HandleRun, // DEPRECATED
+		models.MethodRun:    methods.HandleRun,
+		models.MethodStop:   methods.HandleStop,
 		// tokens
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,

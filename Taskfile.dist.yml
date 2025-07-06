@@ -54,7 +54,7 @@ tasks:
         '{{if not .NO_LIBNFC}}${CGO_LDFLAGS}{{end}}
         {{if not .NO_STATIC}}-static{{end}}'
         -s -w {{.EXTRA_LDFLAGS}}"
-        -tags "netgo,sqlite_omit_load_extension"
+        -tags "netgo,osusergo,sqlite_omit_load_extension"
         -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
         "./cmd/${PLATFORM}"
 

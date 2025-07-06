@@ -283,3 +283,25 @@ func IsServiceRunning(cfg *config.Instance) bool {
 	}
 	return true
 }
+
+func IsTruthy(s string) bool {
+	return strings.EqualFold(s, "true") || strings.EqualFold(s, "yes")
+}
+
+func IsFalsey(s string) bool {
+	return strings.EqualFold(s, "false") || strings.EqualFold(s, "no")
+}
+
+func MaybeJSON(data []byte) bool {
+	for _, b := range data {
+		switch b {
+		case ' ', '\n', '\t', '\r':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}

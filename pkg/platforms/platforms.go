@@ -14,12 +14,6 @@ import (
 )
 
 const (
-	AssetsDir    = "assets"
-	MappingsDir  = "mappings"
-	LaunchersDir = "launchers"
-)
-
-const (
 	PlatformIDBatocera  = "batocera"
 	PlatformIDBazzite   = "bazzite"
 	PlatformIDChimeraOS = "chimeraos"
@@ -57,6 +51,13 @@ type CmdResult struct {
 	PlaylistChanged bool
 	// Playlist is the result of the playlist change.
 	Playlist *playlists.Playlist
+	// NewCommands instructs the script runner to prepend these additional
+	// commands to the current script's remaining command list.
+	NewCommands []parser.Command
+	// Unsafe flags that a token has been generate by a remote/untrusted source
+	// and can no longer be considered safe. This flag will flow on to any
+	// remaining commands.
+	Unsafe bool
 }
 
 // ScanResult is a result generated from a media database indexing files or

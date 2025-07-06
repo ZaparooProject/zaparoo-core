@@ -5,7 +5,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-func centerWidget(width, height int, p tview.Primitive) tview.Primitive {
+func CenterWidget(width, height int, p tview.Primitive) tview.Primitive {
 	return tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().
