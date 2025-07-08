@@ -139,13 +139,13 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
+func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	originalPath := path
 	newPath := strings.ReplaceAll(path, "\\", "/")
 	lowerPath := strings.ToLower(newPath)
 
 	gotRoot := false
-	for _, rootDir := range p.RootDirs(nil) {
+	for _, rootDir := range p.RootDirs(cfg) {
 		rootDir = strings.ReplaceAll(rootDir, "\\", "/")
 		rootDir = strings.ToLower(rootDir)
 		if strings.HasPrefix(lowerPath, rootDir) {

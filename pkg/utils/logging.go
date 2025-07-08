@@ -32,7 +32,8 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
-	log.Logger = log.Output(io.MultiWriter(logWriters...))
+	log.Logger = log.Output(io.MultiWriter(logWriters...)).
+		With().Timestamp().Caller().Logger()
 
 	return nil
 }

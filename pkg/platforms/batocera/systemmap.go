@@ -181,6 +181,7 @@ var LauncherMap = map[string]string{
 	"apple2": "Apple2",
 	//"apple2gs":     "Apple2GS",
 	"arcadia": "Arcadia",
+	"arcade":  "Arcade",
 	//"archimedes":   "Archimedes",
 	"arduboy": "Arduboy",
 	//"astrocde":     "Astrocde",
