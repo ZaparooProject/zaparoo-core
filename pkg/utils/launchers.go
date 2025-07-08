@@ -67,8 +67,14 @@ func ParseCustomLaunchers(
 					MediaPath: path,
 				}
 
-				reader := parser.NewParser(v.Execute)
-				output, err := reader.EvalExpressions(exprEnv)
+				parseReader := parser.NewParser(v.Execute)
+				parsed, err := parseReader.ParseExpressions()
+				if err != nil {
+					return fmt.Errorf("error parsing expressions: %w", err)
+				}
+
+				evalReader := parser.NewParser(parsed)
+				output, err := evalReader.EvalExpressions(exprEnv)
 				if err != nil {
 					return fmt.Errorf("error evaluating execute expression: %w", err)
 				}

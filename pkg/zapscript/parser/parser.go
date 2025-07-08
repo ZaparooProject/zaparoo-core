@@ -48,8 +48,8 @@ const (
 	SymInputMacroExtEnd    = '}'
 	SymExpressionStart     = '['
 	SymExpressionEnd       = ']'
-	TokExpressionStart     = "\uE000"
-	TokExpressionEnd       = "\uE001"
+	TokExpStart            = "\uE000"
+	TokExprEnd             = "\uE001"
 )
 
 type Command struct {
@@ -239,7 +239,7 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 }
 
 func (sr *ScriptReader) parseExpression() (string, error) {
-	rawExpr := TokExpressionStart
+	rawExpr := TokExpStart
 
 	next, err := sr.read()
 	if err != nil {
@@ -265,7 +265,7 @@ func (sr *ScriptReader) parseExpression() (string, error) {
 			if err != nil {
 				return rawExpr, err
 			} else if next == SymExpressionEnd {
-				rawExpr = rawExpr + TokExpressionEnd
+				rawExpr = rawExpr + TokExprEnd
 				err := sr.skip()
 				if err != nil {
 					return rawExpr, err
@@ -282,7 +282,7 @@ func (sr *ScriptReader) parseExpression() (string, error) {
 
 func (sr *ScriptReader) parsePostExpression() (string, error) {
 	rawExpr := ""
-	exprEndToken := []rune(TokExpressionEnd)[0]
+	exprEndToken := []rune(TokExprEnd)[0]
 
 	for {
 		ch, err := sr.read()
@@ -838,11 +838,49 @@ type CustomLauncherExprEnv struct {
 	MediaPath string        `expr:"media_path"`
 }
 
+// ParseExpressions parses and converts expressions in the input string from
+// [[...]] formatted expression fields to internal expression token delimiters,
+// to be evaluated by the EvalExpressions function. This function ONLY parses
+// expression symbols and escape sequences, no other ZapScript syntax.
+func (sr *ScriptReader) ParseExpressions() (string, error) {
+	result := ""
+
+	for {
+		ch, err := sr.read()
+		if err != nil {
+			return result, err
+		} else if ch == eof {
+			break
+		}
+
+		if ch == SymEscapeSeq {
+			next, err := sr.parseEscapeSeq()
+			if err != nil {
+				return result, err
+			}
+			result = result + next
+			continue
+		} else if ch == SymExpressionStart {
+			exprValue, err := sr.parseExpression()
+			if err != nil {
+				return result, err
+			}
+			result = result + exprValue
+			continue
+		} else {
+			result = result + string(ch)
+			continue
+		}
+	}
+
+	return result, nil
+}
+
 func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 	parts := make([]PostArgPart, 0)
 	currentPart := PostArgPart{}
 
-	exprStartToken := []rune(TokExpressionStart)[0]
+	exprStartToken := []rune(TokExpStart)[0]
 
 	for {
 		ch, err := sr.read()
