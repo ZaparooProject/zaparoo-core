@@ -277,7 +277,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 
 		metadata, err := assets.GetSystemMetadata(system.ID)
 		if err != nil {
-			resultSystem.Id = system.ID
+			resultSystem.Name = system.ID
 			log.Err(err).Msg("error getting system metadata")
 		} else {
 			resultSystem.Name = metadata.Name
