@@ -4,12 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"io"
 	"io/fs"
 	"net"
@@ -19,6 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -123,9 +124,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaActive:       methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate: methods.HandleUpdateActiveMedia,
 		// settings
-		models.MethodSettings:       methods.HandleSettings,
-		models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
-		models.MethodSettingsReload: methods.HandleSettingsReload,
+		models.MethodSettings:             methods.HandleSettings,
+		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:       methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// mappings

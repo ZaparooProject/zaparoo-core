@@ -1,8 +1,9 @@
 package models
 
 import (
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type SearchResultMedia struct {
@@ -135,4 +136,10 @@ type ClientResponse struct {
 	Name    string    `json:"name"`
 	Address string    `json:"address"`
 	Secret  string    `json:"secret"`
+}
+
+type LogDownloadResponse struct {
+	Filename string `json:"filename"`
+	Size     int    `json:"size"`
+	Content  string `json:"content"`
 }
