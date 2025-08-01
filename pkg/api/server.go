@@ -4,21 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	apimiddleware "github.com/ZaparooProject/zaparoo-core/pkg/api/middleware"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -30,6 +33,13 @@ import (
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
+
+var allowedOrigins = []string{
+	"capacitor://localhost", // iOS Capacitor v3+
+	"ionic://localhost",     // iOS Capacitor v2
+	"https://localhost",     // Android
+	"http://localhost",      // Fallback/development
+}
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
@@ -487,13 +497,17 @@ func Start(
 ) {
 	r := chi.NewRouter()
 
+	rateLimiter := apimiddleware.NewIPRateLimiter()
+	rateLimiter.StartCleanup()
+
+	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.ApiRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: []string{"https://*", "http://*", "capacitor://*"},
-		AllowedMethods: []string{"GET"},
-		AllowedHeaders: []string{"Accept"},
+		AllowedOrigins: allowedOrigins,
+		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
 
@@ -504,7 +518,16 @@ func Start(
 	methodMap := NewMethodMap()
 
 	session := melody.New()
-	session.Upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if slices.Contains(allowedOrigins, origin) {
+			return true
+		}
+		if origin != "" {
+			log.Warn().Str("origin", origin).Msg("rejected WebSocket connection from unauthorized origin")
+		}
+		return false
+	}
 	go broadcastNotifications(state, session, notifications)
 
 	r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
@@ -531,7 +554,10 @@ func Start(
 	})
 	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
 
-	session.HandleMessage(handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db))
+	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
+		rateLimiter,
+		handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db),
+	))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
