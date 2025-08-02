@@ -133,9 +133,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodMediaActive:       methods.HandleActiveMedia,
 		models.MethodMediaActiveUpdate: methods.HandleUpdateActiveMedia,
 		// settings
-		models.MethodSettings:       methods.HandleSettings,
-		models.MethodSettingsUpdate: methods.HandleSettingsUpdate,
-		models.MethodSettingsReload: methods.HandleSettingsReload,
+		models.MethodSettings:             methods.HandleSettings,
+		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
+		models.MethodSettingsReload:       methods.HandleSettingsReload,
+		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// mappings

@@ -1,0 +1,240 @@
+# Core API
+
+:::warning
+This API is not finalized. A version 1 release will be announced when it is ready for production. You're welcome to use the API as is, but be aware parts may breaking changes may still happen.
+:::
+
+The **Core API** is available on and published by every device running the [Zaparoo Core](../../core) software. This API allows management of all Zaparoo features locally and remotely. The [Zaparoo](https://zaparoo.app/) app uses this API for all communication with Zaparoo devices, as do most of the flags when Zaparoo is run via the command line.
+
+This page documents the protocol used to communicate with the API and how to interact with it. _It is currently the source of truth when developing applications that work with Zaparoo._
+
+## Communication Protocol
+
+The API uses a standard [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) connection to exchange [JSON](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) payloads using the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.
+
+All remote cleartext WebSocket connections must encrypt every payload using the [secure layer](#secure-layer) detailed below, or else the payload will be rejected. Local unencrypted connections are allowed, depending on the platform and privilege context of the running service.
+
+Communication follows a loose client-server relationship. Clients, by default, are not expected to implement the API beyond what that particular client needs to function.
+
+### Connection
+
+Connections to the API can be established with any standard WebSocket client, using the versioned endpoint of the HTTP server published by the Zaparoo service. By default, the HTTP server is accessible on port `7497`. This port is configurable by the user.
+
+These endpoints are currently available:
+
+- `/api/v0.1`
+- `/api/v0`
+- `/api/`
+
+It's highly recommended to target your application at the specific minor version of the endpoint you're using, which will maintain compatibility during API updates.
+
+An example address for connecting to the API: `ws://10.0.0.123:7497/api/v0.1`
+
+The connection requires no special configuration or authentication to initiate.
+
+### HTTP POST
+
+All API methods can also be called via HTTP POST requests to the same versioned endpoints used for WebSocket connections. This provides an alternative for applications that prefer REST-style communication over persistent WebSocket connections.
+
+These HTTP endpoints are available:
+
+- `/api/v0.1`
+- `/api/v0`
+- `/api/`
+
+HTTP requests must use the `POST` method with `Content-Type: application/json` and send the same JSON-RPC 2.0 formatted payloads as WebSocket connections. The server will respond with a single JSON-RPC 2.0 response object.
+
+An example HTTP request to get the server version:
+
+```bash
+curl -X POST http://10.0.0.123:7497/api/v0.1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "method": "version"
+  }'
+```
+
+This would return a response like:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "result": {
+    "version": "0.7.0",
+    "platform": "linux"
+  }
+}
+```
+
+Unlike WebSocket connections, HTTP requests are stateless and do not support notifications. Each request requires a complete JSON-RPC 2.0 payload and will receive a single response.
+
+### JSON Payloads
+
+Server and clients communicate back and forth using JSON payloads, following the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.
+
+Because a WebSocket connection is asynchronous, request payloads are tagged with a unique ID. The client must keep track of IDs sent to another client and wait for a matching response object. A client can continue sending requests while waiting for responses to previous requests.
+
+#### Requests
+
+A request object asks the connected server to run a predefined [method](#methods), and report back when it's completed with a response object.
+
+An example request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
+  "method": "media.search",
+  "params": {
+    "query": "240p"
+  }
+}
+```
+
+This request would query Zaparoo's media database for a filename containing the word "240p" and return a response with the search results.
+
+##### Request object
+
+| Key     | Type   | Required | Description                                                                                                                                                                                   |
+| :------ | :----- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| jsonrpc | string | Yes      | As per the JSON-RPC 2.0 spec, this key's value must be the string `2.0` for a payload to be accepted.                                                                                         |
+| id      | string | Yes\*    | A UUID generated by the requesting client, used to match requests back to responses. A request missing this key is valid but would be treated as a notification and not receive any response. |
+| method  | string | Yes      | A string corresponding to a method to be run by the receiving server.                                                                                                                         |
+| params  | any    | No       | Arguments supplied for the method. The value of this key depends on the method used and is omitted for some methods.                                                                          |
+
+All available request methods and their parameters are [documented below](#methods).
+
+#### Notifications
+
+Notifications are requests which do not contain an ID. Otherwise, they are identical to a standard request object. Notifications can be sent by either server or client and do not receive a response.
+
+Like standard requests, notifications may or may not have parameters and its value will depend on the method. Types of notifications are [documented below](#notifications).
+
+#### Responses
+
+Every request sent must have a matching response. An example response to the `media.search` request shown above:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
+  "result": {
+    "media": [
+      {
+        "system": {
+          "id": "Gameboy",
+          "name": "Gameboy"
+        },
+        "name": "240p Test Suite (PD) v0.03 tepples",
+        "path": "Gameboy/240p Test Suite (PD) v0.03 tepples.gb"
+      }
+    ],
+    "total": 1
+  }
+}
+```
+
+##### Response object
+
+| Key     | Type   | Required | Description                                                                                                                                                     |
+| :------ | :----- | :------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| jsonrpc | number | Yes      | Same as a [request](#requests).                                                                                                                                 |
+| id      | string | Yes      | Same as a [request](#requests). The same ID sent by the original request.                                                                                       |
+| result  | any    | No\*     | Return value of the method. May be `null` depending on the method, will be missing if there was an error. See [methods](#methods) for possible values.          |
+| error   | Error  | No\*     | If a method failed, this key will be populated with the error details and the result key will be empty. See [below](#response-errors) for details about errors. |
+
+##### Response Errors
+
+If a method fails, it will populate the `error` key in the response object with details about the failure. An example of a failed request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
+  "error": {
+    "code": 1,
+    "message": "query or system is required"
+  }
+}
+```
+
+##### Error object
+
+| Key     | Type   | Required | Description                                                                               |
+| :------ | :----- | :------- | :---------------------------------------------------------------------------------------- |
+| code    | number | Yes      | An integer specifying the general error category. **Error codes are not yet formalised.** |
+| message | string | Yes      | Short human readable message explaining the error cause, if possible.                     |
+
+#### Protocol Errors
+
+If a low-level error occurs before a request context can be established, a protocol error will be sent back. This can happen, for example, if a JSON payload is malformed or a payload could not be decrypted. They're identical to an error response except they will have no ID.
+
+Protocol errors may be sent cleartext if a secure context couldn't be established, but will not contain any sensitive data.
+
+### Anonymous Access
+
+Anonymous cleartext access is, generally, allowed when an API connection is made from a loopback address (i.e. from the same device Zaparoo is running). This access depends on the platform and whether the service is running with elevated privileges. Check the page for the specific platform you're using to make sure it's available to you.
+
+This access is also allowed when a connection is made over a WebSocket Secure (wss) connection.
+
+### Heartbeat
+
+If sent the bytes `ping`, the API will immediately respond with the bytes `pong`. This feature can be used by heartbeat functions in WebSocket libraries.
+
+## Launch Endpoint
+
+The HTTP server has an additional endpoint which allows restricted access to launch ZapScript using a GET request. This endpoint is specifically meant to support uses such as QR codes scanned by a phone's camera app or simple launch testing.
+
+The endpoint is: `/l/`
+
+An example request: `GET http://10.0.0.123:7497/l/**launch.system:snes`
+
+This would act as though a token with the text `**launch.system:snes` had been scanned.
+
+Requests from the local device are allowed without restriction. Remote requests must be explicitly allowed using the `allow_launch` config file setting.
+
+## Methods
+
+Methods are used to execute actions and request data back from the API. The current API provides **21 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+
+| ID                   | Description                                                                           |
+| :------------------- | :------------------------------------------------------------------------------------ |
+| run                  | Run supplied ZapScript.                                                               |
+| stop                 | Kill any active launcher, if possible.                                                |
+| tokens               | List active tokens.                                                                   |
+| tokens.history       | Return a list of the latest token launches.                                           |
+| media                | Return status and statistics about media database.                                    |
+| media.active         | Return the currently active (now playing) media.                                      |
+| media.active.update  | Update the currently active media information.                                        |
+| media.search         | Query the media database and return all matching indexed media.                       |
+| media.generate       | Start a new media database index.                                                     |
+| systems              | List all currently indexed systems.                                                   |
+| settings             | List current configuration settings.                                                  |
+| settings.update      | Update one or more settings in-memory and save changes to disk.                       |
+| settings.reload      | Reload settings from disk.                                                            |
+| mappings             | List all mappings.                                                                    |
+| mappings.new         | Create a new mapping.                                                                 |
+| mappings.update      | Change an existing mapping.                                                           |
+| mappings.delete      | Delete an existing mapping.                                                           |
+| mappings.reload      | Reload mappings from disk.                                                            |
+| readers.write        | Attempt to write given text to the first available write-capable reader, if possible. |
+| readers.write.cancel | Cancel any active write operation.                                                    |
+| version              | Return server's current version and platform.                                         |
+
+## Notifications
+
+Notifications let a server or client know an event has occurred. See the [API Notifications](./notifications) page for detailed definitions and examples of each notification.
+
+| ID              | Description                                          |
+| :-------------- | :--------------------------------------------------- |
+| running         | New ZapScript has been added to the launch queue.    |
+| readers.added   | A new reader was connected to the server.            |
+| readers.removed | A connected reader was disconnected from the server. |
+| tokens.added    | A new token detected by a reader.                    |
+| tokens.removed  | A token was removed.                                 |
+| media.started   | New media was started on server.                     |
+| media.stopped   | Media has stopped on server.                         |
+| media.indexing  | The state of the indexing process has changed.       |

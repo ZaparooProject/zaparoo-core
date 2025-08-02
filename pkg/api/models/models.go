@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+
 	"github.com/google/uuid"
 )
 
@@ -17,33 +18,34 @@ const (
 )
 
 const (
-	MethodLaunch             = "launch" // DEPRECATED
-	MethodRun                = "run"
-	MethodRunScript          = "run.script"
-	MethodStop               = "stop"
-	MethodTokens             = "tokens"
-	MethodMedia              = "media"
-	MethodMediaGenerate      = "media.generate"
-	MethodMediaIndex         = "media.index" // DEPRECATED
-	MethodMediaSearch        = "media.search"
-	MethodMediaActive        = "media.active"
-	MethodMediaActiveUpdate  = "media.active.update"
-	MethodSettings           = "settings"
-	MethodSettingsUpdate     = "settings.update"
-	MethodSettingsReload     = "settings.reload"
-	MethodClients            = "clients"
-	MethodClientsNew         = "clients.new"
-	MethodClientsDelete      = "clients.delete"
-	MethodSystems            = "systems"
-	MethodHistory            = "tokens.history"
-	MethodMappings           = "mappings"
-	MethodMappingsNew        = "mappings.new"
-	MethodMappingsDelete     = "mappings.delete"
-	MethodMappingsUpdate     = "mappings.update"
-	MethodMappingsReload     = "mappings.reload"
-	MethodReadersWrite       = "readers.write"
-	MethodReadersWriteCancel = "readers.write.cancel"
-	MethodVersion            = "version"
+	MethodLaunch               = "launch" // DEPRECATED
+	MethodRun                  = "run"
+	MethodRunScript            = "run.script"
+	MethodStop                 = "stop"
+	MethodTokens               = "tokens"
+	MethodMedia                = "media"
+	MethodMediaGenerate        = "media.generate"
+	MethodMediaIndex           = "media.index" // DEPRECATED
+	MethodMediaSearch          = "media.search"
+	MethodMediaActive          = "media.active"
+	MethodMediaActiveUpdate    = "media.active.update"
+	MethodSettings             = "settings"
+	MethodSettingsUpdate       = "settings.update"
+	MethodSettingsReload       = "settings.reload"
+	MethodSettingsLogsDownload = "settings.logs.download"
+	MethodClients              = "clients"
+	MethodClientsNew           = "clients.new"
+	MethodClientsDelete        = "clients.delete"
+	MethodSystems              = "systems"
+	MethodHistory              = "tokens.history"
+	MethodMappings             = "mappings"
+	MethodMappingsNew          = "mappings.new"
+	MethodMappingsDelete       = "mappings.delete"
+	MethodMappingsUpdate       = "mappings.update"
+	MethodMappingsReload       = "mappings.reload"
+	MethodReadersWrite         = "readers.write"
+	MethodReadersWriteCancel   = "readers.write.cancel"
+	MethodVersion              = "version"
 )
 
 type Notification struct {
