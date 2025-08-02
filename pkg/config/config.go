@@ -308,7 +308,7 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 		return false
 	}
 
-	for i, _ := range allow {
+	for i := range allow {
 		if allowRe[i] != nil &&
 			allowRe[i].MatchString(s) {
 			return true

@@ -267,5 +267,5 @@ func (r *ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 }
 
 func (r *ACR122PCSC) CancelWrite() {
-	return
+	// no-op, writing not supported
 }

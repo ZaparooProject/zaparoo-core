@@ -28,7 +28,8 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 
 	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyEnter {
+		switch k {
+		case tcell.KeyEnter:
 			text := zapScriptTextArea.GetText()
 			text = strings.Trim(text, "\r\n ")
 			data, _ := json.Marshal(&models.ReaderWriteParams{
@@ -36,7 +37,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 			})
 			_, _ = client.LocalClient(context.Background(), cfg, models.MethodReadersWrite, string(data))
 			zapScriptTextArea.SetText("", true)
-		} else if k == tcell.KeyEscape {
+		case tcell.KeyEscape:
 			pages.SwitchToPage(PageMain)
 		}
 		return event

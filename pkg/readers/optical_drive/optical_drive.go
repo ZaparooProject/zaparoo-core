@@ -75,13 +75,14 @@ func (r *FileReader) Open(
 			return uuid
 		}
 
-		if r.device.IDSource == IDSourceUUID {
+		switch r.device.IDSource {
+		case IDSourceUUID:
 			return uuid
-		} else if r.device.IDSource == IDSourceLabel {
+		case IDSourceLabel:
 			return label
-		} else if r.device.IDSource == IDSourceMerged {
+		case IDSourceMerged:
 			return uuid + MergedIDSeparator + label
-		} else {
+		default:
 			return uuid + MergedIDSeparator + label
 		}
 	}
@@ -183,5 +184,5 @@ func (r *FileReader) Write(_ string) (*tokens.Token, error) {
 }
 
 func (r *FileReader) CancelWrite() {
-	return
+	// no-op, writing not supported
 }

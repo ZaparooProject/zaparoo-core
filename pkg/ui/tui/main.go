@@ -57,13 +57,14 @@ func setupButtonNavigation(
 
 		button.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			k := event.Key()
-			if k == tcell.KeyUp || k == tcell.KeyLeft {
+			switch k {
+			case tcell.KeyUp, tcell.KeyLeft:
 				app.SetFocus(buttons[prevIndex])
 				return event
-			} else if k == tcell.KeyDown || k == tcell.KeyRight {
+			case tcell.KeyDown, tcell.KeyRight:
 				app.SetFocus(buttons[nextIndex])
 				return event
-			} else if k == tcell.KeyEscape {
+			case tcell.KeyEscape:
 				app.Stop()
 				return nil
 			}
@@ -142,7 +143,7 @@ func BuildMainPage(
 						context.Background(), -1,
 						cfg, models.NotificationTokensAdded,
 					)
-					if errors.Is(client.ErrRequestTimeout, err) {
+					if errors.Is(err, client.ErrRequestTimeout) {
 						continue
 					} else if err != nil {
 						app.QueueUpdateDraw(func() {

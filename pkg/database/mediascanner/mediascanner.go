@@ -348,11 +348,6 @@ func NewNamesIndex(
 	}
 	SeedKnownTags(db, &scanState)
 
-	filteredIds := make([]string, 0)
-	for _, s := range systems {
-		filteredIds = append(filteredIds, s.ID)
-	}
-
 	update(status)
 	systemPaths := make(map[string][]string)
 	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {

@@ -38,14 +38,14 @@ func checkMappingUid(m database.Mapping, t tokens.Token) bool {
 	uid := userdb.NormalizeID(t.UID)
 	pattern := userdb.NormalizeID(m.Pattern)
 
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		log.Debug().Msgf("checking exact match: %s == %s", pattern, uid)
 		return uid == pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		log.Debug().Msgf("checking partial match: %s contains %s", pattern, uid)
 		return strings.Contains(uid, pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		// don't normalize regex pattern
 		log.Debug().Msgf("checking regex match: %s matches %s", m.Pattern, uid)
 		re, err := regexp.Compile(m.Pattern)
@@ -60,12 +60,12 @@ func checkMappingUid(m database.Mapping, t tokens.Token) bool {
 }
 
 func checkMappingText(m database.Mapping, t tokens.Token) bool {
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		return t.Text == m.Pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		return strings.Contains(t.Text, m.Pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
@@ -78,12 +78,12 @@ func checkMappingText(m database.Mapping, t tokens.Token) bool {
 }
 
 func checkMappingData(m database.Mapping, t tokens.Token) bool {
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		return t.Data == m.Pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		return strings.Contains(t.Data, m.Pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
@@ -108,11 +108,12 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 		dbm.Enabled = true
 		dbm.Override = m.ZapScript
 
-		if m.TokenKey == "data" {
+		switch m.TokenKey {
+		case "data":
 			dbm.Type = userdb.MappingTypeData
-		} else if m.TokenKey == "value" {
+		case "value":
 			dbm.Type = userdb.MappingTypeValue
-		} else {
+		default:
 			dbm.Type = userdb.MappingTypeID
 		}
 
@@ -149,18 +150,18 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 	ms = append(ms, mappingsFromConfig(cfg)...)
 
 	for _, m := range ms {
-		switch {
-		case m.Type == userdb.MappingTypeID:
+		switch m.Type {
+		case userdb.MappingTypeID:
 			if checkMappingUid(m, token) {
 				log.Info().Msg("launching with db/cfg id match override")
 				return m.Override, true
 			}
-		case m.Type == userdb.MappingTypeValue:
+		case userdb.MappingTypeValue:
 			if checkMappingText(m, token) {
 				log.Info().Msg("launching with db/cfg value match override")
 				return m.Override, true
 			}
-		case m.Type == userdb.MappingTypeData:
+		case userdb.MappingTypeData:
 			if checkMappingData(m, token) {
 				log.Info().Msg("launching with db/cfg data match override")
 				return m.Override, true

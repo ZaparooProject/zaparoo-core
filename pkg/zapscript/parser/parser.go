@@ -88,11 +88,10 @@ func isWhitespace(ch rune) bool {
 }
 
 func isInputMacroCmd(name string) bool {
-	if name == models.ZapScriptCmdInputKeyboard {
+	switch name {
+	case models.ZapScriptCmdInputKeyboard, models.ZapScriptCmdInputGamepad:
 		return true
-	} else if name == models.ZapScriptCmdInputGamepad {
-		return true
-	} else {
+	default:
 		return false
 	}
 }
@@ -163,15 +162,16 @@ func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
 		return false, err
 	}
 
-	if next == eof {
+	switch next {
+	case eof:
 		return true, nil
-	} else if next == SymCmdSep {
+	case SymCmdSep:
 		err := sr.skip()
 		if err != nil {
 			return false, err
 		}
 		return true, nil
-	} else {
+	default:
 		return false, nil
 	}
 }
@@ -334,9 +334,10 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 		}
 
 		if !inString {
-			if ch == SymJSONStart {
+			switch ch {
+			case SymJSONStart:
 				braceCount++
-			} else if ch == SymJSONEnd {
+			case SymJSONEnd:
 				braceCount--
 			}
 		}
@@ -748,14 +749,15 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 				return script, parseErr(err)
 			}
 
-			if next == eof {
+			switch next {
+			case eof:
 				return script, ErrUnexpectedEOF
-			} else if next == SymCmdStart {
+			case SymCmdStart:
 				err := sr.skip()
 				if err != nil {
 					return script, parseErr(err)
 				}
-			} else {
+			default:
 				// assume it's actually an auto launch cmd
 				err := parseAutoLaunchCmd("*")
 				if err != nil {

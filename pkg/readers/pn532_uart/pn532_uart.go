@@ -161,11 +161,8 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			blockRetryMax := 3
 			blockRetry := 0
 			data := make([]byte, 0)
-			for {
+			for i < 256 {
 				// TODO: this is a random limit i picked, should detect blocks in card
-				if i >= 256 {
-					break
-				}
 
 				if blockRetry >= blockRetryMax {
 					errCount++
@@ -353,5 +350,5 @@ func (r *PN532UARTReader) Write(text string) (*tokens.Token, error) {
 }
 
 func (r *PN532UARTReader) CancelWrite() {
-	return
+	// no-op, writing not supported
 }

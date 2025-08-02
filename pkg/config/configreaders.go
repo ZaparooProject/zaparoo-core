@@ -49,11 +49,10 @@ func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 func (c *Instance) TapModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.Readers.Scan.Mode == ScanModeTap {
+	switch c.vals.Readers.Scan.Mode {
+	case ScanModeTap, "":
 		return true
-	} else if c.vals.Readers.Scan.Mode == "" {
-		return true
-	} else {
+	default:
 		return false
 	}
 }

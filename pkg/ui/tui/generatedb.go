@@ -75,7 +75,7 @@ func (p *ProgressBar) GetProgress() float64 {
 }
 
 func (p *ProgressBar) Draw(screen tcell.Screen) {
-	p.Box.DrawForSubclass(screen, p)
+	p.DrawForSubclass(screen, p)
 
 	x, y, width, height := p.GetInnerRect()
 
@@ -315,7 +315,7 @@ func BuildGenerateDBPage(
 		var lastUpdate *models.IndexingStatusResponse
 		for {
 			indexing, err := waitGenerateUpdate(context.Background(), cfg)
-			if errors.Is(client.ErrRequestTimeout, err) {
+			if errors.Is(err, client.ErrRequestTimeout) {
 				continue
 			} else if err != nil {
 				log.Error().Err(err).Msg("error waiting for indexing update")
@@ -324,8 +324,8 @@ func BuildGenerateDBPage(
 			log.Debug().Msgf("indexing update: %+v", indexing)
 
 			if lastUpdate != nil &&
-				lastUpdate.Indexing == true &&
-				indexing.Indexing == false &&
+				lastUpdate.Indexing &&
+				!indexing.Indexing &&
 				indexing.TotalFiles != nil {
 				showComplete(*indexing.TotalFiles)
 				updateProgress(0, 1, "")

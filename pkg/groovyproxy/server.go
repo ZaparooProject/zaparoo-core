@@ -109,7 +109,7 @@ func Start(
 		case gmcBytes := <-gmcChan:
 			log.Debug().Msg("Receieved GMC Load Event")
 			// **local: can prefix any valid Zapscript to run locally without proxy
-			if bytes.Compare(gmcBytes[:10], []byte("zapscript:")) == 0 {
+			if bytes.Equal(gmcBytes[:10], []byte("zapscript:")) {
 				log.Debug().Msg("GMC Execute is Zapscript Format, running as Token")
 				text := string(gmcBytes[10:])
 				t := tokens.Token{

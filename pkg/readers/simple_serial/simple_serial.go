@@ -201,5 +201,5 @@ func (r *SimpleSerialReader) Write(text string) (*tokens.Token, error) {
 }
 
 func (r *SimpleSerialReader) CancelWrite() {
-	return
+	// no-op, writing not supported
 }

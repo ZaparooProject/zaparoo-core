@@ -71,10 +71,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyDown {
+		switch k {
+		case tcell.KeyTab, tcell.KeyDown:
 			app.SetFocus(systemDropdown)
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp {
+		case tcell.KeyBacktab, tcell.KeyUp:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(-1)
 				app.SetFocus(mediaList)
@@ -82,7 +83,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				app.SetFocus(searchButton)
 			}
 			return nil
-		} else if k == tcell.KeyEnter {
+		case tcell.KeyEnter:
 			app.SetFocus(searchButton)
 		}
 		return event
@@ -92,10 +93,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			return event
 		}
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+		switch k {
+		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyLeft || k == tcell.KeyUp {
+		case tcell.KeyBacktab, tcell.KeyLeft, tcell.KeyUp:
 			app.SetFocus(searchInput)
 			return nil
 		}
@@ -103,7 +105,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+		switch k {
+		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(0)
 				app.SetFocus(mediaList)
@@ -111,7 +114,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				app.SetFocus(searchInput)
 			}
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp || k == tcell.KeyLeft {
+		case tcell.KeyBacktab, tcell.KeyUp, tcell.KeyLeft:
 			app.SetFocus(systemDropdown)
 			return nil
 		}

@@ -27,11 +27,12 @@ func systrayOnReady(
 ) func() {
 	return func() {
 		openCmd := ""
-		if runtime.GOOS == "windows" {
+		switch runtime.GOOS {
+		case "windows":
 			openCmd = "explorer"
-		} else if runtime.GOOS == "darwin" {
+		case "darwin":
 			openCmd = "open"
-		} else {
+		default:
 			openCmd = "xdg-open"
 		}
 

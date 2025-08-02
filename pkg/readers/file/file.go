@@ -150,5 +150,5 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 }
 
 func (r *Reader) CancelWrite() {
-	return
+	// no-op, writing not supported
 }

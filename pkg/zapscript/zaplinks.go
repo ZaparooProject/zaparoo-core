@@ -94,7 +94,7 @@ func isZapLink(link string, db *database.Database) bool {
 		return false
 	}
 
-	if !(strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) {
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return false
 	}
 
@@ -196,7 +196,7 @@ func isOfflineError(err error) bool {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		if netErr.Timeout() || netErr.Temporary() {
+		if netErr.Timeout() {
 			return true
 		}
 	}

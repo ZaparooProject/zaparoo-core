@@ -25,12 +25,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 		ReadersScanIgnoreSystem: make([]string, 0),
 	}
 
-	for _, s := range env.Config.ReadersScan().IgnoreSystem {
-		resp.ReadersScanIgnoreSystem = append(
-			resp.ReadersScanIgnoreSystem,
-			s,
-		)
-	}
+	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
 
 	return resp, nil
 }
@@ -100,11 +95,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersScanMode != nil {
 		log.Info().Str("readersScanMode", *params.ReadersScanMode).Msg("update")
-		if *params.ReadersScanMode == "" {
+		switch *params.ReadersScanMode {
+		case "":
 			env.Config.SetScanMode(config.ScanModeTap)
-		} else if *params.ReadersScanMode == config.ScanModeTap || *params.ReadersScanMode == config.ScanModeHold {
+		case config.ScanModeTap, config.ScanModeHold:
 			env.Config.SetScanMode(*params.ReadersScanMode)
-		} else {
+		default:
 			return nil, ErrInvalidParams
 		}
 	}

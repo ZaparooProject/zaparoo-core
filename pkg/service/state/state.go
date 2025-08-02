@@ -250,8 +250,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		})
 		return
 	}
-	return
-}
+	}
 
 func (s *State) GetContext() context.Context {
 	return s.ctx

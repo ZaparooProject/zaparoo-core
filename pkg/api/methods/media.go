@@ -110,11 +110,12 @@ func generateMediaDB(
 	go func() {
 		total, err := mediascanner.NewNamesIndex(pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
-			if status.Step == 1 {
+			switch status.Step {
+			case 1:
 				desc = "Finding media folders"
-			} else if status.Step == status.Total {
+			case status.Total:
 				desc = "Writing database"
-			} else {
+			default:
 				system, err := systemdefs.GetSystem(status.SystemID)
 				if err != nil {
 					desc = status.SystemID

@@ -37,9 +37,10 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 		t := time.Unix(0, m.Added*int64(time.Millisecond))
 
 		// keep compatibility for v0.1 api
-		if m.Type == userdb.MappingTypeID {
+		switch m.Type {
+		case userdb.MappingTypeID:
 			m.Type = userdb.LegacyMappingTypeUID
-		} else if m.Type == userdb.MappingTypeValue {
+		case userdb.MappingTypeValue:
 			m.Type = userdb.LegacyMappingTypeText
 		}
 
@@ -99,9 +100,10 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 	}
 
 	// convert old type names
-	if params.Type == userdb.LegacyMappingTypeUID {
+	switch params.Type {
+	case userdb.LegacyMappingTypeUID:
 		params.Type = userdb.MappingTypeID
-	} else if params.Type == userdb.LegacyMappingTypeText {
+	case userdb.LegacyMappingTypeText:
 		params.Type = userdb.MappingTypeValue
 	}
 
@@ -191,9 +193,10 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 
 	// convert old type names
 	if params.Type != nil {
-		if *params.Type == userdb.LegacyMappingTypeUID {
+		switch *params.Type {
+		case userdb.LegacyMappingTypeUID:
 			*params.Type = userdb.MappingTypeID
-		} else if *params.Type == userdb.LegacyMappingTypeText {
+		case userdb.LegacyMappingTypeText:
 			*params.Type = userdb.MappingTypeValue
 		}
 	}

@@ -126,11 +126,12 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 			Override: oldMapping.Override,
 		}
 
-		if oldMapping.Type == MappingTypeText {
+		switch oldMapping.Type {
+		case MappingTypeText:
 			newMapping.Type = userdb.MappingTypeValue
-		} else if oldMapping.Type == MappingTypeUID {
+		case MappingTypeUID:
 			newMapping.Type = userdb.MappingTypeID
-		} else {
+		default:
 			newMapping.Type = oldMapping.Type
 		}
 

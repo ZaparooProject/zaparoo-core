@@ -236,7 +236,7 @@ func processTokenQueue(
 			}()
 		case <-st.GetContext().Done():
 			log.Debug().Msg("exiting service worker via context cancellation")
-			break
+			return
 		}
 	}
 }
