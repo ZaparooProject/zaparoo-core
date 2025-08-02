@@ -28,7 +28,7 @@ func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.App
 
 	tagsWriteMenu.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		switch k {
+		switch k { //nolint:exhaustive
 		case tcell.KeyEnter:
 			text := zapScriptTextArea.GetText()
 			text = strings.Trim(text, "\r\n ")

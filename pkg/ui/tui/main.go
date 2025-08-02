@@ -57,7 +57,7 @@ func setupButtonNavigation(
 
 		button.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			k := event.Key()
-			switch k {
+			switch k { //nolint:exhaustive
 			case tcell.KeyUp, tcell.KeyLeft:
 				app.SetFocus(buttons[prevIndex])
 				return event

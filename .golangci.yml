@@ -30,6 +30,11 @@ linters:
     - nilerr
     - unconvert
     - usestdlibvars
+    # High-priority additions for embedded systems
+    - errorlint
+    - exhaustive
+    - prealloc
+    - noctx
 
 formatters:
   enable:
@@ -40,6 +45,7 @@ linters-settings:
   govet:
     enable:
       - shadow
+      - fieldalignment
   gocritic:
     enabled-tags:
       - diagnostic
@@ -52,3 +58,7 @@ linters-settings:
     statements: 50
   goimports:
     local-prefixes: github.com/ZaparooProject/zaparoo-core
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: true
