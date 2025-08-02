@@ -1,3 +1,5 @@
+//go:build darwin
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones

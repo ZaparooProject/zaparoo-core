@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
