@@ -1,9 +1,10 @@
 //go:build linux || darwin
 
-package utils
+package helpers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -192,22 +193,20 @@ func (s *Service) startService() {
 	s.setupStopService()
 	s.stop = stop
 
-	if s.daemon {
-		<-make(chan struct{})
-	} else {
+	if !s.daemon {
 		err := s.stopService()
 		if err != nil {
 			os.Exit(1)
 		}
-
 		os.Exit(0)
 	}
+	<-make(chan struct{})
 }
 
 // Start a new service daemon in the background.
 func (s *Service) Start() error {
 	if s.Running() {
-		return fmt.Errorf("service already running")
+		return errors.New("service already running")
 	}
 
 	// create a copy in binary in tmp so the original can be updated
@@ -273,7 +272,7 @@ func (s *Service) Start() error {
 // Stop the service daemon.
 func (s *Service) Stop() error {
 	if !s.Running() {
-		return fmt.Errorf("service not running")
+		return errors.New("service not running")
 	}
 
 	pid, err := s.Pid()
@@ -342,17 +341,16 @@ func (s *Service) ServiceHandler(cmd *string) error {
 		return nil
 	case "status":
 		if s.Running() {
-			fmt.Println("started")
+			_, _ = fmt.Println("started")
 			return nil
-		} else {
-			fmt.Println("stopped")
-			return fmt.Errorf("service not running")
 		}
+		_, _ = fmt.Println("stopped")
+		return errors.New("service not running")
 	case "":
 		// Do nothing for empty command
 		return nil
 	default:
-		fmt.Printf("Unknown service argument: %s", *cmd)
+		_, _ = fmt.Printf("Unknown service argument: %s", *cmd)
 		return fmt.Errorf("unknown service argument: %s", *cmd)
 	}
 }

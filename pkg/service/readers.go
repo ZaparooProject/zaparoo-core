@@ -8,12 +8,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,8 +39,8 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
-		if !utils.Contains(rs, device.ConnectionString()) &&
-			!utils.Contains(toConnectStrs(), device.ConnectionString()) {
+		if !helpers.Contains(rs, device.ConnectionString()) &&
+			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
 			log.Debug().Msgf("config device not connected, adding: %s", device)
 			toConnect = append(toConnect, toConnectDevice{
 				connectionString: device.ConnectionString(),
@@ -54,17 +54,17 @@ func connectReaders(
 		if _, ok := st.GetReader(device.connectionString); !ok {
 			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {
-				ids := r.Ids()
-				if utils.Contains(ids, rt) {
+				ids := r.IDs()
+				if helpers.Contains(ids, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
 					err := r.Open(device.device, iq)
 					if err != nil {
 						log.Error().Msgf("error opening reader: %s", err)
-					} else {
-						st.SetReader(device.connectionString, r)
-						log.Info().Msgf("opened reader: %s", device)
-						break
+						continue
 					}
+					st.SetReader(device.connectionString, r)
+					log.Info().Msgf("opened reader: %s", device)
+					break
 				}
 			}
 		}
@@ -312,7 +312,7 @@ preprocessing:
 		case stoken := <-lsq:
 			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", st)
-			if exitTimer != nil && !utils.TokensEqual(stoken, st.GetSoftwareToken()) {
+			if exitTimer != nil && !helpers.TokensEqual(stoken, st.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
 				}
@@ -321,7 +321,7 @@ preprocessing:
 			continue preprocessing
 		}
 
-		if utils.TokensEqual(scan, prevToken) {
+		if helpers.TokensEqual(scan, prevToken) {
 			log.Debug().Msg("ignoring duplicate scan")
 			continue preprocessing
 		}
@@ -352,7 +352,7 @@ preprocessing:
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
 				activeToken := st.GetActiveCard()
-				if stopped && utils.TokensEqual(scan, &activeToken) {
+				if stopped && helpers.TokensEqual(scan, &activeToken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
@@ -363,13 +363,12 @@ preprocessing:
 
 			// avoid launching a token that was just written by a reader
 			wt := st.GetWroteToken()
-			if wt != nil && utils.TokensEqual(scan, wt) {
+			if wt != nil && helpers.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
 				st.SetWroteToken(nil)
 				continue preprocessing
-			} else {
-				st.SetWroteToken(nil)
 			}
+			st.SetWroteToken(nil)
 
 			log.Info().Msgf("sending token to queue: %v", scan)
 

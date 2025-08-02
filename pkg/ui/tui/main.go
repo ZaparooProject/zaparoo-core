@@ -9,8 +9,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -97,7 +97,7 @@ func BuildMainPage(
 		svcStatus = "NOT RUNNING\nThe Zaparoo Core service may not have started. Check logs for more information."
 	}
 
-	ip := utils.GetLocalIP()
+	ip := helpers.GetLocalIP()
 	var ipDisplay string
 	if ip == "" {
 		ipDisplay = "Unknown"

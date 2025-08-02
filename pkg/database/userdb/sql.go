@@ -81,11 +81,11 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 	return err
 }
 
-func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastId int) ([]database.HistoryEntry, error) {
+func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]database.HistoryEntry, error) {
 	var list []database.HistoryEntry
 	// Instead of offset, use token-based
-	if lastId == 0 {
-		lastId = 2147483646
+	if lastID == 0 {
+		lastID = 2147483646
 	}
 
 	q, err := db.PrepareContext(ctx, `
@@ -106,7 +106,7 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastId int) ([]dat
 		}
 	}(q)
 
-	rows, err := q.QueryContext(ctx, lastId)
+	rows, err := q.QueryContext(ctx, lastID)
 	if err != nil {
 		return list, err
 	}

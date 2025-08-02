@@ -14,8 +14,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -25,7 +25,7 @@ type Flags struct {
 	Read       *bool
 	Run        *string
 	Launch     *string
-	Api        *string
+	API        *string
 	Version    *bool
 	Config     *bool
 	ShowLoader *string
@@ -56,7 +56,7 @@ func SetupFlags() *Flags {
 			"",
 			"alias of run (DEPRECATED)",
 		),
-		Api: flag.String(
+		API: flag.String(
 			"api",
 			"",
 			"send method and params to API and print response",
@@ -95,7 +95,7 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	flag.Parse()
 
 	if *f.Version {
-		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
+		_, _ = fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
 		os.Exit(0)
 	}
 }
@@ -114,9 +114,8 @@ func runFlag(cfg *config.Instance, value string) {
 		log.Error().Err(err).Msg("error running")
 		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
 		os.Exit(1)
-	} else {
-		os.Exit(0)
 	}
+	os.Exit(0)
 }
 
 // Post actions all remaining common flags that require the environment to be
@@ -125,7 +124,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 	switch {
 	case isFlagPassed("write"):
 		if *f.Write == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: write flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: write flag requires a value\n")
 			os.Exit(1)
 		}
 
@@ -156,12 +155,11 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			close(sigs)
 			enableRun()
 			os.Exit(1)
-		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
-			close(sigs)
-			enableRun()
-			os.Exit(0)
 		}
+		_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
+		close(sigs)
+		enableRun()
+		os.Exit(0)
 	case *f.Read:
 		enableRun := client.DisableZapScript(cfg)
 
@@ -189,26 +187,26 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		close(sigs)
 		enableRun()
-		fmt.Println(resp)
+		_, _ = fmt.Println(resp)
 		os.Exit(0)
 	case isFlagPassed("launch"):
 		if *f.Launch == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: launch flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: launch flag requires a value\n")
 			os.Exit(1)
 		}
 		runFlag(cfg, *f.Launch)
 	case isFlagPassed("run"):
 		if *f.Run == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: run flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: run flag requires a value\n")
 		}
 		runFlag(cfg, *f.Run)
 	case isFlagPassed("api"):
-		if *f.Api == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: api flag requires a value\n")
+		if *f.API == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: api flag requires a value\n")
 			os.Exit(1)
 		}
 
-		ps := strings.SplitN(*f.Api, ":", 2)
+		ps := strings.SplitN(*f.API, ":", 2)
 		method := ps[0]
 		params := ""
 		if len(ps) > 1 {
@@ -222,7 +220,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			os.Exit(1)
 		}
 
-		fmt.Println(resp)
+		_, _ = fmt.Println(resp)
 		os.Exit(0)
 	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
@@ -230,21 +228,20 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			log.Error().Err(err).Msg("error reloading settings")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
 			os.Exit(1)
-		} else {
-			os.Exit(0)
 		}
+		os.Exit(0)
 	}
 }
 
 // Setup initializes the user config and logging. Returns a user config object.
 func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writer) *config.Instance {
-	err := utils.InitLogging(pl, writers)
+	err := helpers.InitLogging(pl, writers)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logging: %v\n", err)
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewConfig(utils.ConfigDir(pl), defaultConfig)
+	cfg, err := config.NewConfig(helpers.ConfigDir(pl), defaultConfig)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)

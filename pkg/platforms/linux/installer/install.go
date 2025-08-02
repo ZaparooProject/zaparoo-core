@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 )
 
 //go:embed conf/blacklist-zaparoo.conf
@@ -36,18 +36,17 @@ Continue with install?`
 )
 
 func CLIInstall() error {
-	if !utils.YesNoPrompt(installMsg, true) {
-		fmt.Println("Aborting install.")
-		return nil
-	} else {
-		err := Install()
-		if err != nil {
-			fmt.Println("Error during install:", err)
-			return err
-		}
-		fmt.Println("Install complete. You may need to reboot for changes to take effect.")
+	if !helpers.YesNoPrompt(installMsg, true) {
+		_, _ = fmt.Println("Aborting install.")
 		return nil
 	}
+	err := Install()
+	if err != nil {
+		_, _ = fmt.Println("Error during install:", err)
+		return err
+	}
+	_, _ = fmt.Println("Install complete. You may need to reboot for changes to take effect.")
+	return nil
 }
 
 func Install() error {
@@ -90,10 +89,10 @@ func Install() error {
 func CLIUninstall() error {
 	err := Uninstall()
 	if err != nil {
-		fmt.Println("Error during uninstall:", err)
+		_, _ = fmt.Println("Error during uninstall:", err)
 		return err
 	}
-	fmt.Println("Uninstall complete. You may need to reboot for changes to take effect.")
+	_, _ = fmt.Println("Uninstall complete. You may need to reboot for changes to take effect.")
 	return nil
 }
 

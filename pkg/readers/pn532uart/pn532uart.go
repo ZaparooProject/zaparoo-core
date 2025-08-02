@@ -1,4 +1,4 @@
-package pn532_uart
+package pn532uart
 
 import (
 	"bytes"
@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
@@ -34,7 +34,7 @@ func NewReader(cfg *config.Instance) *PN532UARTReader {
 	}
 }
 
-func (r *PN532UARTReader) Ids() []string {
+func (*PN532UARTReader) IDs() []string {
 	return []string{"pn532_uart"}
 }
 
@@ -70,7 +70,7 @@ func connect(name string) (serial.Port, error) {
 }
 
 func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -141,7 +141,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			errCount = 0
 			zeroScans = 0
 
-			if r.lastToken != nil && r.lastToken.UID == tgt.Uid {
+			if r.lastToken != nil && r.lastToken.UID == tgt.UID {
 				// same token
 				continue
 			}
@@ -217,14 +217,14 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 			token := &tokens.Token{
 				Type:     tgt.Type,
-				UID:      tgt.Uid,
+				UID:      tgt.UID,
 				Text:     tagText,
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
 				Source:   r.device.ConnectionString(),
 			}
 
-			if !utils.TokensEqual(token, r.lastToken) {
+			if !helpers.TokensEqual(token, r.lastToken) {
 				iq <- readers.Scan{
 					Source: r.device.ConnectionString(),
 					Token:  token,
@@ -255,8 +255,8 @@ var (
 	serialBlockList []string
 )
 
-func (r *PN532UARTReader) Detect(connected []string) string {
-	ports, err := utils.GetSerialDeviceList()
+func (*PN532UARTReader) Detect(connected []string) string {
+	ports, err := helpers.GetSerialDeviceList()
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get serial ports")
 	}
@@ -266,14 +266,14 @@ func (r *PN532UARTReader) Detect(connected []string) string {
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
-		if utils.Contains(serialBlockList, name) {
+		if helpers.Contains(serialBlockList, name) {
 			serialCacheMu.RUnlock()
 			continue
 		}
 		serialCacheMu.RUnlock()
 
 		// ignore if exact same device and reader are connected
-		if utils.Contains(connected, device) {
+		if helpers.Contains(connected, device) {
 			continue
 		}
 
@@ -290,7 +290,7 @@ func (r *PN532UARTReader) Detect(connected []string) string {
 			}
 
 			// ignore if same resolved device and reader connected
-			if realPath != "" && utils.Contains(connected, realPath) {
+			if realPath != "" && helpers.Contains(connected, realPath) {
 				continue
 			}
 
@@ -347,10 +347,10 @@ func (r *PN532UARTReader) Info() string {
 	return "PN532 UART (" + r.name + ")"
 }
 
-func (r *PN532UARTReader) Write(text string) (*tokens.Token, error) {
+func (*PN532UARTReader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *PN532UARTReader) CancelWrite() {
+func (*PN532UARTReader) CancelWrite() {
 	// no-op, writing not supported
 }

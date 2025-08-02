@@ -12,8 +12,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/nixinwang/dialog"
 	"github.com/rs/zerolog/log"
 	"golang.design/x/clipboard"
@@ -43,7 +43,7 @@ func systrayOnReady(
 		systray.SetTooltip("Zaparoo Core")
 
 		mWebUI := systray.AddMenuItem("Open", "Open Zaparoo web UI")
-		ip := utils.GetLocalIP()
+		ip := helpers.GetLocalIP()
 		if ip == "" {
 			ip = "Unknown"
 		}
@@ -93,25 +93,29 @@ func systrayOnReady(
 						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
-					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
+					logPath := filepath.Join(pl.Settings().TempDir, config.LogFile)
+					err := exec.CommandContext(context.Background(), openCmd, logPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
 						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
-					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.ConfigDir(pl), config.CfgFile)).Start()
+					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
+					err := exec.CommandContext(context.Background(), openCmd, configPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
-					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.DataDir(pl), config.MappingsDir)).Start()
+					mappingsPath := filepath.Join(helpers.DataDir(pl), config.MappingsDir)
+					err := exec.CommandContext(context.Background(), openCmd, mappingsPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
-					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.DataDir(pl), config.LaunchersDir)).Start()
+					launchersPath := filepath.Join(helpers.DataDir(pl), config.LaunchersDir)
+					err := exec.CommandContext(context.Background(), openCmd, launchersPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")
@@ -126,7 +130,7 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
-					err := exec.CommandContext(context.Background(), openCmd, utils.DataDir(pl)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, helpers.DataDir(pl)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")

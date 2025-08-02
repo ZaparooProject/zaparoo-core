@@ -57,7 +57,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			})
 			for _, v := range results.Systems {
 				systemDropdown.AddOption(v.Name, func() {
-					filterSystem = v.Id
+					filterSystem = v.ID
 				})
 			}
 		}

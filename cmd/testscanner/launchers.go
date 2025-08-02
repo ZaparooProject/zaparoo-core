@@ -8,7 +8,7 @@ import (
 )
 
 func launch(systemID string) func(*config.Instance, string) error {
-	return func(cfg *config.Instance, path string) error {
+	return func(_ *config.Instance, path string) error {
 		log.Info().Msgf("launching %s with path: %s", systemID, path)
 		return nil
 	}

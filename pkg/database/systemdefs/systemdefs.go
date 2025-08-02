@@ -42,9 +42,8 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 func GetSystem(id string) (*System, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
-	} else {
-		return nil, fmt.Errorf("unknown system: %s", id)
 	}
+	return nil, fmt.Errorf("unknown system: %s", id)
 }
 
 // LookupSystem case-insensitively looks up system ID definition including aliases.

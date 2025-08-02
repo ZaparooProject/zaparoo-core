@@ -25,6 +25,7 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -35,11 +36,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -48,14 +49,14 @@ var systrayIcon []byte
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
 
 func run() error {
 	if os.Geteuid() == 0 {
-		return fmt.Errorf("Zaparoo cannot be run as root")
+		return errors.New("Zaparoo cannot be run as root")
 	}
 
 	pl := &mac.Platform{}
@@ -95,7 +96,7 @@ func run() error {
 	flags.Post(cfg, pl)
 
 	var stopSvc func() error
-	if !utils.IsServiceRunning(cfg) {
+	if !helpers.IsServiceRunning(cfg) {
 		var err error
 		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
@@ -130,7 +131,7 @@ func run() error {
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
-			func() bool { return utils.IsServiceRunning(cfg) },
+			func() bool { return helpers.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 			"desktop",
 		)

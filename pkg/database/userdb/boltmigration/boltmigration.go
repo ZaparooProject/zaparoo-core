@@ -10,8 +10,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	bolt "go.etcd.io/bbolt"
 )
@@ -34,7 +34,7 @@ type Mapping struct {
 }
 
 func dbFile(pl platforms.Platform) string {
-	return filepath.Join(utils.DataDir(pl), "tapto.db")
+	return filepath.Join(helpers.DataDir(pl), "tapto.db")
 }
 
 func Exists(pl platforms.Platform) bool {

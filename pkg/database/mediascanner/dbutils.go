@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -25,7 +25,12 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	// ss.TagIDs = make(map[string]int)
 }
 
-func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string, path string) (int, int) {
+func AddMediaPath(
+	db database.MediaDBI,
+	ss *database.ScanState,
+	systemID string,
+	path string,
+) (titleIndex int, mediaIndex int) {
 	pf := GetPathFragments(path)
 
 	systemIndex := 0
@@ -45,7 +50,7 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 		systemIndex = foundSystemIndex
 	}
 
-	titleIndex := 0
+	titleIndex = 0
 	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
@@ -64,7 +69,7 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 		titleIndex = foundTitleIndex
 	}
 
-	mediaIndex := 0
+	mediaIndex = 0
 	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
@@ -293,7 +298,7 @@ func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
-	if utils.ReURI.MatchString(path) {
+	if helpers.ReURI.MatchString(path) {
 		f.Path = path
 	} else {
 		f.Path = filepath.Clean(path)
@@ -302,14 +307,14 @@ func GetPathFragments(path string) MediaPathFragments {
 	fileBase := filepath.Base(f.Path)
 
 	f.Ext = strings.ToLower(filepath.Ext(f.Path))
-	if utils.HasSpace(f.Ext) {
+	if helpers.HasSpace(f.Ext) {
 		f.Ext = ""
 	}
 
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
 	f.Title = getTitleFromFilename(f.FileName)
-	f.Slug = utils.SlugifyString(f.Title)
+	f.Slug = helpers.SlugifyString(f.Title)
 	f.Tags = getTagsFromFileName(f.FileName)
 
 	return f

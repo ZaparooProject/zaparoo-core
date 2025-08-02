@@ -19,7 +19,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -78,23 +78,22 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	}
 
 	pid := 0
-	if pidBytes, err := os.ReadFile(path); err == nil {
-		pid, err = strconv.Atoi(string(pidBytes))
+	pidBytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	pid, err = strconv.Atoi(string(pidBytes))
+	if err != nil {
+		return false, err
+	}
+
+	if !isProcessRunning(pid) {
+		// clean up stale file
+		err := os.Remove(path)
 		if err != nil {
 			return false, err
 		}
-
-		if !isProcessRunning(pid) {
-			// clean up stale file
-			err := os.Remove(path)
-			if err != nil {
-				return false, err
-			} else {
-				return false, nil
-			}
-		}
-	} else {
-		return false, err
+		return false, nil
 	}
 
 	proc, err := os.FindProcess(pid)
@@ -121,7 +120,7 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 // handleTimeout adds a background timer which quits the app once ended. It's
 // used to make sure there aren't hanging processes running in the background
 // if a core gets loaded while it's open.
-func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
+func handleTimeout(_ *tview.Application, timeout int) (*time.Timer, int) {
 	var to int
 	switch {
 	case timeout == 0:
@@ -141,7 +140,7 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 }
 
 func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {
-	var noticeArgs widgetModels.NoticeArgs
+	var noticeArgs widgetmodels.NoticeArgs
 
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -167,7 +166,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	view.SetWrap(true)
 	view.SetWordWrap(true)
 
-	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
+	view.SetDrawFunc(func(_ tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		y += h / 2
 		return x, y, w, h
 	})
@@ -276,7 +275,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return nil, err
 	}
 
-	var pickerArgs widgetModels.PickerArgs
+	var pickerArgs widgetmodels.PickerArgs
 	err = json.Unmarshal(args, &pickerArgs)
 	if err != nil {
 		return nil, err
@@ -289,7 +288,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	app := tview.NewApplication()
 	tui.SetTheme(&tview.Styles)
 
-	run := func(item widgetModels.PickerItem) {
+	run := func(item widgetmodels.PickerItem) {
 		log.Info().Msgf("running picker selection: %v", item)
 
 		zsrp := models.RunParams{
@@ -340,7 +339,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
 
-	list.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
+	list.SetDrawFunc(func(_ tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		longest := 2
 		for _, item := range pickerArgs.Items {
 			if len(item.Name) > longest {

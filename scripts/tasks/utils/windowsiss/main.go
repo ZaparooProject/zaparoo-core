@@ -25,7 +25,7 @@ func main() {
 	flag.Parse()
 
 	if *version == "" || *arch == "" {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: version and arch are required\n")
+		_, _ = fmt.Fprint(os.Stderr, "Error: version and arch are required\n")
 		os.Exit(1)
 	}
 

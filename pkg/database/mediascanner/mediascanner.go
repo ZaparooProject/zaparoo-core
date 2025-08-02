@@ -12,8 +12,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,7 +68,7 @@ func GetSystemPaths(
 		var folders []string
 		for _, l := range launchers {
 			for _, folder := range l.Folders {
-				if !utils.Contains(folders, folder) {
+				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
 				}
 			}
@@ -131,7 +131,7 @@ func (r *resultsStack) pop() {
 
 func (r *resultsStack) get() (*[]string, error) {
 	if len(r.results) == 0 {
-		return nil, fmt.Errorf("nothing on stack")
+		return nil, errors.New("nothing on stack")
 	}
 	return &r.results[len(r.results)-1], nil
 }
@@ -142,14 +142,14 @@ func (r *resultsStack) get() (*[]string, error) {
 func GetFiles(
 	cfg *config.Instance,
 	platform platforms.Platform,
-	systemId string,
+	systemID string,
 	path string,
 ) ([]string, error) {
 	var allResults []string
 	stack := newResultsStack()
 	visited := make(map[string]struct{})
 
-	system, err := systemdefs.GetSystem(systemId)
+	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,9 +216,9 @@ func GetFiles(
 			return err
 		}
 
-		if utils.IsZip(path) && platform.Settings().ZipsAsDirs {
+		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
-			zipFiles, err := utils.ListZip(path)
+			zipFiles, err := helpers.ListZip(path)
 			if err != nil {
 				// skip invalid zip files
 				log.Warn().Err(err).Msgf("error listing zip: %s", path)
@@ -227,11 +227,11 @@ func GetFiles(
 
 			for i := range zipFiles {
 				abs := filepath.Join(path, zipFiles[i])
-				if utils.MatchSystemFile(cfg, platform, system.ID, abs) {
+				if helpers.MatchSystemFile(cfg, platform, system.ID, abs) {
 					*results = append(*results, abs)
 				}
 			}
-		} else if utils.MatchSystemFile(cfg, platform, system.ID, path) {
+		} else if helpers.MatchSystemFile(cfg, platform, system.ID, path) {
 			// regular files
 			*results = append(*results, path)
 		}
@@ -264,7 +264,7 @@ func GetFiles(
 	}
 
 	if !realRoot.IsDir() {
-		return nil, fmt.Errorf("root is not a directory")
+		return nil, errors.New("root is not a directory")
 	}
 
 	err = filepath.WalkDir(realPath, scanner)
@@ -357,15 +357,15 @@ func NewNamesIndex(
 		scanned[s.ID] = false
 	}
 
-	sysPathIds := utils.AlphaMapKeys(systemPaths)
+	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
 	// update steps with true count
-	status.Total = len(sysPathIds) + 2
+	status.Total = len(sysPathIDs) + 2
 
-	for _, k := range sysPathIds {
-		systemId := k
+	for _, k := range sysPathIDs {
+		systemID := k
 		files := make([]platforms.ScanResult, 0)
 
-		status.SystemID = systemId
+		status.SystemID = systemID
 		status.Step++
 		update(status)
 
@@ -373,7 +373,7 @@ func NewNamesIndex(
 		for _, path := range systemPaths[k] {
 			pathFiles, err := GetFiles(cfg, platform, k, path)
 			if err != nil {
-				log.Error().Err(err).Msgf("error getting files for system: %s", systemId)
+				log.Error().Err(err).Msgf("error getting files for system: %s", systemID)
 				continue
 			}
 			for _, f := range pathFiles {
@@ -385,27 +385,27 @@ func NewNamesIndex(
 		// custom scan function if one exists
 		for _, l := range platform.Launchers(cfg) {
 			if l.SystemID == k && l.Scanner != nil {
-				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
+				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var err error
-				files, err = l.Scanner(cfg, systemId, files)
+				files, err = l.Scanner(cfg, systemID, files)
 				if err != nil {
-					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
+					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 					continue
 				}
 			}
 		}
 
 		if len(files) == 0 {
-			log.Debug().Msgf("no files found for system: %s", systemId)
+			log.Debug().Msgf("no files found for system: %s", systemID)
 			continue
 		}
 
 		status.Files += len(files)
-		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemId)
-		scanned[systemId] = true
+		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
+		scanned[systemID] = true
 
 		for _, p := range files {
-			AddMediaPath(db, &scanState, systemId, p.Path)
+			AddMediaPath(db, &scanState, systemID, p.Path)
 		}
 
 		FlushScanStateMaps(&scanState)
@@ -414,23 +414,23 @@ func NewNamesIndex(
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
 	for _, l := range platform.Launchers(cfg) {
-		systemId := l.SystemID
-		if !scanned[systemId] && l.Scanner != nil {
-			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
-			results, err := l.Scanner(cfg, systemId, []platforms.ScanResult{})
+		systemID := l.SystemID
+		if !scanned[systemID] && l.Scanner != nil {
+			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
+			results, err := l.Scanner(cfg, systemID, []platforms.ScanResult{})
 			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
+				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
 
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemId)
+			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemID)
 
 			status.Files += len(results)
-			scanned[systemId] = true
+			scanned[systemID] = true
 
 			if len(results) > 0 {
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
 			}
 			FlushScanStateMaps(&scanState)
@@ -459,10 +459,10 @@ func NewNamesIndex(
 			if len(results) > 0 {
 				status.Files += len(results)
 				scanned[s.ID] = true
-				systemId := s.ID
+				systemID := s.ID
 
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
 			}
 			FlushScanStateMaps(&scanState)

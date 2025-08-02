@@ -117,7 +117,10 @@ func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Han
 }
 
 // WebSocketRateLimitHandler wraps a WebSocket message handler with rate limiting
-func WebSocketRateLimitHandler(limiter *IPRateLimiter, handler func(*melody.Session, []byte)) func(*melody.Session, []byte) {
+func WebSocketRateLimitHandler(
+	limiter *IPRateLimiter,
+	handler func(*melody.Session, []byte),
+) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
 		host, _, err := net.SplitHostPort(session.Request.RemoteAddr)
 		if err != nil {

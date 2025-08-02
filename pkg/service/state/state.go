@@ -7,11 +7,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -48,7 +48,7 @@ func NewState(platform platforms.Platform) (*State, <-chan models.Notification) 
 func (s *State) SetActiveCard(card tokens.Token) {
 	s.mu.Lock()
 
-	if utils.TokensEqual(&s.activeToken, &card) {
+	if helpers.TokensEqual(&s.activeToken, &card) {
 		// ignore duplicate scans
 		s.mu.Unlock()
 		return

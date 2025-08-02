@@ -37,11 +37,11 @@ type AddMappingParams struct {
 }
 
 type DeleteMappingParams struct {
-	Id int `json:"id"`
+	ID int `json:"id"`
 }
 
 type UpdateMappingParams struct {
-	Id       int     `json:"id"`
+	ID       int     `json:"id"`
 	Label    *string `json:"label"`
 	Enabled  *bool   `json:"enabled"`
 	Type     *string `json:"type"`
@@ -69,7 +69,7 @@ type NewClientParams struct {
 }
 
 type DeleteClientParams struct {
-	Id string `json:"id"`
+	ID string `json:"id"`
 }
 
 type MediaStartedParams struct {

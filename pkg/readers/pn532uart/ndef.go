@@ -19,11 +19,12 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package pn532_uart
+package pn532uart
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/hsanjuan/go-ndef"
@@ -35,7 +36,7 @@ var (
 	NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
 )
 
-var ErrNoNdef = fmt.Errorf("no NDEF record found")
+var ErrNoNdef = errors.New("no NDEF record found")
 
 func ParseRecordText(bs []byte) (string, error) {
 	// sometimes there can be some read corruption and multiple copies of the

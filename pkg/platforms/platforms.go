@@ -9,7 +9,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 )
 
@@ -187,18 +187,18 @@ type Platform interface {
 	// TODO: can this just block instead of returning a delay?
 	ShowNotice(
 		*config.Instance,
-		widgetModels.NoticeArgs,
+		widgetmodels.NoticeArgs,
 	) (func() error, time.Duration, error)
 	// ShowLoader displays a string on-screen of the platform device alongside
 	// an animation indicating something is in progress. Returns a function
 	// that may be used to manually hide the loader and an optional delay to
 	// wait before hiding.
 	// TODO: does this need a close delay returned as well?
-	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
+	ShowLoader(*config.Instance, widgetmodels.NoticeArgs) (func() error, error)
 	// ShowPicker displays a list picker on-screen of the platform device with
 	// a list of Zap Link Cmds to choose from. The chosen action will be
 	// forwarded to the local API instance to be run. Returns a function that
 	// may be used to manually cancel and hide the picker.
 	// TODO: it appears to not return said function
-	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
+	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
 }

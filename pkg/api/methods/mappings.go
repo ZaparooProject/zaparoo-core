@@ -13,7 +13,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -63,11 +63,11 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 }
 
 func validateAddMappingParams(amr *models.AddMappingParams) error {
-	if !utils.Contains(userdb.AllowedMappingTypes, amr.Type) {
+	if !helpers.Contains(userdb.AllowedMappingTypes, amr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if !utils.Contains(userdb.AllowedMatchTypes, amr.Match) {
+	if !helpers.Contains(userdb.AllowedMatchTypes, amr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -142,7 +142,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	err = env.Database.UserDB.DeleteMapping(int64(params.Id))
+	err = env.Database.UserDB.DeleteMapping(int64(params.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +151,16 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 }
 
 func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
-	if umr.Label == nil && umr.Enabled == nil && umr.Type == nil && umr.Match == nil && umr.Pattern == nil && umr.Override == nil {
+	if umr.Label == nil && umr.Enabled == nil && umr.Type == nil &&
+		umr.Match == nil && umr.Pattern == nil && umr.Override == nil {
 		return errors.New("missing fields")
 	}
 
-	if umr.Type != nil && !utils.Contains(userdb.AllowedMappingTypes, *umr.Type) {
+	if umr.Type != nil && !helpers.Contains(userdb.AllowedMappingTypes, *umr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if umr.Match != nil && !utils.Contains(userdb.AllowedMatchTypes, *umr.Match) {
+	if umr.Match != nil && !helpers.Contains(userdb.AllowedMatchTypes, *umr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -206,7 +207,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.Id))
+	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +238,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		newMapping.Override = *params.Override
 	}
 
-	err = env.Database.UserDB.UpdateMapping(int64(params.Id), newMapping)
+	err = env.Database.UserDB.UpdateMapping(int64(params.ID), newMapping)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +249,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reload mappings request")
 
-	mapDir := filepath.Join(utils.DataDir(env.Platform), config.MappingsDir)
+	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)
 	err := env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")

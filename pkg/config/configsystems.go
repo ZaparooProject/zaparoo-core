@@ -18,11 +18,11 @@ func (c *Instance) SystemDefaults() []SystemsDefault {
 	return c.vals.Systems.Default
 }
 
-func (c *Instance) LookupSystemDefaults(systemId string) (SystemsDefault, bool) {
+func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, defaultSystem := range c.vals.Systems.Default {
-		if strings.EqualFold(defaultSystem.System, systemId) {
+		if strings.EqualFold(defaultSystem.System, systemID) {
 			return defaultSystem, true
 		}
 	}

@@ -31,7 +31,7 @@ func HandleSystems(env requests.RequestEnv) (any, error) {
 		}
 
 		sr := models.System{
-			Id: system.ID,
+			ID: system.ID,
 		}
 
 		sm, err := assets.GetSystemMetadata(id)

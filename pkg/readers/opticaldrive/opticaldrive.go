@@ -1,4 +1,4 @@
-package optical_drive
+package opticaldrive
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,7 +37,7 @@ func NewReader(cfg *config.Instance) *FileReader {
 	}
 }
 
-func (r *FileReader) Ids() []string {
+func (*FileReader) IDs() []string {
 	return []string{"optical_drive"}
 }
 
@@ -46,7 +46,7 @@ func (r *FileReader) Open(
 	iq chan<- readers.Scan,
 ) error {
 	log.Info().Msgf("opening optical drive reader: %s", device.ConnectionString())
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -94,35 +94,33 @@ func (r *FileReader) Open(
 		for r.polling {
 			time.Sleep(1 * time.Second)
 
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
 			cancel()
 			if err != nil {
-				if token != nil {
-					log.Debug().Err(err).Msg("error identifying optical media, removing token")
-					token = nil
-					iq <- readers.Scan{
-						Source: r.device.ConnectionString(),
-						Token:  nil,
-					}
-				} else {
+				if token == nil {
 					continue
+				}
+				log.Debug().Err(err).Msg("error identifying optical media, removing token")
+				token = nil
+				iq <- readers.Scan{
+					Source: r.device.ConnectionString(),
+					Token:  nil,
 				}
 			}
 
-				ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 			rawLabel, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "LABEL", r.path).Output()
 			cancel()
 			if err != nil {
-				if token != nil {
-					log.Debug().Err(err).Msg("error identifying optical media, removing token")
-					token = nil
-					iq <- readers.Scan{
-						Source: r.device.ConnectionString(),
-						Token:  nil,
-					}
-				} else {
+				if token == nil {
 					continue
+				}
+				log.Debug().Err(err).Msg("error identifying optical media, removing token")
+				token = nil
+				iq <- readers.Scan{
+					Source: r.device.ConnectionString(),
+					Token:  nil,
 				}
 			}
 
@@ -168,7 +166,7 @@ func (r *FileReader) Close() error {
 	return nil
 }
 
-func (r *FileReader) Detect(_ []string) string {
+func (*FileReader) Detect(_ []string) string {
 	return ""
 }
 
@@ -184,10 +182,10 @@ func (r *FileReader) Info() string {
 	return r.path
 }
 
-func (r *FileReader) Write(_ string) (*tokens.Token, error) {
+func (*FileReader) Write(_ string) (*tokens.Token, error) {
 	return nil, nil
 }
 
-func (r *FileReader) CancelWrite() {
+func (*FileReader) CancelWrite() {
 	// no-op, writing not supported
 }

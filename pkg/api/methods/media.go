@@ -162,17 +162,16 @@ func generateMediaDB(
 			})
 			statusInstance.clear()
 			return
-		} else {
-			log.Info().Msg("finished generating media db successfully")
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:     true,
-				Indexing:   false,
-				TotalFiles: &total,
-			})
-			statusInstance.clear()
-			log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
-			return
 		}
+		log.Info().Msg("finished generating media db successfully")
+		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			Exists:     true,
+			Indexing:   false,
+			TotalFiles: &total,
+		})
+		statusInstance.clear()
+		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
+		return
 	}()
 
 	return nil
@@ -272,7 +271,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 		}
 
 		resultSystem := models.System{
-			Id: system.ID,
+			ID: system.ID,
 		}
 
 		metadata, err := assets.GetSystemMetadata(system.ID)
@@ -317,7 +316,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
-			SystemID:   system.Id,
+			SystemID:   system.ID,
 			SystemName: system.Name,
 			Name:       activeMedia.Name,
 			Path:       env.Platform.NormalizePath(env.Config, activeMedia.Path),

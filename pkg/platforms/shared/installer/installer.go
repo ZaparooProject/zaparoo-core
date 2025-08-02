@@ -14,9 +14,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -61,7 +61,7 @@ func namesFromURL(rawURL string, defaultName string) mediaNames {
 
 func showPreNotice(cfg *config.Instance, pl platforms.Platform, text string) error {
 	if text != "" {
-		hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
+		hide, delay, err := pl.ShowNotice(cfg, widgetmodels.NoticeArgs{
 			Text: text,
 		})
 		if err != nil {
@@ -94,7 +94,7 @@ func findInstallDir(
 
 	fallbackDir := cfg.DefaultMediaDir()
 	if fallbackDir == "" {
-		fallbackDir = filepath.Join(utils.DataDir(pl), config.MediaDir)
+		fallbackDir = filepath.Join(helpers.DataDir(pl), config.MediaDir)
 	}
 	fallbackDir = filepath.Join(fallbackDir, system.ID)
 
@@ -164,7 +164,7 @@ func InstallRemoteFile(
 	itemDisplay := names.display
 	loadingText := fmt.Sprintf("Downloading %s...", itemDisplay)
 
-	hideLoader, err := pl.ShowLoader(cfg, widgetModels.NoticeArgs{
+	hideLoader, err := pl.ShowLoader(cfg, widgetmodels.NoticeArgs{
 		Text: loadingText,
 	})
 	if err != nil {

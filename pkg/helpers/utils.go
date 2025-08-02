@@ -18,13 +18,14 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package utils
+package helpers
 
 import (
 	"archive/zip"
 	"bufio"
 	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -182,11 +183,10 @@ func ListZip(path string) ([]string, error) {
 func RandomElem[T any](xs []T) (T, error) {
 	var item T
 	if len(xs) == 0 {
-		return item, fmt.Errorf("empty slice")
-	} else {
-		item = xs[r.Intn(len(xs))]
-		return item, nil
+		return item, errors.New("empty slice")
 	}
+	item = xs[r.Intn(len(xs))]
+	return item, nil
 }
 
 func CopyFile(sourcePath, destPath string) error {
@@ -256,7 +256,7 @@ func YesNoPrompt(label string, def bool) bool {
 var reSlug = regexp.MustCompile(`(\(.*\))|(\[.*])|[^a-z0-9A-Z]`)
 
 func SlugifyString(input string) string {
-	rep := reSlug.ReplaceAllStringFunc(input, func(m string) string {
+	rep := reSlug.ReplaceAllStringFunc(input, func(_ string) string {
 		return ""
 	})
 	return strings.ToLower(rep)

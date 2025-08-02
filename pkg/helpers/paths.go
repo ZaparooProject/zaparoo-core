@@ -1,4 +1,4 @@
-package utils
+package helpers
 
 import (
 	"errors"
@@ -89,20 +89,19 @@ func PathIsLauncher(
 	// finally, launcher's test func
 	if l.Test != nil {
 		return l.Test(cfg, lp)
-	} else {
-		return false
 	}
+	return false
 }
 
 // MatchSystemFile returns true if a given path is for a given system.
 func MatchSystemFile(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	systemId string,
+	systemID string,
 	path string,
 ) bool {
 	for _, l := range pl.Launchers(cfg) {
-		if l.SystemID == systemId {
+		if l.SystemID == systemID {
 			if PathIsLauncher(cfg, pl, l, path) {
 				return true
 			}
@@ -152,12 +151,24 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		return results, nil
 	}
 
-	lfs := m["libraryfolders"].(map[string]interface{})
+	lfs, ok := m["libraryfolders"].(map[string]any)
+	if !ok {
+		log.Error().Msg("libraryfolders is not a map")
+		return results, nil
+	}
 	for l, v := range lfs {
 		log.Debug().Msgf("library id: %s", l)
-		ls := v.(map[string]interface{})
+		ls, ok := v.(map[string]any)
+		if !ok {
+			log.Error().Msgf("library %s is not a map", l)
+			continue
+		}
 
-		libraryPath := ls["path"].(string)
+		libraryPath, ok := ls["path"].(string)
+		if !ok {
+			log.Error().Msgf("library %s path is not a string", l)
+			continue
+		}
 		steamApps, err := os.ReadDir(filepath.Join(libraryPath, "steamapps"))
 		if err != nil {
 			log.Error().Err(err).Msg("error listing steamapps folder")
@@ -187,11 +198,27 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 				return results, nil
 			}
 
-			appState := am["AppState"].(map[string]interface{})
+			appState, ok := am["AppState"].(map[string]any)
+			if !ok {
+				log.Error().Msgf("AppState is not a map in manifest: %s", mf)
+				continue
+			}
+
+			appID, ok := appState["appid"].(string)
+			if !ok {
+				log.Error().Msgf("appid is not a string in manifest: %s", mf)
+				continue
+			}
+
+			appName, ok := appState["name"].(string)
+			if !ok {
+				log.Error().Msgf("name is not a string in manifest: %s", mf)
+				continue
+			}
 
 			results = append(results, platforms.ScanResult{
-				Path: "steam://" + appState["appid"].(string) + "/" + appState["name"].(string),
-				Name: appState["name"].(string),
+				Path: "steam://" + appID + "/" + appName,
+				Name: appName,
 			})
 		}
 	}
@@ -292,31 +319,28 @@ func HasUserDir() (string, bool) {
 	parent := filepath.Dir(exeDir)
 	userDir := filepath.Join(parent, config.UserDir)
 
-	if info, err := os.Stat(userDir); err == nil {
-		if !info.IsDir() {
-			return "", false
-		} else {
-			return userDir, true
-		}
-	} else {
+	info, err := os.Stat(userDir)
+	if err != nil {
 		return "", false
 	}
+	if !info.IsDir() {
+		return "", false
+	}
+	return userDir, true
 }
 
 func ConfigDir(pl platforms.Platform) string {
 	if v, ok := HasUserDir(); ok {
 		return v
-	} else {
-		return pl.Settings().ConfigDir
 	}
+	return pl.Settings().ConfigDir
 }
 
 func DataDir(pl platforms.Platform) string {
 	if v, ok := HasUserDir(); ok {
 		return v
-	} else {
-		return pl.Settings().DataDir
 	}
+	return pl.Settings().DataDir
 }
 
 var ReURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)

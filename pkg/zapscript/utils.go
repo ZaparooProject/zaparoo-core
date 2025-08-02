@@ -2,6 +2,7 @@ package zapscript
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -48,7 +49,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	execStr := env.Cmd.Args[0]
 
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
 	} else if !env.Cfg.IsExecuteAllowed(execStr) {
 		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
 	}
@@ -64,12 +65,12 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		switch {
 		case r == '"':
 			quoted = !quoted
-			sb.WriteRune(r)
+			_, _ = sb.WriteRune(r)
 		case !quoted && r == ' ':
 			tokenArgs = append(tokenArgs, sb.String())
 			sb.Reset()
 		default:
-			sb.WriteRune(r)
+			_, _ = sb.WriteRune(r)
 		}
 	}
 	if sb.Len() > 0 {
@@ -77,7 +78,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	if len(tokenArgs) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("execute command is empty")
+		return platforms.CmdResult{}, errors.New("execute command is empty")
 	}
 
 	cmd := tokenArgs[0]

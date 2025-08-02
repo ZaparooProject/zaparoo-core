@@ -2,6 +2,7 @@ package zapscript
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -179,7 +180,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 
 func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 	if path == "" {
-		return nil, fmt.Errorf("no playlist path specified")
+		return nil, errors.New("no playlist path specified")
 	}
 
 	if _, err := os.Stat(path); err != nil {
@@ -226,7 +227,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, ErrRequiredArgs
 	}
 
-	if utils.MaybeJSON([]byte(env.Cmd.Args[0])) {
+	if helpers.MaybeJSON([]byte(env.Cmd.Args[0])) {
 		var plsArg ArgPlaylist
 		if err := json.Unmarshal([]byte(env.Cmd.Args[0]), &plsArg); err != nil {
 			return nil, fmt.Errorf("invalid playlist json: %w", err)
@@ -331,7 +332,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Index = env.Playlist.Active.Index
 	}
 
-	items := make([]widgetModels.PickerItem, 0, len(pls.Items))
+	items := make([]widgetmodels.PickerItem, 0, len(pls.Items))
 	for i, m := range pls.Items {
 		var name string
 
@@ -353,7 +354,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "||**playlist.play"
 
-		items = append(items, widgetModels.PickerItem{
+		items = append(items, widgetmodels.PickerItem{
 			Name:      name,
 			ZapScript: zapscript,
 		})
@@ -365,7 +366,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,
-		}, pl.ShowPicker(env.Cfg, widgetModels.PickerArgs{
+		}, pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
 			Title:    pls.Name,
 			Items:    items,
 			Selected: pls.Index,
@@ -374,7 +375,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Next(*env.Playlist.Active)
@@ -388,7 +389,7 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Previous(*env.Playlist.Active)
@@ -402,7 +403,7 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 
 func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	if len(env.Cmd.Args) == 0 {
@@ -432,7 +433,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	env.Playlist.Queue <- nil
@@ -445,7 +446,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Pause(*env.Playlist.Active)

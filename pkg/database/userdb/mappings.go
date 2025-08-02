@@ -1,13 +1,14 @@
 package userdb
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 )
 
 const (
@@ -41,11 +42,11 @@ func NormalizeID(uid string) string {
 }
 
 func (db *UserDB) AddMapping(m database.Mapping) error {
-	if !utils.Contains(AllowedMappingTypes, m.Type) {
+	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
 
-	if !utils.Contains(AllowedMatchTypes, m.Match) {
+	if !helpers.Contains(AllowedMatchTypes, m.Match) {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
@@ -54,7 +55,7 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 	}
 
 	if m.Pattern == "" {
-		return fmt.Errorf("missing pattern")
+		return errors.New("missing pattern")
 	}
 
 	if m.Match == MatchTypeRegex {
@@ -78,11 +79,11 @@ func (db *UserDB) DeleteMapping(id int64) error {
 }
 
 func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
-	if !utils.Contains(AllowedMappingTypes, m.Type) {
+	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
 
-	if !utils.Contains(AllowedMatchTypes, m.Match) {
+	if !helpers.Contains(AllowedMatchTypes, m.Match) {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
@@ -91,7 +92,7 @@ func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
 	}
 
 	if m.Pattern == "" {
-		return fmt.Errorf("missing pattern")
+		return errors.New("missing pattern")
 	}
 
 	if m.Match == MatchTypeRegex {

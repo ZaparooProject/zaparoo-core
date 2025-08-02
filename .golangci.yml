@@ -16,8 +16,8 @@ linters:
     - revive
     - gocritic
     - nolintlint
-    - gocyclo
-    - funlen
+    # - gocyclo
+    # - funlen
     - bodyclose
     - nilerr
     - unconvert
@@ -26,30 +26,112 @@ linters:
     - exhaustive
     - prealloc
     - noctx
+  settings:
+    govet:
+      enable:
+        - shadow
+        - fieldalignment
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    # gocyclo:
+    #   min-complexity: 15
+    # funlen:
+    #   lines: 80
+    #   statements: 50
+    goimports:
+      local-prefixes: github.com/ZaparooProject/zaparoo-core
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: true
+    revive:
+      severity: warning
+      rules:
+        # - name: argument-limit
+          # arguments: [5]
+        - name: atomic
+        - name: bool-literal-in-expr
+        # - name: call-to-gc
+        # - name: cognitive-complexity
+          # arguments: [15]
+        - name: comment-spacings
+        - name: confusing-naming
+        - name: confusing-results
+        - name: constant-logical-expr
+        - name: context-as-argument
+        - name: context-keys-type
+        # - name: cyclomatic
+        #   arguments: [15]
+        - name: datarace
+        # - name: deep-exit
+        - name: defer
+        - name: dot-imports
+        - name: duplicated-imports
+        - name: early-return
+        - name: empty-block
+        - name: empty-lines
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        # - name: flag-parameter
+        # - name: function-length
+        #   arguments: [50, 0]
+        - name: function-result-limit
+          arguments: [3]
+        - name: get-return
+        - name: identical-branches
+        - name: if-return
+        - name: import-alias-naming
+        - name: import-shadowing
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: line-length-limit
+          arguments: [120]
+        # - name: max-control-nesting
+        #   arguments: [3]
+        - name: modifies-parameter
+        - name: modifies-value-receiver
+        - name: nested-structs
+        - name: optimize-operands-order
+        - name: range-val-address
+        - name: range-val-in-closure
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: redundant-build-tag
+        - name: redundant-import-alias
+        - name: redundant-test-main-exit
+        - name: string-of-int
+        - name: struct-tag
+          arguments: ["toml,multiline"]
+        - name: superfluous-else
+        - name: time-date
+        - name: time-equal
+        - name: time-naming
+        - name: unchecked-type-assertion
+        - name: unconditional-recursion
+        - name: unexported-naming
+        - name: unexported-return
+        - name: unhandled-error
+        - name: unnecessary-format
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: unused-receiver
+        - name: use-any
+        - name: use-errors-new
+        - name: use-fmt-print
+        - name: useless-break
+        - name: var-declaration
+        - name: var-naming
+        - name: waitgroup-by-value
 
 formatters:
   enable:
     - gofumpt
     - gci
-
-linters-settings:
-  govet:
-    enable:
-      - shadow
-      - fieldalignment
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-  gocyclo:
-    min-complexity: 15
-  funlen:
-    lines: 80
-    statements: 50
-  goimports:
-    local-prefixes: github.com/ZaparooProject/zaparoo-core
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: true
+  

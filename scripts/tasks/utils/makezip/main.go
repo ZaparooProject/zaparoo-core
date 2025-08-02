@@ -66,7 +66,7 @@ func downloadDoc(platformID, toDir string) error {
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fmt.Printf("error closing response body: %v\n", err)
+			_, _ = fmt.Printf("error closing response body: %v\n", err)
 		}
 	}()
 
@@ -85,7 +85,7 @@ func downloadDoc(platformID, toDir string) error {
 
 func main() {
 	if len(os.Args) < 5 {
-		fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <zip_name>")
+		_, _ = fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <zip_name>")
 		os.Exit(1)
 	}
 
@@ -99,7 +99,7 @@ func main() {
 	}
 
 	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
-		fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
+		_, _ = fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
 		os.Exit(1)
 	}
 
@@ -107,19 +107,19 @@ func main() {
 	if _, err := os.Stat(licensePath); os.IsNotExist(err) {
 		input, err := os.ReadFile("LICENSE")
 		if err != nil {
-			fmt.Printf("Error reading LICENSE file: %v\n", err)
+			_, _ = fmt.Printf("Error reading LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
 		err = os.WriteFile(licensePath, input, 0o644)
 		if err != nil {
-			fmt.Printf("Error copying LICENSE file: %v\n", err)
+			_, _ = fmt.Printf("Error copying LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	appPath := filepath.Join(buildDir, appBin)
 	if _, err := os.Stat(appPath); os.IsNotExist(err) {
-		fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
+		_, _ = fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
 		os.Exit(1)
 	}
 
@@ -129,13 +129,13 @@ func main() {
 	readmePath := filepath.Join(buildDir, "README.txt")
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
 		if err := downloadDoc(platform, buildDir); err != nil {
-			fmt.Printf("Error downloading documentation: %v\n", err)
+			_, _ = fmt.Printf("Error downloading documentation: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	if err := createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir); err != nil {
-		fmt.Printf("Error creating zip: %v\n", err)
+		_, _ = fmt.Printf("Error creating zip: %v\n", err)
 		os.Exit(1)
 	}
 }

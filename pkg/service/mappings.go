@@ -33,7 +33,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func checkMappingUid(m database.Mapping, t tokens.Token) bool {
+func checkMappingUID(m database.Mapping, t tokens.Token) bool {
 	uid := userdb.NormalizeID(t.UID)
 	pattern := userdb.NormalizeID(m.Pattern)
 
@@ -152,7 +152,7 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 	for _, m := range ms {
 		switch m.Type {
 		case userdb.MappingTypeID:
-			if checkMappingUid(m, token) {
+			if checkMappingUID(m, token) {
 				log.Info().Msg("launching with db/cfg id match override")
 				return m.Override, true
 			}

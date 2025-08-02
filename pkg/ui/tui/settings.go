@@ -200,13 +200,14 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	exitDelay := cfg.ReadersScan().ExitDelay
 
 	scanMenu := tview.NewForm()
-	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, optionIndex int) {
+	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, _ int) {
 		cfg.SetScanMode(strings.ToLower(option))
 	}).
-		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
-			delay, _ := strconv.ParseFloat(value, 32)
-			cfg.SetScanExitDelay(float32(delay))
-		}).
+		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2,
+			tview.InputFieldInteger, func(value string) {
+				delay, _ := strconv.ParseFloat(value, 32)
+				cfg.SetScanExitDelay(float32(delay))
+			}).
 		AddDropDown("Ignore systems", allSystems, 0, func(option string, optionIndex int) {
 			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {

@@ -1,4 +1,4 @@
-package simple_serial
+package simpleserial
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
@@ -30,7 +30,7 @@ func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	}
 }
 
-func (r *SimpleSerialReader) Ids() []string {
+func (*SimpleSerialReader) IDs() []string {
 	return []string{"simple_serial"}
 }
 
@@ -85,7 +85,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 }
 
 func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -140,7 +140,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 						continue
 					}
 
-					if t != nil && !utils.TokensEqual(t, r.lastToken) {
+					if t != nil && !helpers.TokensEqual(t, r.lastToken) {
 						iq <- readers.Scan{
 							Source: r.device.ConnectionString(),
 							Token:  t,
@@ -179,7 +179,7 @@ func (r *SimpleSerialReader) Close() error {
 	return nil
 }
 
-func (r *SimpleSerialReader) Detect(connected []string) string {
+func (*SimpleSerialReader) Detect(_ []string) string {
 	return ""
 }
 
@@ -195,10 +195,10 @@ func (r *SimpleSerialReader) Info() string {
 	return r.path
 }
 
-func (r *SimpleSerialReader) Write(text string) (*tokens.Token, error) {
+func (*SimpleSerialReader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *SimpleSerialReader) CancelWrite() {
+func (*SimpleSerialReader) CancelWrite() {
 	// no-op, writing not supported
 }

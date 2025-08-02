@@ -1,4 +1,4 @@
-package utils
+package helpers
 
 import (
 	"context"
@@ -85,7 +85,7 @@ func ParseCustomLaunchers(
 				// until user stops them, not be killed by timeout
 				// TODO: consider storing this context to enable programmatic game termination/quit functionality
 				ctx := context.Background()
-				
+
 				if runtime.GOOS == "windows" {
 					cmd := exec.CommandContext(ctx, "cmd", "/c", output)
 					err = cmd.Start()

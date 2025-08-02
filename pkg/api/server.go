@@ -104,7 +104,7 @@ func (m *MethodMap) AddMethod(
 	handler func(requests.RequestEnv) (any, error),
 ) error {
 	if name == "" {
-		return fmt.Errorf("method name cannot be empty")
+		return errors.New("method name cannot be empty")
 	} else if !isValidMethodName(name) {
 		return fmt.Errorf("method name contains invalid characters: %s", name)
 	} else if _, exists := m.GetMethod(name); exists {
@@ -119,12 +119,16 @@ func (m *MethodMap) GetMethod(name string) (func(requests.RequestEnv) (any, erro
 	if !ok {
 		return nil, false
 	}
-	return fn.(func(requests.RequestEnv) (any, error)), true
+	method, ok := fn.(func(requests.RequestEnv) (any, error))
+	if !ok {
+		return nil, false
+	}
+	return method, true
 }
 
 func (m *MethodMap) ListMethods() []string {
 	var ms []string
-	m.Range(func(key, value any) bool {
+	m.Range(func(key, _ any) bool {
 		ms = append(ms, key.(string))
 		return true
 	})
@@ -227,13 +231,13 @@ func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
 }
 
 // sendWSError sends a JSON-RPC error object response to the client.
-func sendWSError(session *melody.Session, id uuid.UUID, error models.ErrorObject) error {
-	log.Debug().Int("code", error.Code).Str("message", error.Message).Msg("sending error")
+func sendWSError(session *melody.Session, id uuid.UUID, errObj models.ErrorObject) error {
+	log.Debug().Int("code", errObj.Code).Str("message", errObj.Message).Msg("sending error")
 
 	resp := models.ResponseErrorObject{
 		JSONRPC: "2.0",
 		ID:      id,
-		Error:   &error,
+		Error:   &errObj,
 	}
 
 	data, err := json.Marshal(resp)
@@ -263,11 +267,10 @@ func fsCustom404(root http.FileSystem) http.Handler {
 				}
 				http.ServeContent(w, r, "index.html", time.Now(), index)
 				return
-			} else {
-				log.Error().Err(err).Str("path", r.URL.Path).Msg("error opening file")
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
 			}
+			log.Error().Err(err).Str("path", r.URL.Path).Msg("error opening file")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		err = f.Close()
 		if err != nil {
@@ -291,13 +294,13 @@ func handleApp(w http.ResponseWriter, r *http.Request) {
 // broadcastNotifications consumes and broadcasts all incoming API
 // notifications to all connected clients.
 func broadcastNotifications(
-	state *state.State,
+	st *state.State,
 	session *melody.Melody,
 	notifications <-chan models.Notification,
 ) {
 	for {
 		select {
-		case <-state.GetContext().Done():
+		case <-st.GetContext().Done():
 			log.Debug().Msg("closing HTTP server via context cancellation")
 			return
 		case notif := <-notifications:
@@ -356,9 +359,8 @@ func processRequestObject(
 		resp, rpcError := handleRequest(methodMap, env, req)
 		if rpcError != nil {
 			return *req.ID, nil, rpcError
-		} else {
-			return *req.ID, resp, nil
 		}
+		return *req.ID, resp, nil
 	}
 
 	// otherwise try parse a response, which has an id field
@@ -384,7 +386,7 @@ func handleWSMessage(
 	methodMap *MethodMap,
 	platform platforms.Platform,
 	cfg *config.Instance,
-	state *state.State,
+	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 ) func(session *melody.Session, msg []byte) {
@@ -408,15 +410,15 @@ func handleWSMessage(
 			return
 		}
 
-		rawIp := strings.SplitN(session.Request.RemoteAddr, ":", 2)
-		clientIp := net.ParseIP(rawIp[0])
+		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
+		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
 			Platform:   platform,
 			Config:     cfg,
-			State:      state,
+			State:      st,
 			Database:   db,
 			TokenQueue: inTokenQueue,
-			IsLocal:    clientIp.IsLoopback(),
+			IsLocal:    clientIP.IsLoopback(),
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -438,7 +440,7 @@ func handlePostRequest(
 	methodMap *MethodMap,
 	platform platforms.Platform,
 	cfg *config.Instance,
-	state *state.State,
+	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 ) func(w http.ResponseWriter, r *http.Request) {
@@ -455,15 +457,15 @@ func handlePostRequest(
 			return
 		}
 
-		rawIp := strings.SplitN(r.RemoteAddr, ":", 2)
-		clientIp := net.ParseIP(rawIp[0])
+		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
+		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
 			Platform:   platform,
 			Config:     cfg,
-			State:      state,
+			State:      st,
 			Database:   db,
 			TokenQueue: inTokenQueue,
-			IsLocal:    clientIp.IsLoopback(),
+			IsLocal:    clientIP.IsLoopback(),
 		}
 
 		var respBody []byte
@@ -507,7 +509,7 @@ func handlePostRequest(
 func Start(
 	platform platforms.Platform,
 	cfg *config.Instance,
-	state *state.State,
+	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 	notifications <-chan models.Notification,
@@ -515,7 +517,7 @@ func Start(
 	r := chi.NewRouter()
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
-	rateLimiter.StartCleanup(state.GetContext())
+	rateLimiter.StartCleanup(st.GetContext())
 
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
@@ -545,7 +547,7 @@ func Start(
 		}
 		return false
 	}
-	go broadcastNotifications(state, session, notifications)
+	go broadcastNotifications(st, session, notifications)
 
 	r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -553,7 +555,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: latest")
 		}
 	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
+	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
 
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -561,7 +563,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
+	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -569,16 +571,16 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
+	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db),
 	))
 
-	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
-	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
-	r.Get("/run/*", methods.HandleRunRest(cfg, state, inTokenQueue))
+	r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
+	r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
+	r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
 
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
@@ -602,7 +604,7 @@ func Start(
 	}()
 
 	select {
-	case <-state.GetContext().Done():
+	case <-st.GetContext().Done():
 		log.Info().Msg("initiating HTTP server graceful shutdown")
 	case err := <-serverDone:
 		if err != nil {

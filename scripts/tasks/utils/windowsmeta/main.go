@@ -19,7 +19,7 @@ func main() {
 	flag.Parse()
 
 	if *version == "" {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: version is required\n")
+		_, _ = fmt.Fprint(os.Stderr, "Error: version is required\n")
 		os.Exit(1)
 	}
 

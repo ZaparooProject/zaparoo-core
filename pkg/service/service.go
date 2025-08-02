@@ -35,28 +35,28 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/pkg/groovyproxy"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
 func setupEnvironment(pl platforms.Platform) error {
-	if _, ok := utils.HasUserDir(); ok {
+	if _, ok := helpers.HasUserDir(); ok {
 		log.Info().Msg("using 'user' directory for storage")
 	}
 
 	log.Info().Msg("creating platform directories")
 	dirs := []string{
-		utils.ConfigDir(pl),
+		helpers.ConfigDir(pl),
 		pl.Settings().TempDir,
-		utils.DataDir(pl),
-		filepath.Join(utils.DataDir(pl), config.MappingsDir),
-		filepath.Join(utils.DataDir(pl), config.AssetsDir),
-		filepath.Join(utils.DataDir(pl), config.LaunchersDir),
-		filepath.Join(utils.DataDir(pl), config.MediaDir),
+		helpers.DataDir(pl),
+		filepath.Join(helpers.DataDir(pl), config.MappingsDir),
+		filepath.Join(helpers.DataDir(pl), config.AssetsDir),
+		filepath.Join(helpers.DataDir(pl), config.LaunchersDir),
+		filepath.Join(helpers.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0o755)
@@ -66,7 +66,7 @@ func setupEnvironment(pl platforms.Platform) error {
 	}
 
 	successSoundPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		config.SuccessSoundFilename,
 	)
@@ -84,7 +84,7 @@ func setupEnvironment(pl platforms.Platform) error {
 	}
 
 	failSoundPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		config.FailSoundFilename,
 	)
@@ -177,13 +177,13 @@ func Start(
 	}
 
 	log.Info().Msg("loading mapping files")
-	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), config.MappingsDir))
+	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 	}
 
 	log.Info().Msg("loading custom launchers")
-	err = cfg.LoadCustomLaunchers(filepath.Join(utils.DataDir(pl), config.LaunchersDir))
+	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}

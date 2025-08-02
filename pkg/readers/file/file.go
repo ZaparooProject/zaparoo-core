@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,12 +30,12 @@ func NewReader(cfg *config.Instance) *Reader {
 	}
 }
 
-func (r *Reader) Ids() []string {
+func (*Reader) IDs() []string {
 	return []string{"file"}
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -128,7 +128,7 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-func (r *Reader) Detect(connected []string) string {
+func (*Reader) Detect(_ []string) string {
 	return ""
 }
 
@@ -144,10 +144,10 @@ func (r *Reader) Info() string {
 	return r.path
 }
 
-func (r *Reader) Write(text string) (*tokens.Token, error) {
+func (*Reader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *Reader) CancelWrite() {
+func (*Reader) CancelWrite() {
 	// no-op, writing not supported
 }

@@ -44,11 +44,11 @@ func (c *Instance) IsLauncherFileAllowed(s string) bool {
 	return checkAllow(c.vals.Launchers.AllowFile, c.vals.Launchers.allowFileRe, s)
 }
 
-func (c *Instance) LookupLauncherDefaults(launcherId string) (LaunchersDefault, bool) {
+func (c *Instance) LookupLauncherDefaults(launcherID string) (LaunchersDefault, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, defaultLauncher := range c.vals.Launchers.Default {
-		if strings.EqualFold(defaultLauncher.Launcher, launcherId) {
+		if strings.EqualFold(defaultLauncher.Launcher, launcherID) {
 			return defaultLauncher, true
 		}
 	}
@@ -133,7 +133,6 @@ func (c *Instance) IndexRoots() []string {
 
 	if c.vals.Launchers.MediaDir != "" {
 		return append([]string{c.vals.Launchers.MediaDir}, c.vals.Launchers.IndexRoot...)
-	} else {
-		return c.vals.Launchers.IndexRoot
 	}
+	return c.vals.Launchers.IndexRoot
 }

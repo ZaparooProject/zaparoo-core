@@ -15,15 +15,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122_pcsc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532_uart"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532uart"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
@@ -33,20 +33,20 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDWindows
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
-		acr122_pcsc.NewAcr122Pcsc(cfg),
-		pn532_uart.NewReader(cfg),
+		simpleserial.NewReader(cfg),
+		acr122pcsc.NewAcr122Pcsc(cfg),
+		pn532uart.NewReader(cfg),
 	}
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (*Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
@@ -60,19 +60,19 @@ func (p *Platform) StartPost(
 	return nil
 }
 
-func (p *Platform) Stop() error {
+func (*Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(token tokens.Token) error {
+func (*Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
@@ -81,7 +81,7 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -90,23 +90,23 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
+func (*Platform) PlayAudio(_ string) error {
 	return nil
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -114,19 +114,19 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (*Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
@@ -353,7 +353,7 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("launchbox directory not found")
+	return "", errors.New("launchbox directory not found")
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
@@ -363,19 +363,19 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				cfg *config.Instance,
-				systemId string,
+				_ *config.Instance,
+				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
 				// TODO: detect this path from registry
 				root := "C:\\Program Files (x86)\\Steam\\steamapps"
-				appResults, err := utils.ScanSteamApps(root)
+				appResults, err := helpers.ScanSteamApps(root)
 				if err != nil {
 					return nil, err
 				}
 				return append(results, appResults...), nil
 			},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
@@ -392,7 +392,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "flashpoint://")
 				id = strings.TrimPrefix(id, "run/")
 				id = strings.SplitN(id, "/", 2)[0]
@@ -409,7 +409,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				return exec.CommandContext(ctx, "cmd", "/c", path).Start()
@@ -460,13 +460,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return results, err
 				}
 
-				var lbXml LaunchBox
-				err = xml.Unmarshal(data, &lbXml)
+				var lbXML LaunchBox
+				err = xml.Unmarshal(data, &lbXML)
 				if err != nil {
 					return results, err
 				}
 
-				for _, game := range lbXml.Games {
+				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
 						Path: "launchbox://" + game.ID + "/" + game.Title,
 						Name: game.Title,
@@ -495,26 +495,26 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	return nil, 0, nil
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	return nil, nil
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
 	return nil
 }

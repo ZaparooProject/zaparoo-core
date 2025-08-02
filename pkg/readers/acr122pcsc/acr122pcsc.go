@@ -1,4 +1,4 @@
-package acr122_pcsc
+package acr122pcsc
 
 import (
 	"bytes"
@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ebfe/scard"
 	"github.com/rs/zerolog/log"
 )
@@ -30,12 +30,12 @@ func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
 	}
 }
 
-func (r *ACR122PCSC) Ids() []string {
+func (*ACR122PCSC) IDs() []string {
 	return []string{"acr122_pcsc"}
 }
 
 func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -52,7 +52,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 		return err
 	}
 
-	if !utils.Contains(rls, device.Path) {
+	if !helpers.Contains(rls, device.Path) {
 		return errors.New("reader not found: " + device.Path)
 	}
 
@@ -74,7 +74,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				break
 			}
 
-			if !utils.Contains(rls, r.name) {
+			if !helpers.Contains(rls, r.name) {
 				log.Debug().Msgf("reader not found: %s", r.name)
 				r.polling = false
 				break
@@ -216,7 +216,7 @@ func (r *ACR122PCSC) Close() error {
 // functions on readers should actually return an error instead of ""
 var detectErrorOnce sync.Once
 
-func (r *ACR122PCSC) Detect(connected []string) string {
+func (*ACR122PCSC) Detect(connected []string) string {
 	ctx, err := scard.EstablishContext()
 	if err != nil {
 		return ""
@@ -238,7 +238,7 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 
 	acrs := make([]string, 0)
 	for _, r := range rs {
-		if strings.HasPrefix(r, "ACS ACR122") && !utils.Contains(connected, "acr122_pcsc:"+r) {
+		if strings.HasPrefix(r, "ACS ACR122") && !helpers.Contains(connected, "acr122_pcsc:"+r) {
 			acrs = append(acrs, r)
 		}
 	}
@@ -263,10 +263,10 @@ func (r *ACR122PCSC) Info() string {
 	return r.name
 }
 
-func (r *ACR122PCSC) Write(_ string) (*tokens.Token, error) {
+func (*ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *ACR122PCSC) CancelWrite() {
+func (*ACR122PCSC) CancelWrite() {
 	// no-op, writing not supported
 }

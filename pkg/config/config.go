@@ -100,7 +100,11 @@ func GetAuthCfg() Auth {
 	if val == nil {
 		return Auth{}
 	}
-	return val.(Auth)
+	auth, ok := val.(Auth)
+	if !ok {
+		return Auth{}
+	}
+	return auth
 }
 
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
@@ -253,9 +257,9 @@ func (c *Instance) Save() error {
 
 	// generate a device id if one doesn't exist
 	if c.vals.Service.DeviceID == "" {
-		newId := uuid.New().String()
-		c.vals.Service.DeviceID = newId
-		log.Info().Msgf("generated new device id: %s", newId)
+		newID := uuid.New().String()
+		c.vals.Service.DeviceID = newID
+		log.Info().Msgf("generated new device id: %s", newID)
 	}
 
 	tmpMappings := c.vals.Mappings

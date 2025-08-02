@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -35,7 +35,7 @@ func BuildExportLogModal(
 		'1', func() {
 			outcome := uploadLog(pl, exportPages, app)
 			resultModal := genericModal(outcome, "Upload Log File",
-				func(buttonIndex int, buttonLabel string) {
+				func(_ int, _ string) {
 					exportPages.RemovePage("upload")
 				}, true)
 			exportPages.AddPage("upload", resultModal, true, true)
@@ -49,7 +49,7 @@ func BuildExportLogModal(
 			func() {
 				outcome := copyLogToSd(pl, logDestPath, logDestName)
 				resultModal := genericModal(outcome, "Copy Log File",
-					func(buttonIndex int, buttonLabel string) {
+					func(_ int, _ string) {
 						exportPages.RemovePage("copy")
 					}, true)
 				exportPages.AddPage("copy", resultModal, true, true)
@@ -76,7 +76,7 @@ func BuildExportLogModal(
 func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	newPath := logDestPath
-	err := utils.CopyFile(logPath, newPath)
+	err := helpers.CopyFile(logPath, newPath)
 	outcome := ""
 	if err != nil {
 		outcome = fmt.Sprintf("Unable to copy log file to %s.", logDestName)
@@ -89,7 +89,7 @@ func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) 
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
+	modal := genericModal("Uploading log file...", "Log upload", func(_ int, _ string) {}, false)
 	pages.AddPage("temp_upload", modal, true, true)
 	app.SetFocus(modal)
 	app.ForceDraw()
@@ -102,7 +102,6 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	if err != nil {
 		log.Error().Err(err).Msgf("error uploading log file to termbin")
 		return "Error uploading log file."
-	} else {
-		return "Log file URL:\n\n" + strings.TrimSpace(string(out))
 	}
+	return "Log file URL:\n\n" + strings.TrimSpace(string(out))
 }

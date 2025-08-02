@@ -30,11 +30,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
@@ -74,8 +74,8 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdMisterScript: forwardCmd,
 	models.ZapScriptCmdMisterMGL:    forwardCmd,
 
-	models.ZapScriptCmdHTTPGet:  cmdHttpGet,
-	models.ZapScriptCmdHTTPPost: cmdHttpPost,
+	models.ZapScriptCmdHTTPGet:  cmdHTTPGet,
+	models.ZapScriptCmdHTTPPost: cmdHTTPPost,
 
 	models.ZapScriptCmdInputKeyboard: cmdKeyboard,
 	models.ZapScriptCmdInputGamepad:  cmdGamepad,
@@ -91,7 +91,7 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
 	models.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
 	models.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
-	models.ZapScriptCmdGet:      cmdHttpGet, // DEPRECATED
+	models.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
 }
 
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -199,7 +199,7 @@ func RunCommand(
 		case err != nil:
 			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", err)
 		case len(script.Cmds) == 0:
-			return platforms.CmdResult{}, fmt.Errorf("zap link is empty")
+			return platforms.CmdResult{}, errors.New("zap link is empty")
 		case len(script.Cmds) > 1:
 			log.Warn().Msgf("zap link has multiple commands, queueing rest")
 			// TODO: this could result in a recursive scan
@@ -230,7 +230,7 @@ func RunCommand(
 		cmd.AdvArgs[k] = output
 	}
 
-	if when, ok := cmd.AdvArgs["when"]; ok && !utils.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs["when"]; ok && !helpers.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,

@@ -12,7 +12,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Application) *tview.Form {
+func BuildTagsWriteMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	topTextView := tview.NewTextView().
 		SetLabel("").
 		SetText("Place card on reader, input your ZapScript and press ENTER to write. ESC to exit.")

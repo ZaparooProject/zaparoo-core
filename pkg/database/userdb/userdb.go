@@ -9,12 +9,12 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var ErrorNullSql = errors.New("UserDB is not connected")
+var ErrorNullSQL = errors.New("UserDB is not connected")
 
 type UserDB struct {
 	sql *sql.DB
@@ -51,37 +51,37 @@ func (db *UserDB) Open() error {
 }
 
 func (db *UserDB) GetDBPath() string {
-	return filepath.Join(utils.DataDir(db.pl), config.UserDbFile)
+	return filepath.Join(helpers.DataDir(db.pl), config.UserDbFile)
 }
 
-func (db *UserDB) UnsafeGetSqlDb() *sql.DB {
+func (db *UserDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql
 }
 
 func (db *UserDB) Truncate() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *UserDB) Allocate() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlAllocate(db.sql)
 }
 
 func (db *UserDB) MigrateUp() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlMigrateUp(db.sql)
 }
 
 func (db *UserDB) Vacuum() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
 }
@@ -100,15 +100,15 @@ func (db *UserDB) AddHistory(entry database.HistoryEntry) error {
 	return sqlAddHistory(db.ctx, db.sql, entry)
 }
 
-func (db *UserDB) GetHistory(lastId int) ([]database.HistoryEntry, error) {
-	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastId)
+func (db *UserDB) GetHistory(lastID int) ([]database.HistoryEntry, error) {
+	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastID)
 }
 
 func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
 	return sqlUpdateZapLinkHost(db.ctx, db.sql, host, zapscript)
 }
 
-func (db *UserDB) GetZapLinkHost(host string) (bool, bool, error) {
+func (db *UserDB) GetZapLinkHost(host string) (exists bool, allowed bool, err error) {
 	return sqlGetZapLinkHost(db.ctx, db.sql, host)
 }
 

@@ -24,7 +24,7 @@ var FailSound []byte
 var Systems embed.FS
 
 type SystemMetadata struct {
-	Id           string `json:"id"`
+	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Category     string `json:"category"`
 	ReleaseDate  string `json:"releaseDate"`

@@ -1,4 +1,4 @@
-package pn532_uart
+package pn532uart
 
 import (
 	"bytes"
@@ -102,12 +102,11 @@ func waitAck(port serial.Port) ([]byte, error) {
 
 		if bytes.Equal(ackBuf, ackFrame) {
 			return preAck, nil
-		} else {
-			preAck = append(preAck, ackBuf[0])
-			ackBuf = ackBuf[1:]
-			tries++
-			continue
 		}
+		preAck = append(preAck, ackBuf[0])
+		ackBuf = ackBuf[1:]
+		tries++
+		continue
 	}
 }
 
@@ -364,8 +363,8 @@ func GetGeneralStatus(port serial.Port) (GeneralStatus, error) {
 
 type Target struct {
 	Type     string
-	Uid      string
-	UidBytes []byte
+	UID      string
+	UIDBytes []byte
 }
 
 func InListPassiveTarget(port serial.Port) (*Target, error) {
@@ -401,8 +400,8 @@ func InListPassiveTarget(port serial.Port) (*Target, error) {
 
 	return &Target{
 		Type:     tagType,
-		Uid:      uidStr,
-		UidBytes: uid,
+		UID:      uidStr,
+		UIDBytes: uid,
 	}, nil
 }
 

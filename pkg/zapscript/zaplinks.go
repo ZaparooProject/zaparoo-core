@@ -16,9 +16,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
@@ -60,7 +60,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
 		return 0, err
@@ -133,11 +133,11 @@ func isZapLink(link string, db *database.Database) bool {
 	return true
 }
 
-func getRemoteZapScript(url string) ([]byte, error) {
+func getRemoteZapScript(urlStr string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -238,8 +238,8 @@ func isOfflineError(err error) bool {
 }
 
 func checkZapLink(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	_ *config.Instance,
+	_ platforms.Platform,
 	db *database.Database,
 	cmd parser.Command,
 ) (string, error) {
@@ -272,9 +272,8 @@ func checkZapLink(
 		log.Error().Err(err).Msgf("error updating zap link cache")
 	}
 
-	if !utils.MaybeJSON(body) {
+	if !helpers.MaybeJSON(body) {
 		return string(body), nil
-	} else {
-		return "", fmt.Errorf("zapscript JSON not supported")
 	}
+	return "", errors.New("zapscript JSON not supported")
 }

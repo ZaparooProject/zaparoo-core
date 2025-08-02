@@ -49,7 +49,7 @@ func Start(
 	}
 
 	// This address is replaced on the fly as messages are received for forwarding
-	var proxyAddr *net.Addr = nil
+	var proxyAddr *net.Addr
 	proxyAddrChan := make(chan net.Addr)
 	// Listen for Proxy Server Beacons to get proxyAddr for forwarding
 	go func() {

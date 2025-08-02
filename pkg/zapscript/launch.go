@@ -1,6 +1,7 @@
 package zapscript
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -8,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -78,7 +79,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", query)
 		}
 
-		file, err := utils.RandomElem(files)
+		file, err := helpers.RandomElem(files)
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}
@@ -93,17 +94,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// TODO: use parser for launch command
 	ps := strings.SplitN(query, "/", 2)
 	if len(ps) == 2 {
-		systemId, query := ps[0], ps[1]
+		systemID, query := ps[0], ps[1]
 
 		var systems []systemdefs.System
-		if strings.EqualFold(systemId, "all") {
+		if strings.EqualFold(systemID, "all") {
 			systems = systemdefs.AllSystems()
 		} else {
-			system, err := systemdefs.LookupSystem(systemId)
+			system, err := systemdefs.LookupSystem(systemID)
 			if err != nil {
 				return platforms.CmdResult{}, err
 			} else if system == nil {
-				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemId)
+				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
 			systems = []systemdefs.System{*system}
 		}
@@ -119,7 +120,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
-		game, err := utils.RandomElem(res)
+		game, err := helpers.RandomElem(res)
 		if err != nil {
 			return platforms.CmdResult{}, err
 		}
@@ -175,14 +176,13 @@ func getAltLauncher(
 		return func(args string) error {
 			return launcher.Launch(env.Cfg, args)
 		}, nil
-	} else {
-		return func(args string) error {
-			return pl.LaunchMedia(env.Cfg, args)
-		}, nil
 	}
+	return func(args string) error {
+		return pl.LaunchMedia(env.Cfg, args)
+	}, nil
 }
 
-func isValidRemoteFileUrl(s string) (func(installer.DownloaderArgs) error, bool) {
+func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool) {
 	u, err := url.Parse(s)
 	if err != nil {
 		return nil, false
@@ -212,7 +212,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	systemArg := env.Cmd.AdvArgs["system"]
-	if dler, ok := isValidRemoteFileUrl(path); ok && systemArg != "" {
+	if dler, ok := isValidRemoteFileURL(path); ok && systemArg != "" {
 		name := env.Cmd.AdvArgs["name"]
 		preNotice := env.Cmd.AdvArgs["pre_notice"]
 		installPath, err := installer.InstallRemoteFile(
@@ -243,7 +243,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	// match for uri style launch syntax
-	if utils.ReURI.MatchString(path) {
+	if helpers.ReURI.MatchString(path) {
 		log.Debug().Msgf("launching uri: %s", path)
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -257,9 +257,8 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, launch(p)
-	} else {
-		log.Debug().Err(err).Msgf("error finding file: %s", path)
 	}
+	log.Debug().Err(err).Msgf("error finding file: %s", path)
 
 	// attempt to parse the <system>/<path> format
 	ps := strings.SplitN(path, "/", 2)
@@ -286,7 +285,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	var folders []string
 	for _, l := range launchers {
 		for _, folder := range l.Folders {
-			if !utils.Contains(folders, folder) {
+			if !helpers.Contains(folders, folder) {
 				folders = append(folders, folder)
 			}
 		}
@@ -300,9 +299,8 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, launch(fp)
-		} else {
-			log.Debug().Err(err).Msgf("error finding system file: %s", lookupPath)
 		}
+		log.Debug().Err(err).Msgf("error finding system file: %s", lookupPath)
 	}
 
 	gamesdb := env.Database.MediaDB
@@ -313,27 +311,26 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			// treat as a search
 			// TODO: passthrough advanced args
 			return cmdSearch(pl, env)
-		} else {
-			log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
-			// treat as a direct title launch
-			res, err := gamesdb.SearchMediaPathExact(
-				[]systemdefs.System{*system},
-				lookupPath,
-			)
-
-			if err != nil {
-				return platforms.CmdResult{}, err
-			} else if len(res) == 0 {
-				return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
-			}
-
-			log.Info().Msgf("found result: %s", res[0].Path)
-
-			game := res[0]
-			return platforms.CmdResult{
-				MediaChanged: true,
-			}, launch(game.Path)
 		}
+		log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
+		// treat as a direct title launch
+		res, err := gamesdb.SearchMediaPathExact(
+			[]systemdefs.System{*system},
+			lookupPath,
+		)
+
+		if err != nil {
+			return platforms.CmdResult{}, err
+		} else if len(res) == 0 {
+			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
+		}
+
+		log.Info().Msgf("found result: %s", res[0].Path)
+
+		game := res[0]
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, launch(game.Path)
 	}
 
 	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", path)
@@ -384,7 +381,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	systemID, query := ps[0], ps[1]
 
 	if query == "" {
-		return platforms.CmdResult{}, fmt.Errorf("no query specified")
+		return platforms.CmdResult{}, errors.New("no query specified")
 	}
 
 	systems := make([]systemdefs.System, 0)

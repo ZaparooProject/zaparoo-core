@@ -135,7 +135,7 @@ func (sr *ScriptReader) peek() (rune, error) {
 		if err == nil {
 			r, _ := utf8.DecodeRune(b)
 			if r == utf8.RuneError {
-				return r, fmt.Errorf("rune error")
+				return r, errors.New("rune error")
 			}
 			return r, nil
 		}
@@ -147,9 +147,8 @@ func (sr *ScriptReader) skip() error {
 	_, err := sr.read()
 	if err != nil {
 		return err
-	} else {
-		return nil
 	}
+	return nil
 }
 
 func (sr *ScriptReader) checkEndOfCmd(ch rune) (bool, error) {
@@ -344,7 +343,7 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 	}
 
 	// validate json
-	var jsonObj interface{}
+	var jsonObj any
 	if err := json.Unmarshal([]byte(jsonStr), &jsonObj); err != nil {
 		return "", ErrInvalidJSON
 	}
@@ -916,11 +915,10 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 			currentPart = PostArgPart{}
 
 			continue
-		} else {
-			currentPart.Type = ArgPartTypeString
-			currentPart.Value += string(ch)
-			continue
 		}
+		currentPart.Type = ArgPartTypeString
+		currentPart.Value += string(ch)
+		continue
 	}
 
 	if currentPart.Type != ArgPartTypeUnknown {

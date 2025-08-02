@@ -12,12 +12,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var ErrorNullSql = errors.New("MediaDB is not connected")
+var ErrorNullSQL = errors.New("MediaDB is not connected")
 
 type MediaDB struct {
 	sql *sql.DB
@@ -54,7 +54,7 @@ func (db *MediaDB) Open() error {
 }
 
 func (db *MediaDB) GetDBPath() string {
-	return filepath.Join(utils.DataDir(db.pl), config.MediaDbFile)
+	return filepath.Join(helpers.DataDir(db.pl), config.MediaDbFile)
 }
 
 func (db *MediaDB) Exists() bool {
@@ -63,46 +63,46 @@ func (db *MediaDB) Exists() bool {
 
 func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlUpdateLastGenerated(db.ctx, db.sql)
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 	if db.sql == nil {
-		return time.Time{}, ErrorNullSql
+		return time.Time{}, ErrorNullSQL
 	}
 	return sqlGetLastGenerated(db.ctx, db.sql)
 }
 
-func (db *MediaDB) UnsafeGetSqlDb() *sql.DB {
+func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql
 }
 
 func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlAllocate(db.sql)
 }
 
 func (db *MediaDB) MigrateUp() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlMigrateUp(db.sql)
 }
 
 func (db *MediaDB) Vacuum() error {
 	if db.sql == nil {
-		return ErrorNullSql
+		return ErrorNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
 }
@@ -129,7 +129,7 @@ func (db *MediaDB) ReindexTables() error {
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
 func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
-		return make([]database.SearchResult, 0), ErrorNullSql
+		return make([]database.SearchResult, 0), ErrorNullSQL
 	}
 	return sqlSearchMediaPathExact(db.ctx, db.sql, systems, query)
 }
@@ -137,7 +137,7 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 // SearchMediaPathWords returns indexed names that include every word in a query (case-insensitive).
 func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
-		return make([]database.SearchResult, 0), ErrorNullSql
+		return make([]database.SearchResult, 0), ErrorNullSQL
 	}
 	qWords := strings.Fields(strings.ToLower(query))
 	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, qWords)
@@ -148,7 +148,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 	// query == path like with possible *
 	var nullResults []database.SearchResult
 	if db.sql == nil {
-		return nullResults, ErrorNullSql
+		return nullResults, ErrorNullSQL
 	}
 	var parts []string
 	for _, part := range strings.Split(query, "*") {
@@ -184,7 +184,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	// JBONE: return string map of Systems.Key, Systems.Indexed
 	var systems []string
 	if db.sql == nil {
-		return systems, ErrorNullSql
+		return systems, ErrorNullSQL
 	}
 	return sqlIndexedSystems(db.ctx, db.sql)
 }
@@ -193,10 +193,10 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
-		return result, ErrorNullSql
+		return result, ErrorNullSQL
 	}
 
-	system, err := utils.RandomElem(systems)
+	system, err := helpers.RandomElem(systems)
 	if err != nil {
 		return result, err
 	}

@@ -3,7 +3,7 @@
 package linuxinput
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/bendahl/uinput"
 )
 
@@ -11,9 +11,8 @@ import (
 func ToKeyboardCode(name string) (int, bool) {
 	if v, ok := keyboardmap.KeyboardMap[name]; ok {
 		return v, ok
-	} else {
-		return 0, false
 	}
+	return 0, false
 }
 
 var GamepadMap = map[string]int{
@@ -55,7 +54,6 @@ var GamepadMap = map[string]int{
 func ToGamepadCode(name string) (int, bool) {
 	if v, ok := GamepadMap[name]; ok {
 		return v, ok
-	} else {
-		return 0, false
 	}
+	return 0, false
 }

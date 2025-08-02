@@ -13,8 +13,8 @@ type Scan struct {
 
 type Reader interface {
 	// TODO: type? file, libnfc, etc.
-	// Ids returns the device string prefixes supported by this reader.
-	Ids() []string
+	// IDs returns the device string prefixes supported by this reader.
+	IDs() []string
 	// Open any necessary connections to the device and start polling.
 	// Takes a device connection string and a channel to send scanned tokens.
 	Open(config.ReadersConnect, chan<- Scan) error

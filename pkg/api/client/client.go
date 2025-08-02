@@ -60,7 +60,7 @@ func LocalClient(
 	method string,
 	params string,
 ) (string, error) {
-	localWebsocketUrl := url.URL{
+	localWebsocketURL := url.URL{
 		Scheme: "ws",
 		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
 		Path:   APIPath,
@@ -86,7 +86,7 @@ func LocalClient(
 		return "", ErrInvalidParams
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(localWebsocketUrl.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(localWebsocketURL.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -137,7 +137,7 @@ func LocalClient(
 	timer := time.NewTimer(config.APIRequestTimeout)
 	select {
 	case <-done:
-		break
+
 	case <-timer.C:
 		err := c.Close()
 		if err != nil {
@@ -241,7 +241,7 @@ func WaitNotification(
 
 	select {
 	case <-done:
-		break
+
 	case <-timerChan:
 		err := c.Close()
 		if err != nil {

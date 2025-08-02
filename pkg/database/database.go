@@ -112,7 +112,7 @@ type ScanState struct {
 
 type GenericDBI interface {
 	Open() error
-	UnsafeGetSqlDb() *sql.DB
+	UnsafeGetSQLDb() *sql.DB
 	Truncate() error
 	Allocate() error
 	MigrateUp() error
@@ -124,7 +124,7 @@ type GenericDBI interface {
 type UserDBI interface {
 	GenericDBI
 	AddHistory(entry HistoryEntry) error
-	GetHistory(lastId int) ([]HistoryEntry, error)
+	GetHistory(lastID int) ([]HistoryEntry, error)
 	AddMapping(m Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error
