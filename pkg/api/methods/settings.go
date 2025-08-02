@@ -3,12 +3,13 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"path/filepath"
 )
 
 func HandleSettings(env requests.RequestEnv) (any, error) {

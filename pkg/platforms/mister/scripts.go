@@ -5,12 +5,13 @@ package mister
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 
 	"github.com/rs/zerolog/log"
 )

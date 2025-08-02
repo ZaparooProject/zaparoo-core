@@ -24,6 +24,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
@@ -31,8 +34,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path"
 
 	_ "embed"
 )

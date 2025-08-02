@@ -7,15 +7,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gocarina/gocsv"
 	"github.com/rs/zerolog/log"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
 )
 
 type GithubContentsItem struct {

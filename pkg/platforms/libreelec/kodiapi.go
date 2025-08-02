@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type KodiAPIMethod string

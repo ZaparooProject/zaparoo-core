@@ -4,7 +4,6 @@ package utils
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog/log"

@@ -22,9 +22,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"os"
 	"path"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"

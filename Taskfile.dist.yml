@@ -67,3 +67,23 @@ tasks:
       - go test -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out
       - '{{if eq OS "windows"}}powershell rm {{else}}rm {{end}} coverage.out'
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  lint-fix:
+    desc: Run golangci-lint with auto-fixes
+    cmds:
+      - golangci-lint run --fix ./...
+
+  vulncheck:
+    desc: Run govulncheck for security vulnerabilities
+    cmds:
+      - govulncheck ./...
+
+  nilcheck:
+    desc: Run nilaway for nil-pointer analysis
+    cmds:
+      - nilaway ./...

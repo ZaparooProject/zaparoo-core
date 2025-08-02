@@ -24,6 +24,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -33,8 +36,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path"
 )
 
 func main() {

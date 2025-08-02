@@ -1,12 +1,13 @@
 package migrate
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
-	"gopkg.in/ini.v1"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
+	"gopkg.in/ini.v1"
 )
 
 func IniToToml(iniPath string) (config.Values, error) {
@@ -106,16 +107,16 @@ func IniToToml(iniPath string) (config.Values, error) {
 	}
 
 	// api - port
-	port, err := strconv.Atoi(iniVals.Api.Port)
+	port, err := strconv.Atoi(iniVals.API.Port)
 	if err == nil {
-		if port != vals.Service.ApiPort {
-			vals.Service.ApiPort = port
+		if port != vals.Service.APIPort {
+			vals.Service.APIPort = port
 		}
 	}
 
 	// api - allow launch
-	vals.Service.AllowRun = iniVals.Api.AllowLaunch
-	for _, v := range iniVals.Api.AllowLaunch {
+	vals.Service.AllowRun = iniVals.API.AllowLaunch
+	for _, v := range iniVals.API.AllowLaunch {
 		s := "^" + v + "$"
 		vals.Service.AllowRun = append(vals.Service.AllowRun, s)
 	}

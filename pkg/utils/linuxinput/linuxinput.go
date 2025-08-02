@@ -1,9 +1,10 @@
 package linuxinput
 
 import (
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 	"github.com/bendahl/uinput"
-	"time"
 )
 
 const (

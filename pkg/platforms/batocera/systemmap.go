@@ -2,8 +2,9 @@ package batocera
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 )
 
 var SystemMap = map[string]string{

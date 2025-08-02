@@ -21,7 +21,7 @@ var (
 	ErrRequestCancelled = errors.New("request cancelled")
 )
 
-const ApiPath = "/api/v0.1"
+const APIPath = "/api/v0.1"
 
 // DisableZapScript disables the service running any processed ZapScript from
 // tokens, and returns a function to re-enable it.
@@ -63,8 +63,8 @@ func LocalClient(
 ) (string, error) {
 	localWebsocketUrl := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   ApiPath,
+		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
 	}
 
 	id, err := uuid.NewUUID()
@@ -134,7 +134,7 @@ func LocalClient(
 		return "", err
 	}
 
-	timer := time.NewTimer(config.ApiRequestTimeout)
+	timer := time.NewTimer(config.APIRequestTimeout)
 	select {
 	case <-done:
 		break
@@ -177,8 +177,8 @@ func WaitNotification(
 ) (string, error) {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   ApiPath,
+		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
 	}
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
@@ -231,7 +231,7 @@ func WaitNotification(
 
 	var timerChan <-chan time.Time
 	if timeout == 0 {
-		timer := time.NewTimer(config.ApiRequestTimeout)
+		timer := time.NewTimer(config.APIRequestTimeout)
 		timerChan = timer.C
 	} else if timeout > 0 {
 		timer := time.NewTimer(timeout)

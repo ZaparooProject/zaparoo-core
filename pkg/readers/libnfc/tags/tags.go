@@ -26,6 +26,7 @@ package tags
 import (
 	"encoding/hex"
 	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/clausecker/nfc/v2"

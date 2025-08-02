@@ -13,7 +13,7 @@ const (
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"
 	UserDir              = "user"
-	ApiRequestTimeout    = 30 * time.Second
+	APIRequestTimeout    = 30 * time.Second
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
 	AssetsDir            = "assets"

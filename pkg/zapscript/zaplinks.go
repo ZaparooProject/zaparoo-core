@@ -4,10 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +12,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -57,7 +58,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
-	req, err := http.NewRequest("GET", wellKnownURL, nil)
+	req, err := http.NewRequest("GET", wellKnownURL, http.NoBody)
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +132,7 @@ func isZapLink(link string, db *database.Database) bool {
 }
 
 func getRemoteZapScript(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url, http.NoBody)
 	if err != nil {
 		return nil, err
 	}

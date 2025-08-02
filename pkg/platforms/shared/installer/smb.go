@@ -2,14 +2,15 @@ package installer
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/cloudsoda/go-smb2"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net"
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/cloudsoda/go-smb2"
+	"github.com/rs/zerolog/log"
 )
 
 func DownloadSMBFile(opts DownloaderArgs) error {

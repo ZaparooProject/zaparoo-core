@@ -3,11 +3,12 @@ package methods
 import (
 	"encoding/json"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"

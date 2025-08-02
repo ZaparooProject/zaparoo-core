@@ -24,6 +24,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
@@ -32,11 +38,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-	"io"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
 
 	_ "embed"
 )

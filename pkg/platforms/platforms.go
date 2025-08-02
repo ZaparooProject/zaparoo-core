@@ -1,9 +1,10 @@
 package platforms
 
 import (
+	"time"
+
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"

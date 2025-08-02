@@ -2,16 +2,17 @@ package utils
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 )
 
 // PathIsLauncher returns true if a given path matches against any of the

@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 

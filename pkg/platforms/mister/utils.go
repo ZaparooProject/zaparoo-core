@@ -4,9 +4,10 @@ package mister
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"os"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 
 	"github.com/rs/zerolog/log"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"

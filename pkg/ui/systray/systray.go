@@ -3,6 +3,11 @@ package systray
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"time"
+
 	"fyne.io/systray"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -12,10 +17,6 @@ import (
 	"github.com/nixinwang/dialog"
 	"github.com/rs/zerolog/log"
 	"golang.design/x/clipboard"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"time"
 )
 
 func systrayOnReady(
@@ -84,7 +85,7 @@ func systrayOnReady(
 					clipboard.Write(clipboard.FmtText, []byte(ip))
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
-					url := fmt.Sprintf("http://localhost:%d/app/", cfg.ApiPort())
+					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
 					err := exec.Command(openCmd, url).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open web page")

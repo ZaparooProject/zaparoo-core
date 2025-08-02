@@ -23,13 +23,14 @@ package zapscript
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 

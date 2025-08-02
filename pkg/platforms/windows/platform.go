@@ -4,13 +4,14 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"

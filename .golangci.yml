@@ -1,0 +1,55 @@
+run:
+  go: '1.23'
+  # timeout: 10m  # Removed to allow unlimited time
+  build-tags:
+    - linux
+    - windows
+    - darwin
+
+linters:
+  enable:
+    # Security & Correctness
+    - staticcheck
+    - errcheck
+    - gosec
+    - govet
+    - unused
+    - gosimple
+    - ineffassign
+    # Database specific
+    - sqlclosecheck
+    - rowserrcheck
+    # Style & Quality
+    - goimports
+    - revive
+    - gocritic
+    - nolintlint
+    # Complexity
+    - gocyclo
+    - funlen
+    # HTTP
+    - bodyclose
+    # Code Standards
+    - gochecknoglobals
+
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+  gocyclo:
+    min-complexity: 15
+  funlen:
+    lines: 80
+    statements: 50
+  goimports:
+    local-prefixes: github.com/ZaparooProject/zaparoo-core
+  gosec:
+    excludes:
+      - G101 # Hardcoded credentials - often false positives in tests
+  gochecknoglobals:
+    # Allow global logger - add //nolint:gochecknoglobals comment where needed

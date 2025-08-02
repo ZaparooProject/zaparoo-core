@@ -2,6 +2,7 @@ package requests
 
 import (
 	"encoding/json"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"

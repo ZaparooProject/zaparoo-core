@@ -24,6 +24,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/bazzite"
@@ -31,10 +36,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"io"
-	"os"
-	"os/signal"
-	"syscall"
 )
 
 // default user bazzite/bazzite, sudo is enabled

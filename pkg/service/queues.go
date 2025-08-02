@@ -1,8 +1,9 @@
 package service
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"

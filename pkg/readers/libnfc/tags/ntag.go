@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
 	"github.com/clausecker/nfc/v2"
@@ -96,7 +97,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 		}
 
 		allBlocks = append(allBlocks, blocks...)
-		currentBlock = currentBlock + 4
+		currentBlock += 4
 
 		if bytes.Contains(allBlocks, NdefEnd) {
 			// Once we find the end of the NDEF text record there is no need to

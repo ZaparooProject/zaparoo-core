@@ -60,7 +60,7 @@ func setupEnvironment(pl platforms.Platform) error {
 		filepath.Join(utils.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0755)
+		err := os.MkdirAll(dir, 0o755)
 		if err != nil {
 			return err
 		}

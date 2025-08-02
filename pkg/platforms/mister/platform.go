@@ -6,8 +6,6 @@ import (
 	"bufio"
 	"encoding/xml"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"

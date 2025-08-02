@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +13,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"

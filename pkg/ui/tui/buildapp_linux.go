@@ -1,10 +1,11 @@
 package tui
 
 import (
+	"os"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"os"
 )
 
 func tryRunApp(

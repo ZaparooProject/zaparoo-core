@@ -3,11 +3,6 @@ package zapscript
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -15,6 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/rs/zerolog/log"
 )
 
 const plsHeader = "[playlist]"

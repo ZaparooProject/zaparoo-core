@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
@@ -23,7 +24,7 @@ const (
 )
 
 type Mapping struct {
-	Id       string `json:"id"`
+	ID       string `json:"id"`
 	Added    int64  `json:"added"`
 	Label    string `json:"label"`
 	Enabled  bool   `json:"enabled"`

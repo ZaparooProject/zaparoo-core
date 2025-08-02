@@ -3,13 +3,14 @@ package installer
 import (
 	"encoding/base64"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/rs/zerolog/log"
 )
 
 type AuthTransport struct {

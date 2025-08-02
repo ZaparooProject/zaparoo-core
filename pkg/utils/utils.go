@@ -26,9 +26,6 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"io"
 	"math/rand"
 	"net"
@@ -39,6 +36,10 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"

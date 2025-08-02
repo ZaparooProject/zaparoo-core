@@ -2,15 +2,16 @@ package utils
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
-	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 )
 
 func formatExtensions(exts []string) []string {

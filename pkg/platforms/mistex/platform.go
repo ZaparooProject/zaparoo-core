@@ -4,6 +4,12 @@ package mistex
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -11,11 +17,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"github.com/rs/zerolog/log"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"

@@ -22,12 +22,13 @@ package steamos
 
 import (
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"

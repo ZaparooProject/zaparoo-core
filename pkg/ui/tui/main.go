@@ -104,7 +104,7 @@ func BuildMainPage(
 		ipDisplay = ip
 	}
 
-	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.ApiPort())
+	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.APIPort())
 
 	statusText.SetText(
 		fmt.Sprintf(

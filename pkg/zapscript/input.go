@@ -2,9 +2,10 @@ package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 	"strconv"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 
 	"github.com/rs/zerolog/log"
 

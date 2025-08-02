@@ -2,11 +2,12 @@ package main
 
 import (
 	_ "embed"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 )
 
 // TODO: allow updating if files have changed

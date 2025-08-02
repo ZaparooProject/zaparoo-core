@@ -28,7 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
-	"github.com/go-chi/chi/v5"
+	chi "github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
@@ -75,6 +75,18 @@ type MethodMap struct {
 	sync.Map
 }
 
+func (m *MethodMap) Store(key, value any) {
+	m.Map.Store(key, value)
+}
+
+func (m *MethodMap) Load(key any) (value any, ok bool) {
+	return m.Map.Load(key)
+}
+
+func (m *MethodMap) Range(f func(key, value any) bool) {
+	m.Map.Range(f)
+}
+
 func isValidMethodName(name string) bool {
 	for _, r := range name {
 		if (r < 'a' || r > 'z') && r != '.' {
@@ -109,7 +121,7 @@ func (m *MethodMap) GetMethod(name string) (func(requests.RequestEnv) (any, erro
 
 func (m *MethodMap) ListMethods() []string {
 	var ms []string
-	m.Range(func(key, value interface{}) bool {
+	m.Range(func(key, value any) bool {
 		ms = append(ms, key.(string))
 		return true
 	})
@@ -506,7 +518,7 @@ func Start(
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
-	r.Use(middleware.Timeout(config.ApiRequestTimeout))
+	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: allowedOrigins,
 		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
@@ -572,13 +584,13 @@ func Start(
 	})
 
 	server := &http.Server{
-		Addr:    ":" + strconv.Itoa(cfg.ApiPort()),
+		Addr:    ":" + strconv.Itoa(cfg.APIPort()),
 		Handler: r,
 	}
 
 	serverDone := make(chan error, 1)
 	go func() {
-		log.Info().Msgf("starting HTTP server on port %d", cfg.ApiPort())
+		log.Info().Msgf("starting HTTP server on port %d", cfg.APIPort())
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("HTTP server error")
 			serverDone <- err

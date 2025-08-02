@@ -1,12 +1,13 @@
 package config
 
 import (
-	"github.com/pelletier/go-toml/v2"
-	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 type Launchers struct {

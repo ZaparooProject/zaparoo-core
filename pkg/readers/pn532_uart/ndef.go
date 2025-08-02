@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
 	"github.com/rs/zerolog/log"
 
 	"github.com/hsanjuan/go-ndef"

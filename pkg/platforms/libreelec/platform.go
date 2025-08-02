@@ -22,14 +22,15 @@ package libreelec
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/adrg/xdg"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"

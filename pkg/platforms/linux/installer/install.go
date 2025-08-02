@@ -4,10 +4,11 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 )
 
 //go:embed conf/blacklist-zaparoo.conf

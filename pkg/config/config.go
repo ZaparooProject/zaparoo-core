@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
-	"github.com/pelletier/go-toml/v2"
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -48,8 +48,8 @@ type ZapScript struct {
 }
 
 type Service struct {
-	ApiPort    int      `toml:"api_port"`
-	DeviceId   string   `toml:"device_id"`
+	APIPort    int      `toml:"api_port"`
+	DeviceID   string   `toml:"device_id"`
 	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe []*regexp.Regexp
 }
@@ -76,7 +76,7 @@ var BaseDefaults = Values{
 		},
 	},
 	Service: Service{
-		ApiPort: 7497,
+		APIPort: 7497,
 	},
 	Groovy: Groovy{
 		GmcProxyEnabled:        false,
@@ -121,7 +121,7 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		log.Info().Msg("saving new default config to disk")
 
-		err := os.MkdirAll(filepath.Dir(cfgPath), 0755)
+		err := os.MkdirAll(filepath.Dir(cfgPath), 0o755)
 		if err != nil {
 			return nil, err
 		}
@@ -252,9 +252,9 @@ func (c *Instance) Save() error {
 	c.vals.ConfigSchema = SchemaVersion
 
 	// generate a device id if one doesn't exist
-	if c.vals.Service.DeviceId == "" {
+	if c.vals.Service.DeviceID == "" {
 		newId := uuid.New().String()
-		c.vals.Service.DeviceId = newId
+		c.vals.Service.DeviceID = newId
 		log.Info().Msgf("generated new device id: %s", newId)
 	}
 
@@ -318,10 +318,10 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	return false
 }
 
-func (c *Instance) ApiPort() int {
+func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Service.ApiPort
+	return c.vals.Service.APIPort
 }
 
 func (c *Instance) IsExecuteAllowed(s string) bool {

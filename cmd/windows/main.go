@@ -24,13 +24,14 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
-	"github.com/gen2brain/beeep"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/gen2brain/beeep"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"

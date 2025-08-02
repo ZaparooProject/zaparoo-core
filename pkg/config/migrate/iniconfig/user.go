@@ -22,13 +22,14 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package iniconfig
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/rs/zerolog/log"
 
 	"github.com/rs/zerolog"
 	"gopkg.in/ini.v1"
@@ -60,7 +61,7 @@ type LaunchersConfig struct {
 	// TODO: allow_shell - contents of shell command
 }
 
-type ApiConfig struct {
+type APIConfig struct {
 	Port        string   `ini:"port"`
 	AllowLaunch []string `ini:"allow_launch,omitempty,allowshadow"`
 }
@@ -72,7 +73,7 @@ type UserConfig struct {
 	TapTo     TapToConfig     `ini:"tapto"`
 	Systems   SystemsConfig   `ini:"systems"`
 	Launchers LaunchersConfig `ini:"launchers"`
-	Api       ApiConfig       `ini:"api"`
+	API       APIConfig       `ini:"api"`
 }
 
 func (c *UserConfig) GetConnectionString() string {
