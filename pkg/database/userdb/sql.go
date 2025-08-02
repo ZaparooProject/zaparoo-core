@@ -12,7 +12,7 @@ import (
 
 	"embed"
 
-	"github.com/pressly/goose/v3"
+	goose "github.com/pressly/goose/v3"
 )
 
 // Queries go here to keep the interface clean

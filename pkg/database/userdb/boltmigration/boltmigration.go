@@ -83,7 +83,7 @@ func (d *Database) GetMappings() ([]Mapping, error) {
 				return fmt.Errorf("invalid mapping key: %s", k)
 			}
 
-			m.Id = ps[1]
+			m.ID = ps[1]
 
 			ms = append(ms, m)
 		}

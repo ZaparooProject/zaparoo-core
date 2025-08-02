@@ -32,7 +32,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/rs/zerolog"
-	"gopkg.in/ini.v1"
+	ini "gopkg.in/ini.v1"
 )
 
 const UserConfigEnv = "TAPTO_CONFIG"

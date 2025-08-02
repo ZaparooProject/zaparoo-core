@@ -1,10 +1,5 @@
 run:
   go: '1.23'
-  # timeout: 10m  # Removed to allow unlimited time
-  build-tags:
-    - linux
-    - windows
-    - darwin
 
 linters:
   enable:
@@ -48,8 +43,3 @@ linters-settings:
     statements: 50
   goimports:
     local-prefixes: github.com/ZaparooProject/zaparoo-core
-  gosec:
-    excludes:
-      - G101 # Hardcoded credentials - often false positives in tests
-  gochecknoglobals:
-    # Allow global logger - add //nolint:gochecknoglobals comment where needed
