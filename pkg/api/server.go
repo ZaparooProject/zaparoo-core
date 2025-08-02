@@ -77,7 +77,7 @@ type MethodMap struct {
 
 func isValidMethodName(name string) bool {
 	for _, r := range name {
-		if r < 'a' || r > 'z' && r != '.' {
+		if (r < 'a' || r > 'z') && r != '.' {
 			return false
 		}
 	}
