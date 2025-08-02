@@ -123,8 +123,29 @@ func WebSocketRateLimitHandler(limiter *IPRateLimiter, handler func(*melody.Sess
 				Int("msg_size", len(msg)).
 				Msg("WebSocket rate limit exceeded")
 
-			errorMsg := `{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Rate limit exceeded"}}`
-			if err := session.Write([]byte(errorMsg)); err != nil {
+			type jsonRPCError struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			}
+			type jsonRPCErrorResponse struct {
+				JSONRPC string        `json:"jsonrpc"`
+				ID      interface{}   `json:"id"`
+				Error   jsonRPCError  `json:"error"`
+			}
+			resp := jsonRPCErrorResponse{
+				JSONRPC: "2.0",
+				ID:      nil,
+				Error: jsonRPCError{
+					Code:    -32000,
+					Message: "Rate limit exceeded",
+				},
+			}
+			errorMsg, marshalErr := json.Marshal(resp)
+			if marshalErr != nil {
+				log.Error().Err(marshalErr).Msg("failed to marshal rate limit error")
+				return
+			}
+			if err := session.Write(errorMsg); err != nil {
 				log.Error().Err(err).Msg("failed to send rate limit error")
 			}
 			return
