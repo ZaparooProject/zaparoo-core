@@ -6,11 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -33,7 +32,7 @@ func (db *UserDB) Open() error {
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
-		err := os.MkdirAll(filepath.Dir(dbPath), 0755)
+		err := os.MkdirAll(filepath.Dir(dbPath), 0o755)
 		if err != nil {
 			return err
 		}

@@ -13,13 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,7 +57,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
-	req, err := http.NewRequest("GET", wellKnownURL, http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
 		return 0, err
 	}
@@ -73,7 +72,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 		}
 	}()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return 0, errors.New("invalid status code")
 	}
 
@@ -131,7 +130,7 @@ func isZapLink(link string, db *database.Database) bool {
 }
 
 func getRemoteZapScript(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, http.NoBody)
+	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +147,7 @@ func getRemoteZapScript(url string) ([]byte, error) {
 		}
 	}()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
 		return nil, errors.New("invalid status code")
 	}

@@ -2,17 +2,14 @@ package userdb
 
 import (
 	"database/sql"
+	"embed"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-
-	"embed"
-
 	goose "github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 )
 
 // Queries go here to keep the interface clean

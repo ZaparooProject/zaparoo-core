@@ -14,13 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -56,7 +55,7 @@ func createPIDFile(pl platforms.Platform) error {
 		return errors.New("PID file already exists")
 	}
 	pid := os.Getpid()
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o644)
 }
 
 func removePIDFile(pl platforms.Platform) error {

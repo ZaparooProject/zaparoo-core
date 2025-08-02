@@ -154,7 +154,7 @@ func InstallRemoteFile(
 		return "", fmt.Errorf("error checking file: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return "", fmt.Errorf("cannot create directories: %w", err)
 	}
 

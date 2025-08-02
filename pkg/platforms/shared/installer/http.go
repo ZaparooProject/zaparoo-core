@@ -62,7 +62,7 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 			log.Error().Err(err).Msg("error closing response body")
 		}
 	}()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 

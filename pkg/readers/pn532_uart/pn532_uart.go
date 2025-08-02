@@ -12,12 +12,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
-
 	"go.bug.st/serial"
 )
 
@@ -138,7 +136,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				continue
 			}
 
-			//log.Debug().Msgf("target: %s", tgt.Uid)
+			// log.Debug().Msgf("target: %s", tgt.Uid)
 
 			errCount = 0
 			zeroScans = 0
@@ -250,8 +248,10 @@ func (r *PN532UARTReader) Close() error {
 }
 
 // keep track of serial devices that had failed opens
-var serialCacheMu = &sync.RWMutex{}
-var serialBlockList []string
+var (
+	serialCacheMu   = &sync.RWMutex{}
+	serialBlockList []string
+)
 
 func (r *PN532UARTReader) Detect(connected []string) string {
 	ports, err := utils.GetSerialDeviceList()

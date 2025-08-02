@@ -24,12 +24,12 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 	var kodiReq *http.Request
 	var err error
 	if body != "" {
-		kodiReq, err = http.NewRequest("POST", apiURL+path, bytes.NewBuffer([]byte(body)))
+		kodiReq, err = http.NewRequest(http.MethodPost, apiURL+path, bytes.NewBuffer([]byte(body)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 	} else {
-		kodiReq, err = http.NewRequest("GET", apiURL+path, nil)
+		kodiReq, err = http.NewRequest(http.MethodGet, apiURL+path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}

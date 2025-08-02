@@ -8,11 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 	bolt "go.etcd.io/bbolt"
 )
@@ -48,7 +47,7 @@ type Database struct {
 }
 
 func Open(pl platforms.Platform) (*Database, error) {
-	db, err := bolt.Open(dbFile(pl), 0600, &bolt.Options{})
+	db, err := bolt.Open(dbFile(pl), 0o600, &bolt.Options{})
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +60,7 @@ func (d *Database) Close() error {
 }
 
 func (d *Database) GetMappings() ([]Mapping, error) {
-	var ms = make([]Mapping, 0)
+	ms := make([]Mapping, 0)
 
 	err := d.bdb.View(func(txn *bolt.Tx) error {
 		b := txn.Bucket([]byte(BucketMappings))

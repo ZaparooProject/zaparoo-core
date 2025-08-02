@@ -12,12 +12,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/text/unicode/norm"
 )
 
 var (

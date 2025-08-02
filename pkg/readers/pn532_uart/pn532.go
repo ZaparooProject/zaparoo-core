@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
@@ -150,7 +149,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 	frm = append(frm, ^checksum+1) // data checksum
 	frm = append(frm, 0x00)        // postamble
 
-	//log.Debug().Msgf("sending frame: %x", frm)
+	// log.Debug().Msgf("sending frame: %x", frm)
 
 	// write frame
 	err := wakeUp(port)
@@ -204,7 +203,7 @@ retry:
 		return []byte{}, ErrNoFrameFound
 	}
 
-	//log.Debug().Msgf("received frame buffer: %x", buf)
+	// log.Debug().Msgf("received frame buffer: %x", buf)
 
 	// check frame length value and checksum (LEN)
 	off++
@@ -368,7 +367,7 @@ type Target struct {
 }
 
 func InListPassiveTarget(port serial.Port) (*Target, error) {
-	//log.Debug().Msg("running inlistpassivetarget")
+	// log.Debug().Msg("running inlistpassivetarget")
 	res, err := callCommand(port, cmdInListPassiveTarget, []byte{0x01, 0x00})
 	if errors.Is(err, ErrNoFrameFound) {
 		// no tag detected

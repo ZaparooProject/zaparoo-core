@@ -29,14 +29,15 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
-
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	ini "gopkg.in/ini.v1"
 )
 
-const UserConfigEnv = "TAPTO_CONFIG"
-const UserAppPathEnv = "TAPTO_APP_PATH"
+const (
+	UserConfigEnv  = "TAPTO_CONFIG"
+	UserAppPathEnv = "TAPTO_APP_PATH"
+)
 
 type TapToConfig struct {
 	Reader            []string `ini:"reader,omitempty,allowshadow"`

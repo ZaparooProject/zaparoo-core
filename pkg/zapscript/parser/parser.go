@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/expr-lang/expr"
 	"io"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"github.com/expr-lang/expr"
 )
 
 var (

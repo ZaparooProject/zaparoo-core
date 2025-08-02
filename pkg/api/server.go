@@ -23,11 +23,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	chi "github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -47,18 +46,22 @@ var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
 	Message: "Parse error",
 }
+
 var JSONRPCErrorInvalidRequest = models.ErrorObject{
 	Code:    -32600,
 	Message: "Invalid Request",
 }
+
 var JSONRPCErrorMethodNotFound = models.ErrorObject{
 	Code:    -32601,
 	Message: "Method not found",
 }
+
 var JSONRPCErrorInvalidParams = models.ErrorObject{
 	Code:    -32602,
 	Message: "Invalid params",
 }
+
 var JSONRPCErrorInternalError = models.ErrorObject{
 	Code:    -32603,
 	Message: "Internal error",
@@ -203,7 +206,6 @@ func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.Req
 		return nil, &rpcError
 	}
 	return resp, nil
-
 }
 
 // sendWSResponse marshals a method result and sends it to the client.

@@ -676,8 +676,10 @@ func TestParse(t *testing.T) {
 			input: `**render:level-[[difficulty]]?fx=true`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "render", Args: []string{"level-" + parser.TokExpStart + "difficulty" + parser.TokExprEnd},
-						AdvArgs: map[string]string{"fx": "true"}},
+					{
+						Name: "render", Args: []string{"level-" + parser.TokExpStart + "difficulty" + parser.TokExprEnd},
+						AdvArgs: map[string]string{"fx": "true"},
+					},
 				},
 			},
 		},
@@ -1116,13 +1118,15 @@ func TestParse(t *testing.T) {
 			input: `**input.keyboard:Hello{enter}World?delay=100`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.keyboard",
+					{
+						Name: "input.keyboard",
 						Args: []string{
 							"H", "e", "l", "l", "o",
 							"{enter}",
 							"W", "o", "r", "l", "d",
 						},
-						AdvArgs: map[string]string{"delay": "100"}},
+						AdvArgs: map[string]string{"delay": "100"},
+					},
 				},
 			},
 		},
@@ -1131,7 +1135,8 @@ func TestParse(t *testing.T) {
 			input: `**input.keyboard:Hello{enter}World\?delay=1\\00`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.keyboard",
+					{
+						Name: "input.keyboard",
 						Args: []string{
 							"H", "e", "l", "l", "o",
 							"{enter}",
@@ -1147,14 +1152,16 @@ func TestParse(t *testing.T) {
 			input: `**input.gamepad:AB{start}XY?repeat=2&interval=500`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.gamepad",
+					{
+						Name: "input.gamepad",
 						Args: []string{
 							"A", "B", "{start}", "X", "Y",
 						},
 						AdvArgs: map[string]string{
 							"repeat":   "2",
 							"interval": "500",
-						}},
+						},
+					},
 				},
 			},
 		},
@@ -1219,8 +1226,10 @@ func TestParse(t *testing.T) {
 			input: `**http.get:"https://api.example.com/hello?stuff=thing"?other=stuff||**launch.random:Genesis`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
-						AdvArgs: map[string]string{"other": "stuff"}},
+					{
+						Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
+						AdvArgs: map[string]string{"other": "stuff"},
+					},
 					{Name: "launch.random", Args: []string{`Genesis`}},
 				},
 			},
@@ -1338,8 +1347,10 @@ func TestParse(t *testing.T) {
 			input: `Genesis/1 US - Q-Z/Some Game (USA, Europe).md?launcher=LLAPIMegaDrive`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
-						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"}},
+					{
+						Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
+						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"},
+					},
 				},
 			},
 		},
@@ -1564,8 +1575,10 @@ func TestParse(t *testing.T) {
 			input: `**mister.script:update_all.sh?hidden=yes`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mister.script", Args: []string{`update_all.sh`},
-						AdvArgs: map[string]string{"hidden": "yes"}},
+					{
+						Name: "mister.script", Args: []string{`update_all.sh`},
+						AdvArgs: map[string]string{"hidden": "yes"},
+					},
 				},
 			},
 		},

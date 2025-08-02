@@ -271,7 +271,7 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	return os.WriteFile(c.cfgPath, data, 0644)
+	return os.WriteFile(c.cfgPath, data, 0o644)
 }
 
 func (c *Instance) AudioFeedback() bool {

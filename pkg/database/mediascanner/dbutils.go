@@ -21,8 +21,8 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	ss.SystemIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
-	//ss.TagTypeIDs = make(map[string]int)
-	//ss.TagIDs = make(map[string]int)
+	// ss.TagTypeIDs = make(map[string]int)
+	// ss.TagIDs = make(map[string]int)
 }
 
 func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string, path string) (int, int) {
@@ -107,7 +107,7 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 
 		if tagIndex == 0 {
 			// Don't insert unknown tags for now
-			//log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
+			// log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
 			continue
 		}
 

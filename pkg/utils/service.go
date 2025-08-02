@@ -14,9 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,7 +35,7 @@ type ServiceArgs struct {
 }
 
 func NewService(args ServiceArgs) (*Service, error) {
-	err := os.MkdirAll(args.Platform.Settings().TempDir, 0755)
+	err := os.MkdirAll(args.Platform.Settings().TempDir, 0o755)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +51,7 @@ func NewService(args ServiceArgs) (*Service, error) {
 func (s *Service) createPidFile() error {
 	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
-	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0644)
+	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0o644)
 	if err != nil {
 		return err
 	}
@@ -229,7 +228,7 @@ func (s *Service) Start() error {
 	}
 
 	tempPath := filepath.Join(s.pl.Settings().TempDir, filepath.Base(binPath))
-	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o755)
 	if err != nil {
 		return fmt.Errorf("error creating temp binary: %w", err)
 	}

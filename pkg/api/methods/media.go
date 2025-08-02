@@ -10,10 +10,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -239,7 +238,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("query or system is required")
 	}
 
-	var results = make([]models.SearchResultMedia, 0)
+	results := make([]models.SearchResultMedia, 0)
 	var search []database.SearchResult
 	system := params.Systems
 	query := params.Query

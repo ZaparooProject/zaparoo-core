@@ -35,7 +35,7 @@ func (db *MediaDB) Open() error {
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
-		err := os.MkdirAll(filepath.Dir(dbPath), 0755)
+		err := os.MkdirAll(filepath.Dir(dbPath), 0o755)
 		if err != nil {
 			return err
 		}

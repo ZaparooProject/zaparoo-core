@@ -29,8 +29,10 @@ import (
 	"github.com/hsanjuan/go-ndef"
 )
 
-var NdefEnd = []byte{0xFE}
-var NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+var (
+	NdefEnd   = []byte{0xFE}
+	NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+)
 
 func ParseRecordText(blocks []byte) (string, error) {
 	startIndex := bytes.Index(blocks, NdefStart)
@@ -66,7 +68,7 @@ func ParseRecordText(blocks []byte) (string, error) {
 
 func BuildMessage(text string) ([]byte, error) {
 	msg := ndef.NewTextMessage(text, "en")
-	var payload, err = msg.Marshal()
+	payload, err := msg.Marshal()
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +83,7 @@ func BuildMessage(text string) ([]byte, error) {
 }
 
 func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
-	var recordLength = len(ndefRecord)
+	recordLength := len(ndefRecord)
 	if recordLength < 255 {
 		return []byte{0x03, byte(len(ndefRecord))}, nil
 	}
@@ -94,6 +96,6 @@ func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	var header = []byte{0x03, 0xFF}
+	header := []byte{0x03, 0xFF}
 	return append(header, buf.Bytes()...), nil
 }

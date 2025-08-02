@@ -9,12 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pressly/goose/v3"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 )
 
 // Queries go here to keep the interface clean
@@ -559,7 +558,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	slug := utils.SlugifyPath(path)
 
 	var results []database.SearchResult
-	var args = make([]any, 0)
+	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
@@ -624,7 +623,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		parts = []string{""}
 	}
 
-	var args = make([]any, 0)
+	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}

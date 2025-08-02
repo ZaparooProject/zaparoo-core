@@ -50,7 +50,6 @@ func DisableZapScript(cfg *config.Instance) func() {
 			log.Error().Err(err).Msg("error enabling runZapScript")
 		}
 	}
-
 }
 
 // LocalClient sends a single unauthenticated method with params to the local

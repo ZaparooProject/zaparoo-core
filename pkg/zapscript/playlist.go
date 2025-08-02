@@ -24,8 +24,10 @@ func isPlsFile(path string) bool {
 	return filepath.Ext(strings.ToLower(path)) == ".pls"
 }
 
-var plsFileRe = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
-var plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
+var (
+	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
+	plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
+)
 
 type plsItem struct {
 	file  string

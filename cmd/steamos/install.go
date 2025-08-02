@@ -37,7 +37,7 @@ func install() error {
 		serviceFile = strings.ReplaceAll(serviceFile, "%%EXEC%%", exe)
 		serviceFile = strings.ReplaceAll(serviceFile, "%%WORKING%%", filepath.Dir(exe))
 
-		err = os.WriteFile(servicePath, []byte(serviceFile), 0644)
+		err = os.WriteFile(servicePath, []byte(serviceFile), 0o644)
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func install() error {
 
 	// install udev rules and refresh
 	if _, err := os.Stat(udevPath); os.IsNotExist(err) {
-		err = os.WriteFile(udevPath, []byte(udevFile), 0644)
+		err = os.WriteFile(udevPath, []byte(udevFile), 0o644)
 		if err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func install() error {
 
 	// install modprobe blacklist
 	if _, err := os.Stat(modprobePath); os.IsNotExist(err) {
-		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0644)
+		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644)
 		if err != nil {
 			return err
 		}

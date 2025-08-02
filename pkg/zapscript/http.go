@@ -4,9 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/rs/zerolog/log"
 )
 
 func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
