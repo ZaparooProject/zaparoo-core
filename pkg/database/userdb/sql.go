@@ -234,7 +234,7 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 	if err != nil {
 		return err
 	}
-	_, err = stmt.ExecContext(ctx, 
+	_, err = stmt.ExecContext(ctx,
 		m.Added,
 		m.Label,
 		m.Enabled,
@@ -265,7 +265,7 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 		}
 	}(q)
 
-	rows, err := q.QueryContext(ctx, )
+	rows, err := q.QueryContext(ctx)
 	if err != nil {
 		return list, err
 	}
@@ -408,7 +408,7 @@ func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url string, zapscrip
 
 func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, error) {
 	var zapscript string
-	err := db.QueryRowContext(ctx, 
+	err := db.QueryRowContext(ctx,
 		`SELECT ZapScript FROM ZapLinkCache WHERE URL = ?;`,
 		url,
 	).Scan(&zapscript)

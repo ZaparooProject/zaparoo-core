@@ -24,16 +24,16 @@ import (
 type ServiceEntry func() (func() error, error)
 
 type Service struct {
-	daemon bool
+	pl     platforms.Platform
 	start  ServiceEntry
 	stop   func() error
-	pl     platforms.Platform
+	daemon bool
 }
 
 type ServiceArgs struct {
+	Platform platforms.Platform
 	Entry    ServiceEntry
 	NoDaemon bool
-	Platform platforms.Platform
 }
 
 func NewService(args ServiceArgs) (*Service, error) {

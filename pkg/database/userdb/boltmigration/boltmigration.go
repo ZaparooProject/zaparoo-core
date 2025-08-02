@@ -24,13 +24,13 @@ const (
 
 type Mapping struct {
 	ID       string `json:"id"`
-	Added    int64  `json:"added"`
 	Label    string `json:"label"`
-	Enabled  bool   `json:"enabled"`
 	Type     string `json:"type"`
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
+	Added    int64  `json:"added"`
+	Enabled  bool   `json:"enabled"`
 }
 
 func dbFile(pl platforms.Platform) string {

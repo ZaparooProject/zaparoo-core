@@ -18,10 +18,10 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	client := &http.Client{}
 
 	var kodiReq *http.Request
@@ -32,7 +32,7 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 	} else {
-		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, nil)
+		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, http.NoBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}

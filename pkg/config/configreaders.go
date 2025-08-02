@@ -7,17 +7,17 @@ import (
 )
 
 type Readers struct {
-	AutoDetect bool             `toml:"auto_detect"`
 	Scan       ReadersScan      `toml:"scan,omitempty"`
 	Connect    []ReadersConnect `toml:"connect,omitempty"`
+	AutoDetect bool             `toml:"auto_detect"`
 }
 
 type ReadersScan struct {
 	Mode         string   `toml:"mode"`
-	ExitDelay    float32  `toml:"exit_delay,omitempty"`
-	IgnoreSystem []string `toml:"ignore_system,omitempty"`
 	OnScan       string   `toml:"on_scan,omitempty"`
 	OnRemove     string   `toml:"on_remove,omitempty"`
+	IgnoreSystem []string `toml:"ignore_system,omitempty"`
+	ExitDelay    float32  `toml:"exit_delay,omitempty"`
 }
 
 type ReadersConnect struct {

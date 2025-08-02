@@ -52,9 +52,9 @@ const (
 )
 
 type ZapScript struct {
-	ZapScript int            `json:"zapscript"` // schema version
-	Name      *string        `json:"name"`      // optional display name
+	Name      *string        `json:"name"`
 	Cmds      []ZapScriptCmd `json:"cmds"`
+	ZapScript int            `json:"zapscript"`
 }
 
 type ZapScriptCmd struct {
@@ -69,17 +69,17 @@ type CmdEvaluateArgs struct {
 }
 
 type CmdLaunchArgs struct {
-	Path      string  `json:"path" arg:"position=1"`
 	Launcher  *string `json:"launcher"`
 	Name      *string `json:"name"`
 	System    *string `json:"system"`
 	URL       *string `json:"url"`
 	PreNotice *string `json:"preNotice"`
+	Path      string  `json:"path" arg:"position=1"`
 }
 
 type CmdNotice struct {
-	Text   string `json:"text" arg:"position=1"`
 	Loader *bool  `json:"loader"`
+	Text   string `json:"text" arg:"position=1"`
 }
 
 type CmdPicker struct {

@@ -74,15 +74,15 @@ func main() {
 func generateSetupFile(tmpl *template.Template, data InnoSetupData, arch string) error {
 	outFile, err := os.Create("_build/windows_" + arch + "/setup.iss")
 	if err != nil {
-		return fmt.Errorf("error creating output file: %v", err)
+		return fmt.Errorf("error creating output file: %w", err)
 	}
 	defer func(outFile *os.File) {
 		_ = outFile.Close()
 	}(outFile)
 
 	if err := tmpl.Execute(outFile, data); err != nil {
-		return fmt.Errorf("error executing template: %v", err)
+		return fmt.Errorf("error executing template: %w", err)
 	}
-	
+
 	return nil
 }

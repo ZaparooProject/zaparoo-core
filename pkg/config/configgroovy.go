@@ -1,9 +1,9 @@
 package config
 
 type Groovy struct {
-	GmcProxyEnabled        bool   `toml:"gmc_proxy_enabled"`
-	GmcProxyPort           int    `toml:"gmc_proxy_port"`
 	GmcProxyBeaconInterval string `toml:"gmc_proxy_beacon_interval"`
+	GmcProxyPort           int    `toml:"gmc_proxy_port"`
+	GmcProxyEnabled        bool   `toml:"gmc_proxy_enabled"`
 }
 
 func (c *Instance) GmcProxyEnabled() bool {

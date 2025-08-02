@@ -13,12 +13,12 @@ const (
 )
 
 type Token struct {
+	ScanTime time.Time
 	Type     string
 	UID      string
 	Text     string
 	Data     string
-	ScanTime time.Time
-	FromAPI  bool
 	Source   string
+	FromAPI  bool
 	Unsafe   bool
 }

@@ -40,16 +40,16 @@ const (
 )
 
 type TapToConfig struct {
+	ConnectionString  string   `ini:"connection_string,omitempty"`
 	Reader            []string `ini:"reader,omitempty,allowshadow"`
-	AllowCommands     bool     `ini:"allow_commands"`      // TODO: DEPRECATED, remove and use allow_shell below
-	DisableSounds     bool     `ini:"disable_sounds"`      // TODO: rename something like audio_feedback?
-	ProbeDevice       bool     `ini:"probe_device"`        // TODO: rename to reader_detection?
-	ExitGame          bool     `ini:"exit_game"`           // TODO: rename to insert_mode
-	ExitGameBlocklist []string `ini:"exit_game_blocklist"` // TODO: rename to insert_mode_blocklist
-	ExitGameDelay     int      `ini:"exit_game_delay"`     // TODO: rename to insert_mode_delay
+	ExitGameBlocklist []string `ini:"exit_game_blocklist"`
+	ExitGameDelay     int      `ini:"exit_game_delay"`
+	AllowCommands     bool     `ini:"allow_commands"`
+	DisableSounds     bool     `ini:"disable_sounds"`
+	ProbeDevice       bool     `ini:"probe_device"`
+	ExitGame          bool     `ini:"exit_game"`
 	ConsoleLogging    bool     `ini:"console_logging"`
 	Debug             bool     `ini:"debug"`
-	ConnectionString  string   `ini:"connection_string,omitempty"` // DEPRECATED
 }
 
 type SystemsConfig struct {
@@ -68,13 +68,13 @@ type APIConfig struct {
 }
 
 type UserConfig struct {
-	mu        sync.RWMutex
+	TapTo     TapToConfig     `ini:"tapto"`
 	AppPath   string          `ini:"-"`
 	IniPath   string          `ini:"-"`
-	TapTo     TapToConfig     `ini:"tapto"`
 	Systems   SystemsConfig   `ini:"systems"`
-	Launchers LaunchersConfig `ini:"launchers"`
 	API       APIConfig       `ini:"api"`
+	Launchers LaunchersConfig `ini:"launchers"`
+	mu        sync.RWMutex
 }
 
 func (c *UserConfig) GetConnectionString() string {

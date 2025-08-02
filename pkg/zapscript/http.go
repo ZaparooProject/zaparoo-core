@@ -22,13 +22,13 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 		if err != nil {
 			log.Error().Err(err).Msgf("creating request for url: %s", url)
 			return
 		}
-		
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error().Err(err).Msgf("getting url: %s", url)
@@ -56,14 +56,14 @@ func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
 		if err != nil {
 			log.Error().Err(err).Msgf("creating request for url: %s", url)
 			return
 		}
 		req.Header.Set("Content-Type", mime)
-		
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error().Err(err).Msgf("error posting to url: %s", url)

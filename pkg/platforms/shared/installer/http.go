@@ -58,12 +58,12 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 	// Extended timeout for potentially large game files (700MB+)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.url, nil)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
-	
+
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)

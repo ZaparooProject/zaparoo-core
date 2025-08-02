@@ -22,20 +22,20 @@ import (
 const defaultMaxResults = 250
 
 type indexingStatusVals struct {
-	indexing    bool
+	currentDesc string
 	totalSteps  int
 	currentStep int
-	currentDesc string
 	totalFiles  int
+	indexing    bool
 }
 
 type indexingStatus struct {
-	mu          sync.RWMutex
-	indexing    bool
+	currentDesc string
 	totalSteps  int
 	currentStep int
-	currentDesc string
 	totalFiles  int
+	mu          sync.RWMutex
+	indexing    bool
 }
 
 func (s *indexingStatus) get() indexingStatusVals {

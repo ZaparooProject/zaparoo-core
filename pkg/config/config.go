@@ -26,16 +26,16 @@ const (
 )
 
 type Values struct {
+	Groovy       Groovy    `toml:"groovy,omitempty"`
+	Launchers    Launchers `toml:"launchers,omitempty"`
+	Readers      Readers   `toml:"readers,omitempty"`
+	Service      Service   `toml:"service,omitempty"`
+	ZapScript    ZapScript `toml:"zapscript,omitempty"`
+	Systems      Systems   `toml:"systems,omitempty"`
+	Mappings     Mappings  `toml:"mappings,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
 	DebugLogging bool      `toml:"debug_logging"`
 	Audio        Audio     `toml:"audio,omitempty"`
-	Readers      Readers   `toml:"readers,omitempty"`
-	Systems      Systems   `toml:"systems,omitempty"`
-	Launchers    Launchers `toml:"launchers,omitempty"`
-	ZapScript    ZapScript `toml:"zapscript,omitempty"`
-	Service      Service   `toml:"service,omitempty"`
-	Mappings     Mappings  `toml:"mappings,omitempty"`
-	Groovy       Groovy    `toml:"groovy,omitempty"`
 }
 
 type Audio struct {
@@ -48,10 +48,10 @@ type ZapScript struct {
 }
 
 type Service struct {
-	APIPort    int      `toml:"api_port"`
 	DeviceID   string   `toml:"device_id"`
 	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe []*regexp.Regexp
+	APIPort    int `toml:"api_port"`
 }
 
 type Auth struct {
@@ -86,11 +86,11 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	mu       sync.RWMutex
+	vals     Values
 	appPath  string
 	cfgPath  string
 	authPath string
-	vals     Values
+	mu       sync.RWMutex
 }
 
 var authCfg atomic.Value

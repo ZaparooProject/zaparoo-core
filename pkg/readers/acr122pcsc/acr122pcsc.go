@@ -18,10 +18,10 @@ import (
 
 type ACR122PCSC struct {
 	cfg     *config.Instance
+	ctx     *scard.Context
 	device  config.ReadersConnect
 	name    string
 	polling bool
-	ctx     *scard.Context
 }
 
 func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {

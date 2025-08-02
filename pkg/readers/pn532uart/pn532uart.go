@@ -20,12 +20,12 @@ import (
 )
 
 type PN532UARTReader struct {
+	port      serial.Port
 	cfg       *config.Instance
+	lastToken *tokens.Token
 	device    config.ReadersConnect
 	name      string
 	polling   bool
-	port      serial.Port
-	lastToken *tokens.Token
 }
 
 func NewReader(cfg *config.Instance) *PN532UARTReader {

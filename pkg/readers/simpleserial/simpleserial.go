@@ -16,12 +16,12 @@ import (
 )
 
 type SimpleSerialReader struct {
+	port      serial.Port
 	cfg       *config.Instance
+	lastToken *tokens.Token
 	device    config.ReadersConnect
 	path      string
 	polling   bool
-	port      serial.Port
-	lastToken *tokens.Token
 }
 
 func NewReader(cfg *config.Instance) *SimpleSerialReader {

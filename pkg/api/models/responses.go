@@ -18,13 +18,13 @@ type SearchResults struct {
 }
 
 type SettingsResponse struct {
+	ReadersScanMode         string   `json:"readersScanMode"`
+	ReadersScanIgnoreSystem []string `json:"readersScanIgnoreSystems"`
+	ReadersScanExitDelay    float32  `json:"readersScanExitDelay"`
 	RunZapScript            bool     `json:"runZapScript"`
 	DebugLogging            bool     `json:"debugLogging"`
 	AudioScanFeedback       bool     `json:"audioScanFeedback"`
 	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
-	ReadersScanMode         string   `json:"readersScanMode"`
-	ReadersScanExitDelay    float32  `json:"readersScanExitDelay"`
-	ReadersScanIgnoreSystem []string `json:"readersScanIgnoreSystems"`
 }
 
 type System struct {
@@ -58,43 +58,43 @@ type MappingResponse struct {
 	ID       string `json:"id"`
 	Added    string `json:"added"`
 	Label    string `json:"label"`
-	Enabled  bool   `json:"enabled"`
 	Type     string `json:"type"`
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
+	Enabled  bool   `json:"enabled"`
 }
 
 type TokenResponse struct {
+	ScanTime time.Time `json:"scanTime"`
 	Type     string    `json:"type"`
 	UID      string    `json:"uid"`
 	Text     string    `json:"text"`
 	Data     string    `json:"data"`
-	ScanTime time.Time `json:"scanTime"`
 }
 
 type IndexingStatusResponse struct {
-	Exists             bool    `json:"exists"`
-	Indexing           bool    `json:"indexing"`
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
 	CurrentStep        *int    `json:"currentStep,omitempty"`
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
+	Exists             bool    `json:"exists"`
+	Indexing           bool    `json:"indexing"`
 }
 
 type ReaderResponse struct {
-	Connected bool   `json:"connected"`
 	Driver    string `json:"driver"`
 	Path      string `json:"path"`
+	Connected bool   `json:"connected"`
 }
 
 type ActiveMedia struct {
+	Started    time.Time `json:"started"`
 	LauncherID string    `json:"launcherId"`
 	SystemID   string    `json:"systemId"`
 	SystemName string    `json:"systemName"`
 	Path       string    `json:"mediaPath"`
 	Name       string    `json:"mediaName"`
-	Started    time.Time `json:"started"`
 }
 
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
@@ -127,19 +127,19 @@ type MediaResponse struct {
 }
 
 type TokensResponse struct {
-	Active []TokenResponse `json:"active"`
 	Last   *TokenResponse  `json:"last,omitempty"`
+	Active []TokenResponse `json:"active"`
 }
 
 type ClientResponse struct {
-	ID      uuid.UUID `json:"id"`
 	Name    string    `json:"name"`
 	Address string    `json:"address"`
 	Secret  string    `json:"secret"`
+	ID      uuid.UUID `json:"id"`
 }
 
 type LogDownloadResponse struct {
 	Filename string `json:"filename"`
-	Size     int    `json:"size"`
 	Content  string `json:"content"`
+	Size     int    `json:"size"`
 }

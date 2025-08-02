@@ -135,8 +135,8 @@ func WebSocketRateLimitHandler(
 				Msg("WebSocket rate limit exceeded")
 
 			type jsonRPCError struct {
-				Code    int    `json:"code"`
 				Message string `json:"message"`
+				Code    int    `json:"code"`
 			}
 			type jsonRPCErrorResponse struct {
 				JSONRPC string       `json:"jsonrpc"`

@@ -10,10 +10,10 @@ import (
 
 func TestParse(t *testing.T) {
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    parser.Script
-		wantErr error
 	}{
 		{
 			name:  "single command with no args",
@@ -2110,10 +2110,10 @@ func TestParse(t *testing.T) {
 
 func TestParseExpressions(t *testing.T) {
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    string
-		wantErr error
 	}{
 		{
 			name:  "empty input",
@@ -2266,10 +2266,10 @@ func TestParseExpressions(t *testing.T) {
 
 func TestPostProcess(t *testing.T) {
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    string
-		wantErr error
 	}{
 		{
 			name:  "empty arg",

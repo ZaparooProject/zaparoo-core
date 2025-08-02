@@ -51,15 +51,15 @@ func downloadDoc(platformID, toDir string) error {
 	}
 
 	url := baseURL + fileName
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return err
 	}
-	
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -143,7 +143,7 @@ func main() {
 func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
-		return fmt.Errorf("error creating zip file: %v", err)
+		return fmt.Errorf("error creating zip file: %w", err)
 	}
 	defer func(zipFile *os.File) {
 		_ = zipFile.Close()
@@ -166,7 +166,7 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 	for _, file := range filesToAdd {
 		err := addFileToZip(zipWriter, file.path, file.arcname)
 		if err != nil {
-			return fmt.Errorf("error adding file to zip: %v", err)
+			return fmt.Errorf("error adding file to zip: %w", err)
 		}
 	}
 
@@ -178,17 +178,17 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 				} else {
 					destPath := filepath.Join(buildDir, filepath.Base(item))
 					if err := copyFile(item, destPath); err != nil {
-						return fmt.Errorf("error copying extra file: %v", err)
+						return fmt.Errorf("error copying extra file: %w", err)
 					}
 					err = addFileToZip(zipWriter, destPath, filepath.Base(item))
 				}
 				if err != nil {
-					return fmt.Errorf("error adding extra item to zip: %v", err)
+					return fmt.Errorf("error adding extra item to zip: %w", err)
 				}
 			}
 		}
 	}
-	
+
 	return nil
 }
 

@@ -18,8 +18,8 @@ import (
 )
 
 type PathResult struct {
-	System systemdefs.System
 	Path   string
+	System systemdefs.System
 }
 
 // FindPath case-insensitively finds a file/folder at a path.
@@ -88,7 +88,10 @@ func GetSystemPaths(
 					continue
 				}
 
-				matches = append(matches, PathResult{system, path})
+				matches = append(matches, PathResult{
+					System: system,
+					Path:   path,
+				})
 			}
 		}
 
@@ -100,7 +103,10 @@ func GetSystemPaths(
 				if err != nil {
 					continue
 				}
-				matches = append(matches, PathResult{system, path})
+				matches = append(matches, PathResult{
+					System: system,
+					Path:   path,
+				})
 			}
 		}
 	}
@@ -293,9 +299,9 @@ func GetFiles(
 }
 
 type IndexStatus struct {
+	SystemID string
 	Total    int
 	Step     int
-	SystemID string
 	Files    int
 }
 

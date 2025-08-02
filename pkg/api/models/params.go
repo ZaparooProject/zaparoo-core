@@ -3,9 +3,9 @@ package models
 import "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 type SearchParams struct {
-	Query      string    `json:"query"`
 	Systems    *[]string `json:"systems"`
 	MaxResults *int      `json:"maxResults"`
+	Query      string    `json:"query"`
 }
 
 type MediaIndexParams struct {
@@ -21,19 +21,19 @@ type RunParams struct {
 }
 
 type RunScriptParams struct {
-	ZapScript int                   `json:"zapscript"`
 	Name      *string               `json:"name"`
 	Cmds      []models.ZapScriptCmd `json:"cmds"`
+	ZapScript int                   `json:"zapscript"`
 	Unsafe    bool                  `json:"unsafe"`
 }
 
 type AddMappingParams struct {
 	Label    string `json:"label"`
-	Enabled  bool   `json:"enabled"`
 	Type     string `json:"type"`
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
+	Enabled  bool   `json:"enabled"`
 }
 
 type DeleteMappingParams struct {
@@ -41,13 +41,13 @@ type DeleteMappingParams struct {
 }
 
 type UpdateMappingParams struct {
-	ID       int     `json:"id"`
 	Label    *string `json:"label"`
 	Enabled  *bool   `json:"enabled"`
 	Type     *string `json:"type"`
 	Match    *string `json:"match"`
 	Pattern  *string `json:"pattern"`
 	Override *string `json:"override"`
+	ID       int     `json:"id"`
 }
 
 type ReaderWriteParams struct {

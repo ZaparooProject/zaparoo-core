@@ -53,9 +53,9 @@ const (
 )
 
 type Command struct {
+	AdvArgs map[string]string
 	Name    string
 	Args    []string
-	AdvArgs map[string]string
 }
 
 type Script struct {
@@ -71,8 +71,8 @@ const (
 )
 
 type PostArgPart struct {
-	Type  PostArgPartType
 	Value string
+	Type  PostArgPartType
 }
 
 func isCmdName(ch rune) bool {
@@ -829,13 +829,13 @@ type ExprEnvActiveMedia struct {
 }
 
 type ArgExprEnv struct {
+	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
+	Device       ExprEnvDevice      `expr:"device"`
+	LastScanned  ExprEnvLastScanned `expr:"last_scanned"`
 	Platform     string             `expr:"platform"`
 	Version      string             `expr:"version"`
 	ScanMode     string             `expr:"scan_mode"`
-	Device       ExprEnvDevice      `expr:"device"`
-	LastScanned  ExprEnvLastScanned `expr:"last_scanned"`
 	MediaPlaying bool               `expr:"media_playing"`
-	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
 }
 
 type CustomLauncherExprEnv struct {
@@ -860,15 +860,15 @@ func (sr *ScriptReader) ParseExpressions() (string, error) {
 			break
 		}
 
-		switch {
-		case ch == SymEscapeSeq:
+		switch ch {
+		case SymEscapeSeq:
 			next, err := sr.parseEscapeSeq()
 			if err != nil {
 				return result, err
 			}
 			result += next
 			continue
-		case ch == SymExpressionStart:
+		case SymExpressionStart:
 			exprValue, err := sr.parseExpression()
 			if err != nil {
 				return result, err

@@ -6,9 +6,9 @@ import (
 )
 
 type Scan struct {
-	Source string
-	Token  *tokens.Token
 	Error  error
+	Token  *tokens.Token
+	Source string
 }
 
 type Reader interface {

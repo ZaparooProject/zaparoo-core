@@ -2,8 +2,8 @@ package models
 
 type NoticeArgs struct {
 	Text     string `json:"text"`
-	Timeout  int    `json:"timeout"`
 	Complete string `json:"complete"`
+	Timeout  int    `json:"timeout"`
 }
 
 type PickerItem struct {
@@ -12,8 +12,8 @@ type PickerItem struct {
 }
 
 type PickerArgs struct {
-	Items    []PickerItem `json:"items"`
 	Title    string       `json:"title"`
+	Items    []PickerItem `json:"items"`
 	Selected int          `json:"selected"`
 	Timeout  int          `json:"timeout"`
 	Unsafe   bool         `json:"unsafe"`

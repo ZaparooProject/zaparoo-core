@@ -47,15 +47,15 @@ func main() {
 func generateWinresFile(tmpl *template.Template, data TemplateData) error {
 	outFile, err := os.Create("cmd/windows/winres/winres.json")
 	if err != nil {
-		return fmt.Errorf("error creating output file: %v", err)
+		return fmt.Errorf("error creating output file: %w", err)
 	}
 	defer func(outFile *os.File) {
 		_ = outFile.Close()
 	}(outFile)
 
 	if err := tmpl.Execute(outFile, data); err != nil {
-		return fmt.Errorf("error executing template: %v", err)
+		return fmt.Errorf("error executing template: %w", err)
 	}
-	
+
 	return nil
 }

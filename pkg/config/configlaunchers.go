@@ -27,9 +27,9 @@ type LaunchersDefault struct {
 type LaunchersCustom struct {
 	ID        string   `toml:"id"`
 	System    string   `toml:"system"`
+	Execute   string   `toml:"execute"`
 	MediaDirs []string `toml:"media_dirs"`
 	FileExts  []string `toml:"file_exts"`
-	Execute   string   `toml:"execute"`
 }
 
 func (c *Instance) DefaultMediaDir() string {

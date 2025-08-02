@@ -16,20 +16,20 @@ import (
 )
 
 type State struct {
-	mu             sync.RWMutex
-	runZapScript   bool
-	activeToken    tokens.Token // TODO: make a pointer
-	lastScanned    tokens.Token // TODO: make a pointer
-	stopService    bool         // ctx used for observers when stopped
 	platform       platforms.Platform
+	ctx            context.Context
+	Notifications  chan<- models.Notification
 	readers        map[string]readers.Reader
 	softwareToken  *tokens.Token
 	wroteToken     *tokens.Token
-	Notifications  chan<- models.Notification // TODO: move outside state
 	activePlaylist *playlists.Playlist
-	ctx            context.Context
 	ctxCancelFunc  context.CancelFunc
 	activeMedia    *models.ActiveMedia
+	lastScanned    tokens.Token
+	activeToken    tokens.Token
+	mu             sync.RWMutex
+	stopService    bool
+	runZapScript   bool
 }
 
 func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {

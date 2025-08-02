@@ -17,7 +17,7 @@ type RequestEnv struct {
 	State      *state.State
 	Database   *database.Database
 	TokenQueue chan<- tokens.Token
-	IsLocal    bool
-	ID         uuid.UUID
 	Params     json.RawMessage
+	ID         uuid.UUID
+	IsLocal    bool
 }

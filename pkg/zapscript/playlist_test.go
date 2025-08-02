@@ -13,8 +13,8 @@ func TestReadPlsFile(t *testing.T) {
 	tests := []struct {
 		name           string
 		plsContent     string
-		expectedMedia  []playlists.PlaylistItem
 		expectedErrMsg string
+		expectedMedia  []playlists.PlaylistItem
 	}{
 		{
 			name: "valid_pls_with_multiple_entries",

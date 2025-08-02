@@ -117,7 +117,7 @@ func WaitForInternet(maxTries int) bool {
 	for i := 0; i < maxTries; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", http.NoBody)
 		if err != nil {
 			cancel()
 			continue

@@ -72,7 +72,7 @@ func run() error {
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
-		return fmt.Errorf("error starting service: %s", err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -90,7 +90,7 @@ func run() error {
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)
-		return fmt.Errorf("error stopping service: %s", err)
+		return fmt.Errorf("error stopping service: %w", err)
 	}
 
 	return nil
