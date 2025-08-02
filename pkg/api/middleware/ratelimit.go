@@ -70,14 +70,20 @@ func (rl *IPRateLimiter) Cleanup() {
 	}
 }
 
-// StartCleanup starts a goroutine to periodically clean up old rate limiters
-func (rl *IPRateLimiter) StartCleanup() {
+// StartCleanup starts a goroutine to periodically clean up old rate limiters.
+// The cleanup goroutine will stop when the provided context is cancelled.
+func (rl *IPRateLimiter) StartCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Hardcoded cleanup interval
 		defer ticker.Stop()
 
-		for range ticker.C {
-			rl.Cleanup()
+		for {
+			select {
+			case <-ticker.C:
+				rl.Cleanup()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 }
