@@ -10,7 +10,9 @@ require (
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
 	github.com/clausecker/nfc/v2 v2.1.4
+	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
+	github.com/expr-lang/expr v1.17.5
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
@@ -42,11 +44,9 @@ require (
 
 require (
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
-	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/creack/goselect v0.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/expr-lang/expr v1.17.5 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
