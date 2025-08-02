@@ -49,6 +49,13 @@ var serviceFile string
 const serviceFilePath = "/userdata/system/services/zaparoo_service"
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &batocera.Platform{}
 	flags := cli.SetupFlags()
 
@@ -73,25 +80,22 @@ func main() {
 	if *doInstall {
 		err := os.MkdirAll(path.Dir(serviceFilePath), 0755)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error creating service directory: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error creating service directory: %v", err)
 		}
 		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0755)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error writing service file: %v", err)
 		}
 		fmt.Println("Zaparoo service installed successfully.")
-		os.Exit(0)
+		return nil
 	} else if *doUninstall {
 		if _, err := os.Stat(serviceFilePath); err == nil {
 			err := os.Remove(serviceFilePath)
 			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "Error removing service file: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("Error removing service file: %v", err)
 			}
 			fmt.Println("Zaparoo service uninstalled successfully.")
-			os.Exit(0)
+			return nil
 		}
 	}
 
@@ -116,10 +120,12 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating service: %v", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return err
+	}
 
 	flags.Post(cfg, pl)
 
@@ -139,16 +145,14 @@ func main() {
 		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error setting up UI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error setting up UI: %v", err)
 	}
 
 	err = app.Run()
 	if err != nil {
 		log.Error().Msgf("error running UI: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error running UI: %v", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

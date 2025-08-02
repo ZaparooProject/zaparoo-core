@@ -126,9 +126,10 @@ func getLinuxList() ([]string, error) {
 }
 
 func GetSerialDeviceList() ([]string, error) {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return getLinuxList()
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
@@ -146,7 +147,7 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 
 		return devices, nil
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
@@ -164,7 +165,7 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 
 		return devices, nil
+	default:
+		return serial.GetPortsList()
 	}
-
-	return serial.GetPortsList()
 }

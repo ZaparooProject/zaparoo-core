@@ -38,17 +38,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := generateWinresFile(tmpl, data); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error generating winres file: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func generateWinresFile(tmpl *template.Template, data TemplateData) error {
 	outFile, err := os.Create("cmd/windows/winres/winres.json")
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating output file: %v", err)
 	}
 	defer func(outFile *os.File) {
 		_ = outFile.Close()
 	}(outFile)
 
 	if err := tmpl.Execute(outFile, data); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error executing template: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error executing template: %v", err)
 	}
+	
+	return nil
 }

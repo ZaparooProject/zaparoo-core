@@ -183,8 +183,10 @@ retry:
 	buf := make([]byte, 255+7)
 	if tries == 0 {
 		// prepend any leftover response from a skipped ACK
-		buf = make([]byte, 255+7-len(pre))
-		buf = append(pre, buf...)
+		newBuf := make([]byte, len(pre)+len(buf))
+		copy(newBuf, pre)
+		copy(newBuf[len(pre):], buf)
+		buf = newBuf
 	}
 
 	_, err := port.Read(buf)
@@ -369,14 +371,15 @@ type Target struct {
 func InListPassiveTarget(port serial.Port) (*Target, error) {
 	// log.Debug().Msg("running inlistpassivetarget")
 	res, err := callCommand(port, cmdInListPassiveTarget, []byte{0x01, 0x00})
-	if errors.Is(err, ErrNoFrameFound) {
+	switch {
+	case errors.Is(err, ErrNoFrameFound):
 		// no tag detected
 		return nil, nil
-	} else if err != nil {
+	case err != nil:
 		return nil, err
-	} else if len(res) < 2 || res[0] != 0x4B {
+	case len(res) < 2 || res[0] != 0x4B:
 		return nil, errors.New("unexpected passive target response")
-	} else if res[1] != 0x01 {
+	case res[1] != 0x01:
 		// no tag detected
 		return nil, nil
 	}

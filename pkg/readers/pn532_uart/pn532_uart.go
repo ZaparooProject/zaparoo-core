@@ -159,36 +159,38 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			blockRetryMax := 3
 			blockRetry := 0
 			data := make([]byte, 0)
+		readLoop:
 			for i < 256 {
 				// TODO: this is a random limit i picked, should detect blocks in card
 
 				if blockRetry >= blockRetryMax {
 					errCount++
-					break
+					break readLoop
 				}
 
 				res, err := InDataExchange(r.port, []byte{0x30, byte(i)})
-				if errors.Is(err, ErrNoFrameFound) {
+				switch {
+				case errors.Is(err, ErrNoFrameFound):
 					// sometimes the response just doesn't work, try again
 					log.Warn().Msg("no frame found")
 					blockRetry++
-					continue
-				} else if err != nil {
+					continue readLoop
+				case err != nil:
 					log.Error().Err(err).Msg("failed to run indataexchange")
 					errCount++
-					break
-				} else if len(res) < 2 {
+					break readLoop
+				case len(res) < 2:
 					log.Error().Msg("unexpected data response length")
 					errCount++
-					break
-				} else if res[0] != 0x41 || res[1] != 0x00 {
+					break readLoop
+				case res[0] != 0x41 || res[1] != 0x00:
 					log.Warn().Msgf("unexpected data format: %x", res)
 					// sometimes we receive the result of the last passive
 					// target command, so just try request again a few times
 					blockRetry++
-					continue
-				} else if bytes.Equal(res[2:], make([]byte, 16)) {
-					break
+					continue readLoop
+				case bytes.Equal(res[2:], make([]byte, 16)):
+					break readLoop
 				}
 
 				data = append(data, res[2:]...)

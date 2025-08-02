@@ -101,6 +101,13 @@ func isRunning() bool {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &windows.Platform{}
 	flags := cli.SetupFlags()
 
@@ -108,11 +115,10 @@ func main() {
 
 	elevated, err := isElevated()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error checking elevated rights: %s\n", err)
+		return fmt.Errorf("error checking elevated rights: %s", err)
 	}
 	if elevated {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run with elevated rights\n")
-		os.Exit(1)
+		return fmt.Errorf("Zaparoo cannot be run with elevated rights")
 	}
 
 	logWriters := []io.Writer{os.Stderr}
@@ -122,8 +128,7 @@ func main() {
 	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error migrating config: %v", err)
 		} else {
 			defaults = migrated
 		}
@@ -146,16 +151,14 @@ func main() {
 
 	if isRunning() {
 		log.Error().Msg("core is already running")
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo Core is already running\n")
 		_ = beeep.Notify(notificationTitle, "Zaparoo Core is already running.", "")
-		os.Exit(1)
+		return fmt.Errorf("Zaparoo Core is already running")
 	}
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error starting service: %s", err)
 	}
 	err = beeep.Notify(notificationTitle, "Core service started.", "")
 	if err != nil {
@@ -196,5 +199,5 @@ func main() {
 		}
 	}
 
-	os.Exit(0)
+	return nil
 }

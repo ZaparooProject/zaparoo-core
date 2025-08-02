@@ -43,6 +43,13 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
@@ -67,22 +74,21 @@ func main() {
 	if *doInstall {
 		err := installer.CLIInstall()
 		if err != nil {
-			os.Exit(1)
+			return fmt.Errorf("installation failed")
 		} else {
-			os.Exit(0)
+			return nil
 		}
 	} else if *doUninstall {
 		err := installer.CLIUninstall()
 		if err != nil {
-			os.Exit(1)
+			return fmt.Errorf("uninstallation failed")
 		} else {
-			os.Exit(0)
+			return nil
 		}
 	}
 
 	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
-		os.Exit(1)
+		return fmt.Errorf("Zaparoo cannot be run as root")
 	}
 
 	var logWriters []io.Writer
@@ -109,8 +115,7 @@ func main() {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error starting service: %s", err)
 		}
 
 		defer func() {
@@ -140,15 +145,13 @@ func main() {
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error building UI: %s", err)
 		}
 
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error running UI: %s", err)
 		}
 
 		exit <- true
@@ -159,5 +162,5 @@ func main() {
 	case <-exit:
 	}
 
-	os.Exit(0)
+	return nil
 }

@@ -109,7 +109,8 @@ func Start(
 		case gmcBytes := <-gmcChan:
 			log.Debug().Msg("Receieved GMC Load Event")
 			// **local: can prefix any valid Zapscript to run locally without proxy
-			if bytes.Equal(gmcBytes[:10], []byte("zapscript:")) {
+			switch {
+			case bytes.Equal(gmcBytes[:10], []byte("zapscript:")):
 				log.Debug().Msg("GMC Execute is Zapscript Format, running as Token")
 				text := string(gmcBytes[10:])
 				t := tokens.Token{
@@ -118,12 +119,12 @@ func Start(
 				}
 				st.SetActiveCard(t)
 				itq <- t
-			} else if proxyAddr != nil {
+			case proxyAddr != nil:
 				_, err := proxyConn.WriteTo(gmcBytes, *proxyAddr)
 				if err != nil {
 					log.Error().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
 				}
-			} else {
+			default:
 				log.Error().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
 			}
 		case <-ctx.Done():

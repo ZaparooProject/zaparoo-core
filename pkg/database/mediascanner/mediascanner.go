@@ -227,15 +227,13 @@ func GetFiles(
 
 			for i := range zipFiles {
 				abs := filepath.Join(path, zipFiles[i])
-				if utils.MatchSystemFile(cfg, platform, (*system).ID, abs) {
+				if utils.MatchSystemFile(cfg, platform, system.ID, abs) {
 					*results = append(*results, abs)
 				}
 			}
-		} else {
+		} else if utils.MatchSystemFile(cfg, platform, system.ID, path) {
 			// regular files
-			if utils.MatchSystemFile(cfg, platform, (*system).ID, path) {
-				*results = append(*results, path)
-			}
+			*results = append(*results, path)
 		}
 
 		return nil

@@ -311,44 +311,45 @@ func (s *Service) Restart() error {
 	return nil
 }
 
-func (s *Service) ServiceHandler(cmd *string) {
-	if *cmd == "exec" {
+func (s *Service) ServiceHandler(cmd *string) error {
+	switch *cmd {
+	case "exec":
 		s.startService()
-		os.Exit(0)
-	} else if *cmd == "start" {
+		return nil
+	case "start":
 		err := s.Start()
 		if err != nil {
 			log.Error().Msg(err.Error())
-			os.Exit(1)
+			return err
 		}
-
-		os.Exit(0)
-	} else if *cmd == "stop" {
+		return nil
+	case "stop":
 		err := s.Stop()
 		if err != nil {
 			log.Error().Msg(err.Error())
-			os.Exit(1)
+			return err
 		}
-
-		os.Exit(0)
-	} else if *cmd == "restart" {
+		return nil
+	case "restart":
 		err := s.Restart()
 		if err != nil {
 			log.Error().Msg(err.Error())
-			os.Exit(1)
+			return err
 		}
-
-		os.Exit(0)
-	} else if *cmd == "status" {
+		return nil
+	case "status":
 		if s.Running() {
 			fmt.Println("started")
-			os.Exit(0)
+			return nil
 		} else {
 			fmt.Println("stopped")
-			os.Exit(1)
+			return fmt.Errorf("service not running")
 		}
-	} else if *cmd != "" {
+	case "":
+		// Do nothing for empty command
+		return nil
+	default:
 		fmt.Printf("Unknown service argument: %s", *cmd)
-		os.Exit(1)
+		return fmt.Errorf("unknown service argument: %s", *cmd)
 	}
 }

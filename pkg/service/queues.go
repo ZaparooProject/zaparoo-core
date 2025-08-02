@@ -86,7 +86,9 @@ func runTokenZapScript(
 			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
 			before := cmds[:i+1]
 			after := cmds[i+1:]
-			cmds = append(before, append(result.NewCommands, after...)...)
+			before = append(before, result.NewCommands...)
+			cmds = before
+			cmds = append(cmds, after...)
 		}
 	}
 
@@ -143,14 +145,15 @@ func handlePlaylist(
 ) {
 	activePlaylist := st.GetActivePlaylist()
 
-	if pls == nil {
+	switch {
+	case pls == nil:
 		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Msg("clearing playlist")
 		}
 		st.SetActivePlaylist(nil)
 		return
-	} else if activePlaylist == nil {
+	case activePlaylist == nil:
 		// new playlist loaded
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
@@ -160,7 +163,7 @@ func handlePlaylist(
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
 		return
-	} else {
+	default:
 		// active playlist updated
 		if pls.Current() == activePlaylist.Current() &&
 			pls.Playing == activePlaylist.Playing {

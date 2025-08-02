@@ -211,8 +211,8 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {
 				if !slices.Contains(currentSystems, option) {
-					newSystems := append(currentSystems, option)
-					cfg.SetScanIgnoreSystem(newSystems)
+					currentSystems = append(currentSystems, option)
+					cfg.SetScanIgnoreSystem(currentSystems)
 				} else {
 					index := slices.Index(currentSystems, option)
 					newSystems := slices.Delete(currentSystems, index, index+1)

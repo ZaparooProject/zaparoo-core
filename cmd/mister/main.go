@@ -84,6 +84,13 @@ func addToStartup() error {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -117,10 +124,9 @@ func main() {
 	if *addStartupFlag {
 		err := addToStartup()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error adding to startup: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
@@ -150,24 +156,21 @@ func main() {
 	if *showLoader != "" {
 		err := widgets.NoticeUI(pl, *showLoader, true)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error showing loader: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	} else if *showPicker != "" {
 		err := widgets.PickerUI(cfg, pl, *showPicker)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error showing picker: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	} else if *showNotice != "" {
 		err := widgets.NoticeUI(pl, *showNotice, false)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing notice: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error showing notice: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	svc, err := utils.NewService(utils.ServiceArgs{
@@ -178,18 +181,19 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating service: %v", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return err
+	}
 
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
 	err = tryAddStartup()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error adding startup: %v", err)
 	}
 
 	// try to auto-start service if it's not running already
@@ -206,8 +210,9 @@ func main() {
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
 		enableZapScript()
-		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error displaying TUI: %v", err)
 	}
 	enableZapScript()
+
+	return nil
 }

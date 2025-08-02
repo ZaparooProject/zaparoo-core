@@ -40,6 +40,13 @@ import (
 // performance with a decent number of test files
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &Platform{}
 	flags := cli.SetupFlags()
 
@@ -65,8 +72,7 @@ func main() {
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error starting service: %s", err)
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -84,8 +90,8 @@ func main() {
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)
-		os.Exit(1)
+		return fmt.Errorf("error stopping service: %s", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

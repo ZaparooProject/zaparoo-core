@@ -298,16 +298,17 @@ func BuildGenerateDBPage(
 	}
 
 	media, err := getMediaState(context.Background(), cfg)
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Error().Err(err).Msg("error getting media state")
-	} else if media.Database.Indexing {
+	case media.Database.Indexing:
 		updateProgress(
 			*media.Database.CurrentStep,
 			*media.Database.TotalSteps,
 			*media.Database.CurrentStepDisplay,
 		)
 		generateDB.SwitchToPage("progress")
-	} else {
+	default:
 		generateDB.SwitchToPage("initial")
 	}
 

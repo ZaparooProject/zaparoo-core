@@ -122,7 +122,8 @@ func runFlag(cfg *config.Instance, value string) {
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
-	if isFlagPassed("write") {
+	switch {
+	case isFlagPassed("write"):
 		if *f.Write == "" {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: write flag requires a value\n")
 			os.Exit(1)
@@ -140,10 +141,10 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
-		defer close(sigs)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
+			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}()
@@ -152,22 +153,24 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
+			close(sigs)
 			enableRun()
 			os.Exit(1)
 		} else {
 			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
+			close(sigs)
 			enableRun()
 			os.Exit(0)
 		}
-	} else if *f.Read {
+	case *f.Read:
 		enableRun := client.DisableZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
-		defer close(sigs)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
+			close(sigs)
 			enableRun()
 			os.Exit(0)
 		}()
@@ -179,25 +182,27 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			log.Error().Err(err).Msg("error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
+			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}
 
+		close(sigs)
 		enableRun()
 		fmt.Println(resp)
 		os.Exit(0)
-	} else if isFlagPassed("launch") {
+	case isFlagPassed("launch"):
 		if *f.Launch == "" {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: launch flag requires a value\n")
 			os.Exit(1)
 		}
 		runFlag(cfg, *f.Launch)
-	} else if isFlagPassed("run") {
+	case isFlagPassed("run"):
 		if *f.Run == "" {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: run flag requires a value\n")
 		}
 		runFlag(cfg, *f.Run)
-	} else if isFlagPassed("api") {
+	case isFlagPassed("api"):
 		if *f.Api == "" {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: api flag requires a value\n")
 			os.Exit(1)
@@ -219,7 +224,7 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		fmt.Println(resp)
 		os.Exit(0)
-	} else if *f.Reload {
+	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
 			log.Error().Err(err).Msg("error reloading settings")

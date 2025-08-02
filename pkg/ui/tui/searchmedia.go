@@ -122,16 +122,17 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyRight {
+		switch {
+		case k == tcell.KeyRight:
 			app.SetFocus(searchInput)
 			return nil
-		} else if k == tcell.KeyLeft {
+		case k == tcell.KeyLeft:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyUp && mediaList.GetCurrentItem() == 0 {
+		case k == tcell.KeyUp && mediaList.GetCurrentItem() == 0:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1 {
+		case k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1:
 			app.SetFocus(searchInput)
 			return nil
 		}

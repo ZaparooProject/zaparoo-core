@@ -195,11 +195,12 @@ func RunCommand(
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := parser.NewParser(linkValue)
 		script, err := reader.ParseScript()
-		if err != nil {
+		switch {
+		case err != nil:
 			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", err)
-		} else if len(script.Cmds) == 0 {
+		case len(script.Cmds) == 0:
 			return platforms.CmdResult{}, fmt.Errorf("zap link is empty")
-		} else if len(script.Cmds) > 1 {
+		case len(script.Cmds) > 1:
 			log.Warn().Msgf("zap link has multiple commands, queueing rest")
 			// TODO: this could result in a recursive scan
 			newCmds = append(newCmds, script.Cmds[1:]...)

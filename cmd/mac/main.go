@@ -47,9 +47,15 @@ import (
 var systrayIcon []byte
 
 func main() {
-	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	if os.Geteuid() == 0 {
+		return fmt.Errorf("Zaparoo cannot be run as root")
 	}
 
 	pl := &mac.Platform{}
@@ -88,12 +94,13 @@ func main() {
 
 	flags.Post(cfg, pl)
 
+	var stopSvc func() error
 	if !utils.IsServiceRunning(cfg) {
-		stopSvc, err := service.Start(pl, cfg)
+		var err error
+		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error starting service: %s", err)
 		}
 
 		defer func() {
@@ -111,13 +118,15 @@ func main() {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	if *daemonMode {
+	// Handle application modes
+	switch {
+	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
-	} else if *guiMode {
+	case *guiMode:
 		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
 			exit <- true
 		})
-	} else {
+	default:
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
@@ -127,15 +136,13 @@ func main() {
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error building UI: %s", err)
 		}
 
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error running UI: %s", err)
 		}
 
 		exit <- true
@@ -146,5 +153,5 @@ func main() {
 	case <-exit:
 	}
 
-	os.Exit(0)
+	return nil
 }

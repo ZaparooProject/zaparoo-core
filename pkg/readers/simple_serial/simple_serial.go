@@ -61,13 +61,14 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	hasArg := false
 	for i := 0; i < len(ps); i++ {
 		ps[i] = strings.TrimSpace(ps[i])
-		if strings.HasPrefix(ps[i], "uid=") {
+		switch {
+		case strings.HasPrefix(ps[i], "uid="):
 			t.UID = ps[i][4:]
 			hasArg = true
-		} else if strings.HasPrefix(ps[i], "text=") {
+		case strings.HasPrefix(ps[i], "text="):
 			t.Text = ps[i][5:]
 			hasArg = true
-		} else if strings.HasPrefix(ps[i], "removable=") {
+		case strings.HasPrefix(ps[i], "removable="):
 			// TODO: this isn't really what removable means, but it works
 			//		 for now. it will block shell commands though
 			t.FromAPI = ps[i][10:] == "no"

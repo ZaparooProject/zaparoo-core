@@ -134,18 +134,20 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 
 			i := 0
 			data := make([]byte, 0)
+		dataLoop:
 			for {
 				res, err = tag.Transmit([]byte{0xFF, 0xB0, 0x00, byte(i), 0x04})
-				if err != nil {
+				switch {
+				case err != nil:
 					log.Debug().Msgf("error transmitting: %s", err)
-					break
-				} else if bytes.Equal(res, []byte{0x00, 0x00, 0x00, 0x00, 0x90, 0x00}) {
-					break
-				} else if len(res) < 6 {
+					break dataLoop
+				case bytes.Equal(res, []byte{0x00, 0x00, 0x00, 0x00, 0x90, 0x00}):
+					break dataLoop
+				case len(res) < 6:
 					log.Debug().Msgf("invalid response")
-					break
-				} else if i >= 221 {
-					break
+					break dataLoop
+				case i >= 221:
+					break dataLoop
 				}
 
 				data = append(data, res[:len(res)-2]...)

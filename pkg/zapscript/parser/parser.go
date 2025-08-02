@@ -217,14 +217,14 @@ func (sr *ScriptReader) parseQuotedArg(start rune) (string, error) {
 			if err != nil {
 				return arg, err
 			}
-			arg = arg + next
+			arg += next
 			continue
 		} else if ch == SymExpressionStart {
 			exprValue, err := sr.parseExpression()
 			if err != nil {
 				return arg, err
 			}
-			arg = arg + exprValue
+			arg += exprValue
 			continue
 		}
 
@@ -265,7 +265,7 @@ func (sr *ScriptReader) parseExpression() (string, error) {
 			if err != nil {
 				return rawExpr, err
 			} else if next == SymExpressionEnd {
-				rawExpr = rawExpr + TokExprEnd
+				rawExpr += TokExprEnd
 				err := sr.skip()
 				if err != nil {
 					return rawExpr, err
@@ -274,7 +274,7 @@ func (sr *ScriptReader) parseExpression() (string, error) {
 			}
 		}
 
-		rawExpr = rawExpr + string(ch)
+		rawExpr += string(ch)
 	}
 
 	return rawExpr, nil
@@ -296,7 +296,7 @@ func (sr *ScriptReader) parsePostExpression() (string, error) {
 			break
 		}
 
-		rawExpr = rawExpr + string(ch)
+		rawExpr += string(ch)
 	}
 
 	return rawExpr, nil
@@ -399,7 +399,7 @@ func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error
 					return args, advArgs, ErrUnmatchedInputMacroExt
 				}
 
-				extName = extName + string(next)
+				extName += string(next)
 
 				if next == SymInputMacroExtEnd {
 					break
@@ -460,31 +460,31 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 		buf = append(buf, ch)
 
 		if inValue {
-			if valueStart == sr.pos-1 &&
-				(ch == SymArgDoubleQuote || ch == SymArgSingleQuote) {
+			switch {
+			case valueStart == sr.pos-1 && (ch == SymArgDoubleQuote || ch == SymArgSingleQuote):
 				quotedValue, err := sr.parseQuotedArg(ch)
 				if err != nil {
 					return advArgs, string(buf), err
 				}
 				currentValue = quotedValue
 				continue
-			} else if ch == SymJSONStart && valueStart == sr.pos-1 {
+			case ch == SymJSONStart && valueStart == sr.pos-1:
 				jsonValue, err := sr.parseJSONArg()
 				if err != nil {
 					return advArgs, string(buf), err
 				}
 				currentValue = jsonValue
 				continue
-			} else if ch == SymEscapeSeq {
+			case ch == SymEscapeSeq:
 				// escaping next character
 				next, err := sr.parseEscapeSeq()
 				if err != nil {
 					return advArgs, string(buf), err
 				} else if next == "" {
-					currentValue = currentValue + string(SymEscapeSeq)
+					currentValue += string(SymEscapeSeq)
 					continue
 				}
-				currentValue = currentValue + next
+				currentValue += next
 				continue
 			}
 		}
@@ -506,23 +506,22 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 			continue
 		}
 
-		if inValue {
+		switch {
+		case inValue:
 			if ch == SymExpressionStart {
 				exprValue, err := sr.parseExpression()
 				if err != nil {
 					return advArgs, string(buf), err
 				}
-				currentValue = currentValue + exprValue
+				currentValue += exprValue
 			} else {
-				currentValue = currentValue + string(ch)
+				currentValue += string(ch)
 			}
 			continue
-		} else {
-			if !isAdvArgName(ch) {
-				return advArgs, string(buf), ErrInvalidAdvArgName
-			}
-			currentArg = currentArg + string(ch)
-			continue
+		case !isAdvArgName(ch):
+			return advArgs, string(buf), ErrInvalidAdvArgName
+		default:
+			currentArg += string(ch)
 		}
 	}
 
@@ -541,81 +540,84 @@ func (sr *ScriptReader) parseArgs(
 	currentArg := prefix
 	argStart := sr.pos
 
+argsLoop:
 	for {
 		ch, err := sr.read()
 		if err != nil {
 			return args, advArgs, err
 		} else if ch == eof {
-			break
+			break argsLoop
 		}
 
-		if argStart == sr.pos-1 &&
-			(ch == SymArgDoubleQuote || ch == SymArgSingleQuote) {
+		switch {
+		case argStart == sr.pos-1 && (ch == SymArgDoubleQuote || ch == SymArgSingleQuote):
 			quotedArg, err := sr.parseQuotedArg(ch)
 			if err != nil {
 				return args, advArgs, err
 			}
 			currentArg = quotedArg
-			continue
-		} else if argStart == sr.pos-1 && ch == SymJSONStart {
+			continue argsLoop
+		case argStart == sr.pos-1 && ch == SymJSONStart:
 			jsonArg, err := sr.parseJSONArg()
 			if err != nil {
 				return args, advArgs, err
 			}
 			currentArg = jsonArg
-			continue
-		} else if ch == SymEscapeSeq {
+			continue argsLoop
+		case ch == SymEscapeSeq:
 			// escaping next character
 			next, err := sr.parseEscapeSeq()
 			if err != nil {
 				return args, advArgs, err
 			} else if next == "" {
-				currentArg = currentArg + string(SymEscapeSeq)
-				continue
+				currentArg += string(SymEscapeSeq)
+				continue argsLoop
 			}
-			currentArg = currentArg + next
-			continue
+			currentArg += next
+			continue argsLoop
 		}
 
 		eoc, err := sr.checkEndOfCmd(ch)
 		if err != nil {
 			return args, advArgs, err
 		} else if eoc {
-			break
+			break argsLoop
 		}
 
-		if !onlyOneArg && ch == SymArgSep {
+		switch {
+		case !onlyOneArg && ch == SymArgSep:
 			// new argument
 			currentArg = strings.TrimSpace(currentArg)
 			args = append(args, currentArg)
 			currentArg = ""
 			argStart = sr.pos
-			continue
-		} else if ch == SymAdvArgStart {
+			continue argsLoop
+		case ch == SymAdvArgStart:
 			newAdvArgs, buf, err := sr.parseAdvArgs()
-			if errors.Is(err, ErrInvalidAdvArgName) {
+			switch {
+			case errors.Is(err, ErrInvalidAdvArgName):
 				// if an adv arg name is invalid, fallback on treating it
 				// as a positional arg with a ? in it
-				currentArg = currentArg + string(SymAdvArgStart) + buf
-				continue
-			} else if err != nil {
+				currentArg += string(SymAdvArgStart) + buf
+				continue argsLoop
+			case err != nil:
 				return args, advArgs, err
 			}
 
 			advArgs = newAdvArgs
 
 			// advanced args are always the last part of a command
-			break
-		} else if ch == SymExpressionStart {
+			break argsLoop
+		case ch == SymExpressionStart:
 			exprValue, err := sr.parseExpression()
 			if err != nil {
 				return args, advArgs, err
 			}
-			currentArg = currentArg + exprValue
-			continue
-		} else {
-			currentArg = currentArg + string(ch)
-			continue
+			currentArg += exprValue
+			continue argsLoop
+		default:
+			currentArg += string(ch)
+			continue argsLoop
 		}
 	}
 
@@ -632,12 +634,13 @@ func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 	cmd := Command{}
 	var buf []rune
 
+commandLoop:
 	for {
 		ch, err := sr.read()
 		if err != nil {
 			return cmd, string(buf), err
 		} else if ch == eof {
-			break
+			break commandLoop
 		}
 
 		buf = append(buf, ch)
@@ -646,15 +649,16 @@ func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 		if err != nil {
 			return cmd, string(buf), err
 		} else if eoc {
-			break
+			break commandLoop
 		}
 
-		if isCmdName(ch) {
-			cmd.Name = cmd.Name + string(ch)
-		} else if ch == SymArgStart || ch == SymAdvArgStart {
+		switch {
+		case isCmdName(ch):
+			cmd.Name += string(ch)
+		case ch == SymArgStart || ch == SymAdvArgStart:
 			// parse arguments
 			if cmd.Name == "" {
-				break
+				break commandLoop
 			}
 
 			onlyAdvArgs := false
@@ -691,8 +695,8 @@ func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 				cmd.AdvArgs = advArgs
 			}
 
-			break
-		} else {
+			break commandLoop
+		default:
 			// might be a launch cmd
 			return cmd, string(buf), ErrInvalidCmdName
 		}
@@ -738,12 +742,13 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			break
 		}
 
-		if isWhitespace(ch) {
+		switch {
+		case isWhitespace(ch):
 			continue
-		} else if sr.pos == 1 && ch == SymJSONStart {
+		case sr.pos == 1 && ch == SymJSONStart:
 			// reserve starting { as json script for later
 			return Script{}, ErrInvalidJSON
-		} else if ch == SymCmdStart {
+		case ch == SymCmdStart:
 			next, err := sr.peek()
 			if err != nil {
 				return script, parseErr(err)
@@ -767,21 +772,22 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			}
 
 			cmd, buf, err := sr.parseCommand(false)
-			if errors.Is(err, ErrInvalidCmdName) {
+			switch {
+			case errors.Is(err, ErrInvalidCmdName):
 				// assume it's actually an auto launch cmd
 				err := parseAutoLaunchCmd("**" + buf)
 				if err != nil {
 					return script, parseErr(err)
 				}
 				continue
-			} else if err != nil {
+			case err != nil:
 				return script, parseErr(err)
-			} else {
+			default:
 				script.Cmds = append(script.Cmds, cmd)
 			}
 
 			continue
-		} else {
+		default:
 			err := sr.unread()
 			if err != nil {
 				return script, parseErr(err)
@@ -855,22 +861,23 @@ func (sr *ScriptReader) ParseExpressions() (string, error) {
 			break
 		}
 
-		if ch == SymEscapeSeq {
+		switch {
+		case ch == SymEscapeSeq:
 			next, err := sr.parseEscapeSeq()
 			if err != nil {
 				return result, err
 			}
-			result = result + next
+			result += next
 			continue
-		} else if ch == SymExpressionStart {
+		case ch == SymExpressionStart:
 			exprValue, err := sr.parseExpression()
 			if err != nil {
 				return result, err
 			}
-			result = result + exprValue
+			result += exprValue
 			continue
-		} else {
-			result = result + string(ch)
+		default:
+			result += string(ch)
 			continue
 		}
 	}
@@ -911,7 +918,7 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 			continue
 		} else {
 			currentPart.Type = ArgPartTypeString
-			currentPart.Value = currentPart.Value + string(ch)
+			currentPart.Value += string(ch)
 			continue
 		}
 	}
@@ -930,18 +937,18 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 
 			switch v := output.(type) {
 			case string:
-				arg = arg + v
+				arg += v
 			case bool:
-				arg = arg + strconv.FormatBool(v)
+				arg += strconv.FormatBool(v)
 			case int:
-				arg = arg + strconv.Itoa(v)
+				arg += strconv.Itoa(v)
 			case float64:
-				arg = arg + strconv.FormatFloat(v, 'f', -1, 64)
+				arg += strconv.FormatFloat(v, 'f', -1, 64)
 			default:
 				return "", fmt.Errorf("%w: %v (%T)", ErrBadExpressionReturn, v, v)
 			}
 		} else {
-			arg = arg + part.Value
+			arg += part.Value
 		}
 	}
 

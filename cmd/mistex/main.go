@@ -81,7 +81,7 @@ WantedBy=multi-user.target
 	return true, nil
 }
 
-func main() {
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -100,10 +100,9 @@ func main() {
 	if *addStartupFlag {
 		_, err := tryAddToStartup()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error adding to startup: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	defaults := config.BaseDefaults
@@ -111,8 +110,7 @@ func main() {
 	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error migrating config: %v", err)
 		} else {
 			defaults = migrated
 		}
@@ -132,10 +130,12 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating service: %v", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return err
+	}
 
 	flags.Post(cfg, pl)
 
@@ -144,8 +144,7 @@ func main() {
 	added, err := tryAddToStartup()
 	if err != nil {
 		log.Error().Msgf("error adding to startup: %s", err)
-		fmt.Println("Error adding to startup:", err)
-		os.Exit(1)
+		return fmt.Errorf("Error adding to startup: %v", err)
 	} else if added {
 		log.Info().Msg("added to startup")
 		fmt.Println("Added Zaparoo to MiSTeX startup.")
@@ -170,5 +169,14 @@ func main() {
 		fmt.Println("Device address: Unknown")
 	} else {
 		fmt.Println("Device address:", ip)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
 	}
 }

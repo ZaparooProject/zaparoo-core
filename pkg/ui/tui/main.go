@@ -123,55 +123,54 @@ func BuildMainPage(
 
 	if svcRunning {
 		tokens, err := getTokens(context.Background(), cfg)
-		if err != nil {
+		switch {
+		case err != nil:
 			lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-		} else {
-			if tokens.Last != nil {
-				lastScanned.SetText(fmt.Sprintf(
-					"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
-					tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
-					tokens.Last.UID,
-					tokens.Last.Text,
-				))
-			} else {
-				lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
-			}
-
-			go func() {
-				for {
-					resp, err := client.WaitNotification(
-						context.Background(), -1,
-						cfg, models.NotificationTokensAdded,
-					)
-					if errors.Is(err, client.ErrRequestTimeout) {
-						continue
-					} else if err != nil {
-						app.QueueUpdateDraw(func() {
-							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-						})
-						return
-					}
-
-					var token models.TokenResponse
-					err = json.Unmarshal([]byte(resp), &token)
-					if err != nil {
-						app.QueueUpdateDraw(func() {
-							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-						})
-						return
-					}
-
-					app.QueueUpdateDraw(func() {
-						lastScanned.SetText(fmt.Sprintf(
-							"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
-							token.ScanTime.Format("2006-01-02 15:04:05"),
-							token.UID,
-							token.Text,
-						))
-					})
-				}
-			}()
+		case tokens.Last != nil:
+			lastScanned.SetText(fmt.Sprintf(
+				"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
+				tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
+				tokens.Last.UID,
+				tokens.Last.Text,
+			))
+		default:
+			lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 		}
+
+		go func() {
+			for {
+				resp, err := client.WaitNotification(
+					context.Background(), -1,
+					cfg, models.NotificationTokensAdded,
+				)
+				if errors.Is(err, client.ErrRequestTimeout) {
+					continue
+				} else if err != nil {
+					app.QueueUpdateDraw(func() {
+						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+					})
+					return
+				}
+
+				var token models.TokenResponse
+				err = json.Unmarshal([]byte(resp), &token)
+				if err != nil {
+					app.QueueUpdateDraw(func() {
+						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+					})
+					return
+				}
+
+				app.QueueUpdateDraw(func() {
+					lastScanned.SetText(fmt.Sprintf(
+						"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
+						token.ScanTime.Format("2006-01-02 15:04:05"),
+						token.UID,
+						token.Text,
+					))
+				})
+			}
+		}()
 	} else {
 		lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 	}

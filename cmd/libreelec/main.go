@@ -40,7 +40,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func main() {
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -68,10 +68,12 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating service: %v", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return err
+	}
 
 	flags.Post(cfg, pl)
 
@@ -94,8 +96,16 @@ func main() {
 	})
 	if err != nil {
 		enableZapScript()
-		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error displaying TUI: %v", err)
 	}
 	enableZapScript()
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
 }

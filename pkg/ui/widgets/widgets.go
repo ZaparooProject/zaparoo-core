@@ -122,13 +122,14 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 // used to make sure there aren't hanging processes running in the background
 // if a core gets loaded while it's open.
 func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
-	to := 0
-	if timeout == 0 {
+	var to int
+	switch {
+	case timeout == 0:
 		to = DefaultTimeout
-	} else if timeout < 0 {
+	case timeout < 0:
 		// no timeout
 		return nil, -1
-	} else {
+	default:
 		to = timeout
 	}
 

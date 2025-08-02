@@ -60,13 +60,14 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	quoted := false
 	var tokenArgs []string
 	for _, r := range execStr {
-		if r == '"' {
+		switch {
+		case r == '"':
 			quoted = !quoted
 			sb.WriteRune(r)
-		} else if !quoted && r == ' ' {
+		case !quoted && r == ' ':
 			tokenArgs = append(tokenArgs, sb.String())
 			sb.Reset()
-		} else {
+		default:
 			sb.WriteRune(r)
 		}
 	}

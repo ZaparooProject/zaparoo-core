@@ -123,10 +123,16 @@ func main() {
 		}
 	}
 
+	if err := createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir); err != nil {
+		fmt.Printf("Error creating zip: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
-		fmt.Printf("Error creating zip file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating zip file: %v", err)
 	}
 	defer func(zipFile *os.File) {
 		_ = zipFile.Close()
@@ -149,8 +155,7 @@ func main() {
 	for _, file := range filesToAdd {
 		err := addFileToZip(zipWriter, file.path, file.arcname)
 		if err != nil {
-			fmt.Printf("Error adding file to zip: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error adding file to zip: %v", err)
 		}
 	}
 
@@ -162,18 +167,18 @@ func main() {
 				} else {
 					destPath := filepath.Join(buildDir, filepath.Base(item))
 					if err := copyFile(item, destPath); err != nil {
-						fmt.Printf("Error copying extra file: %v\n", err)
-						os.Exit(1)
+						return fmt.Errorf("error copying extra file: %v", err)
 					}
 					err = addFileToZip(zipWriter, destPath, filepath.Base(item))
 				}
 				if err != nil {
-					fmt.Printf("Error adding extra item to zip: %v\n", err)
-					os.Exit(1)
+					return fmt.Errorf("error adding extra item to zip: %v", err)
 				}
 			}
 		}
 	}
+	
+	return nil
 }
 
 func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {

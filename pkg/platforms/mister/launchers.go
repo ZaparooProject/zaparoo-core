@@ -305,11 +305,11 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 
 		}
 
-		//err := mister.LaunchMenu()
-		//if err != nil {
-		//	return err
-		//}
-		//time.Sleep(3 * time.Second)
+		// err := mister.LaunchMenu()
+		// if err != nil {
+		// 	return err
+		// }
+		// time.Sleep(3 * time.Second)
 
 		err := cleanConsole(vt)
 		if err != nil {

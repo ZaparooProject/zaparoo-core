@@ -77,11 +77,12 @@ func LocalClient(
 		Method:  method,
 	}
 
-	if len(params) == 0 {
+	switch {
+	case len(params) == 0:
 		req.Params = nil
-	} else if json.Valid([]byte(params)) {
+	case json.Valid([]byte(params)):
 		req.Params = []byte(params)
-	} else {
+	default:
 		return "", ErrInvalidParams
 	}
 

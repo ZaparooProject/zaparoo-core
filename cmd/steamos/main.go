@@ -47,6 +47,13 @@ import (
 // TODO: fix permissions on files in ~/zaparoo so root doesn't lock them
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -62,37 +69,31 @@ func main() {
 	uid := os.Getuid()
 	if *doInstall {
 		if uid != 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Install must be run as root\n")
-			os.Exit(1)
+			return fmt.Errorf("Install must be run as root")
 		}
 		err := install()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error installing service: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error installing service: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	} else if *doUninstall {
 		if uid != 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Uninstall must be run as root\n")
-			os.Exit(1)
+			return fmt.Errorf("Uninstall must be run as root")
 		}
 		err := uninstall()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error uninstalling service: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error uninstalling service: %v", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	if uid == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Service must not be run as root\n")
-		os.Exit(1)
+		return fmt.Errorf("Service must not be run as root")
 	}
 
 	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error creating data directory: %v", err)
 	}
 
 	defaults := config.BaseDefaults
@@ -100,8 +101,7 @@ func main() {
 	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("Error migrating config: %v", err)
 		} else {
 			defaults = migrated
 		}
@@ -118,15 +118,15 @@ func main() {
 	stop, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
-		os.Exit(1)
+		return fmt.Errorf("error starting service: %v", err)
 	}
 
 	<-sigs
 	err = stop()
 	if err != nil {
 		log.Error().Err(err).Msg("error stopping service")
-		os.Exit(1)
+		return fmt.Errorf("error stopping service: %v", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

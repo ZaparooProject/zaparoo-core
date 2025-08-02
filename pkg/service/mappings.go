@@ -116,15 +116,16 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 			dbm.Type = userdb.MappingTypeID
 		}
 
-		if isCfgRegex(m.MatchPattern) {
+		switch {
+		case isCfgRegex(m.MatchPattern):
 			dbm.Match = userdb.MatchTypeRegex
 			dbm.Pattern = m.MatchPattern[1 : len(m.MatchPattern)-1]
-		} else if strings.Contains(m.MatchPattern, "*") {
+		case strings.Contains(m.MatchPattern, "*"):
 			// TODO: this behaviour doesn't actually match "partial"
 			// the old behaviour will need to be migrated to this one
 			dbm.Match = userdb.MatchTypePartial
 			dbm.Pattern = strings.ReplaceAll(m.MatchPattern, "*", "")
-		} else {
+		default:
 			dbm.Match = userdb.MatchTypeExact
 			dbm.Pattern = m.MatchPattern
 		}

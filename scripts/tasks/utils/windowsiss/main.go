@@ -65,17 +65,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	outFile, err := os.Create("_build/windows_" + *arch + "/setup.iss")
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+	if err := generateSetupFile(tmpl, data, *arch); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error generating setup file: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func generateSetupFile(tmpl *template.Template, data InnoSetupData, arch string) error {
+	outFile, err := os.Create("_build/windows_" + arch + "/setup.iss")
+	if err != nil {
+		return fmt.Errorf("error creating output file: %v", err)
 	}
 	defer func(outFile *os.File) {
 		_ = outFile.Close()
 	}(outFile)
 
 	if err := tmpl.Execute(outFile, data); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error executing template: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error executing template: %v", err)
 	}
+	
+	return nil
 }
