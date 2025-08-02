@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -75,7 +77,7 @@ type MethodMap struct {
 
 func isValidMethodName(name string) bool {
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r == '.') {
+		if r < 'a' || r > 'z' && r != '.' {
 			return false
 		}
 	}
@@ -384,7 +386,7 @@ func handleWSMessage(
 		}()
 
 		// ping command for heartbeat operation
-		if bytes.Compare(msg, []byte("ping")) == 0 {
+		if bytes.Equal(msg, []byte("ping")) {
 			err := session.Write([]byte("pong"))
 			if err != nil {
 				log.Error().Err(err).Msg("sending pong")
@@ -499,7 +501,7 @@ func Start(
 	r := chi.NewRouter()
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
-	rateLimiter.StartCleanup()
+	rateLimiter.StartCleanup(state.GetContext())
 
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
@@ -569,8 +571,39 @@ func Start(
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
-	err := http.ListenAndServe(":"+strconv.Itoa(cfg.ApiPort()), r)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting http server")
+	server := &http.Server{
+		Addr:    ":" + strconv.Itoa(cfg.ApiPort()),
+		Handler: r,
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		log.Info().Msgf("starting HTTP server on port %d", cfg.ApiPort())
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error().Err(err).Msg("HTTP server error")
+			serverDone <- err
+		} else {
+			serverDone <- nil
+		}
+	}()
+
+	select {
+	case <-state.GetContext().Done():
+		log.Info().Msg("initiating HTTP server graceful shutdown")
+	case err := <-serverDone:
+		if err != nil {
+			log.Error().Err(err).Msg("HTTP server failed to start")
+			return
+		}
+		return
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("HTTP server shutdown error")
+	} else {
+		log.Info().Msg("HTTP server shutdown complete")
 	}
 }
