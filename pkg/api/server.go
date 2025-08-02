@@ -43,7 +43,7 @@ var allowedOrigins = []string{
 
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
-	Message: "ParseScript error",
+	Message: "Parse error",
 }
 var JSONRPCErrorInvalidRequest = models.ErrorObject{
 	Code:    -32600,
