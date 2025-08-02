@@ -1,6 +1,7 @@
 package zapscript
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -86,5 +87,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		cmdArgs = tokenArgs[1:]
 	}
 
-	return platforms.CmdResult{}, exec.Command(cmd, cmdArgs...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return platforms.CmdResult{}, exec.CommandContext(ctx, cmd, cmdArgs...).Run()
 }

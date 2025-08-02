@@ -114,7 +114,16 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 
 func WaitForInternet(maxTries int) bool {
 	for i := 0; i < maxTries; i++ {
-		resp, err := http.Get("https://api.github.com")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
 		if err == nil {
 			if err := resp.Body.Close(); err != nil {
 				log.Error().Err(err).Msg("error closing response body")
@@ -205,7 +214,7 @@ func CopyFile(sourcePath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	return inputFile.Close()
+	return nil
 }
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")

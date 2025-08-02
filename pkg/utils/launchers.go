@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -80,12 +81,17 @@ func ParseCustomLaunchers(
 					return fmt.Errorf("error evaluating execute expression: %w", err)
 				}
 
+				// Use background context for game launchers - games should run indefinitely
+				// until user stops them, not be killed by timeout
+				// TODO: consider storing this context to enable programmatic game termination/quit functionality
+				ctx := context.Background()
+				
 				if runtime.GOOS == "windows" {
-					cmd := exec.Command("cmd", "/c", output)
-					err = cmd.Run()
+					cmd := exec.CommandContext(ctx, "cmd", "/c", output)
+					err = cmd.Start()
 				} else {
-					cmd := exec.Command("sh", "-c", output)
-					err = cmd.Run()
+					cmd := exec.CommandContext(ctx, "sh", "-c", output)
+					err = cmd.Start()
 				}
 
 				if err != nil {

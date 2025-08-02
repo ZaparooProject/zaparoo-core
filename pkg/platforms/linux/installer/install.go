@@ -1,12 +1,14 @@
 package installer
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 )
@@ -62,8 +64,10 @@ func Install() error {
 			return fmt.Errorf("error creating udev rules: %w", err)
 		}
 		// these are just for convenience, don't care too much if they fail
-		_ = exec.Command("udevadm", "control", "--reload-rules").Run()
-		_ = exec.Command("udevadm", "trigger").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = exec.CommandContext(ctx, "udevadm", "control", "--reload-rules").Run()
+		_ = exec.CommandContext(ctx, "udevadm", "trigger").Run()
+		cancel()
 	}
 
 	// install modprobe blacklist
@@ -75,7 +79,9 @@ func Install() error {
 			return fmt.Errorf("error creating modprobe blacklist: %w", err)
 		}
 		// this is just for convenience, don't care too much if it fails
-		_ = exec.Command("systemctl", "restart", "systemd-modules-load.service").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = exec.CommandContext(ctx, "systemctl", "restart", "systemd-modules-load.service").Run()
+		cancel()
 	}
 
 	return nil
@@ -103,7 +109,9 @@ func Uninstall() error {
 			return fmt.Errorf("error removing modprobe blacklist: %w", err)
 		}
 		// this is just for convenience, don't care too much if it fails
-		_ = exec.Command("systemctl", "restart", "systemd-modules-load.service").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = exec.CommandContext(ctx, "systemctl", "restart", "systemd-modules-load.service").Run()
+		cancel()
 	}
 
 	// remove udev rules
@@ -113,8 +121,10 @@ func Uninstall() error {
 			return fmt.Errorf("error removing udev rules: %w", err)
 		}
 		// these are just for convenience, don't care too much if they fail
-		_ = exec.Command("udevadm", "control", "--reload-rules").Run()
-		_ = exec.Command("udevadm", "trigger").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = exec.CommandContext(ctx, "udevadm", "control", "--reload-rules").Run()
+		_ = exec.CommandContext(ctx, "udevadm", "trigger").Run()
+		cancel()
 	}
 
 	return nil

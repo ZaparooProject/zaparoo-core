@@ -2,6 +2,7 @@ package batocera
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,19 +18,21 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	client := &http.Client{
-		Timeout: timeout,
-	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	
+	client := &http.Client{}
 
 	var kodiReq *http.Request
 	var err error
 	if body != "" {
-		kodiReq, err = http.NewRequest(http.MethodPost, apiURL+path, bytes.NewBuffer([]byte(body)))
+		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodPost, apiURL+path, bytes.NewBuffer([]byte(body)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 	} else {
-		kodiReq, err = http.NewRequest(http.MethodGet, apiURL+path, nil)
+		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}

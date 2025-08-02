@@ -1,6 +1,7 @@
 package optical_drive
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -93,7 +94,9 @@ func (r *FileReader) Open(
 		for r.polling {
 			time.Sleep(1 * time.Second)
 
-			rawUUID, err := exec.Command("blkid", "-o", "value", "-s", "UUID", r.path).Output()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
+			cancel()
 			if err != nil {
 				if token != nil {
 					log.Debug().Err(err).Msg("error identifying optical media, removing token")
@@ -107,7 +110,9 @@ func (r *FileReader) Open(
 				}
 			}
 
-			rawLabel, err := exec.Command("blkid", "-o", "value", "-s", "LABEL", r.path).Output()
+				ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			rawLabel, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "LABEL", r.path).Output()
+			cancel()
 			if err != nil {
 				if token != nil {
 					log.Debug().Err(err).Msg("error identifying optical media, removing token")

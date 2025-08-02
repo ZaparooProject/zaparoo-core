@@ -3,6 +3,7 @@
 package mac
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -131,7 +132,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command(path).Start()
+				// TODO: consider storing this context to enable programmatic game termination/quit functionality
+				ctx := context.Background()
+				return exec.CommandContext(ctx, path).Start()
 			},
 		},
 	}

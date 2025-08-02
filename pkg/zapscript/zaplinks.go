@@ -1,6 +1,7 @@
 package zapscript
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +58,10 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
-	req, err := http.NewRequest(http.MethodGet, wellKnownURL, http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
 		return 0, err
 	}
@@ -130,7 +134,10 @@ func isZapLink(link string, db *database.Database) bool {
 }
 
 func getRemoteZapScript(url string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, err
 	}

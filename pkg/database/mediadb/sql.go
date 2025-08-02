@@ -1,6 +1,7 @@
 package mediadb
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -41,8 +42,8 @@ func sqlAllocate(db *sql.DB) error {
 	return sqlMigrateUp(db)
 }
 
-func sqlUpdateLastGenerated(db *sql.DB) error {
-	_, err := db.Exec(
+func sqlUpdateLastGenerated(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx,
 		fmt.Sprintf(
 			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('%s', ?)",
 			DBConfigLastGeneratedAt,
@@ -52,9 +53,9 @@ func sqlUpdateLastGenerated(db *sql.DB) error {
 	return err
 }
 
-func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
+func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
 	var rawTimestamp string
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		fmt.Sprintf(
 			"SELECT Value FROM DBConfig WHERE Name = '%s'",
 			DBConfigLastGeneratedAt,
@@ -74,7 +75,7 @@ func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
 	return time.Unix(int64(timestamp), 0), nil
 }
 
-func sqlIndexTables(db *sql.DB) error {
+func sqlIndexTables(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
 	create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
@@ -89,12 +90,12 @@ func sqlIndexTables(db *sql.DB) error {
 	create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
 	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.ExecContext(ctx, sqlStmt)
 	return err
 }
 
 //goland:noinspection SqlWithoutWhere
-func sqlTruncate(db *sql.DB) error {
+func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	delete from Systems;
 	delete from MediaTitles;
@@ -106,31 +107,31 @@ func sqlTruncate(db *sql.DB) error {
 	delete from SupportingMedia;
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.ExecContext(ctx, sqlStmt)
 	return err
 }
 
-func sqlVacuum(db *sql.DB) error {
+func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.ExecContext(ctx, sqlStmt)
 	return err
 }
 
-func sqlBeginTransaction(db *sql.DB) error {
-	_, err := db.Exec("BEGIN")
+func sqlBeginTransaction(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "BEGIN")
 	return err
 }
 
-func sqlCommitTransaction(db *sql.DB) error {
-	_, err := db.Exec("COMMIT")
+func sqlCommitTransaction(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "COMMIT")
 	return err
 }
 
-func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) {
+func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
 	var row database.System
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, SystemID, Name
 		from Systems
@@ -147,7 +148,7 @@ func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) 
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		system.DBID,
 		system.SystemID,
 	).Scan(
@@ -158,12 +159,12 @@ func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) 
 	return row, err
 }
 
-func sqlInsertSystem(db *sql.DB, row database.System) (database.System, error) {
+func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (database.System, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Systems
 		(DBID, SystemID, Name)
@@ -178,7 +179,7 @@ func sqlInsertSystem(db *sql.DB, row database.System) (database.System, error) {
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.SystemID,
 		row.Name,
@@ -191,9 +192,9 @@ func sqlInsertSystem(db *sql.DB, row database.System) (database.System, error) {
 	return row, err
 }
 
-func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
+func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
 	var row database.MediaTitle
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, SystemDBID, Slug, Name
 		from MediaTitles
@@ -210,7 +211,7 @@ func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTit
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		title.DBID,
 		title.Slug,
 	).Scan(
@@ -222,12 +223,12 @@ func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTit
 	return row, err
 }
 
-func sqlInsertMediaTitle(db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
+func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		MediaTitles
 		(DBID, SystemDBID, Slug, Name)
@@ -242,7 +243,7 @@ func sqlInsertMediaTitle(db *sql.DB, row database.MediaTitle) (database.MediaTit
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.SystemDBID,
 		row.Slug,
@@ -256,9 +257,9 @@ func sqlInsertMediaTitle(db *sql.DB, row database.MediaTitle) (database.MediaTit
 	return row, err
 }
 
-func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
+func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (database.Media, error) {
 	var row database.Media
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, MediaTitleDBID, Path
 		from Media
@@ -278,7 +279,7 @@ func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		media.DBID,
 		media.MediaTitleDBID,
 		media.Path,
@@ -290,12 +291,12 @@ func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
 	return row, err
 }
 
-func sqlInsertMedia(db *sql.DB, row database.Media) (database.Media, error) {
+func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (database.Media, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Media
 		(DBID, MediaTitleDBID, Path)
@@ -310,7 +311,7 @@ func sqlInsertMedia(db *sql.DB, row database.Media) (database.Media, error) {
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.MediaTitleDBID,
 		row.Path,
@@ -323,9 +324,9 @@ func sqlInsertMedia(db *sql.DB, row database.Media) (database.Media, error) {
 	return row, err
 }
 
-func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, error) {
+func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (database.TagType, error) {
 	var row database.TagType
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, Type
 		from TagTypes
@@ -342,7 +343,7 @@ func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, err
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Type,
 	).Scan(
@@ -352,12 +353,12 @@ func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, err
 	return row, err
 }
 
-func sqlInsertTagType(db *sql.DB, row database.TagType) (database.TagType, error) {
+func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (database.TagType, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		TagTypes
 		(DBID, Type)
@@ -372,7 +373,7 @@ func sqlInsertTagType(db *sql.DB, row database.TagType) (database.TagType, error
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.Type,
 	)
@@ -384,9 +385,9 @@ func sqlInsertTagType(db *sql.DB, row database.TagType) (database.TagType, error
 	return row, err
 }
 
-func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
+func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database.Tag, error) {
 	var row database.Tag
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, TypeDBID, Tag
 		from Tags
@@ -404,7 +405,7 @@ func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Tag,
 	).Scan(
@@ -415,12 +416,12 @@ func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
 	return row, err
 }
 
-func sqlInsertTag(db *sql.DB, row database.Tag) (database.Tag, error) {
+func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.Tag, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Tags
 		(DBID, TypeDBID, Tag)
@@ -435,7 +436,7 @@ func sqlInsertTag(db *sql.DB, row database.Tag) (database.Tag, error) {
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.TypeDBID,
 		row.Tag,
@@ -448,9 +449,9 @@ func sqlInsertTag(db *sql.DB, row database.Tag) (database.Tag, error) {
 	return row, err
 }
 
-func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
+func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
 	var row database.MediaTag
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, MediaDBID, TagDBID
 		from MediaTags
@@ -470,7 +471,7 @@ func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag,
 	if err != nil {
 		return row, err
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		mediaTag.DBID,
 		mediaTag.MediaDBID,
 		mediaTag.TagDBID,
@@ -482,12 +483,12 @@ func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag,
 	return row, err
 }
 
-func sqlInsertMediaTag(db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
+func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
 	var DBID any = nil
 	if row.DBID != 0 {
 		DBID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		MediaTags
 		(DBID, MediaDBID, TagDBID)
@@ -502,7 +503,7 @@ func sqlInsertMediaTag(db *sql.DB, row database.MediaTag) (database.MediaTag, er
 	if err != nil {
 		return row, err
 	}
-	res, err := stmt.Exec(
+	res, err := stmt.ExecContext(ctx,
 		DBID,
 		row.MediaDBID,
 		row.TagDBID,
@@ -553,8 +554,11 @@ func prepareVariadic(p string, s string, c int) string {
 	return strings.Join(q, s)
 }
 
-func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path string) ([]database.SearchResult, error) {
+func sqlSearchMediaPathExact(ctx context.Context, db *sql.DB, systems []systemdefs.System, path string) ([]database.SearchResult, error) {
 	// query == path
+	if len(systems) == 0 {
+		return nil, fmt.Errorf("no systems provided for media search")
+	}
 	slug := utils.SlugifyPath(path)
 
 	var results []database.SearchResult
@@ -564,7 +568,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	}
 	args = append(args, slug, path)
 
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,
 			Media.Path
@@ -584,7 +588,7 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 		return results, err
 	}
 
-	rows, err := stmt.Query(
+	rows, err := stmt.QueryContext(ctx,
 		args...,
 	)
 	if err != nil {
@@ -615,8 +619,12 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	return results, nil
 }
 
-func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []string) ([]database.SearchResult, error) {
+func sqlSearchMediaPathParts(ctx context.Context, db *sql.DB, systems []systemdefs.System, parts []string) ([]database.SearchResult, error) {
 	var results []database.SearchResult
+
+	if len(systems) == 0 {
+		return nil, fmt.Errorf("no systems provided for media search")
+	}
 
 	// search for anything in systems on blank query
 	if len(parts) == 0 {
@@ -631,7 +639,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		args = append(args, "%"+p+"%")
 	}
 
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,
 			Media.Path
@@ -651,7 +659,7 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		return results, err
 	}
 
-	rows, err := stmt.Query(
+	rows, err := stmt.QueryContext(ctx,
 		args...,
 	)
 	if err != nil {
@@ -682,9 +690,9 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	return results, nil
 }
 
-func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
+func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {
 	systemId := ""
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		SystemID
 		from Systems
@@ -699,17 +707,17 @@ func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
 	if err != nil {
 		return false
 	}
-	err = q.QueryRow(system.ID).Scan(&systemId)
+	err = q.QueryRowContext(ctx, system.ID).Scan(&systemId)
 	if err != nil {
 		return false
 	}
 	return systemId == system.ID
 }
 
-func sqlIndexedSystems(db *sql.DB) ([]string, error) {
+func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	var list []string
 
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select SystemID from Systems;
 	`)
 	defer func(q *sql.Stmt) {
@@ -722,7 +730,7 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 		return list, err
 	}
 
-	rows, err := q.Query()
+	rows, err := q.QueryContext(ctx)
 	if err != nil {
 		return list, err
 	}
@@ -744,9 +752,9 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	return list, err
 }
 
-func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
+func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		Systems.SystemID, Media.Path
 		from Media
@@ -764,7 +772,7 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 	if err != nil {
 		return row, err
 	}
-	err = q.QueryRow(system.ID).Scan(
+	err = q.QueryRowContext(ctx, system.ID).Scan(
 		&row.SystemID,
 		&row.Path,
 	)

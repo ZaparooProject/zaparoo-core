@@ -2,12 +2,14 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const baseURL = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
@@ -49,7 +51,16 @@ func downloadDoc(platformID, toDir string) error {
 	}
 
 	url := baseURL + fileName
-	resp, err := http.Get(url)
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

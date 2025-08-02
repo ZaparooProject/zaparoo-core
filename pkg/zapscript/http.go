@@ -1,8 +1,10 @@
 package zapscript
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
@@ -18,7 +20,16 @@ func cmdHttpGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	url := env.Cmd.Args[0]
 
 	go func() {
-		resp, err := http.Get(url)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			log.Error().Err(err).Msgf("creating request for url: %s", url)
+			return
+		}
+		
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error().Err(err).Msgf("getting url: %s", url)
 			return
@@ -43,7 +54,17 @@ func cmdHttpPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	payload := env.Cmd.Args[2]
 
 	go func() {
-		resp, err := http.Post(url, mime, strings.NewReader(payload))
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+		if err != nil {
+			log.Error().Err(err).Msgf("creating request for url: %s", url)
+			return
+		}
+		req.Header.Set("Content-Type", mime)
+		
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error().Err(err).Msgf("error posting to url: %s", url)
 			return

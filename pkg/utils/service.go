@@ -3,6 +3,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -247,7 +248,9 @@ func (s *Service) Start() error {
 		return err
 	}
 
-	cmd := exec.Command(tempPath, "-service", "exec", "&")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tempPath, "-service", "exec", "&")
 	env := os.Environ()
 	cmd.Env = env
 

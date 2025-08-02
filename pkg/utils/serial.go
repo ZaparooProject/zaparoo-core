@@ -1,11 +1,13 @@
 package utils
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -48,7 +50,9 @@ func ignoreSerialDevice(path string) bool {
 		return false
 	}
 
-	cmd := exec.Command("/usr/bin/udevadm", "info", "--name="+path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {
 		log.Error().Err(err).Msg("udevadm failed")

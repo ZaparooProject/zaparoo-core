@@ -87,31 +87,31 @@ func systrayOnReady(
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
-					err := exec.Command(openCmd, url).Start()
+					err := exec.CommandContext(context.Background(), openCmd, url).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open web page")
 						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
 						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.ConfigDir(pl), config.CfgFile)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.ConfigDir(pl), config.CfgFile)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.MappingsDir)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.DataDir(pl), config.MappingsDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.LaunchersDir)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, filepath.Join(utils.DataDir(pl), config.LaunchersDir)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")
@@ -126,7 +126,7 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
-					err := exec.Command(openCmd, utils.DataDir(pl)).Start()
+					err := exec.CommandContext(context.Background(), openCmd, utils.DataDir(pl)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")

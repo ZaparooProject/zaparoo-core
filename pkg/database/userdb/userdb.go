@@ -1,6 +1,7 @@
 package userdb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -18,10 +19,11 @@ var ErrorNullSql = errors.New("UserDB is not connected")
 type UserDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
+	ctx context.Context
 }
 
-func OpenUserDB(pl platforms.Platform) (*UserDB, error) {
-	db := &UserDB{sql: nil, pl: pl}
+func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
+	db := &UserDB{sql: nil, pl: pl, ctx: ctx}
 	err := db.Open()
 	return db, err
 }
@@ -60,7 +62,7 @@ func (db *UserDB) Truncate() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	return sqlTruncate(db.sql)
+	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *UserDB) Allocate() error {
@@ -81,7 +83,7 @@ func (db *UserDB) Vacuum() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	return sqlVacuum(db.sql)
+	return sqlVacuum(db.ctx, db.sql)
 }
 
 func (db *UserDB) Close() error {
@@ -95,25 +97,25 @@ func (db *UserDB) Close() error {
 // TODO: metadata
 
 func (db *UserDB) AddHistory(entry database.HistoryEntry) error {
-	return sqlAddHistory(db.sql, entry)
+	return sqlAddHistory(db.ctx, db.sql, entry)
 }
 
 func (db *UserDB) GetHistory(lastId int) ([]database.HistoryEntry, error) {
-	return sqlGetHistoryWithOffset(db.sql, lastId)
+	return sqlGetHistoryWithOffset(db.ctx, db.sql, lastId)
 }
 
 func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
-	return sqlUpdateZapLinkHost(db.sql, host, zapscript)
+	return sqlUpdateZapLinkHost(db.ctx, db.sql, host, zapscript)
 }
 
 func (db *UserDB) GetZapLinkHost(host string) (bool, bool, error) {
-	return sqlGetZapLinkHost(db.sql, host)
+	return sqlGetZapLinkHost(db.ctx, db.sql, host)
 }
 
 func (db *UserDB) UpdateZapLinkCache(url string, zapscript string) error {
-	return sqlUpdateZapLinkCache(db.sql, url, zapscript)
+	return sqlUpdateZapLinkCache(db.ctx, db.sql, url, zapscript)
 }
 
 func (db *UserDB) GetZapLinkCache(url string) (string, error) {
-	return sqlGetZapLinkCache(db.sql, url)
+	return sqlGetZapLinkCache(db.ctx, db.sql, url)
 }

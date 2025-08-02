@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -93,7 +95,9 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	app.ForceDraw()
 
 	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
-	out, err := exec.Command("bash", "-c", uploadCmd).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "bash", "-c", uploadCmd).Output()
 	pages.RemovePage("temp_upload")
 	if err != nil {
 		log.Error().Err(err).Msgf("error uploading log file to termbin")

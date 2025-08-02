@@ -1,6 +1,7 @@
 package windows
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -378,7 +379,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
 					"steam://rungameid/"+id,
@@ -393,7 +396,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id := strings.TrimPrefix(path, "flashpoint://")
 				id = strings.TrimPrefix(id, "run/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
 					"flashpoint://run/"+id,
@@ -405,7 +410,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command("cmd", "/c", path).Start()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx, "cmd", "/c", path).Start()
 			},
 		},
 		{
@@ -481,7 +488,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				id := strings.TrimPrefix(path, "launchbox://")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(cliLauncher, "launch_by_id", id).Start()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx, cliLauncher, "launch_by_id", id).Start()
 			},
 		},
 	}

@@ -1,6 +1,7 @@
 package userdb
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -36,26 +37,26 @@ func sqlAllocate(db *sql.DB) error {
 }
 
 //goland:noinspection SqlWithoutWhere
-func sqlTruncate(db *sql.DB) error {
+func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	delete from History;
 	delete from Mappings;
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.ExecContext(ctx, sqlStmt)
 	return err
 }
 
-func sqlVacuum(db *sql.DB) error {
+func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
+	_, err := db.ExecContext(ctx, sqlStmt)
 	return err
 }
 
-func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
-	stmt, err := db.Prepare(`
+func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry) error {
+	stmt, err := db.PrepareContext(ctx, `
 		insert into History(
 			Time, Type, TokenID, TokenValue, TokenData, Success
 		) values (?, ?, ?, ?, ?, ?);
@@ -69,7 +70,7 @@ func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 	if err != nil {
 		return err
 	}
-	_, err = stmt.Exec(
+	_, err = stmt.ExecContext(ctx,
 		entry.Time.Unix(),
 		entry.Type,
 		entry.TokenID,
@@ -80,14 +81,14 @@ func sqlAddHistory(db *sql.DB, entry database.HistoryEntry) error {
 	return err
 }
 
-func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, error) {
+func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastId int) ([]database.HistoryEntry, error) {
 	var list []database.HistoryEntry
 	// Instead of offset, use token-based
 	if lastId == 0 {
 		lastId = 2147483646
 	}
 
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select 
 		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
 		from History
@@ -105,7 +106,7 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 		}
 	}(q)
 
-	rows, err := q.Query(lastId)
+	rows, err := q.QueryContext(ctx, lastId)
 	if err != nil {
 		return list, err
 	}
@@ -137,8 +138,8 @@ func sqlGetHistoryWithOffset(db *sql.DB, lastId int) ([]database.HistoryEntry, e
 	return list, err
 }
 
-func sqlAddMapping(db *sql.DB, m database.Mapping) error {
-	stmt, err := db.Prepare(`
+func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error {
+	stmt, err := db.PrepareContext(ctx, `
 		insert into Mappings(
 			Added, Label, Enabled, Type, Match, Pattern, Override
 		) values (?, ?, ?, ?, ?, ?, ?);
@@ -152,7 +153,7 @@ func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 	if err != nil {
 		return err
 	}
-	_, err = stmt.Exec(
+	_, err = stmt.ExecContext(ctx,
 		m.Added,
 		m.Label,
 		m.Enabled,
@@ -164,9 +165,9 @@ func sqlAddMapping(db *sql.DB, m database.Mapping) error {
 	return err
 }
 
-func sqlGetMapping(db *sql.DB, id int64) (database.Mapping, error) {
+func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping, error) {
 	var row database.Mapping
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
@@ -181,7 +182,7 @@ func sqlGetMapping(db *sql.DB, id int64) (database.Mapping, error) {
 	if err != nil {
 		return row, err
 	}
-	err = q.QueryRow(id).Scan(
+	err = q.QueryRowContext(ctx, id).Scan(
 		&row.DBID,
 		&row.Added,
 		&row.Label,
@@ -194,8 +195,8 @@ func sqlGetMapping(db *sql.DB, id int64) (database.Mapping, error) {
 	return row, err
 }
 
-func sqlDeleteMapping(db *sql.DB, id int64) error {
-	stmt, err := db.Prepare(`
+func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
+	stmt, err := db.PrepareContext(ctx, `
 		delete from Mappings where DBID = ?;
 	`)
 	defer func(stmt *sql.Stmt) {
@@ -207,12 +208,12 @@ func sqlDeleteMapping(db *sql.DB, id int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = stmt.Exec(id)
+	_, err = stmt.ExecContext(ctx, id)
 	return err
 }
 
-func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
-	stmt, err := db.Prepare(`
+func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapping) error {
+	stmt, err := db.PrepareContext(ctx, `
 		update Mappings set
 			Added = ?,
 			Label = ?,
@@ -233,7 +234,7 @@ func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
 	if err != nil {
 		return err
 	}
-	_, err = stmt.Exec(
+	_, err = stmt.ExecContext(ctx, 
 		m.Added,
 		m.Label,
 		m.Enabled,
@@ -246,10 +247,10 @@ func sqlUpdateMapping(db *sql.DB, id int64, m database.Mapping) error {
 	return err
 }
 
-func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
+func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings;
@@ -264,7 +265,7 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 		}
 	}(q)
 
-	rows, err := q.Query()
+	rows, err := q.QueryContext(ctx, )
 	if err != nil {
 		return list, err
 	}
@@ -295,10 +296,10 @@ func sqlGetAllMappings(db *sql.DB) ([]database.Mapping, error) {
 	return list, err
 }
 
-func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
+func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
 	var list []database.Mapping
 
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
 		from Mappings
@@ -314,7 +315,7 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 		}
 	}(q)
 
-	rows, err := q.Query(true)
+	rows, err := q.QueryContext(ctx, true)
 	if err != nil {
 		return list, err
 	}
@@ -345,8 +346,8 @@ func sqlGetEnabledMappings(db *sql.DB) ([]database.Mapping, error) {
 	return list, err
 }
 
-func sqlUpdateZapLinkHost(db *sql.DB, host string, zapscript int) error {
-	stmt, err := db.Prepare(`
+func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscript int) error {
+	stmt, err := db.PrepareContext(ctx, `
 		INSERT INTO ZapLinkHosts (Host, ZapScript, CheckedAt)
 		VALUES (?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(Host) DO UPDATE SET
@@ -363,12 +364,12 @@ func sqlUpdateZapLinkHost(db *sql.DB, host string, zapscript int) error {
 		}
 	}(stmt)
 
-	_, err = stmt.Exec(host, zapscript)
+	_, err = stmt.ExecContext(ctx, host, zapscript)
 	return err
 }
 
-func sqlGetZapLinkHost(db *sql.DB, host string) (supported bool, ok bool, err error) {
-	row := db.QueryRow(`
+func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported bool, ok bool, err error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?;
 	`, host)
 
@@ -383,8 +384,8 @@ func sqlGetZapLinkHost(db *sql.DB, host string) (supported bool, ok bool, err er
 	return zapscript != 0, true, nil
 }
 
-func sqlUpdateZapLinkCache(db *sql.DB, url string, zapscript string) error {
-	stmt, err := db.Prepare(`
+func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url string, zapscript string) error {
+	stmt, err := db.PrepareContext(ctx, `
 		INSERT INTO ZapLinkCache (URL, ZapScript, UpdatedAt)
 		VALUES (?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(URL) DO UPDATE SET
@@ -401,13 +402,13 @@ func sqlUpdateZapLinkCache(db *sql.DB, url string, zapscript string) error {
 		}
 	}(stmt)
 
-	_, err = stmt.Exec(url, zapscript)
+	_, err = stmt.ExecContext(ctx, url, zapscript)
 	return err
 }
 
-func sqlGetZapLinkCache(db *sql.DB, url string) (string, error) {
+func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, error) {
 	var zapscript string
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx, 
 		`SELECT ZapScript FROM ZapLinkCache WHERE URL = ?;`,
 		url,
 	).Scan(&zapscript)

@@ -66,15 +66,15 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 
 	m.Added = time.Now().Unix()
 
-	return sqlAddMapping(db.sql, m)
+	return sqlAddMapping(db.ctx, db.sql, m)
 }
 
 func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
-	return sqlGetMapping(db.sql, id)
+	return sqlGetMapping(db.ctx, db.sql, id)
 }
 
 func (db *UserDB) DeleteMapping(id int64) error {
-	return sqlDeleteMapping(db.sql, id)
+	return sqlDeleteMapping(db.ctx, db.sql, id)
 }
 
 func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
@@ -101,13 +101,13 @@ func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
 		}
 	}
 
-	return sqlUpdateMapping(db.sql, id, m)
+	return sqlUpdateMapping(db.ctx, db.sql, id, m)
 }
 
 func (db *UserDB) GetAllMappings() ([]database.Mapping, error) {
-	return sqlGetAllMappings(db.sql)
+	return sqlGetAllMappings(db.ctx, db.sql)
 }
 
 func (db *UserDB) GetEnabledMappings() ([]database.Mapping, error) {
-	return sqlGetEnabledMappings(db.sql)
+	return sqlGetEnabledMappings(db.ctx, db.sql)
 }

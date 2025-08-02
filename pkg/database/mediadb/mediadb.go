@@ -1,6 +1,7 @@
 package mediadb
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -21,10 +22,11 @@ var ErrorNullSql = errors.New("MediaDB is not connected")
 type MediaDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
+	ctx context.Context
 }
 
-func OpenMediaDB(pl platforms.Platform) (*MediaDB, error) {
-	db := &MediaDB{sql: nil, pl: pl}
+func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
+	db := &MediaDB{sql: nil, pl: pl, ctx: ctx}
 	err := db.Open()
 	return db, err
 }
@@ -63,14 +65,14 @@ func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	return sqlUpdateLastGenerated(db.sql)
+	return sqlUpdateLastGenerated(db.ctx, db.sql)
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 	if db.sql == nil {
 		return time.Time{}, ErrorNullSql
 	}
-	return sqlGetLastGenerated(db.sql)
+	return sqlGetLastGenerated(db.ctx, db.sql)
 }
 
 func (db *MediaDB) UnsafeGetSqlDb() *sql.DB {
@@ -81,7 +83,7 @@ func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	return sqlTruncate(db.sql)
+	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *MediaDB) Allocate() error {
@@ -102,7 +104,7 @@ func (db *MediaDB) Vacuum() error {
 	if db.sql == nil {
 		return ErrorNullSql
 	}
-	return sqlVacuum(db.sql)
+	return sqlVacuum(db.ctx, db.sql)
 }
 
 func (db *MediaDB) Close() error {
@@ -113,15 +115,15 @@ func (db *MediaDB) Close() error {
 }
 
 func (db *MediaDB) BeginTransaction() error {
-	return sqlBeginTransaction(db.sql)
+	return sqlBeginTransaction(db.ctx, db.sql)
 }
 
 func (db *MediaDB) CommitTransaction() error {
-	return sqlCommitTransaction(db.sql)
+	return sqlCommitTransaction(db.ctx, db.sql)
 }
 
 func (db *MediaDB) ReindexTables() error {
-	return sqlIndexTables(db.sql)
+	return sqlIndexTables(db.ctx, db.sql)
 }
 
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
@@ -129,7 +131,7 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 	if db.sql == nil {
 		return make([]database.SearchResult, 0), ErrorNullSql
 	}
-	return sqlSearchMediaPathExact(db.sql, systems, query)
+	return sqlSearchMediaPathExact(db.ctx, db.sql, systems, query)
 }
 
 // SearchMediaPathWords returns indexed names that include every word in a query (case-insensitive).
@@ -138,7 +140,7 @@ func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query strin
 		return make([]database.SearchResult, 0), ErrorNullSql
 	}
 	qWords := strings.Fields(strings.ToLower(query))
-	return sqlSearchMediaPathParts(db.sql, systems, qWords)
+	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, qWords)
 }
 
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
@@ -165,7 +167,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	// TODO: since we approximated a glob, we should actually check
 	//       result paths against base glob to confirm
-	return sqlSearchMediaPathParts(db.sql, systems, parts)
+	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, parts)
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.
@@ -173,7 +175,7 @@ func (db *MediaDB) SystemIndexed(system systemdefs.System) bool {
 	if db.sql == nil {
 		return false
 	}
-	return sqlSystemIndexed(db.sql, system)
+	return sqlSystemIndexed(db.ctx, db.sql, system)
 }
 
 // IndexedSystems returns all systems indexed in the media database.
@@ -184,7 +186,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	if db.sql == nil {
 		return systems, ErrorNullSql
 	}
-	return sqlIndexedSystems(db.sql)
+	return sqlIndexedSystems(db.ctx, db.sql)
 }
 
 // RandomGame returns a random game from specified systems.
@@ -199,15 +201,15 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		return result, err
 	}
 
-	return sqlRandomGame(db.sql, system)
+	return sqlRandomGame(db.ctx, db.sql, system)
 }
 
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
-	return sqlFindSystem(db.sql, row)
+	return sqlFindSystem(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
-	return sqlInsertSystem(db.sql, row)
+	return sqlInsertSystem(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, error) {
@@ -219,11 +221,11 @@ func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, err
 }
 
 func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
-	return sqlFindMediaTitle(db.sql, row)
+	return sqlFindMediaTitle(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
-	return sqlInsertMediaTitle(db.sql, row)
+	return sqlInsertMediaTitle(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
@@ -235,11 +237,11 @@ func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.Med
 }
 
 func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
-	return sqlFindMedia(db.sql, row)
+	return sqlFindMedia(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
-	return sqlInsertMedia(db.sql, row)
+	return sqlInsertMedia(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
@@ -251,11 +253,11 @@ func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error)
 }
 
 func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
-	return sqlFindTagType(db.sql, row)
+	return sqlFindTagType(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
-	return sqlInsertTagType(db.sql, row)
+	return sqlInsertTagType(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, error) {
@@ -267,11 +269,11 @@ func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, 
 }
 
 func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
-	return sqlFindTag(db.sql, row)
+	return sqlFindTag(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
-	return sqlInsertTag(db.sql, row)
+	return sqlInsertTag(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
@@ -283,11 +285,11 @@ func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error) {
-	return sqlFindMediaTag(db.sql, row)
+	return sqlFindMediaTag(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
-	return sqlInsertMediaTag(db.sql, row)
+	return sqlInsertMediaTag(db.ctx, db.sql, row)
 }
 
 func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTag, error) {

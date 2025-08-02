@@ -22,6 +22,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,13 +104,13 @@ func setupEnvironment(pl platforms.Platform) error {
 	return nil
 }
 
-func makeDatabase(pl platforms.Platform) (*database.Database, error) {
+func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Database, error) {
 	db := &database.Database{
 		MediaDB: nil,
 		UserDB:  nil,
 	}
 
-	mediaDB, err := mediadb.OpenMediaDB(pl)
+	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
 		return db, err
 	}
@@ -121,7 +122,7 @@ func makeDatabase(pl platforms.Platform) (*database.Database, error) {
 
 	db.MediaDB = mediaDB
 
-	userDB, err := userdb.OpenUserDB(pl)
+	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
 		return db, err
 	}
@@ -169,7 +170,7 @@ func Start(
 	}
 
 	log.Info().Msg("opening databases")
-	db, err := makeDatabase(pl)
+	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err

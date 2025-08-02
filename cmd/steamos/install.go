@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 )
@@ -41,11 +43,13 @@ func install() error {
 		if err != nil {
 			return err
 		}
-		err = exec.Command("systemctl", "daemon-reload").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
 		if err != nil {
 			return err
 		}
-		err = exec.Command("systemctl", "enable", "zaparoo").Run()
+		err = exec.CommandContext(ctx, "systemctl", "enable", "zaparoo").Run()
 		if err != nil {
 			return err
 		}
@@ -57,11 +61,13 @@ func install() error {
 		if err != nil {
 			return err
 		}
-		err = exec.Command("udevadm", "control", "--reload-rules").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err = exec.CommandContext(ctx, "udevadm", "control", "--reload-rules").Run()
 		if err != nil {
 			return err
 		}
-		err = exec.Command("udevadm", "trigger").Run()
+		err = exec.CommandContext(ctx, "udevadm", "trigger").Run()
 		if err != nil {
 			return err
 		}
@@ -80,15 +86,17 @@ func install() error {
 
 func uninstall() error {
 	if _, err := os.Stat(servicePath); !os.IsNotExist(err) {
-		err = exec.Command("systemctl", "disable", "zaparoo").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err = exec.CommandContext(ctx, "systemctl", "disable", "zaparoo").Run()
 		if err != nil {
 			return err
 		}
-		err = exec.Command("systemctl", "stop", "zaparoo").Run()
+		err = exec.CommandContext(ctx, "systemctl", "stop", "zaparoo").Run()
 		if err != nil {
 			return err
 		}
-		err = exec.Command("systemctl", "daemon-reload").Run()
+		err = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
 		if err != nil {
 			return err
 		}

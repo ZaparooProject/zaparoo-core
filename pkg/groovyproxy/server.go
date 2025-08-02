@@ -28,13 +28,14 @@ func Start(
 	beaconInterval := cfg.GmcProxyBeaconInterval()
 
 	// Setup socket core->beacon send and GMC receipt
-	coreConn, err := net.ListenPacket("udp4", ":0")
+	lc := &net.ListenConfig{}
+	coreConn, err := lc.ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		log.Error().Err(err).Msg("error creating GMC Groovy Core listener socket, aborting GMC Proxy")
 	}
 
 	// Allow external GMC command runners to beacon to this proxy for forwarding
-	proxyConn, err := net.ListenPacket("udp4", fmt.Sprintf(":%v", proxyGMCPort))
+	proxyConn, err := lc.ListenPacket(ctx, "udp4", fmt.Sprintf(":%v", proxyGMCPort))
 	if err != nil {
 		log.Error().Err(err).Msg("error creating GMC Proxy listener socket, aborting GMC Proxy")
 		return
