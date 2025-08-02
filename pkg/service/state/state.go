@@ -163,7 +163,7 @@ func (s *State) ListReaders() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var rs []string
+	rs := make([]string, 0, len(s.readers))
 	for k := range s.readers {
 		rs = append(rs, k)
 	}

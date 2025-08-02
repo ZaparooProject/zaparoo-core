@@ -65,7 +65,7 @@ func LookupSystem(id string) (*System, error) {
 }
 
 func AllSystems() []System {
-	var systems []System
+	systems := make([]System, 0, len(Systems))
 
 	keys := AlphaMapKeys(Systems)
 	for _, k := range keys {

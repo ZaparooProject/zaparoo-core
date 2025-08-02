@@ -99,8 +99,8 @@ func isCfgRegex(s string) bool {
 }
 
 func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
-	var mappings []database.Mapping
 	cfgMappings := cfg.Mappings()
+	mappings := make([]database.Mapping, 0, len(cfgMappings))
 
 	for _, m := range cfgMappings {
 		var dbm database.Mapping

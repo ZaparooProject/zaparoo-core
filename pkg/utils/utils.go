@@ -161,7 +161,7 @@ func ListZip(path string) ([]string, error) {
 		}
 	}(r)
 
-	var files []string
+	files := make([]string, 0, len(r.File))
 	for _, f := range r.File {
 		files = append(files, f.Name)
 	}

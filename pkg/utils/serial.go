@@ -104,7 +104,7 @@ func getLinuxList() ([]string, error) {
 		return nil, err
 	}
 
-	var devices []string
+	devices := make([]string, 0, len(files))
 
 	for _, v := range files {
 		if v.IsDir() {

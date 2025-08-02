@@ -141,7 +141,7 @@ func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applica
 func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
 
-	var connectionStrings []string
+	connectionStrings := make([]string, 0, len(cfg.Readers().Connect))
 	for _, item := range cfg.Readers().Connect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}

@@ -57,14 +57,14 @@ Title1=Song 1
 File2=/path/to/song2.mp3
 Title2=Song 2`,
 			expectedMedia:  nil,
-			expectedErrMsg: "no entries found in pls file",
+			expectedErrMsg: "no items found in pls file",
 		},
 		{
 			name: "empty_pls_file",
 			plsContent: `
 			`,
 			expectedMedia:  nil,
-			expectedErrMsg: "no entries found in pls file",
+			expectedErrMsg: "no items found in pls file",
 		},
 		{
 			name: "invalid_entry_ids",
@@ -72,7 +72,7 @@ Title2=Song 2`,
 FileA=/path/to/song1.mp3
 TitleB=Song 1`,
 			expectedMedia:  nil,
-			expectedErrMsg: "no entries found in pls file",
+			expectedErrMsg: "no items found in pls file",
 		},
 	}
 

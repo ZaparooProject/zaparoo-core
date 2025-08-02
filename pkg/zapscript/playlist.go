@@ -331,7 +331,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Index = env.Playlist.Active.Index
 	}
 
-	var items []widgetModels.PickerItem
+	items := make([]widgetModels.PickerItem, 0, len(pls.Items))
 	for i, m := range pls.Items {
 		var name string
 

@@ -39,7 +39,7 @@ func (c *Instance) ReadersScan() ReadersScan {
 func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var blocklist []string
+	blocklist := make([]string, 0, len(c.vals.Readers.Scan.IgnoreSystem))
 	for _, v := range c.vals.Readers.Scan.IgnoreSystem {
 		blocklist = append(blocklist, strings.ToLower(v))
 	}
