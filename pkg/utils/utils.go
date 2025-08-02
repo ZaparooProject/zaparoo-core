@@ -117,7 +117,9 @@ func WaitForInternet(maxTries int) bool {
 	for i := 0; i < maxTries; i++ {
 		resp, err := http.Get("https://api.github.com")
 		if err == nil {
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				log.Error().Err(err).Msg("error closing response body")
+			}
 			return true
 		}
 		time.Sleep(1 * time.Second)

@@ -53,7 +53,11 @@ func downloadDoc(platformID, toDir string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("error closing response body: %v\n", err)
+		}
+	}()
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {

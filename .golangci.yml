@@ -26,6 +26,15 @@ linters:
     - bodyclose
     # Code Standards
     - gochecknoglobals
+    # Modernization
+    - nilerr
+    - unconvert
+    - usestdlibvars
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
 
 linters-settings:
   govet:

@@ -57,7 +57,11 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Error().Err(err).Msg("error closing response body")
+		}
+	}()
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}

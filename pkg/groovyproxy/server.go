@@ -129,8 +129,12 @@ func Start(
 		case <-ctx.Done():
 			log.Debug().Msg("Closing GMC Proxy via context cancellation")
 			beaconTicker.Stop()
-			coreConn.Close()
-			proxyConn.Close()
+			if err := coreConn.Close(); err != nil {
+				log.Error().Err(err).Msg("error closing core connection")
+			}
+			if err := proxyConn.Close(); err != nil {
+				log.Error().Err(err).Msg("error closing proxy connection")
+			}
 		}
 	}
 }
