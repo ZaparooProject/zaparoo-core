@@ -38,7 +38,7 @@ tasks:
           EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
           APP_BIN: "{{.APP_BIN}}"
       - >-
-        go run scripts/tasks/utils/makezip.go
+        go run scripts/tasks/utils/makezip
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
         "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.zip"
 
