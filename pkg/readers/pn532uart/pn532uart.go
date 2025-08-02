@@ -168,15 +168,15 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 					break readLoop
 				}
 
-				res, err := InDataExchange(r.port, []byte{0x30, byte(i)})
+				res, exchangeErr := InDataExchange(r.port, []byte{0x30, byte(i)})
 				switch {
-				case errors.Is(err, ErrNoFrameFound):
+				case errors.Is(exchangeErr, ErrNoFrameFound):
 					// sometimes the response just doesn't work, try again
 					log.Warn().Msg("no frame found")
 					blockRetry++
 					continue readLoop
-				case err != nil:
-					log.Error().Err(err).Msg("failed to run indataexchange")
+				case exchangeErr != nil:
+					log.Error().Err(exchangeErr).Msg("failed to run indataexchange")
 					errCount++
 					break readLoop
 				case len(res) < 2:
@@ -315,9 +315,9 @@ func (*PN532UARTReader) Detect(connected []string) string {
 		// try to open the device
 		port, err := connect(name)
 		if port != nil {
-			err := port.Close()
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to close serial port")
+			closeErr := port.Close()
+			if closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close serial port")
 			}
 		}
 

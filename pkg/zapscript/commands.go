@@ -194,10 +194,10 @@ func RunCommand(
 	} else if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := parser.NewParser(linkValue)
-		script, err := reader.ParseScript()
+		script, parseErr := reader.ParseScript()
 		switch {
-		case err != nil:
-			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", err)
+		case parseErr != nil:
+			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", parseErr)
 		case len(script.Cmds) == 0:
 			return platforms.CmdResult{}, errors.New("zap link is empty")
 		case len(script.Cmds) > 1:
@@ -214,18 +214,18 @@ func RunCommand(
 
 	for i, arg := range cmd.Args {
 		reader := parser.NewParser(arg)
-		output, err := reader.EvalExpressions(exprEnv)
-		if err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", err)
+		output, evalErr := reader.EvalExpressions(exprEnv)
+		if evalErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", evalErr)
 		}
 		cmd.Args[i] = output
 	}
 
 	for k, arg := range cmd.AdvArgs {
 		reader := parser.NewParser(arg)
-		output, err := reader.EvalExpressions(exprEnv)
-		if err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", err)
+		output, evalErr := reader.EvalExpressions(exprEnv)
+		if evalErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
 		}
 		cmd.AdvArgs[k] = output
 	}

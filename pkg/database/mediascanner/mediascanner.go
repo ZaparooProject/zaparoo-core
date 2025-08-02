@@ -166,9 +166,9 @@ func GetFiles(
 		if file.IsDir() {
 			key := path
 			if file.Type()&os.ModeSymlink != 0 {
-				realPath, err := filepath.EvalSymlinks(path)
-				if err != nil {
-					return err
+				realPath, symlinkErr := filepath.EvalSymlinks(path)
+				if symlinkErr != nil {
+					return symlinkErr
 				}
 				key = realPath
 			}
@@ -180,33 +180,33 @@ func GetFiles(
 
 		// handle symlinked directories
 		if file.Type()&os.ModeSymlink != 0 {
-			absSym, err := filepath.Abs(path)
-			if err != nil {
-				return err
+			absSym, absErr := filepath.Abs(path)
+			if absErr != nil {
+				return absErr
 			}
 
-			realPath, err := filepath.EvalSymlinks(absSym)
-			if err != nil {
-				return err
+			realPath, realPathErr := filepath.EvalSymlinks(absSym)
+			if realPathErr != nil {
+				return realPathErr
 			}
 
-			file, err := os.Stat(realPath)
-			if err != nil {
-				return err
+			file, statErr := os.Stat(realPath)
+			if statErr != nil {
+				return statErr
 			}
 
 			if file.IsDir() {
 				stack.push()
 				defer stack.pop()
 
-				err = filepath.WalkDir(realPath, scanner)
-				if err != nil {
-					return err
+				walkErr := filepath.WalkDir(realPath, scanner)
+				if walkErr != nil {
+					return walkErr
 				}
 
-				results, err := stack.get()
-				if err != nil {
-					return err
+				results, stackErr := stack.get()
+				if stackErr != nil {
+					return stackErr
 				}
 
 				for i := range *results {
@@ -217,17 +217,17 @@ func GetFiles(
 			}
 		}
 
-		results, err := stack.get()
-		if err != nil {
-			return err
+		results, stackErr := stack.get()
+		if stackErr != nil {
+			return stackErr
 		}
 
 		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
-			zipFiles, err := helpers.ListZip(path)
-			if err != nil {
+			zipFiles, zipErr := helpers.ListZip(path)
+			if zipErr != nil {
 				// skip invalid zip files
-				log.Warn().Err(err).Msgf("error listing zip: %s", path)
+				log.Warn().Err(zipErr).Msgf("error listing zip: %s", path)
 				return nil
 			}
 
@@ -377,9 +377,9 @@ func NewNamesIndex(
 
 		// scan using standard folder and extensions
 		for _, path := range systemPaths[k] {
-			pathFiles, err := GetFiles(cfg, platform, k, path)
-			if err != nil {
-				log.Error().Err(err).Msgf("error getting files for system: %s", systemID)
+			pathFiles, pathErr := GetFiles(cfg, platform, k, path)
+			if pathErr != nil {
+				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
 				continue
 			}
 			for _, f := range pathFiles {
@@ -392,10 +392,10 @@ func NewNamesIndex(
 		for _, l := range platform.Launchers(cfg) {
 			if l.SystemID == k && l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
-				var err error
-				files, err = l.Scanner(cfg, systemID, files)
-				if err != nil {
-					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemID)
+				var scanErr error
+				files, scanErr = l.Scanner(cfg, systemID, files)
+				if scanErr != nil {
+					log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 					continue
 				}
 			}
@@ -423,9 +423,9 @@ func NewNamesIndex(
 		systemID := l.SystemID
 		if !scanned[systemID] && l.Scanner != nil {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
-			results, err := l.Scanner(cfg, systemID, []platforms.ScanResult{})
-			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemID)
+			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
 
@@ -454,9 +454,9 @@ func NewNamesIndex(
 	for _, l := range anyScanners {
 		for _, s := range systems {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, s.ID)
-			results, err := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
-			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
+			results, scanErr := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
 				continue
 			}
 

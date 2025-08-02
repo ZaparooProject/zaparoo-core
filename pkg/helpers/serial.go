@@ -97,9 +97,9 @@ func getLinuxList() ([]string, error) {
 		return nil, err
 	}
 	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close serial device folder")
+		closeErr := f.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close serial device folder")
 		}
 	}(f)
 

@@ -259,10 +259,10 @@ func fsCustom404(root http.FileSystem) http.Handler {
 		f, err := root.Open(r.URL.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				index, err := root.Open("index.html")
-				if err != nil {
-					log.Error().Err(err).Msg("error opening index.html")
-					http.Error(w, err.Error(), http.StatusInternalServerError)
+				index, indexErr := root.Open("index.html")
+				if indexErr != nil {
+					log.Error().Err(indexErr).Msg("error opening index.html")
+					http.Error(w, indexErr.Error(), http.StatusInternalServerError)
 					return
 				}
 				http.ServeContent(w, r, "index.html", time.Now(), index)

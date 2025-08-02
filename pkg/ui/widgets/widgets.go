@@ -89,9 +89,8 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 
 	if !isProcessRunning(pid) {
 		// clean up stale file
-		err := os.Remove(path)
-		if err != nil {
-			return false, err
+		if removeErr := os.Remove(path); removeErr != nil {
+			return false, removeErr
 		}
 		return false, nil
 	}

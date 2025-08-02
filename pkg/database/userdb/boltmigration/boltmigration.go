@@ -103,9 +103,9 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 		return err
 	}
 	defer func(oldDB *Database) {
-		err := oldDB.Close()
-		if err != nil {
-			log.Warn().Msgf("error closing old DB: %s", err)
+		closeErr := oldDB.Close()
+		if closeErr != nil {
+			log.Warn().Msgf("error closing old DB: %s", closeErr)
 		}
 	}(oldDB)
 
@@ -134,9 +134,9 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 			newMapping.Type = oldMapping.Type
 		}
 
-		err := newDB.AddMapping(newMapping)
-		if err != nil {
-			log.Warn().Msgf("error migrating mapping: %s", err)
+		addErr := newDB.AddMapping(newMapping)
+		if addErr != nil {
+			log.Warn().Msgf("error migrating mapping: %s", addErr)
 			errors++
 		}
 	}

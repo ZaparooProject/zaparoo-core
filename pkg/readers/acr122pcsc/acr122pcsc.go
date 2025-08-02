@@ -222,9 +222,8 @@ func (*ACR122PCSC) Detect(connected []string) string {
 		return ""
 	}
 	defer func(ctx *scard.Context) {
-		err := ctx.Release()
-		if err != nil {
-			log.Warn().Err(err).Msg("error releasing pcsc context")
+		if releaseErr := ctx.Release(); releaseErr != nil {
+			log.Warn().Err(releaseErr).Msg("error releasing pcsc context")
 		}
 	}(ctx)
 

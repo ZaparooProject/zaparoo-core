@@ -144,17 +144,16 @@ func InstallRemoteFile(
 	log.Debug().Msgf("remote media local path: %s", localPath)
 
 	// check if the file already exists
-	if _, err := os.Stat(localPath); err == nil {
-		err := showPreNotice(cfg, pl, preNotice)
-		if err != nil {
+	if _, statErr := os.Stat(localPath); statErr == nil {
+		if err = showPreNotice(cfg, pl, preNotice); err != nil {
 			log.Warn().Err(err).Msgf("error showing pre-notice")
 		}
 		return localPath, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("error checking file: %w", err)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("error checking file: %w", statErr)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return "", fmt.Errorf("cannot create directories: %w", err)
 	}
 
@@ -171,15 +170,14 @@ func InstallRemoteFile(
 		log.Warn().Err(err).Msgf("error showing loading dialog")
 	}
 
-	if _, err := os.Stat(tempPath); err == nil {
+	if _, statErr := os.Stat(tempPath); statErr == nil {
 		log.Warn().Msgf("removing leftover temp file: %s", tempPath)
-		err := os.Remove(tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing temp file: %s", tempPath)
+		if removeErr := os.Remove(tempPath); removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing temp file: %s", tempPath)
 		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		_ = hideLoader()
-		return "", fmt.Errorf("error checking temp file: %w", err)
+		return "", fmt.Errorf("error checking temp file: %w", statErr)
 	}
 
 	err = downloader(DownloaderArgs{

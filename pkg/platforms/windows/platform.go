@@ -434,12 +434,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				platformsDir := filepath.Join(lbDir, "Data", "Platforms")
-				if _, err := os.Stat(lbDir); os.IsNotExist(err) {
+				if _, statErr := os.Stat(lbDir); os.IsNotExist(statErr) {
 					return results, errors.New("LaunchBox platforms dir not found")
 				}
 
 				xmlPath := filepath.Join(platformsDir, lbSys+".xml")
-				if _, err := os.Stat(xmlPath); os.IsNotExist(err) {
+				if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
 					log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
 					return results, nil
 				}
@@ -449,9 +449,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return results, err
 				}
 				defer func(xmlFile *os.File) {
-					err := xmlFile.Close()
-					if err != nil {
-						log.Warn().Err(err).Msg("error closing xml file")
+					if closeErr := xmlFile.Close(); closeErr != nil {
+						log.Warn().Err(closeErr).Msg("error closing xml file")
 					}
 				}(xmlFile)
 

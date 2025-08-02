@@ -52,9 +52,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	gamesdb := env.Database.MediaDB
 
 	if strings.EqualFold(query, "all") {
-		game, err := gamesdb.RandomGame(systemdefs.AllSystems())
-		if err != nil {
-			return platforms.CmdResult{}, err
+		game, gameErr := gamesdb.RandomGame(systemdefs.AllSystems())
+		if gameErr != nil {
+			return platforms.CmdResult{}, gameErr
 		}
 
 		return platforms.CmdResult{
@@ -66,22 +66,22 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// TODO: won't work for zips, switch to using gamesdb when it indexes paths
 	// TODO: doesn't filter on extensions
 	if filepath.IsAbs(query) {
-		if _, err := os.Stat(query); err != nil {
-			return platforms.CmdResult{}, err
+		if _, statErr := os.Stat(query); statErr != nil {
+			return platforms.CmdResult{}, statErr
 		}
 
-		files, err := filepath.Glob(filepath.Join(query, "*"))
-		if err != nil {
-			return platforms.CmdResult{}, err
+		files, globErr := filepath.Glob(filepath.Join(query, "*"))
+		if globErr != nil {
+			return platforms.CmdResult{}, globErr
 		}
 
 		if len(files) == 0 {
 			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", query)
 		}
 
-		file, err := helpers.RandomElem(files)
-		if err != nil {
-			return platforms.CmdResult{}, err
+		file, randomErr := helpers.RandomElem(files)
+		if randomErr != nil {
+			return platforms.CmdResult{}, randomErr
 		}
 
 		return platforms.CmdResult{
@@ -100,9 +100,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		if strings.EqualFold(systemID, "all") {
 			systems = systemdefs.AllSystems()
 		} else {
-			system, err := systemdefs.LookupSystem(systemID)
-			if err != nil {
-				return platforms.CmdResult{}, err
+			system, lookupErr := systemdefs.LookupSystem(systemID)
+			if lookupErr != nil {
+				return platforms.CmdResult{}, lookupErr
 			} else if system == nil {
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
@@ -111,18 +111,18 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		query = strings.ToLower(query)
 
-		res, err := gamesdb.SearchMediaPathGlob(systems, query)
-		if err != nil {
-			return platforms.CmdResult{}, err
+		res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
+		if searchErr != nil {
+			return platforms.CmdResult{}, searchErr
 		}
 
 		if len(res) == 0 {
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
 		}
 
-		game, err := helpers.RandomElem(res)
-		if err != nil {
-			return platforms.CmdResult{}, err
+		game, randomErr := helpers.RandomElem(res)
+		if randomErr != nil {
+			return platforms.CmdResult{}, randomErr
 		}
 
 		return platforms.CmdResult{
@@ -134,9 +134,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	systems := make([]systemdefs.System, 0, len(env.Cmd.Args))
 
 	for _, id := range env.Cmd.Args {
-		system, err := systemdefs.LookupSystem(id)
-		if err != nil {
-			log.Error().Err(err).Msgf("error looking up system: %s", id)
+		system, lookupErr := systemdefs.LookupSystem(id)
+		if lookupErr != nil {
+			log.Error().Err(lookupErr).Msgf("error looking up system: %s", id)
 			continue
 		}
 
@@ -252,13 +252,15 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	// for relative paths, perform a basic check if the file exists in a games folder
 	// this always takes precedence over the system/path format (but is not totally cross platform)
-	if p, err := findFile(pl, env.Cfg, path); err == nil {
+	var findErr error
+	var p string
+	if p, findErr = findFile(pl, env.Cfg, path); findErr == nil {
 		log.Debug().Msgf("launching found relative path: %s", p)
 		return platforms.CmdResult{
 			MediaChanged: true,
 		}, launch(p)
 	}
-	log.Debug().Err(err).Msgf("error finding file: %s", path)
+	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
 	// attempt to parse the <system>/<path> format
 	ps := strings.SplitN(path, "/", 2)
@@ -294,13 +296,15 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	for _, f := range folders {
 		systemPath := filepath.Join(f, lookupPath)
 		log.Debug().Msgf("checking system path: %s", systemPath)
-		if fp, err := findFile(pl, env.Cfg, systemPath); err == nil {
+		var systemFindErr error
+		var fp string
+		if fp, systemFindErr = findFile(pl, env.Cfg, systemPath); systemFindErr == nil {
 			log.Debug().Msgf("launching found system path: %s", fp)
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, launch(fp)
 		}
-		log.Debug().Err(err).Msgf("error finding system file: %s", lookupPath)
+		log.Debug().Err(systemFindErr).Msgf("error finding system file: %s", lookupPath)
 	}
 
 	gamesdb := env.Database.MediaDB
@@ -359,9 +363,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
-		res, err := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
-		if err != nil {
-			return platforms.CmdResult{}, err
+		res, searchErr := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
+		if searchErr != nil {
+			return platforms.CmdResult{}, searchErr
 		}
 
 		if len(res) == 0 {
@@ -389,17 +393,17 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if strings.EqualFold(systemID, "all") {
 		systems = systemdefs.AllSystems()
 	} else {
-		system, err := systemdefs.LookupSystem(systemID)
-		if err != nil {
-			return platforms.CmdResult{}, err
+		system, lookupErr := systemdefs.LookupSystem(systemID)
+		if lookupErr != nil {
+			return platforms.CmdResult{}, lookupErr
 		}
 
 		systems = append(systems, *system)
 	}
 
-	res, err := gamesdb.SearchMediaPathGlob(systems, query)
-	if err != nil {
-		return platforms.CmdResult{}, err
+	res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
+	if searchErr != nil {
+		return platforms.CmdResult{}, searchErr
 	}
 
 	if len(res) == 0 {

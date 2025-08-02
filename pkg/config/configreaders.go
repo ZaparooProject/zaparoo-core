@@ -7,8 +7,8 @@ import (
 )
 
 type Readers struct {
-	Scan       ReadersScan      `toml:"scan,omitempty"`
 	Connect    []ReadersConnect `toml:"connect,omitempty"`
+	Scan       ReadersScan      `toml:"scan,omitempty"`
 	AutoDetect bool             `toml:"auto_detect"`
 }
 

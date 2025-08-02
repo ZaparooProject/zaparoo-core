@@ -91,9 +91,9 @@ func LocalClient(
 		return "", err
 	}
 	defer func(c *websocket.Conn) {
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 	}(c)
 
@@ -103,15 +103,15 @@ func LocalClient(
 	go func() {
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
-			if err != nil {
-				log.Error().Err(err).Msg("error reading message")
+			_, message, readErr := c.ReadMessage()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("error reading message")
 				return
 			}
 
 			var m models.ResponseObject
-			err = json.Unmarshal(message, &m)
-			if err != nil {
+			unmarshalErr := json.Unmarshal(message, &m)
+			if unmarshalErr != nil {
 				continue
 			}
 
@@ -139,15 +139,15 @@ func LocalClient(
 	case <-done:
 
 	case <-timer.C:
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestCancelled
 	}
@@ -186,9 +186,9 @@ func WaitNotification(
 		return "", err
 	}
 	defer func(c *websocket.Conn) {
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 	}(c)
 
@@ -198,15 +198,15 @@ func WaitNotification(
 	go func() {
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
-			if err != nil {
-				log.Error().Err(err).Msg("error reading message")
+			_, message, readErr := c.ReadMessage()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("error reading message")
 				return
 			}
 
 			var m models.RequestObject
-			err = json.Unmarshal(message, &m)
-			if err != nil {
+			unmarshalErr := json.Unmarshal(message, &m)
+			if unmarshalErr != nil {
 				continue
 			}
 
@@ -243,15 +243,15 @@ func WaitNotification(
 	case <-done:
 
 	case <-timerChan:
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestCancelled
 	}

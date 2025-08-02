@@ -69,8 +69,8 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error getting url: %w", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Error().Err(err).Msg("error closing response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
 	}()
 	if resp.StatusCode != http.StatusOK {
@@ -84,26 +84,26 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 
 	written, err := io.Copy(file, resp.Body)
 	if err != nil {
-		err = file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msgf("error closing file: %s", opts.tempPath)
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msgf("error closing file: %s", opts.tempPath)
 		}
-		err := os.Remove(opts.tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing partial download: %s", opts.tempPath)
+		removeErr := os.Remove(opts.tempPath)
+		if removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing partial download: %s", opts.tempPath)
 		}
 		return fmt.Errorf("error downloading file: %w", err)
 	}
 
 	expected := resp.ContentLength
 	if expected > 0 && written != expected {
-		err = file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msgf("error closing file: %s", opts.tempPath)
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msgf("error closing file: %s", opts.tempPath)
 		}
-		err := os.Remove(opts.tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing partial download: %s", opts.tempPath)
+		removeErr := os.Remove(opts.tempPath)
+		if removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing partial download: %s", opts.tempPath)
 		}
 		return fmt.Errorf("download incomplete: expected %d bytes, got %d", expected, written)
 	}

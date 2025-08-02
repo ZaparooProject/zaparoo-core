@@ -26,16 +26,16 @@ const (
 )
 
 type Values struct {
-	Groovy       Groovy    `toml:"groovy,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
-	Readers      Readers   `toml:"readers,omitempty"`
-	Service      Service   `toml:"service,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
+	Service      Service   `toml:"service,omitempty"`
+	Groovy       Groovy    `toml:"groovy,omitempty"`
+	Readers      Readers   `toml:"readers,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
-	DebugLogging bool      `toml:"debug_logging"`
 	Audio        Audio     `toml:"audio,omitempty"`
+	DebugLogging bool      `toml:"debug_logging"`
 }
 
 type Audio struct {
@@ -86,10 +86,10 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	vals     Values
 	appPath  string
 	cfgPath  string
 	authPath string
+	vals     Values
 	mu       sync.RWMutex
 }
 

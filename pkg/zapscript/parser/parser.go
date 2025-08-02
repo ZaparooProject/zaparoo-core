@@ -370,9 +370,9 @@ func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error
 		}
 
 		if ch == SymInputMacroEscapeSeq {
-			next, err := sr.read()
-			if err != nil {
-				return args, advArgs, err
+			next, readErr := sr.read()
+			if readErr != nil {
+				return args, advArgs, readErr
 			} else if next == eof {
 				args = append(args, string(SymInputMacroEscapeSeq))
 			}
@@ -461,24 +461,24 @@ func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
 		if inValue {
 			switch {
 			case valueStart == sr.pos-1 && (ch == SymArgDoubleQuote || ch == SymArgSingleQuote):
-				quotedValue, err := sr.parseQuotedArg(ch)
-				if err != nil {
-					return advArgs, string(buf), err
+				quotedValue, parseErr := sr.parseQuotedArg(ch)
+				if parseErr != nil {
+					return advArgs, string(buf), parseErr
 				}
 				currentValue = quotedValue
 				continue
 			case ch == SymJSONStart && valueStart == sr.pos-1:
-				jsonValue, err := sr.parseJSONArg()
-				if err != nil {
-					return advArgs, string(buf), err
+				jsonValue, parseErr := sr.parseJSONArg()
+				if parseErr != nil {
+					return advArgs, string(buf), parseErr
 				}
 				currentValue = jsonValue
 				continue
 			case ch == SymEscapeSeq:
 				// escaping next character
-				next, err := sr.parseEscapeSeq()
-				if err != nil {
-					return advArgs, string(buf), err
+				next, escapeErr := sr.parseEscapeSeq()
+				if escapeErr != nil {
+					return advArgs, string(buf), escapeErr
 				} else if next == "" {
 					currentValue += string(SymEscapeSeq)
 					continue
@@ -550,24 +550,24 @@ argsLoop:
 
 		switch {
 		case argStart == sr.pos-1 && (ch == SymArgDoubleQuote || ch == SymArgSingleQuote):
-			quotedArg, err := sr.parseQuotedArg(ch)
-			if err != nil {
-				return args, advArgs, err
+			quotedArg, quotedErr := sr.parseQuotedArg(ch)
+			if quotedErr != nil {
+				return args, advArgs, quotedErr
 			}
 			currentArg = quotedArg
 			continue argsLoop
 		case argStart == sr.pos-1 && ch == SymJSONStart:
-			jsonArg, err := sr.parseJSONArg()
-			if err != nil {
-				return args, advArgs, err
+			jsonArg, jsonErr := sr.parseJSONArg()
+			if jsonErr != nil {
+				return args, advArgs, jsonErr
 			}
 			currentArg = jsonArg
 			continue argsLoop
 		case ch == SymEscapeSeq:
 			// escaping next character
-			next, err := sr.parseEscapeSeq()
-			if err != nil {
-				return args, advArgs, err
+			next, escapeErr := sr.parseEscapeSeq()
+			if escapeErr != nil {
+				return args, advArgs, escapeErr
 			} else if next == "" {
 				currentArg += string(SymEscapeSeq)
 				continue argsLoop
@@ -757,15 +757,13 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			case eof:
 				return script, ErrUnexpectedEOF
 			case SymCmdStart:
-				err := sr.skip()
-				if err != nil {
-					return script, parseErr(err)
+				if skipErr := sr.skip(); skipErr != nil {
+					return script, parseErr(skipErr)
 				}
 			default:
 				// assume it's actually an auto launch cmd
-				err := parseAutoLaunchCmd("*")
-				if err != nil {
-					return script, parseErr(err)
+				if autoErr := parseAutoLaunchCmd("*"); autoErr != nil {
+					return script, parseErr(autoErr)
 				}
 				continue
 			}
@@ -774,9 +772,8 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			switch {
 			case errors.Is(err, ErrInvalidCmdName):
 				// assume it's actually an auto launch cmd
-				err := parseAutoLaunchCmd("**" + buf)
-				if err != nil {
-					return script, parseErr(err)
+				if autoErr := parseAutoLaunchCmd("**" + buf); autoErr != nil {
+					return script, parseErr(autoErr)
 				}
 				continue
 			case err != nil:

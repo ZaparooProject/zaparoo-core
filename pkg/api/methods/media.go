@@ -250,12 +250,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	} else {
 		systems := make([]systemdefs.System, 0)
 		for _, s := range *system {
-			system, err := systemdefs.GetSystem(s)
-			if err != nil {
-				return nil, errors.New("error getting system: " + err.Error())
+			sys, systemErr := systemdefs.GetSystem(s)
+			if systemErr != nil {
+				return nil, errors.New("error getting system: " + systemErr.Error())
 			}
 
-			systems = append(systems, *system)
+			systems = append(systems, *sys)
 		}
 
 		search, err = env.Database.MediaDB.SearchMediaPathWords(systems, query)

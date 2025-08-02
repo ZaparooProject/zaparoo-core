@@ -34,9 +34,9 @@ func (db *UserDB) Open() error {
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
-		err := os.MkdirAll(filepath.Dir(dbPath), 0o755)
-		if err != nil {
-			return err
+		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o755)
+		if mkdirErr != nil {
+			return mkdirErr
 		}
 	}
 	sqlInstance, err := sql.Open("sqlite3", dbPath)

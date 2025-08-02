@@ -259,9 +259,8 @@ func readerManager(
 			return
 		}
 		if time.Since(lastError) > 1*time.Second {
-			err := pl.PlayAudio(config.FailSoundFilename)
-			if err != nil {
-				log.Warn().Msgf("error playing fail sound: %s", err)
+			if audioErr := pl.PlayAudio(config.FailSoundFilename); audioErr != nil {
+				log.Warn().Msgf("error playing fail sound: %s", audioErr)
 			}
 		}
 	}
@@ -282,9 +281,8 @@ func readerManager(
 					}
 				}
 
-				err := connectReaders(pl, cfg, st, scanQueue)
-				if err != nil {
-					log.Error().Msgf("error connecting rs: %s", err)
+				if connectErr := connectReaders(pl, cfg, st, scanQueue); connectErr != nil {
+					log.Error().Msgf("error connecting rs: %s", connectErr)
 				}
 			}
 		}

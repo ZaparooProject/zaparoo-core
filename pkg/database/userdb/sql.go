@@ -62,9 +62,9 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 		) values (?, ?, ?, ?, ?, ?);
 	`)
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 	if err != nil {
@@ -100,9 +100,9 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 		return list, err
 	}
 	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := q.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(q)
 
@@ -111,15 +111,15 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 		return list, err
 	}
 	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+		closeErr := rows.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
 	}(rows)
 	for rows.Next() {
 		row := database.HistoryEntry{}
 		var timeInt int64
-		err := rows.Scan(
+		scanErr := rows.Scan(
 			&row.DBID,
 			&timeInt,
 			&row.Type,
@@ -128,8 +128,8 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 			&row.TokenData,
 			&row.Success,
 		)
-		if err != nil {
-			return list, err
+		if scanErr != nil {
+			return list, scanErr
 		}
 		row.Time = time.Unix(timeInt, 0)
 		list = append(list, row)
@@ -145,9 +145,9 @@ func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error {
 		) values (?, ?, ?, ?, ?, ?, ?);
 	`)
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 	if err != nil {
@@ -174,9 +174,9 @@ func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping,
 		where DBID = ?;
 	`)
 	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := q.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(q)
 	if err != nil {
@@ -200,9 +200,9 @@ func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
 		delete from Mappings where DBID = ?;
 	`)
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 	if err != nil {
@@ -226,9 +226,9 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 			DBID = ?;
 	`)
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 	if err != nil {
@@ -259,9 +259,9 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 		return list, err
 	}
 	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := q.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(q)
 
@@ -270,14 +270,14 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 		return list, err
 	}
 	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+		closeErr := rows.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
 	}(rows)
 	for rows.Next() {
 		row := database.Mapping{}
-		err := rows.Scan(
+		scanErr := rows.Scan(
 			&row.DBID,
 			&row.Added,
 			&row.Label,
@@ -287,8 +287,8 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 			&row.Pattern,
 			&row.Override,
 		)
-		if err != nil {
-			return list, err
+		if scanErr != nil {
+			return list, scanErr
 		}
 		list = append(list, row)
 	}
@@ -309,9 +309,9 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 		return list, err
 	}
 	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := q.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(q)
 
@@ -320,14 +320,14 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 		return list, err
 	}
 	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+		closeErr := rows.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
 	}(rows)
 	for rows.Next() {
 		row := database.Mapping{}
-		err := rows.Scan(
+		scanErr := rows.Scan(
 			&row.DBID,
 			&row.Added,
 			&row.Label,
@@ -337,8 +337,8 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 			&row.Pattern,
 			&row.Override,
 		)
-		if err != nil {
-			return list, err
+		if scanErr != nil {
+			return list, scanErr
 		}
 		list = append(list, row)
 	}
@@ -358,9 +358,9 @@ func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscrip
 		return err
 	}
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 
@@ -396,9 +396,9 @@ func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url string, zapscrip
 		return err
 	}
 	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+		closeErr := stmt.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}(stmt)
 

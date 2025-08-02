@@ -60,12 +60,12 @@ func Start(
 				return
 			default:
 				buf := make([]byte, 1024)
-				_, addr, err := proxyConn.ReadFrom(buf)
-				if addr == nil || err != nil {
-					log.Error().Err(err).Msg("error reading GMC proxy beacon")
+				_, addr, readErr := proxyConn.ReadFrom(buf)
+				if addr == nil || readErr != nil {
+					log.Error().Err(readErr).Msg("error reading GMC proxy beacon")
 					continue
 				}
-				if errors.Is(err, net.ErrClosed) {
+				if errors.Is(readErr, net.ErrClosed) {
 					return
 				}
 				proxyAddrChan <- addr
@@ -83,12 +83,12 @@ func Start(
 				return
 			default:
 				buf := make([]byte, 1024)
-				rlen, _, err := coreConn.ReadFrom(buf)
-				if rlen > 0 && err != nil {
-					log.Error().Err(err).Msg("error reading GMC command packet from Groovy core")
+				rlen, _, readErr := coreConn.ReadFrom(buf)
+				if rlen > 0 && readErr != nil {
+					log.Error().Err(readErr).Msg("error reading GMC command packet from Groovy core")
 					continue
 				}
-				if errors.Is(err, net.ErrClosed) {
+				if errors.Is(readErr, net.ErrClosed) {
 					return
 				}
 				gmcChan <- buf[:rlen]
@@ -101,9 +101,9 @@ func Start(
 	for {
 		select {
 		case <-beaconTicker.C:
-			_, err := coreConn.WriteTo([]byte{0}, coreAddr)
-			if err != nil {
-				log.Error().Err(err).Msg("error sending GMC beacon to Groovy core")
+			_, writeErr := coreConn.WriteTo([]byte{0}, coreAddr)
+			if writeErr != nil {
+				log.Error().Err(writeErr).Msg("error sending GMC beacon to Groovy core")
 			}
 		case addr := <-proxyAddrChan:
 			proxyAddr = &addr
@@ -121,9 +121,9 @@ func Start(
 				st.SetActiveCard(t)
 				itq <- t
 			case proxyAddr != nil:
-				_, err := proxyConn.WriteTo(gmcBytes, *proxyAddr)
-				if err != nil {
-					log.Error().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
+				_, writeErr := proxyConn.WriteTo(gmcBytes, *proxyAddr)
+				if writeErr != nil {
+					log.Error().Err(writeErr).Msg("error forwarding GMC from Groovy core to proxy")
 				}
 			default:
 				log.Error().Err(err).Msg("error forwarding GMC from Groovy core to proxy")

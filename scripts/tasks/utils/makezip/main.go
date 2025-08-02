@@ -65,8 +65,8 @@ func downloadDoc(platformID, toDir string) error {
 		return err
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			_, _ = fmt.Printf("error closing response body: %v\n", err)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)
 		}
 	}()
 
@@ -177,8 +177,8 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 					err = addDirToZip(zipWriter, item, buildDir)
 				} else {
 					destPath := filepath.Join(buildDir, filepath.Base(item))
-					if err := copyFile(item, destPath); err != nil {
-						return fmt.Errorf("error copying extra file: %w", err)
+					if copyErr := copyFile(item, destPath); copyErr != nil {
+						return fmt.Errorf("error copying extra file: %w", copyErr)
 					}
 					err = addFileToZip(zipWriter, destPath, filepath.Base(item))
 				}

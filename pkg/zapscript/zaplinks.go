@@ -71,8 +71,8 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 		return 0, err
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Error().Err(err).Msg("error closing response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
 	}()
 
@@ -113,9 +113,8 @@ func isZapLink(link string, db *database.Database) bool {
 		}
 		if err != nil {
 			log.Debug().Err(err).Msgf("error querying zap link support: %s", link)
-			err := db.UserDB.UpdateZapLinkHost(u.Host, result)
-			if err != nil {
-				log.Error().Err(err).Msgf("error updating zap link support: %s", link)
+			if updateErr := db.UserDB.UpdateZapLinkHost(u.Host, result); updateErr != nil {
+				log.Error().Err(updateErr).Msgf("error updating zap link support: %s", link)
 			}
 			return false
 		}
@@ -149,8 +148,8 @@ func getRemoteZapScript(urlStr string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Error().Err(err).Msg("error closing response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
 	}()
 
@@ -255,9 +254,9 @@ func checkZapLink(
 	log.Info().Msgf("checking zap link: %s", value)
 	body, err := getRemoteZapScript(value)
 	if isOfflineError(err) {
-		zapscript, err := db.UserDB.GetZapLinkCache(value)
-		if err != nil {
-			return "", err
+		zapscript, cacheErr := db.UserDB.GetZapLinkCache(value)
+		if cacheErr != nil {
+			return "", cacheErr
 		}
 		if zapscript != "" {
 			return zapscript, nil

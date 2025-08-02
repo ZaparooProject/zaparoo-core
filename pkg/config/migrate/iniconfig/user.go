@@ -68,12 +68,12 @@ type APIConfig struct {
 }
 
 type UserConfig struct {
-	TapTo     TapToConfig     `ini:"tapto"`
 	AppPath   string          `ini:"-"`
 	IniPath   string          `ini:"-"`
 	Systems   SystemsConfig   `ini:"systems"`
 	API       APIConfig       `ini:"api"`
 	Launchers LaunchersConfig `ini:"launchers"`
+	TapTo     TapToConfig     `ini:"tapto"`
 	mu        sync.RWMutex
 }
 
@@ -268,12 +268,12 @@ func NewUserConfig(defaultConfig *UserConfig) (*UserConfig, error) {
 	defaultConfig.AppPath = exePath
 	defaultConfig.IniPath = iniPath
 
-	if _, err := os.Stat(iniPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(iniPath); os.IsNotExist(statErr) {
 		// create a blank one on disk
-		err := defaultConfig.SaveConfig()
-		if err != nil {
-			log.Error().Err(err).Msg("failed to save new user config to disk")
-			return defaultConfig, err
+		saveErr := defaultConfig.SaveConfig()
+		if saveErr != nil {
+			log.Error().Err(saveErr).Msg("failed to save new user config to disk")
+			return defaultConfig, saveErr
 		}
 
 		return defaultConfig, nil
