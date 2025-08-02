@@ -115,8 +115,9 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 
 func WaitForInternet(maxTries int) bool {
 	for i := 0; i < maxTries; i++ {
-		_, err := http.Get("https://api.github.com")
+		resp, err := http.Get("https://api.github.com")
 		if err == nil {
+			resp.Body.Close()
 			return true
 		}
 		time.Sleep(1 * time.Second)

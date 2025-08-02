@@ -11,13 +11,11 @@ linters:
     - gosec
     - govet
     - unused
-    - gosimple
     - ineffassign
     # Database specific
     - sqlclosecheck
     - rowserrcheck
     # Style & Quality
-    - goimports
     - revive
     - gocritic
     - nolintlint

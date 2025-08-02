@@ -67,12 +67,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Error().Err(err).Msgf("closing body")
-		}
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		return 0, errors.New("invalid status code")
@@ -143,12 +138,7 @@ func getRemoteZapScript(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Error().Err(err).Msgf("closing body")
-		}
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)

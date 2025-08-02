@@ -39,12 +39,7 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
-		}
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
