@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"sync"
@@ -134,9 +136,9 @@ func WebSocketRateLimitHandler(limiter *IPRateLimiter, handler func(*melody.Sess
 				Message string `json:"message"`
 			}
 			type jsonRPCErrorResponse struct {
-				JSONRPC string        `json:"jsonrpc"`
-				ID      interface{}   `json:"id"`
-				Error   jsonRPCError  `json:"error"`
+				JSONRPC string       `json:"jsonrpc"`
+				ID      any          `json:"id"`
+				Error   jsonRPCError `json:"error"`
 			}
 			resp := jsonRPCErrorResponse{
 				JSONRPC: "2.0",
