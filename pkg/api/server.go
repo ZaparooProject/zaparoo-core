@@ -2,19 +2,23 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/methods"
+	apimiddleware "github.com/ZaparooProject/zaparoo-core/pkg/api/middleware"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
@@ -32,9 +36,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var allowedOrigins = []string{
+	"capacitor://localhost", // iOS Capacitor v3+
+	"ionic://localhost",     // iOS Capacitor v2
+	"https://localhost",     // Android
+	"http://localhost",      // Fallback/development
+}
+
 var JSONRPCErrorParseError = models.ErrorObject{
 	Code:    -32700,
-	Message: "ParseScript error",
+	Message: "Parse error",
 }
 var JSONRPCErrorInvalidRequest = models.ErrorObject{
 	Code:    -32600,
@@ -66,7 +77,7 @@ type MethodMap struct {
 
 func isValidMethodName(name string) bool {
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r == '.') {
+		if (r < 'a' || r > 'z') && r != '.' {
 			return false
 		}
 	}
@@ -375,7 +386,7 @@ func handleWSMessage(
 		}()
 
 		// ping command for heartbeat operation
-		if bytes.Compare(msg, []byte("ping")) == 0 {
+		if bytes.Equal(msg, []byte("ping")) {
 			err := session.Write([]byte("pong"))
 			if err != nil {
 				log.Error().Err(err).Msg("sending pong")
@@ -489,13 +500,17 @@ func Start(
 ) {
 	r := chi.NewRouter()
 
+	rateLimiter := apimiddleware.NewIPRateLimiter()
+	rateLimiter.StartCleanup(state.GetContext())
+
+	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.ApiRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: []string{"https://*", "http://*", "capacitor://*"},
-		AllowedMethods: []string{"GET"},
-		AllowedHeaders: []string{"Accept"},
+		AllowedOrigins: allowedOrigins,
+		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
 
@@ -506,7 +521,16 @@ func Start(
 	methodMap := NewMethodMap()
 
 	session := melody.New()
-	session.Upgrader.CheckOrigin = func(r *http.Request) bool { return true }
+	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if slices.Contains(allowedOrigins, origin) {
+			return true
+		}
+		if origin != "" {
+			log.Warn().Str("origin", origin).Msg("rejected WebSocket connection from unauthorized origin")
+		}
+		return false
+	}
 	go broadcastNotifications(state, session, notifications)
 
 	r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
@@ -533,7 +557,10 @@ func Start(
 	})
 	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, state, inTokenQueue, db))
 
-	session.HandleMessage(handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db))
+	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
+		rateLimiter,
+		handleWSMessage(methodMap, platform, cfg, state, inTokenQueue, db),
+	))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, state, inTokenQueue)) // DEPRECATED
 	r.Get("/r/*", methods.HandleRunRest(cfg, state, inTokenQueue))
@@ -544,8 +571,39 @@ func Start(
 		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
-	err := http.ListenAndServe(":"+strconv.Itoa(cfg.ApiPort()), r)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting http server")
+	server := &http.Server{
+		Addr:    ":" + strconv.Itoa(cfg.ApiPort()),
+		Handler: r,
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		log.Info().Msgf("starting HTTP server on port %d", cfg.ApiPort())
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error().Err(err).Msg("HTTP server error")
+			serverDone <- err
+		} else {
+			serverDone <- nil
+		}
+	}()
+
+	select {
+	case <-state.GetContext().Done():
+		log.Info().Msg("initiating HTTP server graceful shutdown")
+	case err := <-serverDone:
+		if err != nil {
+			log.Error().Err(err).Msg("HTTP server failed to start")
+			return
+		}
+		return
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("HTTP server shutdown error")
+	} else {
+		log.Info().Msg("HTTP server shutdown complete")
 	}
 }
