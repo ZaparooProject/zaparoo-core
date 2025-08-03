@@ -28,14 +28,14 @@ type GithubLinks struct {
 }
 
 type GithubContentsItem struct {
-	Links       GithubLinks `json:"_links"`
+	Links       GithubLinks `json:"_links"`       //nolint:tagliatelle // GitHub API format
 	Name        string      `json:"name"`
 	Path        string      `json:"path"`
 	Sha         string      `json:"sha"`
 	URL         string      `json:"url"`
-	HTMLURL     string      `json:"html_url"`
-	GitURL      string      `json:"git_url"`
-	DownloadURL string      `json:"download_url"`
+	HTMLURL     string      `json:"html_url"`     //nolint:tagliatelle // GitHub API format
+	GitURL      string      `json:"git_url"`      //nolint:tagliatelle // GitHub API format
+	DownloadURL string      `json:"download_url"` //nolint:tagliatelle // GitHub API format
 	Type        string      `json:"type"`
 	Size        int         `json:"size"`
 }
