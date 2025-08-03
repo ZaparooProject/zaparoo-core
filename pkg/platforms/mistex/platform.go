@@ -190,10 +190,16 @@ func LaunchMenu() error {
 	if err != nil {
 		return err
 	}
-	defer cmd.Close()
+	defer func() {
+		if err := cmd.Close(); err != nil {
+			log.Warn().Err(err).Msg("failed to close command")
+		}
+	}()
 
 	// TODO: hardcoded for xilinx variant, should read pref from mister.ini
-	cmd.WriteString(fmt.Sprintf("load_core %s\n", filepath.Join(mrextConfig.SdFolder, "menu.bit")))
+	if _, err := cmd.WriteString(fmt.Sprintf("load_core %s\n", filepath.Join(mrextConfig.SdFolder, "menu.bit"))); err != nil {
+		log.Warn().Err(err).Msg("failed to write to command")
+	}
 
 	return nil
 }
