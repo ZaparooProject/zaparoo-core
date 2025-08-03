@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
@@ -40,8 +41,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
-
-	_ "embed"
 )
 
 // TODO: fix permissions on files in ~/zaparoo so root doesn't lock them
@@ -91,7 +90,7 @@ func run() error {
 		return fmt.Errorf("Service must not be run as root")
 	}
 
-	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
+	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o755)
 	if err != nil {
 		return fmt.Errorf("Error creating data directory: %w", err)
 	}

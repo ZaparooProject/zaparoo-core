@@ -20,20 +20,20 @@ import (
 )
 
 type GithubContentsItem struct {
+	Links struct {
+		Self string `json:"self"`
+		Git  string `json:"git"`
+		Html string `json:"html"`
+	} `json:"_links"`
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Sha         string `json:"sha"`
-	Size        int    `json:"size"`
 	Url         string `json:"url"`
 	HtmlUrl     string `json:"html_url"`
 	GitUrl      string `json:"git_url"`
 	DownloadUrl string `json:"download_url"`
 	Type        string `json:"type"`
-	Links       struct {
-		Self string `json:"self"`
-		Git  string `json:"git"`
-		Html string `json:"html"`
-	} `json:"_links"`
+	Size        int    `json:"size"`
 }
 
 type ArcadeDbEntry struct {
@@ -118,7 +118,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0755)
+	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o755)
 	if err != nil {
 		return false, err
 	}
@@ -146,7 +146,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, err
 	}
 
-	err = os.WriteFile(arcadeDBPath, body, 0644)
+	err = os.WriteFile(arcadeDBPath, body, 0o644)
 	if err != nil {
 		return false, err
 	}

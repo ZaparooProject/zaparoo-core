@@ -32,17 +32,14 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/rs/zerolog/log"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
+	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 

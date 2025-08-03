@@ -53,7 +53,6 @@ func TestCalculateNdefHeader(t *testing.T) {
 				t.Fatalf("test %v, expected: %v, got: %v", name, hex.EncodeToString(tc.want), hex.EncodeToString(got))
 			}
 		})
-
 	}
 }
 

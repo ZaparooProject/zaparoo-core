@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-
 	"github.com/rs/zerolog/log"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
@@ -72,7 +71,7 @@ func RunDevCmd(cmd string, args string) error {
 		}
 	}(dev)
 
-	_, err = dev.WriteString(fmt.Sprintf("%s %s\n", cmd, args))
+	_, err = fmt.Fprintf(dev, "%s %s\n", cmd, args)
 	if err != nil {
 		return err
 	}

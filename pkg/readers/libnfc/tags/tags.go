@@ -28,7 +28,6 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/clausecker/nfc/v2"
 )
 
@@ -50,8 +49,8 @@ func GetTagUID(target nfc.Target) string {
 	var uid string
 	switch target.Modulation() {
 	case nfc.Modulation{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106}:
-		var card = target.(*nfc.ISO14443aTarget)
-		var ID = card.UID
+		card := target.(*nfc.ISO14443aTarget)
+		ID := card.UID
 		uid = hex.EncodeToString(ID[:card.UIDLen])
 		break
 	default:
@@ -75,7 +74,7 @@ func comm(pnd nfc.Device, tx []byte, replySize int) ([]byte, error) {
 func GetTagType(target nfc.Target) string {
 	switch target.Modulation() {
 	case nfc.Modulation{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106}:
-		var card = target.(*nfc.ISO14443aTarget)
+		card := target.(*nfc.ISO14443aTarget)
 		if card.Atqa == [2]byte{0x00, 0x04} && card.Sak == 0x08 {
 			// https://www.nxp.com/docs/en/application-note/AN10833.pdf page 9
 			return tokens.TypeMifare

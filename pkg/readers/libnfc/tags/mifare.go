@@ -25,13 +25,11 @@ package tags
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/rs/zerolog/log"
-
 	"github.com/clausecker/nfc/v2"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/exp/slices"
 )
 
@@ -110,14 +108,14 @@ func getMifareCapacityInBytes() int {
 
 // WriteMifare writes the given text string to a Mifare card starting from sector, skipping any trailer blocks
 func WriteMifare(pnd nfc.Device, text string, cardUid string) ([]byte, error) {
-	var payload, err = BuildMessage(text)
+	payload, err := BuildMessage(text)
 	if err != nil {
 		return nil, err
 	}
 
-	var cardCapacity = getMifareCapacityInBytes()
+	cardCapacity := getMifareCapacityInBytes()
 	if len(payload) > cardCapacity {
-		return nil, errors.New(fmt.Sprintf("Payload too big for card: [%d/%d] bytes used\n", len(payload), cardCapacity))
+		return nil, fmt.Errorf("Payload too big for card: [%d/%d] bytes used\n", len(payload), cardCapacity)
 	}
 
 	var chunks [][]byte
@@ -128,7 +126,7 @@ func WriteMifare(pnd nfc.Device, text string, cardUid string) ([]byte, error) {
 		chunks = append(chunks, chunk)
 	}
 
-	var chunkIndex = 0
+	chunkIndex := 0
 	for sector := 1; sector <= 15; sector++ {
 		// Iterate over blocks in sector (0-2) skipping trailer block (3)
 		for sectorIndex := 0; sectorIndex < 3; sectorIndex++ {

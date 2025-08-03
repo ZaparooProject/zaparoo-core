@@ -14,28 +14,27 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/rs/zerolog/log"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	mm "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 type Platform struct {
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
 	tr             *mister.Tracker
 	stopTr         func() error
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	kbd            linuxinput.Keyboard
+	gpd            linuxinput.Gamepad
 }
 
 func (p *Platform) ID() string {
@@ -51,12 +50,12 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(mister.TempDir, 0755)
+	err := os.MkdirAll(mister.TempDir, 0o755)
 	if err != nil {
 		return err
 	}
 
-	err = os.MkdirAll(helpers.DataDir(p), 0755)
+	err = os.MkdirAll(helpers.DataDir(p), 0o755)
 	if err != nil {
 		return err
 	}
@@ -156,7 +155,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 		_ = f.Close()
 	}(f)
 
-	_, err = f.WriteString(fmt.Sprintf("%s,%s", token.UID, token.Text))
+	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
 		return fmt.Errorf("unable to write scan result file %s: %w", mister.TokenReadFile, err)
 	}
@@ -197,7 +196,7 @@ func LaunchMenu() error {
 	}()
 
 	// TODO: hardcoded for xilinx variant, should read pref from mister.ini
-	if _, err := cmd.WriteString(fmt.Sprintf("load_core %s\n", filepath.Join(mrextConfig.SdFolder, "menu.bit"))); err != nil {
+	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(mrextConfig.SdFolder, "menu.bit")); err != nil {
 		log.Warn().Err(err).Msg("failed to write to command")
 	}
 

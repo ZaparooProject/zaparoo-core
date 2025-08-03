@@ -32,14 +32,12 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mistex"
-
-	"github.com/rs/zerolog/log"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/rs/zerolog/log"
 )
 
 func tryAddToStartup() (bool, error) {
@@ -61,7 +59,7 @@ WantedBy=multi-user.target
 		return false, nil
 	}
 
-	err = os.WriteFile(unitPath, []byte(unitFile), 0644)
+	err = os.WriteFile(unitPath, []byte(unitFile), 0o644)
 	if err != nil {
 		return false, err
 	}

@@ -14,20 +14,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,10 +39,10 @@ const (
 )
 
 type Platform struct {
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	kbd            linuxinput.Keyboard
+	gpd            linuxinput.Gamepad
 }
 
 func (p *Platform) ID() string {

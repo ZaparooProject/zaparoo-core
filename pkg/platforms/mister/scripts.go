@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-
 	"github.com/rs/zerolog/log"
 )
 
@@ -151,7 +150,7 @@ cd $(dirname "%s")
 %s
 `, runScript, bin, bin+" "+args)
 
-	err = os.WriteFile(scriptPath, []byte(launcher), 0755)
+	err = os.WriteFile(scriptPath, []byte(launcher), 0o755)
 	if err != nil {
 		return err
 	}

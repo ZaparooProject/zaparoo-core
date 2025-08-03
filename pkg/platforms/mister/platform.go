@@ -14,43 +14,41 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 type Platform struct {
-	kbd                 linuxinput.Keyboard
-	gpd                 linuxinput.Gamepad
-	tracker             *Tracker
-	stopTracker         func() error
 	dbLoadTime          time.Time
-	uidMap              map[string]string
+	lastUIHidden        time.Time
 	textMap             map[string]string
+	stopTracker         func() error
+	tracker             *Tracker
+	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
-	platformMu          sync.Mutex
-	lastLauncher        platforms.Launcher
-	lastUIHidden        time.Time
 	activeMedia         func() *models.ActiveMedia
 	setActiveMedia      func(*models.ActiveMedia)
+	kbd                 linuxinput.Keyboard
+	gpd                 linuxinput.Gamepad
+	lastLauncher        platforms.Launcher
+	platformMu          sync.Mutex
 }
 
 func NewPlatform() *Platform {
@@ -108,11 +106,11 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 
 func (p *Platform) StartPre(_ *config.Instance) error {
 	if MainHasFeature(MainFeaturePicker) {
-		err := os.MkdirAll(MainPickerDir, 0755)
+		err := os.MkdirAll(MainPickerDir, 0o755)
 		if err != nil {
 			return err
 		}
-		err = os.WriteFile(MainPickerSelected, []byte(""), 0644)
+		err = os.WriteFile(MainPickerSelected, []byte(""), 0o644)
 		if err != nil {
 			return err
 		}
@@ -248,7 +246,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 		_ = f.Close()
 	}(f)
 
-	_, err = f.WriteString(fmt.Sprintf("%s,%s", token.UID, token.Text))
+	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
 		return fmt.Errorf("unable to write scan result file %s: %w", TokenReadFile, err)
 	}
@@ -257,7 +255,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
-		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0644)
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0o644)
 		if err != nil {
 			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
 		}
@@ -388,7 +386,6 @@ func (p *Platform) LookupMapping(t tokens.Token) (string, bool) {
 	for pattern, cmd := range oldDb.Texts {
 		// check if pattern is a regex
 		re, err := regexp.Compile(pattern)
-
 		// not a regex
 		if err != nil {
 			if pattern, ok := oldDb.Texts[t.Text]; ok {

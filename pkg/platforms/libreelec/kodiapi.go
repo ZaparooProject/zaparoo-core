@@ -50,8 +50,8 @@ type KodiPlayerStopParams struct {
 }
 
 type KodiPlayer struct {
-	ID   int    `json:"playerid"`
 	Type string `json:"type"`
+	ID   int    `json:"playerid"`
 }
 
 type KodiPlayerGetActivePlayersResponse []KodiPlayer
@@ -73,22 +73,22 @@ type KodiVideoLibraryGetEpisodesResponse struct {
 }
 
 type KodiAPIPayload struct {
+	Params  any           `json:"params,omitempty"`
 	JSONRPC string        `json:"jsonrpc"`
 	ID      string        `json:"id"`
 	Method  KodiAPIMethod `json:"method"`
-	Params  any           `json:"params,omitempty"`
 }
 
 type KodiAPIError struct {
-	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
 type KodiAPIResponse struct {
-	ID      string          `json:"id"`
-	Result  json.RawMessage `json:"result"`
 	Error   *KodiAPIError   `json:"error,omitempty"`
+	ID      string          `json:"id"`
 	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result"`
 }
 
 func apiRequest(
@@ -110,7 +110,7 @@ func apiRequest(
 	log.Debug().Msgf("request: %s", string(reqJson))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
-	kodiReq, err := http.NewRequest("POST", kodiURL, bytes.NewBuffer(reqJson))
+	kodiReq, err := http.NewRequest(http.MethodPost, kodiURL, bytes.NewBuffer(reqJson))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

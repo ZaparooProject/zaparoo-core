@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"os"
@@ -36,8 +37,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rs/zerolog/log"
-
-	_ "embed"
 )
 
 // api: https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/services/HttpServerThread.cpp
@@ -78,11 +77,11 @@ func run() error {
 	flags.Pre(pl)
 
 	if *doInstall {
-		err := os.MkdirAll(path.Dir(serviceFilePath), 0755)
+		err := os.MkdirAll(path.Dir(serviceFilePath), 0o755)
 		if err != nil {
 			return fmt.Errorf("Error creating service directory: %w", err)
 		}
-		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0755)
+		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0o755)
 		if err != nil {
 			return fmt.Errorf("Error writing service file: %w", err)
 		}

@@ -60,7 +60,7 @@ func showNotice(
 		if err != nil {
 			return "", fmt.Errorf("error marshalling notice args: %w", err)
 		}
-		err = os.WriteFile(argsPath, argsJson, 0644)
+		err = os.WriteFile(argsPath, argsJson, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("error writing notice args: %w", err)
 		}
@@ -91,7 +91,7 @@ func hideNotice(argsPath string) error {
 		if err != nil {
 			return fmt.Errorf("error removing notice args: %w", err)
 		}
-		err = os.WriteFile(argsPath+".complete", []byte{}, 0644)
+		err = os.WriteFile(argsPath+".complete", []byte{}, 0o644)
 		if err != nil {
 			return fmt.Errorf("error writing notice complete: %w", err)
 		}
@@ -130,14 +130,14 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 		}
 
 		path := filepath.Join(MainPickerDir, name+".txt")
-		err = os.WriteFile(path, contents, 0644)
+		err = os.WriteFile(path, contents, 0o644)
 		if err != nil {
 			return err
 		}
 	}
 
 	// launch
-	err = os.WriteFile(CmdInterface, []byte("show_picker\n"), 0644)
+	err = os.WriteFile(CmdInterface, []byte("show_picker\n"), 0o644)
 	if err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func showPicker(
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(argsPath, argsJson, 0644)
+	err = os.WriteFile(argsPath, argsJson, 0o644)
 	if err != nil {
 		return err
 	}

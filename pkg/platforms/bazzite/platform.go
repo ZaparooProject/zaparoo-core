@@ -29,22 +29,19 @@ import (
 	"path/filepath"
 	"time"
 
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
 )
 
 type Platform struct {

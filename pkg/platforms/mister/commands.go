@@ -38,11 +38,8 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, er
 		return platforms.CmdResult{}, fmt.Errorf("ini id out of range: %d", id)
 	}
 
-	doRelaunch := true
+	doRelaunch := !(env.TotalCommands > 1 && env.CurrentIndex < env.TotalCommands-1)
 	// only relaunch if there aren't any more commands
-	if env.TotalCommands > 1 && env.CurrentIndex < env.TotalCommands-1 {
-		doRelaunch = false
-	}
 
 	err = mister.SetActiveIni(id, doRelaunch)
 	if err != nil {
@@ -158,7 +155,7 @@ func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 		}
 	}(cmd)
 
-	_, err = cmd.WriteString(fmt.Sprintf("load_core %s\n", tmpFile.Name()))
+	_, err = fmt.Fprintf(cmd, "load_core %s\n", tmpFile.Name())
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

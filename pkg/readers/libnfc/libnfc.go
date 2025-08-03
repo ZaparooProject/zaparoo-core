@@ -13,11 +13,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc/tags"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -38,20 +37,20 @@ type WriteRequestResult struct {
 }
 
 type WriteRequest struct {
-	Text   string
 	Result chan WriteRequestResult
 	Cancel chan bool
+	Text   string
 }
 
 type Reader struct {
 	cfg           *config.Instance
-	conn          config.ReadersConnect
 	pnd           *nfc.Device
-	polling       bool
 	prevToken     *tokens.Token
 	write         chan WriteRequest
 	activeWrite   *WriteRequest
+	conn          config.ReadersConnect
 	activeWriteMu sync.RWMutex
+	polling       bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -227,8 +226,10 @@ func (r *Reader) CancelWrite() {
 }
 
 // keep track of serial devices that had failed opens
-var serialCacheMu = &sync.RWMutex{}
-var serialBlockList []string
+var (
+	serialCacheMu   = &sync.RWMutex{}
+	serialBlockList []string
+)
 
 func detectSerialReaders(connected []string) string {
 	devices, err := helpers.GetSerialDeviceList()
@@ -376,14 +377,15 @@ func (r *Reader) pollDevice(
 	var record tags.TagData
 	cardType := tags.GetTagType(target)
 
-	if cardType == tokens.TypeNTAG {
+	switch cardType {
+	case tokens.TypeNTAG:
 		log.Info().Msg("NTAG detected")
 		record, err = tags.ReadNtag(*pnd)
 		if err != nil {
 			return activeToken, removed, fmt.Errorf("error reading ntag: %w", err)
 		}
 		cardType = tokens.TypeNTAG
-	} else if cardType == tokens.TypeMifare {
+	case tokens.TypeMifare:
 		log.Info().Msg("MIFARE detected")
 		record, err = tags.ReadMifare(*pnd, tagUid)
 		if err != nil {

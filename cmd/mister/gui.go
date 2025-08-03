@@ -27,12 +27,11 @@ import (
 	"os"
 	"path"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
@@ -49,7 +48,8 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 	modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
 		AddButtons([]string{"Yes", "No"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			if buttonLabel == "Yes" {
+			switch buttonLabel {
+			case "Yes":
 				err := startup.AddService("mrext/" + config.AppName)
 				if err != nil {
 					_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
@@ -63,7 +63,7 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 					}
 				}
 				app.Stop()
-			} else if buttonLabel == "No" {
+			case "No":
 				app.Stop()
 			}
 		})

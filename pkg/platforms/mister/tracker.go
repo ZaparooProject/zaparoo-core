@@ -12,23 +12,19 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
-
-	"github.com/wizzomafizzo/mrext/pkg/metadata"
-	mrextUtils "github.com/wizzomafizzo/mrext/pkg/utils"
-
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
+	"github.com/wizzomafizzo/mrext/pkg/metadata"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextUtils "github.com/wizzomafizzo/mrext/pkg/utils"
 )
 
 const ArcadeSystem = "Arcade"
@@ -41,19 +37,19 @@ type NameMapping struct {
 }
 
 type Tracker struct {
-	Config           *mrextConfig.UserConfig
-	mu               sync.Mutex
 	pl               platforms.Platform
+	Config           *mrextConfig.UserConfig
+	setActiveMedia   func(*models.ActiveMedia)
 	cfg              *config.Instance
-	ActiveCore       string
-	ActiveSystem     string
+	activeMedia      func() *models.ActiveMedia
 	ActiveSystemName string
+	ActiveSystem     string
 	ActiveGameId     string
 	ActiveGameName   string
 	ActiveGamePath   string
+	ActiveCore       string
 	NameMap          []NameMapping
-	activeMedia      func() *models.ActiveMedia
-	setActiveMedia   func(*models.ActiveMedia)
+	mu               sync.Mutex
 }
 
 func generateNameMap() []NameMapping {
@@ -461,7 +457,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}()
 
 	if _, err := os.Stat(mrextConfig.CoreNameFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextConfig.CoreNameFile, []byte(""), 0644)
+		err := os.WriteFile(mrextConfig.CoreNameFile, []byte(""), 0o644)
 		if err != nil {
 			return nil, err
 		}
@@ -474,7 +470,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, err := os.Stat(mrextConfig.CoreConfigFolder); os.IsNotExist(err) {
-		err := os.MkdirAll(mrextConfig.CoreConfigFolder, 0755)
+		err := os.MkdirAll(mrextConfig.CoreConfigFolder, 0o755)
 		if err != nil {
 			return nil, err
 		}
@@ -487,7 +483,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, err := os.Stat(mrextConfig.ActiveGameFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextConfig.ActiveGameFile, []byte(""), 0644)
+		err := os.WriteFile(mrextConfig.ActiveGameFile, []byte(""), 0o644)
 		if err != nil {
 			return nil, err
 		}
@@ -500,7 +496,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, err := os.Stat(mrextConfig.CurrentPathFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextConfig.CurrentPathFile, []byte(""), 0644)
+		err := os.WriteFile(mrextConfig.CurrentPathFile, []byte(""), 0o644)
 		if err != nil {
 			return nil, err
 		}
