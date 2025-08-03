@@ -281,7 +281,7 @@ func (sr *ScriptReader) parseExpression() (string, error) {
 
 func (sr *ScriptReader) parsePostExpression() (string, error) {
 	rawExpr := ""
-	exprEndToken := []rune(TokExprEnd)[0]
+	exprEndToken, _ := utf8.DecodeRuneInString(TokExprEnd)
 
 	for {
 		ch, err := sr.read()
@@ -357,9 +357,9 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 	return string(normalizedJSON), nil
 }
 
-func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error) {
-	args := make([]string, 0)
-	advArgs := make(map[string]string)
+func (sr *ScriptReader) parseInputMacroArg() (args []string, advArgs map[string]string, err error) {
+	args = make([]string, 0)
+	advArgs = make(map[string]string)
 
 	for {
 		ch, err := sr.read()
@@ -431,8 +431,8 @@ func (sr *ScriptReader) parseInputMacroArg() ([]string, map[string]string, error
 	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseAdvArgs() (map[string]string, string, error) {
-	advArgs := make(map[string]string)
+func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainder string, err error) {
+	advArgs = make(map[string]string)
 	inValue := false
 	currentArg := ""
 	currentValue := ""
@@ -533,9 +533,9 @@ func (sr *ScriptReader) parseArgs(
 	prefix string,
 	onlyAdvArgs bool,
 	onlyOneArg bool,
-) ([]string, map[string]string, error) {
-	args := make([]string, 0)
-	advArgs := make(map[string]string)
+) (args []string, advArgs map[string]string, err error) {
+	args = make([]string, 0)
+	advArgs = make(map[string]string)
 	currentArg := prefix
 	argStart := sr.pos
 
@@ -885,7 +885,7 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 	parts := make([]PostArgPart, 0)
 	currentPart := PostArgPart{}
 
-	exprStartToken := []rune(TokExpStart)[0]
+	exprStartToken, _ := utf8.DecodeRuneInString(TokExpStart)
 
 	for {
 		ch, err := sr.read()

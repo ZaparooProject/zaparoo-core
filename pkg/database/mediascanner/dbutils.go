@@ -21,8 +21,6 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	ss.SystemIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
-	// ss.TagTypeIDs = make(map[string]int)
-	// ss.TagIDs = make(map[string]int)
 }
 
 func AddMediaPath(
@@ -30,7 +28,7 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
-) (titleIndex int, mediaIndex int) {
+) (titleIndex, mediaIndex int) {
 	pf := GetPathFragments(path)
 
 	systemIndex := 0

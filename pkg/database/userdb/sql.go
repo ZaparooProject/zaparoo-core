@@ -368,7 +368,7 @@ func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscrip
 	return err
 }
 
-func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported bool, ok bool, err error) {
+func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported, ok bool, err error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?;
 	`, host)
@@ -384,7 +384,7 @@ func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported 
 	return zapscript != 0, true, nil
 }
 
-func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url string, zapscript string) error {
+func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url, zapscript string) error {
 	stmt, err := db.PrepareContext(ctx, `
 		INSERT INTO ZapLinkCache (URL, ZapScript, UpdatedAt)
 		VALUES (?, ?, CURRENT_TIMESTAMP)

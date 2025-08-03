@@ -98,8 +98,6 @@ func waitAck(port serial.Port) ([]byte, error) {
 			continue
 		}
 
-		// log.Debug().Msgf("inspecting ack: %x", ackBuf)
-
 		if bytes.Equal(ackBuf, ackFrame) {
 			return preAck, nil
 		}
@@ -135,8 +133,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 	}
 
 	dlen := byte(len(data))
-	frm = append(frm, dlen)    // length
-	frm = append(frm, ^dlen+1) // length checksum
+	frm = append(frm, dlen, ^dlen+1) // length and length checksum
 
 	checksum := byte(0)
 
@@ -145,10 +142,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 		checksum += b
 	}
 
-	frm = append(frm, ^checksum+1) // data checksum
-	frm = append(frm, 0x00)        // postamble
-
-	// log.Debug().Msgf("sending frame: %x", frm)
+	frm = append(frm, ^checksum+1, 0x00) // data checksum and postamble
 
 	// write frame
 	err := wakeUp(port)
@@ -204,8 +198,6 @@ retry:
 		return []byte{}, ErrNoFrameFound
 	}
 
-	// log.Debug().Msgf("received frame buffer: %x", buf)
-
 	// check frame length value and checksum (LEN)
 	off++
 	frameLen := int(buf[off])
@@ -257,8 +249,6 @@ retry:
 
 	// get frame data
 	off++
-
-	// log.Debug().Msgf("received frame data: %x", buf[off:off+frameLen-1])
 
 	// return data part of frame
 	data := make([]byte, frameLen-1)
@@ -368,7 +358,6 @@ type Target struct {
 }
 
 func InListPassiveTarget(port serial.Port) (*Target, error) {
-	// log.Debug().Msg("running inlistpassivetarget")
 	res, err := callCommand(port, cmdInListPassiveTarget, []byte{0x01, 0x00})
 	switch {
 	case errors.Is(err, ErrNoFrameFound):

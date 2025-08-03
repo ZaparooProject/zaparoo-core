@@ -26,7 +26,7 @@ type mediaNames struct {
 	ext      string
 }
 
-func namesFromURL(rawURL string, defaultName string) mediaNames {
+func namesFromURL(rawURL, defaultName string) mediaNames {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Path == "" {
 		file := filepath.Base(rawURL)

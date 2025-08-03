@@ -23,7 +23,7 @@ func PathIsLauncher(
 	l platforms.Launcher,
 	path string,
 ) bool {
-	if len(path) == 0 {
+	if path == "" {
 		return false
 	}
 

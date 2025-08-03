@@ -124,7 +124,7 @@ func IniToToml(iniPath string) (config.Values, error) {
 	return vals, nil
 }
 
-func Required(oldIni string, newToml string) bool {
+func Required(oldIni, newToml string) bool {
 	iniExists := false
 	if _, err := os.Stat(oldIni); err == nil {
 		iniExists = true

@@ -38,7 +38,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	line = strings.TrimSpace(line)
 	line = strings.Trim(line, "\r")
 
-	if len(line) == 0 {
+	if line == "" {
 		return nil, nil
 	}
 
@@ -47,7 +47,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	}
 
 	args := line[5:]
-	if len(args) == 0 {
+	if args == "" {
 		return nil, nil
 	}
 

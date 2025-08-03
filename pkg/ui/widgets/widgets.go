@@ -119,7 +119,7 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 // handleTimeout adds a background timer which quits the app once ended. It's
 // used to make sure there aren't hanging processes running in the background
 // if a core gets loaded while it's open.
-func handleTimeout(_ *tview.Application, timeout int) (*time.Timer, int) {
+func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actualTimeout int) {
 	var to int
 	switch {
 	case timeout == 0:
@@ -131,7 +131,7 @@ func handleTimeout(_ *tview.Application, timeout int) (*time.Timer, int) {
 		to = timeout
 	}
 
-	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
+	timer = time.AfterFunc(time.Duration(to)*time.Second, func() {
 		os.Exit(0)
 	})
 
@@ -190,17 +190,18 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	if noticeArgs.Complete != "" {
 		go func() {
 			for range ticker.C {
-				if _, err := os.Stat(noticeArgs.Complete); err == nil {
-					log.Debug().Msg("notice complete file exists, stopping")
-					err := os.Remove(noticeArgs.Complete)
-					if err != nil {
-						log.Error().Err(err).Msg("error removing complete file")
-					}
-					app.QueueUpdateDraw(func() {
-						app.Stop()
-					})
-					os.Exit(0)
+				if _, err := os.Stat(noticeArgs.Complete); err != nil {
+					continue
 				}
+				log.Debug().Msg("notice complete file exists, stopping")
+				err := os.Remove(noticeArgs.Complete)
+				if err != nil {
+					log.Error().Err(err).Msg("error removing complete file")
+				}
+				app.QueueUpdateDraw(func() {
+					app.Stop()
+				})
+				os.Exit(0)
 			}
 		}()
 	}

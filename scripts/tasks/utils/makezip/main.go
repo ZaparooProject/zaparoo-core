@@ -222,7 +222,7 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 	return err
 }
 
-func addDirToZip(zipWriter *zip.Writer, dirPath string, buildDir string) error {
+func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 	return filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err

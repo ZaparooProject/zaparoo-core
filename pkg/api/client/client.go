@@ -78,7 +78,7 @@ func LocalClient(
 	}
 
 	switch {
-	case len(params) == 0:
+	case params == "":
 		req.Params = nil
 	case json.Valid([]byte(params)):
 		req.Params = []byte(params)

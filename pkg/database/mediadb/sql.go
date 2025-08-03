@@ -543,7 +543,7 @@ func sqlCleanInactiveMedia(db *sql.DB) error {
 */
 
 // return ?, ?,... based on count
-func prepareVariadic(p string, s string, c int) string {
+func prepareVariadic(p, s string, c int) string {
 	if c < 1 {
 		return ""
 	}
@@ -606,7 +606,7 @@ func sqlSearchMediaPathExact(
 	}(rows)
 	for rows.Next() {
 		result := database.SearchResult{}
-		if err = rows.Scan(
+		if err := rows.Scan(
 			&result.SystemID,
 			&result.Path,
 		); err != nil {
@@ -680,7 +680,7 @@ func sqlSearchMediaPathParts(
 	}(rows)
 	for rows.Next() {
 		result := database.SearchResult{}
-		if err = rows.Scan(
+		if err := rows.Scan(
 			&result.SystemID,
 			&result.Path,
 		); err != nil {
@@ -745,7 +745,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	}(rows)
 	for rows.Next() {
 		row := ""
-		if err = rows.Scan(&row); err != nil {
+		if err := rows.Scan(&row); err != nil {
 			return list, err
 		}
 		list = append(list, row)

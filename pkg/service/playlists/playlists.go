@@ -13,7 +13,7 @@ type Playlist struct {
 	Playing bool
 }
 
-func NewPlaylist(id string, name string, item []PlaylistItem) *Playlist {
+func NewPlaylist(id, name string, item []PlaylistItem) *Playlist {
 	return &Playlist{
 		ID:      id,
 		Name:    name,

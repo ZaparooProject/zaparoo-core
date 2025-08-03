@@ -32,7 +32,7 @@ type State struct {
 	runZapScript   bool
 }
 
-func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
+func NewState(platform platforms.Platform) (state *State, notificationChan <-chan models.Notification) {
 	ns := make(chan models.Notification, 100)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{

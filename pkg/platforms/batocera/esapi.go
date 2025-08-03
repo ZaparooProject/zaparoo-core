@@ -14,7 +14,7 @@ import (
 
 const apiURL = "http://localhost:1234"
 
-func apiRequest(path string, body string, timeout time.Duration) ([]byte, error) {
+func apiRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}

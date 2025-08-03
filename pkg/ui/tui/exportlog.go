@@ -73,7 +73,7 @@ func BuildExportLogModal(
 	return exportMenu
 }
 
-func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) string {
+func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	newPath := logDestPath
 	err := helpers.CopyFile(logPath, newPath)

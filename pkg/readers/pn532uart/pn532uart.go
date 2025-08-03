@@ -136,8 +136,6 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				continue
 			}
 
-			// log.Debug().Msgf("target: %s", tgt.Uid)
-
 			errCount = 0
 			zeroScans = 0
 
