@@ -52,7 +52,6 @@ func GetTagUID(target nfc.Target) string {
 		card := target.(*nfc.ISO14443aTarget)
 		ID := card.UID
 		uid = hex.EncodeToString(ID[:card.UIDLen])
-		break
 	default:
 		uid = ""
 	}

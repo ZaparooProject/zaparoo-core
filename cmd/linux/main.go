@@ -88,7 +88,7 @@ func run() error {
 	}
 
 	if os.Geteuid() == 0 {
-		return fmt.Errorf("Zaparoo cannot be run as root")
+		return fmt.Errorf("zaparoo cannot be run as root")
 	}
 
 	var logWriters []io.Writer

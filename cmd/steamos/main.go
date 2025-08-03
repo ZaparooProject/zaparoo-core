@@ -68,31 +68,31 @@ func run() error {
 	uid := os.Getuid()
 	if *doInstall {
 		if uid != 0 {
-			return fmt.Errorf("Install must be run as root")
+			return fmt.Errorf("install must be run as root")
 		}
 		err := install()
 		if err != nil {
-			return fmt.Errorf("Error installing service: %w", err)
+			return fmt.Errorf("error installing service: %w", err)
 		}
 		return nil
 	} else if *doUninstall {
 		if uid != 0 {
-			return fmt.Errorf("Uninstall must be run as root")
+			return fmt.Errorf("uninstall must be run as root")
 		}
 		err := uninstall()
 		if err != nil {
-			return fmt.Errorf("Error uninstalling service: %w", err)
+			return fmt.Errorf("error uninstalling service: %w", err)
 		}
 		return nil
 	}
 
 	if uid == 0 {
-		return fmt.Errorf("Service must not be run as root")
+		return fmt.Errorf("service must not be run as root")
 	}
 
 	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o755)
 	if err != nil {
-		return fmt.Errorf("Error creating data directory: %w", err)
+		return fmt.Errorf("error creating data directory: %w", err)
 	}
 
 	defaults := config.BaseDefaults
@@ -100,7 +100,7 @@ func run() error {
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			return fmt.Errorf("Error migrating config: %w", err)
+			return fmt.Errorf("error migrating config: %w", err)
 		} else {
 			defaults = migrated
 		}

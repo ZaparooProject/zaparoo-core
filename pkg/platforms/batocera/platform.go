@@ -343,10 +343,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Scanner: func(
 				cfg *config.Instance,
 				systemID string,
-				results []platforms.ScanResult,
+				_ []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				// drop existing results since they're just junk here
-				results = []platforms.ScanResult{}
+				results := []platforms.ScanResult{}
 
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {

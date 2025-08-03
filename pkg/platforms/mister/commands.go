@@ -38,7 +38,7 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, er
 		return platforms.CmdResult{}, fmt.Errorf("ini id out of range: %d", id)
 	}
 
-	doRelaunch := !(env.TotalCommands > 1 && env.CurrentIndex < env.TotalCommands-1)
+	doRelaunch := env.TotalCommands <= 1 || env.CurrentIndex >= env.TotalCommands-1
 	// only relaunch if there aren't any more commands
 
 	err = mister.SetActiveIni(id, doRelaunch)

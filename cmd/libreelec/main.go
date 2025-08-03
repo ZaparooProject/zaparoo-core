@@ -68,7 +68,7 @@ func run() error {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		return fmt.Errorf("Error creating service: %w", err)
+		return fmt.Errorf("error creating service: %w", err)
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
@@ -96,7 +96,7 @@ func run() error {
 	})
 	if err != nil {
 		enableZapScript()
-		return fmt.Errorf("Error displaying TUI: %w", err)
+		return fmt.Errorf("error displaying TUI: %w", err)
 	}
 	enableZapScript()
 

@@ -302,8 +302,6 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 
 		vt := "4"
 
-		if pl.activeMedia().SystemID != "" {
-		}
 
 		// err := mister.LaunchMenu()
 		// if err != nil {

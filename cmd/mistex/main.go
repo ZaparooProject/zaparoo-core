@@ -104,7 +104,7 @@ func run() error {
 	if *addStartupFlag {
 		_, err := tryAddToStartup()
 		if err != nil {
-			return fmt.Errorf("Error adding to startup: %w", err)
+			return fmt.Errorf("error adding to startup: %w", err)
 		}
 		return nil
 	}
@@ -114,7 +114,7 @@ func run() error {
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			return fmt.Errorf("Error migrating config: %w", err)
+			return fmt.Errorf("error migrating config: %w", err)
 		} else {
 			defaults = migrated
 		}
@@ -134,7 +134,7 @@ func run() error {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		return fmt.Errorf("Error creating service: %w", err)
+		return fmt.Errorf("error creating service: %w", err)
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
@@ -148,7 +148,7 @@ func run() error {
 	added, err := tryAddToStartup()
 	if err != nil {
 		log.Error().Msgf("error adding to startup: %s", err)
-		return fmt.Errorf("Error adding to startup: %w", err)
+		return fmt.Errorf("error adding to startup: %w", err)
 	} else if added {
 		log.Info().Msg("added to startup")
 		fmt.Println("Added Zaparoo to MiSTeX startup.")

@@ -85,7 +85,7 @@ func run() error {
 	}
 
 	if os.Geteuid() == 0 {
-		return fmt.Errorf("Zaparoo must not be run as root")
+		return fmt.Errorf("zaparoo must not be run as root")
 	}
 
 	// only difference with daemon mode right now is no log pretty printing

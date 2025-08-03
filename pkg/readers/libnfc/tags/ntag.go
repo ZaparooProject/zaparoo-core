@@ -126,7 +126,7 @@ func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
 	}
 
 	if len(payload) > cardCapacity {
-		return nil, fmt.Errorf("Payload too big for card: [%d/%d] bytes used\n", len(payload), cardCapacity)
+		return nil, fmt.Errorf("payload too big for card: [%d/%d] bytes used", len(payload), cardCapacity)
 	}
 
 	var startingBlock byte = 0x04
