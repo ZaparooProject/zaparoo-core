@@ -26,9 +26,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReadPlsFile(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		plsContent     string
@@ -97,16 +99,17 @@ TitleB=Song 1`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			plsFile := filepath.Join(t.TempDir(), "test.pls")
 			err := os.WriteFile(plsFile, []byte(tt.plsContent), 0o600)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			media, err := readPlsFile(plsFile)
 			if tt.expectedErrMsg != "" {
-				assert.Error(t, err)
+				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectedErrMsg)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expectedMedia, media)
 			}
 		})

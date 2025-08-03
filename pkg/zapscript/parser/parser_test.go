@@ -28,6 +28,7 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		wantErr error
 		name    string
@@ -2114,6 +2115,7 @@ func TestParse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			p := parser.NewParser(tt.input)
 			got, err := p.ParseScript()
 			if !errors.Is(err, tt.wantErr) {
@@ -2128,6 +2130,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestParseExpressions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		wantErr error
 		name    string
@@ -2270,6 +2273,7 @@ func TestParseExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			p := parser.NewParser(tt.input)
 			got, err := p.ParseExpressions()
 			if !errors.Is(err, tt.wantErr) {
@@ -2284,6 +2288,7 @@ func TestParseExpressions(t *testing.T) {
 }
 
 func TestPostProcess(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		wantErr error
 		name    string
@@ -2354,6 +2359,7 @@ func TestPostProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			env := parser.ArgExprEnv{
 				Platform:     "mister",
 				Version:      "1.2.3",
