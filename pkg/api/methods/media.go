@@ -171,7 +171,6 @@ func generateMediaDB(
 		})
 		statusInstance.clear()
 		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
-		return
 	}()
 
 	return nil

@@ -15,9 +15,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc/tags"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -160,11 +160,11 @@ func (r *Reader) Detect(connected []string) string {
 	}
 
 	device := detectSerialReaders(connected)
-	if device != "" && !utils.Contains(connected, device) {
+	if device != "" && !helpers.Contains(connected, device) {
 		return device
 	}
 
-	if !utils.Contains(connected, autoConnStr) {
+	if !helpers.Contains(connected, autoConnStr) {
 		return autoConnStr
 	}
 
@@ -231,7 +231,7 @@ var serialCacheMu = &sync.RWMutex{}
 var serialBlockList []string
 
 func detectSerialReaders(connected []string) string {
-	devices, err := utils.GetSerialDeviceList()
+	devices, err := helpers.GetSerialDeviceList()
 	if err != nil {
 		log.Error().Msgf("error getting serial devices: %s", err)
 		return ""
@@ -244,14 +244,14 @@ func detectSerialReaders(connected []string) string {
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
-		if utils.Contains(serialBlockList, device) {
+		if helpers.Contains(serialBlockList, device) {
 			serialCacheMu.RUnlock()
 			continue
 		}
 		serialCacheMu.RUnlock()
 
 		// ignore if exact same device and reader are connected
-		if utils.Contains(connected, connStr) {
+		if helpers.Contains(connected, connStr) {
 			continue
 		}
 
@@ -267,7 +267,7 @@ func detectSerialReaders(connected []string) string {
 		}
 
 		// ignore if same resolved device and reader connected
-		if realPath != "" && utils.Contains(connected, realPath) {
+		if realPath != "" && helpers.Contains(connected, realPath) {
 			continue
 		}
 

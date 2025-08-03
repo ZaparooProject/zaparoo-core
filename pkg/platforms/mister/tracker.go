@@ -17,8 +17,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
@@ -286,7 +286,7 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
-	launchers := utils.PathToLaunchers(tr.cfg, tr.pl, path)
+	launchers := helpers.PathToLaunchers(tr.cfg, tr.pl, path)
 	if len(launchers) == 0 {
 		log.Warn().Msgf("no launchers found for %s", path)
 		return

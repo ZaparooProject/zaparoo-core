@@ -33,8 +33,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mistex"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 
 	"github.com/rs/zerolog/log"
 
@@ -107,7 +107,7 @@ func run() error {
 
 	defaults := config.BaseDefaults
 	iniPath := "/media/fat/Scripts/tapto.ini"
-	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
+	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			return fmt.Errorf("Error migrating config: %v", err)
@@ -122,7 +122,7 @@ func run() error {
 		[]io.Writer{os.Stderr},
 	)
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -164,7 +164,7 @@ func run() error {
 		fmt.Println("Zaparoo service is running.")
 	}
 
-	ip := utils.GetLocalIP()
+	ip := helpers.GetLocalIP()
 	if ip == "" {
 		fmt.Println("Device address: Unknown")
 	} else {

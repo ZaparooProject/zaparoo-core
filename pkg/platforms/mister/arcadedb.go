@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gocarina/gocsv"
 	"github.com/rs/zerolog/log"
 )
@@ -90,7 +90,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 
 func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	arcadeDBPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		ArcadeDbFile,
 	)
@@ -152,7 +152,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	arcadeDBPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		ArcadeDbFile,
 	)

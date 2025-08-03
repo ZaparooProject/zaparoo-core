@@ -14,9 +14,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -36,7 +36,7 @@ func showNotice(
 	loader bool,
 ) (string, error) {
 	log.Info().Msgf("showing notice: %s", text)
-	argsId := utils.RandSeq(10)
+	argsId := helpers.RandSeq(10)
 	argsName := "notice-" + argsId + ".json"
 	if loader {
 		argsName = "loader-" + argsId + ".json"

@@ -35,9 +35,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/steamos"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 
@@ -97,8 +97,8 @@ func run() error {
 	}
 
 	defaults := config.BaseDefaults
-	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
-	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
+	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
+	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			return fmt.Errorf("Error migrating config: %v", err)

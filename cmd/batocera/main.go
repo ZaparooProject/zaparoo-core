@@ -31,10 +31,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 
 	_ "embed"
@@ -112,7 +112,7 @@ func run() error {
 		}
 	}()
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -141,7 +141,7 @@ func run() error {
 	app, err := tui.BuildMain(
 		cfg, pl,
 		svc.Running,
-		path.Join(utils.DataDir(pl), config.LogFile),
+		path.Join(helpers.DataDir(pl), config.LogFile),
 		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)

@@ -32,10 +32,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/libreelec"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
@@ -60,7 +60,7 @@ func run() error {
 		}
 	}()
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},

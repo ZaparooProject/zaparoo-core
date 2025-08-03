@@ -34,11 +34,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -111,7 +111,7 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	if !utils.IsServiceRunning(cfg) {
+	if !helpers.IsServiceRunning(cfg) {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
@@ -139,7 +139,7 @@ func run() error {
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
-			func() bool { return utils.IsServiceRunning(cfg) },
+			func() bool { return helpers.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 			"desktop",
 		)
