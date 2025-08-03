@@ -118,11 +118,13 @@ func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // unused parameter required by interface
+//nolint:gocritic // unused parameter required by interface
+func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
-func (*Platform) LookupMapping(_ tokens.Token) (string, bool) { //nolint:gocritic // unused parameter required by interface
+//nolint:gocritic // unused parameter required by interface
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 

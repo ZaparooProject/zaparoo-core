@@ -94,7 +94,8 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
 }
 
-func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	return pl.ForwardCmd(env)
 }
 

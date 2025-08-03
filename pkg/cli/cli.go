@@ -234,7 +234,13 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 }
 
 // Setup initializes the user config and logging. Returns a user config object.
-func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writer) *config.Instance { //nolint:gocritic // config struct copied for immutability
+//
+//nolint:gocritic // config struct copied for immutability
+func Setup(
+	pl platforms.Platform,
+	defaultConfig config.Values,
+	writers []io.Writer,
+) *config.Instance {
 	err := helpers.InitLogging(pl, writers)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logging: %v\n", err)

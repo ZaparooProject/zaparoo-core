@@ -55,7 +55,8 @@ func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry) error { //nolint:gocritic // struct passed for DB insertion
+//nolint:gocritic // struct passed for DB insertion
+func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry) error {
 	stmt, err := db.PrepareContext(ctx, `
 		insert into History(
 			Time, Type, TokenID, TokenValue, TokenData, Success
@@ -138,7 +139,8 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 	return list, err
 }
 
-func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error { //nolint:gocritic // struct passed for DB insertion
+//nolint:gocritic // struct passed for DB insertion
+func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error {
 	stmt, err := db.PrepareContext(ctx, `
 		insert into Mappings(
 			Added, Label, Enabled, Type, Match, Pattern, Override
@@ -212,7 +214,8 @@ func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
 	return err
 }
 
-func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapping) error { //nolint:gocritic // struct passed for DB update
+//nolint:gocritic // struct passed for DB update
+func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapping) error {
 	stmt, err := db.PrepareContext(ctx, `
 		update Mappings set
 			Added = ?,

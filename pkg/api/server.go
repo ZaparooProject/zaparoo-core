@@ -185,7 +185,13 @@ func NewMethodMap() *MethodMap {
 
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
-func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.RequestObject) (any, *models.ErrorObject) { //nolint:gocritic // single-use parameter in API handler
+//
+//nolint:gocritic // single-use parameter in API handler
+func handleRequest(
+	methodMap *MethodMap,
+	env requests.RequestEnv,
+	req models.RequestObject,
+) (any, *models.ErrorObject) {
 	log.Debug().Interface("request", req).Msg("received request")
 
 	fn, ok := methodMap.GetMethod(req.Method)

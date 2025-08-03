@@ -15,7 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) != 1 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -33,7 +34,8 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}, pl.LaunchSystem(env.Cfg, systemID)
 }
 
-func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -202,7 +204,8 @@ func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool)
 	return nil, false
 }
 
-func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -342,7 +345,8 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", path)
 }
 
-func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}

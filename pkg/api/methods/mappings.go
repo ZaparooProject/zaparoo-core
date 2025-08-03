@@ -129,7 +129,8 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 	return nil, nil
 }
 
-func HandleDeleteMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received delete mapping request")
 
 	if len(env.Params) == 0 {
@@ -178,7 +179,8 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 	return nil
 }
 
-func HandleUpdateMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received update mapping request")
 
 	if len(env.Params) == 0 {
@@ -246,7 +248,8 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) { //nolint:gocrit
 	return nil, nil
 }
 
-func HandleReloadMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reload mappings request")
 
 	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)

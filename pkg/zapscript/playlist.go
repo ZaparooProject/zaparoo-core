@@ -220,7 +220,8 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 	return items, nil
 }
 
-func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playlist, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playlist, error) {
 	if len(env.Cmd.Args) == 0 {
 		return nil, ErrArgCount
 	} else if env.Cmd.Args[0] == "" {
@@ -279,7 +280,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	return playlists.NewPlaylist(env.Cmd.Args[0], name, items), nil
 }
 
-func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active != nil &&
 		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
 		log.Info().Msg("starting paused playlist")
@@ -306,7 +308,8 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}, nil
 }
 
-func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err
@@ -321,7 +324,8 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}, nil
 }
 
-func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err
@@ -373,7 +377,8 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		})
 }
 
-func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
@@ -387,7 +392,8 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}, nil
 }
 
-func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
@@ -401,7 +407,8 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 	}, nil
 }
 
-func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
@@ -431,7 +438,8 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}, nil
 }
 
-func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
@@ -444,7 +452,8 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}, pl.StopActiveLauncher()
 }
 
-func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
 		return platforms.CmdResult{}, errors.New("no playlist active")
 	}

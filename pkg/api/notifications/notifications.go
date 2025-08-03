@@ -38,7 +38,8 @@ func MediaStarted(ns chan<- models.Notification, payload models.MediaStartedPara
 	sendNotification(ns, models.NotificationStarted, payload)
 }
 
-func TokensAdded(ns chan<- models.Notification, payload models.TokenResponse) { //nolint:gocritic // single-use parameter in notification
+//nolint:gocritic // single-use parameter in notification
+func TokensAdded(ns chan<- models.Notification, payload models.TokenResponse) {
 	sendNotification(ns, models.NotificationTokensAdded, payload)
 }
 

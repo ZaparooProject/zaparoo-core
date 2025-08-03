@@ -30,7 +30,8 @@ func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	return resp, nil
 }
 
-func HandleSettingsReload(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings reload request")
 
 	err := env.Config.Load()
@@ -56,7 +57,8 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) { //nolint:gocri
 	return nil, nil
 }
 
-func HandleSettingsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings update request")
 
 	if len(env.Params) == 0 {

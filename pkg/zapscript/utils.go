@@ -13,19 +13,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg(strings.Join(env.Cmd.Args, ", "))
 	return platforms.CmdResult{}, nil
 }
 
-func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // unused parameter required by interface
+//nolint:gocritic // unused parameter required by interface
+func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg("stopping media")
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, pl.StopActiveLauncher()
 }
 
-func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -41,7 +44,8 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	return platforms.CmdResult{}, nil
 }
 
-func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}

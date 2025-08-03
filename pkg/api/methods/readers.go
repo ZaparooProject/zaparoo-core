@@ -52,7 +52,8 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	return nil, nil
 }
 
-func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+//nolint:gocritic // single-use parameter in API handler
+func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reader write cancel request")
 
 	rs := env.State.ListReaders()

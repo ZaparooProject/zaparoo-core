@@ -10,7 +10,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) != 1 {
 		return platforms.CmdResult{}, ErrArgCount
 	} else if env.Cmd.Args[0] == "" {
@@ -44,7 +45,9 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{}, nil
 }
 
-func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
+//nolint:gocritic // single-use parameter in command handler
+func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	//nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) != 3 {
 		return platforms.CmdResult{}, ErrArgCount
 	}

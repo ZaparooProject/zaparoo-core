@@ -71,7 +71,12 @@ func main() {
 	}
 }
 
-func generateSetupFile(tmpl *template.Template, data InnoSetupData, arch string) error { //nolint:gocritic // single-use parameter in generator
+//nolint:gocritic // single-use parameter in generator
+func generateSetupFile(
+	tmpl *template.Template,
+	data InnoSetupData,
+	arch string,
+) error {
 	outFile, err := os.Create("_build/windows_" + arch + "/setup.iss")
 	if err != nil {
 		return fmt.Errorf("error creating output file: %w", err)

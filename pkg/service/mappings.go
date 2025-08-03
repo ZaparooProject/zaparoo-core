@@ -136,7 +136,13 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 	return mappings
 }
 
-func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platform, token tokens.Token) (string, bool) { //nolint:gocritic // single-use parameter in service function
+//nolint:gocritic // single-use parameter in service function
+func getMapping(
+	cfg *config.Instance,
+	db *database.Database,
+	pl platforms.Platform,
+	token tokens.Token,
+) (string, bool) {
 	// TODO: need a way to identify the source of a match so it can be
 	// reported and debugged by the user if there's issues
 
