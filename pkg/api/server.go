@@ -252,7 +252,10 @@ func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
 		return fmt.Errorf("error marshalling response: %w", err)
 	}
 
-	return session.Write(data)
+	if err := session.Write(data); err != nil {
+		return fmt.Errorf("failed to write websocket response: %w", err)
+	}
+	return nil
 }
 
 // sendWSError sends a JSON-RPC error object response to the client.

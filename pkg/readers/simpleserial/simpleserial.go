@@ -21,6 +21,7 @@ package simpleserial
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -112,7 +113,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(path); err != nil {
-			return err
+			return fmt.Errorf("failed to stat device path %s: %w", path, err)
 		}
 	}
 
@@ -120,12 +121,12 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 		BaudRate: 115200,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open serial port %s: %w", path, err)
 	}
 
 	err = port.SetReadTimeout(100 * time.Millisecond)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to set read timeout on serial port: %w", err)
 	}
 
 	r.port = port
@@ -192,7 +193,7 @@ func (r *SimpleSerialReader) Close() error {
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to close serial port: %w", err)
 		}
 	}
 	return nil

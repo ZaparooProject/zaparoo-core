@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -87,7 +88,7 @@ func LocalClient(
 
 	id, err := uuid.NewUUID()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to generate uuid: %w", err)
 	}
 
 	req := models.RequestObject{
@@ -107,7 +108,7 @@ func LocalClient(
 
 	c, _, err := websocket.DefaultDialer.Dial(localWebsocketURL.String(), nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -150,7 +151,7 @@ func LocalClient(
 
 	err = c.WriteJSON(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
 	timer := time.NewTimer(config.APIRequestTimeout)
@@ -182,7 +183,7 @@ func LocalClient(
 	var b []byte
 	b, err = json.Marshal(resp.Result)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal response result: %w", err)
 	}
 
 	return string(b), nil
@@ -202,7 +203,7 @@ func WaitNotification(
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
 	defer func(c *websocket.Conn) {
 		closeErr := c.Close()
@@ -282,7 +283,7 @@ func WaitNotification(
 	var b []byte
 	b, err = json.Marshal(resp.Params)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal response params: %w", err)
 	}
 
 	return string(b), nil

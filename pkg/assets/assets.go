@@ -22,6 +22,7 @@ package assets
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 )
 
 //go:embed _app
@@ -55,9 +56,9 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 
 	data, err := Systems.ReadFile("systems/" + system + ".json")
 	if err != nil {
-		return metadata, err
+		return metadata, fmt.Errorf("failed to read system metadata file: %w", err)
 	}
 
 	err = json.Unmarshal(data, &metadata)
-	return metadata, err
+	return metadata, fmt.Errorf("failed to unmarshal system metadata: %w", err)
 }

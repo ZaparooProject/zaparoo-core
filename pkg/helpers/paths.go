@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -303,7 +304,7 @@ func DoLaunch(
 
 	err := launcher.Launch(cfg, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to launch: %w", err)
 	}
 
 	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)

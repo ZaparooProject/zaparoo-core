@@ -71,12 +71,12 @@ func BuildMessage(text string) ([]byte, error) {
 	msg := ndef.NewTextMessage(text, "en")
 	payload, err := msg.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal ndef message: %w", err)
 	}
 
 	header, err := CalculateNdefHeader(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to calculate ndef header: %w", err)
 	}
 	payload = append(header, payload...)
 	payload = append(payload, []byte{0xFE}...)
@@ -99,7 +99,7 @@ func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, uint16(recordLength))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to write binary data: %w", err)
 	}
 
 	header := []byte{0x03, 0xFF}

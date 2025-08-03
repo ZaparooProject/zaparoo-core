@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -61,14 +62,14 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 	if r.ctx == nil {
 		ctx, err := scard.EstablishContext()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to establish scard context: %w", err)
 		}
 		r.ctx = ctx
 	}
 
 	rls, err := r.ctx.ListReaders()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to list scard readers: %w", err)
 	}
 
 	if !helpers.Contains(rls, device.Path) {
@@ -225,7 +226,7 @@ func (r *ACR122PCSC) Close() error {
 	if r.ctx != nil {
 		err := r.ctx.Release()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to release scard context: %w", err)
 		}
 	}
 	return nil

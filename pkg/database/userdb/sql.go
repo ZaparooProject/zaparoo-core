@@ -63,7 +63,10 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to truncate database: %w", err)
+	}
+	return nil
 }
 
 func sqlVacuum(ctx context.Context, db *sql.DB) error {
@@ -71,7 +74,10 @@ func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to vacuum database: %w", err)
+	}
+	return nil
 }
 
 //nolint:gocritic // struct passed for DB insertion
@@ -82,7 +88,7 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 		) values (?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare history insert statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -97,7 +103,10 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 		entry.TokenData,
 		entry.Success,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute history insert: %w", err)
+	}
+	return nil
 }
 
 func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]database.HistoryEntry, error) {
@@ -116,7 +125,7 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 		limit 25;
 	`)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to prepare history query statement: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -126,7 +135,7 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 
 	rows, err := q.QueryContext(ctx, lastID)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to query history: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -146,13 +155,15 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 			&row.Success,
 		)
 		if scanErr != nil {
-			return list, scanErr
+			return list, fmt.Errorf("failed to scan history row: %w", scanErr)
 		}
 		row.Time = time.Unix(timeInt, 0)
 		list = append(list, row)
 	}
-	err = rows.Err()
-	return list, err
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating history rows: %w", err)
+	}
+	return list, nil
 }
 
 //nolint:gocritic // struct passed for DB insertion
@@ -163,7 +174,7 @@ func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error {
 		) values (?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare mapping insert statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -179,7 +190,10 @@ func sqlAddMapping(ctx context.Context, db *sql.DB, m database.Mapping) error {
 		m.Pattern,
 		m.Override,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute mapping insert: %w", err)
+	}
+	return nil
 }
 
 func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping, error) {
@@ -191,7 +205,7 @@ func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping,
 		where DBID = ?;
 	`)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare mapping select statement: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -208,7 +222,10 @@ func sqlGetMapping(ctx context.Context, db *sql.DB, id int64) (database.Mapping,
 		&row.Pattern,
 		&row.Override,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan mapping row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
@@ -216,7 +233,7 @@ func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
 		delete from Mappings where DBID = ?;
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare mapping delete statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -224,7 +241,10 @@ func sqlDeleteMapping(ctx context.Context, db *sql.DB, id int64) error {
 		}
 	}()
 	_, err = stmt.ExecContext(ctx, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute mapping delete: %w", err)
+	}
+	return nil
 }
 
 //nolint:gocritic // struct passed for DB update

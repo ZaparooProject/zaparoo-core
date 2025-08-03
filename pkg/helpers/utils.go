@@ -61,7 +61,7 @@ func GetMd5Hash(path string) (string, error) {
 	//nolint:gosec // Safe: opens files for MD5 hashing, used for game file identification
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to open file for MD5 hash: %w", err)
 	}
 	//nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
 	hash := md5.New()
@@ -74,13 +74,13 @@ func GetFileSize(path string) (int64, error) {
 	//nolint:gosec // Safe: opens files to get file size, used for game file analysis
 	file, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to open file for size check: %w", err)
 	}
 
 	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return 0, err
+		return 0, fmt.Errorf("failed to get file stat: %w", err)
 	}
 
 	size := stat.Size()
@@ -165,7 +165,7 @@ func IsZip(path string) bool {
 func ListZip(path string) ([]string, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open zip file: %w", err)
 	}
 	defer func(r *zip.ReadCloser) {
 		err := r.Close()
@@ -209,7 +209,7 @@ func CopyFile(sourcePath, destPath string) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	outputFile, err := os.Create(destPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func(outputFile *os.File) {
 		_ = outputFile.Close()
@@ -217,11 +217,11 @@ func CopyFile(sourcePath, destPath string) error {
 
 	_, err = io.Copy(outputFile, inputFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to copy file content: %w", err)
 	}
 	err = outputFile.Sync()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to sync file: %w", err)
 	}
 	return nil
 }

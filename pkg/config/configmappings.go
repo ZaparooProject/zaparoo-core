@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 
 	_, err := os.Stat(mappingsDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to stat mappings directory: %w", err)
 	}
 
 	var mapFiles []string
@@ -70,7 +71,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 		},
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to walk mappings directory: %w", err)
 	}
 	log.Info().Msgf("found %d mapping files", len(mapFiles))
 

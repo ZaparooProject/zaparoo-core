@@ -21,6 +21,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -147,7 +148,7 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 
 		err := os.MkdirAll(filepath.Dir(cfgPath), 0o750)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 
 		err = cfg.Save()
@@ -175,18 +176,18 @@ func (c *Instance) Load() error {
 	}
 
 	if _, err := os.Stat(c.cfgPath); err != nil {
-		return err
+		return fmt.Errorf("failed to stat config file: %w", err)
 	}
 
 	data, err := os.ReadFile(c.cfgPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var newVals Values
 	err = toml.Unmarshal(data, &newVals)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	if newVals.ConfigSchema != SchemaVersion {
@@ -205,13 +206,13 @@ func (c *Instance) Load() error {
 		log.Info().Msg("loading auth file")
 		authData, err := os.ReadFile(c.authPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read auth file: %w", err)
 		}
 
 		var authVals Auth
 		err = toml.Unmarshal(authData, &authVals)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to unmarshal auth file: %w", err)
 		}
 
 		log.Info().Msgf("loaded %d auth entries", len(authVals.Creds))
@@ -289,13 +290,16 @@ func (c *Instance) Save() error {
 
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	return os.WriteFile(c.cfgPath, data, 0o600)
+	if err := os.WriteFile(c.cfgPath, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	return nil
 }
 
 func (c *Instance) AudioFeedback() bool {

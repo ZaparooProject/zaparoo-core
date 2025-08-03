@@ -117,7 +117,7 @@ func ParseCustomLaunchers(
 
 				if err != nil {
 					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
-					return err
+					return fmt.Errorf("failed to start custom launcher command: %w", err)
 				}
 
 				return nil

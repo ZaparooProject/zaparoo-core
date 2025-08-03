@@ -22,6 +22,7 @@ package file
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	}
 
 	if _, err := os.Stat(parent); err != nil {
-		return err
+		return fmt.Errorf("failed to stat parent directory: %w", err)
 	}
 
 	if _, err := os.Stat(path); err != nil {
@@ -78,7 +79,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		//nolint:gosec // Safe: creates file reader token files in controlled directories
 		f, err := os.Create(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create file: %w", err)
 		}
 		_ = f.Close()
 	}

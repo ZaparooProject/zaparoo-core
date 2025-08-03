@@ -173,6 +173,9 @@ linters:
           toml: snake
     # dupl:
     #   threshold: 100
+    wrapcheck:
+      extra-ignore-sigs:
+        - .Err(
     goheader:
       template: |-
         Zaparoo Core

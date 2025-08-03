@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,7 +81,7 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 
 	_, err := os.Stat(launchersDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to stat launchers directory: %w", err)
 	}
 
 	var launcherFiles []string
@@ -106,7 +107,7 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 		},
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to walk launchers directory: %w", err)
 	}
 	log.Info().Msgf("found %d custom launcher files", len(launcherFiles))
 

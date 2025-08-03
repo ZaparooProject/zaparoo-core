@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ import (
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	err := os.MkdirAll(pl.Settings().TempDir, 0o750)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	logWriters := []io.Writer{&lumberjack.Logger{

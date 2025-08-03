@@ -39,7 +39,7 @@ type ServiceArgs struct {
 func NewService(args ServiceArgs) (*Service, error) {
 	err := os.MkdirAll(args.Platform.Settings().TempDir, 0o750)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	return &Service{
@@ -55,7 +55,7 @@ func (s *Service) createPidFile() error {
 	pid := os.Getpid()
 	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func (s *Service) createPidFile() error {
 func (s *Service) removePidFile() error {
 	err := os.Remove(filepath.Join(s.pl.Settings().TempDir, config.PidFile))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to remove PID file: %w", err)
 	}
 	return nil
 }
@@ -242,11 +242,11 @@ func (s *Service) Start() error {
 
 	err = tempFile.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 	err = binFile.Close()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to close binary file: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -285,12 +285,12 @@ func (s *Service) Stop() error {
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to find process: %w", err)
 	}
 
 	err = process.Signal(syscall.SIGTERM)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to send SIGTERM to process: %w", err)
 	}
 
 	return nil

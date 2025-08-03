@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +121,7 @@ func getLinuxList() ([]string, error) {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open /dev directory: %w", err)
 	}
 	defer func(f *os.File) {
 		closeErr := f.Close()
@@ -131,7 +132,7 @@ func getLinuxList() ([]string, error) {
 
 	files, err := f.Readdir(0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read /dev directory: %w", err)
 	}
 
 	devices := make([]string, 0, len(files))
@@ -163,7 +164,7 @@ func GetSerialDeviceList() ([]string, error) {
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get serial ports list on darwin: %w", err)
 		}
 
 		for _, v := range ports {
@@ -181,7 +182,7 @@ func GetSerialDeviceList() ([]string, error) {
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get serial ports list on windows: %w", err)
 		}
 
 		for _, v := range ports {
@@ -196,6 +197,10 @@ func GetSerialDeviceList() ([]string, error) {
 
 		return devices, nil
 	default:
-		return serial.GetPortsList()
+		ports, err := serial.GetPortsList()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get serial ports list: %w", err)
+		}
+		return ports, nil
 	}
 }

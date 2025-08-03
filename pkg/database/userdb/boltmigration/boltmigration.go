@@ -68,14 +68,17 @@ type Database struct {
 func Open(pl platforms.Platform) (*Database, error) {
 	db, err := bolt.Open(dbFile(pl), 0o600, &bolt.Options{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open bolt database: %w", err)
 	}
 
 	return &Database{bdb: db}, nil
 }
 
 func (d *Database) Close() error {
-	return d.bdb.Close()
+	if err := d.bdb.Close(); err != nil {
+		return fmt.Errorf("failed to close bolt database: %w", err)
+	}
+	return nil
 }
 
 func (d *Database) GetMappings() ([]Mapping, error) {
@@ -93,7 +96,7 @@ func (d *Database) GetMappings() ([]Mapping, error) {
 			var m Mapping
 			err := json.Unmarshal(v, &m)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to unmarshal mapping data: %w", err)
 			}
 
 			ps := strings.Split(string(k), ":")
@@ -108,8 +111,11 @@ func (d *Database) GetMappings() ([]Mapping, error) {
 
 		return nil
 	})
+	if err != nil {
+		return ms, fmt.Errorf("failed to view bolt database: %w", err)
+	}
 
-	return ms, err
+	return ms, nil
 }
 
 func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
@@ -170,13 +176,13 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 		log.Warn().Msgf("%d errors migrating old mappings", errors)
 		err := os.Rename(oldDBPath, oldDBPath+".error")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to rename old database file to .error: %w", err)
 		}
 	} else {
 		log.Info().Msg("successfully migrated old mappings")
 		err := os.Rename(oldDBPath, oldDBPath+".migrated")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to rename old database file to .migrated: %w", err)
 		}
 	}
 
