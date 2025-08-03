@@ -344,7 +344,7 @@ func (p *Platform) KeyboardPress(arg string) error {
 		names = []string{arg}
 	}
 
-	var codes []int
+	codes := make([]int, 0, len(names))
 	for _, name := range names {
 		code, ok := linuxinput.ToKeyboardCode(name)
 		if !ok {

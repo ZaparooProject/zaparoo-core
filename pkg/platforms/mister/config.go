@@ -50,8 +50,9 @@ func MainHasFeature(feature string) bool {
 }
 
 func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
-	var setCore []string
-	for _, v := range cfg.SystemDefaults() {
+	systemDefaults := cfg.SystemDefaults()
+	setCore := make([]string, 0, len(systemDefaults))
+	for _, v := range systemDefaults {
 		if v.Launcher == "" {
 			continue
 		}

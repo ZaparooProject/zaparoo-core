@@ -117,8 +117,9 @@ func WriteMifare(pnd nfc.Device, text string, cardUID string) ([]byte, error) {
 		return nil, fmt.Errorf("payload too big for card: [%d/%d] bytes used", len(payload), cardCapacity)
 	}
 
-	var chunks [][]byte
-	for _, chunk := range chunkBy(payload, 16) {
+	payloadChunks := chunkBy(payload, 16)
+	chunks := make([][]byte, 0, len(payloadChunks))
+	for _, chunk := range payloadChunks {
 		for len(chunk) < 16 {
 			chunk = append(chunk, []byte{0x00}...)
 		}
