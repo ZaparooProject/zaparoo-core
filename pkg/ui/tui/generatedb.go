@@ -33,7 +33,7 @@ func waitGenerateUpdate(ctx context.Context, cfg *config.Instance) (models.Index
 		cfg, models.NotificationMediaIndexing,
 	)
 	if err != nil {
-		return models.IndexingStatusResponse{}, nil
+		return models.IndexingStatusResponse{}, err
 	}
 	var status models.IndexingStatusResponse
 	err = json.Unmarshal([]byte(resp), &status)

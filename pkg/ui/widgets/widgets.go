@@ -74,7 +74,10 @@ func removePIDFile(pl platforms.Platform) error {
 func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	path := pidPath(pl)
 	if _, err := os.Stat(path); err != nil {
-		return false, nil
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 
 	pid := 0
