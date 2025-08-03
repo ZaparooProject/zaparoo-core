@@ -115,7 +115,7 @@ func run() error {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			return fmt.Errorf("error starting service: %s", err)
+			return fmt.Errorf("error starting service: %w", err)
 		}
 
 		defer func() {
@@ -145,13 +145,13 @@ func run() error {
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")
-			return fmt.Errorf("error building UI: %s", err)
+			return fmt.Errorf("error building UI: %w", err)
 		}
 
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
-			return fmt.Errorf("error running UI: %s", err)
+			return fmt.Errorf("error running UI: %w", err)
 		}
 
 		exit <- true

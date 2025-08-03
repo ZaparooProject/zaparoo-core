@@ -107,14 +107,14 @@ func run() error {
 	stop, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
-		return fmt.Errorf("error starting service: %v", err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	<-sigs
 	err = stop()
 	if err != nil {
 		log.Error().Err(err).Msg("error stopping service")
-		return fmt.Errorf("error stopping service: %v", err)
+		return fmt.Errorf("error stopping service: %w", err)
 	}
 
 	return nil

@@ -80,11 +80,11 @@ func run() error {
 	if *doInstall {
 		err := os.MkdirAll(path.Dir(serviceFilePath), 0755)
 		if err != nil {
-			return fmt.Errorf("Error creating service directory: %v", err)
+			return fmt.Errorf("Error creating service directory: %w", err)
 		}
 		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0755)
 		if err != nil {
-			return fmt.Errorf("Error writing service file: %v", err)
+			return fmt.Errorf("Error writing service file: %w", err)
 		}
 		fmt.Println("Zaparoo service installed successfully.")
 		return nil
@@ -92,7 +92,7 @@ func run() error {
 		if _, err := os.Stat(serviceFilePath); err == nil {
 			err := os.Remove(serviceFilePath)
 			if err != nil {
-				return fmt.Errorf("Error removing service file: %v", err)
+				return fmt.Errorf("Error removing service file: %w", err)
 			}
 			fmt.Println("Zaparoo service uninstalled successfully.")
 			return nil
@@ -120,7 +120,7 @@ func run() error {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		return fmt.Errorf("Error creating service: %v", err)
+		return fmt.Errorf("Error creating service: %w", err)
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
@@ -145,13 +145,13 @@ func run() error {
 		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)
-		return fmt.Errorf("Error setting up UI: %v", err)
+		return fmt.Errorf("Error setting up UI: %w", err)
 	}
 
 	err = app.Run()
 	if err != nil {
 		log.Error().Msgf("error running UI: %s", err)
-		return fmt.Errorf("Error running UI: %v", err)
+		return fmt.Errorf("Error running UI: %w", err)
 	}
 
 	return nil

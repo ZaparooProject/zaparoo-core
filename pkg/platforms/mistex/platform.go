@@ -150,7 +150,7 @@ func (p *Platform) Stop() error {
 func (p *Platform) ScanHook(token tokens.Token) error {
 	f, err := os.Create(mister.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %s", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", mister.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -158,7 +158,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 
 	_, err = f.WriteString(fmt.Sprintf("%s,%s", token.UID, token.Text))
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %s", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", mister.TokenReadFile, err)
 	}
 
 	return nil
@@ -183,7 +183,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 
 func LaunchMenu() error {
 	if _, err := os.Stat(mrextConfig.CmdInterface); err != nil {
-		return fmt.Errorf("command interface not accessible: %s", err)
+		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	cmd, err := os.OpenFile(mrextConfig.CmdInterface, os.O_RDWR, 0)

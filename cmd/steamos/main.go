@@ -73,7 +73,7 @@ func run() error {
 		}
 		err := install()
 		if err != nil {
-			return fmt.Errorf("Error installing service: %v", err)
+			return fmt.Errorf("Error installing service: %w", err)
 		}
 		return nil
 	} else if *doUninstall {
@@ -82,7 +82,7 @@ func run() error {
 		}
 		err := uninstall()
 		if err != nil {
-			return fmt.Errorf("Error uninstalling service: %v", err)
+			return fmt.Errorf("Error uninstalling service: %w", err)
 		}
 		return nil
 	}
@@ -93,7 +93,7 @@ func run() error {
 
 	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
 	if err != nil {
-		return fmt.Errorf("Error creating data directory: %v", err)
+		return fmt.Errorf("Error creating data directory: %w", err)
 	}
 
 	defaults := config.BaseDefaults
@@ -101,7 +101,7 @@ func run() error {
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			return fmt.Errorf("Error migrating config: %v", err)
+			return fmt.Errorf("Error migrating config: %w", err)
 		} else {
 			defaults = migrated
 		}
@@ -118,14 +118,14 @@ func run() error {
 	stop, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
-		return fmt.Errorf("error starting service: %v", err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	<-sigs
 	err = stop()
 	if err != nil {
 		log.Error().Err(err).Msg("error stopping service")
-		return fmt.Errorf("error stopping service: %v", err)
+		return fmt.Errorf("error stopping service: %w", err)
 	}
 
 	return nil

@@ -58,7 +58,7 @@ func NormalizePath(cfg *config.Instance, path string) string {
 func RunDevCmd(cmd string, args string) error {
 	_, err := os.Stat(mrextConfig.CmdInterface)
 	if err != nil {
-		return fmt.Errorf("command interface not accessible: %s", err)
+		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	dev, err := os.OpenFile(mrextConfig.CmdInterface, os.O_RDWR, 0)

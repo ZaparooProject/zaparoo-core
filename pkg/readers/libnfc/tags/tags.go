@@ -66,7 +66,7 @@ func comm(pnd nfc.Device, tx []byte, replySize int) ([]byte, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("comm error: %s", err)
+		return nil, fmt.Errorf("comm error: %w", err)
 	}
 
 	return rx, nil

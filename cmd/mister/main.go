@@ -124,7 +124,7 @@ func run() error {
 	if *addStartupFlag {
 		err := addToStartup()
 		if err != nil {
-			return fmt.Errorf("Error adding to startup: %v", err)
+			return fmt.Errorf("Error adding to startup: %w", err)
 		}
 		return nil
 	}
@@ -156,19 +156,19 @@ func run() error {
 	if *showLoader != "" {
 		err := widgets.NoticeUI(pl, *showLoader, true)
 		if err != nil {
-			return fmt.Errorf("Error showing loader: %v", err)
+			return fmt.Errorf("Error showing loader: %w", err)
 		}
 		return nil
 	} else if *showPicker != "" {
 		err := widgets.PickerUI(cfg, pl, *showPicker)
 		if err != nil {
-			return fmt.Errorf("Error showing picker: %v", err)
+			return fmt.Errorf("Error showing picker: %w", err)
 		}
 		return nil
 	} else if *showNotice != "" {
 		err := widgets.NoticeUI(pl, *showNotice, false)
 		if err != nil {
-			return fmt.Errorf("Error showing notice: %v", err)
+			return fmt.Errorf("Error showing notice: %w", err)
 		}
 		return nil
 	}
@@ -181,7 +181,7 @@ func run() error {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		return fmt.Errorf("Error creating service: %v", err)
+		return fmt.Errorf("Error creating service: %w", err)
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
@@ -193,7 +193,7 @@ func run() error {
 	// offer to add service to MiSTer startup if it's not already there
 	err = tryAddStartup()
 	if err != nil {
-		return fmt.Errorf("Error adding startup: %v", err)
+		return fmt.Errorf("Error adding startup: %w", err)
 	}
 
 	// try to auto-start service if it's not running already
@@ -210,7 +210,7 @@ func run() error {
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
 		enableZapScript()
-		return fmt.Errorf("Error displaying TUI: %v", err)
+		return fmt.Errorf("Error displaying TUI: %w", err)
 	}
 	enableZapScript()
 

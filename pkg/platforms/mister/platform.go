@@ -242,7 +242,7 @@ func (p *Platform) Stop() error {
 func (p *Platform) ScanHook(token tokens.Token) error {
 	f, err := os.Create(TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %s", TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -250,7 +250,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 
 	_, err = f.WriteString(fmt.Sprintf("%s,%s", token.UID, token.Text))
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %s", TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", TokenReadFile, err)
 	}
 
 	p.lastScan = &token

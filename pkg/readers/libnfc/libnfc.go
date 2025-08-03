@@ -380,7 +380,7 @@ func (r *Reader) pollDevice(
 		log.Info().Msg("NTAG detected")
 		record, err = tags.ReadNtag(*pnd)
 		if err != nil {
-			return activeToken, removed, fmt.Errorf("error reading ntag: %s", err)
+			return activeToken, removed, fmt.Errorf("error reading ntag: %w", err)
 		}
 		cardType = tokens.TypeNTAG
 	} else if cardType == tokens.TypeMifare {
