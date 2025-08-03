@@ -107,10 +107,6 @@ func (p *Platform) StopActiveLauncher() error {
 }
 
 func (p *Platform) PlayAudio(path string) error {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(helpers.DataDir(p), path)
-	}
-
 	return nil
 }
 

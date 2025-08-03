@@ -384,14 +384,12 @@ func (r *Reader) pollDevice(
 		if err != nil {
 			return activeToken, removed, fmt.Errorf("error reading ntag: %w", err)
 		}
-		cardType = tokens.TypeNTAG
 	case tokens.TypeMifare:
 		log.Info().Msg("MIFARE detected")
 		record, err = tags.ReadMifare(*pnd, tagUid)
 		if err != nil {
 			log.Error().Msgf("error reading mifare: %s", err)
 		}
-		cardType = tokens.TypeMifare
 	}
 
 	log.Debug().Msgf("record bytes: %s", hex.EncodeToString(record.Bytes))
