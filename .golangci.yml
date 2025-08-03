@@ -26,6 +26,27 @@ linters:
     - exhaustive
     - prealloc
     - noctx
+    - nilnil
+    - errname
+    - wrapcheck
+    # - gocognit
+    # - cyclop
+    # - nestif
+    # - maintidx
+    - makezero
+    - sloglint
+    - gosmopolitan
+    - depguard
+    - tagliatelle
+    - testableexamples
+    - testifylint
+    # - varnamelen
+    - decorder
+    # - dupl
+    - goheader
+    - grouper
+    - paralleltest
+    - tparallel
   settings:
     govet:
       enable:
@@ -129,6 +150,49 @@ linters:
         - name: var-declaration
         - name: var-naming
         - name: waitgroup-by-value
+    # gocognit:
+    #   min-complexity: 15
+    # cyclop:
+    #   max-complexity: 15
+    #   skip-tests: true
+    # nestif:
+    #   min-complexity: 4
+    # varnamelen:
+    #   min-name-length: 2
+    #   ignore-names: ["err", "id", "i", "j", "k", "db", "tx", "ctx", "wg"]
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "log"
+              desc: use zerolog instead
+    tagliatelle:
+      case:
+        rules:
+          json: camel
+          toml: snake
+    # dupl:
+    #   threshold: 100
+    goheader:
+      template: |-
+        Zaparoo Core
+        Copyright (c) {{ YEAR }} The Zaparoo Project Contributors.
+        SPDX-License-Identifier: GPL-3.0-only
+
+        This file is part of Zaparoo Core.
+
+        Zaparoo Core is free software: you can redistribute it and/or modify
+        it under the terms of the GNU General Public License as published by
+        the Free Software Foundation, either version 3 of the License, or
+        (at your option) any later version.
+
+        Zaparoo Core is distributed in the hope that it will be useful,
+        but WITHOUT ANY WARRANTY; without even the implied warranty of
+        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+        GNU General Public License for more details.
+
+        You should have received a copy of the GNU General Public License
+        along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 formatters:
   enable:

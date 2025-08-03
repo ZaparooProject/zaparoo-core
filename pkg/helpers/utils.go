@@ -1,6 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-only
 
 This file is part of Zaparoo Core.
 
