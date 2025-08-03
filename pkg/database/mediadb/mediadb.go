@@ -36,7 +36,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var ErrorNullSQL = errors.New("MediaDB is not connected")
+var ErrNullSQL = errors.New("MediaDB is not connected")
 
 type MediaDB struct {
 	sql *sql.DB
@@ -82,14 +82,14 @@ func (db *MediaDB) Exists() bool {
 
 func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlUpdateLastGenerated(db.ctx, db.sql)
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 	if db.sql == nil {
-		return time.Time{}, ErrorNullSQL
+		return time.Time{}, ErrNullSQL
 	}
 	return sqlGetLastGenerated(db.ctx, db.sql)
 }
@@ -100,28 +100,28 @@ func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 
 func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlAllocate(db.sql)
 }
 
 func (db *MediaDB) MigrateUp() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlMigrateUp(db.sql)
 }
 
 func (db *MediaDB) Vacuum() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
 }
@@ -148,7 +148,7 @@ func (db *MediaDB) ReindexTables() error {
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
 func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
-		return make([]database.SearchResult, 0), ErrorNullSQL
+		return make([]database.SearchResult, 0), ErrNullSQL
 	}
 	return sqlSearchMediaPathExact(db.ctx, db.sql, systems, query)
 }
@@ -156,7 +156,7 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 // SearchMediaPathWords returns indexed names that include every word in a query (case-insensitive).
 func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
-		return make([]database.SearchResult, 0), ErrorNullSQL
+		return make([]database.SearchResult, 0), ErrNullSQL
 	}
 	qWords := strings.Fields(strings.ToLower(query))
 	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, qWords)
@@ -167,7 +167,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 	// query == path like with possible *
 	var nullResults []database.SearchResult
 	if db.sql == nil {
-		return nullResults, ErrorNullSQL
+		return nullResults, ErrNullSQL
 	}
 	var parts []string
 	for _, part := range strings.Split(query, "*") {
@@ -203,7 +203,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 	// JBONE: return string map of Systems.Key, Systems.Indexed
 	var systems []string
 	if db.sql == nil {
-		return systems, ErrorNullSQL
+		return systems, ErrNullSQL
 	}
 	return sqlIndexedSystems(db.ctx, db.sql)
 }
@@ -212,7 +212,7 @@ func (db *MediaDB) IndexedSystems() ([]string, error) {
 func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
-		return result, ErrorNullSQL
+		return result, ErrNullSQL
 	}
 
 	system, err := helpers.RandomElem(systems)

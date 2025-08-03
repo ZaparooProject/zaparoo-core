@@ -33,7 +33,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var ErrorNullSQL = errors.New("UserDB is not connected")
+var ErrNullSQL = errors.New("UserDB is not connected")
 
 type UserDB struct {
 	sql *sql.DB
@@ -79,28 +79,28 @@ func (db *UserDB) UnsafeGetSQLDb() *sql.DB {
 
 func (db *UserDB) Truncate() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlTruncate(db.ctx, db.sql)
 }
 
 func (db *UserDB) Allocate() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlAllocate(db.sql)
 }
 
 func (db *UserDB) MigrateUp() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlMigrateUp(db.sql)
 }
 
 func (db *UserDB) Vacuum() error {
 	if db.sql == nil {
-		return ErrorNullSQL
+		return ErrNullSQL
 	}
 	return sqlVacuum(db.ctx, db.sql)
 }
