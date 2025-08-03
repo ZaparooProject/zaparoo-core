@@ -101,6 +101,7 @@ func (r *FileReader) Open(
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			//nolint:gosec // Safe: r.path validated as device path starting with /dev/
 			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
 			cancel()
 			if err != nil {
@@ -116,6 +117,7 @@ func (r *FileReader) Open(
 			}
 
 			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			//nolint:gosec // Safe: r.path validated as device path starting with /dev/
 			rawLabel, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "LABEL", r.path).Output()
 			cancel()
 			if err != nil {

@@ -98,6 +98,11 @@ func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
 	if recordLength < 255 {
 		return []byte{0x03, byte(len(ndefRecord))}, nil
 	}
+	
+	// Check for uint16 overflow to prevent integer overflow
+	if recordLength > 65535 {
+		return nil, errors.New("NDEF record too large for Type 2 tag format")
+	}
 
 	// NFCForum-TS-Type-2-Tag_1.1.pdf Page 9
 	// > 255 Use three consecutive bytes format

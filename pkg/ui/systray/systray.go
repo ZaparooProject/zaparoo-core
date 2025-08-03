@@ -87,6 +87,7 @@ func systrayOnReady(
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
 					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
+					//nolint:gosec // Safe: opens system file manager with localhost URL
 					err := exec.CommandContext(context.Background(), openCmd, url).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open web page")
@@ -94,6 +95,7 @@ func systrayOnReady(
 					}
 				case <-mOpenLog.ClickedCh:
 					logPath := filepath.Join(pl.Settings().TempDir, config.LogFile)
+					//nolint:gosec // Safe: opens system file manager with internal log path
 					err := exec.CommandContext(context.Background(), openCmd, logPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
@@ -101,6 +103,7 @@ func systrayOnReady(
 					}
 				case <-mEditConfig.ClickedCh:
 					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
+					//nolint:gosec // Safe: opens system file manager with internal config path
 					err := exec.CommandContext(context.Background(), openCmd, configPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
@@ -108,6 +111,7 @@ func systrayOnReady(
 					}
 				case <-mOpenMappings.ClickedCh:
 					mappingsPath := filepath.Join(helpers.DataDir(pl), config.MappingsDir)
+					//nolint:gosec // Safe: opens system file manager with internal mappings directory
 					err := exec.CommandContext(context.Background(), openCmd, mappingsPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
@@ -115,6 +119,7 @@ func systrayOnReady(
 					}
 				case <-mOpenLaunchers.ClickedCh:
 					launchersPath := filepath.Join(helpers.DataDir(pl), config.LaunchersDir)
+					//nolint:gosec // Safe: opens system file manager with internal launchers directory
 					err := exec.CommandContext(context.Background(), openCmd, launchersPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")

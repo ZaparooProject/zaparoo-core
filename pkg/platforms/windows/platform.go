@@ -383,6 +383,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id = strings.SplitN(id, "/", 2)[0]
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				//nolint:gosec // Safe: launches Steam with game ID from internal database
 				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
@@ -400,6 +401,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id = strings.SplitN(id, "/", 2)[0]
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
 				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
@@ -492,6 +494,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id = strings.SplitN(id, "/", 2)[0]
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
 				return exec.CommandContext(ctx, cliLauncher, "launch_by_id", id).Start()
 			},
 		},

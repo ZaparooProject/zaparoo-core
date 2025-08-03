@@ -58,6 +58,7 @@ func ignoreSerialDevice(path string) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	//nolint:gosec // Safe: path validated to start with /dev/, udevadm uses absolute path
 	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {

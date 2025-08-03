@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -94,10 +96,22 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	app.SetFocus(modal)
 	app.ForceDraw()
 
-	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
+	// Create a pipe to safely pass file content to nc without shell injection
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "bash", "-c", uploadCmd).Output()
+	
+	// Read the log file
+	//nolint:gosec // Safe: logPath is from internal platform settings, not user input
+	logContent, err := os.ReadFile(logPath)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read log file")
+		return "Error reading log file."
+	}
+	
+	// Execute nc command with stdin pipe
+	cmd := exec.CommandContext(ctx, "nc", "termbin.com", "9999")
+	cmd.Stdin = bytes.NewReader(logContent)
+	out, err := cmd.Output()
 	pages.RemovePage("temp_upload")
 	if err != nil {
 		log.Error().Err(err).Msgf("error uploading log file to termbin")

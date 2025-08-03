@@ -94,5 +94,6 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
 	return platforms.CmdResult{}, exec.CommandContext(ctx, cmd, cmdArgs...).Run()
 }
