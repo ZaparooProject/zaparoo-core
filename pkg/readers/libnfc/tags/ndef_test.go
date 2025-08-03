@@ -30,6 +30,7 @@ import (
 )
 
 func TestCalculateNdefHeader(t *testing.T) {
+	t.Parallel()
 	test2 := map[string]struct {
 		input []byte
 		want  []byte
@@ -45,6 +46,7 @@ func TestCalculateNdefHeader(t *testing.T) {
 
 	for name, tc := range test2 {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			got, err := CalculateNdefHeader(tc.input)
 			if err != nil {
 				t.Fatalf("Got error: %v", err)
@@ -57,6 +59,7 @@ func TestCalculateNdefHeader(t *testing.T) {
 }
 
 func TestBuildMessage(t *testing.T) {
+	t.Parallel()
 	test2 := []struct {
 		input string
 		want  string
@@ -99,6 +102,7 @@ func TestBuildMessage(t *testing.T) {
 
 	for name, tc := range test2 {
 		t.Run(tc.input, func(t *testing.T) {
+			t.Parallel()
 			got, err := BuildMessage(tc.input)
 			if err != nil {
 				t.Fatal(err)
