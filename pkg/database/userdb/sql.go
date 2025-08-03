@@ -83,7 +83,7 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 }
 
 func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]database.HistoryEntry, error) {
-	var list []database.HistoryEntry
+	list := make([]database.HistoryEntry, 0, 25)
 	// Instead of offset, use token-based
 	if lastID == 0 {
 		lastID = 2147483646
@@ -251,7 +251,7 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 }
 
 func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
-	var list []database.Mapping
+	list := make([]database.Mapping, 0)
 
 	q, err := db.PrepareContext(ctx, `
 		select
@@ -300,7 +300,7 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 }
 
 func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
-	var list []database.Mapping
+	list := make([]database.Mapping, 0)
 
 	q, err := db.PrepareContext(ctx, `
 		select

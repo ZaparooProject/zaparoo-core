@@ -437,7 +437,7 @@ func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainder str
 	currentArg := ""
 	currentValue := ""
 	valueStart := int64(-1)
-	var buf []rune
+	buf := make([]rune, 0, 64)
 
 	storeArg := func() {
 		if currentArg != "" {

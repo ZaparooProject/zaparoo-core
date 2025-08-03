@@ -566,7 +566,7 @@ func sqlSearchMediaPathExact(
 	}
 	slug := helpers.SlugifyPath(path)
 
-	var results []database.SearchResult
+	results := make([]database.SearchResult, 0, 1)
 	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
@@ -628,7 +628,7 @@ func sqlSearchMediaPathParts(
 	systems []systemdefs.System,
 	parts []string,
 ) ([]database.SearchResult, error) {
-	var results []database.SearchResult
+	results := make([]database.SearchResult, 0, 250)
 
 	if len(systems) == 0 {
 		return nil, errors.New("no systems provided for media search")
@@ -720,7 +720,7 @@ func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System)
 }
 
 func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
-	var list []string
+	list := make([]string, 0)
 
 	q, err := db.PrepareContext(ctx, `
 		select SystemID from Systems;
