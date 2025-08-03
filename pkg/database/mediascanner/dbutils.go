@@ -48,7 +48,6 @@ func AddMediaPath(
 		systemIndex = foundSystemIndex
 	}
 
-	titleIndex = 0
 	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
@@ -67,7 +66,6 @@ func AddMediaPath(
 		titleIndex = foundTitleIndex
 	}
 
-	mediaIndex = 0
 	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
