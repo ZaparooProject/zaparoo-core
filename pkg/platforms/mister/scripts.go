@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -30,7 +31,7 @@ func getTTY() (string, error) {
 }
 
 func scriptIsActive() bool {
-	cmd := exec.Command("bash", "-c", "ps ax | grep [/]tmp/script")
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", "ps ax | grep [/]tmp/script")
 	output, err := cmd.Output()
 	if err != nil {
 		// grep returns an error code if there was no result
@@ -48,7 +49,9 @@ func openConsole(pl platforms.Platform, vt string) error {
 	// to 1 on success. then check in a loop if it actually did change to 1 and keep
 	// pressing F9 until it's switched
 
-	err := exec.Command("chvt", vt).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
 		log.Debug().Err(err).Msg("open console: error running chvt")
 		return err
@@ -91,7 +94,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 
 	if hidden {
 		// run the script directly
-		cmd := exec.Command(bin, args)
+		cmd := exec.CommandContext(context.Background(), bin, args)
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8")
 		cmd.Env = append(cmd.Env, "HOME=/root")
@@ -135,7 +138,9 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 
 	// this is just to follow mister's convention, which reserves
 	// tty2 for scripts
-	err = exec.Command("chvt", vt).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
 		return err
 	}
@@ -155,7 +160,8 @@ cd $(dirname "%s")
 		return err
 	}
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		context.Background(),
 		"/sbin/agetty",
 		"-a",
 		"root",

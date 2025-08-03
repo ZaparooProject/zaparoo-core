@@ -3,6 +3,7 @@
 package mister
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
@@ -95,7 +97,13 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		ArcadeDbFile,
 	)
 
-	resp, err := http.Get(ArcadeDbUrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbUrl, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -131,7 +139,13 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, nil
 	}
 
-	resp, err = http.Get(latestFile.DownloadUrl)
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadUrl, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err
 	}

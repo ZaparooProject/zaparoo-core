@@ -4,6 +4,7 @@ package mister
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -326,7 +327,8 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 			return fmt.Errorf("error setting video mode: %w", err)
 		}
 
-		cmd := exec.Command(
+		cmd := exec.CommandContext(
+			context.Background(),
 			"nice",
 			"-n",
 			"-20",
@@ -370,7 +372,9 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 }
 
 func killMPlayer(_ *config.Instance) error {
-	psCmd := exec.Command("sh", "-c", "ps aux | grep mplayer | grep -v grep")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	psCmd := exec.CommandContext(ctx, "sh", "-c", "ps aux | grep mplayer | grep -v grep")
 	output, err := psCmd.Output()
 	if err != nil {
 		log.Info().Msgf("mplayer processes not detected.")
@@ -394,7 +398,9 @@ func killMPlayer(_ *config.Instance) error {
 		pid := fields[0]
 		log.Info().Msgf("killing mplayer process with PID: %s", pid)
 
-		killCmd := exec.Command("kill", "-9", pid)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		killCmd := exec.CommandContext(ctx, "kill", "-9", pid)
 		if err := killCmd.Run(); err != nil {
 			log.Error().Msgf("failed to kill process %s: %v", pid, err)
 		}

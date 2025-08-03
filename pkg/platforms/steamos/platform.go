@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamos
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -170,7 +171,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+				return exec.CommandContext(
+					context.Background(),
 					"steam",
 					"steam://rungameid/"+id,
 				).Start()
@@ -181,7 +183,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
 			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command("bash", "-c", path).Start()
+				return exec.CommandContext(context.Background(), "bash", "-c", path).Start()
 			},
 		},
 	}

@@ -3,6 +3,7 @@
 package mistex
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -230,7 +231,9 @@ func (p *Platform) PlayAudio(path string) error {
 		path = filepath.Join(helpers.DataDir(p), path)
 	}
 
-	return exec.Command("aplay", path).Start()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "aplay", path).Start()
 }
 
 func (p *Platform) ActiveSystem() string {

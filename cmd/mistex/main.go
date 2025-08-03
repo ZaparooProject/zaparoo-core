@@ -24,12 +24,14 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -64,13 +66,17 @@ WantedBy=multi-user.target
 		return false, err
 	}
 
-	cmd := exec.Command("systemctl", "daemon-reload")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", "daemon-reload")
 	err = cmd.Run()
 	if err != nil {
 		return false, err
 	}
 
-	cmd = exec.Command("systemctl", "enable", "zaparoo.service")
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, "systemctl", "enable", "zaparoo.service")
 	err = cmd.Run()
 	if err != nil {
 		return false, err

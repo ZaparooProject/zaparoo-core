@@ -4,12 +4,14 @@ package libreelec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -110,7 +112,9 @@ func apiRequest(
 	log.Debug().Msgf("request: %s", string(reqJson))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
-	kodiReq, err := http.NewRequest(http.MethodPost, kodiURL, bytes.NewBuffer(reqJson))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, kodiURL, bytes.NewBuffer(reqJson))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

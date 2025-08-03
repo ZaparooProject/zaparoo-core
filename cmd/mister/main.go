@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -127,7 +128,9 @@ func run() error {
 	}
 
 	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
-		_ = exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
 	}
 
 	defaults := config.BaseDefaults
