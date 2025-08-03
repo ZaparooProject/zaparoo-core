@@ -99,7 +99,7 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 	// Create a pipe to safely pass file content to nc without shell injection
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	// Read the log file
 	//nolint:gosec // Safe: logPath is from internal platform settings, not user input
 	logContent, err := os.ReadFile(logPath)
@@ -107,7 +107,7 @@ func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application
 		log.Error().Err(err).Msg("failed to read log file")
 		return "Error reading log file."
 	}
-	
+
 	// Execute nc command with stdin pipe
 	cmd := exec.CommandContext(ctx, "nc", "termbin.com", "9999")
 	cmd.Stdin = bytes.NewReader(logContent)

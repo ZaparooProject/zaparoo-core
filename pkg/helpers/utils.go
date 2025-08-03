@@ -46,7 +46,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-
 func TokensEqual(a, b *tokens.Token) bool {
 	if a == nil && b == nil {
 		return true

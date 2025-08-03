@@ -56,7 +56,7 @@ func main() {
 
 func run() error {
 	if os.Geteuid() == 0 {
-		return errors.New("Zaparoo cannot be run as root")
+		return errors.New("zaparoo cannot be run as root")
 	}
 
 	pl := &mac.Platform{}

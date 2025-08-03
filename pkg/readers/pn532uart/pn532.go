@@ -19,7 +19,7 @@ const (
 	cmdInDataExchange      = 0x40
 	hostToPn532            = 0xD4
 	pn532ToHost            = 0xD5
-	pn532Ready             = 0x01 //nolint:gosec // keeping as reference
+	pn532Ready             = 0x01
 )
 
 var (

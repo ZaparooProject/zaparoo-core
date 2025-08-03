@@ -600,11 +600,11 @@ func sqlSearchMediaPathExact(
 	}()
 	for rows.Next() {
 		result := database.SearchResult{}
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
-		); err != nil {
-			return results, err
+		); scanErr != nil {
+			return results, scanErr
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
@@ -680,11 +680,11 @@ func sqlSearchMediaPathParts(
 	}()
 	for rows.Next() {
 		result := database.SearchResult{}
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
-		); err != nil {
-			return results, err
+		); scanErr != nil {
+			return results, scanErr
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
@@ -745,8 +745,8 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	}()
 	for rows.Next() {
 		row := ""
-		if err := rows.Scan(&row); err != nil {
-			return list, err
+		if scanErr := rows.Scan(&row); scanErr != nil {
+			return list, scanErr
 		}
 		list = append(list, row)
 	}

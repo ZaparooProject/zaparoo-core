@@ -31,29 +31,29 @@ const (
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
-	Cmd           parser.Command
-	Cfg           *config.Instance
 	Playlist      playlists.PlaylistController
+	Cfg           *config.Instance
+	Database      *database.Database
+	Cmd           parser.Command
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
-	Database      *database.Database
 }
 
 // CmdResult returns a summary of what global side effects may or may not have
 // happened as a result of a single ZapScript command running.
 type CmdResult struct {
+	// Playlist is the result of the playlist change.
+	Playlist *playlists.Playlist
+	// NewCommands instructs the script runner to prepend these additional
+	// commands to the current script's remaining command list.
+	NewCommands []parser.Command
 	// MediaChanged is true if a command may have started or stopped running
 	// media, and could affect handling of the hold mode feature. This doesn't
 	// include playlist changes, which manage running media separately.
 	MediaChanged bool
 	// PlaylistChanged is true if a command started/changed/stopped a playlist.
 	PlaylistChanged bool
-	// Playlist is the result of the playlist change.
-	Playlist *playlists.Playlist
-	// NewCommands instructs the script runner to prepend these additional
-	// commands to the current script's remaining command list.
-	NewCommands []parser.Command
 	// Unsafe flags that a token has been generate by a remote/untrusted source
 	// and can no longer be considered safe. This flag will flow on to any
 	// remaining commands.
@@ -73,6 +73,16 @@ type ScanResult struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
+	// Test function returns true if file looks supported by this launcher.
+	// It's checked after all standard extension and folder checks.
+	Test func(*config.Instance, string) bool
+	// Launch function, takes a direct as possible path/ID media file.
+	Launch func(*config.Instance, string) error
+	// Kill function kills the current active launcher, if possible.
+	Kill func(*config.Instance) error
+	// Optional function to perform custom media scanning. Takes the list of
+	// results from the standard scan, if any, and returns the final list.
+	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// Unique ID of the launcher, visible to user.
 	ID string
 	// System associated with this launcher.
@@ -85,16 +95,6 @@ type Launcher struct {
 	Extensions []string
 	// Accepted schemes for URI-style launches.
 	Schemes []string
-	// Test function returns true if file looks supported by this launcher.
-	// It's checked after all standard extension and folder checks.
-	Test func(*config.Instance, string) bool
-	// Launch function, takes a direct as possible path/ID media file.
-	Launch func(*config.Instance, string) error
-	// Kill function kills the current active launcher, if possible.
-	Kill func(*config.Instance) error
-	// Optional function to perform custom media scanning. Takes the list of
-	// results from the standard scan, if any, and returns the final list.
-	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// If true, all resolved paths must be in the allow list before they
 	// can be launched.
 	AllowListOnly bool
