@@ -99,9 +99,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer func(b io.ReadCloser) {
-		_ = b.Close()
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -133,9 +131,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer func(b io.ReadCloser) {
-		_ = b.Close()
-	}(resp.Body)
+	defer resp.Body.Close()
 
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
