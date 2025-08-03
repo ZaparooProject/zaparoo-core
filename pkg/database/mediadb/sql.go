@@ -139,15 +139,14 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 		or SystemID = ?
 		limit 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
 		return row, err
 	}
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 	err = stmt.QueryRowContext(ctx,
 		system.DBID,
 		system.SystemID,
@@ -170,15 +169,14 @@ func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (data
 		(DBID, SystemID, Name)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
 		return row, err
 	}
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 	res, err := stmt.ExecContext(ctx,
 		dbID,
 		row.SystemID,
@@ -202,15 +200,14 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 		or Slug = ?
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
 		return row, err
 	}
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 	err = stmt.QueryRowContext(ctx,
 		title.DBID,
 		title.Slug,
@@ -234,12 +231,11 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitl
 		(DBID, SystemDBID, Slug, Name)
 		values (?, ?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -270,12 +266,11 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 		)
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -302,12 +297,11 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		(DBID, MediaTitleDBID, Path)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -334,12 +328,11 @@ func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (
 		or Type = ?
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -364,12 +357,11 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 		(DBID, Type)
 		values (?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -396,12 +388,11 @@ func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database
 		LIMIT 1;
 	`)
 	// TODO: Add TagType dependency when unknown tags supported
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -427,12 +418,11 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 		(DBID, TypeDBID, Tag)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -462,12 +452,11 @@ func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag
 		)
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -494,12 +483,11 @@ func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (
 		(DBID, MediaDBID, TagDBID)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		closeErr := stmt.Close()
-		if closeErr != nil {
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
 		return row, err
 	}
@@ -592,6 +580,11 @@ func sqlSearchMediaPathExact(
 	if err != nil {
 		return results, err
 	}
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
 	rows, err := stmt.QueryContext(ctx,
 		args...,
@@ -599,11 +592,11 @@ func sqlSearchMediaPathExact(
 	if err != nil {
 		return results, err
 	}
-	defer func(rows *sql.Rows) {
+	defer func() { 
 		if closeErr := rows.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		result := database.SearchResult{}
 		if err := rows.Scan(
@@ -666,6 +659,11 @@ func sqlSearchMediaPathParts(
 	if err != nil {
 		return results, err
 	}
+	defer func() { 
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
 	rows, err := stmt.QueryContext(ctx,
 		args...,
@@ -673,11 +671,11 @@ func sqlSearchMediaPathParts(
 	if err != nil {
 		return results, err
 	}
-	defer func(rows *sql.Rows) {
+	defer func() { 
 		if closeErr := rows.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		result := database.SearchResult{}
 		if err := rows.Scan(
@@ -704,14 +702,14 @@ func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System)
 		from Systems
 		where SystemID = ?;
 	`)
-	defer func(q *sql.Stmt) {
-		if closeErr := q.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(q)
 	if err != nil {
 		return false
 	}
+	defer func() { 
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 	err = q.QueryRowContext(ctx, system.ID).Scan(&systemID)
 	if err != nil {
 		return false
@@ -725,24 +723,24 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	q, err := db.PrepareContext(ctx, `
 		select SystemID from Systems;
 	`)
-	defer func(q *sql.Stmt) {
-		if closeErr := q.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(q)
 	if err != nil {
 		return list, err
 	}
+	defer func() { 
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
 	rows, err := q.QueryContext(ctx)
 	if err != nil {
 		return list, err
 	}
-	defer func(rows *sql.Rows) {
+	defer func() { 
 		if closeErr := rows.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		row := ""
 		if err := rows.Scan(&row); err != nil {
@@ -765,15 +763,14 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 		where Systems.SystemID = ?
 		ORDER BY RANDOM() LIMIT 1;
 	`)
-	defer func(q *sql.Stmt) {
-		closeErr := q.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}(q)
 	if err != nil {
 		return row, err
 	}
+	defer func() { 
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 	err = q.QueryRowContext(ctx, system.ID).Scan(
 		&row.SystemID,
 		&row.Path,
