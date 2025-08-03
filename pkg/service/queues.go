@@ -18,7 +18,7 @@ func runTokenZapScript(
 	platform platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
-	token tokens.Token,
+	token tokens.Token, //nolint:gocritic // single-use parameter in service function
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,

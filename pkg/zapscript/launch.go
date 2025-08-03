@@ -15,7 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) != 1 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -33,7 +33,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}, pl.LaunchSystem(env.Cfg, systemID)
 }
 
-func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -155,14 +155,15 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 func getAltLauncher(
 	pl platforms.Platform,
-	env platforms.CmdEnv,
+	env platforms.CmdEnv, //nolint:gocritic // single-use parameter in command handler
 ) (func(args string) error, error) {
 	if env.Cmd.AdvArgs["launcher"] != "" {
 		var launcher platforms.Launcher
 
-		for _, l := range pl.Launchers(env.Cfg) {
-			if l.ID == env.Cmd.AdvArgs["launcher"] {
-				launcher = l
+		launchers := pl.Launchers(env.Cfg)
+		for i := range launchers {
+			if launchers[i].ID == env.Cmd.AdvArgs["launcher"] {
+				launcher = launchers[i]
 				break
 			}
 		}
@@ -201,7 +202,7 @@ func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool)
 	return nil, false
 }
 
-func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -278,15 +279,16 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers(env.Cfg) {
-		if l.SystemID == system.ID {
-			launchers = append(launchers, l)
+	allLaunchers := pl.Launchers(env.Cfg)
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID == system.ID {
+			launchers = append(launchers, allLaunchers[i])
 		}
 	}
 
 	var folders []string
-	for _, l := range launchers {
-		for _, folder := range l.Folders {
+	for i := range launchers {
+		for _, folder := range launchers[i].Folders {
 			if !helpers.Contains(folders, folder) {
 				folders = append(folders, folder)
 			}
@@ -340,7 +342,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", path)
 }
 
-func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
 	}

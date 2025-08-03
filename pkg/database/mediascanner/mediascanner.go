@@ -59,15 +59,16 @@ func GetSystemPaths(
 
 	for _, system := range systems {
 		var launchers []platforms.Launcher
-		for _, l := range pl.Launchers(cfg) {
-			if l.SystemID == system.ID {
-				launchers = append(launchers, l)
+		allLaunchers := pl.Launchers(cfg)
+		for i := range allLaunchers {
+			if allLaunchers[i].SystemID == system.ID {
+				launchers = append(launchers, allLaunchers[i])
 			}
 		}
 
 		var folders []string
-		for _, l := range launchers {
-			for _, folder := range l.Folders {
+		for i := range launchers {
+			for _, folder := range launchers[i].Folders {
 				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
 				}
@@ -389,7 +390,9 @@ func NewNamesIndex(
 
 		// for each system launcher in a platform, run the results through its
 		// custom scan function if one exists
-		for _, l := range platform.Launchers(cfg) {
+		launchers := platform.Launchers(cfg)
+		for i := range launchers {
+			l := &launchers[i]
 			if l.SystemID == k && l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
@@ -419,7 +422,9 @@ func NewNamesIndex(
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
-	for _, l := range platform.Launchers(cfg) {
+	launchers := platform.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
 		systemID := l.SystemID
 		if !scanned[systemID] && l.Scanner != nil {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
@@ -445,13 +450,15 @@ func NewNamesIndex(
 
 	// launcher scanners with no system defined are run against every system
 	var anyScanners []platforms.Launcher
-	for _, l := range platform.Launchers(cfg) {
-		if l.SystemID == "" && l.Scanner != nil {
-			anyScanners = append(anyScanners, l)
+	allLaunchers := platform.Launchers(cfg)
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
+			anyScanners = append(anyScanners, allLaunchers[i])
 		}
 	}
 
-	for _, l := range anyScanners {
+	for i := range anyScanners {
+		l := &anyScanners[i]
 		for _, s := range systems {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, s.ID)
 			results, scanErr := l.Scanner(cfg, s.ID, []platforms.ScanResult{})

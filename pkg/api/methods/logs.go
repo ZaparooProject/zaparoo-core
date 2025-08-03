@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleLogsDownload(env requests.RequestEnv) (any, error) {
+func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received logs download request")
 
 	logFilePath := filepath.Join(env.Platform.Settings().TempDir, config.LogFile)

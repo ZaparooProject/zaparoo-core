@@ -107,7 +107,7 @@ func GetAuthCfg() Auth {
 	return auth
 }
 
-func NewConfig(configDir string, defaults Values) (*Instance, error) {
+func NewConfig(configDir string, defaults Values) (*Instance, error) { //nolint:gocritic // config struct copied for immutability
 	cfgPath := os.Getenv(CfgEnv)
 	log.Debug().Msgf("env config path: %s", cfgPath)
 

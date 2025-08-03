@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2024, 2025 Callan Barrett
@@ -18,8 +20,6 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-//go:build linux
-
 package recalbox
 
 import (
@@ -31,10 +31,10 @@ import (
 
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 
@@ -44,7 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 )
 
 type Platform struct {
@@ -59,9 +59,9 @@ func (p *Platform) ID() string {
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
+		simpleserial.NewReader(cfg),
 		libnfc.NewReader(cfg),
-		optical_drive.NewReader(cfg),
+		opticaldrive.NewReader(cfg),
 	}
 }
 
@@ -111,7 +111,7 @@ func (p *Platform) StopActiveLauncher() error {
 
 func (p *Platform) PlayAudio(path string) error {
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
+		path = filepath.Join(helpers.DataDir(p), path)
 	}
 
 	return nil
@@ -123,13 +123,13 @@ func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -165,7 +165,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

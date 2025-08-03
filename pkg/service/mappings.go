@@ -33,7 +33,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func checkMappingUID(m database.Mapping, t tokens.Token) bool {
+func checkMappingUID(m *database.Mapping, t *tokens.Token) bool {
 	uid := userdb.NormalizeID(t.UID)
 	pattern := userdb.NormalizeID(m.Pattern)
 
@@ -58,7 +58,7 @@ func checkMappingUID(m database.Mapping, t tokens.Token) bool {
 	return false
 }
 
-func checkMappingText(m database.Mapping, t tokens.Token) bool {
+func checkMappingText(m *database.Mapping, t *tokens.Token) bool {
 	switch m.Match {
 	case userdb.MatchTypeExact:
 		return t.Text == m.Pattern
@@ -76,7 +76,7 @@ func checkMappingText(m database.Mapping, t tokens.Token) bool {
 	return false
 }
 
-func checkMappingData(m database.Mapping, t tokens.Token) bool {
+func checkMappingData(m *database.Mapping, t *tokens.Token) bool {
 	switch m.Match {
 	case userdb.MatchTypeExact:
 		return t.Data == m.Pattern
@@ -136,7 +136,7 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 	return mappings
 }
 
-func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platform, token tokens.Token) (string, bool) {
+func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platform, token tokens.Token) (string, bool) { //nolint:gocritic // single-use parameter in service function
 	// TODO: need a way to identify the source of a match so it can be
 	// reported and debugged by the user if there's issues
 
@@ -152,17 +152,17 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 	for _, m := range ms {
 		switch m.Type {
 		case userdb.MappingTypeID:
-			if checkMappingUID(m, token) {
+			if checkMappingUID(&m, &token) {
 				log.Info().Msg("launching with db/cfg id match override")
 				return m.Override, true
 			}
 		case userdb.MappingTypeValue:
-			if checkMappingText(m, token) {
+			if checkMappingText(&m, &token) {
 				log.Info().Msg("launching with db/cfg value match override")
 				return m.Override, true
 			}
 		case userdb.MappingTypeData:
-			if checkMappingData(m, token) {
+			if checkMappingData(&m, &token) {
 				log.Info().Msg("launching with db/cfg data match override")
 				return m.Override, true
 			}

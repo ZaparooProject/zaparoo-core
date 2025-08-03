@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleSettings(env requests.RequestEnv) (any, error) {
+func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings request")
 
 	resp := models.SettingsResponse{
@@ -30,7 +30,7 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 	return resp, nil
 }
 
-func HandleSettingsReload(env requests.RequestEnv) (any, error) {
+func HandleSettingsReload(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings reload request")
 
 	err := env.Config.Load()
@@ -56,7 +56,7 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
+func HandleSettingsUpdate(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings update request")
 
 	if len(env.Params) == 0 {

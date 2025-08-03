@@ -45,7 +45,7 @@ func NewState(platform platforms.Platform) (state *State, notificationChan <-cha
 	}, ns
 }
 
-func (s *State) SetActiveCard(card tokens.Token) {
+func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-use parameter in state setter
 	s.mu.Lock()
 
 	if helpers.TokensEqual(&s.activeToken, &card) {

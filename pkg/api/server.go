@@ -185,7 +185,7 @@ func NewMethodMap() *MethodMap {
 
 // handleRequest validates a client request and forwards it to the
 // appropriate method handler. Returns the method's result object.
-func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.RequestObject) (any, *models.ErrorObject) {
+func handleRequest(methodMap *MethodMap, env requests.RequestEnv, req models.RequestObject) (any, *models.ErrorObject) { //nolint:gocritic // single-use parameter in API handler
 	log.Debug().Interface("request", req).Msg("received request")
 
 	fn, ok := methodMap.GetMethod(req.Method)
@@ -327,7 +327,7 @@ func broadcastNotifications(
 
 func processRequestObject(
 	methodMap *MethodMap,
-	env requests.RequestEnv,
+	env requests.RequestEnv, //nolint:gocritic // single-use parameter in API handler
 	msg []byte,
 ) (uuid.UUID, any, *models.ErrorObject) {
 	if !json.Valid(msg) {

@@ -17,7 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleMappings(env requests.RequestEnv) (any, error) {
+func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received mappings request")
 
 	resp := models.AllMappingsResponse{
@@ -85,7 +85,7 @@ func validateAddMappingParams(amr *models.AddMappingParams) error {
 	return nil
 }
 
-func HandleAddMapping(env requests.RequestEnv) (any, error) {
+func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received add mapping request")
 
 	if len(env.Params) == 0 {
@@ -129,7 +129,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
+func HandleDeleteMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received delete mapping request")
 
 	if len(env.Params) == 0 {
@@ -178,7 +178,7 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 	return nil
 }
 
-func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
+func HandleUpdateMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received update mapping request")
 
 	if len(env.Params) == 0 {
@@ -246,7 +246,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleReloadMappings(env requests.RequestEnv) (any, error) {
+func HandleReloadMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received reload mappings request")
 
 	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)

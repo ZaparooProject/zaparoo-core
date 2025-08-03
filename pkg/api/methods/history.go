@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleTokens(env requests.RequestEnv) (any, error) {
+func HandleTokens(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received tokens request")
 
 	resp := models.TokensResponse{
@@ -40,7 +40,7 @@ func HandleTokens(env requests.RequestEnv) (any, error) {
 	return resp, nil
 }
 
-func HandleHistory(env requests.RequestEnv) (any, error) {
+func HandleHistory(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received history request")
 
 	entries, err := env.Database.UserDB.GetHistory(0)

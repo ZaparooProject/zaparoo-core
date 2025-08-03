@@ -9,7 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleReaderWrite(env requests.RequestEnv) (any, error) {
+func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received reader write request")
 
 	if len(env.Params) == 0 {
@@ -52,7 +52,7 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
+func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received reader write cancel request")
 
 	rs := env.State.ListReaders()

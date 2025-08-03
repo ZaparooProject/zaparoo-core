@@ -123,10 +123,12 @@ func runBeforeExitHook(
 	db *database.Database,
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
-	activeMedia models.ActiveMedia,
+	activeMedia models.ActiveMedia, //nolint:gocritic // single-use parameter in service function
 ) {
 	var systemIDs []string
-	for _, l := range pl.Launchers(cfg) {
+	launchers := pl.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
 		if l.ID == activeMedia.SystemID {
 			systemIDs = append(systemIDs, l.SystemID)
 			system, err := systemdefs.LookupSystem(l.SystemID)

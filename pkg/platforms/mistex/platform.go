@@ -12,10 +12,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"github.com/rs/zerolog/log"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -23,7 +23,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	mm "github.com/wizzomafizzo/mrext/pkg/mister"
@@ -46,7 +46,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
+		simpleserial.NewReader(cfg),
 	}
 }
 
@@ -56,7 +56,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return err
 	}
 
-	err = os.MkdirAll(utils.DataDir(p), 0755)
+	err = os.MkdirAll(helpers.DataDir(p), 0755)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func (p *Platform) StartPost(
 
 	// attempt arcadedb update
 	go func() {
-		haveInternet := utils.WaitForInternet(30)
+		haveInternet := helpers.WaitForInternet(30)
 		if !haveInternet {
 			log.Warn().Msg("no internet connection, skipping network tasks")
 			return
@@ -222,7 +222,7 @@ func (p *Platform) PlayAudio(path string) error {
 	}
 
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
+		path = filepath.Join(helpers.DataDir(p), path)
 	}
 
 	return exec.Command("aplay", path).Start()
@@ -255,13 +255,13 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -298,7 +298,7 @@ func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), mister.Launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), mister.Launchers...)
 }
 
 func (p *Platform) ShowNotice(

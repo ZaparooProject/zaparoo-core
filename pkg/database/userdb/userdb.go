@@ -96,7 +96,7 @@ func (db *UserDB) Close() error {
 // TODO: reader source (physical reader vs web)
 // TODO: metadata
 
-func (db *UserDB) AddHistory(entry database.HistoryEntry) error {
+func (db *UserDB) AddHistory(entry database.HistoryEntry) error { //nolint:gocritic // struct passed for DB insertion
 	return sqlAddHistory(db.ctx, db.sql, entry)
 }
 

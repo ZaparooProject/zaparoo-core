@@ -25,7 +25,7 @@ var (
 	ErrNotAllowed    = errors.New("not allowed")
 )
 
-func HandleRun(env requests.RequestEnv) (any, error) {
+func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received run request")
 
 	if len(env.Params) == 0 {
@@ -142,7 +142,7 @@ func HandleRunRest(
 	}
 }
 
-func HandleStop(env requests.RequestEnv) (any, error) {
+func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
 	return nil, env.Platform.StopActiveLauncher()
 }

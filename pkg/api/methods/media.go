@@ -177,7 +177,7 @@ func generateMediaDB(
 	return nil
 }
 
-func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
+func HandleGenerateMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received generate media request")
 
 	var systems []systemdefs.System
@@ -215,7 +215,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	return nil, err
 }
 
-func HandleMediaSearch(env requests.RequestEnv) (any, error) {
+func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
 	if len(env.Params) == 0 {
@@ -301,7 +301,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	}, nil
 }
 
-func HandleMedia(env requests.RequestEnv) (any, error) {
+func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media request")
 
 	resp := models.MediaResponse{
@@ -344,7 +344,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	return resp, nil
 }
 
-func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
+func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received update active media request")
 
 	if len(env.Params) == 0 {
@@ -380,7 +380,7 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	return nil, nil
 }
 
-func HandleActiveMedia(env requests.RequestEnv) (any, error) {
+func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received active media request")
 
 	media := env.State.ActiveMedia()

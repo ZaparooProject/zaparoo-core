@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleSystems(env requests.RequestEnv) (any, error) {
+func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received systems request")
 
 	indexed, err := env.Database.MediaDB.IndexedSystems()

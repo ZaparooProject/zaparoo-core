@@ -11,7 +11,7 @@ import (
 )
 
 // DEPRECATED
-func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
@@ -29,7 +29,7 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	return platforms.CmdResult{}, pl.KeyboardPress(code)
 }
 
-func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
@@ -49,7 +49,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 	return platforms.CmdResult{}, nil
 }
 
-func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
 	}
@@ -66,7 +66,7 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	return platforms.CmdResult{}, nil
 }
 
-func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platforms.CmdResult, error) {
+func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	var amount int
 
 	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] != "" {
@@ -87,12 +87,12 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 	return platforms.CmdResult{}, nil
 }
 
-func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	log.Info().Msgf("inserting coin for player 1: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "5")
 }
 
-func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // single-use parameter in command handler
 	log.Info().Msgf("inserting coin for player 2: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "6")
 }

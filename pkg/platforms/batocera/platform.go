@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -26,7 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -54,8 +54,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
-		optical_drive.NewReader(cfg),
+		simpleserial.NewReader(cfg),
+		opticaldrive.NewReader(cfg),
 	}
 }
 
@@ -183,7 +183,7 @@ func (p *Platform) PlayAudio(path string) error {
 	}
 
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
+		path = filepath.Join(helpers.DataDir(p), path)
 	}
 
 	return exec.Command("aplay", path).Start()
@@ -228,7 +228,7 @@ func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
@@ -247,7 +247,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -393,7 +393,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		})
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
 func (p *Platform) ShowNotice(

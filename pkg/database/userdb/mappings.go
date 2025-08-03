@@ -41,7 +41,7 @@ func NormalizeID(uid string) string {
 	return uid
 }
 
-func (db *UserDB) AddMapping(m database.Mapping) error {
+func (db *UserDB) AddMapping(m database.Mapping) error { //nolint:gocritic // struct passed for DB insertion
 	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
@@ -78,7 +78,7 @@ func (db *UserDB) DeleteMapping(id int64) error {
 	return sqlDeleteMapping(db.ctx, db.sql, id)
 }
 
-func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
+func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error { //nolint:gocritic // struct passed for DB update
 	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}

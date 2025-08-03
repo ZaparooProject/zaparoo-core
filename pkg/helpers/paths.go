@@ -20,7 +20,7 @@ import (
 func PathIsLauncher(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	l platforms.Launcher,
+	l *platforms.Launcher,
 	path string,
 ) bool {
 	if path == "" {
@@ -100,9 +100,10 @@ func MatchSystemFile(
 	systemID string,
 	path string,
 ) bool {
-	for _, l := range pl.Launchers(cfg) {
-		if l.SystemID == systemID {
-			if PathIsLauncher(cfg, pl, l, path) {
+	launchers := pl.Launchers(cfg)
+	for i := range launchers {
+		if launchers[i].SystemID == systemID {
+			if PathIsLauncher(cfg, pl, &launchers[i], path) {
 				return true
 			}
 		}
@@ -118,9 +119,10 @@ func PathToLaunchers(
 	path string,
 ) []platforms.Launcher {
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers(cfg) {
-		if PathIsLauncher(cfg, pl, l, path) {
-			launchers = append(launchers, l)
+	allLaunchers := pl.Launchers(cfg)
+	for i := range allLaunchers {
+		if PathIsLauncher(cfg, pl, &allLaunchers[i], path) {
+			launchers = append(launchers, allLaunchers[i])
 		}
 	}
 	return launchers
@@ -273,7 +275,7 @@ func DoLaunch(
 	cfg *config.Instance,
 	pl platforms.Platform,
 	setActiveMedia func(*models.ActiveMedia),
-	launcher platforms.Launcher,
+	launcher *platforms.Launcher,
 	path string,
 ) error {
 	log.Debug().Msgf("launching with: %v", launcher)

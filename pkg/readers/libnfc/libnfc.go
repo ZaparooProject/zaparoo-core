@@ -145,7 +145,7 @@ func (r *Reader) Close() error {
 	}
 }
 
-func (r *Reader) Ids() []string {
+func (r *Reader) IDs() []string {
 	return []string{
 		"pn532_uart",
 		"pn532_i2c",

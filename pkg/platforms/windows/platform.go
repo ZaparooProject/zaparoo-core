@@ -64,7 +64,7 @@ func (*Platform) Stop() error {
 	return nil
 }
 
-func (*Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ tokens.Token) error { //nolint:gocritic // unused parameter required by interface
 	return nil
 }
 
@@ -106,7 +106,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -122,11 +122,11 @@ func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) { //nolint:gocritic // unused parameter required by interface
 	return platforms.CmdResult{}, nil
 }
 
-func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) { //nolint:gocritic // unused parameter required by interface
 	return "", false
 }
 
