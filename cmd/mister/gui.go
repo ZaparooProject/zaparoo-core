@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023, 2024 Callan Barrett
@@ -18,8 +20,6 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-//go:build linux
-
 package main
 
 import (
@@ -30,9 +30,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
@@ -99,7 +99,7 @@ func tryAddStartup() error {
 	return nil
 }
 
-func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
+func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
 	return tui.BuildAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)

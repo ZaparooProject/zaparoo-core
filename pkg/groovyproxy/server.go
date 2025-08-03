@@ -97,7 +97,7 @@ func Start(
 	}()
 
 	freq, _ := time.ParseDuration(beaconInterval)
-	beaconTicker := time.NewTicker(time.Duration(freq))
+	beaconTicker := time.NewTicker(freq)
 	for {
 		select {
 		case <-beaconTicker.C:
