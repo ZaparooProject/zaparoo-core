@@ -115,9 +115,8 @@ func run() error {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			return fmt.Errorf("error migrating config: %w", err)
-		} else {
-			defaults = migrated
 		}
+		defaults = migrated
 	}
 
 	cfg := cli.Setup(
@@ -143,7 +142,7 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	fmt.Println("Zaparoo v" + config.AppVersion)
+	_, _ = fmt.Println("Zaparoo v" + config.AppVersion)
 
 	added, err := tryAddToStartup()
 	if err != nil {
@@ -151,28 +150,28 @@ func run() error {
 		return fmt.Errorf("error adding to startup: %w", err)
 	} else if added {
 		log.Info().Msg("added to startup")
-		fmt.Println("Added Zaparoo to MiSTeX startup.")
+		_, _ = fmt.Println("Added Zaparoo to MiSTeX startup.")
 	}
 
 	if !svc.Running() {
 		err := svc.Start()
-		fmt.Println("Zaparoo service not running, starting...")
+		_, _ = fmt.Println("Zaparoo service not running, starting...")
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			fmt.Println("Error starting Zaparoo service:", err)
+			_, _ = fmt.Println("Error starting Zaparoo service:", err)
 		} else {
 			log.Info().Msg("service started manually")
-			fmt.Println("Zaparoo service started.")
+			_, _ = fmt.Println("Zaparoo service started.")
 		}
 	} else {
-		fmt.Println("Zaparoo service is running.")
+		_, _ = fmt.Println("Zaparoo service is running.")
 	}
 
 	ip := helpers.GetLocalIP()
 	if ip == "" {
-		fmt.Println("Device address: Unknown")
+		_, _ = fmt.Println("Device address: Unknown")
 	} else {
-		fmt.Println("Device address:", ip)
+		_, _ = fmt.Println("Device address:", ip)
 	}
 
 	return nil
@@ -180,7 +179,7 @@ func run() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }

@@ -49,9 +49,12 @@ func GetTagUID(target nfc.Target) string {
 	var uid string
 	switch target.Modulation() {
 	case nfc.Modulation{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106}:
-		card := target.(*nfc.ISO14443aTarget)
-		ID := card.UID
-		uid = hex.EncodeToString(ID[:card.UIDLen])
+		card, ok := target.(*nfc.ISO14443aTarget)
+		if !ok {
+			return ""
+		}
+		id := card.UID
+		uid = hex.EncodeToString(id[:card.UIDLen])
 	default:
 		uid = ""
 	}
@@ -71,9 +74,11 @@ func comm(pnd nfc.Device, tx []byte, replySize int) ([]byte, error) {
 }
 
 func GetTagType(target nfc.Target) string {
-	switch target.Modulation() {
-	case nfc.Modulation{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106}:
-		card := target.(*nfc.ISO14443aTarget)
+	if target.Modulation() == (nfc.Modulation{Type: nfc.ISO14443a, BaudRate: nfc.Nbr106}) {
+		card, ok := target.(*nfc.ISO14443aTarget)
+		if !ok {
+			return ""
+		}
 		if card.Atqa == [2]byte{0x00, 0x04} && card.Sak == 0x08 {
 			// https://www.nxp.com/docs/en/application-note/AN10833.pdf page 9
 			return tokens.TypeMifare

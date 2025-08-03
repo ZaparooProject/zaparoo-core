@@ -49,7 +49,7 @@ const serviceFilePath = "/userdata/system/services/zaparoo_service"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -85,7 +85,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("error writing service file: %w", err)
 		}
-		fmt.Println("Zaparoo service installed successfully.")
+		_, _ = fmt.Println("Zaparoo service installed successfully.")
 		return nil
 	} else if *doUninstall {
 		if _, err := os.Stat(serviceFilePath); err == nil {
@@ -93,7 +93,7 @@ func run() error {
 			if err != nil {
 				return fmt.Errorf("error removing service file: %w", err)
 			}
-			fmt.Println("Zaparoo service uninstalled successfully.")
+			_, _ = fmt.Println("Zaparoo service uninstalled successfully.")
 			return nil
 		}
 	}

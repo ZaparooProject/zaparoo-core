@@ -22,9 +22,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
+	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	mm "github.com/wizzomafizzo/mrext/pkg/mister"
 )
@@ -38,11 +38,11 @@ type Platform struct {
 	gpd            linuxinput.Gamepad
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDMistex
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
@@ -147,7 +147,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(token tokens.Token) error {
+func (*Platform) ScanHook(token tokens.Token) error {
 	f, err := os.Create(mister.TokenReadFile)
 	if err != nil {
 		return fmt.Errorf("unable to create scan result file %s: %w", mister.TokenReadFile, err)
@@ -164,11 +164,11 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return append(cfg.IndexRoots(), games.GetGamesFolders(mister.UserConfigToMrext(cfg))...)
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    mister.DataDir,
 		ConfigDir:  mister.DataDir,
@@ -177,16 +177,16 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (*Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return mister.NormalizePath(cfg, path)
 }
 
 func LaunchMenu() error {
-	if _, err := os.Stat(mrextConfig.CmdInterface); err != nil {
+	if _, err := os.Stat(mrextconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	cmd, err := os.OpenFile(mrextConfig.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func LaunchMenu() error {
 	}()
 
 	// TODO: hardcoded for xilinx variant, should read pref from mister.ini
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(mrextConfig.SdFolder, "menu.bit")); err != nil {
+	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(mrextconfig.SdFolder, "menu.bit")); err != nil {
 		log.Warn().Err(err).Msg("failed to write to command")
 	}
 
@@ -212,10 +212,10 @@ func (p *Platform) StopActiveLauncher() error {
 	return err
 }
 
-func (p *Platform) GetActiveLauncher() string {
+func (*Platform) GetActiveLauncher() string {
 	core := mister.GetActiveCoreName()
 
-	if core == mrextConfig.MenuCore {
+	if core == mrextconfig.MenuCore {
 		return ""
 	}
 
@@ -241,7 +241,7 @@ func (p *Platform) ActiveSystem() string {
 }
 
 func (p *Platform) ActiveGame() string {
-	return p.tr.ActiveGameId
+	return p.tr.ActiveGameID
 }
 
 func (p *Platform) ActiveGameName() string {
@@ -252,7 +252,7 @@ func (p *Platform) ActiveGamePath() string {
 	return p.tr.ActiveGamePath
 }
 
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	system, err := games.LookupSystem(id)
 	if err != nil {
 		return err
@@ -296,12 +296,11 @@ func (p *Platform) GamepadPress(name string) error {
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := commandsMappings[env.Cmd.Name]; ok {
 		return f(p, env)
-	} else {
-		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 	}
+	return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
@@ -309,23 +308,23 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), mister.Launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	return nil, 0, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	return nil, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
 }

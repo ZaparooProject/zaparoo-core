@@ -140,13 +140,12 @@ func (r *Reader) Close() error {
 
 	if r.pnd == nil {
 		return nil
-	} else {
-		log.Debug().Msgf("closing device: %s", r.conn)
-		return r.pnd.Close()
 	}
+	log.Debug().Msgf("closing device: %s", r.conn)
+	return r.pnd.Close()
 }
 
-func (r *Reader) IDs() []string {
+func (*Reader) IDs() []string {
 	return []string{
 		"pn532_uart",
 		"pn532_i2c",
@@ -296,13 +295,13 @@ func detectSerialReaders(connected []string) string {
 			serialCacheMu.Lock()
 			serialBlockList = append(serialBlockList, device)
 			serialCacheMu.Unlock()
-		} else {
-			err := pnd.Close()
-			if err != nil {
-				log.Warn().Err(err).Msgf("error closing device: %s", device)
-			}
-			return connStr
+			continue
 		}
+		err = pnd.Close()
+		if err != nil {
+			log.Warn().Err(err).Msgf("error closing device: %s", device)
+		}
+		return connStr
 	}
 
 	return ""
@@ -364,17 +363,17 @@ func (r *Reader) pollDevice(
 		return activeToken, removed, nil
 	}
 
-	tagUid := tags.GetTagUID(target)
-	if tagUid == "" {
+	tagUID := tags.GetTagUID(target)
+	if tagUID == "" {
 		log.Warn().Msgf("unable to detect token ID: %s", target.String())
 	}
 
 	// no change in tag
-	if activeToken != nil && tagUid == activeToken.UID {
+	if activeToken != nil && tagUID == activeToken.UID {
 		return activeToken, removed, nil
 	}
 
-	log.Info().Msgf("found token ID: %s", tagUid)
+	log.Info().Msgf("found token ID: %s", tagUID)
 
 	var record tags.TagData
 	cardType := tags.GetTagType(target)
@@ -388,7 +387,7 @@ func (r *Reader) pollDevice(
 		}
 	case tokens.TypeMifare:
 		log.Info().Msg("MIFARE detected")
-		record, err = tags.ReadMifare(*pnd, tagUid)
+		record, err = tags.ReadMifare(*pnd, tagUID)
 		if err != nil {
 			log.Error().Msgf("error reading mifare: %s", err)
 		}
@@ -409,7 +408,7 @@ func (r *Reader) pollDevice(
 
 	card := &tokens.Token{
 		Type:     record.Type,
-		UID:      tagUid,
+		UID:      tagUID,
 		Text:     tagText,
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
@@ -430,10 +429,9 @@ func (r *Reader) writeTag(req WriteRequest) {
 		}
 		r.activeWriteMu.Unlock()
 		return
-	} else {
-		r.activeWrite = &req
-		r.activeWriteMu.Unlock()
 	}
+	r.activeWrite = &req
+	r.activeWriteMu.Unlock()
 	defer func() {
 		r.activeWriteMu.Lock()
 		r.activeWrite = nil
@@ -482,15 +480,15 @@ func (r *Reader) writeTag(req WriteRequest) {
 		return
 	}
 
-	cardUid := tags.GetTagUID(target)
-	log.Info().Msgf("found tag with ID: %s", cardUid)
+	cardUID := tags.GetTagUID(target)
+	log.Info().Msgf("found tag with ID: %s", cardUID)
 
 	cardType := tags.GetTagType(target)
 	var bytesWritten []byte
 
 	switch cardType {
 	case tokens.TypeMifare:
-		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUid)
+		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUID)
 		if err != nil {
 			log.Error().Msgf("error writing to mifare: %s", err)
 			req.Result <- WriteRequestResult{
@@ -524,8 +522,8 @@ func (r *Reader) writeTag(req WriteRequest) {
 		return
 	}
 
-	if t.UID != cardUid {
-		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUid)
+	if t.UID != cardUID {
+		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUID)
 		req.Result <- WriteRequestResult{
 			Err: errors.New("ID mismatch after write"),
 		}

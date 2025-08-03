@@ -28,7 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 	"github.com/wizzomafizzo/mrext/pkg/games"
 	"github.com/wizzomafizzo/mrext/pkg/mister"
@@ -92,11 +92,11 @@ func (p *Platform) SetDB(uidMap map[string]string, textMap map[string]string) {
 	p.textMap = textMap
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDMister
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
@@ -265,11 +265,11 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return append(cfg.IndexRoots(), games.GetGamesFolders(UserConfigToMrext(cfg))...)
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    DataDir,
 		ConfigDir:  DataDir,
@@ -278,7 +278,7 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (*Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return NormalizePath(cfg, path)
 }
 
@@ -302,7 +302,7 @@ func (p *Platform) PlayAudio(path string) error {
 	return exec.CommandContext(ctx, "aplay", path).Start()
 }
 
-func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	system, err := games.LookupSystem(id)
 	if err != nil {
 		return err
@@ -355,9 +355,8 @@ func (p *Platform) KeyboardPress(arg string) error {
 
 	if len(codes) == 1 {
 		return p.kbd.Press(codes[0])
-	} else {
-		return p.kbd.Combo(codes...)
 	}
+	return p.kbd.Combo(codes...)
 }
 
 func (p *Platform) GamepadPress(name string) error {
@@ -371,9 +370,8 @@ func (p *Platform) GamepadPress(name string) error {
 func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := p.cmdMappings[env.Cmd.Name]; ok {
 		return f(p, env)
-	} else {
-		return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 	}
+	return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 }
 
 func (p *Platform) LookupMapping(t tokens.Token) (string, bool) {
@@ -419,8 +417,8 @@ type Romsets struct {
 	Romsets []Romset `xml:"romset"`
 }
 
-func readRomsets(filepath string) ([]Romset, error) {
-	f, err := os.Open(filepath)
+func readRomsets(filePath string) ([]Romset, error) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -447,17 +445,16 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		SystemID:   systemdefs.SystemAmiga,
 		Folders:    []string{"Amiga"},
 		Extensions: []string{".adf"},
-		Test: func(cfg *config.Instance, path string) bool {
+		Test: func(_ *config.Instance, path string) bool {
 			if strings.Contains(path, aGamesPath) || strings.Contains(path, aDemosPath) {
 				return true
-			} else {
-				return false
 			}
+			return false
 		},
 		Launch: launch(systemdefs.SystemAmiga),
 		Scanner: func(
 			cfg *config.Instance,
-			systemId string,
+			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			log.Info().Msg("starting amigavision scan")
@@ -510,19 +507,19 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		SystemID:   systemdefs.SystemNeoGeo,
 		Folders:    []string{"NEOGEO"},
 		Extensions: []string{".neo"},
-		Test: func(cfg *config.Instance, path string) bool {
+		Test: func(_ *config.Instance, path string) bool {
 			if filepath.Ext(path) == ".zip" {
 				return true
-			} else if filepath.Ext(path) == "" {
-				return true
-			} else {
-				return false
 			}
+			if filepath.Ext(path) == "" {
+				return true
+			}
+			return false
 		},
 		Launch: launch(systemdefs.SystemNeoGeo),
 		Scanner: func(
 			cfg *config.Instance,
-			systemId string,
+			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			log.Info().Msg("starting neogeo scan")
@@ -601,7 +598,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 func (p *Platform) ShowNotice(
 	cfg *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
@@ -624,7 +621,7 @@ func (p *Platform) ShowNotice(
 
 func (p *Platform) ShowLoader(
 	cfg *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
@@ -647,7 +644,7 @@ func (p *Platform) ShowLoader(
 
 func (p *Platform) ShowPicker(
 	cfg *config.Instance,
-	args widgetModels.PickerArgs,
+	args widgetmodels.PickerArgs,
 ) error {
 	return showPicker(cfg, p, args)
 }

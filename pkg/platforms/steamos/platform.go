@@ -24,6 +24,7 @@ package steamos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,7 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
@@ -52,11 +53,11 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDSteamOS
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
@@ -65,7 +66,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	}
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (*Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
@@ -79,19 +80,19 @@ func (p *Platform) StartPost(
 	return nil
 }
 
-func (p *Platform) Stop() error {
+func (*Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
@@ -100,7 +101,7 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
+func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -109,12 +110,12 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
+func (*Platform) PlayAudio(_ string) error {
 	return nil
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
@@ -133,19 +134,19 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (*Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
 }
 
@@ -156,8 +157,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				cfg *config.Instance,
-				systemId string,
+				_ *config.Instance,
+				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
 				root := "/home/deck/.steam/steam/steamapps"
@@ -167,7 +168,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 				return append(results, appResults...), nil
 			},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
@@ -182,7 +183,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				return exec.CommandContext(context.Background(), "bash", "-c", path).Start()
 			},
 		},
@@ -191,23 +192,23 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	return nil, 0, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	return nil, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
 }

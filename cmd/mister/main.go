@@ -41,11 +41,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"github.com/rs/zerolog/log"
-	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func addToStartup() error {
-	var startup mrextMister.Startup
+	var startup mrextmister.Startup
 
 	err := startup.Load()
 	if err != nil {
@@ -83,7 +83,7 @@ func addToStartup() error {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }

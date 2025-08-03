@@ -26,7 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,11 +45,11 @@ type Platform struct {
 	gpd            linuxinput.Gamepad
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDBatocera
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
@@ -124,15 +124,15 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return append(cfg.IndexRoots(), "/userdata/roms")
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    DataDir,
 		ConfigDir:  ConfigDir,
@@ -218,13 +218,12 @@ func (p *Platform) StopActiveLauncher() error {
 		log.Info().Msg("stopped active launcher")
 		p.setActiveMedia(nil)
 		return nil
-	} else {
-		return fmt.Errorf("stop active launcher: failed to stop launcher")
 	}
+	return errors.New("stop active launcher: failed to stop launcher")
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
@@ -272,20 +271,22 @@ func (p *Platform) GamepadPress(name string) error {
 	return p.gpd.Press(code)
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
 	return "", false
+}
+
+type ESGame struct {
+	Name string `xml:"name"`
+	Path string `xml:"path"`
 }
 
 type ESGameList struct {
 	XMLName xml.Name `xml:"gameList"`
-	Games   []struct {
-		Name string `xml:"name"`
-		Path string `xml:"path"`
-	} `xml:"game"`
+	Games   []ESGame `xml:"game"`
 }
 
 func readESGameListXML(path string) (ESGameList, error) {
@@ -320,7 +321,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				return exec.CommandContext(context.Background(), path).Start()
 			},
 		},
@@ -337,7 +338,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       launcherID,
 			SystemID: v,
 			Folders:  []string{k},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				return apiLaunch(path)
 			},
 			Scanner: func(
@@ -396,23 +397,23 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	return nil, 0, apiNotify(args.Text)
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	return nil, apiNotify(args.Text)
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
 }

@@ -105,16 +105,16 @@ func apiRequest(
 		Params:  params,
 	}
 
-	reqJson, err := json.Marshal(req)
+	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	log.Debug().Msgf("request: %s", string(reqJson))
+	log.Debug().Msgf("request: %s", string(reqJSON))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, kodiURL, bytes.NewBuffer(reqJson))
+	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, kodiURL, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -187,26 +187,25 @@ func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
 
 func kodiLaunchTVRequest(cfg *config.Instance, path string) error {
 	var params KodiPlayerOpenParams
-	if strings.HasPrefix(path, SchemeKodiEpisode+"://") {
-		id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
-		id = strings.SplitN(id, "/", 2)[0]
-		intID, err := strconv.Atoi(id)
-		if err != nil {
-			return err
-		}
-		params = KodiPlayerOpenParams{
-			Item: KodiItem{
-				EpisodeID: intID,
-			},
-			Options: KodiItemOptions{
-				Resume: true,
-			},
-		}
-	} else {
+	if !strings.HasPrefix(path, SchemeKodiEpisode+"://") {
 		return fmt.Errorf("invalid path: %s", path)
 	}
+	id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
+	id = strings.SplitN(id, "/", 2)[0]
+	intID, err := strconv.Atoi(id)
+	if err != nil {
+		return err
+	}
+	params = KodiPlayerOpenParams{
+		Item: KodiItem{
+			EpisodeID: intID,
+		},
+		Options: KodiItemOptions{
+			Resume: true,
+		},
+	}
 
-	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
+	_, err = apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
 
 	return err
 }

@@ -5,6 +5,7 @@ package mister
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -103,11 +104,11 @@ func launch(systemID string) func(*config.Instance, string) error {
 }
 
 func launchSinden(
-	systemId string,
+	systemID string,
 	rbfName string,
 ) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
-		s, err := games.GetSystem(systemId)
+		s, err := games.GetSystem(systemID)
 		if err != nil {
 			return err
 		}
@@ -173,11 +174,11 @@ func launchAggGnw(cfg *config.Instance, path string) error {
 }
 
 func launchAltCore(
-	systemId string,
+	systemID string,
 	rbfPath string,
 ) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
-		s, err := games.GetSystem(systemId)
+		s, err := games.GetSystem(systemID)
 		if err != nil {
 			return err
 		}
@@ -297,11 +298,10 @@ func killCore(_ *config.Instance) error {
 func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 	return func(_ *config.Instance, path string) error {
 		if len(path) == 0 {
-			return fmt.Errorf("no path specified")
+			return errors.New("no path specified")
 		}
 
 		vt := "4"
-
 
 		// err := mister.LaunchMenu()
 		// if err != nil {
@@ -396,12 +396,12 @@ func killMPlayer(_ *config.Instance) error {
 		pid := fields[0]
 		log.Info().Msgf("killing mplayer process with PID: %s", pid)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		killCmd := exec.CommandContext(ctx, "kill", "-9", pid)
+		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid)
 		if err := killCmd.Run(); err != nil {
 			log.Error().Msgf("failed to kill process %s: %v", pid, err)
 		}
+		killCancel()
 	}
 
 	return nil
@@ -443,7 +443,7 @@ var Launchers = []platforms.Launcher{
 		Folders:    []string{"ATARI7800", "Atari2600"},
 		Extensions: []string{".a26"},
 		Launch:     launchAtari2600(),
-		Test: func(cfg *config.Instance, path string) bool {
+		Test: func(_ *config.Instance, path string) bool {
 			lowerPath := strings.ToLower(path)
 			// TODO: really, this should specifically check on the root dirs,
 			// 		 but we'd need to modify the test function to have access

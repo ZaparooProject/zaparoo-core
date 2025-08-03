@@ -61,7 +61,7 @@ func openConsole(pl platforms.Platform, vt string) error {
 	tty := ""
 	for {
 		if tries > 10 {
-			return fmt.Errorf("open console: could not switch to tty1")
+			return errors.New("open console: could not switch to tty1")
 		}
 		// switch to console
 		err := pl.KeyboardPress("{f9}")
@@ -174,13 +174,12 @@ cd $(dirname "%s")
 	)
 
 	exit := func() {
-		if pl.activeMedia() == nil {
-			// exit console
-			err = pl.KeyboardPress("{f12}")
-			if err != nil {
-				return
-			}
-		} else {
+		if pl.activeMedia() != nil {
+			return
+		}
+		// exit console
+		err = pl.KeyboardPress("{f12}")
+		if err != nil {
 			return
 		}
 	}

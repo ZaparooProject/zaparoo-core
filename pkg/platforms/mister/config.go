@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
+	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
 	TokenReadFile      = "/tmp/TOKENREAD"
 	DataDir            = SDRootDir + "/zaparoo"
-	ArcadeDbUrl        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
+	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
 	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
@@ -49,7 +49,7 @@ func MainHasFeature(feature string) bool {
 	return false
 }
 
-func UserConfigToMrext(cfg *config.Instance) *mrextConfig.UserConfig {
+func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
 	var setCore []string
 	for _, v := range cfg.SystemDefaults() {
 		if v.Launcher == "" {
@@ -57,8 +57,8 @@ func UserConfigToMrext(cfg *config.Instance) *mrextConfig.UserConfig {
 		}
 		setCore = append(setCore, v.System+":"+v.Launcher)
 	}
-	return &mrextConfig.UserConfig{
-		Systems: mrextConfig.SystemsConfig{
+	return &mrextconfig.UserConfig{
+		Systems: mrextconfig.SystemsConfig{
 			GamesFolder: cfg.IndexRoots(),
 			SetCore:     setCore,
 		},

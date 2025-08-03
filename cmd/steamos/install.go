@@ -41,7 +41,8 @@ func install() error {
 		serviceFile = strings.ReplaceAll(serviceFile, "%%EXEC%%", exe)
 		serviceFile = strings.ReplaceAll(serviceFile, "%%WORKING%%", filepath.Dir(exe))
 
-		err = os.WriteFile(servicePath, []byte(serviceFile), 0o644) //nolint:gosec // System service file needs to be readable
+		//nolint:gosec // System service file needs to be readable
+		err = os.WriteFile(servicePath, []byte(serviceFile), 0o644)
 		if err != nil {
 			return err
 		}
@@ -77,7 +78,8 @@ func install() error {
 
 	// install modprobe blacklist
 	if _, err := os.Stat(modprobePath); os.IsNotExist(err) {
-		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644) //nolint:gosec // modprobe config needs to be readable by system
+		//nolint:gosec // modprobe config needs to be readable by system
+		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644)
 		if err != nil {
 			return err
 		}

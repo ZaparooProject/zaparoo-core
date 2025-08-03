@@ -9,17 +9,17 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog/log"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
+	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
 	"github.com/wizzomafizzo/mrext/pkg/games"
-	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func ExitGame() {
-	_ = mrextMister.LaunchMenu()
+	_ = mrextmister.LaunchMenu()
 }
 
 func GetActiveCoreName() string {
-	coreName, err := mrextMister.GetActiveCoreName()
+	coreName, err := mrextmister.GetActiveCoreName()
 	if err != nil {
 		log.Error().Msgf("error trying to get the core name: %s", err)
 	}
@@ -33,7 +33,7 @@ func NormalizePath(cfg *config.Instance, path string) string {
 	}
 
 	var match string
-	for _, parent := range mrextConfig.GamesFolders {
+	for _, parent := range mrextconfig.GamesFolders {
 		if strings.HasPrefix(path, parent) {
 			match = path[len(parent):]
 			break
@@ -55,12 +55,12 @@ func NormalizePath(cfg *config.Instance, path string) string {
 }
 
 func RunDevCmd(cmd string, args string) error {
-	_, err := os.Stat(mrextConfig.CmdInterface)
+	_, err := os.Stat(mrextconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	dev, err := os.OpenFile(mrextConfig.CmdInterface, os.O_RDWR, 0)
+	dev, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

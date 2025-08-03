@@ -40,7 +40,7 @@ const (
 )
 
 // buildMifareAuthCommand returns a command to authenticate against a block
-func buildMifareAuthCommand(block byte, cardUid string) []byte {
+func buildMifareAuthCommand(block byte, cardUID string) []byte {
 	command := []byte{
 		// Auth using key A
 		0x60, block,
@@ -48,12 +48,12 @@ func buildMifareAuthCommand(block byte, cardUid string) []byte {
 		0xd3, 0xf7, 0xd3, 0xf7, 0xd3, 0xf7,
 	}
 	// And finally append the tag UID to the end
-	uidBytes, _ := hex.DecodeString(cardUid)
+	uidBytes, _ := hex.DecodeString(cardUID)
 	return append(command, uidBytes...)
 }
 
 // ReadMifare reads data from all blocks in sectors 1-15
-func ReadMifare(pnd nfc.Device, cardUid string) (TagData, error) {
+func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 	permissionSectors := []int{4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60}
 	var allBlocks []byte
 	for block := 0; block < 64; block++ {
@@ -73,7 +73,7 @@ func ReadMifare(pnd nfc.Device, cardUid string) (TagData, error) {
 		// We need to authenticate before any read/ write operations can be performed
 		// Only need to authenticate once per sector
 		if block%4 == 0 {
-			_, err := comm(pnd, buildMifareAuthCommand(byte(block), cardUid), 2)
+			_, err := comm(pnd, buildMifareAuthCommand(byte(block), cardUID), 2)
 			if err != nil {
 				log.Warn().Err(err).Msg("authenticating sector error")
 			}
@@ -92,7 +92,6 @@ func ReadMifare(pnd nfc.Device, cardUid string) (TagData, error) {
 			// This should make things "load" quicker
 			break
 		}
-
 	}
 
 	return TagData{
@@ -107,7 +106,7 @@ func getMifareCapacityInBytes() int {
 }
 
 // WriteMifare writes the given text string to a Mifare card starting from sector, skipping any trailer blocks
-func WriteMifare(pnd nfc.Device, text string, cardUid string) ([]byte, error) {
+func WriteMifare(pnd nfc.Device, text string, cardUID string) ([]byte, error) {
 	payload, err := BuildMessage(text)
 	if err != nil {
 		return nil, err
@@ -133,7 +132,7 @@ func WriteMifare(pnd nfc.Device, text string, cardUid string) ([]byte, error) {
 			blockToWrite := (sector * 4) + sectorIndex
 			if sectorIndex == 0 {
 				// We changed sectors, time to authenticate
-				_, err := comm(pnd, buildMifareAuthCommand(byte(blockToWrite), cardUid), 2)
+				_, err := comm(pnd, buildMifareAuthCommand(byte(blockToWrite), cardUID), 2)
 				if err != nil {
 					return nil, err
 				}

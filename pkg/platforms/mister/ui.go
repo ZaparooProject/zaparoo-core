@@ -16,17 +16,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
 func preNoticeTime() time.Duration {
 	if MainHasFeature(MainFeatureNotice) {
 		return 3 * time.Second
-	} else {
-		// accounting for the time it takes to boot up the console
-		return 5 * time.Second
 	}
+	// accounting for the time it takes to boot up the console
+	return 5 * time.Second
 }
 
 func showNotice(
@@ -36,10 +35,10 @@ func showNotice(
 	loader bool,
 ) (string, error) {
 	log.Info().Msgf("showing notice: %s", text)
-	argsId := helpers.RandSeq(10)
-	argsName := "notice-" + argsId + ".json"
+	argsID := helpers.RandSeq(10)
+	argsName := "notice-" + argsID + ".json"
 	if loader {
-		argsName = "loader-" + argsId + ".json"
+		argsName = "loader-" + argsID + ".json"
 	}
 	argsPath := filepath.Join(pl.Settings().TempDir, argsName)
 	completePath := argsPath + ".complete"
@@ -52,15 +51,15 @@ func showNotice(
 	} else {
 		log.Debug().Msg("launching script notice")
 		// fall back on script
-		args := widgetModels.NoticeArgs{
+		args := widgetmodels.NoticeArgs{
 			Text:     text,
 			Complete: completePath,
 		}
-		argsJson, err := json.Marshal(args)
+		argsJSON, err := json.Marshal(args)
 		if err != nil {
 			return "", fmt.Errorf("error marshalling notice args: %w", err)
 		}
-		err = os.WriteFile(argsPath, argsJson, 0o644)
+		err = os.WriteFile(argsPath, argsJSON, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("error writing notice args: %w", err)
 		}
@@ -99,7 +98,7 @@ func hideNotice(argsPath string) error {
 	return nil
 }
 
-func misterSetupMainPicker(args widgetModels.PickerArgs) error {
+func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 	// remove existing items
 	files, err := os.ReadDir(MainPickerDir)
 	if err != nil {
@@ -148,25 +147,24 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 func showPicker(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	args widgetModels.PickerArgs,
+	args widgetmodels.PickerArgs,
 ) error {
 	// use custom main ui if available
 	if MainHasFeature(MainFeaturePicker) {
 		err := misterSetupMainPicker(args)
 		if err != nil {
 			return err
-		} else {
-			return nil
 		}
+		return nil
 	}
 
 	// fall back to launching script menu
 	argsPath := filepath.Join(pl.Settings().TempDir, "picker.json")
-	argsJson, err := json.Marshal(args)
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(argsPath, argsJson, 0o644)
+	err = os.WriteFile(argsPath, argsJSON, 0o644)
 	if err != nil {
 		return err
 	}

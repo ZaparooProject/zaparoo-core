@@ -21,21 +21,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type GithubLinks struct {
+	Self string `json:"self"`
+	Git  string `json:"git"`
+	HTML string `json:"html"`
+}
+
 type GithubContentsItem struct {
-	Links struct {
-		Self string `json:"self"`
-		Git  string `json:"git"`
-		Html string `json:"html"`
-	} `json:"_links"`
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Sha         string `json:"sha"`
-	Url         string `json:"url"`
-	HtmlUrl     string `json:"html_url"`
-	GitUrl      string `json:"git_url"`
-	DownloadUrl string `json:"download_url"`
-	Type        string `json:"type"`
-	Size        int    `json:"size"`
+	Links       GithubLinks `json:"_links"`
+	Name        string      `json:"name"`
+	Path        string      `json:"path"`
+	Sha         string      `json:"sha"`
+	URL         string      `json:"url"`
+	HTMLURL     string      `json:"html_url"`
+	GitURL      string      `json:"git_url"`
+	DownloadURL string      `json:"download_url"`
+	Type        string      `json:"type"`
+	Size        int         `json:"size"`
 }
 
 type ArcadeDbEntry struct {
@@ -83,7 +85,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 	header := fmt.Sprintf("blob %d\x00", size)
 
 	hasher := sha1.New()
-	hasher.Write([]byte(header))
+	_, _ = hasher.Write([]byte(header))
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", err
 	}
@@ -99,7 +101,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbUrl, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, nil)
 	if err != nil {
 		return false, err
 	}
@@ -141,7 +143,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadUrl, nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, nil)
 	if err != nil {
 		return false, err
 	}

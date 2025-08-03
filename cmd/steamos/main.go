@@ -25,6 +25,7 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,7 +48,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -68,7 +69,7 @@ func run() error {
 	uid := os.Getuid()
 	if *doInstall {
 		if uid != 0 {
-			return fmt.Errorf("install must be run as root")
+			return errors.New("install must be run as root")
 		}
 		err := install()
 		if err != nil {
@@ -77,7 +78,7 @@ func run() error {
 		return nil
 	} else if *doUninstall {
 		if uid != 0 {
-			return fmt.Errorf("uninstall must be run as root")
+			return errors.New("uninstall must be run as root")
 		}
 		err := uninstall()
 		if err != nil {
@@ -87,7 +88,7 @@ func run() error {
 	}
 
 	if uid == 0 {
-		return fmt.Errorf("service must not be run as root")
+		return errors.New("service must not be run as root")
 	}
 
 	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o755)
@@ -101,9 +102,8 @@ func run() error {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			return fmt.Errorf("error migrating config: %w", err)
-		} else {
-			defaults = migrated
 		}
+		defaults = migrated
 	}
 
 	cfg := cli.Setup(

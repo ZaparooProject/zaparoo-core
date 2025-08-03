@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,7 +50,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -71,21 +72,19 @@ func run() error {
 	if *doInstall {
 		err := installer.CLIInstall()
 		if err != nil {
-			return fmt.Errorf("installation failed")
-		} else {
-			return nil
+			return errors.New("installation failed")
 		}
+		return nil
 	} else if *doUninstall {
 		err := installer.CLIUninstall()
 		if err != nil {
-			return fmt.Errorf("uninstallation failed")
-		} else {
-			return nil
+			return errors.New("uninstallation failed")
 		}
+		return nil
 	}
 
 	if os.Geteuid() == 0 {
-		return fmt.Errorf("zaparoo must not be run as root")
+		return errors.New("zaparoo must not be run as root")
 	}
 
 	// only difference with daemon mode right now is no log pretty printing
