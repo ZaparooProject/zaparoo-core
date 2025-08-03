@@ -68,7 +68,7 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		env.State.SetWroteToken(t)
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 //nolint:gocritic // single-use parameter in API handler
@@ -88,5 +88,5 @@ func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
 
 	reader.CancelWrite()
 
-	return nil, nil
+	return NoContent{}, nil
 }

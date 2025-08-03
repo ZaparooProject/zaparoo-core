@@ -145,7 +145,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		return nil, err
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 //nolint:gocritic // single-use parameter in API handler
@@ -167,7 +167,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
@@ -264,7 +264,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		return nil, err
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 //nolint:gocritic // single-use parameter in API handler
@@ -278,5 +278,5 @@ func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading mappings")
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }

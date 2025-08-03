@@ -44,6 +44,8 @@ var (
 	ErrNotAllowed    = errors.New("not allowed")
 )
 
+type NoContent struct{}
+
 func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received run request")
 
@@ -115,7 +117,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	env.State.SetActiveCard(t)
 	env.TokenQueue <- t
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 func isLocalRequest(r *http.Request) bool {

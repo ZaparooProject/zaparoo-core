@@ -73,7 +73,7 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading custom launchers")
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 //nolint:gocritic // single-use parameter in API handler

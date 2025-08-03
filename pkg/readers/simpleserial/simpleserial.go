@@ -58,16 +58,16 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	line = strings.Trim(line, "\r")
 
 	if line == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means empty line, not an error
 	}
 
 	if !strings.HasPrefix(line, "SCAN\t") {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means invalid format, not an error
 	}
 
 	args := line[5:]
 	if args == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no args, not an error
 	}
 
 	t := tokens.Token{

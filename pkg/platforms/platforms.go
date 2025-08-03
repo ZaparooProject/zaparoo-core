@@ -20,6 +20,7 @@
 package platforms
 
 import (
+	"errors"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -31,6 +32,8 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 )
+
+var ErrNotSupported = errors.New("operation not supported on this platform")
 
 const (
 	PlatformIDBatocera  = "batocera"

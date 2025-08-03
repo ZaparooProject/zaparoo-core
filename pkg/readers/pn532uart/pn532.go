@@ -381,14 +381,14 @@ func InListPassiveTarget(port serial.Port) (*Target, error) {
 	switch {
 	case errors.Is(err, ErrNoFrameFound):
 		// no tag detected
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no target detected
 	case err != nil:
 		return nil, err
 	case len(res) < 2 || res[0] != 0x4B:
 		return nil, errors.New("unexpected passive target response")
 	case res[1] != 0x01:
 		// no tag detected
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no target detected
 	}
 
 	uidLen := res[6]

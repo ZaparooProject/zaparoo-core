@@ -370,7 +370,7 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	if len(env.Params) == 0 {
 		log.Info().Msg("clearing active media")
 		env.State.SetActiveMedia(nil)
-		return nil, nil
+		return NoContent{}, nil
 	}
 
 	var params models.UpdateActiveMediaParams
@@ -397,7 +397,7 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	env.State.SetActiveMedia(&activeMedia)
-	return nil, nil
+	return NoContent{}, nil
 }
 
 func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
@@ -405,7 +405,7 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	media := env.State.ActiveMedia()
 	if media == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
 	return models.ActiveMedia{

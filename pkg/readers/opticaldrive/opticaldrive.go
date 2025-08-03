@@ -210,7 +210,7 @@ func (r *FileReader) Info() string {
 }
 
 func (*FileReader) Write(_ string) (*tokens.Token, error) {
-	return nil, nil
+	return nil, errors.New("writing not supported on this reader")
 }
 
 func (*FileReader) CancelWrite() {
