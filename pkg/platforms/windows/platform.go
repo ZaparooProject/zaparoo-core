@@ -526,7 +526,7 @@ func (*Platform) ShowNotice(
 	_ *config.Instance,
 	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, nil
+	return nil, 0, platforms.ErrNotSupported
 }
 
 func (*Platform) ShowLoader(
@@ -540,5 +540,5 @@ func (*Platform) ShowPicker(
 	_ *config.Instance,
 	_ widgetmodels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }

@@ -413,5 +413,5 @@ func (p *Platform) ShowPicker(
 	_ *config.Instance,
 	_ widgetModels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }

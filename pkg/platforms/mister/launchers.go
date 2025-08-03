@@ -374,7 +374,7 @@ func killMPlayer(_ *config.Instance) error {
 	output, err := psCmd.Output()
 	if err != nil {
 		log.Info().Msgf("mplayer processes not detected.")
-		return nil
+		return err
 	}
 
 	lines := strings.Split(string(output), "\n")

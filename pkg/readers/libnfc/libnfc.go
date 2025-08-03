@@ -30,6 +30,8 @@ const (
 	autoConnStr        = "libnfc_auto:"
 )
 
+var ErrWriteCancelled = errors.New("write operation was cancelled")
+
 type WriteRequestResult struct {
 	Token     *tokens.Token
 	Err       error
@@ -208,7 +210,7 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 
 	res := <-req.Result
 	if res.Cancelled {
-		return nil, nil
+		return nil, ErrWriteCancelled
 	} else if res.Err != nil {
 		log.Error().Msgf("error writing to tag: %s", res.Err)
 		return nil, res.Err

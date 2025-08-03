@@ -310,19 +310,19 @@ func (p *Platform) ShowNotice(
 	_ *config.Instance,
 	_ widgetModels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, nil
+	return nil, 0, platforms.ErrNotSupported
 }
 
 func (p *Platform) ShowLoader(
 	_ *config.Instance,
 	_ widgetModels.NoticeArgs,
 ) (func() error, error) {
-	return nil, nil
+	return nil, platforms.ErrNotSupported
 }
 
 func (p *Platform) ShowPicker(
 	_ *config.Instance,
 	_ widgetModels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }
