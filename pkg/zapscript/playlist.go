@@ -47,6 +47,7 @@ type ArgPlaylist struct {
 }
 
 func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
+	//nolint:gosec // Safe: reads playlist files for media management
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

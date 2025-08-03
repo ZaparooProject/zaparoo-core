@@ -16,6 +16,7 @@ func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocriti
 
 	logFilePath := filepath.Join(env.Platform.Settings().TempDir, config.LogFile)
 
+	//nolint:gosec // Safe: reads log files from controlled application directories
 	data, err := os.ReadFile(logFilePath)
 	if err != nil {
 		log.Error().Err(err).Str("path", logFilePath).Msg("failed to read log file")

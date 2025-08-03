@@ -79,7 +79,7 @@ TitleB=Song 1`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plsFile := filepath.Join(t.TempDir(), "test.pls")
-			err := os.WriteFile(plsFile, []byte(tt.plsContent), 0o644)
+			err := os.WriteFile(plsFile, []byte(tt.plsContent), 0o600)
 			assert.NoError(t, err)
 
 			media, err := readPlsFile(plsFile)

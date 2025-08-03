@@ -446,6 +446,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return results, nil
 				}
 
+				//nolint:gosec // Safe: reads game database XML files from controlled directories
 				xmlFile, err := os.Open(xmlPath)
 				if err != nil {
 					return results, err

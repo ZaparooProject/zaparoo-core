@@ -561,6 +561,7 @@ func sqlSearchMediaPathExact(
 	}
 	args = append(args, slug, path)
 
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,
@@ -640,6 +641,7 @@ func sqlSearchMediaPathParts(
 		args = append(args, "%"+p+"%")
 	}
 
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,

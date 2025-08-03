@@ -61,6 +61,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	for _, mapPath := range mapFiles {
 		log.Debug().Msgf("loading mapping file: %s", mapPath)
 
+		//nolint:gosec // Safe: reads mapping config files from controlled application directories
 		data, err := os.ReadFile(mapPath)
 		if err != nil {
 			log.Error().Msgf("error reading mapping file: %s", mapPath)

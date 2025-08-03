@@ -77,6 +77,7 @@ func generateSetupFile(
 	data InnoSetupData,
 	arch string,
 ) error {
+	//nolint:gosec // Safe: creates installer script in build environment with controlled path
 	outFile, err := os.Create("_build/windows_" + arch + "/setup.iss")
 	if err != nil {
 		return fmt.Errorf("error creating output file: %w", err)

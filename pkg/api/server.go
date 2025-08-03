@@ -594,8 +594,9 @@ func Start(
 	})
 
 	server := &http.Server{
-		Addr:    ":" + strconv.Itoa(cfg.APIPort()),
-		Handler: r,
+		Addr:              ":" + strconv.Itoa(cfg.APIPort()),
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	serverDone := make(chan error, 1)

@@ -97,6 +97,7 @@ func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 	for _, launcherPath := range launcherFiles {
 		log.Debug().Msgf("loading custom launcher: %s", launcherPath)
 
+		//nolint:gosec // Safe: reads launcher config files from controlled application directories
 		data, err := os.ReadFile(launcherPath)
 		if err != nil {
 			log.Error().Msgf("error reading custom launcher: %s", launcherPath)

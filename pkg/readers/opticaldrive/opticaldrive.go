@@ -94,6 +94,12 @@ func (r *FileReader) Open(
 		for r.polling {
 			time.Sleep(1 * time.Second)
 
+			// Validate device path to prevent command injection
+			if !strings.HasPrefix(r.path, "/dev/") {
+				log.Error().Str("path", r.path).Msg("invalid optical drive device path")
+				continue
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
 			cancel()

@@ -14,7 +14,7 @@ import (
 )
 
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
-	err := os.MkdirAll(pl.Settings().TempDir, 0o755)
+	err := os.MkdirAll(pl.Settings().TempDir, 0o750)
 	if err != nil {
 		return err
 	}

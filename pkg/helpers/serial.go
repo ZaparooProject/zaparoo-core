@@ -50,6 +50,12 @@ func ignoreSerialDevice(path string) bool {
 		return false
 	}
 
+	// Validate device path to prevent command injection
+	if !strings.HasPrefix(path, "/dev/") {
+		log.Error().Str("path", path).Msg("invalid device path")
+		return false
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)

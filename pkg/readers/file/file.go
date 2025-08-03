@@ -56,6 +56,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 	if _, err := os.Stat(path); err != nil {
 		// attempt to create empty file
+		//nolint:gosec // Safe: creates file reader token files in controlled directories
 		f, err := os.Create(path)
 		if err != nil {
 			return err

@@ -55,7 +55,7 @@ func createPIDFile(pl platforms.Platform) error {
 		return errors.New("PID file already exists")
 	}
 	pid := os.Getpid()
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o644)
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600)
 }
 
 func removePIDFile(pl platforms.Platform) error {
@@ -81,6 +81,7 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	}
 
 	pid := 0
+	//nolint:gosec // Safe: reads PID files for process management
 	pidBytes, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
@@ -144,6 +145,7 @@ func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actual
 func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {
 	var noticeArgs widgetmodels.NoticeArgs
 
+	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err
@@ -273,6 +275,7 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 }
 
 func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
+	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
 		return nil, err

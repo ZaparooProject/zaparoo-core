@@ -24,11 +24,12 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -45,7 +46,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 func TokensEqual(a, b *tokens.Token) bool {
 	if a == nil && b == nil {
@@ -58,10 +58,12 @@ func TokensEqual(a, b *tokens.Token) bool {
 }
 
 func GetMd5Hash(path string) (string, error) {
+	//nolint:gosec // Safe: opens files for MD5 hashing, used for game file identification
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
+	//nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
 	hash := md5.New()
 	_, _ = io.Copy(hash, file)
 	_ = file.Close()
@@ -69,6 +71,7 @@ func GetMd5Hash(path string) (string, error) {
 }
 
 func GetFileSize(path string) (int64, error) {
+	//nolint:gosec // Safe: opens files to get file size, used for game file analysis
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -185,11 +188,16 @@ func RandomElem[T any](xs []T) (T, error) {
 	if len(xs) == 0 {
 		return item, errors.New("empty slice")
 	}
-	item = xs[r.Intn(len(xs))]
+	randInt, err := rand.Int(rand.Reader, big.NewInt(int64(len(xs))))
+	if err != nil {
+		return item, fmt.Errorf("failed to generate random number: %w", err)
+	}
+	item = xs[randInt.Int64()]
 	return item, nil
 }
 
 func CopyFile(sourcePath, destPath string) error {
+	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
 		return err
@@ -198,6 +206,7 @@ func CopyFile(sourcePath, destPath string) error {
 		_ = inputFile.Close()
 	}(inputFile)
 
+	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	outputFile, err := os.Create(destPath)
 	if err != nil {
 		return err
@@ -222,7 +231,13 @@ var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 func RandSeq(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		randInt, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			// Fallback to timestamp-based selection if crypto/rand fails
+			b[i] = letters[int(time.Now().UnixNano())%len(letters)]
+		} else {
+			b[i] = letters[randInt.Int64()]
+		}
 	}
 	return string(b)
 }

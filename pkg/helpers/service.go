@@ -37,7 +37,7 @@ type ServiceArgs struct {
 }
 
 func NewService(args ServiceArgs) (*Service, error) {
-	err := os.MkdirAll(args.Platform.Settings().TempDir, 0o755)
+	err := os.MkdirAll(args.Platform.Settings().TempDir, 0o750)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func NewService(args ServiceArgs) (*Service, error) {
 func (s *Service) createPidFile() error {
 	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
-	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0o644)
+	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0o600)
 	if err != nil {
 		return err
 	}
@@ -74,6 +74,7 @@ func (s *Service) Pid() (int, error) {
 	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 
 	if _, err := os.Stat(path); err == nil {
+		//nolint:gosec // Safe: reads PID files for service management
 		pidFile, err := os.ReadFile(path)
 		if err != nil {
 			return pid, fmt.Errorf("error reading pid file: %w", err)
@@ -228,7 +229,8 @@ func (s *Service) Start() error {
 	}
 
 	tempPath := filepath.Join(s.pl.Settings().TempDir, filepath.Base(binPath))
-	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o755)
+	//nolint:gosec // Safe: creates temporary binary file for service restart in controlled directory
+	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("error creating temp binary: %w", err)
 	}
@@ -249,6 +251,7 @@ func (s *Service) Start() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	//nolint:gosec // Safe: executes copy of current binary for service restart
 	cmd := exec.CommandContext(ctx, tempPath, "-service", "exec", "&")
 	env := os.Environ()
 	cmd.Env = env

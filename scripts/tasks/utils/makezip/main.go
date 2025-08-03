@@ -80,7 +80,7 @@ func downloadDoc(platformID, toDir string) error {
 		processedContent = stripFrontmatter(processedContent)
 	}
 
-	return os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0o600)
 }
 
 func main() {
@@ -110,7 +110,7 @@ func main() {
 			_, _ = fmt.Printf("Error reading LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
-		err = os.WriteFile(licensePath, input, 0o644)
+		err = os.WriteFile(licensePath, input, 0o600)
 		if err != nil {
 			_, _ = fmt.Printf("Error copying LICENSE file: %v\n", err)
 			os.Exit(1)
@@ -141,6 +141,7 @@ func main() {
 }
 
 func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir string) error {
+	//nolint:gosec // Safe: creates zip files in build script with controlled paths
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
 		return fmt.Errorf("error creating zip file: %w", err)
@@ -193,6 +194,7 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 }
 
 func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
+	//nolint:gosec // Safe: opens files in build script with controlled paths
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -235,7 +237,7 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
-			if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 				return err
 			}
 
@@ -250,9 +252,10 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 }
 
 func copyFile(src, dst string) error {
+	//nolint:gosec // Safe: reads files in build script with controlled paths
 	input, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, input, 0o644)
+	return os.WriteFile(dst, input, 0o600)
 }

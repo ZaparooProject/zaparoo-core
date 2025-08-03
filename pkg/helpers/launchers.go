@@ -87,9 +87,11 @@ func ParseCustomLaunchers(
 				ctx := context.Background()
 
 				if runtime.GOOS == "windows" {
+					//nolint:gosec // Intentional: executes user-configured game launcher commands
 					cmd := exec.CommandContext(ctx, "cmd", "/c", output)
 					err = cmd.Start()
 				} else {
+					//nolint:gosec // Intentional: executes user-configured game launcher commands
 					cmd := exec.CommandContext(ctx, "sh", "-c", output)
 					err = cmd.Start()
 				}

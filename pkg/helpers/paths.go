@@ -140,6 +140,7 @@ func ExeDir() string {
 func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 
+	//nolint:gosec // Safe: reads Steam config files for game library scanning
 	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
 	if err != nil {
 		log.Error().Err(err).Msg("error opening libraryfolders.vdf")
@@ -187,6 +188,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		for _, mf := range manifestFiles {
 			log.Debug().Msgf("manifest file: %s", mf)
 
+			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
 			af, err := os.Open(mf)
 			if err != nil {
 				log.Error().Err(err).Msgf("error opening manifest: %s", mf)

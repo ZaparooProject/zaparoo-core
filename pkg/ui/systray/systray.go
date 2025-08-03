@@ -130,6 +130,7 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
+					//nolint:gosec // Safe: opens file manager to internal data directory
 					err := exec.CommandContext(context.Background(), openCmd, helpers.DataDir(pl)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")

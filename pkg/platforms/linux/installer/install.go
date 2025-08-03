@@ -58,7 +58,7 @@ func Install() error {
 	if _, err := os.Stat(filepath.Dir(udevPath)); os.IsNotExist(err) {
 		return errors.New("udev rules directory does not exist")
 	} else if _, err := os.Stat(udevPath); os.IsNotExist(err) {
-		err = os.WriteFile(udevPath, []byte(udevFile), 0o644)
+		err = os.WriteFile(udevPath, []byte(udevFile), 0o644) //nolint:gosec // udev rules need to be readable by system
 		if err != nil {
 			return fmt.Errorf("error creating udev rules: %w", err)
 		}
@@ -73,7 +73,7 @@ func Install() error {
 	if _, err := os.Stat(filepath.Dir(modprobePath)); os.IsNotExist(err) {
 		return errors.New("modprobe directory does not exist")
 	} else if _, err := os.Stat(modprobePath); os.IsNotExist(err) {
-		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644)
+		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644) //nolint:gosec // modprobe config needs to be readable by system
 		if err != nil {
 			return fmt.Errorf("error creating modprobe blacklist: %w", err)
 		}

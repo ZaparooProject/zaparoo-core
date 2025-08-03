@@ -59,7 +59,7 @@ func setupEnvironment(pl platforms.Platform) error {
 		filepath.Join(helpers.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0o755)
+		err := os.MkdirAll(dir, 0o750)
 		if err != nil {
 			return err
 		}
@@ -72,6 +72,7 @@ func setupEnvironment(pl platforms.Platform) error {
 	)
 	if _, err := os.Stat(successSoundPath); err != nil {
 		// copy success sound to temp
+		//nolint:gosec // Safe: creates audio files in controlled application directories
 		sf, err := os.Create(successSoundPath)
 		if err != nil {
 			log.Error().Msgf("error creating success sound file: %s", err)
@@ -90,6 +91,7 @@ func setupEnvironment(pl platforms.Platform) error {
 	)
 	if _, err := os.Stat(failSoundPath); err != nil {
 		// copy fail sound to temp
+		//nolint:gosec // Safe: creates audio files in controlled application directories
 		ff, err := os.Create(failSoundPath)
 		if err != nil {
 			log.Error().Msgf("error creating fail sound file: %s", err)

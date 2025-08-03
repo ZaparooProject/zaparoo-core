@@ -126,7 +126,7 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		log.Info().Msg("saving new default config to disk")
 
-		err := os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+		err := os.MkdirAll(filepath.Dir(cfgPath), 0o750)
 		if err != nil {
 			return nil, err
 		}
@@ -276,7 +276,7 @@ func (c *Instance) Save() error {
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	return os.WriteFile(c.cfgPath, data, 0o644)
+	return os.WriteFile(c.cfgPath, data, 0o600)
 }
 
 func (c *Instance) AudioFeedback() bool {
