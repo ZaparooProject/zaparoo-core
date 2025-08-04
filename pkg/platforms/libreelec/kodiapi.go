@@ -128,8 +128,8 @@ func apiRequest(
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
 		}
 	}()
 

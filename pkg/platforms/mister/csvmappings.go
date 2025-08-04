@@ -45,7 +45,7 @@ func LoadCsvMappings() (uids, texts map[string]string, err error) {
 	uids = make(map[string]string)
 	texts = make(map[string]string)
 
-	if _, err := os.Stat(LegacyMappingsPath); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Stat(LegacyMappingsPath); errors.Is(statErr, os.ErrNotExist) {
 		log.Debug().Msg("no legacy mappings file found, skipping processing")
 		return nil, nil, nil
 	}

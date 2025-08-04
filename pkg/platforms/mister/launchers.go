@@ -336,9 +336,9 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 		cmd.Stderr = os.Stderr
 
 		restore := func() {
-			err := mister.LaunchMenu()
-			if err != nil {
-				log.Warn().Err(err).Msg("error launching menu")
+			menuErr := mister.LaunchMenu()
+			if menuErr != nil {
+				log.Warn().Err(menuErr).Msg("error launching menu")
 			}
 
 			err = restoreConsole(vt)

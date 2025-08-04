@@ -262,8 +262,8 @@ func detectSerialReaders(connected []string) string {
 		symPath, err := os.Readlink(device)
 		if err == nil {
 			parent := filepath.Dir(device)
-			abs, err := filepath.Abs(filepath.Join(parent, symPath))
-			if err == nil {
+			abs, absErr := filepath.Abs(filepath.Join(parent, symPath))
+			if absErr == nil {
 				realPath = abs
 			}
 		}
@@ -319,8 +319,8 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 			deviceName := pnd.String()
 			log.Info().Msgf("device name: %s", deviceName)
 
-			if err := pnd.InitiatorInit(); err != nil {
-				log.Error().Msgf("could not init initiator: %s", err)
+			if initErr := pnd.InitiatorInit(); initErr != nil {
+				log.Error().Msgf("could not init initiator: %s", initErr)
 				continue
 			}
 

@@ -70,9 +70,9 @@ func getGitBlobSha1(filePath string) (string, error) {
 		return "", err
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close file")
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close file")
 		}
 	}(file)
 
@@ -110,8 +110,8 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, err
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
 		}
 	}()
 
@@ -152,8 +152,8 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, err
 	}
 	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
 		}
 	}()
 

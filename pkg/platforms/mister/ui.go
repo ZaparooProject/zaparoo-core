@@ -105,9 +105,9 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 		log.Error().Msgf("error reading picker items dir: %s", err)
 	} else {
 		for _, file := range files {
-			err := os.Remove(filepath.Join(MainPickerDir, file.Name()))
-			if err != nil {
-				log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
+			removeErr := os.Remove(filepath.Join(MainPickerDir, file.Name()))
+			if removeErr != nil {
+				log.Error().Msgf("error deleting file %s: %s", file.Name(), removeErr)
 			}
 		}
 	}
@@ -123,9 +123,9 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 			name = name[:25] + "..."
 		}
 
-		contents, err := json.Marshal(item)
-		if err != nil {
-			return err
+		contents, marshalErr := json.Marshal(item)
+		if marshalErr != nil {
+			return marshalErr
 		}
 
 		path := filepath.Join(MainPickerDir, name+".txt")

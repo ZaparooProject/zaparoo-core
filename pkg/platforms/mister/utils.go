@@ -65,9 +65,9 @@ func RunDevCmd(cmd, args string) error {
 		return err
 	}
 	defer func(dev *os.File) {
-		err := dev.Close()
-		if err != nil {
-			log.Error().Msgf("error closing cmd interface: %s", err)
+		closeErr := dev.Close()
+		if closeErr != nil {
+			log.Error().Msgf("error closing cmd interface: %s", closeErr)
 		}
 	}(dev)
 

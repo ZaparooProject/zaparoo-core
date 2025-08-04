@@ -295,9 +295,9 @@ func readESGameListXML(path string) (ESGameList, error) {
 		return ESGameList{}, err
 	}
 	defer func(xmlFile *os.File) {
-		err := xmlFile.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing xml file")
+		closeErr := xmlFile.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing xml file")
 		}
 	}(xmlFile)
 

@@ -150,9 +150,9 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 		return platforms.CmdResult{}, err
 	}
 	defer func(cmd *os.File) {
-		err := cmd.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close mgl file")
+		closeErr := cmd.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close mgl file")
 		}
 	}(cmd)
 

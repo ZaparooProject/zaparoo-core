@@ -535,9 +535,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			for _, sf := range sfs {
 				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
-					romsets, err := readRomsets(rsf)
-					if err != nil {
-						log.Warn().Err(err).Msg("unable to read romsets")
+					romsets, readErr := readRomsets(rsf)
+					if readErr != nil {
+						log.Warn().Err(readErr).Msg("unable to read romsets")
 						continue
 					}
 

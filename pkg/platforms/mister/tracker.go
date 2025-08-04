@@ -270,9 +270,9 @@ func (tr *Tracker) loadGame() {
 	name := mrextutils.RemoveFileExt(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
-		mgl, err := mister.ReadMgl(path)
-		if err != nil {
-			log.Error().Msgf("error reading mgl: %s", err)
+		mgl, mglErr := mister.ReadMgl(path)
+		if mglErr != nil {
+			log.Error().Msgf("error reading mgl: %s", mglErr)
 		} else {
 			path = mister.ResolvePath(mgl.File.Path)
 			log.Info().Msgf("mgl path: %s", path)
@@ -343,9 +343,9 @@ func loadRecent(filename string) error {
 		return fmt.Errorf("error opening game file: %w", err)
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			log.Error().Msgf("error closing file: %s", err)
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Error().Msgf("error closing file: %s", closeErr)
 		}
 	}(file)
 
@@ -362,9 +362,9 @@ func loadRecent(filename string) error {
 		// main menu's recent file, written when launching mgls
 		if strings.HasSuffix(strings.ToLower(newest.Name), ".mgl") {
 			mglPath := mister.ResolvePath(filepath.Join(newest.Directory, newest.Name))
-			mgl, err := mister.ReadMgl(mglPath)
-			if err != nil {
-				return fmt.Errorf("error reading mgl file: %w", err)
+			mgl, mglErr := mister.ReadMgl(mglPath)
+			if mglErr != nil {
+				return fmt.Errorf("error reading mgl file: %w", mglErr)
 			}
 
 			err = mister.SetActiveGame(mgl.File.Path)
@@ -451,19 +451,19 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						tr.runPickerSelection(event.Name)
 					}
 				}
-			case err, ok := <-watcher.Errors:
+			case watchErr, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				log.Error().Msgf("error in watcher: %s", err)
+				log.Error().Msgf("error in watcher: %s", watchErr)
 			}
 		}
 	}()
 
-	if _, err := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
-		if err != nil {
-			return nil, err
+	if _, statErr := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(statErr) {
+		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
+		if writeErr != nil {
+			return nil, writeErr
 		}
 		log.Info().Msgf("created core name file: %s", mrextconfig.CoreNameFile)
 	}
@@ -473,10 +473,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, err
 	}
 
-	if _, err := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(err) {
-		err := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
-		if err != nil {
-			return nil, err
+	if _, statErr := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(statErr) {
+		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
+		if mkdirErr != nil {
+			return nil, mkdirErr
 		}
 		log.Info().Msgf("created core config folder: %s", mrextconfig.CoreConfigFolder)
 	}
@@ -486,10 +486,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, err
 	}
 
-	if _, err := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
-		if err != nil {
-			return nil, err
+	if _, statActiveErr := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
+		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
+		if writeActiveErr != nil {
+			return nil, writeActiveErr
 		}
 		log.Info().Msgf("created active game file: %s", mrextconfig.ActiveGameFile)
 	}
@@ -499,10 +499,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, err
 	}
 
-	if _, err := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(err) {
-		err := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
-		if err != nil {
-			return nil, err
+	if _, statPathErr := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
+		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
+		if writePathErr != nil {
+			return nil, writePathErr
 		}
 		log.Info().Msgf("created current path file: %s", mrextconfig.CurrentPathFile)
 	}
@@ -537,9 +537,9 @@ func StartTracker(
 
 	tr.LoadCore()
 	if !mister.ActiveGameEnabled() {
-		err := mister.SetActiveGame("")
-		if err != nil {
-			log.Error().Msgf("error setting active game: %s", err)
+		setErr := mister.SetActiveGame("")
+		if setErr != nil {
+			log.Error().Msgf("error setting active game: %s", setErr)
 		}
 	}
 

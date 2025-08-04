@@ -99,9 +99,9 @@ func run() error {
 	defaults := config.BaseDefaults
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
-		migrated, err := migrate.IniToToml(iniPath)
-		if err != nil {
-			return fmt.Errorf("error migrating config: %w", err)
+		migrated, migrateErr := migrate.IniToToml(iniPath)
+		if migrateErr != nil {
+			return fmt.Errorf("error migrating config: %w", migrateErr)
 		}
 		defaults = migrated
 	}

@@ -79,9 +79,9 @@ func run() error {
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
-		err := svc.Start()
-		if err != nil {
-			log.Error().Err(err).Msg("could not start service")
+		startErr := svc.Start()
+		if startErr != nil {
+			log.Error().Err(startErr).Msg("could not start service")
 		}
 	}
 
