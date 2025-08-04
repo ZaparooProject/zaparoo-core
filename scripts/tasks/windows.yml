@@ -4,7 +4,7 @@ tasks:
   build-metadata:
     internal: true
     cmds:
-      - go run scripts/tasks/utils/windowsmeta -version "${APP_VERSION}"
+      - go run scripts/tasks/utils/windowsmeta/main.go -version "${APP_VERSION}"
       - task: :docker:run
         vars:
           IMAGE_NAME: zaparoo/cross-build
@@ -13,7 +13,7 @@ tasks:
   build-installer:
     internal: true
     cmds:
-      - go run scripts/tasks/utils/windowsiss -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
+      - go run scripts/tasks/utils/windowsiss/main.go -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
       - cp "cmd/windows/winres/icon.ico" "_build/windows_{{.BUILD_ARCH}}"
       - docker container create --name zaparoo-innosetup amake/innosetup setup.iss
       - docker cp "_build/windows_{{.BUILD_ARCH}}/setup.iss" zaparoo-innosetup:/work/
