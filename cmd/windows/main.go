@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -32,22 +33,16 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
-	"github.com/gen2brain/beeep"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/windows"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/gen2brain/beeep"
+	"github.com/rs/zerolog/log"
 	syswindows "golang.org/x/sys/windows"
-
-	_ "embed"
 )
 
 //go:embed winres/icon.ico
@@ -102,7 +97,7 @@ func isRunning() bool {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -118,7 +113,7 @@ func run() error {
 		return fmt.Errorf("error checking elevated rights: %w", elevatedErr)
 	}
 	if elevated {
-		return errors.New("Zaparoo cannot be run with elevated rights")
+		return errors.New("zaparoo cannot be run with elevated rights")
 	}
 
 	logWriters := []io.Writer{os.Stderr}
@@ -151,7 +146,7 @@ func run() error {
 	if isRunning() {
 		log.Error().Msg("core is already running")
 		_ = beeep.Notify(notificationTitle, "Zaparoo Core is already running.", "")
-		return errors.New("Zaparoo Core is already running")
+		return errors.New("zaparoo is already running")
 	}
 
 	stopSvc, err := service.Start(pl, cfg)
