@@ -7,6 +7,7 @@ import (
 	"crypto/sha1" //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -110,7 +111,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	if resp == nil {
-		return false, fmt.Errorf("received nil response")
+		return false, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -155,7 +156,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to download arcadedb: %w", err)
 	}
 	if resp == nil {
-		return false, fmt.Errorf("received nil response")
+		return false, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

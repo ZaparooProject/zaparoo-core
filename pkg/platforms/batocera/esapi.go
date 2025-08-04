@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,7 +46,7 @@ func apiRequest(path, body string, timeout time.Duration) ([]byte, error) {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	if resp == nil {
-		return nil, fmt.Errorf("received nil response")
+		return nil, errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

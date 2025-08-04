@@ -22,6 +22,7 @@ package installer
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -92,7 +93,7 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error getting url: %w", err)
 	}
 	if resp == nil {
-		return fmt.Errorf("received nil response")
+		return errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

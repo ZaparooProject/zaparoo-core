@@ -22,6 +22,7 @@ package main
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,7 +85,7 @@ func downloadDoc(platformID, toDir string) error {
 		return fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	if resp == nil {
-		return fmt.Errorf("received nil response")
+		return errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
