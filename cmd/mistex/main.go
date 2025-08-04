@@ -1,4 +1,4 @@
-///go:build linux && cgo
+//go:build linux
 
 /*
 Zaparoo Core
@@ -24,21 +24,22 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mistex"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
-	"github.com/rs/zerolog/log"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mistex"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/rs/zerolog/log"
 )
 
 func tryAddToStartup() (bool, error) {
@@ -60,27 +61,32 @@ WantedBy=multi-user.target
 		return false, nil
 	}
 
-	err = os.WriteFile(unitPath, []byte(unitFile), 0644)
+	//nolint:gosec // Systemd unit file needs to be readable by system
+	err = os.WriteFile(unitPath, []byte(unitFile), 0o644)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to write unit file: %w", err)
 	}
 
-	cmd := exec.Command("systemctl", "daemon-reload")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", "daemon-reload")
 	err = cmd.Run()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to reload systemd daemon: %w", err)
 	}
 
-	cmd = exec.Command("systemctl", "enable", "zaparoo.service")
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, "systemctl", "enable", "zaparoo.service")
 	err = cmd.Run()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to enable zaparoo service: %w", err)
 	}
 
 	return true, nil
 }
 
-func main() {
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -99,22 +105,19 @@ func main() {
 	if *addStartupFlag {
 		_, err := tryAddToStartup()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error adding to startup: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	defaults := config.BaseDefaults
 	iniPath := "/media/fat/Scripts/tapto.ini"
-	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
+	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
-		} else {
-			defaults = migrated
+			return fmt.Errorf("error migrating config: %w", err)
 		}
+		defaults = migrated
 	}
 
 	cfg := cli.Setup(
@@ -123,7 +126,7 @@ func main() {
 		[]io.Writer{os.Stderr},
 	)
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -131,43 +134,53 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating service: %w", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return fmt.Errorf("service handler error: %w", err)
+	}
 
 	flags.Post(cfg, pl)
 
-	fmt.Println("Zaparoo v" + config.AppVersion)
+	_, _ = fmt.Println("Zaparoo v" + config.AppVersion)
 
 	added, err := tryAddToStartup()
 	if err != nil {
 		log.Error().Msgf("error adding to startup: %s", err)
-		fmt.Println("Error adding to startup:", err)
-		os.Exit(1)
+		return fmt.Errorf("error adding to startup: %w", err)
 	} else if added {
 		log.Info().Msg("added to startup")
-		fmt.Println("Added Zaparoo to MiSTeX startup.")
+		_, _ = fmt.Println("Added Zaparoo to MiSTeX startup.")
 	}
 
 	if !svc.Running() {
 		err := svc.Start()
-		fmt.Println("Zaparoo service not running, starting...")
+		_, _ = fmt.Println("Zaparoo service not running, starting...")
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			fmt.Println("Error starting Zaparoo service:", err)
+			_, _ = fmt.Println("Error starting Zaparoo service:", err)
 		} else {
 			log.Info().Msg("service started manually")
-			fmt.Println("Zaparoo service started.")
+			_, _ = fmt.Println("Zaparoo service started.")
 		}
 	} else {
-		fmt.Println("Zaparoo service is running.")
+		_, _ = fmt.Println("Zaparoo service is running.")
 	}
 
-	ip := utils.GetLocalIP()
+	ip := helpers.GetLocalIP()
 	if ip == "" {
-		fmt.Println("Device address: Unknown")
+		_, _ = fmt.Println("Device address: Unknown")
 	} else {
-		fmt.Println("Device address:", ip)
+		_, _ = fmt.Println("Device address:", ip)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
 	}
 }

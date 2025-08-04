@@ -1,6 +1,26 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mediadb
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -9,12 +29,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pressly/goose/v3"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 )
 
 // Queries go here to keep the interface clean
@@ -42,20 +61,23 @@ func sqlAllocate(db *sql.DB) error {
 	return sqlMigrateUp(db)
 }
 
-func sqlUpdateLastGenerated(db *sql.DB) error {
-	_, err := db.Exec(
+func sqlUpdateLastGenerated(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx,
 		fmt.Sprintf(
 			"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('%s', ?)",
 			DBConfigLastGeneratedAt,
 		),
 		strconv.FormatInt(time.Now().Unix(), 10),
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to set last generated timestamp: %w", err)
+	}
+	return nil
 }
 
-func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
+func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
 	var rawTimestamp string
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		fmt.Sprintf(
 			"SELECT Value FROM DBConfig WHERE Name = '%s'",
 			DBConfigLastGeneratedAt,
@@ -64,18 +86,18 @@ func sqlGetLastGenerated(db *sql.DB) (time.Time, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, nil
 	} else if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("failed to scan timestamp: %w", err)
 	}
 
 	timestamp, err := strconv.Atoi(rawTimestamp)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("failed to parse timestamp: %w", err)
 	}
 
 	return time.Unix(int64(timestamp), 0), nil
 }
 
-func sqlIndexTables(db *sql.DB) error {
+func sqlIndexTables(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
 	create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
@@ -90,12 +112,15 @@ func sqlIndexTables(db *sql.DB) error {
 	create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
 	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	`
-	_, err := db.Exec(sqlStmt)
-	return err
+	_, err := db.ExecContext(ctx, sqlStmt)
+	if err != nil {
+		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+	return nil
 }
 
 //goland:noinspection SqlWithoutWhere
-func sqlTruncate(db *sql.DB) error {
+func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	delete from Systems;
 	delete from MediaTitles;
@@ -107,31 +132,43 @@ func sqlTruncate(db *sql.DB) error {
 	delete from SupportingMedia;
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
-	return err
+	_, err := db.ExecContext(ctx, sqlStmt)
+	if err != nil {
+		return fmt.Errorf("failed to truncate database: %w", err)
+	}
+	return nil
 }
 
-func sqlVacuum(db *sql.DB) error {
+func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	sqlStmt := `
 	vacuum;
 	`
-	_, err := db.Exec(sqlStmt)
-	return err
+	_, err := db.ExecContext(ctx, sqlStmt)
+	if err != nil {
+		return fmt.Errorf("failed to vacuum database: %w", err)
+	}
+	return nil
 }
 
-func sqlBeginTransaction(db *sql.DB) error {
-	_, err := db.Exec("BEGIN")
-	return err
+func sqlBeginTransaction(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "BEGIN")
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	return nil
 }
 
-func sqlCommitTransaction(db *sql.DB) error {
-	_, err := db.Exec("COMMIT")
-	return err
+func sqlCommitTransaction(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "COMMIT")
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
 }
 
-func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) {
+func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
 	var row database.System
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, SystemID, Name
 		from Systems
@@ -139,16 +176,15 @@ func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) 
 		or SystemID = ?
 		limit 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find system statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx,
 		system.DBID,
 		system.SystemID,
 	).Scan(
@@ -156,45 +192,50 @@ func sqlFindSystem(db *sql.DB, system database.System) (database.System, error) 
 		&row.SystemID,
 		&row.Name,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan system row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertSystem(db *sql.DB, row database.System) (database.System, error) {
-	var DBID any = nil
+func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (database.System, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Systems
 		(DBID, SystemID, Name)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert system statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.SystemID,
 		row.Name,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert system statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for system: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
-func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
+func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
 	var row database.MediaTitle
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, SystemDBID, Slug, Name
 		from MediaTitles
@@ -202,16 +243,15 @@ func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTit
 		or Slug = ?
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media title statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx,
 		title.DBID,
 		title.Slug,
 	).Scan(
@@ -220,46 +260,51 @@ func sqlFindMediaTitle(db *sql.DB, title database.MediaTitle) (database.MediaTit
 		&row.Slug,
 		&row.Name,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media title row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertMediaTitle(db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
-	var DBID any = nil
+func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		MediaTitles
 		(DBID, SystemDBID, Slug, Name)
 		values (?, ?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert media title statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.SystemDBID,
 		row.Slug,
 		row.Name,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media title statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media title: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
-func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
+func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (database.Media, error) {
 	var row database.Media
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, MediaTitleDBID, Path
 		from Media
@@ -270,16 +315,15 @@ func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
 		)
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		media.DBID,
 		media.MediaTitleDBID,
 		media.Path,
@@ -288,45 +332,50 @@ func sqlFindMedia(db *sql.DB, media database.Media) (database.Media, error) {
 		&row.MediaTitleDBID,
 		&row.Path,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertMedia(db *sql.DB, row database.Media) (database.Media, error) {
-	var DBID any = nil
+func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (database.Media, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Media
 		(DBID, MediaTitleDBID, Path)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert media statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.MediaTitleDBID,
 		row.Path,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
-func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, error) {
+func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (database.TagType, error) {
 	var row database.TagType
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, Type
 		from TagTypes
@@ -334,60 +383,64 @@ func sqlFindTagType(db *sql.DB, tagType database.TagType) (database.TagType, err
 		or Type = ?
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find tag type statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Type,
 	).Scan(
 		&row.DBID,
 		&row.Type,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan tag type row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertTagType(db *sql.DB, row database.TagType) (database.TagType, error) {
-	var DBID any = nil
+func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (database.TagType, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		TagTypes
 		(DBID, Type)
 		values (?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert tag type statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.Type,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert tag type statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag type: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
-func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
+func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database.Tag, error) {
 	var row database.Tag
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, TypeDBID, Tag
 		from Tags
@@ -396,16 +449,15 @@ func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
 		LIMIT 1;
 	`)
 	// TODO: Add TagType dependency when unknown tags supported
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find tag statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Tag,
 	).Scan(
@@ -413,45 +465,50 @@ func sqlFindTag(db *sql.DB, tagType database.Tag) (database.Tag, error) {
 		&row.TypeDBID,
 		&row.Tag,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan tag row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertTag(db *sql.DB, row database.Tag) (database.Tag, error) {
-	var DBID any = nil
+func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.Tag, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		Tags
 		(DBID, TypeDBID, Tag)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(stmt)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert tag statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.TypeDBID,
 		row.Tag,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
-func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
+func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
 	var row database.MediaTag
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		select
 		DBID, MediaDBID, TagDBID
 		from MediaTags
@@ -462,16 +519,15 @@ func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag,
 		)
 		LIMIT 1;
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media tag statement: %w", err)
 	}
-	err = stmt.QueryRow(
+	err = stmt.QueryRowContext(ctx,
 		mediaTag.DBID,
 		mediaTag.MediaDBID,
 		mediaTag.TagDBID,
@@ -480,40 +536,45 @@ func sqlFindMediaTag(db *sql.DB, mediaTag database.MediaTag) (database.MediaTag,
 		&row.MediaDBID,
 		&row.TagDBID,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media tag row: %w", err)
+	}
+	return row, nil
 }
 
-func sqlInsertMediaTag(db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
-	var DBID any = nil
+func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
+	var dbID any
 	if row.DBID != 0 {
-		DBID = row.DBID
+		dbID = row.DBID
 	}
-	stmt, err := db.Prepare(`
+	stmt, err := db.PrepareContext(ctx, `
 		insert into
 		MediaTags
 		(DBID, MediaDBID, TagDBID)
 		values (?, ?, ?)
 	`)
-	defer func(stmt *sql.Stmt) {
-		err := stmt.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(stmt)
+	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert media tag statement: %w", err)
 	}
-	res, err := stmt.Exec(
-		DBID,
+	res, err := stmt.ExecContext(ctx,
+		dbID,
 		row.MediaDBID,
 		row.TagDBID,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media tag statement: %w", err)
 	}
-	lastId, err := res.LastInsertId()
-	row.DBID = lastId
-	return row, err
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
+	}
+	row.DBID = lastID
+	return row, nil
 }
 
 // Not in use
@@ -543,7 +604,7 @@ func sqlCleanInactiveMedia(db *sql.DB) error {
 */
 
 // return ?, ?,... based on count
-func prepareVariadic(p string, s string, c int) string {
+func prepareVariadic(p, s string, c int) string {
 	if c < 1 {
 		return ""
 	}
@@ -554,18 +615,27 @@ func prepareVariadic(p string, s string, c int) string {
 	return strings.Join(q, s)
 }
 
-func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path string) ([]database.SearchResult, error) {
+func sqlSearchMediaPathExact(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+	path string,
+) ([]database.SearchResult, error) {
 	// query == path
-	slug := utils.SlugifyPath(path)
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+	slug := helpers.SlugifyPath(path)
 
-	var results []database.SearchResult
-	var args = make([]any, 0)
+	results := make([]database.SearchResult, 0, 1)
+	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
 	args = append(args, slug, path)
 
-	stmt, err := db.Prepare(`
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,
 			Media.Path
@@ -574,39 +644,42 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 			on Systems.DBID = MediaTitles.SystemDBID
 		inner join Media
 			on MediaTitles.DBID = Media.MediaTitleDBID
-		where Systems.SystemID IN (` +
-		prepareVariadic("?", ",", len(systems)) +
+		where Systems.SystemID IN (`+
+		prepareVariadic("?", ",", len(systems))+
 		`)
 		and MediaTitles.Slug = ?
 		and Media.Path = ?
 		LIMIT 1
 	`)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to prepare media path exact search statement: %w", err)
 	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
-	rows, err := stmt.Query(
+	rows, err := stmt.QueryContext(ctx,
 		args...,
 	)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to execute media path exact search query: %w", err)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		result := database.SearchResult{}
-		err := rows.Scan(
+		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
-		)
-		if err != nil {
-			return results, err
+		); scanErr != nil {
+			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
-		result.Name = utils.FilenameFromPath(result.Path)
+		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
 	}
 	err = rows.Err()
@@ -616,15 +689,24 @@ func sqlSearchMediaPathExact(db *sql.DB, systems []systemdefs.System, path strin
 	return results, nil
 }
 
-func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []string) ([]database.SearchResult, error) {
-	var results []database.SearchResult
+func sqlSearchMediaPathParts(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+	parts []string,
+) ([]database.SearchResult, error) {
+	results := make([]database.SearchResult, 0, 250)
+
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
 
 	// search for anything in systems on blank query
 	if len(parts) == 0 {
 		parts = []string{""}
 	}
 
-	var args = make([]any, 0)
+	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
@@ -632,7 +714,8 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 		args = append(args, "%"+p+"%")
 	}
 
-	stmt, err := db.Prepare(`
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	stmt, err := db.PrepareContext(ctx, `
 		select 
 			Systems.SystemID,
 			Media.Path
@@ -641,39 +724,42 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 			on Systems.DBID = MediaTitles.SystemDBID
 		inner join Media
 			on MediaTitles.DBID = Media.MediaTitleDBID
-		where Systems.SystemID IN (` +
-		prepareVariadic("?", ",", len(systems)) +
+		where Systems.SystemID IN (`+
+		prepareVariadic("?", ",", len(systems))+
 		`)
-		and ` +
-		prepareVariadic(" Media.Path like ? ", " and ", len(parts)) +
+		and `+
+		prepareVariadic(" Media.Path like ? ", " and ", len(parts))+
 		` LIMIT 250
 	`)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to prepare media path parts search statement: %w", err)
 	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
-	rows, err := stmt.Query(
+	rows, err := stmt.QueryContext(ctx,
 		args...,
 	)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to execute media path parts search query: %w", err)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		result := database.SearchResult{}
-		err := rows.Scan(
+		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
-		)
-		if err != nil {
-			return results, err
+		); scanErr != nil {
+			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
-		result.Name = utils.FilenameFromPath(result.Path)
+		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
 	}
 	err = rows.Err()
@@ -683,61 +769,57 @@ func sqlSearchMediaPathParts(db *sql.DB, systems []systemdefs.System, parts []st
 	return results, nil
 }
 
-func sqlSystemIndexed(db *sql.DB, system systemdefs.System) bool {
-	systemId := ""
-	q, err := db.Prepare(`
+func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {
+	systemID := ""
+	q, err := db.PrepareContext(ctx, `
 		select
 		SystemID
 		from Systems
 		where SystemID = ?;
 	`)
-	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
-	}(q)
+	}()
+	err = q.QueryRowContext(ctx, system.ID).Scan(&systemID)
 	if err != nil {
 		return false
 	}
-	err = q.QueryRow(system.ID).Scan(&systemId)
-	if err != nil {
-		return false
-	}
-	return systemId == system.ID
+	return systemID == system.ID
 }
 
-func sqlIndexedSystems(db *sql.DB) ([]string, error) {
-	var list []string
+func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	list := make([]string, 0)
 
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select SystemID from Systems;
 	`)
-	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(q)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to prepare indexed systems query: %w", err)
 	}
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
 
-	rows, err := q.Query()
+	rows, err := q.QueryContext(ctx)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to execute indexed systems query: %w", err)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql rows")
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
 		}
-	}(rows)
+	}()
 	for rows.Next() {
 		row := ""
-		err := rows.Scan(&row)
-		if err != nil {
-			return list, err
+		if scanErr := rows.Scan(&row); scanErr != nil {
+			return list, fmt.Errorf("failed to scan indexed systems result: %w", scanErr)
 		}
 		list = append(list, row)
 	}
@@ -745,9 +827,9 @@ func sqlIndexedSystems(db *sql.DB) ([]string, error) {
 	return list, err
 }
 
-func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
+func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
-	q, err := db.Prepare(`
+	q, err := db.PrepareContext(ctx, `
 		select
 		Systems.SystemID, Media.Path
 		from Media
@@ -756,19 +838,21 @@ func sqlRandomGame(db *sql.DB, system systemdefs.System) (database.SearchResult,
 		where Systems.SystemID = ?
 		ORDER BY RANDOM() LIMIT 1;
 	`)
-	defer func(q *sql.Stmt) {
-		err := q.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close sql statement")
-		}
-	}(q)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare random game query: %w", err)
 	}
-	err = q.QueryRow(system.ID).Scan(
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = q.QueryRowContext(ctx, system.ID).Scan(
 		&row.SystemID,
 		&row.Path,
 	)
-	row.Name = utils.FilenameFromPath(row.Path)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan random game row: %w", err)
+	}
+	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, nil
 }

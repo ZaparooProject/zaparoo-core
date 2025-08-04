@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package parser_test
 
 import (
@@ -9,11 +28,12 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    parser.Script
-		wantErr error
 	}{
 		{
 			name:  "single command with no args",
@@ -622,7 +642,10 @@ func TestParse(t *testing.T) {
 			input: `"DOS/Games/test,123.iso"?lang=en`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`DOS/Games/test,123.iso`}, AdvArgs: map[string]string{"lang": "en"}},
+					{
+						Name: "launch", Args: []string{`DOS/Games/test,123.iso`},
+						AdvArgs: map[string]string{"lang": "en"},
+					},
 				},
 			},
 		},
@@ -676,8 +699,11 @@ func TestParse(t *testing.T) {
 			input: `**render:level-[[difficulty]]?fx=true`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "render", Args: []string{"level-" + parser.TokExpStart + "difficulty" + parser.TokExprEnd},
-						AdvArgs: map[string]string{"fx": "true"}},
+					{
+						Name:    "render",
+						Args:    []string{"level-" + parser.TokExpStart + "difficulty" + parser.TokExprEnd},
+						AdvArgs: map[string]string{"fx": "true"},
+					},
 				},
 			},
 		},
@@ -890,7 +916,10 @@ func TestParse(t *testing.T) {
 			input: `**api:{"endpoint": "/users", "method": "GET"}?timeout=30`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "api", Args: []string{`{"endpoint":"/users","method":"GET"}`}, AdvArgs: map[string]string{"timeout": "30"}},
+					{
+						Name: "api", Args: []string{`{"endpoint":"/users","method":"GET"}`},
+						AdvArgs: map[string]string{"timeout": "30"},
+					},
 				},
 			},
 		},
@@ -968,9 +997,13 @@ func TestParse(t *testing.T) {
 			input: `**stuff:'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "stuff", Args: []string{`C:\some\path\completed?\usa, games/file.exe`}, AdvArgs: map[string]string{
-						"doot": "doot",
-					}},
+					{
+						Name: "stuff",
+						Args: []string{`C:\some\path\completed?\usa, games/file.exe`},
+						AdvArgs: map[string]string{
+							"doot": "doot",
+						},
+					},
 				},
 			},
 		},
@@ -979,9 +1012,13 @@ func TestParse(t *testing.T) {
 			input: `**stuff:^'C:\some\path\completed?\usa, games/file.exe'?doot=doot`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "stuff", Args: []string{`'C:\some\path\completed?\usa`, `games/file.exe'`}, AdvArgs: map[string]string{
-						"doot": "doot",
-					}},
+					{
+						Name: "stuff",
+						Args: []string{`'C:\some\path\completed?\usa`, `games/file.exe'`},
+						AdvArgs: map[string]string{
+							"doot": "doot",
+						},
+					},
 				},
 			},
 		},
@@ -1116,13 +1153,15 @@ func TestParse(t *testing.T) {
 			input: `**input.keyboard:Hello{enter}World?delay=100`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.keyboard",
+					{
+						Name: "input.keyboard",
 						Args: []string{
 							"H", "e", "l", "l", "o",
 							"{enter}",
 							"W", "o", "r", "l", "d",
 						},
-						AdvArgs: map[string]string{"delay": "100"}},
+						AdvArgs: map[string]string{"delay": "100"},
+					},
 				},
 			},
 		},
@@ -1131,7 +1170,8 @@ func TestParse(t *testing.T) {
 			input: `**input.keyboard:Hello{enter}World\?delay=1\\00`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.keyboard",
+					{
+						Name: "input.keyboard",
 						Args: []string{
 							"H", "e", "l", "l", "o",
 							"{enter}",
@@ -1147,14 +1187,16 @@ func TestParse(t *testing.T) {
 			input: `**input.gamepad:AB{start}XY?repeat=2&interval=500`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "input.gamepad",
+					{
+						Name: "input.gamepad",
 						Args: []string{
 							"A", "B", "{start}", "X", "Y",
 						},
 						AdvArgs: map[string]string{
 							"repeat":   "2",
 							"interval": "500",
-						}},
+						},
+					},
 				},
 			},
 		},
@@ -1219,8 +1261,10 @@ func TestParse(t *testing.T) {
 			input: `**http.get:"https://api.example.com/hello?stuff=thing"?other=stuff||**launch.random:Genesis`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
-						AdvArgs: map[string]string{"other": "stuff"}},
+					{
+						Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
+						AdvArgs: map[string]string{"other": "stuff"},
+					},
 					{Name: "launch.random", Args: []string{`Genesis`}},
 				},
 			},
@@ -1338,8 +1382,10 @@ func TestParse(t *testing.T) {
 			input: `Genesis/1 US - Q-Z/Some Game (USA, Europe).md?launcher=LLAPIMegaDrive`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
-						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"}},
+					{
+						Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
+						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"},
+					},
 				},
 			},
 		},
@@ -1420,7 +1466,10 @@ func TestParse(t *testing.T) {
 			input: `Genesis/@Genesis - 2022-05-18.zip/1 US - Q-Z/Some Game (USA, Europe).md`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`Genesis/@Genesis - 2022-05-18.zip/1 US - Q-Z/Some Game (USA, Europe).md`}},
+					{
+						Name: "launch",
+						Args: []string{`Genesis/@Genesis - 2022-05-18.zip/1 US - Q-Z/Some Game (USA, Europe).md`},
+					},
 				},
 			},
 		},
@@ -1564,8 +1613,10 @@ func TestParse(t *testing.T) {
 			input: `**mister.script:update_all.sh?hidden=yes`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "mister.script", Args: []string{`update_all.sh`},
-						AdvArgs: map[string]string{"hidden": "yes"}},
+					{
+						Name: "mister.script", Args: []string{`update_all.sh`},
+						AdvArgs: map[string]string{"hidden": "yes"},
+					},
 				},
 			},
 		},
@@ -1601,7 +1652,10 @@ func TestParse(t *testing.T) {
 			input: `**playlist.load:/media/fat/playlist.pls?mode=shuffle`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "playlist.load", Args: []string{`/media/fat/playlist.pls`}, AdvArgs: map[string]string{"mode": "shuffle"}},
+					{
+						Name: "playlist.load", Args: []string{`/media/fat/playlist.pls`},
+						AdvArgs: map[string]string{"mode": "shuffle"},
+					},
 				},
 			},
 		},
@@ -1747,7 +1801,12 @@ func TestParse(t *testing.T) {
 			input: `**config:[[env]]-[[version]]-[[build]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "config", Args: []string{parser.TokExpStart + "env" + parser.TokExprEnd + "-" + parser.TokExpStart + "version" + parser.TokExprEnd + "-" + parser.TokExpStart + "build" + parser.TokExprEnd}},
+					{
+						Name: "config",
+						Args: []string{parser.TokExpStart + "env" + parser.TokExprEnd + "-" +
+							parser.TokExpStart + "version" + parser.TokExprEnd + "-" +
+							parser.TokExpStart + "build" + parser.TokExprEnd},
+					},
 				},
 			},
 		},
@@ -1756,7 +1815,14 @@ func TestParse(t *testing.T) {
 			input: `**connect:[[host]],[[port]],[[user]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "connect", Args: []string{parser.TokExpStart + "host" + parser.TokExprEnd, parser.TokExpStart + "port" + parser.TokExprEnd, parser.TokExpStart + "user" + parser.TokExprEnd}},
+					{
+						Name: "connect",
+						Args: []string{
+							parser.TokExpStart + "host" + parser.TokExprEnd,
+							parser.TokExpStart + "port" + parser.TokExprEnd,
+							parser.TokExpStart + "user" + parser.TokExprEnd,
+						},
+					},
 				},
 			},
 		},
@@ -1777,7 +1843,13 @@ func TestParse(t *testing.T) {
 			input: `**deploy:[[app.name]],[[build_number]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "deploy", Args: []string{parser.TokExpStart + "app.name" + parser.TokExprEnd, parser.TokExpStart + "build_number" + parser.TokExprEnd}},
+					{
+						Name: "deploy",
+						Args: []string{
+							parser.TokExpStart + "app.name" + parser.TokExprEnd,
+							parser.TokExpStart + "build_number" + parser.TokExprEnd,
+						},
+					},
 				},
 			},
 		},
@@ -1786,7 +1858,13 @@ func TestParse(t *testing.T) {
 			input: `**level:[[level1]],[[player2_score]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "level", Args: []string{parser.TokExpStart + "level1" + parser.TokExprEnd, parser.TokExpStart + "player2_score" + parser.TokExprEnd}},
+					{
+						Name: "level",
+						Args: []string{
+							parser.TokExpStart + "level1" + parser.TokExprEnd,
+							parser.TokExpStart + "player2_score" + parser.TokExprEnd,
+						},
+					},
 				},
 			},
 		},
@@ -1795,7 +1873,11 @@ func TestParse(t *testing.T) {
 			input: `**say:"Hello [[user]], welcome to [[game]]"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "say", Args: []string{"Hello " + parser.TokExpStart + "user" + parser.TokExprEnd + ", welcome to " + parser.TokExpStart + "game" + parser.TokExprEnd}},
+					{
+						Name: "say",
+						Args: []string{"Hello " + parser.TokExpStart + "user" + parser.TokExprEnd +
+							", welcome to " + parser.TokExpStart + "game" + parser.TokExprEnd},
+					},
 				},
 			},
 		},
@@ -1804,7 +1886,11 @@ func TestParse(t *testing.T) {
 			input: `**path:C:^\Games^\[[system]]^\game.exe`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "path", Args: []string{"C:\\Games\\" + parser.TokExpStart + "system" + parser.TokExprEnd + "\\game.exe"}},
+					{
+						Name: "path",
+						Args: []string{"C:\\Games\\" + parser.TokExpStart + "system" + parser.TokExprEnd +
+							"\\game.exe"},
+					},
 				},
 			},
 		},
@@ -1813,9 +1899,14 @@ func TestParse(t *testing.T) {
 			input: `**url:https://api.example.com/[[endpoint]]?key=[[api_key]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "url", Args: []string{"https://api.example.com/" + parser.TokExpStart + "endpoint" + parser.TokExprEnd}, AdvArgs: map[string]string{
-						"key": parser.TokExpStart + "api_key" + parser.TokExprEnd,
-					}},
+					{
+						Name: "url",
+						Args: []string{"https://api.example.com/" + parser.TokExpStart + "endpoint" +
+							parser.TokExprEnd},
+						AdvArgs: map[string]string{
+							"key": parser.TokExpStart + "api_key" + parser.TokExprEnd,
+						},
+					},
 				},
 			},
 		},
@@ -1833,7 +1924,11 @@ func TestParse(t *testing.T) {
 			input: `[[system]]/games/[[game_name]].rom`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{parser.TokExpStart + "system" + parser.TokExprEnd + "/games/" + parser.TokExpStart + "game_name" + parser.TokExprEnd + ".rom"}},
+					{
+						Name: "launch",
+						Args: []string{parser.TokExpStart + "system" + parser.TokExprEnd + "/games/" +
+							parser.TokExpStart + "game_name" + parser.TokExprEnd + ".rom"},
+					},
 				},
 			},
 		},
@@ -1851,7 +1946,11 @@ func TestParse(t *testing.T) {
 			input: `**format:[[first name]] [[last name]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "format", Args: []string{parser.TokExpStart + "first name" + parser.TokExprEnd + " " + parser.TokExpStart + "last name" + parser.TokExprEnd}},
+					{
+						Name: "format",
+						Args: []string{parser.TokExpStart + "first name" + parser.TokExprEnd + " " +
+							parser.TokExpStart + "last name" + parser.TokExprEnd},
+					},
 				},
 			},
 		},
@@ -1860,10 +1959,14 @@ func TestParse(t *testing.T) {
 			input: `**run:"[[app_path]]",arg2?env=[[environment]]&debug=[[debug]]||**cleanup:[[temp_dir]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "run", Args: []string{parser.TokExpStart + "app_path" + parser.TokExprEnd, "arg2"}, AdvArgs: map[string]string{
-						"env":   parser.TokExpStart + "environment" + parser.TokExprEnd,
-						"debug": parser.TokExpStart + "debug" + parser.TokExprEnd,
-					}},
+					{
+						Name: "run",
+						Args: []string{parser.TokExpStart + "app_path" + parser.TokExprEnd, "arg2"},
+						AdvArgs: map[string]string{
+							"env":   parser.TokExpStart + "environment" + parser.TokExprEnd,
+							"debug": parser.TokExpStart + "debug" + parser.TokExprEnd,
+						},
+					},
 					{Name: "cleanup", Args: []string{parser.TokExpStart + "temp_dir" + parser.TokExprEnd}},
 				},
 			},
@@ -2012,6 +2115,7 @@ func TestParse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			p := parser.NewParser(tt.input)
 			got, err := p.ParseScript()
 			if !errors.Is(err, tt.wantErr) {
@@ -2026,11 +2130,12 @@ func TestParse(t *testing.T) {
 }
 
 func TestParseExpressions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    string
-		wantErr error
 	}{
 		{
 			name:  "empty input",
@@ -2050,7 +2155,8 @@ func TestParseExpressions(t *testing.T) {
 		{
 			name:  "multiple expressions",
 			input: "[[first]] and [[second]]",
-			want:  parser.TokExpStart + "first" + parser.TokExprEnd + " and " + parser.TokExpStart + "second" + parser.TokExprEnd,
+			want: parser.TokExpStart + "first" + parser.TokExprEnd + " and " +
+				parser.TokExpStart + "second" + parser.TokExprEnd,
 		},
 		{
 			name:  "expression at start",
@@ -2075,7 +2181,9 @@ func TestParseExpressions(t *testing.T) {
 		{
 			name:  "multiple consecutive expressions",
 			input: "[[a]][[b]][[c]]",
-			want:  parser.TokExpStart + "a" + parser.TokExprEnd + parser.TokExpStart + "b" + parser.TokExprEnd + parser.TokExpStart + "c" + parser.TokExprEnd,
+			want: parser.TokExpStart + "a" + parser.TokExprEnd +
+				parser.TokExpStart + "b" + parser.TokExprEnd +
+				parser.TokExpStart + "c" + parser.TokExprEnd,
 		},
 		{
 			name:  "empty expression",
@@ -2095,12 +2203,14 @@ func TestParseExpressions(t *testing.T) {
 		{
 			name:  "expression in path",
 			input: "/path/to/[[system]]/games/[[game]].rom",
-			want:  "/path/to/" + parser.TokExpStart + "system" + parser.TokExprEnd + "/games/" + parser.TokExpStart + "game" + parser.TokExprEnd + ".rom",
+			want: "/path/to/" + parser.TokExpStart + "system" + parser.TokExprEnd + "/games/" +
+				parser.TokExpStart + "game" + parser.TokExprEnd + ".rom",
 		},
 		{
 			name:  "expression in command",
 			input: "echo [[message]] > [[output_file]]",
-			want:  "echo " + parser.TokExpStart + "message" + parser.TokExprEnd + " > " + parser.TokExpStart + "output_file" + parser.TokExprEnd,
+			want: "echo " + parser.TokExpStart + "message" + parser.TokExprEnd + " > " +
+				parser.TokExpStart + "output_file" + parser.TokExprEnd,
 		},
 		{
 			name:  "complex expression with operators",
@@ -2131,7 +2241,8 @@ func TestParseExpressions(t *testing.T) {
 		{
 			name:  "real world example - custom launcher",
 			input: "sh -c \"cd [[media_path | dirname]] && wine game.exe\"",
-			want:  "sh -c \"cd " + parser.TokExpStart + "media_path | dirname" + parser.TokExprEnd + " && wine game.exe\"",
+			want: "sh -c \"cd " + parser.TokExpStart + "media_path | dirname" + parser.TokExprEnd +
+				" && wine game.exe\"",
 		},
 		{
 			name:  "escaped brackets",
@@ -2162,6 +2273,7 @@ func TestParseExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			p := parser.NewParser(tt.input)
 			got, err := p.ParseExpressions()
 			if !errors.Is(err, tt.wantErr) {
@@ -2176,11 +2288,12 @@ func TestParseExpressions(t *testing.T) {
 }
 
 func TestPostProcess(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
+		wantErr error
 		name    string
 		input   string
 		want    string
-		wantErr error
 	}{
 		{
 			name:  "empty arg",
@@ -2246,6 +2359,7 @@ func TestPostProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			env := parser.ArgExprEnv{
 				Platform:     "mister",
 				Version:      "1.2.3",

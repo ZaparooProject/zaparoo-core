@@ -1,13 +1,33 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package userdb
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 )
 
 const (
@@ -40,12 +60,12 @@ func NormalizeID(uid string) string {
 	return uid
 }
 
-func (db *UserDB) AddMapping(m database.Mapping) error {
-	if !utils.Contains(AllowedMappingTypes, m.Type) {
+func (db *UserDB) AddMapping(m database.Mapping) error { //nolint:gocritic // struct passed for DB insertion
+	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
 
-	if !utils.Contains(AllowedMatchTypes, m.Match) {
+	if !helpers.Contains(AllowedMatchTypes, m.Match) {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
@@ -54,7 +74,7 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 	}
 
 	if m.Pattern == "" {
-		return fmt.Errorf("missing pattern")
+		return errors.New("missing pattern")
 	}
 
 	if m.Match == MatchTypeRegex {
@@ -66,23 +86,23 @@ func (db *UserDB) AddMapping(m database.Mapping) error {
 
 	m.Added = time.Now().Unix()
 
-	return sqlAddMapping(db.sql, m)
+	return sqlAddMapping(db.ctx, db.sql, m)
 }
 
 func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
-	return sqlGetMapping(db.sql, id)
+	return sqlGetMapping(db.ctx, db.sql, id)
 }
 
 func (db *UserDB) DeleteMapping(id int64) error {
-	return sqlDeleteMapping(db.sql, id)
+	return sqlDeleteMapping(db.ctx, db.sql, id)
 }
 
-func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
-	if !utils.Contains(AllowedMappingTypes, m.Type) {
+func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error { //nolint:gocritic // struct passed for DB update
+	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
 
-	if !utils.Contains(AllowedMatchTypes, m.Match) {
+	if !helpers.Contains(AllowedMatchTypes, m.Match) {
 		return fmt.Errorf("invalid match type: %s", m.Match)
 	}
 
@@ -91,7 +111,7 @@ func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
 	}
 
 	if m.Pattern == "" {
-		return fmt.Errorf("missing pattern")
+		return errors.New("missing pattern")
 	}
 
 	if m.Match == MatchTypeRegex {
@@ -101,13 +121,13 @@ func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error {
 		}
 	}
 
-	return sqlUpdateMapping(db.sql, id, m)
+	return sqlUpdateMapping(db.ctx, db.sql, id, m)
 }
 
 func (db *UserDB) GetAllMappings() ([]database.Mapping, error) {
-	return sqlGetAllMappings(db.sql)
+	return sqlGetAllMappings(db.ctx, db.sql)
 }
 
 func (db *UserDB) GetEnabledMappings() ([]database.Mapping, error) {
-	return sqlGetEnabledMappings(db.sql)
+	return sqlGetEnabledMappings(db.ctx, db.sql)
 }

@@ -38,15 +38,17 @@ tasks:
           EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
           APP_BIN: "{{.APP_BIN}}"
       - >-
-        go run scripts/tasks/utils/makezip.go
+        go run scripts/tasks/utils/makezip/main.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
         "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.zip"
 
   run:
     internal: true
     vars:
-      BUILDCACHE: '{{if eq OS "windows"}}{{.LOCALAPPDATA}}\\go-build{{else}}{{.HOME}}/.cache/go-build{{end}}'
-      GOCACHE: '{{if eq OS "windows"}}{{.USERPROFILE}}\\go{{else}}{{.HOME}}/go{{end}}'
+      BUILDCACHE:
+        sh: go env GOCACHE
+      GOCACHE:
+        sh: go env GOMODCACHE || echo "{{.HOME}}/go"
       IMG_BUILDCACHE: /home/build/.cache/go-build
       IMG_GOCACHE: /home/build/go
     cmds:

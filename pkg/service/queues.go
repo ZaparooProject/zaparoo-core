@@ -1,7 +1,26 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package service
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -11,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,7 +38,7 @@ func runTokenZapScript(
 	platform platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
-	token tokens.Token,
+	token tokens.Token, //nolint:gocritic // single-use parameter in service function
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,
@@ -37,7 +57,7 @@ func runTokenZapScript(
 	reader := parser.NewParser(token.Text)
 	script, err := reader.ParseScript()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse script: %w", err)
 	}
 
 	log.Info().Msgf("running script (%d cmds): %s", len(script.Cmds), token.Text)
@@ -62,7 +82,7 @@ func runTokenZapScript(
 			st,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
 		if result.MediaChanged && !token.FromAPI {
@@ -86,7 +106,9 @@ func runTokenZapScript(
 			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
 			before := cmds[:i+1]
 			after := cmds[i+1:]
-			cmds = append(before, append(result.NewCommands, after...)...)
+			before = append(before, result.NewCommands...)
+			cmds = before
+			cmds = append(cmds, after...)
 		}
 	}
 
@@ -143,14 +165,15 @@ func handlePlaylist(
 ) {
 	activePlaylist := st.GetActivePlaylist()
 
-	if pls == nil {
+	switch {
+	case pls == nil:
 		// request to clear playlist
 		if activePlaylist != nil {
 			log.Info().Msg("clearing playlist")
 		}
 		st.SetActivePlaylist(nil)
 		return
-	} else if activePlaylist == nil {
+	case activePlaylist == nil:
 		// new playlist loaded
 		st.SetActivePlaylist(pls)
 		if pls.Playing {
@@ -160,7 +183,7 @@ func handlePlaylist(
 			log.Info().Any("pls", pls).Msg("setting new playlist")
 		}
 		return
-	} else {
+	default:
 		// active playlist updated
 		if pls.Current() == activePlaylist.Current() &&
 			pls.Playing == activePlaylist.Playing {
@@ -202,7 +225,7 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			err := platform.ScanHook(t)
+			err := platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}
@@ -235,7 +258,7 @@ func processTokenQueue(
 			}()
 		case <-st.GetContext().Done():
 			log.Debug().Msg("exiting service worker via context cancellation")
-			break
+			return
 		}
 	}
 }

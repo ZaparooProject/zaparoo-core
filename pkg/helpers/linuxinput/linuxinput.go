@@ -1,9 +1,32 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+//go:build linux
+
 package linuxinput
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
-	"github.com/bendahl/uinput"
+	"fmt"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput/keyboardmap"
+	"github.com/bendahl/uinput"
 )
 
 const (
@@ -24,7 +47,7 @@ func NewKeyboard(delay time.Duration) (Keyboard, error) {
 	keyboardmap.SetupLegacyKeyboardMap()
 	kbd, err := uinput.CreateKeyboard(uinputDev, []byte(DeviceName))
 	if err != nil {
-		return Keyboard{}, err
+		return Keyboard{}, fmt.Errorf("failed to create keyboard device: %w", err)
 	}
 	return Keyboard{
 		Device: kbd,
@@ -33,7 +56,10 @@ func NewKeyboard(delay time.Duration) (Keyboard, error) {
 }
 
 func (k *Keyboard) Close() error {
-	return k.Device.Close()
+	if err := k.Device.Close(); err != nil {
+		return fmt.Errorf("failed to close keyboard device: %w", err)
+	}
+	return nil
 }
 
 func (k *Keyboard) Press(key int) error {
@@ -43,26 +69,29 @@ func (k *Keyboard) Press(key int) error {
 
 	err := k.Device.KeyDown(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to press key down: %w", err)
 	}
 
 	time.Sleep(k.Delay)
 
-	return k.Device.KeyUp(key)
+	if err := k.Device.KeyUp(key); err != nil {
+		return fmt.Errorf("failed to release key: %w", err)
+	}
+	return nil
 }
 
 func (k *Keyboard) Combo(keys ...int) error {
 	for _, key := range keys {
 		err := k.Device.KeyDown(key)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to press combo key down: %w", err)
 		}
 	}
 	time.Sleep(k.Delay)
 	for _, key := range keys {
 		err := k.Device.KeyUp(key)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to release combo key: %w", err)
 		}
 	}
 	return nil
@@ -84,7 +113,7 @@ func NewGamepad(delay time.Duration) (Gamepad, error) {
 		0x5678,
 	)
 	if err != nil {
-		return Gamepad{}, err
+		return Gamepad{}, fmt.Errorf("failed to create gamepad device: %w", err)
 	}
 	return Gamepad{
 		Device: gpd,
@@ -93,30 +122,36 @@ func NewGamepad(delay time.Duration) (Gamepad, error) {
 }
 
 func (k *Gamepad) Close() error {
-	return k.Device.Close()
+	if err := k.Device.Close(); err != nil {
+		return fmt.Errorf("failed to close gamepad device: %w", err)
+	}
+	return nil
 }
 
 func (k *Gamepad) Press(key int) error {
 	err := k.Device.ButtonDown(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to press gamepad button down: %w", err)
 	}
 	time.Sleep(k.Delay)
-	return k.Device.ButtonUp(key)
+	if err := k.Device.ButtonUp(key); err != nil {
+		return fmt.Errorf("failed to release gamepad button: %w", err)
+	}
+	return nil
 }
 
 func (k *Gamepad) Combo(keys ...int) error {
 	for _, key := range keys {
 		err := k.Device.ButtonDown(key)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to press gamepad combo button down: %w", err)
 		}
 	}
 	time.Sleep(k.Delay)
 	for _, key := range keys {
 		err := k.Device.ButtonUp(key)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to release gamepad combo button: %w", err)
 		}
 	}
 	return nil

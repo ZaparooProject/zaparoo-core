@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package models
 
 import "encoding/json"
@@ -52,9 +71,9 @@ const (
 )
 
 type ZapScript struct {
-	ZapScript int            `json:"zapscript"` // schema version
-	Name      *string        `json:"name"`      // optional display name
+	Name      *string        `json:"name"`
 	Cmds      []ZapScriptCmd `json:"cmds"`
+	ZapScript int            `json:"zapscript"`
 }
 
 type ZapScriptCmd struct {
@@ -69,17 +88,17 @@ type CmdEvaluateArgs struct {
 }
 
 type CmdLaunchArgs struct {
-	Path      string  `json:"path" arg:"position=1"`
 	Launcher  *string `json:"launcher"`
 	Name      *string `json:"name"`
 	System    *string `json:"system"`
 	URL       *string `json:"url"`
 	PreNotice *string `json:"preNotice"`
+	Path      string  `json:"path" arg:"position=1"`
 }
 
 type CmdNotice struct {
-	Text   string `json:"text" arg:"position=1"`
 	Loader *bool  `json:"loader"`
+	Text   string `json:"text" arg:"position=1"`
 }
 
 type CmdPicker struct {

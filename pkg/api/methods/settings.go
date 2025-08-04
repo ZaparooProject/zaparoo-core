@@ -1,17 +1,38 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package methods
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/rs/zerolog/log"
-	"path/filepath"
 )
 
-func HandleSettings(env requests.RequestEnv) (any, error) {
+func HandleSettings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received settings request")
 
 	resp := models.SettingsResponse{
@@ -24,16 +45,12 @@ func HandleSettings(env requests.RequestEnv) (any, error) {
 		ReadersScanIgnoreSystem: make([]string, 0),
 	}
 
-	for _, s := range env.Config.ReadersScan().IgnoreSystem {
-		resp.ReadersScanIgnoreSystem = append(
-			resp.ReadersScanIgnoreSystem,
-			s,
-		)
-	}
+	resp.ReadersScanIgnoreSystem = append(resp.ReadersScanIgnoreSystem, env.Config.ReadersScan().IgnoreSystem...)
 
 	return resp, nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings reload request")
 
@@ -43,23 +60,24 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("error loading settings")
 	}
 
-	mapDir := filepath.Join(utils.DataDir(env.Platform), config.MappingsDir)
+	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)
 	err = env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")
 		return nil, errors.New("error loading mappings")
 	}
 
-	launchersDir := filepath.Join(utils.DataDir(env.Platform), config.LaunchersDir)
+	launchersDir := filepath.Join(helpers.DataDir(env.Platform), config.LaunchersDir)
 	err = env.Config.LoadCustomLaunchers(launchersDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading custom launchers")
 		return nil, errors.New("error loading custom launchers")
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings update request")
 
@@ -99,11 +117,12 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersScanMode != nil {
 		log.Info().Str("readersScanMode", *params.ReadersScanMode).Msg("update")
-		if *params.ReadersScanMode == "" {
+		switch *params.ReadersScanMode {
+		case "":
 			env.Config.SetScanMode(config.ScanModeTap)
-		} else if *params.ReadersScanMode == config.ScanModeTap || *params.ReadersScanMode == config.ScanModeHold {
+		case config.ScanModeTap, config.ScanModeHold:
 			env.Config.SetScanMode(*params.ReadersScanMode)
-		} else {
+		default:
 			return nil, ErrInvalidParams
 		}
 	}
@@ -118,5 +137,9 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
 	}
 
-	return nil, env.Config.Save()
+	err = env.Config.Save()
+	if err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+	return NoContent{}, nil
 }

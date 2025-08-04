@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package middleware
 
 import (
@@ -117,7 +136,10 @@ func HTTPRateLimitMiddleware(limiter *IPRateLimiter) func(http.Handler) http.Han
 }
 
 // WebSocketRateLimitHandler wraps a WebSocket message handler with rate limiting
-func WebSocketRateLimitHandler(limiter *IPRateLimiter, handler func(*melody.Session, []byte)) func(*melody.Session, []byte) {
+func WebSocketRateLimitHandler(
+	limiter *IPRateLimiter,
+	handler func(*melody.Session, []byte),
+) func(*melody.Session, []byte) {
 	return func(session *melody.Session, msg []byte) {
 		host, _, err := net.SplitHostPort(session.Request.RemoteAddr)
 		if err != nil {
@@ -132,8 +154,8 @@ func WebSocketRateLimitHandler(limiter *IPRateLimiter, handler func(*melody.Sess
 				Msg("WebSocket rate limit exceeded")
 
 			type jsonRPCError struct {
-				Code    int    `json:"code"`
 				Message string `json:"message"`
+				Code    int    `json:"code"`
 			}
 			type jsonRPCErrorResponse struct {
 				JSONRPC string       `json:"jsonrpc"`

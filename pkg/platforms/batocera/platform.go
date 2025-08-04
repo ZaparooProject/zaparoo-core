@@ -1,3 +1,5 @@
+//go:build linux
+
 package batocera
 
 import (
@@ -5,11 +7,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput"
 	"io"
 	"os"
 	"os/exec"
@@ -18,13 +15,18 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,35 +39,35 @@ const (
 )
 
 type Platform struct {
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	kbd            linuxinput.Keyboard
+	gpd            linuxinput.Gamepad
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDBatocera
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
-		optical_drive.NewReader(cfg),
+		simpleserial.NewReader(cfg),
+		opticaldrive.NewReader(cfg),
 	}
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
 	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create keyboard input device: %w", err)
 	}
 	p.kbd = kbd
 
 	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gamepad input device: %w", err)
 	}
 	p.gpd = gpd
 
@@ -92,7 +94,7 @@ func (p *Platform) StartPost(
 
 		systemMeta, err := assets.GetSystemMetadata(systemID)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get system metadata for %s: %w", systemID, err)
 		}
 
 		p.setActiveMedia(&models.ActiveMedia{
@@ -122,15 +124,15 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return append(cfg.IndexRoots(), "/userdata/roms")
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    DataDir,
 		ConfigDir:  ConfigDir,
@@ -151,7 +153,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 		if strings.HasPrefix(lowerPath, rootDir) {
 			gotRoot = true
 			newPath = path[len(rootDir):]
-			if len(newPath) > 0 && newPath[0] == '/' {
+			if newPath != "" && newPath[0] == '/' {
 				newPath = newPath[1:]
 			}
 			break
@@ -180,10 +182,16 @@ func (p *Platform) PlayAudio(path string) error {
 	}
 
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
+		path = filepath.Join(helpers.DataDir(p), path)
 	}
 
-	return exec.Command("aplay", path).Start()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "aplay", path).Start()
+	if err != nil {
+		return fmt.Errorf("failed to start aplay command: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) StopActiveLauncher() error {
@@ -214,18 +222,17 @@ func (p *Platform) StopActiveLauncher() error {
 		log.Info().Msg("stopped active launcher")
 		p.setActiveMedia(nil)
 		return nil
-	} else {
-		return fmt.Errorf("stop active launcher: failed to stop launcher")
 	}
+	return errors.New("stop active launcher: failed to stop launcher")
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
@@ -244,7 +251,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -257,7 +264,11 @@ func (p *Platform) KeyboardPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown keyboard key: %s", name)
 	}
-	return p.kbd.Press(code)
+	err := p.kbd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press keyboard key %s: %w", name, err)
+	}
+	return nil
 }
 
 func (p *Platform) GamepadPress(name string) error {
@@ -265,46 +276,52 @@ func (p *Platform) GamepadPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-	return p.gpd.Press(code)
+	err := p.gpd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
+	}
+	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
+}
+
+type ESGame struct {
+	Name string `xml:"name"`
+	Path string `xml:"path"`
 }
 
 type ESGameList struct {
 	XMLName xml.Name `xml:"gameList"`
-	Games   []struct {
-		Name string `xml:"name"`
-		Path string `xml:"path"`
-	} `xml:"game"`
+	Games   []ESGame `xml:"game"`
 }
 
 func readESGameListXML(path string) (ESGameList, error) {
-	xmlFile, err := os.Open(path)
+	xmlFile, err := os.Open(path) //nolint:gosec // Internal EmulationStation gamelist XML path
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to open ES game list XML file %s: %w", path, err)
 	}
 	defer func(xmlFile *os.File) {
-		err := xmlFile.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing xml file")
+		closeErr := xmlFile.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing xml file")
 		}
 	}(xmlFile)
 
 	data, err := io.ReadAll(xmlFile)
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to read ES game list XML file %s: %w", path, err)
 	}
 
 	var gameList ESGameList
 	err = xml.Unmarshal(data, &gameList)
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to unmarshal ES game list XML: %w", err)
 	}
 
 	return gameList, nil
@@ -316,8 +333,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command(path).Start()
+			Launch: func(_ *config.Instance, path string) error {
+				return exec.CommandContext(context.Background(), path).Start()
 			},
 		},
 	}
@@ -333,16 +350,15 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       launcherID,
 			SystemID: v,
 			Folders:  []string{k},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				return apiLaunch(path)
 			},
 			Scanner: func(
 				cfg *config.Instance,
 				systemID string,
-				results []platforms.ScanResult,
+				_ []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				// drop existing results since they're just junk here
-				results = []platforms.ScanResult{}
+				results := []platforms.ScanResult{}
 
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {
@@ -390,26 +406,26 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		})
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
 	return nil, 0, apiNotify(args.Text)
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	args widgetModels.NoticeArgs,
+	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
 	return nil, apiNotify(args.Text)
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }

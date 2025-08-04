@@ -1,11 +1,33 @@
-package utils
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package helpers
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -48,7 +70,16 @@ func ignoreSerialDevice(path string) bool {
 		return false
 	}
 
-	cmd := exec.Command("/usr/bin/udevadm", "info", "--name="+path)
+	// Validate device path to prevent command injection
+	if !strings.HasPrefix(path, "/dev/") {
+		log.Error().Str("path", path).Msg("invalid device path")
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	//nolint:gosec // Safe: path validated to start with /dev/, udevadm uses absolute path
+	cmd := exec.CommandContext(ctx, "/usr/bin/udevadm", "info", "--name="+path)
 	out, err := cmd.Output()
 	if err != nil {
 		log.Error().Err(err).Msg("udevadm failed")
@@ -90,21 +121,21 @@ func getLinuxList() ([]string, error) {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open /dev directory: %w", err)
 	}
 	defer func(f *os.File) {
-		err := f.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close serial device folder")
+		closeErr := f.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close serial device folder")
 		}
 	}(f)
 
 	files, err := f.Readdir(0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read /dev directory: %w", err)
 	}
 
-	var devices []string
+	devices := make([]string, 0, len(files))
 
 	for _, v := range files {
 		if v.IsDir() {
@@ -126,13 +157,14 @@ func getLinuxList() ([]string, error) {
 }
 
 func GetSerialDeviceList() ([]string, error) {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return getLinuxList()
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get serial ports list on darwin: %w", err)
 		}
 
 		for _, v := range ports {
@@ -146,11 +178,11 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 
 		return devices, nil
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		var devices []string
 		ports, err := serial.GetPortsList()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get serial ports list on windows: %w", err)
 		}
 
 		for _, v := range ports {
@@ -164,7 +196,11 @@ func GetSerialDeviceList() ([]string, error) {
 		}
 
 		return devices, nil
+	default:
+		ports, err := serial.GetPortsList()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get serial ports list: %w", err)
+		}
+		return ports, nil
 	}
-
-	return serial.GetPortsList()
 }

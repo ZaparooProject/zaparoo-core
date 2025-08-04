@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package tui
 
 import (
@@ -141,7 +160,7 @@ func BuildAudioMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Applica
 func BuildReadersMenu(cfg *config.Instance, pages *tview.Pages, _ *tview.Application) *tview.Form {
 	autoDetect := cfg.AutoDetect()
 
-	var connectionStrings []string
+	connectionStrings := make([]string, 0, len(cfg.Readers().Connect))
 	for _, item := range cfg.Readers().Connect {
 		connectionStrings = append(connectionStrings, item.Driver+":"+item.Path)
 	}
@@ -200,19 +219,20 @@ func BuildScanModeMenu(cfg *config.Instance, pages *tview.Pages, app *tview.Appl
 	exitDelay := cfg.ReadersScan().ExitDelay
 
 	scanMenu := tview.NewForm()
-	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, optionIndex int) {
+	scanMenu.AddDropDown("Scan mode", scanModes, scanMode, func(option string, _ int) {
 		cfg.SetScanMode(strings.ToLower(option))
 	}).
-		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2, tview.InputFieldInteger, func(value string) {
-			delay, _ := strconv.ParseFloat(value, 32)
-			cfg.SetScanExitDelay(float32(delay))
-		}).
+		AddInputField("Exit delay", strconv.FormatFloat(float64(exitDelay), 'f', 0, 32), 2,
+			tview.InputFieldInteger, func(value string) {
+				delay, _ := strconv.ParseFloat(value, 32)
+				cfg.SetScanExitDelay(float32(delay))
+			}).
 		AddDropDown("Ignore systems", allSystems, 0, func(option string, optionIndex int) {
 			currentSystems := cfg.ReadersScan().IgnoreSystem
 			if optionIndex > 0 {
 				if !slices.Contains(currentSystems, option) {
-					newSystems := append(currentSystems, option)
-					cfg.SetScanIgnoreSystem(newSystems)
+					currentSystems = append(currentSystems, option)
+					cfg.SetScanIgnoreSystem(currentSystems)
 				} else {
 					index := slices.Index(currentSystems, option)
 					newSystems := slices.Delete(currentSystems, index, index+1)

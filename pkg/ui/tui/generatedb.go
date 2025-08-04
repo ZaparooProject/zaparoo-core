@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package tui
 
 import (
@@ -17,12 +36,12 @@ import (
 func getMediaState(ctx context.Context, cfg *config.Instance) (models.MediaResponse, error) {
 	resp, err := client.LocalClient(ctx, cfg, models.MethodMedia, "")
 	if err != nil {
-		return models.MediaResponse{}, err
+		return models.MediaResponse{}, fmt.Errorf("failed to get media state from local client: %w", err)
 	}
 	var tokens models.MediaResponse
 	err = json.Unmarshal([]byte(resp), &tokens)
 	if err != nil {
-		return models.MediaResponse{}, err
+		return models.MediaResponse{}, fmt.Errorf("failed to unmarshal media response: %w", err)
 	}
 	return tokens, nil
 }
@@ -33,12 +52,12 @@ func waitGenerateUpdate(ctx context.Context, cfg *config.Instance) (models.Index
 		cfg, models.NotificationMediaIndexing,
 	)
 	if err != nil {
-		return models.IndexingStatusResponse{}, nil
+		return models.IndexingStatusResponse{}, fmt.Errorf("failed to wait for notification: %w", err)
 	}
 	var status models.IndexingStatusResponse
 	err = json.Unmarshal([]byte(resp), &status)
 	if err != nil {
-		return models.IndexingStatusResponse{}, err
+		return models.IndexingStatusResponse{}, fmt.Errorf("failed to unmarshal indexing status response: %w", err)
 	}
 	return status, nil
 }
@@ -75,7 +94,7 @@ func (p *ProgressBar) GetProgress() float64 {
 }
 
 func (p *ProgressBar) Draw(screen tcell.Screen) {
-	p.Box.DrawForSubclass(screen, p)
+	p.DrawForSubclass(screen, p)
 
 	x, y, width, height := p.GetInnerRect()
 
@@ -298,16 +317,17 @@ func BuildGenerateDBPage(
 	}
 
 	media, err := getMediaState(context.Background(), cfg)
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Error().Err(err).Msg("error getting media state")
-	} else if media.Database.Indexing {
+	case media.Database.Indexing:
 		updateProgress(
 			*media.Database.CurrentStep,
 			*media.Database.TotalSteps,
 			*media.Database.CurrentStepDisplay,
 		)
 		generateDB.SwitchToPage("progress")
-	} else {
+	default:
 		generateDB.SwitchToPage("initial")
 	}
 
@@ -315,7 +335,7 @@ func BuildGenerateDBPage(
 		var lastUpdate *models.IndexingStatusResponse
 		for {
 			indexing, err := waitGenerateUpdate(context.Background(), cfg)
-			if errors.Is(client.ErrRequestTimeout, err) {
+			if errors.Is(err, client.ErrRequestTimeout) {
 				continue
 			} else if err != nil {
 				log.Error().Err(err).Msg("error waiting for indexing update")
@@ -324,8 +344,8 @@ func BuildGenerateDBPage(
 			log.Debug().Msgf("indexing update: %+v", indexing)
 
 			if lastUpdate != nil &&
-				lastUpdate.Indexing == true &&
-				indexing.Indexing == false &&
+				lastUpdate.Indexing &&
+				!indexing.Indexing &&
 				indexing.TotalFiles != nil {
 				showComplete(*indexing.TotalFiles)
 				updateProgress(0, 1, "")

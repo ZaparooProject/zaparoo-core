@@ -1,9 +1,28 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package methods
 
 import (
 	"encoding/json"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -11,13 +30,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
-func HandleMappings(env requests.RequestEnv) (any, error) {
+func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received mappings request")
 
 	resp := models.AllMappingsResponse{
@@ -36,9 +56,10 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 		t := time.Unix(0, m.Added*int64(time.Millisecond))
 
 		// keep compatibility for v0.1 api
-		if m.Type == userdb.MappingTypeID {
+		switch m.Type {
+		case userdb.MappingTypeID:
 			m.Type = userdb.LegacyMappingTypeUID
-		} else if m.Type == userdb.MappingTypeValue {
+		case userdb.MappingTypeValue:
 			m.Type = userdb.LegacyMappingTypeText
 		}
 
@@ -62,11 +83,11 @@ func HandleMappings(env requests.RequestEnv) (any, error) {
 }
 
 func validateAddMappingParams(amr *models.AddMappingParams) error {
-	if !utils.Contains(userdb.AllowedMappingTypes, amr.Type) {
+	if !helpers.Contains(userdb.AllowedMappingTypes, amr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if !utils.Contains(userdb.AllowedMatchTypes, amr.Match) {
+	if !helpers.Contains(userdb.AllowedMatchTypes, amr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -77,14 +98,14 @@ func validateAddMappingParams(amr *models.AddMappingParams) error {
 	if amr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(amr.Pattern)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to compile regex pattern: %w", err)
 		}
 	}
 
 	return nil
 }
 
-func HandleAddMapping(env requests.RequestEnv) (any, error) {
+func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received add mapping request")
 
 	if len(env.Params) == 0 {
@@ -98,9 +119,10 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 	}
 
 	// convert old type names
-	if params.Type == userdb.LegacyMappingTypeUID {
+	switch params.Type {
+	case userdb.LegacyMappingTypeUID:
 		params.Type = userdb.MappingTypeID
-	} else if params.Type == userdb.LegacyMappingTypeText {
+	case userdb.LegacyMappingTypeText:
 		params.Type = userdb.MappingTypeValue
 	}
 
@@ -121,12 +143,13 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) {
 
 	err = env.Database.UserDB.AddMapping(m)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to add mapping: %w", err)
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received delete mapping request")
 
@@ -140,24 +163,25 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	err = env.Database.UserDB.DeleteMapping(int64(params.Id))
+	err = env.Database.UserDB.DeleteMapping(int64(params.ID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to delete mapping: %w", err)
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
 func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
-	if umr.Label == nil && umr.Enabled == nil && umr.Type == nil && umr.Match == nil && umr.Pattern == nil && umr.Override == nil {
+	if umr.Label == nil && umr.Enabled == nil && umr.Type == nil &&
+		umr.Match == nil && umr.Pattern == nil && umr.Override == nil {
 		return errors.New("missing fields")
 	}
 
-	if umr.Type != nil && !utils.Contains(userdb.AllowedMappingTypes, *umr.Type) {
+	if umr.Type != nil && !helpers.Contains(userdb.AllowedMappingTypes, *umr.Type) {
 		return errors.New("invalid type")
 	}
 
-	if umr.Match != nil && !utils.Contains(userdb.AllowedMatchTypes, *umr.Match) {
+	if umr.Match != nil && !helpers.Contains(userdb.AllowedMatchTypes, *umr.Match) {
 		return errors.New("invalid match")
 	}
 
@@ -168,13 +192,14 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 	if umr.Match != nil && *umr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(*umr.Pattern)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to compile regex pattern: %w", err)
 		}
 	}
 
 	return nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received update mapping request")
 
@@ -190,9 +215,10 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 
 	// convert old type names
 	if params.Type != nil {
-		if *params.Type == userdb.LegacyMappingTypeUID {
+		switch *params.Type {
+		case userdb.LegacyMappingTypeUID:
 			*params.Type = userdb.MappingTypeID
-		} else if *params.Type == userdb.LegacyMappingTypeText {
+		case userdb.LegacyMappingTypeText:
 			*params.Type = userdb.MappingTypeValue
 		}
 	}
@@ -203,9 +229,9 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		return nil, ErrInvalidParams
 	}
 
-	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.Id))
+	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.ID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get mapping: %w", err)
 	}
 
 	newMapping := oldMapping
@@ -234,23 +260,24 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		newMapping.Override = *params.Override
 	}
 
-	err = env.Database.UserDB.UpdateMapping(int64(params.Id), newMapping)
+	err = env.Database.UserDB.UpdateMapping(int64(params.ID), newMapping)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to update mapping: %w", err)
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleReloadMappings(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received reload mappings request")
 
-	mapDir := filepath.Join(utils.DataDir(env.Platform), config.MappingsDir)
+	mapDir := filepath.Join(helpers.DataDir(env.Platform), config.MappingsDir)
 	err := env.Config.LoadMappings(mapDir)
 	if err != nil {
 		log.Error().Err(err).Msg("error loading mappings")
 		return nil, errors.New("error loading mappings")
 	}
 
-	return nil, nil
+	return NoContent{}, nil
 }

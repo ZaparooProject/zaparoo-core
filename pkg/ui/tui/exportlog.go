@@ -1,14 +1,37 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package tui
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -33,7 +56,7 @@ func BuildExportLogModal(
 		'1', func() {
 			outcome := uploadLog(pl, exportPages, app)
 			resultModal := genericModal(outcome, "Upload Log File",
-				func(buttonIndex int, buttonLabel string) {
+				func(_ int, _ string) {
 					exportPages.RemovePage("upload")
 				}, true)
 			exportPages.AddPage("upload", resultModal, true, true)
@@ -47,7 +70,7 @@ func BuildExportLogModal(
 			func() {
 				outcome := copyLogToSd(pl, logDestPath, logDestName)
 				resultModal := genericModal(outcome, "Copy Log File",
-					func(buttonIndex int, buttonLabel string) {
+					func(_ int, _ string) {
 						exportPages.RemovePage("copy")
 					}, true)
 				exportPages.AddPage("copy", resultModal, true, true)
@@ -71,10 +94,10 @@ func BuildExportLogModal(
 	return exportMenu
 }
 
-func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) string {
+func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
 	newPath := logDestPath
-	err := utils.CopyFile(logPath, newPath)
+	err := helpers.CopyFile(logPath, newPath)
 	outcome := ""
 	if err != nil {
 		outcome = fmt.Sprintf("Unable to copy log file to %s.", logDestName)
@@ -87,18 +110,31 @@ func copyLogToSd(pl platforms.Platform, logDestPath string, logDestName string) 
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
 	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
-	modal := genericModal("Uploading log file...", "Log upload", func(buttonIndex int, buttonLabel string) {}, false)
+	modal := genericModal("Uploading log file...", "Log upload", func(_ int, _ string) {}, false)
 	pages.AddPage("temp_upload", modal, true, true)
 	app.SetFocus(modal)
 	app.ForceDraw()
 
-	uploadCmd := "cat '" + logPath + "' | nc termbin.com 9999"
-	out, err := exec.Command("bash", "-c", uploadCmd).Output()
+	// Create a pipe to safely pass file content to nc without shell injection
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Read the log file
+	//nolint:gosec // Safe: logPath is from internal platform settings, not user input
+	logContent, err := os.ReadFile(logPath)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to read log file")
+		return "Error reading log file."
+	}
+
+	// Execute nc command with stdin pipe
+	cmd := exec.CommandContext(ctx, "nc", "termbin.com", "9999")
+	cmd.Stdin = bytes.NewReader(logContent)
+	out, err := cmd.Output()
 	pages.RemovePage("temp_upload")
 	if err != nil {
 		log.Error().Err(err).Msgf("error uploading log file to termbin")
 		return "Error uploading log file."
-	} else {
-		return "Log file URL:\n\n" + strings.TrimSpace(string(out))
 	}
+	return "Log file URL:\n\n" + strings.TrimSpace(string(out))
 }

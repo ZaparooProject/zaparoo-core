@@ -1,11 +1,32 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
-	"github.com/pelletier/go-toml/v2"
-	"github.com/rs/zerolog/log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
+	"github.com/rs/zerolog/log"
 )
 
 type MappingsEntry struct {
@@ -24,7 +45,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 
 	_, err := os.Stat(mappingsDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to stat mappings directory: %w", err)
 	}
 
 	var mapFiles []string
@@ -50,7 +71,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 		},
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to walk mappings directory: %w", err)
 	}
 	log.Info().Msgf("found %d mapping files", len(mapFiles))
 
@@ -60,6 +81,7 @@ func (c *Instance) LoadMappings(mappingsDir string) error {
 	for _, mapPath := range mapFiles {
 		log.Debug().Msgf("loading mapping file: %s", mapPath)
 
+		//nolint:gosec // Safe: reads mapping config files from controlled application directories
 		data, err := os.ReadFile(mapPath)
 		if err != nil {
 			log.Error().Msgf("error reading mapping file: %s", mapPath)

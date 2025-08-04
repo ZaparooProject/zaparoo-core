@@ -1,17 +1,23 @@
+//go:build linux
+
 package libreelec
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type KodiAPIMethod string
@@ -47,8 +53,8 @@ type KodiPlayerStopParams struct {
 }
 
 type KodiPlayer struct {
-	ID   int    `json:"playerid"`
 	Type string `json:"type"`
+	ID   int    `json:"playerid"`
 }
 
 type KodiPlayerGetActivePlayersResponse []KodiPlayer
@@ -70,22 +76,22 @@ type KodiVideoLibraryGetEpisodesResponse struct {
 }
 
 type KodiAPIPayload struct {
+	Params  any           `json:"params,omitempty"`
 	JSONRPC string        `json:"jsonrpc"`
 	ID      string        `json:"id"`
 	Method  KodiAPIMethod `json:"method"`
-	Params  any           `json:"params,omitempty"`
 }
 
 type KodiAPIError struct {
-	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
 type KodiAPIResponse struct {
-	ID      string          `json:"id"`
-	Result  json.RawMessage `json:"result"`
 	Error   *KodiAPIError   `json:"error,omitempty"`
+	ID      string          `json:"id"`
 	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result"`
 }
 
 func apiRequest(
@@ -100,14 +106,16 @@ func apiRequest(
 		Params:  params,
 	}
 
-	reqJson, err := json.Marshal(req)
+	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
-	log.Debug().Msgf("request: %s", string(reqJson))
+	log.Debug().Msgf("request: %s", string(reqJSON))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
-	kodiReq, err := http.NewRequest("POST", kodiURL, bytes.NewBuffer(reqJson))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, kodiURL, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -120,12 +128,14 @@ func apiRequest(
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
+	if resp == nil {
+		return nil, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
 		}
-	}(resp.Body)
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -162,7 +172,7 @@ func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
 
 	movieID, err := strconv.Atoi(pathID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse movie ID %q: %w", pathID, err)
 	}
 
 	params := KodiPlayerOpenParams{
@@ -181,26 +191,25 @@ func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
 
 func kodiLaunchTVRequest(cfg *config.Instance, path string) error {
 	var params KodiPlayerOpenParams
-	if strings.HasPrefix(path, SchemeKodiEpisode+"://") {
-		id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
-		id = strings.SplitN(id, "/", 2)[0]
-		intID, err := strconv.Atoi(id)
-		if err != nil {
-			return err
-		}
-		params = KodiPlayerOpenParams{
-			Item: KodiItem{
-				EpisodeID: intID,
-			},
-			Options: KodiItemOptions{
-				Resume: true,
-			},
-		}
-	} else {
+	if !strings.HasPrefix(path, SchemeKodiEpisode+"://") {
 		return fmt.Errorf("invalid path: %s", path)
 	}
+	id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
+	id = strings.SplitN(id, "/", 2)[0]
+	intID, err := strconv.Atoi(id)
+	if err != nil {
+		return fmt.Errorf("failed to parse episode ID %q: %w", id, err)
+	}
+	params = KodiPlayerOpenParams{
+		Item: KodiItem{
+			EpisodeID: intID,
+		},
+		Options: KodiItemOptions{
+			Resume: true,
+		},
+	}
 
-	_, err := apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
+	_, err = apiRequest(cfg, KodiAPIMethodPlayerOpen, params)
 
 	return err
 }
@@ -218,7 +227,7 @@ func kodiScanMovies(
 	var scanResults KodiVideoLibraryGetMoviesResponse
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal movies response: %w", err)
 	}
 
 	for _, movie := range scanResults.Movies {
@@ -249,7 +258,7 @@ func kodiScanTV(
 	var scanResults KodiVideoLibraryGetTVShowsResponse
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal TV shows response: %w", err)
 	}
 
 	for _, show := range scanResults.TVShows {
@@ -264,7 +273,7 @@ func kodiScanTV(
 		var epsResults KodiVideoLibraryGetEpisodesResponse
 		err = json.Unmarshal(epsResp, &epsResults)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to unmarshal episodes response: %w", err)
 		}
 
 		for _, ep := range epsResults.Episodes {
@@ -293,7 +302,7 @@ func kodiStop(cfg *config.Instance) error {
 	var players KodiPlayerGetActivePlayersResponse
 	err = json.Unmarshal(playersResp, &players)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal players response: %w", err)
 	}
 
 	if len(players) == 0 {

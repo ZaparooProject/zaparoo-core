@@ -1,11 +1,30 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package models
 
 import "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
 
 type SearchParams struct {
-	Query      string    `json:"query"`
 	Systems    *[]string `json:"systems"`
 	MaxResults *int      `json:"maxResults"`
+	Query      string    `json:"query"`
 }
 
 type MediaIndexParams struct {
@@ -21,33 +40,33 @@ type RunParams struct {
 }
 
 type RunScriptParams struct {
-	ZapScript int                   `json:"zapscript"`
 	Name      *string               `json:"name"`
 	Cmds      []models.ZapScriptCmd `json:"cmds"`
+	ZapScript int                   `json:"zapscript"`
 	Unsafe    bool                  `json:"unsafe"`
 }
 
 type AddMappingParams struct {
 	Label    string `json:"label"`
-	Enabled  bool   `json:"enabled"`
 	Type     string `json:"type"`
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
+	Enabled  bool   `json:"enabled"`
 }
 
 type DeleteMappingParams struct {
-	Id int `json:"id"`
+	ID int `json:"id"`
 }
 
 type UpdateMappingParams struct {
-	Id       int     `json:"id"`
 	Label    *string `json:"label"`
 	Enabled  *bool   `json:"enabled"`
 	Type     *string `json:"type"`
 	Match    *string `json:"match"`
 	Pattern  *string `json:"pattern"`
 	Override *string `json:"override"`
+	ID       int     `json:"id"`
 }
 
 type ReaderWriteParams struct {
@@ -69,7 +88,7 @@ type NewClientParams struct {
 }
 
 type DeleteClientParams struct {
-	Id string `json:"id"`
+	ID string `json:"id"`
 }
 
 type MediaStartedParams struct {

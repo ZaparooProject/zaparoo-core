@@ -1,15 +1,37 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package installer
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/rs/zerolog/log"
 )
 
 type AuthTransport struct {
@@ -33,7 +55,11 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	return t.Base.RoundTrip(req)
+	resp, err := t.Base.RoundTrip(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform HTTP round trip: %w", err)
+	}
+	return resp, nil
 }
 
 var timeoutTr = &http.Transport{
@@ -52,17 +78,29 @@ var httpClient = &http.Client{
 }
 
 func DownloadHTTPFile(opts DownloaderArgs) error {
-	resp, err := httpClient.Get(opts.url)
+	// TODO: Add progress feedback for large file downloads
+	// Extended timeout for potentially large game files (700MB+)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.url, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Error().Err(err).Msgf("closing body")
+	if resp == nil {
+		return errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
-	}(resp.Body)
-	if resp.StatusCode != 200 {
+	}()
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
@@ -73,26 +111,26 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 
 	written, err := io.Copy(file, resp.Body)
 	if err != nil {
-		err = file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msgf("error closing file: %s", opts.tempPath)
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msgf("error closing file: %s", opts.tempPath)
 		}
-		err := os.Remove(opts.tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing partial download: %s", opts.tempPath)
+		removeErr := os.Remove(opts.tempPath)
+		if removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing partial download: %s", opts.tempPath)
 		}
 		return fmt.Errorf("error downloading file: %w", err)
 	}
 
 	expected := resp.ContentLength
 	if expected > 0 && written != expected {
-		err = file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msgf("error closing file: %s", opts.tempPath)
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msgf("error closing file: %s", opts.tempPath)
 		}
-		err := os.Remove(opts.tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing partial download: %s", opts.tempPath)
+		removeErr := os.Remove(opts.tempPath)
+		if removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing partial download: %s", opts.tempPath)
 		}
 		return fmt.Errorf("download incomplete: expected %d bytes, got %d", expected, written)
 	}

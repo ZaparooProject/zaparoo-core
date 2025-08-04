@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023, 2024 Callan Barrett
-Copyright (C) 2023 Gareth Jones
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -22,32 +22,35 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package iniconfig
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog"
-	"gopkg.in/ini.v1"
+	"github.com/rs/zerolog/log"
+	ini "gopkg.in/ini.v1"
 )
 
-const UserConfigEnv = "TAPTO_CONFIG"
-const UserAppPathEnv = "TAPTO_APP_PATH"
+const (
+	UserConfigEnv  = "TAPTO_CONFIG"
+	UserAppPathEnv = "TAPTO_APP_PATH"
+)
 
 type TapToConfig struct {
+	ConnectionString  string   `ini:"connection_string,omitempty"`
 	Reader            []string `ini:"reader,omitempty,allowshadow"`
-	AllowCommands     bool     `ini:"allow_commands"`      // TODO: DEPRECATED, remove and use allow_shell below
-	DisableSounds     bool     `ini:"disable_sounds"`      // TODO: rename something like audio_feedback?
-	ProbeDevice       bool     `ini:"probe_device"`        // TODO: rename to reader_detection?
-	ExitGame          bool     `ini:"exit_game"`           // TODO: rename to insert_mode
-	ExitGameBlocklist []string `ini:"exit_game_blocklist"` // TODO: rename to insert_mode_blocklist
-	ExitGameDelay     int      `ini:"exit_game_delay"`     // TODO: rename to insert_mode_delay
+	ExitGameBlocklist []string `ini:"exit_game_blocklist"`
+	ExitGameDelay     int      `ini:"exit_game_delay"`
+	AllowCommands     bool     `ini:"allow_commands"`
+	DisableSounds     bool     `ini:"disable_sounds"`
+	ProbeDevice       bool     `ini:"probe_device"`
+	ExitGame          bool     `ini:"exit_game"`
 	ConsoleLogging    bool     `ini:"console_logging"`
 	Debug             bool     `ini:"debug"`
-	ConnectionString  string   `ini:"connection_string,omitempty"` // DEPRECATED
 }
 
 type SystemsConfig struct {
@@ -60,19 +63,19 @@ type LaunchersConfig struct {
 	// TODO: allow_shell - contents of shell command
 }
 
-type ApiConfig struct {
+type APIConfig struct {
 	Port        string   `ini:"port"`
 	AllowLaunch []string `ini:"allow_launch,omitempty,allowshadow"`
 }
 
 type UserConfig struct {
-	mu        sync.RWMutex
 	AppPath   string          `ini:"-"`
 	IniPath   string          `ini:"-"`
-	TapTo     TapToConfig     `ini:"tapto"`
 	Systems   SystemsConfig   `ini:"systems"`
+	API       APIConfig       `ini:"api"`
 	Launchers LaunchersConfig `ini:"launchers"`
-	Api       ApiConfig       `ini:"api"`
+	TapTo     TapToConfig     `ini:"tapto"`
+	mu        sync.RWMutex
 }
 
 func (c *UserConfig) GetConnectionString() string {
@@ -213,12 +216,12 @@ func (c *UserConfig) LoadConfig() error {
 
 	cfg, err := ini.ShadowLoad(c.IniPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load ini file: %w", err)
 	}
 
 	err = cfg.StrictMapTo(c)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to map config: %w", err)
 	}
 
 	return nil
@@ -235,12 +238,12 @@ func (c *UserConfig) SaveConfig() error {
 
 	err := cfg.ReflectFrom(c)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to reflect config: %w", err)
 	}
 
 	err = cfg.SaveTo(c.IniPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	return nil
@@ -251,7 +254,7 @@ func NewUserConfig(defaultConfig *UserConfig) (*UserConfig, error) {
 
 	exePath, err := os.Executable()
 	if err != nil {
-		return defaultConfig, err
+		return defaultConfig, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	appPath := os.Getenv(UserAppPathEnv)
@@ -266,12 +269,12 @@ func NewUserConfig(defaultConfig *UserConfig) (*UserConfig, error) {
 	defaultConfig.AppPath = exePath
 	defaultConfig.IniPath = iniPath
 
-	if _, err := os.Stat(iniPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(iniPath); os.IsNotExist(statErr) {
 		// create a blank one on disk
-		err := defaultConfig.SaveConfig()
-		if err != nil {
-			log.Error().Err(err).Msg("failed to save new user config to disk")
-			return defaultConfig, err
+		saveErr := defaultConfig.SaveConfig()
+		if saveErr != nil {
+			log.Error().Err(saveErr).Msg("failed to save new user config to disk")
+			return defaultConfig, saveErr
 		}
 
 		return defaultConfig, nil

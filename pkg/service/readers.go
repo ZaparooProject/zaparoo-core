@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package service
 
 import (
@@ -8,13 +27,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,8 +58,8 @@ func connectReaders(
 	}
 
 	for _, device := range cfg.Readers().Connect {
-		if !utils.Contains(rs, device.ConnectionString()) &&
-			!utils.Contains(toConnectStrs(), device.ConnectionString()) {
+		if !helpers.Contains(rs, device.ConnectionString()) &&
+			!helpers.Contains(toConnectStrs(), device.ConnectionString()) {
 			log.Debug().Msgf("config device not connected, adding: %s", device)
 			toConnect = append(toConnect, toConnectDevice{
 				connectionString: device.ConnectionString(),
@@ -55,17 +73,17 @@ func connectReaders(
 		if _, ok := st.GetReader(device.connectionString); !ok {
 			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {
-				ids := r.Ids()
-				if utils.Contains(ids, rt) {
+				ids := r.IDs()
+				if helpers.Contains(ids, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
 					err := r.Open(device.device, iq)
 					if err != nil {
 						log.Error().Msgf("error opening reader: %s", err)
-					} else {
-						st.SetReader(device.connectionString, r)
-						log.Info().Msgf("opened reader: %s", device)
-						break
+						continue
 					}
+					st.SetReader(device.connectionString, r)
+					log.Info().Msgf("opened reader: %s", device)
+					break
 				}
 			}
 		}
@@ -124,10 +142,12 @@ func runBeforeExitHook(
 	db *database.Database,
 	lsq chan *tokens.Token,
 	plq chan *playlists.Playlist,
-	activeMedia models.ActiveMedia,
+	activeMedia models.ActiveMedia, //nolint:gocritic // single-use parameter in service function
 ) {
 	var systemIDs []string
-	for _, l := range pl.Launchers(cfg) {
+	launchers := pl.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
 		if l.ID == activeMedia.SystemID {
 			systemIDs = append(systemIDs, l.SystemID)
 			system, err := systemdefs.LookupSystem(l.SystemID)
@@ -260,9 +280,8 @@ func readerManager(
 			return
 		}
 		if time.Since(lastError) > 1*time.Second {
-			err := pl.PlayAudio(config.FailSoundFilename)
-			if err != nil {
-				log.Warn().Msgf("error playing fail sound: %s", err)
+			if audioErr := pl.PlayAudio(config.FailSoundFilename); audioErr != nil {
+				log.Warn().Msgf("error playing fail sound: %s", audioErr)
 			}
 		}
 	}
@@ -283,9 +302,8 @@ func readerManager(
 					}
 				}
 
-				err := connectReaders(pl, cfg, st, scanQueue)
-				if err != nil {
-					log.Error().Msgf("error connecting rs: %s", err)
+				if connectErr := connectReaders(pl, cfg, st, scanQueue); connectErr != nil {
+					log.Error().Msgf("error connecting rs: %s", connectErr)
 				}
 			}
 		}
@@ -313,7 +331,7 @@ preprocessing:
 		case stoken := <-lsq:
 			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", st)
-			if exitTimer != nil && !utils.TokensEqual(stoken, st.GetSoftwareToken()) {
+			if exitTimer != nil && !helpers.TokensEqual(stoken, st.GetSoftwareToken()) {
 				if stopped := exitTimer.Stop(); stopped {
 					log.Info().Msg("different software token inserted, cancelling exit")
 				}
@@ -322,7 +340,7 @@ preprocessing:
 			continue preprocessing
 		}
 
-		if utils.TokensEqual(scan, prevToken) {
+		if helpers.TokensEqual(scan, prevToken) {
 			log.Debug().Msg("ignoring duplicate scan")
 			continue preprocessing
 		}
@@ -353,7 +371,7 @@ preprocessing:
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
 				activeToken := st.GetActiveCard()
-				if stopped && utils.TokensEqual(scan, &activeToken) {
+				if stopped && helpers.TokensEqual(scan, &activeToken) {
 					log.Info().Msg("same token reinserted, cancelling exit")
 					continue preprocessing
 				} else if stopped {
@@ -364,13 +382,12 @@ preprocessing:
 
 			// avoid launching a token that was just written by a reader
 			wt := st.GetWroteToken()
-			if wt != nil && utils.TokensEqual(scan, wt) {
+			if wt != nil && helpers.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
 				st.SetWroteToken(nil)
 				continue preprocessing
-			} else {
-				st.SetWroteToken(nil)
 			}
+			st.SetWroteToken(nil)
 
 			log.Info().Msgf("sending token to queue: %v", scan)
 

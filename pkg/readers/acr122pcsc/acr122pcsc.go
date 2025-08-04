@@ -1,27 +1,47 @@
-package acr122_pcsc
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package acr122pcsc
 
 import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ebfe/scard"
 	"github.com/rs/zerolog/log"
 )
 
 type ACR122PCSC struct {
 	cfg     *config.Instance
+	ctx     *scard.Context
 	device  config.ReadersConnect
 	name    string
 	polling bool
-	ctx     *scard.Context
 }
 
 func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
@@ -30,29 +50,29 @@ func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
 	}
 }
 
-func (r *ACR122PCSC) Ids() []string {
+func (*ACR122PCSC) IDs() []string {
 	return []string{"acr122_pcsc"}
 }
 
 func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
 	if r.ctx == nil {
 		ctx, err := scard.EstablishContext()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to establish scard context: %w", err)
 		}
 		r.ctx = ctx
 	}
 
 	rls, err := r.ctx.ListReaders()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to list scard readers: %w", err)
 	}
 
-	if !utils.Contains(rls, device.Path) {
+	if !helpers.Contains(rls, device.Path) {
 		return errors.New("reader not found: " + device.Path)
 	}
 
@@ -74,7 +94,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				break
 			}
 
-			if !utils.Contains(rls, r.name) {
+			if !helpers.Contains(rls, r.name) {
 				log.Debug().Msgf("reader not found: %s", r.name)
 				r.polling = false
 				break
@@ -134,18 +154,20 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 
 			i := 0
 			data := make([]byte, 0)
+		dataLoop:
 			for {
 				res, err = tag.Transmit([]byte{0xFF, 0xB0, 0x00, byte(i), 0x04})
-				if err != nil {
+				switch {
+				case err != nil:
 					log.Debug().Msgf("error transmitting: %s", err)
-					break
-				} else if bytes.Equal(res, []byte{0x00, 0x00, 0x00, 0x00, 0x90, 0x00}) {
-					break
-				} else if len(res) < 6 {
+					break dataLoop
+				case bytes.Equal(res, []byte{0x00, 0x00, 0x00, 0x00, 0x90, 0x00}):
+					break dataLoop
+				case len(res) < 6:
 					log.Debug().Msgf("invalid response")
-					break
-				} else if i >= 221 {
-					break
+					break dataLoop
+				case i >= 221:
+					break dataLoop
 				}
 
 				data = append(data, res[:len(res)-2]...)
@@ -204,7 +226,7 @@ func (r *ACR122PCSC) Close() error {
 	if r.ctx != nil {
 		err := r.ctx.Release()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to release scard context: %w", err)
 		}
 	}
 	return nil
@@ -214,15 +236,14 @@ func (r *ACR122PCSC) Close() error {
 // functions on readers should actually return an error instead of ""
 var detectErrorOnce sync.Once
 
-func (r *ACR122PCSC) Detect(connected []string) string {
+func (*ACR122PCSC) Detect(connected []string) string {
 	ctx, err := scard.EstablishContext()
 	if err != nil {
 		return ""
 	}
 	defer func(ctx *scard.Context) {
-		err := ctx.Release()
-		if err != nil {
-			log.Warn().Err(err).Msg("error releasing pcsc context")
+		if releaseErr := ctx.Release(); releaseErr != nil {
+			log.Warn().Err(releaseErr).Msg("error releasing pcsc context")
 		}
 	}(ctx)
 
@@ -236,7 +257,7 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 
 	acrs := make([]string, 0)
 	for _, r := range rs {
-		if strings.HasPrefix(r, "ACS ACR122") && !utils.Contains(connected, "acr122_pcsc:"+r) {
+		if strings.HasPrefix(r, "ACS ACR122") && !helpers.Contains(connected, "acr122_pcsc:"+r) {
 			acrs = append(acrs, r)
 		}
 	}
@@ -261,10 +282,10 @@ func (r *ACR122PCSC) Info() string {
 	return r.name
 }
 
-func (r *ACR122PCSC) Write(_ string) (*tokens.Token, error) {
+func (*ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *ACR122PCSC) CancelWrite() {
-	return
+func (*ACR122PCSC) CancelWrite() {
+	// no-op, writing not supported
 }

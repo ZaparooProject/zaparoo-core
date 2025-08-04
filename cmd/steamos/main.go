@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -22,28 +24,36 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/steamos"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
-	_ "embed"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/steamos"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
 )
 
 // TODO: fix permissions on files in ~/zaparoo so root doesn't lock them
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -59,49 +69,41 @@ func main() {
 	uid := os.Getuid()
 	if *doInstall {
 		if uid != 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Install must be run as root\n")
-			os.Exit(1)
+			return errors.New("install must be run as root")
 		}
 		err := install()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error installing service: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error installing service: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	} else if *doUninstall {
 		if uid != 0 {
-			_, _ = fmt.Fprintf(os.Stderr, "Uninstall must be run as root\n")
-			os.Exit(1)
+			return errors.New("uninstall must be run as root")
 		}
 		err := uninstall()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error uninstalling service: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error uninstalling service: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	if uid == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Service must not be run as root\n")
-		os.Exit(1)
+		return errors.New("service must not be run as root")
 	}
 
-	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0755)
+	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o750)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating data directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating data directory: %w", err)
 	}
 
 	defaults := config.BaseDefaults
-	iniPath := filepath.Join(utils.ExeDir(), "tapto.ini")
-	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
-		migrated, err := migrate.IniToToml(iniPath)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
-			os.Exit(1)
-		} else {
-			defaults = migrated
+	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
+	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
+		migrated, migrateErr := migrate.IniToToml(iniPath)
+		if migrateErr != nil {
+			return fmt.Errorf("error migrating config: %w", migrateErr)
 		}
+		defaults = migrated
 	}
 
 	cfg := cli.Setup(
@@ -115,15 +117,15 @@ func main() {
 	stop, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("error starting service")
-		os.Exit(1)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	<-sigs
 	err = stop()
 	if err != nil {
 		log.Error().Err(err).Msg("error stopping service")
-		os.Exit(1)
+		return fmt.Errorf("error stopping service: %w", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

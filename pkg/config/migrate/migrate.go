@@ -1,12 +1,33 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package migrate
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
-	"gopkg.in/ini.v1"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate/iniconfig"
+	"gopkg.in/ini.v1"
 )
 
 func IniToToml(iniPath string) (config.Values, error) {
@@ -18,12 +39,12 @@ func IniToToml(iniPath string) (config.Values, error) {
 
 	iniCfg, err := ini.ShadowLoad(iniPath)
 	if err != nil {
-		return vals, err
+		return vals, fmt.Errorf("failed to load ini file: %w", err)
 	}
 
 	err = iniCfg.StrictMapTo(&iniVals)
 	if err != nil {
-		return vals, err
+		return vals, fmt.Errorf("failed to map config: %w", err)
 	}
 
 	// readers
@@ -106,16 +127,16 @@ func IniToToml(iniPath string) (config.Values, error) {
 	}
 
 	// api - port
-	port, err := strconv.Atoi(iniVals.Api.Port)
+	port, err := strconv.Atoi(iniVals.API.Port)
 	if err == nil {
-		if port != vals.Service.ApiPort {
-			vals.Service.ApiPort = port
+		if port != vals.Service.APIPort {
+			vals.Service.APIPort = port
 		}
 	}
 
 	// api - allow launch
-	vals.Service.AllowRun = iniVals.Api.AllowLaunch
-	for _, v := range iniVals.Api.AllowLaunch {
+	vals.Service.AllowRun = iniVals.API.AllowLaunch
+	for _, v := range iniVals.API.AllowLaunch {
 		s := "^" + v + "$"
 		vals.Service.AllowRun = append(vals.Service.AllowRun, s)
 	}
@@ -123,7 +144,7 @@ func IniToToml(iniPath string) (config.Values, error) {
 	return vals, nil
 }
 
-func Required(oldIni string, newToml string) bool {
+func Required(oldIni, newToml string) bool {
 	iniExists := false
 	if _, err := os.Stat(oldIni); err == nil {
 		iniExists = true

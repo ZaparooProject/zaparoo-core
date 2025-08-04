@@ -1,6 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023 - 2025 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -23,24 +24,21 @@ package zapscript
 import (
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
-	"github.com/rs/zerolog/log"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -77,8 +75,8 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdMisterScript: forwardCmd,
 	models.ZapScriptCmdMisterMGL:    forwardCmd,
 
-	models.ZapScriptCmdHTTPGet:  cmdHttpGet,
-	models.ZapScriptCmdHTTPPost: cmdHttpPost,
+	models.ZapScriptCmdHTTPGet:  cmdHTTPGet,
+	models.ZapScriptCmdHTTPPost: cmdHTTPPost,
 
 	models.ZapScriptCmdInputKeyboard: cmdKeyboard,
 	models.ZapScriptCmdInputGamepad:  cmdGamepad,
@@ -94,11 +92,16 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdCommand:  cmdExecute, // DEPRECATED
 	models.ZapScriptCmdINI:      forwardCmd, // DEPRECATED
 	models.ZapScriptCmdSystem:   cmdSystem,  // DEPRECATED
-	models.ZapScriptCmdGet:      cmdHttpGet, // DEPRECATED
+	models.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	return pl.ForwardCmd(env)
+	result, err := pl.ForwardCmd(&env)
+	if err != nil {
+		return result, fmt.Errorf("failed to forward command: %w", err)
+	}
+	return result, nil
 }
 
 // Check all games folders for a relative path to a file
@@ -181,7 +184,7 @@ func RunCommand(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	plsc playlists.PlaylistController,
-	token tokens.Token,
+	token tokens.Token, //nolint:gocritic // single-use parameter in command handler
 	cmd parser.Command,
 	totalCmds int,
 	currentIndex int,
@@ -197,12 +200,13 @@ func RunCommand(
 	} else if linkValue != "" {
 		log.Info().Msgf("valid zap link, replacing cmd: %s", linkValue)
 		reader := parser.NewParser(linkValue)
-		script, err := reader.ParseScript()
-		if err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", err)
-		} else if len(script.Cmds) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("zap link is empty")
-		} else if len(script.Cmds) > 1 {
+		script, parseErr := reader.ParseScript()
+		switch {
+		case parseErr != nil:
+			return platforms.CmdResult{}, fmt.Errorf("error parsing zap link: %w", parseErr)
+		case len(script.Cmds) == 0:
+			return platforms.CmdResult{}, errors.New("zap link is empty")
+		case len(script.Cmds) > 1:
 			log.Warn().Msgf("zap link has multiple commands, queueing rest")
 			// TODO: this could result in a recursive scan
 			newCmds = append(newCmds, script.Cmds[1:]...)
@@ -216,23 +220,23 @@ func RunCommand(
 
 	for i, arg := range cmd.Args {
 		reader := parser.NewParser(arg)
-		output, err := reader.EvalExpressions(exprEnv)
-		if err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", err)
+		output, evalErr := reader.EvalExpressions(exprEnv)
+		if evalErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating arg expression: %w", evalErr)
 		}
 		cmd.Args[i] = output
 	}
 
 	for k, arg := range cmd.AdvArgs {
 		reader := parser.NewParser(arg)
-		output, err := reader.EvalExpressions(exprEnv)
-		if err != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", err)
+		output, evalErr := reader.EvalExpressions(exprEnv)
+		if evalErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
 		}
 		cmd.AdvArgs[k] = output
 	}
 
-	if when, ok := cmd.AdvArgs["when"]; ok && !utils.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs["when"]; ok && !helpers.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,

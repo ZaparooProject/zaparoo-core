@@ -1,9 +1,29 @@
-package pn532_uart
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package pn532uart
 
 import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,22 +32,20 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
-
 	"go.bug.st/serial"
 )
 
 type PN532UARTReader struct {
+	port      serial.Port
 	cfg       *config.Instance
+	lastToken *tokens.Token
 	device    config.ReadersConnect
 	name      string
 	polling   bool
-	port      serial.Port
-	lastToken *tokens.Token
 }
 
 func NewReader(cfg *config.Instance) *PN532UARTReader {
@@ -36,7 +54,7 @@ func NewReader(cfg *config.Instance) *PN532UARTReader {
 	}
 }
 
-func (r *PN532UARTReader) Ids() []string {
+func (*PN532UARTReader) IDs() []string {
 	return []string{"pn532_uart"}
 }
 
@@ -49,12 +67,12 @@ func connect(name string) (serial.Port, error) {
 		StopBits: serial.OneStopBit,
 	})
 	if err != nil {
-		return port, err
+		return port, fmt.Errorf("failed to open serial port: %w", err)
 	}
 
 	err = port.SetReadTimeout(50 * time.Millisecond)
 	if err != nil {
-		return port, err
+		return port, fmt.Errorf("failed to set read timeout: %w", err)
 	}
 
 	err = SamConfiguration(port)
@@ -72,7 +90,7 @@ func connect(name string) (serial.Port, error) {
 }
 
 func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -80,7 +98,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(name); err != nil {
-			return err
+			return fmt.Errorf("device path does not exist: %w", err)
 		}
 	}
 
@@ -138,12 +156,10 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				continue
 			}
 
-			//log.Debug().Msgf("target: %s", tgt.Uid)
-
 			errCount = 0
 			zeroScans = 0
 
-			if r.lastToken != nil && r.lastToken.UID == tgt.Uid {
+			if r.lastToken != nil && r.lastToken.UID == tgt.UID {
 				// same token
 				continue
 			}
@@ -161,39 +177,38 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			blockRetryMax := 3
 			blockRetry := 0
 			data := make([]byte, 0)
-			for {
+		readLoop:
+			for i < 256 {
 				// TODO: this is a random limit i picked, should detect blocks in card
-				if i >= 256 {
-					break
-				}
 
 				if blockRetry >= blockRetryMax {
 					errCount++
-					break
+					break readLoop
 				}
 
-				res, err := InDataExchange(r.port, []byte{0x30, byte(i)})
-				if errors.Is(err, ErrNoFrameFound) {
+				res, exchangeErr := InDataExchange(r.port, []byte{0x30, byte(i)})
+				switch {
+				case errors.Is(exchangeErr, ErrNoFrameFound):
 					// sometimes the response just doesn't work, try again
 					log.Warn().Msg("no frame found")
 					blockRetry++
-					continue
-				} else if err != nil {
-					log.Error().Err(err).Msg("failed to run indataexchange")
+					continue readLoop
+				case exchangeErr != nil:
+					log.Error().Err(exchangeErr).Msg("failed to run indataexchange")
 					errCount++
-					break
-				} else if len(res) < 2 {
+					break readLoop
+				case len(res) < 2:
 					log.Error().Msg("unexpected data response length")
 					errCount++
-					break
-				} else if res[0] != 0x41 || res[1] != 0x00 {
+					break readLoop
+				case res[0] != 0x41 || res[1] != 0x00:
 					log.Warn().Msgf("unexpected data format: %x", res)
 					// sometimes we receive the result of the last passive
 					// target command, so just try request again a few times
 					blockRetry++
-					continue
-				} else if bytes.Equal(res[2:], make([]byte, 16)) {
-					break
+					continue readLoop
+				case bytes.Equal(res[2:], make([]byte, 16)):
+					break readLoop
 				}
 
 				data = append(data, res[2:]...)
@@ -220,14 +235,14 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 			token := &tokens.Token{
 				Type:     tgt.Type,
-				UID:      tgt.Uid,
+				UID:      tgt.UID,
 				Text:     tagText,
 				Data:     hex.EncodeToString(data),
 				ScanTime: time.Now(),
 				Source:   r.device.ConnectionString(),
 			}
 
-			if !utils.TokensEqual(token, r.lastToken) {
+			if !helpers.TokensEqual(token, r.lastToken) {
 				iq <- readers.Scan{
 					Source: r.device.ConnectionString(),
 					Token:  token,
@@ -246,18 +261,20 @@ func (r *PN532UARTReader) Close() error {
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to close serial port: %w", err)
 		}
 	}
 	return nil
 }
 
 // keep track of serial devices that had failed opens
-var serialCacheMu = &sync.RWMutex{}
-var serialBlockList []string
+var (
+	serialCacheMu   = &sync.RWMutex{}
+	serialBlockList []string
+)
 
-func (r *PN532UARTReader) Detect(connected []string) string {
-	ports, err := utils.GetSerialDeviceList()
+func (*PN532UARTReader) Detect(connected []string) string {
+	ports, err := helpers.GetSerialDeviceList()
 	if err != nil {
 		log.Error().Err(err).Msg("failed to get serial ports")
 	}
@@ -267,14 +284,14 @@ func (r *PN532UARTReader) Detect(connected []string) string {
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
-		if utils.Contains(serialBlockList, name) {
+		if helpers.Contains(serialBlockList, name) {
 			serialCacheMu.RUnlock()
 			continue
 		}
 		serialCacheMu.RUnlock()
 
 		// ignore if exact same device and reader are connected
-		if utils.Contains(connected, device) {
+		if helpers.Contains(connected, device) {
 			continue
 		}
 
@@ -291,7 +308,7 @@ func (r *PN532UARTReader) Detect(connected []string) string {
 			}
 
 			// ignore if same resolved device and reader connected
-			if realPath != "" && utils.Contains(connected, realPath) {
+			if realPath != "" && helpers.Contains(connected, realPath) {
 				continue
 			}
 
@@ -316,9 +333,9 @@ func (r *PN532UARTReader) Detect(connected []string) string {
 		// try to open the device
 		port, err := connect(name)
 		if port != nil {
-			err := port.Close()
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to close serial port")
+			closeErr := port.Close()
+			if closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close serial port")
 			}
 		}
 
@@ -348,10 +365,10 @@ func (r *PN532UARTReader) Info() string {
 	return "PN532 UART (" + r.name + ")"
 }
 
-func (r *PN532UARTReader) Write(text string) (*tokens.Token, error) {
+func (*PN532UARTReader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *PN532UARTReader) CancelWrite() {
-	return
+func (*PN532UARTReader) CancelWrite() {
+	// no-op, writing not supported
 }

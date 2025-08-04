@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -19,21 +19,24 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package pn532_uart
+package pn532uart
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"github.com/rs/zerolog/log"
 
 	"github.com/hsanjuan/go-ndef"
+	"github.com/rs/zerolog/log"
 )
 
-var NdefEnd = []byte{0xFE}
-var NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+var (
+	NdefEnd   = []byte{0xFE}
+	NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+)
 
-var ErrNoNdef = fmt.Errorf("no NDEF record found")
+var ErrNoNdef = errors.New("no NDEF record found")
 
 func ParseRecordText(bs []byte) (string, error) {
 	// sometimes there can be some read corruption and multiple copies of the
@@ -76,9 +79,9 @@ func ParseRecordText(bs []byte) (string, error) {
 
 func BuildMessage(text string) ([]byte, error) {
 	msg := ndef.NewTextMessage(text, "en")
-	var payload, err = msg.Marshal()
+	payload, err := msg.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal NDEF message: %w", err)
 	}
 
 	header, err := CalculateNdefHeader(payload)
@@ -91,9 +94,14 @@ func BuildMessage(text string) ([]byte, error) {
 }
 
 func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
-	var recordLength = len(ndefRecord)
+	recordLength := len(ndefRecord)
 	if recordLength < 255 {
 		return []byte{0x03, byte(len(ndefRecord))}, nil
+	}
+
+	// Check for uint16 overflow to prevent integer overflow
+	if recordLength > 65535 {
+		return nil, errors.New("NDEF record too large for Type 2 tag format")
 	}
 
 	// NFCForum-TS-Type-2-Tag_1.1.pdf Page 9
@@ -101,9 +109,9 @@ func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, uint16(recordLength))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to write binary data: %w", err)
 	}
 
-	var header = []byte{0x03, 0xFF}
+	header := []byte{0x03, 0xFF}
 	return append(header, buf.Bytes()...), nil
 }

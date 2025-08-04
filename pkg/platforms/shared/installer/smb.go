@@ -1,15 +1,35 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package installer
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/cloudsoda/go-smb2"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net"
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/cloudsoda/go-smb2"
+	"github.com/rs/zerolog/log"
 )
 
 func DownloadSMBFile(opts DownloaderArgs) error {
@@ -19,7 +39,7 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 	}
 
 	server := u.Host
-	if _, _, err := net.SplitHostPort(server); err != nil {
+	if _, _, splitErr := net.SplitHostPort(server); splitErr != nil {
 		server = net.JoinHostPort(server, "445")
 	}
 
@@ -51,9 +71,8 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error dialing SMB server: %w", err)
 	}
 	defer func(session *smb2.Session) {
-		err := session.Logoff()
-		if err != nil {
-			log.Warn().Err(err).Msg("error logging off SMB session")
+		if logoffErr := session.Logoff(); logoffErr != nil {
+			log.Warn().Err(logoffErr).Msg("error logging off SMB session")
 		}
 	}(session)
 	// TODO: on mister if this fails it the loader may get stuck
@@ -63,9 +82,8 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error mounting SMB share: %w", err)
 	}
 	defer func(fs *smb2.Share) {
-		err := fs.Umount()
-		if err != nil {
-			log.Warn().Err(err).Msg("error unmounting SMB share")
+		if umountErr := fs.Umount(); umountErr != nil {
+			log.Warn().Err(umountErr).Msg("error unmounting SMB share")
 		}
 	}(fs)
 
@@ -74,9 +92,8 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 		return fmt.Errorf("error opening SMB file: %w", err)
 	}
 	defer func(remoteFile *smb2.File) {
-		err := remoteFile.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing SMB file")
+		if closeErr := remoteFile.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing SMB file")
 		}
 	}(remoteFile)
 
@@ -87,13 +104,11 @@ func DownloadSMBFile(opts DownloaderArgs) error {
 
 	_, err = io.Copy(file, remoteFile)
 	if err != nil {
-		err = file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msgf("error closing file: %s", opts.tempPath)
+		if closeErr := file.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msgf("error closing file: %s", opts.tempPath)
 		}
-		err := os.Remove(opts.tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing partial download: %s", opts.tempPath)
+		if removeErr := os.Remove(opts.tempPath); removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing partial download: %s", opts.tempPath)
 		}
 		return fmt.Errorf("error downloading file: %w", err)
 	}

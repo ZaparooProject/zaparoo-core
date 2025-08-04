@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package database
 
 import (
@@ -24,54 +43,54 @@ type Database struct {
  */
 
 type HistoryEntry struct {
-	DBID       int64     `db:"DBID" json:"id"`
 	Time       time.Time `json:"time"`
 	Type       string    `json:"type"`
 	TokenID    string    `json:"tokenId"`
 	TokenValue string    `json:"tokenValue"`
 	TokenData  string    `json:"tokenData"`
+	DBID       int64     `db:"DBID" json:"id"`
 	Success    bool      `json:"success"`
 }
 
 type Mapping struct {
-	DBID     int64
-	Added    int64  `json:"added"`
 	Label    string `json:"label"`
-	Enabled  bool   `json:"enabled"`
 	Type     string `json:"type"`
 	Match    string `json:"match"`
 	Pattern  string `json:"pattern"`
 	Override string `json:"override"`
+	DBID     int64
+	Added    int64 `json:"added"`
+	Enabled  bool  `json:"enabled"`
 }
 
 type System struct {
-	DBID     int64
 	SystemID string
 	Name     string
+	DBID     int64
 }
 
 type MediaTitle struct {
-	DBID       int64
-	SystemDBID int64
 	Slug       string
 	Name       string
+	DBID       int64
+	SystemDBID int64
 }
 
 type Media struct {
+	Path           string
 	DBID           int64
 	MediaTitleDBID int64
-	Path           string
 }
 
 type TagType struct {
-	DBID int64
 	Type string
+	DBID int64
 }
 
 type Tag struct {
+	Tag      string
 	DBID     int64
 	TypeDBID int64
-	Tag      string
 }
 
 type MediaTag struct {
@@ -93,16 +112,16 @@ type FileInfo struct {
 }
 
 type ScanState struct {
-	SystemsIndex   int
 	SystemIDs      map[string]int
-	TitlesIndex    int
 	TitleIDs       map[string]int
-	MediaIndex     int
-	MediaIDs       map[string]int // Path
-	TagTypesIndex  int
+	MediaIDs       map[string]int
 	TagTypeIDs     map[string]int
-	TagsIndex      int
 	TagIDs         map[string]int
+	SystemsIndex   int
+	TitlesIndex    int
+	MediaIndex     int
+	TagTypesIndex  int
+	TagsIndex      int
 	MediaTagsIndex int
 }
 
@@ -112,7 +131,7 @@ type ScanState struct {
 
 type GenericDBI interface {
 	Open() error
-	UnsafeGetSqlDb() *sql.DB
+	UnsafeGetSQLDb() *sql.DB
 	Truncate() error
 	Allocate() error
 	MigrateUp() error
@@ -124,7 +143,7 @@ type GenericDBI interface {
 type UserDBI interface {
 	GenericDBI
 	AddHistory(entry HistoryEntry) error
-	GetHistory(lastId int) ([]HistoryEntry, error)
+	GetHistory(lastID int) ([]HistoryEntry, error)
 	AddMapping(m Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error

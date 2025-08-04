@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package tui
 
 import (
@@ -57,7 +76,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			})
 			for _, v := range results.Systems {
 				systemDropdown.AddOption(v.Name, func() {
-					filterSystem = v.Id
+					filterSystem = v.ID
 				})
 			}
 		}
@@ -71,10 +90,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyDown {
+		switch k { //nolint:exhaustive // only handling navigation keys
+		case tcell.KeyTab, tcell.KeyDown:
 			app.SetFocus(systemDropdown)
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp {
+		case tcell.KeyBacktab, tcell.KeyUp:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(-1)
 				app.SetFocus(mediaList)
@@ -82,7 +102,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				app.SetFocus(searchButton)
 			}
 			return nil
-		} else if k == tcell.KeyEnter {
+		case tcell.KeyEnter:
 			app.SetFocus(searchButton)
 		}
 		return event
@@ -92,10 +112,11 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			return event
 		}
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+		switch k { //nolint:exhaustive // only handling navigation keys
+		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyLeft || k == tcell.KeyUp {
+		case tcell.KeyBacktab, tcell.KeyLeft, tcell.KeyUp:
 			app.SetFocus(searchInput)
 			return nil
 		}
@@ -103,7 +124,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyTab || k == tcell.KeyRight || k == tcell.KeyDown {
+		switch k { //nolint:exhaustive // only handling navigation keys
+		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(0)
 				app.SetFocus(mediaList)
@@ -111,7 +133,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 				app.SetFocus(searchInput)
 			}
 			return nil
-		} else if k == tcell.KeyBacktab || k == tcell.KeyUp || k == tcell.KeyLeft {
+		case tcell.KeyBacktab, tcell.KeyUp, tcell.KeyLeft:
 			app.SetFocus(systemDropdown)
 			return nil
 		}
@@ -119,16 +141,17 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	mediaList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		if k == tcell.KeyRight {
+		switch {
+		case k == tcell.KeyRight:
 			app.SetFocus(searchInput)
 			return nil
-		} else if k == tcell.KeyLeft {
+		case k == tcell.KeyLeft:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyUp && mediaList.GetCurrentItem() == 0 {
+		case k == tcell.KeyUp && mediaList.GetCurrentItem() == 0:
 			app.SetFocus(searchButton)
 			return nil
-		} else if k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1 {
+		case k == tcell.KeyDown && mediaList.GetCurrentItem() == mediaList.GetItemCount()-1:
 			app.SetFocus(searchInput)
 			return nil
 		}

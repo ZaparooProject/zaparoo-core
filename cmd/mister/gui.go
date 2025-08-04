@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023, 2024 Callan Barrett
@@ -22,21 +24,21 @@ package main
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"os"
 	"path"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func buildTheInstallRequestApp() (*tview.Application, error) {
-	var startup mrextMister.Startup
+	var startup mrextmister.Startup
 	app := tview.NewApplication()
 	// create the main modal
 	modal := tview.NewModal()
@@ -45,8 +47,9 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 		SetTitleAlign(tview.AlignCenter)
 	modal.SetText("Add Zaparoo service to MiSTer startup?\nThis won't impact MiSTer's performance.").
 		AddButtons([]string{"Yes", "No"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			if buttonLabel == "Yes" {
+		SetDoneFunc(func(_ int, buttonLabel string) {
+			switch buttonLabel {
+			case "Yes":
 				err := startup.AddService("mrext/" + config.AppName)
 				if err != nil {
 					_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
@@ -60,7 +63,7 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 					}
 				}
 				app.Stop()
-			} else if buttonLabel == "No" {
+			case "No":
 				app.Stop()
 			}
 		})
@@ -69,7 +72,7 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 }
 
 func tryAddStartup() error {
-	var startup mrextMister.Startup
+	var startup mrextmister.Startup
 
 	err := startup.Load()
 	if err != nil {
@@ -80,14 +83,12 @@ func tryAddStartup() error {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove tapto from startup: %w", err)
 		}
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		err := tui.BuildAndRetry(func() (*tview.Application, error) {
-			return buildTheInstallRequestApp()
-		})
+		err := tui.BuildAndRetry(buildTheInstallRequestApp)
 		if err != nil {
 			log.Error().Msgf("failed to build app: %s", err)
 		}
@@ -96,10 +97,14 @@ func tryAddStartup() error {
 	return nil
 }
 
-func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *utils.Service) error {
+func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
-	return tui.BuildAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
 		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
+	if err != nil {
+		return fmt.Errorf("failed to build and display service info: %w", err)
+	}
+	return nil
 }

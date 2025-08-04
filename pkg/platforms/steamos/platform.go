@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2024 Callan Barrett
@@ -21,29 +23,30 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamos
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/optical_drive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/adrg/xdg"
+	"github.com/rs/zerolog/log"
 )
 
 type Platform struct {
@@ -51,20 +54,20 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDSteamOS
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
+		simpleserial.NewReader(cfg),
 		libnfc.NewReader(cfg),
-		optical_drive.NewReader(cfg),
+		opticaldrive.NewReader(cfg),
 	}
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (*Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
@@ -78,19 +81,19 @@ func (p *Platform) StartPost(
 	return nil
 }
 
-func (p *Platform) Stop() error {
+func (*Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
@@ -99,7 +102,7 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(_ *config.Instance, path string) string {
+func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -108,27 +111,23 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
-	}
-
+func (*Platform) PlayAudio(_ string) error {
 	return nil
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -136,19 +135,19 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (*Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
@@ -159,22 +158,28 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				cfg *config.Instance,
-				systemId string,
+				_ *config.Instance,
+				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
 				root := "/home/deck/.steam/steam/steamapps"
-				appResults, err := utils.ScanSteamApps(root)
+				appResults, err := helpers.ScanSteamApps(root)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
 				return append(results, appResults...), nil
 			},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+
+				if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+					return fmt.Errorf("invalid Steam game ID: %s", id)
+				}
+
+				return exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
+					context.Background(),
 					"steam",
 					"steam://rungameid/"+id,
 				).Start()
@@ -184,32 +189,32 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command("bash", "-c", path).Start()
+			Launch: func(_ *config.Instance, path string) error {
+				return exec.CommandContext(context.Background(), "bash", "-c", path).Start()
 			},
 		},
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, nil
+	return nil, 0, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, error) {
-	return nil, nil
+	return nil, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }

@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mediascanner
 
 import (
@@ -7,7 +26,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,11 +40,14 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	ss.SystemIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
-	//ss.TagTypeIDs = make(map[string]int)
-	//ss.TagIDs = make(map[string]int)
 }
 
-func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string, path string) (int, int) {
+func AddMediaPath(
+	db database.MediaDBI,
+	ss *database.ScanState,
+	systemID string,
+	path string,
+) (titleIndex, mediaIndex int) {
 	pf := GetPathFragments(path)
 
 	systemIndex := 0
@@ -45,7 +67,6 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 		systemIndex = foundSystemIndex
 	}
 
-	titleIndex := 0
 	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
@@ -64,7 +85,6 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 		titleIndex = foundTitleIndex
 	}
 
-	mediaIndex := 0
 	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
@@ -107,7 +127,7 @@ func AddMediaPath(db database.MediaDBI, ss *database.ScanState, systemID string,
 
 		if tagIndex == 0 {
 			// Don't insert unknown tags for now
-			//log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
+			// log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
 			continue
 		}
 
@@ -293,7 +313,7 @@ func GetPathFragments(path string) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
-	if utils.ReURI.MatchString(path) {
+	if helpers.ReURI.MatchString(path) {
 		f.Path = path
 	} else {
 		f.Path = filepath.Clean(path)
@@ -302,14 +322,14 @@ func GetPathFragments(path string) MediaPathFragments {
 	fileBase := filepath.Base(f.Path)
 
 	f.Ext = strings.ToLower(filepath.Ext(f.Path))
-	if utils.HasSpace(f.Ext) {
+	if helpers.HasSpace(f.Ext) {
 		f.Ext = ""
 	}
 
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
 	f.Title = getTitleFromFilename(f.FileName)
-	f.Slug = utils.SlugifyString(f.Title)
+	f.Slug = helpers.SlugifyString(f.Title)
 	f.Tags = getTagsFromFileName(f.FileName)
 
 	return f

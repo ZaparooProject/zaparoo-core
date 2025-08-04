@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -24,20 +26,21 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/libreelec"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path"
 )
 
-func main() {
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -57,7 +60,7 @@ func main() {
 		}
 	}()
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -65,18 +68,20 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating service: %w", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return fmt.Errorf("service handler failed: %w", err)
+	}
 
 	flags.Post(cfg, pl)
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
-		err := svc.Start()
-		if err != nil {
-			log.Error().Err(err).Msg("could not start service")
+		startErr := svc.Start()
+		if startErr != nil {
+			log.Error().Err(startErr).Msg("could not start service")
 		}
 	}
 
@@ -91,8 +96,16 @@ func main() {
 	})
 	if err != nil {
 		enableZapScript()
-		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error displaying TUI: %w", err)
 	}
 	enableZapScript()
+
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
 }

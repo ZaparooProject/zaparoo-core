@@ -1,13 +1,29 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package zapscript
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"io"
 	"net"
 	"net/http"
@@ -18,7 +34,11 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,30 +77,35 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	wellKnownURL := baseURL + WellKnownPath
 	log.Debug().Msgf("querying zap link support at %s", wellKnownURL)
 
-	req, err := http.NewRequest("GET", wellKnownURL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to create request for '%s': %w", wellKnownURL, err)
 	}
 
 	resp, err := zapFetchClient.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Error().Err(err).Msgf("closing body")
+	if resp == nil {
+		return 0, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
-	}(resp.Body)
+	}()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return 0, errors.New("invalid status code")
 	}
 
 	var wellKnown WellKnown
 	err = json.NewDecoder(resp.Body).Decode(&wellKnown)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to decode JSON from '%s': %w", wellKnownURL, err)
 	}
 
 	log.Debug().Msgf("zap link well known result for %s: %v", wellKnownURL, wellKnown)
@@ -93,7 +118,7 @@ func isZapLink(link string, db *database.Database) bool {
 		return false
 	}
 
-	if !(strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) {
+	if !strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https") {
 		return false
 	}
 
@@ -110,9 +135,8 @@ func isZapLink(link string, db *database.Database) bool {
 		}
 		if err != nil {
 			log.Debug().Err(err).Msgf("error querying zap link support: %s", link)
-			err := db.UserDB.UpdateZapLinkHost(u.Host, result)
-			if err != nil {
-				log.Error().Err(err).Msgf("error updating zap link support: %s", link)
+			if updateErr := db.UserDB.UpdateZapLinkHost(u.Host, result); updateErr != nil {
+				log.Error().Err(updateErr).Msgf("error updating zap link support: %s", link)
 			}
 			return false
 		}
@@ -130,26 +154,31 @@ func isZapLink(link string, db *database.Database) bool {
 	return true
 }
 
-func getRemoteZapScript(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func getRemoteZapScript(urlStr string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request for '%s': %w", urlStr, err)
 	}
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := zapFetchClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Error().Err(err).Msgf("closing body")
+	if resp == nil {
+		return nil, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
-	}(resp.Body)
+	}()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		log.Debug().Msgf("status code: %d", resp.StatusCode)
 		return nil, errors.New("invalid status code")
 	}
@@ -195,7 +224,7 @@ func isOfflineError(err error) bool {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		if netErr.Timeout() || netErr.Temporary() {
+		if netErr.Timeout() {
 			return true
 		}
 	}
@@ -233,8 +262,8 @@ func isOfflineError(err error) bool {
 }
 
 func checkZapLink(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	_ *config.Instance,
+	_ platforms.Platform,
 	db *database.Database,
 	cmd parser.Command,
 ) (string, error) {
@@ -250,9 +279,9 @@ func checkZapLink(
 	log.Info().Msgf("checking zap link: %s", value)
 	body, err := getRemoteZapScript(value)
 	if isOfflineError(err) {
-		zapscript, err := db.UserDB.GetZapLinkCache(value)
-		if err != nil {
-			return "", err
+		zapscript, cacheErr := db.UserDB.GetZapLinkCache(value)
+		if cacheErr != nil {
+			return "", fmt.Errorf("failed to get zaplink cache for '%s': %w", value, cacheErr)
 		}
 		if zapscript != "" {
 			return zapscript, nil
@@ -267,9 +296,8 @@ func checkZapLink(
 		log.Error().Err(err).Msgf("error updating zap link cache")
 	}
 
-	if !utils.MaybeJSON(body) {
+	if !helpers.MaybeJSON(body) {
 		return string(body), nil
-	} else {
-		return "", fmt.Errorf("zapscript JSON not supported")
 	}
+	return "", errors.New("zapscript JSON not supported")
 }

@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package widgets
 
 import (
@@ -5,8 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +37,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
@@ -55,18 +74,27 @@ func createPIDFile(pl platforms.Platform) error {
 		return errors.New("PID file already exists")
 	}
 	pid := os.Getpid()
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+	//nolint:gosec // Safe: PID file may be read by other processes
+	err := os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	return nil
 }
 
 func removePIDFile(pl platforms.Platform) error {
 	path := pidPath(pl)
 	_, err := os.Stat(path)
 	if err == nil {
-		return os.Remove(path)
+		err = os.Remove(path)
+		if err != nil {
+			return fmt.Errorf("failed to remove PID file: %w", err)
+		}
+		return nil
 	} else if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	return fmt.Errorf("failed to stat PID file: %w", err)
 }
 
 // killWidgetIfRunning checks if a widget is running via the PID file and
@@ -74,44 +102,46 @@ func removePIDFile(pl platforms.Platform) error {
 func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 	path := pidPath(pl)
 	if _, err := os.Stat(path); err != nil {
-		return false, nil
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to stat PID file: %w", err)
 	}
 
 	pid := 0
-	if pidBytes, err := os.ReadFile(path); err == nil {
-		pid, err = strconv.Atoi(string(pidBytes))
-		if err != nil {
-			return false, err
-		}
+	//nolint:gosec // Safe: reads PID files for process management
+	pidBytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("failed to read PID file: %w", err)
+	}
+	pid, err = strconv.Atoi(string(pidBytes))
+	if err != nil {
+		return false, fmt.Errorf("failed to parse PID: %w", err)
+	}
 
-		if !isProcessRunning(pid) {
-			// clean up stale file
-			err := os.Remove(path)
-			if err != nil {
-				return false, err
-			} else {
-				return false, nil
-			}
+	if !isProcessRunning(pid) {
+		// clean up stale file
+		if removeErr := os.Remove(path); removeErr != nil {
+			return false, fmt.Errorf("failed to remove stale PID file: %w", removeErr)
 		}
-	} else {
-		return false, err
+		return false, nil
 	}
 
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to find process: %w", err)
 	}
 
 	err = proc.Signal(syscall.SIGTERM)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to send SIGTERM: %w", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(path); err == nil {
 		err := os.Remove(path)
 		if err != nil {
-			return true, err
+			return true, fmt.Errorf("failed to remove PID file after kill: %w", err)
 		}
 	}
 
@@ -121,18 +151,19 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 // handleTimeout adds a background timer which quits the app once ended. It's
 // used to make sure there aren't hanging processes running in the background
 // if a core gets loaded while it's open.
-func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
-	to := 0
-	if timeout == 0 {
+func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actualTimeout int) {
+	var to int
+	switch {
+	case timeout == 0:
 		to = DefaultTimeout
-	} else if timeout < 0 {
+	case timeout < 0:
 		// no timeout
 		return nil, -1
-	} else {
+	default:
 		to = timeout
 	}
 
-	timer := time.AfterFunc(time.Duration(to)*time.Second, func() {
+	timer = time.AfterFunc(time.Duration(to)*time.Second, func() {
 		os.Exit(0)
 	})
 
@@ -140,16 +171,17 @@ func handleTimeout(app *tview.Application, timeout int) (*time.Timer, int) {
 }
 
 func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {
-	var noticeArgs widgetModels.NoticeArgs
+	var noticeArgs widgetmodels.NoticeArgs
 
+	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read args file: %w", err)
 	}
 
 	err = json.Unmarshal(args, &noticeArgs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal notice args: %w", err)
 	}
 
 	if noticeArgs.Text == "" && loader {
@@ -166,7 +198,7 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	view.SetWrap(true)
 	view.SetWordWrap(true)
 
-	view.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
+	view.SetDrawFunc(func(_ tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		y += h / 2
 		return x, y, w, h
 	})
@@ -191,17 +223,18 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	if noticeArgs.Complete != "" {
 		go func() {
 			for range ticker.C {
-				if _, err := os.Stat(noticeArgs.Complete); err == nil {
-					log.Debug().Msg("notice complete file exists, stopping")
-					err := os.Remove(noticeArgs.Complete)
-					if err != nil {
-						log.Error().Err(err).Msg("error removing complete file")
-					}
-					app.QueueUpdateDraw(func() {
-						app.Stop()
-					})
-					os.Exit(0)
+				if _, err := os.Stat(noticeArgs.Complete); err != nil {
+					continue
 				}
+				log.Debug().Msg("notice complete file exists, stopping")
+				err := os.Remove(noticeArgs.Complete)
+				if err != nil {
+					log.Error().Err(err).Msg("error removing complete file")
+				}
+				app.QueueUpdateDraw(func() {
+					app.Stop()
+				})
+				os.Exit(0)
 			}
 		}()
 	}
@@ -266,19 +299,23 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to build and retry notice widget: %w", err)
+	}
+	return nil
 }
 
 func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
+	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read picker args file: %w", err)
 	}
 
-	var pickerArgs widgetModels.PickerArgs
+	var pickerArgs widgetmodels.PickerArgs
 	err = json.Unmarshal(args, &pickerArgs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal picker args: %w", err)
 	}
 
 	if len(pickerArgs.Items) < 1 {
@@ -288,7 +325,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	app := tview.NewApplication()
 	tui.SetTheme(&tview.Styles)
 
-	run := func(item widgetModels.PickerItem) {
+	run := func(item widgetmodels.PickerItem) {
 		log.Info().Msgf("running picker selection: %v", item)
 
 		zsrp := models.RunParams{
@@ -339,7 +376,7 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 	flex.AddItem(padding, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
 
-	list.SetDrawFunc(func(screen tcell.Screen, x, y, w, h int) (int, int, int, int) {
+	list.SetDrawFunc(func(_ tcell.Screen, x, y, w, h int) (int, int, int, int) {
 		longest := 2
 		for _, item := range pickerArgs.Items {
 			if len(item.Name) > longest {
@@ -434,5 +471,8 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to build and run picker UI: %w", err)
+	}
+	return nil
 }

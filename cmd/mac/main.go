@@ -1,3 +1,5 @@
+//go:build darwin
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -22,32 +24,39 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
-	_ "embed"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mac"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/systray"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/rs/zerolog/log"
 )
 
 //go:embed app/systrayicon.png
 var systrayIcon []byte
 
 func main() {
-	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	if os.Geteuid() == 0 {
+		return errors.New("zaparoo cannot be run as root")
 	}
 
 	pl := &mac.Platform{}
@@ -86,12 +95,13 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	if !utils.IsServiceRunning(cfg) {
-		stopSvc, err := service.Start(pl, cfg)
+	var stopSvc func() error
+	if !helpers.IsServiceRunning(cfg) {
+		var err error
+		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error starting service: %w", err)
 		}
 
 		defer func() {
@@ -109,31 +119,31 @@ func main() {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	if *daemonMode {
+	// Handle application modes
+	switch {
+	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
-	} else if *guiMode {
+	case *guiMode:
 		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
 			exit <- true
 		})
-	} else {
+	default:
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
-			func() bool { return utils.IsServiceRunning(cfg) },
+			func() bool { return helpers.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 			"desktop",
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error building UI: %w", err)
 		}
 
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error running UI: %w", err)
 		}
 
 		exit <- true
@@ -144,5 +154,5 @@ func main() {
 	case <-exit:
 	}
 
-	os.Exit(0)
+	return nil
 }

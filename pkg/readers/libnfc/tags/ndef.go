@@ -1,4 +1,4 @@
-//go:build (linux || darwin) && cgo
+//go:build linux
 
 /*
 Zaparoo Core
@@ -31,8 +31,10 @@ import (
 	"github.com/hsanjuan/go-ndef"
 )
 
-var NdefEnd = []byte{0xFE}
-var NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+var (
+	NdefEnd   = []byte{0xFE}
+	NdefStart = []byte{0x54, 0x02, 0x65, 0x6E}
+)
 
 func ParseRecordText(blocks []byte) (string, error) {
 	startIndex := bytes.Index(blocks, NdefStart)
@@ -62,7 +64,7 @@ func BuildMessage(text string) ([]byte, error) {
 	msg := ndef.NewTextMessage(text, "en")
 	payload, err := msg.Marshal()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal NDEF message: %w", err)
 	}
 
 	header, err := CalculateNdefHeader(payload)
@@ -75,19 +77,22 @@ func BuildMessage(text string) ([]byte, error) {
 }
 
 func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
-	var recordLength = len(ndefRecord)
+	recordLength := len(ndefRecord)
 	if recordLength < 255 {
 		return []byte{0x03, byte(len(ndefRecord))}, nil
 	}
 
 	// NFCForum-TS-Type-2-Tag_1.1.pdf Page 9
 	// > 255 Use three consecutive bytes format
+	if recordLength > 65535 {
+		return nil, fmt.Errorf("NDEF record length %d exceeds uint16 maximum", recordLength)
+	}
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, uint16(recordLength))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to write NDEF header: %w", err)
 	}
 
-	var header = []byte{0x03, 0xFF}
+	header := []byte{0x03, 0xFF}
 	return append(header, buf.Bytes()...), nil
 }

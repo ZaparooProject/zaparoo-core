@@ -1,36 +1,37 @@
-//go:build linux || darwin
+//go:build linux
 
 package mister
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
 func getTTY() (string, error) {
 	sys := "/sys/devices/virtual/tty/tty0/active"
 	if _, err := os.Stat(sys); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to stat tty active file: %w", err)
 	}
 
 	tty, err := os.ReadFile(sys)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read tty active file: %w", err)
 	}
 
 	return strings.TrimSpace(string(tty)), nil
 }
 
 func scriptIsActive() bool {
-	cmd := exec.Command("bash", "-c", "ps ax | grep [/]tmp/script")
+	cmd := exec.CommandContext(context.Background(), "bash", "-c", "ps ax | grep [/]tmp/script")
 	output, err := cmd.Output()
 	if err != nil {
 		// grep returns an error code if there was no result
@@ -48,22 +49,24 @@ func openConsole(pl platforms.Platform, vt string) error {
 	// to 1 on success. then check in a loop if it actually did change to 1 and keep
 	// pressing F9 until it's switched
 
-	err := exec.Command("chvt", vt).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
 		log.Debug().Err(err).Msg("open console: error running chvt")
-		return err
+		return fmt.Errorf("failed to run chvt: %w", err)
 	}
 
 	tries := 0
 	tty := ""
 	for {
 		if tries > 10 {
-			return fmt.Errorf("open console: could not switch to tty1")
+			return errors.New("open console: could not switch to tty1")
 		}
 		// switch to console
 		err := pl.KeyboardPress("{f9}")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to press F9 key: %w", err)
 		}
 		time.Sleep(50 * time.Millisecond)
 		tty, err = getTTY()
@@ -79,9 +82,9 @@ func openConsole(pl platforms.Platform, vt string) error {
 	return nil
 }
 
-func runScript(pl *Platform, bin string, args string, hidden bool) error {
+func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
-		return err
+		return fmt.Errorf("failed to stat script file: %w", err)
 	}
 
 	active := scriptIsActive()
@@ -91,14 +94,16 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 
 	if hidden {
 		// run the script directly
-		cmd := exec.Command(bin, args)
+		cmd := exec.CommandContext(context.Background(), bin, args)
 		cmd.Env = os.Environ()
-		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8")
-		cmd.Env = append(cmd.Env, "HOME=/root")
-		cmd.Env = append(cmd.Env, "LESSKEY=/media/fat/linux/lesskey")
-		cmd.Env = append(cmd.Env, "ZAPAROO_RUN_SCRIPT=1")
+		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root",
+			"LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT=1")
 		cmd.Dir = filepath.Dir(bin)
-		return cmd.Run()
+		err := cmd.Run()
+		if err != nil {
+			return fmt.Errorf("failed to run script: %w", err)
+		}
+		return nil
 	}
 
 	if pl.activeMedia() != nil {
@@ -135,9 +140,11 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 
 	// this is just to follow mister's convention, which reserves
 	// tty2 for scripts
-	err = exec.Command("chvt", vt).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
 	}
 
 	// this is how mister launches scripts itself
@@ -150,12 +157,13 @@ cd $(dirname "%s")
 %s
 `, runScript, bin, bin+" "+args)
 
-	err = os.WriteFile(scriptPath, []byte(launcher), 0755)
+	err = os.WriteFile(scriptPath, []byte(launcher), 0o750) //nolint:gosec // Script file needs execute permissions
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write script file: %w", err)
 	}
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		context.Background(),
 		"/sbin/agetty",
 		"-a",
 		"root",
@@ -168,13 +176,12 @@ cd $(dirname "%s")
 	)
 
 	exit := func() {
-		if pl.activeMedia() == nil {
-			// exit console
-			err = pl.KeyboardPress("{f12}")
-			if err != nil {
-				return
-			}
-		} else {
+		if pl.activeMedia() != nil {
+			return
+		}
+		// exit console
+		err = pl.KeyboardPress("{f12}")
+		if err != nil {
 			return
 		}
 	}
@@ -185,28 +192,32 @@ cd $(dirname "%s")
 		if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
 			exit()
 		}
-		return err
+		return fmt.Errorf("failed to run script command: %w", err)
 	}
 
 	exit()
 	return nil
 }
 
-func echoFile(path string, s string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+func echoFile(path, s string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // Internal path for script output
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file for echo: %w", err)
 	}
 
 	_, err = f.WriteString(s)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to file: %w", err)
 	}
 
-	return f.Close()
+	err = f.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
+	}
+	return nil
 }
 
-func writeTty(id string, s string) error {
+func writeTty(id, s string) error {
 	tty := "/dev/tty" + id
 	return echoFile(tty, s)
 }

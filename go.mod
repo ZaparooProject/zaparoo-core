@@ -1,8 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core
 
-go 1.23.0
-
-toolchain go1.23.6
+go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
@@ -16,7 +14,7 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
-	github.com/go-chi/chi/v5 v5.0.12
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.1
 	github.com/gocarina/gocsv v0.0.0-20230616125104-99d496ca653d
 	github.com/google/go-cmp v0.6.0

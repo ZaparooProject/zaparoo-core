@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package methods
 
 import (
@@ -10,10 +29,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -23,20 +41,20 @@ import (
 const defaultMaxResults = 250
 
 type indexingStatusVals struct {
-	indexing    bool
+	currentDesc string
 	totalSteps  int
 	currentStep int
-	currentDesc string
 	totalFiles  int
+	indexing    bool
 }
 
 type indexingStatus struct {
-	mu          sync.RWMutex
-	indexing    bool
+	currentDesc string
 	totalSteps  int
 	currentStep int
-	currentDesc string
 	totalFiles  int
+	mu          sync.RWMutex
+	indexing    bool
 }
 
 func (s *indexingStatus) get() indexingStatusVals {
@@ -110,11 +128,12 @@ func generateMediaDB(
 	go func() {
 		total, err := mediascanner.NewNamesIndex(pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
-			if status.Step == 1 {
+			switch status.Step {
+			case 1:
 				desc = "Finding media folders"
-			} else if status.Step == status.Total {
+			case status.Total:
 				desc = "Writing database"
-			} else {
+			default:
 				system, err := systemdefs.GetSystem(status.SystemID)
 				if err != nil {
 					desc = status.SystemID
@@ -162,22 +181,21 @@ func generateMediaDB(
 			})
 			statusInstance.clear()
 			return
-		} else {
-			log.Info().Msg("finished generating media db successfully")
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:     true,
-				Indexing:   false,
-				TotalFiles: &total,
-			})
-			statusInstance.clear()
-			log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
-			return
 		}
+		log.Info().Msg("finished generating media db successfully")
+		notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+			Exists:     true,
+			Indexing:   false,
+			TotalFiles: &total,
+		})
+		statusInstance.clear()
+		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
 	}()
 
 	return nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received generate media request")
 
@@ -216,7 +234,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	return nil, err
 }
 
-func HandleMediaSearch(env requests.RequestEnv) (any, error) {
+func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
 	if len(env.Params) == 0 {
@@ -238,7 +256,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 		return nil, errors.New("query or system is required")
 	}
 
-	var results = make([]models.SearchResultMedia, 0)
+	results := make([]models.SearchResultMedia, 0)
 	var search []database.SearchResult
 	system := params.Systems
 	query := params.Query
@@ -251,12 +269,12 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	} else {
 		systems := make([]systemdefs.System, 0)
 		for _, s := range *system {
-			system, err := systemdefs.GetSystem(s)
-			if err != nil {
-				return nil, errors.New("error getting system: " + err.Error())
+			sys, systemErr := systemdefs.GetSystem(s)
+			if systemErr != nil {
+				return nil, errors.New("error getting system: " + systemErr.Error())
 			}
 
-			systems = append(systems, *system)
+			systems = append(systems, *sys)
 		}
 
 		search, err = env.Database.MediaDB.SearchMediaPathWords(systems, query)
@@ -272,7 +290,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 		}
 
 		resultSystem := models.System{
-			Id: system.ID,
+			ID: system.ID,
 		}
 
 		metadata, err := assets.GetSystemMetadata(system.ID)
@@ -302,7 +320,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) {
 	}, nil
 }
 
-func HandleMedia(env requests.RequestEnv) (any, error) {
+func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media request")
 
 	resp := models.MediaResponse{
@@ -317,7 +335,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
-			SystemID:   system.Id,
+			SystemID:   system.ID,
 			SystemName: system.Name,
 			Name:       activeMedia.Name,
 			Path:       env.Platform.NormalizePath(env.Config, activeMedia.Path),
@@ -345,13 +363,14 @@ func HandleMedia(env requests.RequestEnv) (any, error) {
 	return resp, nil
 }
 
+//nolint:gocritic // single-use parameter in API handler
 func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received update active media request")
 
 	if len(env.Params) == 0 {
 		log.Info().Msg("clearing active media")
 		env.State.SetActiveMedia(nil)
-		return nil, nil
+		return NoContent{}, nil
 	}
 
 	var params models.UpdateActiveMediaParams
@@ -378,15 +397,15 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	env.State.SetActiveMedia(&activeMedia)
-	return nil, nil
+	return NoContent{}, nil
 }
 
-func HandleActiveMedia(env requests.RequestEnv) (any, error) {
+func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received active media request")
 
 	media := env.State.ActiveMedia()
 	if media == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no active media
 	}
 
 	return models.ActiveMedia{

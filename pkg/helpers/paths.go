@@ -1,17 +1,38 @@
-package utils
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package helpers
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 )
 
 // PathIsLauncher returns true if a given path matches against any of the
@@ -19,10 +40,10 @@ import (
 func PathIsLauncher(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	l platforms.Launcher,
+	l *platforms.Launcher,
 	path string,
 ) bool {
-	if len(path) == 0 {
+	if path == "" {
 		return false
 	}
 
@@ -88,21 +109,21 @@ func PathIsLauncher(
 	// finally, launcher's test func
 	if l.Test != nil {
 		return l.Test(cfg, lp)
-	} else {
-		return false
 	}
+	return false
 }
 
 // MatchSystemFile returns true if a given path is for a given system.
 func MatchSystemFile(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	systemId string,
+	systemID string,
 	path string,
 ) bool {
-	for _, l := range pl.Launchers(cfg) {
-		if l.SystemID == systemId {
-			if PathIsLauncher(cfg, pl, l, path) {
+	launchers := pl.Launchers(cfg)
+	for i := range launchers {
+		if launchers[i].SystemID == systemID {
+			if PathIsLauncher(cfg, pl, &launchers[i], path) {
 				return true
 			}
 		}
@@ -118,9 +139,10 @@ func PathToLaunchers(
 	path string,
 ) []platforms.Launcher {
 	var launchers []platforms.Launcher
-	for _, l := range pl.Launchers(cfg) {
-		if PathIsLauncher(cfg, pl, l, path) {
-			launchers = append(launchers, l)
+	allLaunchers := pl.Launchers(cfg)
+	for i := range allLaunchers {
+		if PathIsLauncher(cfg, pl, &allLaunchers[i], path) {
+			launchers = append(launchers, allLaunchers[i])
 		}
 	}
 	return launchers
@@ -138,6 +160,7 @@ func ExeDir() string {
 func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 
+	//nolint:gosec // Safe: reads Steam config files for game library scanning
 	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
 	if err != nil {
 		log.Error().Err(err).Msg("error opening libraryfolders.vdf")
@@ -151,12 +174,24 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		return results, nil
 	}
 
-	lfs := m["libraryfolders"].(map[string]interface{})
+	lfs, ok := m["libraryfolders"].(map[string]any)
+	if !ok {
+		log.Error().Msg("libraryfolders is not a map")
+		return results, nil
+	}
 	for l, v := range lfs {
 		log.Debug().Msgf("library id: %s", l)
-		ls := v.(map[string]interface{})
+		ls, ok := v.(map[string]any)
+		if !ok {
+			log.Error().Msgf("library %s is not a map", l)
+			continue
+		}
 
-		libraryPath := ls["path"].(string)
+		libraryPath, ok := ls["path"].(string)
+		if !ok {
+			log.Error().Msgf("library %s path is not a string", l)
+			continue
+		}
 		steamApps, err := os.ReadDir(filepath.Join(libraryPath, "steamapps"))
 		if err != nil {
 			log.Error().Err(err).Msg("error listing steamapps folder")
@@ -173,6 +208,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 		for _, mf := range manifestFiles {
 			log.Debug().Msgf("manifest file: %s", mf)
 
+			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
 			af, err := os.Open(mf)
 			if err != nil {
 				log.Error().Err(err).Msgf("error opening manifest: %s", mf)
@@ -186,11 +222,27 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 				return results, nil
 			}
 
-			appState := am["AppState"].(map[string]interface{})
+			appState, ok := am["AppState"].(map[string]any)
+			if !ok {
+				log.Error().Msgf("AppState is not a map in manifest: %s", mf)
+				continue
+			}
+
+			appID, ok := appState["appid"].(string)
+			if !ok {
+				log.Error().Msgf("appid is not a string in manifest: %s", mf)
+				continue
+			}
+
+			appName, ok := appState["name"].(string)
+			if !ok {
+				log.Error().Msgf("name is not a string in manifest: %s", mf)
+				continue
+			}
 
 			results = append(results, platforms.ScanResult{
-				Path: "steam://" + appState["appid"].(string) + "/" + appState["name"].(string),
-				Name: appState["name"].(string),
+				Path: "steam://" + appID + "/" + appName,
+				Name: appName,
 			})
 		}
 	}
@@ -245,14 +297,14 @@ func DoLaunch(
 	cfg *config.Instance,
 	pl platforms.Platform,
 	setActiveMedia func(*models.ActiveMedia),
-	launcher platforms.Launcher,
+	launcher *platforms.Launcher,
 	path string,
 ) error {
 	log.Debug().Msgf("launching with: %v", launcher)
 
 	err := launcher.Launch(cfg, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to launch: %w", err)
 	}
 
 	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)
@@ -291,31 +343,28 @@ func HasUserDir() (string, bool) {
 	parent := filepath.Dir(exeDir)
 	userDir := filepath.Join(parent, config.UserDir)
 
-	if info, err := os.Stat(userDir); err == nil {
-		if !info.IsDir() {
-			return "", false
-		} else {
-			return userDir, true
-		}
-	} else {
+	info, err := os.Stat(userDir)
+	if err != nil {
 		return "", false
 	}
+	if !info.IsDir() {
+		return "", false
+	}
+	return userDir, true
 }
 
 func ConfigDir(pl platforms.Platform) string {
 	if v, ok := HasUserDir(); ok {
 		return v
-	} else {
-		return pl.Settings().ConfigDir
 	}
+	return pl.Settings().ConfigDir
 }
 
 func DataDir(pl platforms.Platform) string {
 	if v, ok := HasUserDir(); ok {
 		return v
-	} else {
-		return pl.Settings().DataDir
 	}
+	return pl.Settings().DataDir
 }
 
 var ReURI = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$`)

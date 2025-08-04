@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux
 
 package mister
 
@@ -7,16 +7,16 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	mrextConfig "github.com/wizzomafizzo/mrext/pkg/config"
+	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
 )
 
 const (
 	SDRootDir          = "/media/fat"
 	TempDir            = "/tmp/zaparoo"
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
-	TokenReadFile      = "/tmp/TOKENREAD"
+	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Temp file path, not credentials
 	DataDir            = SDRootDir + "/zaparoo"
-	ArcadeDbUrl        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
+	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
 	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
@@ -49,16 +49,17 @@ func MainHasFeature(feature string) bool {
 	return false
 }
 
-func UserConfigToMrext(cfg *config.Instance) *mrextConfig.UserConfig {
-	var setCore []string
-	for _, v := range cfg.SystemDefaults() {
+func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
+	systemDefaults := cfg.SystemDefaults()
+	setCore := make([]string, 0, len(systemDefaults))
+	for _, v := range systemDefaults {
 		if v.Launcher == "" {
 			continue
 		}
 		setCore = append(setCore, v.System+":"+v.Launcher)
 	}
-	return &mrextConfig.UserConfig{
-		Systems: mrextConfig.SystemsConfig{
+	return &mrextconfig.UserConfig{
+		Systems: mrextconfig.SystemsConfig{
 			GamesFolder: cfg.IndexRoots(),
 			SetCore:     setCore,
 		},

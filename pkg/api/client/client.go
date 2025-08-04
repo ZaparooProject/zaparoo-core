@@ -1,9 +1,29 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package client
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -21,7 +41,7 @@ var (
 	ErrRequestCancelled = errors.New("request cancelled")
 )
 
-const ApiPath = "/api/v0.1"
+const APIPath = "/api/v0.1"
 
 // DisableZapScript disables the service running any processed ZapScript from
 // tokens, and returns a function to re-enable it.
@@ -50,7 +70,6 @@ func DisableZapScript(cfg *config.Instance) func() {
 			log.Error().Err(err).Msg("error enabling runZapScript")
 		}
 	}
-
 }
 
 // LocalClient sends a single unauthenticated method with params to the local
@@ -61,15 +80,15 @@ func LocalClient(
 	method string,
 	params string,
 ) (string, error) {
-	localWebsocketUrl := url.URL{
+	localWebsocketURL := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   ApiPath,
+		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
 	}
 
 	id, err := uuid.NewUUID()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to generate uuid: %w", err)
 	}
 
 	req := models.RequestObject{
@@ -78,22 +97,23 @@ func LocalClient(
 		Method:  method,
 	}
 
-	if len(params) == 0 {
+	switch {
+	case params == "":
 		req.Params = nil
-	} else if json.Valid([]byte(params)) {
+	case json.Valid([]byte(params)):
 		req.Params = []byte(params)
-	} else {
+	default:
 		return "", ErrInvalidParams
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(localWebsocketUrl.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(localWebsocketURL.String(), nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
 	defer func(c *websocket.Conn) {
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 	}(c)
 
@@ -103,15 +123,15 @@ func LocalClient(
 	go func() {
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
-			if err != nil {
-				log.Error().Err(err).Msg("error reading message")
+			_, message, readErr := c.ReadMessage()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("error reading message")
 				return
 			}
 
 			var m models.ResponseObject
-			err = json.Unmarshal(message, &m)
-			if err != nil {
+			unmarshalErr := json.Unmarshal(message, &m)
+			if unmarshalErr != nil {
 				continue
 			}
 
@@ -131,23 +151,23 @@ func LocalClient(
 
 	err = c.WriteJSON(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
-	timer := time.NewTimer(config.ApiRequestTimeout)
+	timer := time.NewTimer(config.APIRequestTimeout)
 	select {
 	case <-done:
-		break
+
 	case <-timer.C:
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestCancelled
 	}
@@ -163,7 +183,7 @@ func LocalClient(
 	var b []byte
 	b, err = json.Marshal(resp.Result)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal response result: %w", err)
 	}
 
 	return string(b), nil
@@ -177,18 +197,18 @@ func WaitNotification(
 ) (string, error) {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   "localhost:" + strconv.Itoa(cfg.ApiPort()),
-		Path:   ApiPath,
+		Host:   "localhost:" + strconv.Itoa(cfg.APIPort()),
+		Path:   APIPath,
 	}
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
 	defer func(c *websocket.Conn) {
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 	}(c)
 
@@ -198,15 +218,15 @@ func WaitNotification(
 	go func() {
 		defer close(done)
 		for {
-			_, message, err := c.ReadMessage()
-			if err != nil {
-				log.Error().Err(err).Msg("error reading message")
+			_, message, readErr := c.ReadMessage()
+			if readErr != nil {
+				log.Error().Err(readErr).Msg("error reading message")
 				return
 			}
 
 			var m models.RequestObject
-			err = json.Unmarshal(message, &m)
-			if err != nil {
+			unmarshalErr := json.Unmarshal(message, &m)
+			if unmarshalErr != nil {
 				continue
 			}
 
@@ -231,7 +251,7 @@ func WaitNotification(
 
 	var timerChan <-chan time.Time
 	if timeout == 0 {
-		timer := time.NewTimer(config.ApiRequestTimeout)
+		timer := time.NewTimer(config.APIRequestTimeout)
 		timerChan = timer.C
 	} else if timeout > 0 {
 		timer := time.NewTimer(timeout)
@@ -241,17 +261,17 @@ func WaitNotification(
 
 	select {
 	case <-done:
-		break
+
 	case <-timerChan:
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestTimeout
 	case <-ctx.Done():
-		err := c.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing websocket")
+		closeErr := c.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing websocket")
 		}
 		return "", ErrRequestCancelled
 	}
@@ -263,7 +283,7 @@ func WaitNotification(
 	var b []byte
 	b, err = json.Marshal(resp.Params)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal response params: %w", err)
 	}
 
 	return string(b), nil

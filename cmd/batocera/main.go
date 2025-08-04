@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -22,19 +24,19 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"os"
 	"path"
 
-	_ "embed"
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/batocera"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/rs/zerolog/log"
 )
 
 // api: https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/services/HttpServerThread.cpp
@@ -46,6 +48,13 @@ var serviceFile string
 const serviceFilePath = "/userdata/system/services/zaparoo_service"
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &batocera.Platform{}
 	flags := cli.SetupFlags()
 
@@ -68,27 +77,26 @@ func main() {
 	flags.Pre(pl)
 
 	if *doInstall {
-		err := os.MkdirAll(path.Dir(serviceFilePath), 0755)
+		//nolint:gosec // System service directory needs standard permissions
+		err := os.MkdirAll(path.Dir(serviceFilePath), 0o755)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error creating service directory: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error creating service directory: %w", err)
 		}
-		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0755)
+		//nolint:gosec // System service file needs to be readable by system
+		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0o644)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error writing service file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error writing service file: %w", err)
 		}
-		fmt.Println("Zaparoo service installed successfully.")
-		os.Exit(0)
+		_, _ = fmt.Println("Zaparoo service installed successfully.")
+		return nil
 	} else if *doUninstall {
 		if _, err := os.Stat(serviceFilePath); err == nil {
 			err := os.Remove(serviceFilePath)
 			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "Error removing service file: %v\n", err)
-				os.Exit(1)
+				return fmt.Errorf("error removing service file: %w", err)
 			}
-			fmt.Println("Zaparoo service uninstalled successfully.")
-			os.Exit(0)
+			_, _ = fmt.Println("Zaparoo service uninstalled successfully.")
+			return nil
 		}
 	}
 
@@ -105,7 +113,7 @@ func main() {
 		}
 	}()
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -113,18 +121,20 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating service: %w", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return fmt.Errorf("service handler failed: %w", err)
+	}
 
 	flags.Post(cfg, pl)
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
-		err := svc.Start()
-		if err != nil {
-			log.Error().Err(err).Msg("could not start service")
+		startErr := svc.Start()
+		if startErr != nil {
+			log.Error().Err(startErr).Msg("could not start service")
 		}
 	}
 
@@ -132,20 +142,18 @@ func main() {
 	app, err := tui.BuildMain(
 		cfg, pl,
 		svc.Running,
-		path.Join(utils.DataDir(pl), config.LogFile),
+		path.Join(helpers.DataDir(pl), config.LogFile),
 		"storage")
 	if err != nil {
 		log.Error().Msgf("error setting up UI: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error setting up UI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error setting up UI: %w", err)
 	}
 
 	err = app.Run()
 	if err != nil {
 		log.Error().Msgf("error running UI: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error running UI: %w", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

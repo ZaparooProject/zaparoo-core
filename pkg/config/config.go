@@ -1,7 +1,27 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -12,7 +32,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
-	"github.com/pelletier/go-toml/v2"
+	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -26,16 +46,16 @@ const (
 )
 
 type Values struct {
-	ConfigSchema int       `toml:"config_schema"`
-	DebugLogging bool      `toml:"debug_logging"`
-	Audio        Audio     `toml:"audio,omitempty"`
-	Readers      Readers   `toml:"readers,omitempty"`
-	Systems      Systems   `toml:"systems,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
-	Service      Service   `toml:"service,omitempty"`
+	Systems      Systems   `toml:"systems,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
+	Service      Service   `toml:"service,omitempty"`
 	Groovy       Groovy    `toml:"groovy,omitempty"`
+	Readers      Readers   `toml:"readers,omitempty"`
+	ConfigSchema int       `toml:"config_schema"`
+	Audio        Audio     `toml:"audio,omitempty"`
+	DebugLogging bool      `toml:"debug_logging"`
 }
 
 type Audio struct {
@@ -48,10 +68,10 @@ type ZapScript struct {
 }
 
 type Service struct {
-	ApiPort    int      `toml:"api_port"`
-	DeviceId   string   `toml:"device_id"`
+	DeviceID   string   `toml:"device_id"`
 	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe []*regexp.Regexp
+	APIPort    int `toml:"api_port"`
 }
 
 type Auth struct {
@@ -76,7 +96,7 @@ var BaseDefaults = Values{
 		},
 	},
 	Service: Service{
-		ApiPort: 7497,
+		APIPort: 7497,
 	},
 	Groovy: Groovy{
 		GmcProxyEnabled:        false,
@@ -86,11 +106,11 @@ var BaseDefaults = Values{
 }
 
 type Instance struct {
-	mu       sync.RWMutex
 	appPath  string
 	cfgPath  string
 	authPath string
 	vals     Values
+	mu       sync.RWMutex
 }
 
 var authCfg atomic.Value
@@ -100,9 +120,14 @@ func GetAuthCfg() Auth {
 	if val == nil {
 		return Auth{}
 	}
-	return val.(Auth)
+	auth, ok := val.(Auth)
+	if !ok {
+		return Auth{}
+	}
+	return auth
 }
 
+//nolint:gocritic // config struct copied for immutability
 func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	cfgPath := os.Getenv(CfgEnv)
 	log.Debug().Msgf("env config path: %s", cfgPath)
@@ -121,9 +146,9 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		log.Info().Msg("saving new default config to disk")
 
-		err := os.MkdirAll(filepath.Dir(cfgPath), 0755)
+		err := os.MkdirAll(filepath.Dir(cfgPath), 0o750)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 
 		err = cfg.Save()
@@ -151,18 +176,18 @@ func (c *Instance) Load() error {
 	}
 
 	if _, err := os.Stat(c.cfgPath); err != nil {
-		return err
+		return fmt.Errorf("failed to stat config file: %w", err)
 	}
 
 	data, err := os.ReadFile(c.cfgPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var newVals Values
 	err = toml.Unmarshal(data, &newVals)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	if newVals.ConfigSchema != SchemaVersion {
@@ -181,13 +206,13 @@ func (c *Instance) Load() error {
 		log.Info().Msg("loading auth file")
 		authData, err := os.ReadFile(c.authPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read auth file: %w", err)
 		}
 
 		var authVals Auth
 		err = toml.Unmarshal(authData, &authVals)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to unmarshal auth file: %w", err)
 		}
 
 		log.Info().Msgf("loaded %d auth entries", len(authVals.Creds))
@@ -252,10 +277,10 @@ func (c *Instance) Save() error {
 	c.vals.ConfigSchema = SchemaVersion
 
 	// generate a device id if one doesn't exist
-	if c.vals.Service.DeviceId == "" {
-		newId := uuid.New().String()
-		c.vals.Service.DeviceId = newId
-		log.Info().Msgf("generated new device id: %s", newId)
+	if c.vals.Service.DeviceID == "" {
+		newID := uuid.New().String()
+		c.vals.Service.DeviceID = newID
+		log.Info().Msgf("generated new device id: %s", newID)
 	}
 
 	tmpMappings := c.vals.Mappings
@@ -265,13 +290,16 @@ func (c *Instance) Save() error {
 
 	data, err := toml.Marshal(&c.vals)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	c.vals.Mappings = tmpMappings
 	c.vals.Launchers.Custom = tmpCustomLauncher
 
-	return os.WriteFile(c.cfgPath, data, 0644)
+	if err := os.WriteFile(c.cfgPath, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	return nil
 }
 
 func (c *Instance) AudioFeedback() bool {
@@ -308,7 +336,7 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 		return false
 	}
 
-	for i, _ := range allow {
+	for i := range allow {
 		if allowRe[i] != nil &&
 			allowRe[i].MatchString(s) {
 			return true
@@ -318,10 +346,10 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	return false
 }
 
-func (c *Instance) ApiPort() int {
+func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Service.ApiPort
+	return c.vals.Service.APIPort
 }
 
 func (c *Instance) IsExecuteAllowed(s string) bool {

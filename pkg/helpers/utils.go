@@ -1,6 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -18,19 +19,18 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package utils
+package helpers
 
 import (
 	"archive/zip"
 	"bufio"
 	"context"
-	"crypto/md5"
+	"crypto/md5" //nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
+	"crypto/rand"
+	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"io"
-	"math/rand"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -40,11 +40,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
-
-var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 func TokensEqual(a, b *tokens.Token) bool {
 	if a == nil && b == nil {
@@ -57,10 +58,12 @@ func TokensEqual(a, b *tokens.Token) bool {
 }
 
 func GetMd5Hash(path string) (string, error) {
+	//nolint:gosec // Safe: opens files for MD5 hashing, used for game file identification
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to open file for MD5 hash: %w", err)
 	}
+	//nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
 	hash := md5.New()
 	_, _ = io.Copy(hash, file)
 	_ = file.Close()
@@ -68,15 +71,16 @@ func GetMd5Hash(path string) (string, error) {
 }
 
 func GetFileSize(path string) (int64, error) {
+	//nolint:gosec // Safe: opens files to get file size, used for game file analysis
 	file, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to open file for size check: %w", err)
 	}
 
 	stat, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return 0, err
+		return 0, fmt.Errorf("failed to get file stat: %w", err)
 	}
 
 	size := stat.Size()
@@ -114,8 +118,20 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 
 func WaitForInternet(maxTries int) bool {
 	for i := 0; i < maxTries; i++ {
-		_, err := http.Get("https://api.github.com")
-		if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", http.NoBody)
+		if err != nil {
+			cancel()
+			continue
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+		if err == nil && resp != nil {
+			if err := resp.Body.Close(); err != nil {
+				log.Error().Err(err).Msg("error closing response body")
+			}
 			return true
 		}
 		time.Sleep(1 * time.Second)
@@ -149,7 +165,7 @@ func IsZip(path string) bool {
 func ListZip(path string) ([]string, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open zip file: %w", err)
 	}
 	defer func(r *zip.ReadCloser) {
 		err := r.Close()
@@ -158,7 +174,7 @@ func ListZip(path string) ([]string, error) {
 		}
 	}(r)
 
-	var files []string
+	files := make([]string, 0, len(r.File))
 	for _, f := range r.File {
 		files = append(files, f.Name)
 	}
@@ -170,25 +186,30 @@ func ListZip(path string) ([]string, error) {
 func RandomElem[T any](xs []T) (T, error) {
 	var item T
 	if len(xs) == 0 {
-		return item, fmt.Errorf("empty slice")
-	} else {
-		item = xs[r.Intn(len(xs))]
-		return item, nil
+		return item, errors.New("empty slice")
 	}
+	randInt, err := rand.Int(rand.Reader, big.NewInt(int64(len(xs))))
+	if err != nil {
+		return item, fmt.Errorf("failed to generate random number: %w", err)
+	}
+	item = xs[randInt.Int64()]
+	return item, nil
 }
 
 func CopyFile(sourcePath, destPath string) error {
+	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open source file %s: %w", sourcePath, err)
 	}
 	defer func(inputFile *os.File) {
 		_ = inputFile.Close()
 	}(inputFile)
 
+	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	outputFile, err := os.Create(destPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func(outputFile *os.File) {
 		_ = outputFile.Close()
@@ -196,13 +217,13 @@ func CopyFile(sourcePath, destPath string) error {
 
 	_, err = io.Copy(outputFile, inputFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to copy file content: %w", err)
 	}
 	err = outputFile.Sync()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to sync file: %w", err)
 	}
-	return inputFile.Close()
+	return nil
 }
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -210,7 +231,13 @@ var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 func RandSeq(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		randInt, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			// Fallback to timestamp-based selection if crypto/rand fails
+			b[i] = letters[int(time.Now().UnixNano())%len(letters)]
+		} else {
+			b[i] = letters[randInt.Int64()]
+		}
 	}
 	return string(b)
 }
@@ -244,7 +271,7 @@ func YesNoPrompt(label string, def bool) bool {
 var reSlug = regexp.MustCompile(`(\(.*\))|(\[.*])|[^a-z0-9A-Z]`)
 
 func SlugifyString(input string) string {
-	rep := reSlug.ReplaceAllStringFunc(input, func(m string) string {
+	rep := reSlug.ReplaceAllStringFunc(input, func(_ string) string {
 		return ""
 	})
 	return strings.ToLower(rep)

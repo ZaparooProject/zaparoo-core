@@ -1,8 +1,26 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package platforms
 
 import (
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
+	"errors"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -11,7 +29,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
 )
+
+var ErrNotSupported = errors.New("operation not supported on this platform")
 
 const (
 	PlatformIDBatocera  = "batocera"
@@ -31,29 +53,29 @@ const (
 // CmdEnv is the local state of a scanned token, as it processes each ZapScript
 // command. Every command run has access to and can modify it.
 type CmdEnv struct {
-	Cmd           parser.Command
-	Cfg           *config.Instance
 	Playlist      playlists.PlaylistController
+	Cfg           *config.Instance
+	Database      *database.Database
+	Cmd           parser.Command
 	TotalCommands int
 	CurrentIndex  int
 	Unsafe        bool
-	Database      *database.Database
 }
 
 // CmdResult returns a summary of what global side effects may or may not have
 // happened as a result of a single ZapScript command running.
 type CmdResult struct {
+	// Playlist is the result of the playlist change.
+	Playlist *playlists.Playlist
+	// NewCommands instructs the script runner to prepend these additional
+	// commands to the current script's remaining command list.
+	NewCommands []parser.Command
 	// MediaChanged is true if a command may have started or stopped running
 	// media, and could affect handling of the hold mode feature. This doesn't
 	// include playlist changes, which manage running media separately.
 	MediaChanged bool
 	// PlaylistChanged is true if a command started/changed/stopped a playlist.
 	PlaylistChanged bool
-	// Playlist is the result of the playlist change.
-	Playlist *playlists.Playlist
-	// NewCommands instructs the script runner to prepend these additional
-	// commands to the current script's remaining command list.
-	NewCommands []parser.Command
 	// Unsafe flags that a token has been generate by a remote/untrusted source
 	// and can no longer be considered safe. This flag will flow on to any
 	// remaining commands.
@@ -73,6 +95,16 @@ type ScanResult struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
+	// Test function returns true if file looks supported by this launcher.
+	// It's checked after all standard extension and folder checks.
+	Test func(*config.Instance, string) bool
+	// Launch function, takes a direct as possible path/ID media file.
+	Launch func(*config.Instance, string) error
+	// Kill function kills the current active launcher, if possible.
+	Kill func(*config.Instance) error
+	// Optional function to perform custom media scanning. Takes the list of
+	// results from the standard scan, if any, and returns the final list.
+	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// Unique ID of the launcher, visible to user.
 	ID string
 	// System associated with this launcher.
@@ -85,16 +117,6 @@ type Launcher struct {
 	Extensions []string
 	// Accepted schemes for URI-style launches.
 	Schemes []string
-	// Test function returns true if file looks supported by this launcher.
-	// It's checked after all standard extension and folder checks.
-	Test func(*config.Instance, string) bool
-	// Launch function, takes a direct as possible path/ID media file.
-	Launch func(*config.Instance, string) error
-	// Kill function kills the current active launcher, if possible.
-	Kill func(*config.Instance) error
-	// Optional function to perform custom media scanning. Takes the list of
-	// results from the standard scan, if any, and returns the final list.
-	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// If true, all resolved paths must be in the allow list before they
 	// can be launched.
 	AllowListOnly bool
@@ -143,7 +165,7 @@ type Platform interface {
 	Settings() Settings
 	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
 	// processed for launching.
-	ScanHook(tokens.Token) error
+	ScanHook(*tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
@@ -173,10 +195,10 @@ type Platform interface {
 	// virtual gamepad, using a button name from the ZapScript format.
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
-	ForwardCmd(CmdEnv) (CmdResult, error)
+	ForwardCmd(*CmdEnv) (CmdResult, error)
 	// LookupMapping is a platform-specific method of matching a token to a
 	// mapping. It takes last precedence when checking mapping sources.
-	LookupMapping(tokens.Token) (string, bool) // DEPRECATED
+	LookupMapping(*tokens.Token) (string, bool) // DEPRECATED
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers(*config.Instance) []Launcher
@@ -187,18 +209,18 @@ type Platform interface {
 	// TODO: can this just block instead of returning a delay?
 	ShowNotice(
 		*config.Instance,
-		widgetModels.NoticeArgs,
+		widgetmodels.NoticeArgs,
 	) (func() error, time.Duration, error)
 	// ShowLoader displays a string on-screen of the platform device alongside
 	// an animation indicating something is in progress. Returns a function
 	// that may be used to manually hide the loader and an optional delay to
 	// wait before hiding.
 	// TODO: does this need a close delay returned as well?
-	ShowLoader(*config.Instance, widgetModels.NoticeArgs) (func() error, error)
+	ShowLoader(*config.Instance, widgetmodels.NoticeArgs) (func() error, error)
 	// ShowPicker displays a list picker on-screen of the platform device with
 	// a list of Zap Link Cmds to choose from. The chosen action will be
 	// forwarded to the local API instance to be run. Returns a function that
 	// may be used to manually cancel and hide the picker.
 	// TODO: it appears to not return said function
-	ShowPicker(*config.Instance, widgetModels.PickerArgs) error
+	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
 }

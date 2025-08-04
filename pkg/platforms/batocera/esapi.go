@@ -1,34 +1,41 @@
+//go:build linux
+
 package batocera
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const apiURL = "http://localhost:1234"
 
-func apiRequest(path string, body string, timeout time.Duration) ([]byte, error) {
+func apiRequest(path, body string, timeout time.Duration) ([]byte, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	client := &http.Client{
-		Timeout: timeout,
-	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	client := &http.Client{}
 
 	var kodiReq *http.Request
 	var err error
 	if body != "" {
-		kodiReq, err = http.NewRequest("POST", apiURL+path, bytes.NewBuffer([]byte(body)))
+		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodPost, apiURL+path, bytes.NewBuffer([]byte(body)))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 	} else {
-		kodiReq, err = http.NewRequest("GET", apiURL+path, nil)
+		kodiReq, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, http.NoBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -38,12 +45,14 @@ func apiRequest(path string, body string, timeout time.Duration) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close response body")
+	if resp == nil {
+		return nil, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("error closing response body")
 		}
-	}(resp.Body)
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -114,7 +123,7 @@ func apiRunningGame() (APIRunningGameResponse, bool, error) {
 	var game APIRunningGameResponse
 	err = json.Unmarshal(resp, &game)
 	if err != nil {
-		return APIRunningGameResponse{}, false, err
+		return APIRunningGameResponse{}, false, fmt.Errorf("failed to unmarshal running game response: %w", err)
 	}
 
 	return game, true, nil

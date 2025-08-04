@@ -1,17 +1,37 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package file
 
 import (
 	"encoding/hex"
 	"errors"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,12 +50,12 @@ func NewReader(cfg *config.Instance) *Reader {
 	}
 }
 
-func (r *Reader) Ids() []string {
+func (*Reader) IDs() []string {
 	return []string{"file"}
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -51,14 +71,15 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	}
 
 	if _, err := os.Stat(parent); err != nil {
-		return err
+		return fmt.Errorf("failed to stat parent directory: %w", err)
 	}
 
 	if _, err := os.Stat(path); err != nil {
 		// attempt to create empty file
+		//nolint:gosec // Safe: creates file reader token files in controlled directories
 		f, err := os.Create(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create file: %w", err)
 		}
 		_ = f.Close()
 	}
@@ -128,7 +149,7 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-func (r *Reader) Detect(connected []string) string {
+func (*Reader) Detect(_ []string) string {
 	return ""
 }
 
@@ -144,10 +165,10 @@ func (r *Reader) Info() string {
 	return r.path
 }
 
-func (r *Reader) Write(text string) (*tokens.Token, error) {
+func (*Reader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *Reader) CancelWrite() {
-	return
+func (*Reader) CancelWrite() {
+	// no-op, writing not supported
 }

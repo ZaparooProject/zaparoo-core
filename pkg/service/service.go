@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -22,57 +22,57 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb/boltmigration"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/groovyproxy"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
 func setupEnvironment(pl platforms.Platform) error {
-	if _, ok := utils.HasUserDir(); ok {
+	if _, ok := helpers.HasUserDir(); ok {
 		log.Info().Msg("using 'user' directory for storage")
 	}
 
 	log.Info().Msg("creating platform directories")
 	dirs := []string{
-		utils.ConfigDir(pl),
+		helpers.ConfigDir(pl),
 		pl.Settings().TempDir,
-		utils.DataDir(pl),
-		filepath.Join(utils.DataDir(pl), config.MappingsDir),
-		filepath.Join(utils.DataDir(pl), config.AssetsDir),
-		filepath.Join(utils.DataDir(pl), config.LaunchersDir),
-		filepath.Join(utils.DataDir(pl), config.MediaDir),
+		helpers.DataDir(pl),
+		filepath.Join(helpers.DataDir(pl), config.MappingsDir),
+		filepath.Join(helpers.DataDir(pl), config.AssetsDir),
+		filepath.Join(helpers.DataDir(pl), config.LaunchersDir),
+		filepath.Join(helpers.DataDir(pl), config.MediaDir),
 	}
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0755)
+		err := os.MkdirAll(dir, 0o750)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
 	successSoundPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		config.SuccessSoundFilename,
 	)
 	if _, err := os.Stat(successSoundPath); err != nil {
 		// copy success sound to temp
+		//nolint:gosec // Safe: creates audio files in controlled application directories
 		sf, err := os.Create(successSoundPath)
 		if err != nil {
 			log.Error().Msgf("error creating success sound file: %s", err)
@@ -85,12 +85,13 @@ func setupEnvironment(pl platforms.Platform) error {
 	}
 
 	failSoundPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		config.FailSoundFilename,
 	)
 	if _, err := os.Stat(failSoundPath); err != nil {
 		// copy fail sound to temp
+		//nolint:gosec // Safe: creates audio files in controlled application directories
 		ff, err := os.Create(failSoundPath)
 		if err != nil {
 			log.Error().Msgf("error creating fail sound file: %s", err)
@@ -105,15 +106,15 @@ func setupEnvironment(pl platforms.Platform) error {
 	return nil
 }
 
-func makeDatabase(pl platforms.Platform) (*database.Database, error) {
+func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Database, error) {
 	db := &database.Database{
 		MediaDB: nil,
 		UserDB:  nil,
 	}
 
-	mediaDB, err := mediadb.OpenMediaDB(pl)
+	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
-		return db, err
+		return db, fmt.Errorf("failed to open media database: %w", err)
 	}
 
 	err = mediaDB.MigrateUp()
@@ -123,9 +124,9 @@ func makeDatabase(pl platforms.Platform) (*database.Database, error) {
 
 	db.MediaDB = mediaDB
 
-	userDB, err := userdb.OpenUserDB(pl)
+	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
-		return db, err
+		return db, fmt.Errorf("failed to open user database: %w", err)
 	}
 
 	err = userDB.MigrateUp()
@@ -167,24 +168,24 @@ func Start(
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, err
+		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
 
 	log.Info().Msg("opening databases")
-	db, err := makeDatabase(pl)
+	db, err := makeDatabase(st.GetContext(), pl)
 	if err != nil {
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
 
 	log.Info().Msg("loading mapping files")
-	err = cfg.LoadMappings(filepath.Join(utils.DataDir(pl), config.MappingsDir))
+	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading mapping files")
 	}
 
 	log.Info().Msg("loading custom launchers")
-	err = cfg.LoadCustomLaunchers(filepath.Join(utils.DataDir(pl), config.LaunchersDir))
+	err = cfg.LoadCustomLaunchers(filepath.Join(helpers.DataDir(pl), config.LaunchersDir))
 	if err != nil {
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}
@@ -207,7 +208,7 @@ func Start(
 	err = pl.StartPost(cfg, st.ActiveMedia, st.SetActiveMedia)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
-		return nil, err
+		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 
 	return func() error {

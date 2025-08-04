@@ -1,17 +1,37 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package zapscript
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils/linuxinput/keyboardmap"
 	"strconv"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/rs/zerolog/log"
 )
 
 // DEPRECATED
+//
+//nolint:gocritic // single-use parameter in command handler
 func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
@@ -27,9 +47,13 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	if code == "" {
 		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
 	}
-	return platforms.CmdResult{}, pl.KeyboardPress(code)
+	if err := pl.KeyboardPress(code); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key: %w", err)
+	}
+	return platforms.CmdResult{}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
@@ -42,7 +66,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 
 	for _, name := range env.Cmd.Args {
 		if err := pl.KeyboardPress(name); err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key '%s': %w", name, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -50,6 +74,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 	return platforms.CmdResult{}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Unsafe {
 		return platforms.CmdResult{}, ErrRemoteSource
@@ -59,7 +84,7 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	for _, name := range env.Cmd.Args {
 		if err := pl.GamepadPress(name); err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to press gamepad button '%s': %w", name, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -67,7 +92,12 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 	return platforms.CmdResult{}, nil
 }
 
-func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platforms.CmdResult, error) {
+//nolint:gocritic // single-use parameter in command handler
+func insertCoin(
+	pl platforms.Platform,
+	env platforms.CmdEnv,
+	key string,
+) (platforms.CmdResult, error) {
 	var amount int
 
 	if len(env.Cmd.Args) == 0 || env.Cmd.Args[0] != "" {
@@ -76,7 +106,7 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 		var err error
 		amount, err = strconv.Atoi(env.Cmd.Args[0])
 		if err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("invalid amount '%s': %w", env.Cmd.Args[0], err)
 		}
 	}
 
@@ -88,11 +118,13 @@ func insertCoin(pl platforms.Platform, env platforms.CmdEnv, key string) (platfo
 	return platforms.CmdResult{}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdCoinP1(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 1: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "5")
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdCoinP2(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msgf("inserting coin for player 2: %v", env.Cmd.Args)
 	return insertCoin(pl, env, "6")

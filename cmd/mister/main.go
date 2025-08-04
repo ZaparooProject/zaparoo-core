@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -22,33 +24,32 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-
-	mrextMister "github.com/wizzomafizzo/mrext/pkg/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
+	"github.com/rs/zerolog/log"
+	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func addToStartup() error {
-	var startup mrextMister.Startup
+	var startup mrextmister.Startup
 
 	err := startup.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load startup config: %w", err)
 	}
 
 	changed := false
@@ -57,7 +58,7 @@ func addToStartup() error {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove tapto from startup: %w", err)
 		}
 		changed = true
 	}
@@ -65,7 +66,7 @@ func addToStartup() error {
 	if !startup.Exists("mrext/" + config.AppName) {
 		err = startup.AddService("mrext/" + config.AppName)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add service to startup: %w", err)
 		}
 		changed = true
 	}
@@ -73,7 +74,7 @@ func addToStartup() error {
 	if changed && len(startup.Entries) > 0 {
 		err = startup.Save()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to save startup config: %w", err)
 		}
 	}
 
@@ -81,6 +82,13 @@ func addToStartup() error {
 }
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -114,19 +122,20 @@ func main() {
 	if *addStartupFlag {
 		err := addToStartup()
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error adding to startup: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	if _, err := os.Stat("/media/fat/Scripts/tapto.sh"); err == nil {
-		_ = exec.Command("/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "/media/fat/Scripts/tapto.sh", "-service", "stop").Run()
 	}
 
 	defaults := config.BaseDefaults
 	iniPath := "/media/fat/Scripts/tapto.ini"
-	if migrate.Required(iniPath, filepath.Join(utils.ConfigDir(pl), config.CfgFile)) {
+	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
 		migrated, err := migrate.IniToToml(iniPath)
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error migrating config: %v\n", err)
@@ -144,30 +153,28 @@ func main() {
 		}
 	}()
 
-	if *showLoader != "" {
+	switch {
+	case *showLoader != "":
 		err := widgets.NoticeUI(pl, *showLoader, true)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing loader: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error showing loader: %w", err)
 		}
-		os.Exit(0)
-	} else if *showPicker != "" {
+		return nil
+	case *showPicker != "":
 		err := widgets.PickerUI(cfg, pl, *showPicker)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing picker: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error showing picker: %w", err)
 		}
-		os.Exit(0)
-	} else if *showNotice != "" {
+		return nil
+	case *showNotice != "":
 		err := widgets.NoticeUI(pl, *showNotice, false)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Error showing notice: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error showing notice: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
-	svc, err := utils.NewService(utils.ServiceArgs{
+	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {
 			return service.Start(pl, cfg)
 		},
@@ -175,25 +182,26 @@ func main() {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("error creating service")
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating service: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating service: %w", err)
 	}
-	svc.ServiceHandler(serviceFlag)
+	err = svc.ServiceHandler(serviceFlag)
+	if err != nil {
+		return fmt.Errorf("service handler failed: %w", err)
+	}
 
 	flags.Post(cfg, pl)
 
 	// offer to add service to MiSTer startup if it's not already there
 	err = tryAddStartup()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error adding startup: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error adding startup: %w", err)
 	}
 
 	// try to auto-start service if it's not running already
 	if !svc.Running() {
-		err := svc.Start()
-		if err != nil {
-			log.Error().Err(err).Msg("could not start service")
+		startErr := svc.Start()
+		if startErr != nil {
+			log.Error().Err(startErr).Msg("could not start service")
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -203,8 +211,9 @@ func main() {
 	err = displayServiceInfo(pl, cfg, svc)
 	if err != nil {
 		enableZapScript()
-		_, _ = fmt.Fprintf(os.Stderr, "Error displaying TUI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error displaying TUI: %w", err)
 	}
 	enableZapScript()
+
+	return nil
 }

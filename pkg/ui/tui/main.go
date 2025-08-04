@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package tui
 
 import (
@@ -9,8 +28,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
@@ -31,12 +50,12 @@ const (
 func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
 	resp, err := client.LocalClient(ctx, cfg, models.MethodTokens, "")
 	if err != nil {
-		return models.TokensResponse{}, err
+		return models.TokensResponse{}, fmt.Errorf("failed to get tokens from local client: %w", err)
 	}
 	var tokens models.TokensResponse
 	err = json.Unmarshal([]byte(resp), &tokens)
 	if err != nil {
-		return models.TokensResponse{}, err
+		return models.TokensResponse{}, fmt.Errorf("failed to unmarshal tokens response: %w", err)
 	}
 	return tokens, nil
 }
@@ -57,13 +76,14 @@ func setupButtonNavigation(
 
 		button.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			k := event.Key()
-			if k == tcell.KeyUp || k == tcell.KeyLeft {
+			switch k { //nolint:exhaustive // only handling navigation keys
+			case tcell.KeyUp, tcell.KeyLeft:
 				app.SetFocus(buttons[prevIndex])
 				return event
-			} else if k == tcell.KeyDown || k == tcell.KeyRight {
+			case tcell.KeyDown, tcell.KeyRight:
 				app.SetFocus(buttons[nextIndex])
 				return event
-			} else if k == tcell.KeyEscape {
+			case tcell.KeyEscape:
 				app.Stop()
 				return nil
 			}
@@ -96,7 +116,7 @@ func BuildMainPage(
 		svcStatus = "NOT RUNNING\nThe Zaparoo Core service may not have started. Check logs for more information."
 	}
 
-	ip := utils.GetLocalIP()
+	ip := helpers.GetLocalIP()
 	var ipDisplay string
 	if ip == "" {
 		ipDisplay = "Unknown"
@@ -104,7 +124,7 @@ func BuildMainPage(
 		ipDisplay = ip
 	}
 
-	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.ApiPort())
+	webUI := fmt.Sprintf("http://%s:%d/app/", ip, cfg.APIPort())
 
 	statusText.SetText(
 		fmt.Sprintf(
@@ -122,55 +142,54 @@ func BuildMainPage(
 
 	if svcRunning {
 		tokens, err := getTokens(context.Background(), cfg)
-		if err != nil {
+		switch {
+		case err != nil:
 			lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-		} else {
-			if tokens.Last != nil {
-				lastScanned.SetText(fmt.Sprintf(
-					"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
-					tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
-					tokens.Last.UID,
-					tokens.Last.Text,
-				))
-			} else {
-				lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
-			}
-
-			go func() {
-				for {
-					resp, err := client.WaitNotification(
-						context.Background(), -1,
-						cfg, models.NotificationTokensAdded,
-					)
-					if errors.Is(client.ErrRequestTimeout, err) {
-						continue
-					} else if err != nil {
-						app.QueueUpdateDraw(func() {
-							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-						})
-						return
-					}
-
-					var token models.TokenResponse
-					err = json.Unmarshal([]byte(resp), &token)
-					if err != nil {
-						app.QueueUpdateDraw(func() {
-							lastScanned.SetText("Error checking last scanned:\n" + err.Error())
-						})
-						return
-					}
-
-					app.QueueUpdateDraw(func() {
-						lastScanned.SetText(fmt.Sprintf(
-							"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
-							token.ScanTime.Format("2006-01-02 15:04:05"),
-							token.UID,
-							token.Text,
-						))
-					})
-				}
-			}()
+		case tokens.Last != nil:
+			lastScanned.SetText(fmt.Sprintf(
+				"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
+				tokens.Last.ScanTime.Format("2006-01-02 15:04:05"),
+				tokens.Last.UID,
+				tokens.Last.Text,
+			))
+		default:
+			lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 		}
+
+		go func() {
+			for {
+				resp, err := client.WaitNotification(
+					context.Background(), -1,
+					cfg, models.NotificationTokensAdded,
+				)
+				if errors.Is(err, client.ErrRequestTimeout) {
+					continue
+				} else if err != nil {
+					app.QueueUpdateDraw(func() {
+						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+					})
+					return
+				}
+
+				var token models.TokenResponse
+				err = json.Unmarshal([]byte(resp), &token)
+				if err != nil {
+					app.QueueUpdateDraw(func() {
+						lastScanned.SetText("Error checking last scanned:\n" + err.Error())
+					})
+					return
+				}
+
+				app.QueueUpdateDraw(func() {
+					lastScanned.SetText(fmt.Sprintf(
+						"[::b]Time:[::-]  %s\n[::b]ID:[::-]    %s\n[::b]Value:[::-] %s",
+						token.ScanTime.Format("2006-01-02 15:04:05"),
+						token.UID,
+						token.Text,
+					))
+				})
+			}
+		}()
 	} else {
 		lastScanned.SetText("[::b]Time:[::-]  -\n[::b]ID:[::-]    -\n[::b]Value:[::-] -")
 	}

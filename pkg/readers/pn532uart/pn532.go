@@ -1,4 +1,23 @@
-package pn532_uart
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package pn532uart
 
 import (
 	"bytes"
@@ -7,7 +26,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
@@ -40,14 +58,14 @@ func wakeUp(port serial.Port) error {
 		0x00, 0x00, 0x00, 0x00,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write wakeup bytes: %w", err)
 	} else if n != 16 {
 		return errors.New("wakeup write error, not all bytes written")
 	}
 
 	err = port.Drain()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to drain port: %w", err)
 	}
 
 	return nil
@@ -59,12 +77,15 @@ func sendAck(port serial.Port) error {
 
 	n, err := port.Write(ackFrame)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write ACK frame: %w", err)
 	} else if n != len(ackFrame) {
 		return errors.New("ack write error, not all bytes written")
 	}
 
-	return port.Drain()
+	if err := port.Drain(); err != nil {
+		return fmt.Errorf("failed to drain port after ACK: %w", err)
+	}
+	return nil
 }
 
 // Block and wait to receive an ACK frame on the serial port, returning any
@@ -88,7 +109,7 @@ func waitAck(port serial.Port) ([]byte, error) {
 
 		n, err := port.Read(buf)
 		if err != nil {
-			return preAck, err
+			return preAck, fmt.Errorf("failed to read from port while waiting for ACK: %w", err)
 		} else if n == 0 {
 			tries++
 			continue
@@ -99,16 +120,13 @@ func waitAck(port serial.Port) ([]byte, error) {
 			continue
 		}
 
-		// log.Debug().Msgf("inspecting ack: %x", ackBuf)
-
 		if bytes.Equal(ackBuf, ackFrame) {
 			return preAck, nil
-		} else {
-			preAck = append(preAck, ackBuf[0])
-			ackBuf = ackBuf[1:]
-			tries++
-			continue
 		}
+		preAck = append(preAck, ackBuf[0])
+		ackBuf = ackBuf[1:]
+		tries++
+		continue
 	}
 }
 
@@ -116,12 +134,15 @@ func sendNack(port serial.Port) error {
 	// tells the PN532 there was a problem and to resend previous data
 	n, err := port.Write(nackFrame)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write NACK frame: %w", err)
 	} else if n != len(nackFrame) {
 		return errors.New("nack write error, not all bytes written")
 	}
 
-	return port.Drain()
+	if err := port.Drain(); err != nil {
+		return fmt.Errorf("failed to drain port after NACK: %w", err)
+	}
+	return nil
 }
 
 func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
@@ -137,8 +158,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 	}
 
 	dlen := byte(len(data))
-	frm = append(frm, dlen)    // length
-	frm = append(frm, ^dlen+1) // length checksum
+	frm = append(frm, dlen, ^dlen+1) // length and length checksum
 
 	checksum := byte(0)
 
@@ -147,10 +167,7 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 		checksum += b
 	}
 
-	frm = append(frm, ^checksum+1) // data checksum
-	frm = append(frm, 0x00)        // postamble
-
-	//log.Debug().Msgf("sending frame: %x", frm)
+	frm = append(frm, ^checksum+1, 0x00) // data checksum and postamble
 
 	// write frame
 	err := wakeUp(port)
@@ -160,14 +177,14 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 
 	n, err := port.Write(frm)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to write frame: %w", err)
 	} else if n != len(frm) {
 		return []byte{}, errors.New("write error, not all bytes written")
 	}
 
 	err = port.Drain()
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to drain port after frame write: %w", err)
 	}
 
 	return waitAck(port)
@@ -184,13 +201,15 @@ retry:
 	buf := make([]byte, 255+7)
 	if tries == 0 {
 		// prepend any leftover response from a skipped ACK
-		buf = make([]byte, 255+7-len(pre))
-		buf = append(pre, buf...)
+		newBuf := make([]byte, len(pre)+len(buf))
+		copy(newBuf, pre)
+		copy(newBuf[len(pre):], buf)
+		buf = newBuf
 	}
 
 	_, err := port.Read(buf)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to read response frame: %w", err)
 	}
 
 	// find middle of packet code (0x00 0xff) and skip preamble
@@ -203,8 +222,6 @@ retry:
 	if off == len(buf) {
 		return []byte{}, ErrNoFrameFound
 	}
-
-	//log.Debug().Msgf("received frame buffer: %x", buf)
 
 	// check frame length value and checksum (LEN)
 	off++
@@ -257,8 +274,6 @@ retry:
 
 	// get frame data
 	off++
-
-	// log.Debug().Msgf("received frame data: %x", buf[off:off+frameLen-1])
 
 	// return data part of frame
 	data := make([]byte, frameLen-1)
@@ -363,23 +378,23 @@ func GetGeneralStatus(port serial.Port) (GeneralStatus, error) {
 
 type Target struct {
 	Type     string
-	Uid      string
-	UidBytes []byte
+	UID      string
+	UIDBytes []byte
 }
 
 func InListPassiveTarget(port serial.Port) (*Target, error) {
-	//log.Debug().Msg("running inlistpassivetarget")
 	res, err := callCommand(port, cmdInListPassiveTarget, []byte{0x01, 0x00})
-	if errors.Is(err, ErrNoFrameFound) {
+	switch {
+	case errors.Is(err, ErrNoFrameFound):
 		// no tag detected
-		return nil, nil
-	} else if err != nil {
+		return nil, nil //nolint:nilnil // nil response means no target detected
+	case err != nil:
 		return nil, err
-	} else if len(res) < 2 || res[0] != 0x4B {
+	case len(res) < 2 || res[0] != 0x4B:
 		return nil, errors.New("unexpected passive target response")
-	} else if res[1] != 0x01 {
+	case res[1] != 0x01:
 		// no tag detected
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means no target detected
 	}
 
 	uidLen := res[6]
@@ -399,8 +414,8 @@ func InListPassiveTarget(port serial.Port) (*Target, error) {
 
 	return &Target{
 		Type:     tagType,
-		Uid:      uidStr,
-		UidBytes: uid,
+		UID:      uidStr,
+		UIDBytes: uid,
 	}, nil
 }
 

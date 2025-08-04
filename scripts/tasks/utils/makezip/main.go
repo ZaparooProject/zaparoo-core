@@ -1,13 +1,35 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package main
 
 import (
 	"archive/zip"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const baseURL = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
@@ -49,17 +71,31 @@ func downloadDoc(platformID, toDir string) error {
 	}
 
 	url := baseURL + fileName
-	resp, err := http.Get(url)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(resp.Body)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to execute HTTP request: %w", err)
+	}
+	if resp == nil {
+		return errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)
+		}
+	}()
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	processedContent := string(content)
@@ -67,12 +103,17 @@ func downloadDoc(platformID, toDir string) error {
 		processedContent = stripFrontmatter(processedContent)
 	}
 
-	return os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0644)
+	readmePath := filepath.Join(toDir, "README.txt")
+	readmeContent := []byte(strings.TrimSpace(processedContent) + "\n")
+	if err := os.WriteFile(readmePath, readmeContent, 0o600); err != nil {
+		return fmt.Errorf("failed to write README.txt: %w", err)
+	}
+	return nil
 }
 
 func main() {
 	if len(os.Args) < 5 {
-		fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <zip_name>")
+		_, _ = fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <zip_name>")
 		os.Exit(1)
 	}
 
@@ -86,7 +127,7 @@ func main() {
 	}
 
 	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
-		fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
+		_, _ = fmt.Printf("The specified directory '%s' does not exist\n", buildDir)
 		os.Exit(1)
 	}
 
@@ -94,19 +135,19 @@ func main() {
 	if _, err := os.Stat(licensePath); os.IsNotExist(err) {
 		input, err := os.ReadFile("LICENSE")
 		if err != nil {
-			fmt.Printf("Error reading LICENSE file: %v\n", err)
+			_, _ = fmt.Printf("Error reading LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
-		err = os.WriteFile(licensePath, input, 0644)
+		err = os.WriteFile(licensePath, input, 0o600)
 		if err != nil {
-			fmt.Printf("Error copying LICENSE file: %v\n", err)
+			_, _ = fmt.Printf("Error copying LICENSE file: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	appPath := filepath.Join(buildDir, appBin)
 	if _, err := os.Stat(appPath); os.IsNotExist(err) {
-		fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
+		_, _ = fmt.Printf("The specified binary file '%s' does not exist\n", appPath)
 		os.Exit(1)
 	}
 
@@ -116,15 +157,22 @@ func main() {
 	readmePath := filepath.Join(buildDir, "README.txt")
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
 		if err := downloadDoc(platform, buildDir); err != nil {
-			fmt.Printf("Error downloading documentation: %v\n", err)
+			_, _ = fmt.Printf("Error downloading documentation: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
+	if err := createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir); err != nil {
+		_, _ = fmt.Printf("Error creating zip: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir string) error {
+	//nolint:gosec // Safe: creates zip files in build script with controlled paths
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
-		fmt.Printf("Error creating zip file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error creating zip file: %w", err)
 	}
 	defer func(zipFile *os.File) {
 		_ = zipFile.Close()
@@ -147,8 +195,7 @@ func main() {
 	for _, file := range filesToAdd {
 		err := addFileToZip(zipWriter, file.path, file.arcname)
 		if err != nil {
-			fmt.Printf("Error adding file to zip: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error adding file to zip: %w", err)
 		}
 	}
 
@@ -159,25 +206,26 @@ func main() {
 					err = addDirToZip(zipWriter, item, buildDir)
 				} else {
 					destPath := filepath.Join(buildDir, filepath.Base(item))
-					if err := copyFile(item, destPath); err != nil {
-						fmt.Printf("Error copying extra file: %v\n", err)
-						os.Exit(1)
+					if copyErr := copyFile(item, destPath); copyErr != nil {
+						return fmt.Errorf("error copying extra file: %w", copyErr)
 					}
 					err = addFileToZip(zipWriter, destPath, filepath.Base(item))
 				}
 				if err != nil {
-					fmt.Printf("Error adding extra item to zip: %v\n", err)
-					os.Exit(1)
+					return fmt.Errorf("error adding extra item to zip: %w", err)
 				}
 			}
 		}
 	}
+
+	return nil
 }
 
 func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
+	//nolint:gosec // Safe: opens files in build script with controlled paths
 	file, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file %s: %w", filePath, err)
 	}
 	defer func(file *os.File) {
 		_ = file.Close()
@@ -185,27 +233,30 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 
 	info, err := file.Stat()
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 	header.Name = arcname
 	header.Method = zip.Deflate
 
 	writer, err := zipWriter.CreateHeader(header)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 
 	_, err = io.Copy(writer, file)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to copy file content to zip: %w", err)
+	}
+	return nil
 }
 
-func addDirToZip(zipWriter *zip.Writer, dirPath string, buildDir string) error {
-	return filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
+	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -213,12 +264,12 @@ func addDirToZip(zipWriter *zip.Writer, dirPath string, buildDir string) error {
 		if !info.IsDir() {
 			relPath, err := filepath.Rel(dirPath, path)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to get relative path: %w", err)
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
-			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-				return err
+			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
 			}
 
 			if err := copyFile(path, destPath); err != nil {
@@ -228,13 +279,20 @@ func addDirToZip(zipWriter *zip.Writer, dirPath string, buildDir string) error {
 			return addFileToZip(zipWriter, destPath, filepath.Join(filepath.Base(dirPath), relPath))
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {
+	//nolint:gosec // Safe: reads files in build script with controlled paths
 	input, err := os.ReadFile(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
-	return os.WriteFile(dst, input, 0644)
+	if err := os.WriteFile(dst, input, 0o600); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+	return nil
 }

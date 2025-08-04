@@ -9,7 +9,7 @@ jobs:
     env:
       GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Get latest Zaparoo release
         id: zaparooreleaseinfo
         uses: cardinalby/git-get-release-action@v1

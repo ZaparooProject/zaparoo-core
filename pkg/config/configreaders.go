@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package config
 
 import (
@@ -7,17 +26,17 @@ import (
 )
 
 type Readers struct {
-	AutoDetect bool             `toml:"auto_detect"`
-	Scan       ReadersScan      `toml:"scan,omitempty"`
 	Connect    []ReadersConnect `toml:"connect,omitempty"`
+	Scan       ReadersScan      `toml:"scan,omitempty"`
+	AutoDetect bool             `toml:"auto_detect"`
 }
 
 type ReadersScan struct {
 	Mode         string   `toml:"mode"`
-	ExitDelay    float32  `toml:"exit_delay,omitempty"`
-	IgnoreSystem []string `toml:"ignore_system,omitempty"`
 	OnScan       string   `toml:"on_scan,omitempty"`
 	OnRemove     string   `toml:"on_remove,omitempty"`
+	IgnoreSystem []string `toml:"ignore_system,omitempty"`
+	ExitDelay    float32  `toml:"exit_delay,omitempty"`
 }
 
 type ReadersConnect struct {
@@ -39,7 +58,7 @@ func (c *Instance) ReadersScan() ReadersScan {
 func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var blocklist []string
+	blocklist := make([]string, 0, len(c.vals.Readers.Scan.IgnoreSystem))
 	for _, v := range c.vals.Readers.Scan.IgnoreSystem {
 		blocklist = append(blocklist, strings.ToLower(v))
 	}
@@ -49,11 +68,10 @@ func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 func (c *Instance) TapModeEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.Readers.Scan.Mode == ScanModeTap {
+	switch c.vals.Readers.Scan.Mode {
+	case ScanModeTap, "":
 		return true
-	} else if c.vals.Readers.Scan.Mode == "" {
-		return true
-	} else {
+	default:
 		return false
 	}
 }

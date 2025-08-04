@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023-2025 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -23,15 +23,16 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"io"
-	"os"
-	"os/signal"
-	"syscall"
 )
 
 // platform-agnostic build with a cut down platform def and modified copy of
@@ -39,6 +40,13 @@ import (
 // performance with a decent number of test files
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &Platform{}
 	flags := cli.SetupFlags()
 
@@ -64,8 +72,7 @@ func main() {
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
-		_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -83,8 +90,8 @@ func main() {
 	err = stopSvc()
 	if err != nil {
 		log.Error().Msgf("error stopping service: %s", err)
-		os.Exit(1)
+		return fmt.Errorf("error stopping service: %w", err)
 	}
 
-	os.Exit(0)
+	return nil
 }

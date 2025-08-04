@@ -1,29 +1,57 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package zapscript
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/rs/zerolog/log"
 )
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg(strings.Join(env.Cmd.Args, ", "))
 	return platforms.CmdResult{}, nil
 }
 
+//nolint:gocritic // unused parameter required by interface
 func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg("stopping media")
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, pl.StopActiveLauncher()
+	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
@@ -31,7 +59,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 	amount, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("invalid delay amount '%s': %w", env.Cmd.Args[0], err)
 	}
 
 	log.Info().Msgf("delaying for: %d", amount)
@@ -40,6 +68,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	return platforms.CmdResult{}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, ErrArgCount
@@ -48,7 +77,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	execStr := env.Cmd.Args[0]
 
 	if env.Unsafe {
-		return platforms.CmdResult{}, fmt.Errorf("command cannot be run from a remote source")
+		return platforms.CmdResult{}, errors.New("command cannot be run from a remote source")
 	} else if !env.Cfg.IsExecuteAllowed(execStr) {
 		return platforms.CmdResult{}, fmt.Errorf("execute not allowed: %s", execStr)
 	}
@@ -61,14 +90,15 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	quoted := false
 	var tokenArgs []string
 	for _, r := range execStr {
-		if r == '"' {
+		switch {
+		case r == '"':
 			quoted = !quoted
-			sb.WriteRune(r)
-		} else if !quoted && r == ' ' {
+			_, _ = sb.WriteRune(r)
+		case !quoted && r == ' ':
 			tokenArgs = append(tokenArgs, sb.String())
 			sb.Reset()
-		} else {
-			sb.WriteRune(r)
+		default:
+			_, _ = sb.WriteRune(r)
 		}
 	}
 	if sb.Len() > 0 {
@@ -76,7 +106,7 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	if len(tokenArgs) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("execute command is empty")
+		return platforms.CmdResult{}, errors.New("execute command is empty")
 	}
 
 	cmd := tokenArgs[0]
@@ -86,5 +116,11 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		cmdArgs = tokenArgs[1:]
 	}
 
-	return platforms.CmdResult{}, exec.Command(cmd, cmdArgs...).Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
+	if err := exec.CommandContext(ctx, cmd, cmdArgs...).Run(); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", cmd, err)
+	}
+	return platforms.CmdResult{}, nil
 }

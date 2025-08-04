@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux
 
 /*
 Zaparoo Core
@@ -25,6 +25,7 @@ package mister
 import (
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -41,18 +42,18 @@ type CsvMappingEntry struct {
 	Text      string `csv:"text"`
 }
 
-func LoadCsvMappings() (map[string]string, map[string]string, error) {
-	uids := make(map[string]string)
-	texts := make(map[string]string)
+func LoadCsvMappings() (uids, texts map[string]string, err error) {
+	uids = make(map[string]string)
+	texts = make(map[string]string)
 
-	if _, err := os.Stat(LegacyMappingsPath); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Stat(LegacyMappingsPath); errors.Is(statErr, os.ErrNotExist) {
 		log.Debug().Msg("no legacy mappings file found, skipping processing")
 		return nil, nil, nil
 	}
 
 	f, err := os.Open(LegacyMappingsPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to open legacy mappings file: %w", err)
 	}
 	defer func(c io.Closer) {
 		_ = c.Close()
@@ -61,7 +62,7 @@ func LoadCsvMappings() (map[string]string, map[string]string, error) {
 	entries := make([]CsvMappingEntry, 0)
 	err = gocsv.Unmarshal(f, &entries)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal CSV mappings: %w", err)
 	}
 
 	count := 0

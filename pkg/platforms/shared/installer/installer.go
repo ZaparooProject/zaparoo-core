@@ -1,15 +1,28 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package installer
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"io/fs"
 	"net/url"
 	"os"
@@ -17,6 +30,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/rs/zerolog/log"
 )
 
 type mediaNames struct {
@@ -25,7 +45,7 @@ type mediaNames struct {
 	ext      string
 }
 
-func namesFromURL(rawURL string, defaultName string) mediaNames {
+func namesFromURL(rawURL, defaultName string) mediaNames {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Path == "" {
 		file := filepath.Base(rawURL)
@@ -60,7 +80,7 @@ func namesFromURL(rawURL string, defaultName string) mediaNames {
 
 func showPreNotice(cfg *config.Instance, pl platforms.Platform, text string) error {
 	if text != "" {
-		hide, delay, err := pl.ShowNotice(cfg, widgetModels.NoticeArgs{
+		hide, delay, err := pl.ShowNotice(cfg, widgetmodels.NoticeArgs{
 			Text: text,
 		})
 		if err != nil {
@@ -93,7 +113,7 @@ func findInstallDir(
 
 	fallbackDir := cfg.DefaultMediaDir()
 	if fallbackDir == "" {
-		fallbackDir = filepath.Join(utils.DataDir(pl), config.MediaDir)
+		fallbackDir = filepath.Join(helpers.DataDir(pl), config.MediaDir)
 	}
 	fallbackDir = filepath.Join(fallbackDir, system.ID)
 
@@ -143,17 +163,17 @@ func InstallRemoteFile(
 	log.Debug().Msgf("remote media local path: %s", localPath)
 
 	// check if the file already exists
-	if _, err := os.Stat(localPath); err == nil {
-		err := showPreNotice(cfg, pl, preNotice)
-		if err != nil {
+	if _, statErr := os.Stat(localPath); statErr == nil {
+		if err = showPreNotice(cfg, pl, preNotice); err != nil {
 			log.Warn().Err(err).Msgf("error showing pre-notice")
 		}
 		return localPath, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("error checking file: %w", err)
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("error checking file: %w", statErr)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+	//nolint:gosec // Safe: other processes may see installed media
+	if err = os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return "", fmt.Errorf("cannot create directories: %w", err)
 	}
 
@@ -163,22 +183,21 @@ func InstallRemoteFile(
 	itemDisplay := names.display
 	loadingText := fmt.Sprintf("Downloading %s...", itemDisplay)
 
-	hideLoader, err := pl.ShowLoader(cfg, widgetModels.NoticeArgs{
+	hideLoader, err := pl.ShowLoader(cfg, widgetmodels.NoticeArgs{
 		Text: loadingText,
 	})
 	if err != nil {
 		log.Warn().Err(err).Msgf("error showing loading dialog")
 	}
 
-	if _, err := os.Stat(tempPath); err == nil {
+	if _, statErr := os.Stat(tempPath); statErr == nil {
 		log.Warn().Msgf("removing leftover temp file: %s", tempPath)
-		err := os.Remove(tempPath)
-		if err != nil {
-			log.Warn().Err(err).Msgf("error removing temp file: %s", tempPath)
+		if removeErr := os.Remove(tempPath); removeErr != nil {
+			log.Warn().Err(removeErr).Msgf("error removing temp file: %s", tempPath)
 		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		_ = hideLoader()
-		return "", fmt.Errorf("error checking temp file: %w", err)
+		return "", fmt.Errorf("error checking temp file: %w", statErr)
 	}
 
 	err = downloader(DownloaderArgs{

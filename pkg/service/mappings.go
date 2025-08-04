@@ -1,7 +1,7 @@
 /*
 Zaparoo Core
-Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
 
 This file is part of Zaparoo Core.
 
@@ -27,25 +27,24 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
-func checkMappingUid(m database.Mapping, t tokens.Token) bool {
+func checkMappingUID(m *database.Mapping, t *tokens.Token) bool {
 	uid := userdb.NormalizeID(t.UID)
 	pattern := userdb.NormalizeID(m.Pattern)
 
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		log.Debug().Msgf("checking exact match: %s == %s", pattern, uid)
 		return uid == pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		log.Debug().Msgf("checking partial match: %s contains %s", pattern, uid)
 		return strings.Contains(uid, pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		// don't normalize regex pattern
 		log.Debug().Msgf("checking regex match: %s matches %s", m.Pattern, uid)
 		re, err := regexp.Compile(m.Pattern)
@@ -59,13 +58,13 @@ func checkMappingUid(m database.Mapping, t tokens.Token) bool {
 	return false
 }
 
-func checkMappingText(m database.Mapping, t tokens.Token) bool {
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+func checkMappingText(m *database.Mapping, t *tokens.Token) bool {
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		return t.Text == m.Pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		return strings.Contains(t.Text, m.Pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
@@ -77,13 +76,13 @@ func checkMappingText(m database.Mapping, t tokens.Token) bool {
 	return false
 }
 
-func checkMappingData(m database.Mapping, t tokens.Token) bool {
-	switch {
-	case m.Match == userdb.MatchTypeExact:
+func checkMappingData(m *database.Mapping, t *tokens.Token) bool {
+	switch m.Match {
+	case userdb.MatchTypeExact:
 		return t.Data == m.Pattern
-	case m.Match == userdb.MatchTypePartial:
+	case userdb.MatchTypePartial:
 		return strings.Contains(t.Data, m.Pattern)
-	case m.Match == userdb.MatchTypeRegex:
+	case userdb.MatchTypeRegex:
 		re, err := regexp.Compile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
@@ -100,31 +99,33 @@ func isCfgRegex(s string) bool {
 }
 
 func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
-	var mappings []database.Mapping
 	cfgMappings := cfg.Mappings()
+	mappings := make([]database.Mapping, 0, len(cfgMappings))
 
 	for _, m := range cfgMappings {
 		var dbm database.Mapping
 		dbm.Enabled = true
 		dbm.Override = m.ZapScript
 
-		if m.TokenKey == "data" {
+		switch m.TokenKey {
+		case "data":
 			dbm.Type = userdb.MappingTypeData
-		} else if m.TokenKey == "value" {
+		case "value":
 			dbm.Type = userdb.MappingTypeValue
-		} else {
+		default:
 			dbm.Type = userdb.MappingTypeID
 		}
 
-		if isCfgRegex(m.MatchPattern) {
+		switch {
+		case isCfgRegex(m.MatchPattern):
 			dbm.Match = userdb.MatchTypeRegex
 			dbm.Pattern = m.MatchPattern[1 : len(m.MatchPattern)-1]
-		} else if strings.Contains(m.MatchPattern, "*") {
+		case strings.Contains(m.MatchPattern, "*"):
 			// TODO: this behaviour doesn't actually match "partial"
 			// the old behaviour will need to be migrated to this one
 			dbm.Match = userdb.MatchTypePartial
 			dbm.Pattern = strings.ReplaceAll(m.MatchPattern, "*", "")
-		} else {
+		default:
 			dbm.Match = userdb.MatchTypeExact
 			dbm.Pattern = m.MatchPattern
 		}
@@ -135,7 +136,13 @@ func mappingsFromConfig(cfg *config.Instance) []database.Mapping {
 	return mappings
 }
 
-func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platform, token tokens.Token) (string, bool) {
+//nolint:gocritic // single-use parameter in service function
+func getMapping(
+	cfg *config.Instance,
+	db *database.Database,
+	pl platforms.Platform,
+	token tokens.Token,
+) (string, bool) {
 	// TODO: need a way to identify the source of a match so it can be
 	// reported and debugged by the user if there's issues
 
@@ -149,19 +156,19 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 	ms = append(ms, mappingsFromConfig(cfg)...)
 
 	for _, m := range ms {
-		switch {
-		case m.Type == userdb.MappingTypeID:
-			if checkMappingUid(m, token) {
+		switch m.Type {
+		case userdb.MappingTypeID:
+			if checkMappingUID(&m, &token) {
 				log.Info().Msg("launching with db/cfg id match override")
 				return m.Override, true
 			}
-		case m.Type == userdb.MappingTypeValue:
-			if checkMappingText(m, token) {
+		case userdb.MappingTypeValue:
+			if checkMappingText(&m, &token) {
 				log.Info().Msg("launching with db/cfg value match override")
 				return m.Override, true
 			}
-		case m.Type == userdb.MappingTypeData:
-			if checkMappingData(m, token) {
+		case userdb.MappingTypeData:
+			if checkMappingData(&m, &token) {
 				log.Info().Msg("launching with db/cfg data match override")
 				return m.Override, true
 			}
@@ -169,5 +176,5 @@ func getMapping(cfg *config.Instance, db *database.Database, pl platforms.Platfo
 	}
 
 	// check platform mappings
-	return pl.LookupMapping(token)
+	return pl.LookupMapping(&token)
 }

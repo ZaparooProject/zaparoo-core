@@ -1,4 +1,4 @@
-//go:build (linux || darwin) && cgo
+//go:build linux
 
 package libnfc
 
@@ -6,17 +6,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc/tags"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -30,6 +30,8 @@ const (
 	autoConnStr        = "libnfc_auto:"
 )
 
+var ErrWriteCancelled = errors.New("write operation was cancelled")
+
 type WriteRequestResult struct {
 	Token     *tokens.Token
 	Err       error
@@ -37,20 +39,20 @@ type WriteRequestResult struct {
 }
 
 type WriteRequest struct {
-	Text   string
 	Result chan WriteRequestResult
 	Cancel chan bool
+	Text   string
 }
 
 type Reader struct {
 	cfg           *config.Instance
-	conn          config.ReadersConnect
 	pnd           *nfc.Device
-	polling       bool
 	prevToken     *tokens.Token
 	write         chan WriteRequest
 	activeWrite   *WriteRequest
+	conn          config.ReadersConnect
 	activeWriteMu sync.RWMutex
+	polling       bool
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -138,13 +140,16 @@ func (r *Reader) Close() error {
 
 	if r.pnd == nil {
 		return nil
-	} else {
-		log.Debug().Msgf("closing device: %s", r.conn)
-		return r.pnd.Close()
 	}
+	log.Debug().Msgf("closing device: %s", r.conn)
+	err := r.pnd.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close NFC device: %w", err)
+	}
+	return nil
 }
 
-func (r *Reader) Ids() []string {
+func (*Reader) IDs() []string {
 	return []string{
 		"pn532_uart",
 		"pn532_i2c",
@@ -159,11 +164,11 @@ func (r *Reader) Detect(connected []string) string {
 	}
 
 	device := detectSerialReaders(connected)
-	if device != "" && !utils.Contains(connected, device) {
+	if device != "" && !helpers.Contains(connected, device) {
 		return device
 	}
 
-	if !utils.Contains(connected, autoConnStr) {
+	if !helpers.Contains(connected, autoConnStr) {
 		return autoConnStr
 	}
 
@@ -208,7 +213,7 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 
 	res := <-req.Result
 	if res.Cancelled {
-		return nil, nil
+		return nil, ErrWriteCancelled
 	} else if res.Err != nil {
 		log.Error().Msgf("error writing to tag: %s", res.Err)
 		return nil, res.Err
@@ -226,11 +231,13 @@ func (r *Reader) CancelWrite() {
 }
 
 // keep track of serial devices that had failed opens
-var serialCacheMu = &sync.RWMutex{}
-var serialBlockList []string
+var (
+	serialCacheMu   = &sync.RWMutex{}
+	serialBlockList []string
+)
 
 func detectSerialReaders(connected []string) string {
-	devices, err := utils.GetSerialDeviceList()
+	devices, err := helpers.GetSerialDeviceList()
 	if err != nil {
 		log.Error().Msgf("error getting serial devices: %s", err)
 		return ""
@@ -243,14 +250,14 @@ func detectSerialReaders(connected []string) string {
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
-		if utils.Contains(serialBlockList, device) {
+		if helpers.Contains(serialBlockList, device) {
 			serialCacheMu.RUnlock()
 			continue
 		}
 		serialCacheMu.RUnlock()
 
 		// ignore if exact same device and reader are connected
-		if utils.Contains(connected, connStr) {
+		if helpers.Contains(connected, connStr) {
 			continue
 		}
 
@@ -259,14 +266,14 @@ func detectSerialReaders(connected []string) string {
 		symPath, err := os.Readlink(device)
 		if err == nil {
 			parent := filepath.Dir(device)
-			abs, err := filepath.Abs(filepath.Join(parent, symPath))
-			if err == nil {
+			abs, absErr := filepath.Abs(filepath.Join(parent, symPath))
+			if absErr == nil {
 				realPath = abs
 			}
 		}
 
 		// ignore if same resolved device and reader connected
-		if realPath != "" && utils.Contains(connected, realPath) {
+		if realPath != "" && helpers.Contains(connected, realPath) {
 			continue
 		}
 
@@ -292,13 +299,13 @@ func detectSerialReaders(connected []string) string {
 			serialCacheMu.Lock()
 			serialBlockList = append(serialBlockList, device)
 			serialCacheMu.Unlock()
-		} else {
-			err := pnd.Close()
-			if err != nil {
-				log.Warn().Err(err).Msgf("error closing device: %s", device)
-			}
-			return connStr
+			continue
 		}
+		err = pnd.Close()
+		if err != nil {
+			log.Warn().Err(err).Msgf("error closing device: %s", device)
+		}
+		return connStr
 	}
 
 	return ""
@@ -316,17 +323,16 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 			deviceName := pnd.String()
 			log.Info().Msgf("device name: %s", deviceName)
 
-			if err := pnd.InitiatorInit(); err != nil {
-				log.Error().Msgf("could not init initiator: %s", err)
+			if initErr := pnd.InitiatorInit(); initErr != nil {
+				log.Error().Msgf("could not init initiator: %s", initErr)
 				continue
 			}
 
-			return pnd, err
+			return pnd, nil
 		}
 
 		if tries >= connectMaxTries {
-			// log.Debug().Msgf("could not open device after %d tries: %s", connectMaxTries, err)
-			return pnd, err
+			return pnd, fmt.Errorf("failed to open NFC device after %d tries: %w", connectMaxTries, err)
 		}
 
 		tries++
@@ -343,7 +349,7 @@ func (r *Reader) pollDevice(
 
 	count, target, err := pnd.InitiatorPollTarget(tags.SupportedCardTypes, ttp, pbp)
 	if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
-		return nil, false, err
+		return nil, false, fmt.Errorf("failed to poll NFC target: %w", err)
 	}
 
 	if count > 1 {
@@ -360,35 +366,34 @@ func (r *Reader) pollDevice(
 		return activeToken, removed, nil
 	}
 
-	tagUid := tags.GetTagUID(target)
-	if tagUid == "" {
+	tagUID := tags.GetTagUID(target)
+	if tagUID == "" {
 		log.Warn().Msgf("unable to detect token ID: %s", target.String())
 	}
 
 	// no change in tag
-	if activeToken != nil && tagUid == activeToken.UID {
+	if activeToken != nil && tagUID == activeToken.UID {
 		return activeToken, removed, nil
 	}
 
-	log.Info().Msgf("found token ID: %s", tagUid)
+	log.Info().Msgf("found token ID: %s", tagUID)
 
 	var record tags.TagData
 	cardType := tags.GetTagType(target)
 
-	if cardType == tokens.TypeNTAG {
+	switch cardType {
+	case tokens.TypeNTAG:
 		log.Info().Msg("NTAG detected")
 		record, err = tags.ReadNtag(*pnd)
 		if err != nil {
-			return activeToken, removed, fmt.Errorf("error reading ntag: %s", err)
+			return activeToken, removed, fmt.Errorf("error reading ntag: %w", err)
 		}
-		cardType = tokens.TypeNTAG
-	} else if cardType == tokens.TypeMifare {
+	case tokens.TypeMifare:
 		log.Info().Msg("MIFARE detected")
-		record, err = tags.ReadMifare(*pnd, tagUid)
+		record, err = tags.ReadMifare(*pnd, tagUID)
 		if err != nil {
 			log.Error().Msgf("error reading mifare: %s", err)
 		}
-		cardType = tokens.TypeMifare
 	}
 
 	log.Debug().Msgf("record bytes: %s", hex.EncodeToString(record.Bytes))
@@ -406,7 +411,7 @@ func (r *Reader) pollDevice(
 
 	card := &tokens.Token{
 		Type:     record.Type,
-		UID:      tagUid,
+		UID:      tagUID,
 		Text:     tagText,
 		Data:     hex.EncodeToString(record.Bytes),
 		ScanTime: time.Now(),
@@ -427,10 +432,9 @@ func (r *Reader) writeTag(req WriteRequest) {
 		}
 		r.activeWriteMu.Unlock()
 		return
-	} else {
-		r.activeWrite = &req
-		r.activeWriteMu.Unlock()
 	}
+	r.activeWrite = &req
+	r.activeWriteMu.Unlock()
 	defer func() {
 		r.activeWriteMu.Lock()
 		r.activeWrite = nil
@@ -479,15 +483,15 @@ func (r *Reader) writeTag(req WriteRequest) {
 		return
 	}
 
-	cardUid := tags.GetTagUID(target)
-	log.Info().Msgf("found tag with ID: %s", cardUid)
+	cardUID := tags.GetTagUID(target)
+	log.Info().Msgf("found tag with ID: %s", cardUID)
 
 	cardType := tags.GetTagType(target)
 	var bytesWritten []byte
 
 	switch cardType {
 	case tokens.TypeMifare:
-		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUid)
+		bytesWritten, err = tags.WriteMifare(*r.pnd, req.Text, cardUID)
 		if err != nil {
 			log.Error().Msgf("error writing to mifare: %s", err)
 			req.Result <- WriteRequestResult{
@@ -521,8 +525,8 @@ func (r *Reader) writeTag(req WriteRequest) {
 		return
 	}
 
-	if t.UID != cardUid {
-		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUid)
+	if t.UID != cardUID {
+		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUID)
 		req.Result <- WriteRequestResult{
 			Err: errors.New("ID mismatch after write"),
 		}

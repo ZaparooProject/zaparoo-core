@@ -1,10 +1,31 @@
+//go:build windows
+
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package windows
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"io"
 	"os"
 	"os/exec"
@@ -12,20 +33,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/adrg/xdg"
-
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122_pcsc"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532_uart"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simple_serial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532uart"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,20 +54,20 @@ type Platform struct {
 	setActiveMedia func(*models.ActiveMedia)
 }
 
-func (p *Platform) ID() string {
+func (*Platform) ID() string {
 	return platforms.PlatformIDWindows
 }
 
-func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
 		file.NewReader(cfg),
-		simple_serial.NewReader(cfg),
-		acr122_pcsc.NewAcr122Pcsc(cfg),
-		pn532_uart.NewReader(cfg),
+		simpleserial.NewReader(cfg),
+		acr122pcsc.NewAcr122Pcsc(cfg),
+		pn532uart.NewReader(cfg),
 	}
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (*Platform) StartPre(_ *config.Instance) error {
 	return nil
 }
 
@@ -61,19 +81,19 @@ func (p *Platform) StartPost(
 	return nil
 }
 
-func (p *Platform) Stop() error {
+func (*Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(token tokens.Token) error {
+func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
-func (p *Platform) RootDirs(cfg *config.Instance) []string {
+func (*Platform) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-func (p *Platform) Settings() platforms.Settings {
+func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
@@ -82,7 +102,7 @@ func (p *Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
@@ -91,27 +111,23 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(utils.DataDir(p), path)
-	}
-
+func (*Platform) PlayAudio(_ string) error {
 	return nil
 }
 
-func (p *Platform) LaunchSystem(_ *config.Instance, _ string) error {
-	return fmt.Errorf("launching systems is not supported")
+func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+	return errors.New("launching systems is not supported")
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := utils.FindLauncher(cfg, p, path)
+	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = utils.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -119,19 +135,19 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
+func (*Platform) KeyboardPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) GamepadPress(name string) error {
+func (*Platform) GamepadPress(_ string) error {
 	return nil
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
-func (p *Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
@@ -193,131 +209,131 @@ var lbSysMap = map[string]string{
 	systemdefs.SystemOdyssey2:          "Magnavox Odyssey 2",
 	systemdefs.SystemChannelF:          "Fairchild Channel F",
 	systemdefs.SystemBBCMicro:          "BBC Microcomputer System",
-	//systemdefs.REPLACE: "Memotech MTX512",
-	//systemdefs.REPLACE: "Camputers Lynx",
+	// systemdefs.REPLACE: "Memotech MTX512",
+	// systemdefs.REPLACE: "Camputers Lynx",
 	systemdefs.SystemGameCom:       "Tiger Game.com",
 	systemdefs.SystemOric:          "Oric Atmos",
 	systemdefs.SystemAcornElectron: "Acorn Electron",
-	//systemdefs.REPLACE: "Dragon 32/64",
+	// systemdefs.REPLACE: "Dragon 32/64",
 	systemdefs.SystemAdventureVision: "Entex Adventure Vision",
-	//systemdefs.REPLACE: "APF Imagination Machine",
+	// systemdefs.REPLACE: "APF Imagination Machine",
 	systemdefs.SystemAquarius: "Mattel Aquarius",
 	systemdefs.SystemJupiter:  "Jupiter Ace",
 	systemdefs.SystemSAMCoupe: "SAM Coupé",
-	//systemdefs.REPLACE: "Enterprise",
-	//systemdefs.REPLACE: "EACA EG2000 Colour Genie",
-	//systemdefs.REPLACE: "Acorn Archimedes",
-	//systemdefs.REPLACE: "Tapwave Zodiac",
-	//systemdefs.REPLACE: "Atari ST",
+	// systemdefs.REPLACE: "Enterprise",
+	// systemdefs.REPLACE: "EACA EG2000 Colour Genie",
+	// systemdefs.REPLACE: "Acorn Archimedes",
+	// systemdefs.REPLACE: "Tapwave Zodiac",
+	// systemdefs.REPLACE: "Atari ST",
 	systemdefs.SystemAstrocade: "Bally Astrocade",
-	//systemdefs.REPLACE: "Magnavox Odyssey",
+	// systemdefs.REPLACE: "Magnavox Odyssey",
 	systemdefs.SystemArcadia:     "Emerson Arcadia 2001",
 	systemdefs.SystemSG1000:      "Sega SG-1000",
 	systemdefs.SystemSuperVision: "Epoch Super Cassette Vision",
 	systemdefs.SystemMSX:         "Microsoft MSX",
 	systemdefs.SystemDOS:         "MS-DOS",
 	systemdefs.SystemPC:          "Windows",
-	//systemdefs.REPLACE: "Web Browser",
-	//systemdefs.REPLACE: "Sega Model 2",
-	//systemdefs.REPLACE: "Namco System 22",
-	//systemdefs.REPLACE: "Sega Model 3",
-	//systemdefs.REPLACE: "Sega System 32",
-	//systemdefs.REPLACE: "Sega System 16",
-	//systemdefs.REPLACE: "Sammy Atomiswave",
-	//systemdefs.REPLACE: "Sega Naomi",
-	//systemdefs.REPLACE: "Sega Naomi 2",
+	// systemdefs.REPLACE: "Web Browser",
+	// systemdefs.REPLACE: "Sega Model 2",
+	// systemdefs.REPLACE: "Namco System 22",
+	// systemdefs.REPLACE: "Sega Model 3",
+	// systemdefs.REPLACE: "Sega System 32",
+	// systemdefs.REPLACE: "Sega System 16",
+	// systemdefs.REPLACE: "Sammy Atomiswave",
+	// systemdefs.REPLACE: "Sega Naomi",
+	// systemdefs.REPLACE: "Sega Naomi 2",
 	systemdefs.SystemAtari800: "Atari 800",
-	//systemdefs.REPLACE: "Sega Model 1",
-	//systemdefs.REPLACE: "Sega Pico",
+	// systemdefs.REPLACE: "Sega Model 1",
+	// systemdefs.REPLACE: "Sega Pico",
 	systemdefs.SystemAcornAtom: "Acorn Atom",
-	//systemdefs.REPLACE: "Amstrad GX4000",
+	// systemdefs.REPLACE: "Amstrad GX4000",
 	systemdefs.SystemAppleII: "Apple II",
-	//systemdefs.REPLACE: "Apple IIGS",
-	//systemdefs.REPLACE: "Casio Loopy",
+	// systemdefs.REPLACE: "Apple IIGS",
+	// systemdefs.REPLACE: "Casio Loopy",
 	systemdefs.SystemCasioPV1000: "Casio PV-1000",
-	//systemdefs.REPLACE: "Coleco ADAM",
-	//systemdefs.REPLACE: "Commodore 128",
-	//systemdefs.REPLACE: "Commodore Amiga CD32",
-	//systemdefs.REPLACE: "Commodore CDTV",
-	//systemdefs.REPLACE: "Commodore Plus 4",
-	//systemdefs.REPLACE: "Commodore VIC-20",
-	//systemdefs.REPLACE: "Fujitsu FM Towns Marty",
+	// systemdefs.REPLACE: "Coleco ADAM",
+	// systemdefs.REPLACE: "Commodore 128",
+	// systemdefs.REPLACE: "Commodore Amiga CD32",
+	// systemdefs.REPLACE: "Commodore CDTV",
+	// systemdefs.REPLACE: "Commodore Plus 4",
+	// systemdefs.REPLACE: "Commodore VIC-20",
+	// systemdefs.REPLACE: "Fujitsu FM Towns Marty",
 	systemdefs.SystemVectrex: "GCE Vectrex",
-	//systemdefs.REPLACE: "Nuon",
+	// systemdefs.REPLACE: "Nuon",
 	systemdefs.SystemMegaDuck: "Mega Duck",
 	systemdefs.SystemX68000:   "Sharp X68000",
 	systemdefs.SystemTRS80:    "Tandy TRS-80",
-	//systemdefs.REPLACE: "Elektronika BK",
-	//systemdefs.REPLACE: "Epoch Game Pocket Computer",
-	//systemdefs.REPLACE: "Funtech Super Acan",
-	//systemdefs.REPLACE: "GamePark GP32",
-	//systemdefs.REPLACE: "Hartung Game Master",
-	//systemdefs.REPLACE: "Interton VC 4000",
-	//systemdefs.REPLACE: "MUGEN",
-	//systemdefs.REPLACE: "OpenBOR",
-	//systemdefs.REPLACE: "Philips VG 5000",
-	//systemdefs.REPLACE: "Philips Videopac+",
-	//systemdefs.REPLACE: "RCA Studio II",
-	//systemdefs.REPLACE: "ScummVM",
-	//systemdefs.REPLACE: "Sega Dreamcast VMU",
-	//systemdefs.REPLACE: "Sega SC-3000",
-	//systemdefs.REPLACE: "Sega ST-V",
-	//systemdefs.REPLACE: "Sinclair ZX-81",
+	// systemdefs.REPLACE: "Elektronika BK",
+	// systemdefs.REPLACE: "Epoch Game Pocket Computer",
+	// systemdefs.REPLACE: "Funtech Super Acan",
+	// systemdefs.REPLACE: "GamePark GP32",
+	// systemdefs.REPLACE: "Hartung Game Master",
+	// systemdefs.REPLACE: "Interton VC 4000",
+	// systemdefs.REPLACE: "MUGEN",
+	// systemdefs.REPLACE: "OpenBOR",
+	// systemdefs.REPLACE: "Philips VG 5000",
+	// systemdefs.REPLACE: "Philips Videopac+",
+	// systemdefs.REPLACE: "RCA Studio II",
+	// systemdefs.REPLACE: "ScummVM",
+	// systemdefs.REPLACE: "Sega Dreamcast VMU",
+	// systemdefs.REPLACE: "Sega SC-3000",
+	// systemdefs.REPLACE: "Sega ST-V",
+	// systemdefs.REPLACE: "Sinclair ZX-81",
 	systemdefs.SystemSordM5: "Sord M5",
 	systemdefs.SystemTI994A: "Texas Instruments TI 99/4A",
-	//systemdefs.REPLACE: "Pinball",
+	// systemdefs.REPLACE: "Pinball",
 	systemdefs.SystemCreatiVision: "VTech CreatiVision",
-	//systemdefs.REPLACE: "Watara Supervision",
-	//systemdefs.REPLACE: "WoW Action Max",
-	//systemdefs.REPLACE: "ZiNc",
+	// systemdefs.REPLACE: "Watara Supervision",
+	// systemdefs.REPLACE: "WoW Action Max",
+	// systemdefs.REPLACE: "ZiNc",
 	systemdefs.SystemFDS: "Nintendo Famicom Disk System",
-	//systemdefs.REPLACE: "NEC PC-FX",
+	// systemdefs.REPLACE: "NEC PC-FX",
 	systemdefs.SystemSuperGrafx:     "PC Engine SuperGrafx",
 	systemdefs.SystemTurboGrafx16CD: "NEC TurboGrafx-CD",
-	//systemdefs.REPLACE: "TRS-80 Color Computer",
+	// systemdefs.REPLACE: "TRS-80 Color Computer",
 	systemdefs.SystemGameNWatch: "Nintendo Game & Watch",
 	systemdefs.SystemNeoGeoCD:   "SNK Neo Geo CD",
-	//systemdefs.REPLACE: "Nintendo Satellaview",
-	//systemdefs.REPLACE: "Taito Type X",
-	//systemdefs.REPLACE: "XaviXPORT",
-	//systemdefs.REPLACE: "Mattel HyperScan",
-	//systemdefs.REPLACE: "Game Wave Family Entertainment System",
-	//systemdefs.SystemSega32X: "Sega CD 32X",
-	//systemdefs.REPLACE: "Aamber Pegasus",
-	//systemdefs.REPLACE: "Apogee BK-01",
-	//systemdefs.REPLACE: "Commodore MAX Machine",
-	//systemdefs.REPLACE: "Commodore PET",
-	//systemdefs.REPLACE: "Exelvision EXL 100",
-	//systemdefs.REPLACE: "Exidy Sorcerer",
-	//systemdefs.REPLACE: "Fujitsu FM-7",
-	//systemdefs.REPLACE: "Hector HRX",
-	//systemdefs.REPLACE: "Matra and Hachette Alice",
-	//systemdefs.REPLACE: "Microsoft MSX2",
-	//systemdefs.REPLACE: "Microsoft MSX2+",
-	//systemdefs.REPLACE: "NEC PC-8801",
-	//systemdefs.REPLACE: "NEC PC-9801",
-	//systemdefs.REPLACE: "Nintendo 64DD",
+	// systemdefs.REPLACE: "Nintendo Satellaview",
+	// systemdefs.REPLACE: "Taito Type X",
+	// systemdefs.REPLACE: "XaviXPORT",
+	// systemdefs.REPLACE: "Mattel HyperScan",
+	// systemdefs.REPLACE: "Game Wave Family Entertainment System",
+	// systemdefs.SystemSega32X: "Sega CD 32X",
+	// systemdefs.REPLACE: "Aamber Pegasus",
+	// systemdefs.REPLACE: "Apogee BK-01",
+	// systemdefs.REPLACE: "Commodore MAX Machine",
+	// systemdefs.REPLACE: "Commodore PET",
+	// systemdefs.REPLACE: "Exelvision EXL 100",
+	// systemdefs.REPLACE: "Exidy Sorcerer",
+	// systemdefs.REPLACE: "Fujitsu FM-7",
+	// systemdefs.REPLACE: "Hector HRX",
+	// systemdefs.REPLACE: "Matra and Hachette Alice",
+	// systemdefs.REPLACE: "Microsoft MSX2",
+	// systemdefs.REPLACE: "Microsoft MSX2+",
+	// systemdefs.REPLACE: "NEC PC-8801",
+	// systemdefs.REPLACE: "NEC PC-9801",
+	// systemdefs.REPLACE: "Nintendo 64DD",
 	systemdefs.SystemPokemonMini: "Nintendo Pokemon Mini",
-	//systemdefs.REPLACE: "Othello Multivision",
-	//systemdefs.REPLACE: "VTech Socrates",
+	// systemdefs.REPLACE: "Othello Multivision",
+	// systemdefs.REPLACE: "VTech Socrates",
 	systemdefs.SystemVector06C: "Vector-06C",
 	systemdefs.SystemTomyTutor: "Tomy Tutor",
-	//systemdefs.REPLACE: "Spectravideo",
-	//systemdefs.REPLACE: "Sony PSP Minis",
-	//systemdefs.REPLACE: "Sony PocketStation",
-	//systemdefs.REPLACE: "Sharp X1",
-	//systemdefs.REPLACE: "Sharp MZ-2500",
-	//systemdefs.REPLACE: "Sega Triforce",
-	//systemdefs.REPLACE: "Sega Hikaru",
-	//systemdefs.SystemNeoGeo: "SNK Neo Geo MVS",
+	// systemdefs.REPLACE: "Spectravideo",
+	// systemdefs.REPLACE: "Sony PSP Minis",
+	// systemdefs.REPLACE: "Sony PocketStation",
+	// systemdefs.REPLACE: "Sharp X1",
+	// systemdefs.REPLACE: "Sharp MZ-2500",
+	// systemdefs.REPLACE: "Sega Triforce",
+	// systemdefs.REPLACE: "Sega Hikaru",
+	// systemdefs.SystemNeoGeo: "SNK Neo Geo MVS",
 	systemdefs.SystemSwitch: "Nintendo Switch",
-	//systemdefs.REPLACE: "Windows 3.X",
-	//systemdefs.REPLACE: "Nokia N-Gage",
-	//systemdefs.REPLACE: "GameWave",
-	//systemdefs.REPLACE: "Linux",
+	// systemdefs.REPLACE: "Windows 3.X",
+	// systemdefs.REPLACE: "Nokia N-Gage",
+	// systemdefs.REPLACE: "GameWave",
+	// systemdefs.REPLACE: "Linux",
 	systemdefs.SystemPS5: "Sony Playstation 5",
-	//systemdefs.REPLACE: "PICO-8",
-	//systemdefs.REPLACE: "VTech V.Smile",
+	// systemdefs.REPLACE: "PICO-8",
+	// systemdefs.REPLACE: "VTech V.Smile",
 	systemdefs.SystemSeriesXS: "Microsoft Xbox Series X/S",
 }
 
@@ -333,7 +349,7 @@ type LaunchBoxGame struct {
 func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	dirs := []string{
@@ -358,7 +374,7 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("launchbox directory not found")
+	return "", errors.New("launchbox directory not found")
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
@@ -368,23 +384,26 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				cfg *config.Instance,
-				systemId string,
+				_ *config.Instance,
+				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
 				// TODO: detect this path from registry
 				root := "C:\\Program Files (x86)\\Steam\\steamapps"
-				appResults, err := utils.ScanSteamApps(root)
+				appResults, err := helpers.ScanSteamApps(root)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
 				return append(results, appResults...), nil
 			},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				//nolint:gosec // Safe: launches Steam with game ID from internal database
+				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
 					"steam://rungameid/"+id,
@@ -395,11 +414,14 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "flashpoint://")
 				id = strings.TrimPrefix(id, "run/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
+				return exec.CommandContext(ctx,
 					"cmd", "/c",
 					"start",
 					"flashpoint://run/"+id,
@@ -410,8 +432,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
-			Launch: func(cfg *config.Instance, path string) error {
-				return exec.Command("cmd", "/c", path).Start()
+			Launch: func(_ *config.Instance, path string) error {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx, "cmd", "/c", path).Start()
 			},
 		},
 		{
@@ -433,39 +457,39 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				platformsDir := filepath.Join(lbDir, "Data", "Platforms")
-				if _, err := os.Stat(lbDir); os.IsNotExist(err) {
+				if _, statErr := os.Stat(lbDir); os.IsNotExist(statErr) {
 					return results, errors.New("LaunchBox platforms dir not found")
 				}
 
 				xmlPath := filepath.Join(platformsDir, lbSys+".xml")
-				if _, err := os.Stat(xmlPath); os.IsNotExist(err) {
+				if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
 					log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
 					return results, nil
 				}
 
+				//nolint:gosec // Safe: reads game database XML files from controlled directories
 				xmlFile, err := os.Open(xmlPath)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to open XML file %s: %w", xmlPath, err)
 				}
 				defer func(xmlFile *os.File) {
-					err := xmlFile.Close()
-					if err != nil {
-						log.Warn().Err(err).Msg("error closing xml file")
+					if closeErr := xmlFile.Close(); closeErr != nil {
+						log.Warn().Err(closeErr).Msg("error closing xml file")
 					}
 				}(xmlFile)
 
 				data, err := io.ReadAll(xmlFile)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to read XML file: %w", err)
 				}
 
-				var lbXml LaunchBox
-				err = xml.Unmarshal(data, &lbXml)
+				var lbXML LaunchBox
+				err = xml.Unmarshal(data, &lbXML)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to unmarshal XML: %w", err)
 				}
 
-				for _, game := range lbXml.Games {
+				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
 						Path: "launchbox://" + game.ID + "/" + game.Title,
 						Name: game.Title,
@@ -487,31 +511,34 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				id := strings.TrimPrefix(path, "launchbox://")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.Command(cliLauncher, "launch_by_id", id).Start()
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
+				return exec.CommandContext(ctx, cliLauncher, "launch_by_id", id).Start()
 			},
 		},
 	}
 
-	return append(utils.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
 
-func (p *Platform) ShowNotice(
+func (*Platform) ShowNotice(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, nil
+	return nil, 0, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowLoader(
+func (*Platform) ShowLoader(
 	_ *config.Instance,
-	_ widgetModels.NoticeArgs,
+	_ widgetmodels.NoticeArgs,
 ) (func() error, error) {
-	return nil, nil
+	return nil, platforms.ErrNotSupported
 }
 
-func (p *Platform) ShowPicker(
+func (*Platform) ShowPicker(
 	_ *config.Instance,
-	_ widgetModels.PickerArgs,
+	_ widgetmodels.PickerArgs,
 ) error {
-	return nil
+	return platforms.ErrNotSupported
 }

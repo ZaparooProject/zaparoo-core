@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mediascanner
 
 import (
@@ -12,14 +31,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog/log"
 )
 
 type PathResult struct {
-	System systemdefs.System
 	Path   string
+	System systemdefs.System
 }
 
 // FindPath case-insensitively finds a file/folder at a path.
@@ -33,7 +52,7 @@ func FindPath(path string) (string, error) {
 
 	files, err := os.ReadDir(parent)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read directory %s: %w", parent, err)
 	}
 
 	for _, file := range files {
@@ -59,16 +78,17 @@ func GetSystemPaths(
 
 	for _, system := range systems {
 		var launchers []platforms.Launcher
-		for _, l := range pl.Launchers(cfg) {
-			if l.SystemID == system.ID {
-				launchers = append(launchers, l)
+		allLaunchers := pl.Launchers(cfg)
+		for i := range allLaunchers {
+			if allLaunchers[i].SystemID == system.ID {
+				launchers = append(launchers, allLaunchers[i])
 			}
 		}
 
 		var folders []string
-		for _, l := range launchers {
-			for _, folder := range l.Folders {
-				if !utils.Contains(folders, folder) {
+		for i := range launchers {
+			for _, folder := range launchers[i].Folders {
+				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
 				}
 			}
@@ -88,7 +108,10 @@ func GetSystemPaths(
 					continue
 				}
 
-				matches = append(matches, PathResult{system, path})
+				matches = append(matches, PathResult{
+					System: system,
+					Path:   path,
+				})
 			}
 		}
 
@@ -100,7 +123,10 @@ func GetSystemPaths(
 				if err != nil {
 					continue
 				}
-				matches = append(matches, PathResult{system, path})
+				matches = append(matches, PathResult{
+					System: system,
+					Path:   path,
+				})
 			}
 		}
 	}
@@ -131,7 +157,7 @@ func (r *resultsStack) pop() {
 
 func (r *resultsStack) get() (*[]string, error) {
 	if len(r.results) == 0 {
-		return nil, fmt.Errorf("nothing on stack")
+		return nil, errors.New("nothing on stack")
 	}
 	return &r.results[len(r.results)-1], nil
 }
@@ -142,16 +168,16 @@ func (r *resultsStack) get() (*[]string, error) {
 func GetFiles(
 	cfg *config.Instance,
 	platform platforms.Platform,
-	systemId string,
+	systemID string,
 	path string,
 ) ([]string, error) {
 	var allResults []string
 	stack := newResultsStack()
 	visited := make(map[string]struct{})
 
-	system, err := systemdefs.GetSystem(systemId)
+	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
 	var scanner func(path string, file fs.DirEntry, err error) error
@@ -160,9 +186,9 @@ func GetFiles(
 		if file.IsDir() {
 			key := path
 			if file.Type()&os.ModeSymlink != 0 {
-				realPath, err := filepath.EvalSymlinks(path)
-				if err != nil {
-					return err
+				realPath, symlinkErr := filepath.EvalSymlinks(path)
+				if symlinkErr != nil {
+					return fmt.Errorf("failed to evaluate symlink %s: %w", path, symlinkErr)
 				}
 				key = realPath
 			}
@@ -174,33 +200,33 @@ func GetFiles(
 
 		// handle symlinked directories
 		if file.Type()&os.ModeSymlink != 0 {
-			absSym, err := filepath.Abs(path)
-			if err != nil {
-				return err
+			absSym, absErr := filepath.Abs(path)
+			if absErr != nil {
+				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
 			}
 
-			realPath, err := filepath.EvalSymlinks(absSym)
-			if err != nil {
-				return err
+			realPath, realPathErr := filepath.EvalSymlinks(absSym)
+			if realPathErr != nil {
+				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
 			}
 
-			file, err := os.Stat(realPath)
-			if err != nil {
-				return err
+			file, statErr := os.Stat(realPath)
+			if statErr != nil {
+				return fmt.Errorf("failed to stat symlink target %s: %w", realPath, statErr)
 			}
 
 			if file.IsDir() {
 				stack.push()
 				defer stack.pop()
 
-				err = filepath.WalkDir(realPath, scanner)
-				if err != nil {
-					return err
+				walkErr := filepath.WalkDir(realPath, scanner)
+				if walkErr != nil {
+					return fmt.Errorf("failed to walk directory %s: %w", realPath, walkErr)
 				}
 
-				results, err := stack.get()
-				if err != nil {
-					return err
+				results, stackErr := stack.get()
+				if stackErr != nil {
+					return stackErr
 				}
 
 				for i := range *results {
@@ -211,31 +237,29 @@ func GetFiles(
 			}
 		}
 
-		results, err := stack.get()
-		if err != nil {
-			return err
+		results, stackErr := stack.get()
+		if stackErr != nil {
+			return stackErr
 		}
 
-		if utils.IsZip(path) && platform.Settings().ZipsAsDirs {
+		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
-			zipFiles, err := utils.ListZip(path)
-			if err != nil {
+			zipFiles, zipErr := helpers.ListZip(path)
+			if zipErr != nil {
 				// skip invalid zip files
-				log.Warn().Err(err).Msgf("error listing zip: %s", path)
+				log.Warn().Err(zipErr).Msgf("error listing zip: %s", path)
 				return nil
 			}
 
 			for i := range zipFiles {
 				abs := filepath.Join(path, zipFiles[i])
-				if utils.MatchSystemFile(cfg, platform, (*system).ID, abs) {
+				if helpers.MatchSystemFile(cfg, platform, system.ID, abs) {
 					*results = append(*results, abs)
 				}
 			}
-		} else {
+		} else if helpers.MatchSystemFile(cfg, platform, system.ID, path) {
 			// regular files
-			if utils.MatchSystemFile(cfg, platform, (*system).ID, path) {
-				*results = append(*results, path)
-			}
+			*results = append(*results, path)
 		}
 
 		return nil
@@ -246,7 +270,7 @@ func GetFiles(
 
 	root, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
 
 	// handle symlinks on the root game folder because WalkDir fails silently on them
@@ -256,22 +280,22 @@ func GetFiles(
 	} else {
 		realPath, err = filepath.EvalSymlinks(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to evaluate symlink %s: %w", path, err)
 		}
 	}
 
 	realRoot, err := os.Stat(realPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat real path %s: %w", realPath, err)
 	}
 
 	if !realRoot.IsDir() {
-		return nil, fmt.Errorf("root is not a directory")
+		return nil, errors.New("root is not a directory")
 	}
 
 	err = filepath.WalkDir(realPath, scanner)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
 
 	results, err := stack.get()
@@ -295,9 +319,9 @@ func GetFiles(
 }
 
 type IndexStatus struct {
+	SystemID string
 	Total    int
 	Step     int
-	SystemID string
 	Files    int
 }
 
@@ -321,11 +345,11 @@ func NewNamesIndex(
 
 	err := db.Truncate()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to truncate database: %w", err)
 	}
 	err = db.BeginTransaction()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
 	status := IndexStatus{
@@ -348,11 +372,6 @@ func NewNamesIndex(
 	}
 	SeedKnownTags(db, &scanState)
 
-	filteredIds := make([]string, 0)
-	for _, s := range systems {
-		filteredIds = append(filteredIds, s.ID)
-	}
-
 	update(status)
 	systemPaths := make(map[string][]string)
 	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
@@ -364,23 +383,23 @@ func NewNamesIndex(
 		scanned[s.ID] = false
 	}
 
-	sysPathIds := utils.AlphaMapKeys(systemPaths)
+	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
 	// update steps with true count
-	status.Total = len(sysPathIds) + 2
+	status.Total = len(sysPathIDs) + 2
 
-	for _, k := range sysPathIds {
-		systemId := k
+	for _, k := range sysPathIDs {
+		systemID := k
 		files := make([]platforms.ScanResult, 0)
 
-		status.SystemID = systemId
+		status.SystemID = systemID
 		status.Step++
 		update(status)
 
 		// scan using standard folder and extensions
 		for _, path := range systemPaths[k] {
-			pathFiles, err := GetFiles(cfg, platform, k, path)
-			if err != nil {
-				log.Error().Err(err).Msgf("error getting files for system: %s", systemId)
+			pathFiles, pathErr := GetFiles(cfg, platform, k, path)
+			if pathErr != nil {
+				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
 				continue
 			}
 			for _, f := range pathFiles {
@@ -390,29 +409,31 @@ func NewNamesIndex(
 
 		// for each system launcher in a platform, run the results through its
 		// custom scan function if one exists
-		for _, l := range platform.Launchers(cfg) {
+		launchers := platform.Launchers(cfg)
+		for i := range launchers {
+			l := &launchers[i]
 			if l.SystemID == k && l.Scanner != nil {
-				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
-				var err error
-				files, err = l.Scanner(cfg, systemId, files)
-				if err != nil {
-					log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
+				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
+				var scanErr error
+				files, scanErr = l.Scanner(cfg, systemID, files)
+				if scanErr != nil {
+					log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 					continue
 				}
 			}
 		}
 
 		if len(files) == 0 {
-			log.Debug().Msgf("no files found for system: %s", systemId)
+			log.Debug().Msgf("no files found for system: %s", systemID)
 			continue
 		}
 
 		status.Files += len(files)
-		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemId)
-		scanned[systemId] = true
+		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
+		scanned[systemID] = true
 
 		for _, p := range files {
-			AddMediaPath(db, &scanState, systemId, p.Path)
+			AddMediaPath(db, &scanState, systemID, p.Path)
 		}
 
 		FlushScanStateMaps(&scanState)
@@ -420,24 +441,26 @@ func NewNamesIndex(
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
-	for _, l := range platform.Launchers(cfg) {
-		systemId := l.SystemID
-		if !scanned[systemId] && l.Scanner != nil {
-			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemId)
-			results, err := l.Scanner(cfg, systemId, []platforms.ScanResult{})
-			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, systemId)
+	launchers := platform.Launchers(cfg)
+	for i := range launchers {
+		l := &launchers[i]
+		systemID := l.SystemID
+		if !scanned[systemID] && l.Scanner != nil {
+			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
+			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
 
-			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemId)
+			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemID)
 
 			status.Files += len(results)
-			scanned[systemId] = true
+			scanned[systemID] = true
 
 			if len(results) > 0 {
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
 			}
 			FlushScanStateMaps(&scanState)
@@ -446,18 +469,20 @@ func NewNamesIndex(
 
 	// launcher scanners with no system defined are run against every system
 	var anyScanners []platforms.Launcher
-	for _, l := range platform.Launchers(cfg) {
-		if l.SystemID == "" && l.Scanner != nil {
-			anyScanners = append(anyScanners, l)
+	allLaunchers := platform.Launchers(cfg)
+	for i := range allLaunchers {
+		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
+			anyScanners = append(anyScanners, allLaunchers[i])
 		}
 	}
 
-	for _, l := range anyScanners {
+	for i := range anyScanners {
+		l := &anyScanners[i]
 		for _, s := range systems {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, s.ID)
-			results, err := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
-			if err != nil {
-				log.Error().Err(err).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
+			results, scanErr := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
+			if scanErr != nil {
+				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
 				continue
 			}
 
@@ -466,10 +491,10 @@ func NewNamesIndex(
 			if len(results) > 0 {
 				status.Files += len(results)
 				scanned[s.ID] = true
-				systemId := s.ID
+				systemID := s.ID
 
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemId, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
 			}
 			FlushScanStateMaps(&scanState)
@@ -483,19 +508,19 @@ func NewNamesIndex(
 	scanState.TagIDs = make(map[string]int)
 	err = db.ReindexTables()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to reindex tables: %w", err)
 	}
 	err = db.CommitTransaction()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	err = db.Vacuum()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to vacuum database: %w", err)
 	}
 	err = db.UpdateLastGenerated()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
 	// MiSTer needs the love here

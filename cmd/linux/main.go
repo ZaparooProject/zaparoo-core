@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
@@ -22,24 +24,33 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
@@ -64,22 +75,19 @@ func main() {
 	if *doInstall {
 		err := installer.CLIInstall()
 		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
+			return errors.New("installation failed")
 		}
+		return nil
 	} else if *doUninstall {
 		err := installer.CLIUninstall()
 		if err != nil {
-			os.Exit(1)
-		} else {
-			os.Exit(0)
+			return errors.New("uninstallation failed")
 		}
+		return nil
 	}
 
 	if os.Geteuid() == 0 {
-		_, _ = fmt.Fprintf(os.Stderr, "Zaparoo cannot be run as root\n")
-		os.Exit(1)
+		return errors.New("zaparoo cannot be run as root")
 	}
 
 	var logWriters []io.Writer
@@ -102,12 +110,11 @@ func main() {
 
 	flags.Post(cfg, pl)
 
-	if !utils.IsServiceRunning(cfg) {
+	if !helpers.IsServiceRunning(cfg) {
 		stopSvc, err := service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
-			_, _ = fmt.Fprintf(os.Stderr, "Error starting service: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error starting service: %w", err)
 		}
 
 		defer func() {
@@ -131,21 +138,19 @@ func main() {
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
-			func() bool { return utils.IsServiceRunning(cfg) },
+			func() bool { return helpers.IsServiceRunning(cfg) },
 			filepath.Join(os.Getenv("HOME"), "Desktop", "core.log"),
 			"desktop",
 		)
 		if err != nil {
 			log.Error().Err(err).Msgf("error building UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error building UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error building UI: %w", err)
 		}
 
 		err = app.Run()
 		if err != nil {
 			log.Error().Err(err).Msg("error running UI")
-			_, _ = fmt.Fprintf(os.Stderr, "Error running UI: %s\n", err)
-			os.Exit(1)
+			return fmt.Errorf("error running UI: %w", err)
 		}
 
 		exit <- true
@@ -156,5 +161,5 @@ func main() {
 	case <-exit:
 	}
 
-	os.Exit(0)
+	return nil
 }

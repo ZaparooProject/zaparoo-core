@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package cli
 
 import (
@@ -14,8 +33,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -25,7 +44,7 @@ type Flags struct {
 	Read       *bool
 	Run        *string
 	Launch     *string
-	Api        *string
+	API        *string
 	Version    *bool
 	Config     *bool
 	ShowLoader *string
@@ -56,7 +75,7 @@ func SetupFlags() *Flags {
 			"",
 			"alias of run (DEPRECATED)",
 		),
-		Api: flag.String(
+		API: flag.String(
 			"api",
 			"",
 			"send method and params to API and print response",
@@ -95,7 +114,7 @@ func (f *Flags) Pre(pl platforms.Platform) {
 	flag.Parse()
 
 	if *f.Version {
-		fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
+		_, _ = fmt.Printf("Zaparoo v%s (%s)\n", config.AppVersion, pl.ID())
 		os.Exit(0)
 	}
 }
@@ -114,17 +133,17 @@ func runFlag(cfg *config.Instance, value string) {
 		log.Error().Err(err).Msg("error running")
 		_, _ = fmt.Fprintf(os.Stderr, "Error running: %v\n", err)
 		os.Exit(1)
-	} else {
-		os.Exit(0)
 	}
+	os.Exit(0)
 }
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
 func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
-	if isFlagPassed("write") {
+	switch {
+	case isFlagPassed("write"):
 		if *f.Write == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: write flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: write flag requires a value\n")
 			os.Exit(1)
 		}
 
@@ -140,10 +159,10 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
-		defer close(sigs)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
+			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}()
@@ -152,22 +171,23 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
+			close(sigs)
 			enableRun()
 			os.Exit(1)
-		} else {
-			_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
-			enableRun()
-			os.Exit(0)
 		}
-	} else if *f.Read {
+		_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
+		close(sigs)
+		enableRun()
+		os.Exit(0)
+	case *f.Read:
 		enableRun := client.DisableZapScript(cfg)
 
 		// cleanup after ctrl-c
 		sigs := make(chan os.Signal, 1)
-		defer close(sigs)
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
+			close(sigs)
 			enableRun()
 			os.Exit(0)
 		}()
@@ -179,31 +199,33 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			log.Error().Err(err).Msg("error waiting for notification")
 			_, _ = fmt.Fprintf(os.Stderr, "Error waiting for notification: %v\n", err)
+			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}
 
+		close(sigs)
 		enableRun()
-		fmt.Println(resp)
+		_, _ = fmt.Println(resp)
 		os.Exit(0)
-	} else if isFlagPassed("launch") {
+	case isFlagPassed("launch"):
 		if *f.Launch == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: launch flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: launch flag requires a value\n")
 			os.Exit(1)
 		}
 		runFlag(cfg, *f.Launch)
-	} else if isFlagPassed("run") {
+	case isFlagPassed("run"):
 		if *f.Run == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: run flag requires a value\n")
+			_, _ = fmt.Fprint(os.Stderr, "Error: run flag requires a value\n")
 		}
 		runFlag(cfg, *f.Run)
-	} else if isFlagPassed("api") {
-		if *f.Api == "" {
-			_, _ = fmt.Fprintf(os.Stderr, "Error: api flag requires a value\n")
+	case isFlagPassed("api"):
+		if *f.API == "" {
+			_, _ = fmt.Fprint(os.Stderr, "Error: api flag requires a value\n")
 			os.Exit(1)
 		}
 
-		ps := strings.SplitN(*f.Api, ":", 2)
+		ps := strings.SplitN(*f.API, ":", 2)
 		method := ps[0]
 		params := ""
 		if len(ps) > 1 {
@@ -217,29 +239,34 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 			os.Exit(1)
 		}
 
-		fmt.Println(resp)
+		_, _ = fmt.Println(resp)
 		os.Exit(0)
-	} else if *f.Reload {
+	case *f.Reload:
 		_, err := client.LocalClient(context.Background(), cfg, models.MethodSettingsReload, "")
 		if err != nil {
 			log.Error().Err(err).Msg("error reloading settings")
 			_, _ = fmt.Fprintf(os.Stderr, "Error reloading: %v\n", err)
 			os.Exit(1)
-		} else {
-			os.Exit(0)
 		}
+		os.Exit(0)
 	}
 }
 
 // Setup initializes the user config and logging. Returns a user config object.
-func Setup(pl platforms.Platform, defaultConfig config.Values, writers []io.Writer) *config.Instance {
-	err := utils.InitLogging(pl, writers)
+//
+//nolint:gocritic // config struct copied for immutability
+func Setup(
+	pl platforms.Platform,
+	defaultConfig config.Values,
+	writers []io.Writer,
+) *config.Instance {
+	err := helpers.InitLogging(pl, writers)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logging: %v\n", err)
 		os.Exit(1)
 	}
 
-	cfg, err := config.NewConfig(utils.ConfigDir(pl), defaultConfig)
+	cfg, err := config.NewConfig(helpers.ConfigDir(pl), defaultConfig)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
 		os.Exit(1)

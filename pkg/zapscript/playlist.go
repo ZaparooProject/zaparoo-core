@@ -1,13 +1,28 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package zapscript
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -15,6 +30,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/rs/zerolog/log"
 )
 
 const plsHeader = "[playlist]"
@@ -23,8 +44,10 @@ func isPlsFile(path string) bool {
 	return filepath.Ext(strings.ToLower(path)) == ".pls"
 }
 
-var plsFileRe = regexp.MustCompile("^File([1-9]\\d*)\\s*=\\s*(.*)$")
-var plsTitleRe = regexp.MustCompile("^Title([1-9]\\d*)\\s*=\\s*(.*)$")
+var (
+	plsFileRe  = regexp.MustCompile(`^File([1-9]\d*)\s*=\s*(.*)$`)
+	plsTitleRe = regexp.MustCompile(`^Title([1-9]\d*)\s*=\s*(.*)$`)
+)
 
 type plsItem struct {
 	file  string
@@ -43,9 +66,10 @@ type ArgPlaylist struct {
 }
 
 func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
+	//nolint:gosec // Safe: reads playlist files for media management
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read playlist file '%s': %w", path, err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -176,16 +200,16 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 
 func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 	if path == "" {
-		return nil, fmt.Errorf("no playlist path specified")
+		return nil, errors.New("no playlist path specified")
 	}
 
 	if _, err := os.Stat(path); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat path '%s': %w", path, err)
 	}
 
 	dir, err := os.ReadDir(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read directory '%s': %w", path, err)
 	}
 
 	files := make([]string, 0)
@@ -216,6 +240,7 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 	return items, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playlist, error) {
 	if len(env.Cmd.Args) == 0 {
 		return nil, ErrArgCount
@@ -223,7 +248,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, ErrRequiredArgs
 	}
 
-	if utils.MaybeJSON([]byte(env.Cmd.Args[0])) {
+	if helpers.MaybeJSON([]byte(env.Cmd.Args[0])) {
 		var plsArg ArgPlaylist
 		if err := json.Unmarshal([]byte(env.Cmd.Args[0]), &plsArg); err != nil {
 			return nil, fmt.Errorf("invalid playlist json: %w", err)
@@ -275,6 +300,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	return playlists.NewPlaylist(env.Cmd.Args[0], name, items), nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active != nil &&
 		(len(env.Cmd.Args) == 0 || env.Cmd.Args[0] == "") {
@@ -302,6 +328,7 @@ func cmdPlaylistPlay(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
@@ -317,6 +344,7 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	pls, err := loadPlaylist(pl, env)
 	if err != nil {
@@ -328,7 +356,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		pls.Index = env.Playlist.Active.Index
 	}
 
-	var items []widgetModels.PickerItem
+	items := make([]widgetmodels.PickerItem, 0, len(pls.Items))
 	for i, m := range pls.Items {
 		var name string
 
@@ -350,7 +378,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "||**playlist.play"
 
-		items = append(items, widgetModels.PickerItem{
+		items = append(items, widgetmodels.PickerItem{
 			Name:      name,
 			ZapScript: zapscript,
 		})
@@ -359,19 +387,26 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	log.Info().Any("items", pls.Items).Msgf("open playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
-	return platforms.CmdResult{
+	if err := pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
+		Title:    pls.Name,
+		Items:    items,
+		Selected: pls.Index,
+	}); err != nil {
+		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,
-		}, pl.ShowPicker(env.Cfg, widgetModels.PickerArgs{
-			Title:    pls.Name,
-			Items:    items,
-			Selected: pls.Index,
-		})
+		}, fmt.Errorf("failed to show picker: %w", err)
+	}
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Next(*env.Playlist.Active)
@@ -383,9 +418,10 @@ func cmdPlaylistNext(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Previous(*env.Playlist.Active)
@@ -397,9 +433,10 @@ func cmdPlaylistPrevious(_ platforms.Platform, env platforms.CmdEnv) (platforms.
 	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	if len(env.Cmd.Args) == 0 {
@@ -408,7 +445,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 	indexArg, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("invalid index '%s': %w", env.Cmd.Args[0], err)
 	}
 
 	newIndex := indexArg - 1
@@ -427,29 +464,43 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	env.Playlist.Queue <- nil
 
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        nil,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        nil,
-	}, pl.StopActiveLauncher()
+	}, nil
 }
 
+//nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if env.Playlist.Active == nil {
-		return platforms.CmdResult{}, fmt.Errorf("no playlist active")
+		return platforms.CmdResult{}, errors.New("no playlist active")
 	}
 
 	pls := playlists.Pause(*env.Playlist.Active)
 	env.Playlist.Queue <- pls
 
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        pls,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        pls,
-	}, pl.StopActiveLauncher()
+	}, nil
 }

@@ -1,4 +1,4 @@
-//go:build (linux || darwin) && cgo
+//go:build linux
 
 /*
 Zaparoo Core
@@ -25,10 +25,9 @@ package tags
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -47,16 +46,18 @@ const (
 // Can be identified by matching blocks 0x03-0x07
 // https://github.com/RfidResearchGroup/proxmark3/blob/master/client/src/cmdhfmfu.c
 var LegoDimensionsMatcher = []byte{
-	//0xE1, 0x10, 0x12, 0x00, // Skip as we never read 0x03
+	// 0xE1, 0x10, 0x12, 0x00, // Skip as we never read 0x03
 	0x01, 0x03, 0xA0, 0x0C,
 	0x34, 0x03, 0x13, 0xD1,
 	0x01, 0x0F, 0x54, 0x02,
-	0x65, 0x6E}
+	0x65, 0x6E,
+}
 
 // Can be identified by matching address 0x09-0x0F
 var AmiiboMatcher = []byte{
 	0x48, 0x0F, 0xE0,
-	0xF1, 0x10, 0xFF, 0xEE}
+	0xF1, 0x10, 0xFF, 0xEE,
+}
 
 func ReadNtag(pnd nfc.Device) (TagData, error) {
 	blockCount, err := getNtagBlockCount(pnd)
@@ -96,7 +97,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 		}
 
 		allBlocks = append(allBlocks, blocks...)
-		currentBlock = currentBlock + 4
+		currentBlock += 4
 
 		if bytes.Contains(allBlocks, NdefEnd) {
 			// Once we find the end of the NDEF text record there is no need to
@@ -114,7 +115,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 }
 
 func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
-	var payload, err = BuildMessage(text)
+	payload, err := BuildMessage(text)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
 	}
 
 	if len(payload) > cardCapacity {
-		return nil, errors.New(fmt.Sprintf("Payload too big for card: [%d/%d] bytes used\n", len(payload), cardCapacity))
+		return nil, fmt.Errorf("payload too big for card: [%d/%d] bytes used", len(payload), cardCapacity)
 	}
 
 	var startingBlock byte = 0x04
@@ -133,7 +134,7 @@ func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
 		for len(chunk) < 4 {
 			chunk = append(chunk, []byte{0x00}...)
 		}
-		var tx = []byte{WriteCommand, startingBlock + byte(i)}
+		tx := []byte{WriteCommand, startingBlock + byte(i)}
 		tx = append(tx, chunk...)
 		_, err := comm(pnd, tx, 1)
 		if err != nil {
@@ -152,7 +153,7 @@ func getNtagBlockCount(pnd nfc.Device) (int, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to read NTAG page count: %w", err)
 	}
 
 	switch rx[2] {
@@ -179,7 +180,7 @@ func getNtagCapacity(pnd nfc.Device) (int, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to read NTAG capacity: %w", err)
 	}
 
 	// https://github.com/adafruit/Adafruit_MFRC630/blob/master/docs/NTAG.md#capability-container

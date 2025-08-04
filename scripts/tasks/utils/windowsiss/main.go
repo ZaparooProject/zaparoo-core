@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package main
 
 import (
@@ -25,7 +44,7 @@ func main() {
 	flag.Parse()
 
 	if *version == "" || *arch == "" {
-		_, _ = fmt.Fprintf(os.Stderr, "Error: version and arch are required\n")
+		_, _ = fmt.Fprint(os.Stderr, "Error: version and arch are required\n")
 		os.Exit(1)
 	}
 
@@ -65,17 +84,30 @@ func main() {
 		os.Exit(1)
 	}
 
-	outFile, err := os.Create("_build/windows_" + *arch + "/setup.iss")
-	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
+	if err := generateSetupFile(tmpl, data, *arch); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error generating setup file: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+//nolint:gocritic // single-use parameter in generator
+func generateSetupFile(
+	tmpl *template.Template,
+	data InnoSetupData,
+	arch string,
+) error {
+	//nolint:gosec // Safe: creates installer script in build environment with controlled path
+	outFile, err := os.Create("_build/windows_" + arch + "/setup.iss")
+	if err != nil {
+		return fmt.Errorf("error creating output file: %w", err)
 	}
 	defer func(outFile *os.File) {
 		_ = outFile.Close()
 	}(outFile)
 
 	if err := tmpl.Execute(outFile, data); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error executing template: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error executing template: %w", err)
 	}
+
+	return nil
 }

@@ -1,21 +1,41 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package systray
 
 import (
 	"context"
 	"fmt"
-	"fyne.io/systray"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/nixinwang/dialog"
-	"github.com/rs/zerolog/log"
-	"golang.design/x/clipboard"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"fyne.io/systray"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/nixinwang/dialog"
+	"github.com/rs/zerolog/log"
+	"golang.design/x/clipboard"
 )
 
 func systrayOnReady(
@@ -26,11 +46,12 @@ func systrayOnReady(
 ) func() {
 	return func() {
 		openCmd := ""
-		if runtime.GOOS == "windows" {
+		switch runtime.GOOS {
+		case "windows":
 			openCmd = "explorer"
-		} else if runtime.GOOS == "darwin" {
+		case "darwin":
 			openCmd = "open"
-		} else {
+		default:
 			openCmd = "xdg-open"
 		}
 
@@ -41,7 +62,7 @@ func systrayOnReady(
 		systray.SetTooltip("Zaparoo Core")
 
 		mWebUI := systray.AddMenuItem("Open", "Open Zaparoo web UI")
-		ip := utils.GetLocalIP()
+		ip := helpers.GetLocalIP()
 		if ip == "" {
 			ip = "Unknown"
 		}
@@ -84,32 +105,41 @@ func systrayOnReady(
 					clipboard.Write(clipboard.FmtText, []byte(ip))
 					notify("Copied address to clipboard.")
 				case <-mWebUI.ClickedCh:
-					url := fmt.Sprintf("http://localhost:%d/app/", cfg.ApiPort())
-					err := exec.Command(openCmd, url).Start()
+					url := fmt.Sprintf("http://localhost:%d/app/", cfg.APIPort())
+					//nolint:gosec // Safe: opens system file manager with localhost URL
+					err := exec.CommandContext(context.Background(), openCmd, url).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open web page")
 						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(pl.Settings().TempDir, config.LogFile)).Start()
+					logPath := filepath.Join(pl.Settings().TempDir, config.LogFile)
+					//nolint:gosec // Safe: opens system file manager with internal log path
+					err := exec.CommandContext(context.Background(), openCmd, logPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open log file")
 						notify("Error opening log file.")
 					}
 				case <-mEditConfig.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.ConfigDir(pl), config.CfgFile)).Start()
+					configPath := filepath.Join(helpers.ConfigDir(pl), config.CfgFile)
+					//nolint:gosec // Safe: opens system file manager with internal config path
+					err := exec.CommandContext(context.Background(), openCmd, configPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open config file")
 						notify("Error opening config file.")
 					}
 				case <-mOpenMappings.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.MappingsDir)).Start()
+					mappingsPath := filepath.Join(helpers.DataDir(pl), config.MappingsDir)
+					//nolint:gosec // Safe: opens system file manager with internal mappings directory
+					err := exec.CommandContext(context.Background(), openCmd, mappingsPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open mappings dir")
 						notify("Error opening mappings directory.")
 					}
 				case <-mOpenLaunchers.ClickedCh:
-					err := exec.Command(openCmd, filepath.Join(utils.DataDir(pl), config.LaunchersDir)).Start()
+					launchersPath := filepath.Join(helpers.DataDir(pl), config.LaunchersDir)
+					//nolint:gosec // Safe: opens system file manager with internal launchers directory
+					err := exec.CommandContext(context.Background(), openCmd, launchersPath).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open launchers dir")
 						notify("Error opening launchers directory.")
@@ -124,7 +154,8 @@ func systrayOnReady(
 						notify("Core config successfully reloaded.")
 					}
 				case <-mOpenDataDir.ClickedCh:
-					err := exec.Command(openCmd, utils.DataDir(pl)).Start()
+					//nolint:gosec // Safe: opens file manager to internal data directory
+					err := exec.CommandContext(context.Background(), openCmd, helpers.DataDir(pl)).Start()
 					if err != nil {
 						log.Error().Err(err).Msg("failed to open data dir")
 						notify("Error opening data directory.")

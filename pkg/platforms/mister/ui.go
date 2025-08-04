@@ -1,29 +1,31 @@
+//go:build linux
+
 package mister
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	widgetModels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/rs/zerolog/log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/rs/zerolog/log"
 )
 
 func preNoticeTime() time.Duration {
 	if MainHasFeature(MainFeatureNotice) {
 		return 3 * time.Second
-	} else {
-		// accounting for the time it takes to boot up the console
-		return 5 * time.Second
 	}
+	// accounting for the time it takes to boot up the console
+	return 5 * time.Second
 }
 
 func showNotice(
@@ -33,10 +35,10 @@ func showNotice(
 	loader bool,
 ) (string, error) {
 	log.Info().Msgf("showing notice: %s", text)
-	argsId := utils.RandSeq(10)
-	argsName := "notice-" + argsId + ".json"
+	argsID := helpers.RandSeq(10)
+	argsName := "notice-" + argsID + ".json"
 	if loader {
-		argsName = "loader-" + argsId + ".json"
+		argsName = "loader-" + argsID + ".json"
 	}
 	argsPath := filepath.Join(pl.Settings().TempDir, argsName)
 	completePath := argsPath + ".complete"
@@ -49,15 +51,15 @@ func showNotice(
 	} else {
 		log.Debug().Msg("launching script notice")
 		// fall back on script
-		args := widgetModels.NoticeArgs{
+		args := widgetmodels.NoticeArgs{
 			Text:     text,
 			Complete: completePath,
 		}
-		argsJson, err := json.Marshal(args)
+		argsJSON, err := json.Marshal(args)
 		if err != nil {
 			return "", fmt.Errorf("error marshalling notice args: %w", err)
 		}
-		err = os.WriteFile(argsPath, argsJson, 0644)
+		err = os.WriteFile(argsPath, argsJSON, 0o600)
 		if err != nil {
 			return "", fmt.Errorf("error writing notice args: %w", err)
 		}
@@ -88,7 +90,7 @@ func hideNotice(argsPath string) error {
 		if err != nil {
 			return fmt.Errorf("error removing notice args: %w", err)
 		}
-		err = os.WriteFile(argsPath+".complete", []byte{}, 0644)
+		err = os.WriteFile(argsPath+".complete", []byte{}, 0o600)
 		if err != nil {
 			return fmt.Errorf("error writing notice complete: %w", err)
 		}
@@ -96,16 +98,16 @@ func hideNotice(argsPath string) error {
 	return nil
 }
 
-func misterSetupMainPicker(args widgetModels.PickerArgs) error {
+func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 	// remove existing items
 	files, err := os.ReadDir(MainPickerDir)
 	if err != nil {
 		log.Error().Msgf("error reading picker items dir: %s", err)
 	} else {
 		for _, file := range files {
-			err := os.Remove(filepath.Join(MainPickerDir, file.Name()))
-			if err != nil {
-				log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
+			removeErr := os.Remove(filepath.Join(MainPickerDir, file.Name()))
+			if removeErr != nil {
+				log.Error().Msgf("error deleting file %s: %s", file.Name(), removeErr)
 			}
 		}
 	}
@@ -121,22 +123,22 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 			name = name[:25] + "..."
 		}
 
-		contents, err := json.Marshal(item)
-		if err != nil {
-			return err
+		contents, marshalErr := json.Marshal(item)
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal picker item: %w", marshalErr)
 		}
 
 		path := filepath.Join(MainPickerDir, name+".txt")
-		err = os.WriteFile(path, contents, 0644)
+		err = os.WriteFile(path, contents, 0o600)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write picker item file: %w", err)
 		}
 	}
 
 	// launch
-	err = os.WriteFile(CmdInterface, []byte("show_picker\n"), 0644)
+	err = os.WriteFile(CmdInterface, []byte("show_picker\n"), 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write show_picker command: %w", err)
 	}
 
 	return nil
@@ -145,27 +147,26 @@ func misterSetupMainPicker(args widgetModels.PickerArgs) error {
 func showPicker(
 	cfg *config.Instance,
 	pl platforms.Platform,
-	args widgetModels.PickerArgs,
+	args widgetmodels.PickerArgs,
 ) error {
 	// use custom main ui if available
 	if MainHasFeature(MainFeaturePicker) {
 		err := misterSetupMainPicker(args)
 		if err != nil {
 			return err
-		} else {
-			return nil
 		}
+		return nil
 	}
 
 	// fall back to launching script menu
 	argsPath := filepath.Join(pl.Settings().TempDir, "picker.json")
-	argsJson, err := json.Marshal(args)
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal picker args: %w", err)
 	}
-	err = os.WriteFile(argsPath, argsJson, 0644)
+	err = os.WriteFile(argsPath, argsJSON, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write picker args file: %w", err)
 	}
 
 	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-picker %s", argsPath)

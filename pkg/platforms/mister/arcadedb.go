@@ -1,38 +1,44 @@
-//go:build linux || darwin
+//go:build linux
 
 package mister
 
 import (
-	"crypto/sha1"
+	"context"
+	"crypto/sha1" //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
-	"github.com/gocarina/gocsv"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/gocarina/gocsv"
+	"github.com/rs/zerolog/log"
 )
 
+type GithubLinks struct {
+	Self string `json:"self"`
+	Git  string `json:"git"`
+	HTML string `json:"html"`
+}
+
 type GithubContentsItem struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Sha         string `json:"sha"`
-	Size        int    `json:"size"`
-	Url         string `json:"url"`
-	HtmlUrl     string `json:"html_url"`
-	GitUrl      string `json:"git_url"`
-	DownloadUrl string `json:"download_url"`
-	Type        string `json:"type"`
-	Links       struct {
-		Self string `json:"self"`
-		Git  string `json:"git"`
-		Html string `json:"html"`
-	} `json:"_links"`
+	Links       GithubLinks `json:"_links"` //nolint:tagliatelle // GitHub API format
+	Name        string      `json:"name"`
+	Path        string      `json:"path"`
+	Sha         string      `json:"sha"`
+	URL         string      `json:"url"`
+	HTMLURL     string      `json:"html_url"`     //nolint:tagliatelle // GitHub API format
+	GitURL      string      `json:"git_url"`      //nolint:tagliatelle // GitHub API format
+	DownloadURL string      `json:"download_url"` //nolint:tagliatelle // GitHub API format
+	Type        string      `json:"type"`
+	Size        int         `json:"size"`
 }
 
 type ArcadeDbEntry struct {
@@ -60,64 +66,75 @@ type ArcadeDbEntry struct {
 }
 
 func getGitBlobSha1(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) //nolint:gosec // Internal path for arcade DB verification
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to open file: %w", err)
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to close file")
+		closeErr := file.Close()
+		if closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close file")
 		}
 	}(file)
 
 	info, err := file.Stat()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	size := info.Size()
 	header := fmt.Sprintf("blob %d\x00", size)
 
-	hasher := sha1.New()
-	hasher.Write([]byte(header))
+	hasher := sha1.New() //nolint:gosec // Required for git blob SHA1 verification against GitHub API
+	_, _ = hasher.Write([]byte(header))
 	if _, err := io.Copy(hasher, file); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to copy file to hasher: %w", err)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	arcadeDBPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		ArcadeDbFile,
 	)
 
-	resp, err := http.Get(ArcadeDbUrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, http.NoBody)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	defer func(b io.ReadCloser) {
-		_ = b.Close()
-	}(resp.Body)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute HTTP request: %w", err)
+	}
+	if resp == nil {
+		return false, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var contents []GithubContentsItem
 	err = json.Unmarshal(body, &contents)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	} else if len(contents) == 0 {
 		return false, nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0755)
+	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o750)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	latestFile := contents[len(contents)-1]
@@ -128,22 +145,33 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, nil
 	}
 
-	resp, err = http.Get(latestFile.DownloadUrl)
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, http.NoBody)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create download request: %w", err)
 	}
-	defer func(b io.ReadCloser) {
-		_ = b.Close()
-	}(resp.Body)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to download arcadedb: %w", err)
+	}
+	if resp == nil {
+		return false, errors.New("received nil response")
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close response body")
+		}
+	}()
 
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read download body: %w", err)
 	}
 
-	err = os.WriteFile(arcadeDBPath, body, 0644)
+	err = os.WriteFile(arcadeDBPath, body, 0o600)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
 	}
 
 	return true, nil
@@ -151,18 +179,18 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	arcadeDBPath := filepath.Join(
-		utils.DataDir(pl),
+		helpers.DataDir(pl),
 		config.AssetsDir,
 		ArcadeDbFile,
 	)
 
 	if _, err := os.Stat(arcadeDBPath); os.IsNotExist(err) {
-		return nil, err
+		return nil, fmt.Errorf("arcadedb file does not exist: %w", err)
 	}
 
-	dbFile, err := os.Open(arcadeDBPath)
+	dbFile, err := os.Open(arcadeDBPath) //nolint:gosec // Internal path for arcade DB reading
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open arcadedb file: %w", err)
 	}
 	defer func(c io.Closer) {
 		_ = c.Close()
@@ -171,7 +199,7 @@ func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	entries := make([]ArcadeDbEntry, 0)
 	err = gocsv.Unmarshal(dbFile, &entries)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
 	}
 
 	return entries, nil

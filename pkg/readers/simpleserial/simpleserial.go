@@ -1,29 +1,47 @@
-package simple_serial
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package simpleserial
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
-
 	"go.bug.st/serial"
 )
 
 type SimpleSerialReader struct {
+	port      serial.Port
 	cfg       *config.Instance
+	lastToken *tokens.Token
 	device    config.ReadersConnect
 	path      string
 	polling   bool
-	port      serial.Port
-	lastToken *tokens.Token
 }
 
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
@@ -32,7 +50,7 @@ func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	}
 }
 
-func (r *SimpleSerialReader) Ids() []string {
+func (*SimpleSerialReader) IDs() []string {
 	return []string{"simple_serial"}
 }
 
@@ -40,17 +58,17 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	line = strings.TrimSpace(line)
 	line = strings.Trim(line, "\r")
 
-	if len(line) == 0 {
-		return nil, nil
+	if line == "" {
+		return nil, nil //nolint:nilnil // nil response means empty line, not an error
 	}
 
 	if !strings.HasPrefix(line, "SCAN\t") {
-		return nil, nil
+		return nil, nil //nolint:nilnil // nil response means invalid format, not an error
 	}
 
 	args := line[5:]
-	if len(args) == 0 {
-		return nil, nil
+	if args == "" {
+		return nil, nil //nolint:nilnil // nil response means no args, not an error
 	}
 
 	t := tokens.Token{
@@ -63,13 +81,14 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 	hasArg := false
 	for i := 0; i < len(ps); i++ {
 		ps[i] = strings.TrimSpace(ps[i])
-		if strings.HasPrefix(ps[i], "uid=") {
+		switch {
+		case strings.HasPrefix(ps[i], "uid="):
 			t.UID = ps[i][4:]
 			hasArg = true
-		} else if strings.HasPrefix(ps[i], "text=") {
+		case strings.HasPrefix(ps[i], "text="):
 			t.Text = ps[i][5:]
 			hasArg = true
-		} else if strings.HasPrefix(ps[i], "removable=") {
+		case strings.HasPrefix(ps[i], "removable="):
 			// TODO: this isn't really what removable means, but it works
 			//		 for now. it will block shell commands though
 			t.FromAPI = ps[i][10:] == "no"
@@ -86,7 +105,7 @@ func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {
 }
 
 func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
-	if !utils.Contains(r.Ids(), device.Driver) {
+	if !helpers.Contains(r.IDs(), device.Driver) {
 		return errors.New("invalid reader id: " + device.Driver)
 	}
 
@@ -94,7 +113,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(path); err != nil {
-			return err
+			return fmt.Errorf("failed to stat device path %s: %w", path, err)
 		}
 	}
 
@@ -102,12 +121,12 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 		BaudRate: 115200,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open serial port %s: %w", path, err)
 	}
 
 	err = port.SetReadTimeout(100 * time.Millisecond)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to set read timeout on serial port: %w", err)
 	}
 
 	r.port = port
@@ -141,7 +160,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 						continue
 					}
 
-					if t != nil && !utils.TokensEqual(t, r.lastToken) {
+					if t != nil && !helpers.TokensEqual(t, r.lastToken) {
 						iq <- readers.Scan{
 							Source: r.device.ConnectionString(),
 							Token:  t,
@@ -174,13 +193,13 @@ func (r *SimpleSerialReader) Close() error {
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to close serial port: %w", err)
 		}
 	}
 	return nil
 }
 
-func (r *SimpleSerialReader) Detect(connected []string) string {
+func (*SimpleSerialReader) Detect(_ []string) string {
 	return ""
 }
 
@@ -196,10 +215,10 @@ func (r *SimpleSerialReader) Info() string {
 	return r.path
 }
 
-func (r *SimpleSerialReader) Write(text string) (*tokens.Token, error) {
+func (*SimpleSerialReader) Write(_ string) (*tokens.Token, error) {
 	return nil, errors.New("writing not supported on this reader")
 }
 
-func (r *SimpleSerialReader) CancelWrite() {
-	return
+func (*SimpleSerialReader) CancelWrite() {
+	// no-op, writing not supported
 }

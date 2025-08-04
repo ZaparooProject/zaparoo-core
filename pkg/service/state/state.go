@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package state
 
 import (
@@ -7,33 +26,32 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	mu             sync.RWMutex
-	runZapScript   bool
-	activeToken    tokens.Token // TODO: make a pointer
-	lastScanned    tokens.Token // TODO: make a pointer
-	stopService    bool         // ctx used for observers when stopped
 	platform       platforms.Platform
+	ctx            context.Context
+	Notifications  chan<- models.Notification
 	readers        map[string]readers.Reader
 	softwareToken  *tokens.Token
 	wroteToken     *tokens.Token
-	Notifications  chan<- models.Notification // TODO: move outside state
 	activePlaylist *playlists.Playlist
-	ctx            context.Context
 	ctxCancelFunc  context.CancelFunc
 	activeMedia    *models.ActiveMedia
+	lastScanned    tokens.Token
+	activeToken    tokens.Token
+	mu             sync.RWMutex
+	stopService    bool
+	runZapScript   bool
 }
 
-func NewState(platform platforms.Platform) (*State, <-chan models.Notification) {
+func NewState(platform platforms.Platform) (state *State, notificationChan <-chan models.Notification) {
 	ns := make(chan models.Notification, 100)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
@@ -46,10 +64,10 @@ func NewState(platform platforms.Platform) (*State, <-chan models.Notification) 
 	}, ns
 }
 
-func (s *State) SetActiveCard(card tokens.Token) {
+func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-use parameter in state setter
 	s.mu.Lock()
 
-	if utils.TokensEqual(&s.activeToken, &card) {
+	if helpers.TokensEqual(&s.activeToken, &card) {
 		// ignore duplicate scans
 		s.mu.Unlock()
 		return
@@ -164,7 +182,7 @@ func (s *State) ListReaders() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var rs []string
+	rs := make([]string, 0, len(s.readers))
 	for k := range s.readers {
 		rs = append(rs, k)
 	}
@@ -250,7 +268,6 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		})
 		return
 	}
-	return
 }
 
 func (s *State) GetContext() context.Context {
