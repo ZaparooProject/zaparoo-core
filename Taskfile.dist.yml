@@ -18,6 +18,7 @@ includes:
   chimeraos: ./scripts/tasks/chimeraos.yml
   libreelec: ./scripts/tasks/libreelec.yml
   linux: ./scripts/tasks/linux.yml
+  cross-build: ./scripts/tasks/cross-build.yml
   mac: ./scripts/tasks/mac.yml
   mister: ./scripts/tasks/mister.yml
   mistex: ./scripts/tasks/mistex.yml

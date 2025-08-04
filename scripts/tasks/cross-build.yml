@@ -1,0 +1,182 @@
+version: "3"
+
+tasks:
+  setup:
+    internal: true
+    desc: Build the Zig-based cross-compilation Docker image
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/universal-build
+          DOCKERFILE: "./scripts/cross-build"
+
+  # Linux builds
+  build-linux-amd64:
+    desc: Build Linux amd64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: linux
+          BUILD_ARCH: amd64
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          CC: "zig cc -target x86_64-linux-musl"
+          CXX: "zig c++ -target x86_64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-musl/include -I/opt/deps/x86_64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-musl/lib -L/opt/deps/x86_64-linux-musl/lib -lnfc -lusb -lusb-1.0"'
+
+  build-linux-arm64:
+    desc: Build Linux arm64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: linux
+          BUILD_ARCH: arm64
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          CC: "zig cc -target aarch64-linux-musl"
+          CXX: "zig c++ -target aarch64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-musl/include -I/opt/deps/aarch64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-musl/lib -L/opt/deps/aarch64-linux-musl/lib -lnfc -lusb -lusb-1.0"'
+
+  build-linux-arm:
+    desc: Build Linux arm binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: linux
+          BUILD_ARCH: arm
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          CC: "zig cc -target arm-linux-musleabihf"
+          CXX: "zig c++ -target arm-linux-musleabihf"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/arm-linux-musleabihf/include -I/opt/deps/arm-linux-musleabihf/include" -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-musleabihf/lib -L/opt/deps/arm-linux-musleabihf/lib -lnfc -lusb -lusb-1.0"'
+
+  # Windows builds
+  build-windows-amd64:
+    desc: Build Windows amd64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: amd64
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=x86_64-windows-gnu"
+          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+
+  build-windows-arm64:
+    desc: Build Windows arm64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: arm64
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=aarch64-windows-gnu"
+          CXX: "zig c++ -w --target=aarch64-windows-gnu"
+
+  # macOS builds
+  build-mac-amd64:
+    desc: Build macOS amd64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: mac
+          BUILD_ARCH: amd64
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          NO_LIBNFC: true
+          NO_STATIC: true
+          CC: >-
+            zig cc -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+
+  build-mac-arm64:
+    desc: Build macOS arm64 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: mac
+          BUILD_ARCH: arm64
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          NO_LIBNFC: true
+          NO_STATIC: true
+          CC: >-
+            zig cc -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+
+  build-all-linux:
+    desc: Build all Linux architectures using Zig cross-compilation
+    cmds:
+      - task: build-linux-amd64
+      - task: build-linux-arm64
+      - task: build-linux-arm
+
+  build-all-windows:    
+    desc: Build all Windows architectures using Zig cross-compilation
+    cmds:
+      - task: build-windows-amd64
+      - task: build-windows-arm64
+
+  build-all-mac:
+    desc: Build all macOS architectures using Zig cross-compilation
+    cmds:
+      - task: build-mac-amd64
+      - task: build-mac-arm64
+
+  build-all:
+    desc: Build all platforms and architectures using Zig cross-compilation
+    cmds:
+      - task: build-all-linux
+      - task: build-all-windows
+      - task: build-all-mac
+
+  # Debugging tasks
+  debug-setup:
+    desc: Debug the Docker image setup
+    cmds:
+      - task: setup
+      - docker run --rm zaparoo/universal-build ls -la /opt/libnfc/
+      - docker run --rm zaparoo/universal-build ls -la /opt/deps/
+      - docker run --rm zaparoo/universal-build ls -la /opt/macosx-sdk/
+
+  debug-deps:
+    desc: Show cross-compiled dependency information
+    cmds:
+      - docker run --rm zaparoo/universal-build sh -c "find /opt -name '*.a' | head -10"
+      - docker run --rm zaparoo/universal-build sh -c "zig version && go version"
+      - docker run --rm zaparoo/universal-build sh -c "which lipo && which go-winres"
