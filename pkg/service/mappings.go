@@ -176,5 +176,5 @@ func getMapping(
 	}
 
 	// check platform mappings
-	return pl.LookupMapping(token)
+	return pl.LookupMapping(&token)
 }

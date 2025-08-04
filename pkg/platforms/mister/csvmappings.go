@@ -41,7 +41,7 @@ type CsvMappingEntry struct {
 	Text      string `csv:"text"`
 }
 
-func LoadCsvMappings() (uids map[string]string, texts map[string]string, err error) {
+func LoadCsvMappings() (uids, texts map[string]string, err error) {
 	uids = make(map[string]string)
 	texts = make(map[string]string)
 

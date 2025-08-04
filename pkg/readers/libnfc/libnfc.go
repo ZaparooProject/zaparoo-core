@@ -328,7 +328,6 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 		}
 
 		if tries >= connectMaxTries {
-			// log.Debug().Msgf("could not open device after %d tries: %s", connectMaxTries, err)
 			return pnd, err
 		}
 

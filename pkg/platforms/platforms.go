@@ -165,7 +165,7 @@ type Platform interface {
 	Settings() Settings
 	// ScanHook is run immediately AFTER a successful scan, but BEFORE it is
 	// processed for launching.
-	ScanHook(tokens.Token) error
+	ScanHook(*tokens.Token) error
 	// SupportedReaders returns a list of supported reader modules for platform.
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
@@ -195,10 +195,10 @@ type Platform interface {
 	// virtual gamepad, using a button name from the ZapScript format.
 	GamepadPress(string) error
 	// ForwardCmd processes a platform-specific ZapScript command.
-	ForwardCmd(CmdEnv) (CmdResult, error)
+	ForwardCmd(*CmdEnv) (CmdResult, error)
 	// LookupMapping is a platform-specific method of matching a token to a
 	// mapping. It takes last precedence when checking mapping sources.
-	LookupMapping(tokens.Token) (string, bool) // DEPRECATED
+	LookupMapping(*tokens.Token) (string, bool) // DEPRECATED
 	// Launchers is the complete list of all launchers available on this
 	// platform.
 	Launchers(*config.Instance) []Launcher

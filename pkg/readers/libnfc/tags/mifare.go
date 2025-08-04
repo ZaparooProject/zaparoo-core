@@ -106,7 +106,7 @@ func getMifareCapacityInBytes() int {
 }
 
 // WriteMifare writes the given text string to a Mifare card starting from sector, skipping any trailer blocks
-func WriteMifare(pnd nfc.Device, text string, cardUID string) ([]byte, error) {
+func WriteMifare(pnd nfc.Device, text, cardUID string) ([]byte, error) {
 	payload, err := BuildMessage(text)
 	if err != nil {
 		return nil, err

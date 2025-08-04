@@ -153,19 +153,20 @@ func run() error {
 		}
 	}()
 
-	if *showLoader != "" {
+	switch {
+	case *showLoader != "":
 		err := widgets.NoticeUI(pl, *showLoader, true)
 		if err != nil {
 			return fmt.Errorf("error showing loader: %w", err)
 		}
 		return nil
-	} else if *showPicker != "" {
+	case *showPicker != "":
 		err := widgets.PickerUI(cfg, pl, *showPicker)
 		if err != nil {
 			return fmt.Errorf("error showing picker: %w", err)
 		}
 		return nil
-	} else if *showNotice != "" {
+	case *showNotice != "":
 		err := widgets.NoticeUI(pl, *showNotice, false)
 		if err != nil {
 			return fmt.Errorf("error showing notice: %w", err)

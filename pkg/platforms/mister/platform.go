@@ -42,7 +42,7 @@ type Platform struct {
 	tracker             *Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
-	cmdMappings         map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error)
+	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
 	activeMedia         func() *models.ActiveMedia
 	setActiveMedia      func(*models.ActiveMedia)
@@ -58,10 +58,10 @@ func NewPlatform() *Platform {
 	}
 }
 
-func (p *Platform) setLastLauncher(l platforms.Launcher) {
+func (p *Platform) setLastLauncher(l *platforms.Launcher) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
-	p.lastLauncher = l
+	p.lastLauncher = *l
 }
 
 func (p *Platform) getLastLauncher() platforms.Launcher {
@@ -86,7 +86,7 @@ func (p *Platform) GetDBLoadTime() time.Time {
 	return p.dbLoadTime
 }
 
-func (p *Platform) SetDB(uidMap map[string]string, textMap map[string]string) {
+func (p *Platform) SetDB(uidMap, textMap map[string]string) {
 	p.dbLoadTime = time.Now()
 	p.uidMap = uidMap
 	p.textMap = textMap
@@ -145,7 +145,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.stopMappingsWatcher = closeMappingsWatcher
 
-	p.cmdMappings = map[string]func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error){
+	p.cmdMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){
 		"mister.ini":    CmdIni,
 		"mister.core":   CmdLaunchCore,
 		"mister.script": cmdMisterScript(p),
@@ -166,7 +166,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := StartTracker(
-		*UserConfigToMrext(cfg),
+		UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -238,7 +238,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (p *Platform) ScanHook(token tokens.Token) error {
+func (p *Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(TokenReadFile)
 	if err != nil {
 		return fmt.Errorf("unable to create scan result file %s: %w", TokenReadFile, err)
@@ -252,7 +252,7 @@ func (p *Platform) ScanHook(token tokens.Token) error {
 		return fmt.Errorf("unable to write scan result file %s: %w", TokenReadFile, err)
 	}
 
-	p.lastScan = &token
+	p.lastScan = token
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
@@ -325,7 +325,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
-	p.setLastLauncher(launcher)
+	p.setLastLauncher(&launcher)
 	return nil
 }
 
@@ -367,14 +367,14 @@ func (p *Platform) GamepadPress(name string) error {
 	return p.gpd.Press(code)
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := p.cmdMappings[env.Cmd.Name]; ok {
 		return f(p, env)
 	}
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 }
 
-func (p *Platform) LookupMapping(t tokens.Token) (string, bool) {
+func (p *Platform) LookupMapping(t *tokens.Token) (string, bool) {
 	oldDb := p.getDB()
 
 	// check nfc.csv uids
@@ -589,9 +589,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	ls := Launchers
-	ls = append(ls, amiga)
-	ls = append(ls, neogeo)
-	ls = append(ls, mplayerVideo)
+	ls = append(ls, amiga, neogeo, mplayerVideo)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }

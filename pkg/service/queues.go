@@ -224,7 +224,7 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
-			err := platform.ScanHook(t)
+			err := platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}

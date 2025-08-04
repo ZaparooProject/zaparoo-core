@@ -55,20 +55,22 @@ type Tracker struct {
 func generateNameMap() []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
-	for _, system := range games.Systems {
-		if system.SetName != "" {
+	for key := range games.Systems {
+		system := games.Systems[key]
+		switch {
+		case system.SetName != "":
 			nameMap = append(nameMap, NameMapping{
 				CoreName: system.SetName,
 				System:   system.Id,
 				Name:     system.Name,
 			})
-		} else if len(system.Folder) > 0 {
+		case len(system.Folder) > 0:
 			nameMap = append(nameMap, NameMapping{
 				CoreName: system.Folder[0],
 				System:   system.Id,
 				Name:     system.Name,
 			})
-		} else {
+		default:
 			log.Warn().Msgf("system %s has no setname or folder", system.Id)
 		}
 	}
@@ -77,7 +79,8 @@ func generateNameMap() []NameMapping {
 	if err != nil {
 		log.Error().Msgf("error reading arcade db: %s", err)
 	} else {
-		for _, entry := range arcadeDbEntries {
+		for i := range arcadeDbEntries {
+			entry := &arcadeDbEntries[i]
 			nameMap = append(nameMap, NameMapping{
 				CoreName:   entry.Setname,
 				System:     ArcadeSystem,
@@ -248,15 +251,16 @@ func (tr *Tracker) loadGame() {
 	defer tr.mu.Unlock()
 
 	activeGame, err := mister.GetActiveGame()
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Error().Msgf("error getting active game: %s", err)
 		tr.stopGame()
 		return
-	} else if activeGame == "" {
+	case activeGame == "":
 		log.Debug().Msg("active game is empty, stopping game")
 		tr.stopGame()
 		return
-	} else if !filepath.IsAbs(activeGame) {
+	case !filepath.IsAbs(activeGame):
 		log.Debug().Msgf("active game is not absolute, assuming arcade: %s", activeGame)
 		return
 	}
@@ -381,11 +385,12 @@ func loadRecent(filename string) error {
 
 func (tr *Tracker) runPickerSelection(name string) {
 	contents, err := os.ReadFile(name)
-	if err != nil {
+	switch {
+	case err != nil:
 		log.Error().Msgf("error reading main picker selected: %s", err)
-	} else if len(contents) == 0 {
+	case len(contents) == 0:
 		log.Error().Msgf("main picker selected is empty")
-	} else {
+	default:
 		path := strings.TrimSpace(string(contents))
 		path = mrextconfig.SdFolder + "/" + path
 		log.Info().Msgf("main picker selected path: %s", path)
@@ -431,16 +436,17 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 					return
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					if event.Name == mrextconfig.CoreNameFile {
+					switch {
+					case event.Name == mrextconfig.CoreNameFile:
 						tr.LoadCore()
-					} else if event.Name == mrextconfig.ActiveGameFile {
+					case event.Name == mrextconfig.ActiveGameFile:
 						tr.loadGame()
-					} else if strings.HasPrefix(event.Name, mrextconfig.CoreConfigFolder) {
+					case strings.HasPrefix(event.Name, mrextconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
 						}
-					} else if event.Name == MainPickerSelected {
+					case event.Name == MainPickerSelected:
 						log.Info().Msgf("main picker selected: %s", event.Name)
 						tr.runPickerSelection(event.Name)
 					}
@@ -517,13 +523,13 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 }
 
 func StartTracker(
-	mrextCfg mrextconfig.UserConfig,
+	mrextCfg *mrextconfig.UserConfig,
 	cfg *config.Instance,
 	pl platforms.Platform,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) (*Tracker, func() error, error) {
-	tr, err := NewTracker(&mrextCfg, pl, cfg, activeMedia, setActiveMedia)
+	tr, err := NewTracker(mrextCfg, pl, cfg, activeMedia, setActiveMedia)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err

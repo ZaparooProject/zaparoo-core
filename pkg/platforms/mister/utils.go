@@ -54,7 +54,7 @@ func NormalizePath(cfg *config.Instance, path string) string {
 	return sys.Id + "/" + strings.Join(parts[1:], "/")
 }
 
-func RunDevCmd(cmd string, args string) error {
+func RunDevCmd(cmd, args string) error {
 	_, err := os.Stat(mrextconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)

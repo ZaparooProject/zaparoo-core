@@ -16,7 +16,7 @@ import (
 	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
-func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	inis, err := mister.GetAllMisterIni()
 	if err != nil {
 		return platforms.CmdResult{}, err
@@ -52,7 +52,7 @@ func CmdIni(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, er
 	}, nil
 }
 
-func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
@@ -62,8 +62,8 @@ func CmdLaunchCore(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdRes
 	}, mister.LaunchShortCore(env.Cmd.Args[0])
 }
 
-func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (platforms.CmdResult, error) {
-	return func(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error) {
+	return func(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 		// TODO: generic read bool function
 		hidden := env.Cmd.AdvArgs["hidden"] == "true" || env.Cmd.AdvArgs["hidden"] == "yes"
 
@@ -121,7 +121,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, platforms.CmdEnv) (
 	}
 }
 
-func CmdMisterMgl(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) == 0 {
 		return platforms.CmdResult{}, errors.New("no mgl specified")
 	}

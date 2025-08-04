@@ -82,7 +82,7 @@ func openConsole(pl platforms.Platform, vt string) error {
 	return nil
 }
 
-func runScript(pl *Platform, bin string, args string, hidden bool) error {
+func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
 		return err
 	}
@@ -96,10 +96,7 @@ func runScript(pl *Platform, bin string, args string, hidden bool) error {
 		// run the script directly
 		cmd := exec.CommandContext(context.Background(), bin, args)
 		cmd.Env = os.Environ()
-		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8")
-		cmd.Env = append(cmd.Env, "HOME=/root")
-		cmd.Env = append(cmd.Env, "LESSKEY=/media/fat/linux/lesskey")
-		cmd.Env = append(cmd.Env, "ZAPAROO_RUN_SCRIPT=1")
+		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root", "LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT=1")
 		cmd.Dir = filepath.Dir(bin)
 		return cmd.Run()
 	}
@@ -197,7 +194,7 @@ cd $(dirname "%s")
 	return nil
 }
 
-func echoFile(path string, s string) error {
+func echoFile(path, s string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return err
@@ -211,7 +208,7 @@ func echoFile(path string, s string) error {
 	return f.Close()
 }
 
-func writeTty(id string, s string) error {
+func writeTty(id, s string) error {
 	tty := "/dev/tty" + id
 	return echoFile(tty, s)
 }

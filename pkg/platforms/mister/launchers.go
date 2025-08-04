@@ -297,17 +297,12 @@ func killCore(_ *config.Instance) error {
 
 func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 	return func(_ *config.Instance, path string) error {
-		if len(path) == 0 {
+		if path == "" {
 			return errors.New("no path specified")
 		}
 
 		vt := "4"
 
-		// err := mister.LaunchMenu()
-		// if err != nil {
-		// 	return err
-		// }
-		// time.Sleep(3 * time.Second)
 
 		err := cleanConsole(vt)
 		if err != nil {

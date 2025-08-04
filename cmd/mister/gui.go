@@ -88,9 +88,7 @@ func tryAddStartup() error {
 	}
 
 	if !startup.Exists("mrext/" + config.AppName) {
-		err := tui.BuildAndRetry(func() (*tview.Application, error) {
-			return buildTheInstallRequestApp()
-		})
+		err := tui.BuildAndRetry(buildTheInstallRequestApp)
 		if err != nil {
 			log.Error().Msgf("failed to build app: %s", err)
 		}

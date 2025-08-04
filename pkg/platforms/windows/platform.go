@@ -83,7 +83,7 @@ func (*Platform) Stop() error {
 	return nil
 }
 
-func (*Platform) ScanHook(_ tokens.Token) error { //nolint:gocritic // unused parameter required by interface
+func (*Platform) ScanHook(_ *tokens.Token) error { //nolint:gocritic // unused parameter required by interface
 	return nil
 }
 
@@ -142,12 +142,12 @@ func (*Platform) GamepadPress(_ string) error {
 }
 
 //nolint:gocritic // unused parameter required by interface
-func (*Platform) ForwardCmd(_ platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(_ *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, nil
 }
 
 //nolint:gocritic // unused parameter required by interface
-func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 

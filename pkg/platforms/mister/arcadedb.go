@@ -101,7 +101,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, http.NoBody)
 	if err != nil {
 		return false, err
 	}
@@ -143,7 +143,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, nil)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, http.NoBody)
 	if err != nil {
 		return false, err
 	}

@@ -85,7 +85,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := mister.StartTracker(
-		*mister.UserConfigToMrext(cfg),
+		mister.UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -147,7 +147,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (*Platform) ScanHook(token tokens.Token) error {
+func (*Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(mister.TokenReadFile)
 	if err != nil {
 		return fmt.Errorf("unable to create scan result file %s: %w", mister.TokenReadFile, err)
@@ -293,14 +293,14 @@ func (p *Platform) GamepadPress(name string) error {
 	return p.gpd.Press(code)
 }
 
-func (p *Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	if f, ok := commandsMappings[env.Cmd.Name]; ok {
 		return f(p, env)
 	}
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on mister: %s", env.Cmd)
 }
 
-func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 

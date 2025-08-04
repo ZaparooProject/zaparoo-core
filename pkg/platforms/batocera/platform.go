@@ -124,7 +124,7 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
-func (*Platform) ScanHook(_ tokens.Token) error {
+func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
 
@@ -153,7 +153,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 		if strings.HasPrefix(lowerPath, rootDir) {
 			gotRoot = true
 			newPath = path[len(rootDir):]
-			if len(newPath) > 0 && newPath[0] == '/' {
+			if newPath != "" && newPath[0] == '/' {
 				newPath = newPath[1:]
 			}
 			break
@@ -271,11 +271,11 @@ func (p *Platform) GamepadPress(name string) error {
 	return p.gpd.Press(code)
 }
 
-func (*Platform) ForwardCmd(env platforms.CmdEnv) (platforms.CmdResult, error) {
+func (*Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	return platforms.CmdResult{}, fmt.Errorf("command not supported on batocera: %s", env.Cmd)
 }
 
-func (*Platform) LookupMapping(_ tokens.Token) (string, bool) {
+func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
