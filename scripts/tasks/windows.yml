@@ -32,67 +32,28 @@ tasks:
 #        amake/innosetup
 #        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
 
-  setup:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/cross-build
-          DOCKERFILE: scripts/cross
+
 
   build-arm64:
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: arm64
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: zig cc -w --target=aarch64-windows-gnu
-          CXX: zig c++ -w --target=aarch64-windows-gnu
+      - task: :cross-build:build-windows-arm64
       - task: build-installer
         vars:
           BUILD_ARCH: arm64
 
   build-amd64:
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: amd64
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: x86_64-w64-mingw32-gcc
-          CXX: x86_64-w64-mingw32-g++
+      - task: :cross-build:build-windows-amd64
       - task: build-installer
         vars:
           BUILD_ARCH: amd64
 
   build-386:
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: 386
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: i686-w64-mingw32-gcc-win32
-          CXX: i686-w64-mingw32-g++-win32
+      - task: :cross-build:build-windows-386
       - task: build-installer
         vars:
           BUILD_ARCH: 386

@@ -1,42 +1,30 @@
 version: "3"
 
 tasks:
-  setup-arm64:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-arm64-build
-          DOCKERFILE: "./scripts/linux_arm64"
-          DOCKER_PLATFORM: linux/arm64/v8
-
-  setup-amd64:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-amd64-build
-          DOCKERFILE: "./scripts/linux_amd64"
-          DOCKER_PLATFORM: linux/amd64
-
-  build-arm64:
-    cmds:
-      - task: setup-arm64
-      - task: :docker:build-app
-        vars:
-          PLATFORM: chimeraos
-          BUILD_ARCH: arm64
-          DOCKER_PLATFORM: linux/arm64/v8
-          IMAGE_NAME: zaparoo/linux-arm64-build
-          APP_BIN: zaparoo
-
   build-amd64:
     cmds:
-      - task: setup-amd64
+      - task: :cross-build:setup
       - task: :docker:build-app
         vars:
           PLATFORM: chimeraos
           BUILD_ARCH: amd64
-          DOCKER_PLATFORM: linux/amd64
-          IMAGE_NAME: zaparoo/linux-amd64-build
+          IMAGE_NAME: zaparoo/universal-build
           APP_BIN: zaparoo
+          CC: "zig cc -target x86_64-linux-musl"
+          CXX: "zig c++ -target x86_64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-musl/include -I/opt/deps/x86_64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-musl/lib -L/opt/deps/x86_64-linux-musl/lib -lnfc -lusb -lusb-1.0"'
+
+  build-arm64:
+    cmds:
+      - task: :cross-build:setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: chimeraos
+          BUILD_ARCH: arm64
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: zaparoo
+          CC: "zig cc -target aarch64-linux-musl"
+          CXX: "zig c++ -target aarch64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-musl/include -I/opt/deps/aarch64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-musl/lib -L/opt/deps/aarch64-linux-musl/lib -lnfc -lusb -lusb-1.0"'

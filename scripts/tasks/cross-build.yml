@@ -90,6 +90,22 @@ tasks:
           CC: "zig cc -w --target=aarch64-windows-gnu"
           CXX: "zig c++ -w --target=aarch64-windows-gnu"
 
+  build-windows-386:
+    desc: Build Windows 386 binary using Zig cross-compilation
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: 386
+
+          IMAGE_NAME: zaparoo/universal-build
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=i386-windows-gnu"
+          CXX: "zig c++ -w --target=i386-windows-gnu"
+
   # macOS builds
   build-mac-amd64:
     desc: Build macOS amd64 binary using Zig cross-compilation
@@ -151,6 +167,7 @@ tasks:
     cmds:
       - task: build-windows-amd64
       - task: build-windows-arm64
+      - task: build-windows-386
 
   build-all-mac:
     desc: Build all macOS architectures using Zig cross-compilation
