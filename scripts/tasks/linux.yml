@@ -3,12 +3,12 @@ version: "3"
 tasks:
   build-amd64:
     cmds:
-      - task: :cross-build:build-linux-amd64
+      - task: :zigcc:build-linux-amd64
 
   build-arm64:
     cmds:
-      - task: :cross-build:build-linux-arm64
+      - task: :zigcc:build-linux-arm64
 
   build-arm:
     cmds:
-      - task: :cross-build:build-linux-arm
+      - task: :zigcc:build-linux-arm

@@ -1,0 +1,158 @@
+version: "3"
+
+tasks:
+  setup:
+    internal: true
+    cmds:
+      - task: :docker:build-image
+        vars:
+          IMAGE_NAME: zaparoo/zigcc
+          DOCKERFILE: "./scripts/zigcc"
+
+  build-linux-amd64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_ARCH: amd64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: '{{default "zaparoo" .APP_BIN}}'
+          CC: "zig cc -target x86_64-linux-musl"
+          CXX: "zig c++ -target x86_64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-musl/include
+            -I/opt/deps/x86_64-linux-musl/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-musl/lib
+            -L/opt/deps/x86_64-linux-musl/lib -lnfc -lusb -lusb-1.0"
+
+  build-linux-arm64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_ARCH: arm64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: '{{default "zaparoo" .APP_BIN}}'
+          CC: "zig cc -target aarch64-linux-musl"
+          CXX: "zig c++ -target aarch64-linux-musl"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-musl/include
+            -I/opt/deps/aarch64-linux-musl/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-musl/lib
+            -L/opt/deps/aarch64-linux-musl/lib -lnfc -lusb -lusb-1.0"
+
+  build-linux-arm:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_ARCH: arm
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: '{{default "zaparoo" .APP_BIN}}'
+          CC: "zig cc -target arm-linux-musleabihf"
+          CXX: "zig c++ -target arm-linux-musleabihf"
+          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-musleabihf/include
+            -I/opt/deps/arm-linux-musleabihf/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-musleabihf/lib
+            -L/opt/deps/arm-linux-musleabihf/lib -lnfc -lusb -lusb-1.0"
+
+  build-windows-amd64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: amd64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=x86_64-windows-gnu"
+          CXX: "zig c++ -w --target=x86_64-windows-gnu"
+
+  build-windows-arm64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: arm64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=aarch64-windows-gnu"
+          CXX: "zig c++ -w --target=aarch64-windows-gnu"
+
+  build-windows-386:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: windows
+          BUILD_ARCH: "386"
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: Zaparoo.exe
+          NO_LIBNFC: true
+          EXTRA_LDFLAGS: -H=windowsgui
+          CC: "zig cc -w --target=i386-windows-gnu"
+          CXX: "zig c++ -w --target=i386-windows-gnu"
+
+  build-mac-amd64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: mac
+          BUILD_ARCH: amd64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: zaparoo
+          NO_LIBNFC: true
+          NO_STATIC: true
+          CC: >-
+            zig cc -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=x86_64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+
+  build-mac-arm64:
+    internal: true
+    cmds:
+      - task: setup
+      - task: :docker:build-app
+        vars:
+          PLATFORM: mac
+          BUILD_ARCH: arm64
+          IMAGE_NAME: zaparoo/zigcc
+          APP_BIN: zaparoo
+          NO_LIBNFC: true
+          NO_STATIC: true
+          CC: >-
+            zig cc -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks
+          CXX: >-
+            zig c++ -w --target=aarch64-macos
+            -I/opt/macosx-sdk/usr/include
+            -L/opt/macosx-sdk/usr/lib
+            -F/opt/macosx-sdk/System/Library/Frameworks

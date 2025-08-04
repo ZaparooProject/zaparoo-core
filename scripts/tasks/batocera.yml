@@ -3,45 +3,21 @@ version: "3"
 tasks:
   build-amd64:
     cmds:
-      - task: :cross-build:setup
-      - task: :docker:build-app
+      - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: batocera
-          BUILD_ARCH: amd64
-          IMAGE_NAME: zaparoo/universal-build
-          APP_BIN: zaparoo
-          CC: "zig cc -target x86_64-linux-musl"
-          CXX: "zig c++ -target x86_64-linux-musl"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
-          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-musl/include -I/opt/deps/x86_64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-musl/lib -L/opt/deps/x86_64-linux-musl/lib -lnfc -lusb -lusb-1.0"'
 
   build-arm64:
     cmds:
-      - task: :cross-build:setup
-      - task: :docker:build-app
+      - task: :zigcc:build-linux-arm64
         vars:
           PLATFORM: batocera
-          BUILD_ARCH: arm64
-          IMAGE_NAME: zaparoo/universal-build
-          APP_BIN: zaparoo
-          CC: "zig cc -target aarch64-linux-musl"
-          CXX: "zig c++ -target aarch64-linux-musl"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
-          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-musl/include -I/opt/deps/aarch64-linux-musl/include" -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-musl/lib -L/opt/deps/aarch64-linux-musl/lib -lnfc -lusb -lusb-1.0"'
 
   build-arm:
     cmds:
-      - task: :cross-build:setup
-      - task: :docker:build-app
+      - task: :zigcc:build-linux-arm
         vars:
           PLATFORM: batocera
-          BUILD_ARCH: arm
-          IMAGE_NAME: zaparoo/universal-build
-          APP_BIN: zaparoo
-          CC: "zig cc -target arm-linux-musleabihf"
-          CXX: "zig c++ -target arm-linux-musleabihf"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
-          EXTRA_DOCKER_ARGS: '-e CGO_CFLAGS="-I/opt/libnfc/arm-linux-musleabihf/include -I/opt/deps/arm-linux-musleabihf/include" -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-musleabihf/lib -L/opt/deps/arm-linux-musleabihf/lib -lnfc -lusb -lusb-1.0"'
 
   deploy-arm64:
     cmds:

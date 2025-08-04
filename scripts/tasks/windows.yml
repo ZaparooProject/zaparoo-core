@@ -7,7 +7,7 @@ tasks:
       - go run scripts/tasks/utils/windowsmeta/main.go -version "${APP_VERSION}"
       - task: :docker:run
         vars:
-          IMAGE_NAME: zaparoo/cross-build
+          IMAGE_NAME: zaparoo/zigcc
           EXEC: sh -c 'cd cmd/windows && go-winres make --arch="amd64,arm64,386"'
 
   build-installer:
@@ -32,12 +32,10 @@ tasks:
 #        amake/innosetup
 #        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
 
-
-
   build-arm64:
     cmds:
       - task: build-metadata
-      - task: :cross-build:build-windows-arm64
+      - task: :zigcc:build-windows-arm64
       - task: build-installer
         vars:
           BUILD_ARCH: arm64
@@ -45,7 +43,7 @@ tasks:
   build-amd64:
     cmds:
       - task: build-metadata
-      - task: :cross-build:build-windows-amd64
+      - task: :zigcc:build-windows-amd64
       - task: build-installer
         vars:
           BUILD_ARCH: amd64
@@ -53,7 +51,7 @@ tasks:
   build-386:
     cmds:
       - task: build-metadata
-      - task: :cross-build:build-windows-386
+      - task: :zigcc:build-windows-386
       - task: build-installer
         vars:
-          BUILD_ARCH: 386
+          BUILD_ARCH: "386"

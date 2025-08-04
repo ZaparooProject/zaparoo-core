@@ -12,19 +12,17 @@ tasks:
           BUILD_OS: darwin
           BUILD_ARCH: arm64
           PLATFORM: mac
-          IMAGE_NAME: zaparoo/universal-build
+          IMAGE_NAME: zaparoo/zigcc
           EXEC: lipo -output ./_build/mac_universal/zaparoo -create ./_build/mac_arm64/zaparoo ./_build/mac_amd64/zaparoo
       - cp ./_build/mac_universal/zaparoo "./_build/mac_universal/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
 
-
-
   build-arm64:
     cmds:
-      - task: :cross-build:build-mac-arm64
+      - task: :zigcc:build-mac-arm64
 
   build-amd64:
     cmds:
-      - task: :cross-build:build-mac-amd64
+      - task: :zigcc:build-mac-amd64
 
   dev:
     cmds:
