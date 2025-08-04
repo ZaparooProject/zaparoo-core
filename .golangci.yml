@@ -1,4 +1,4 @@
-version: 2
+version: "2"
 
 run:
   go: '1.23'
@@ -62,8 +62,6 @@ linters:
     # funlen:
     #   lines: 80
     #   statements: 50
-    goimports:
-      local-prefixes: github.com/ZaparooProject/zaparoo-core
     prealloc:
       simple: true
       range-loops: true
