@@ -571,11 +571,12 @@ func Start(
 	session := melody.New()
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		if slices.Contains(allowedOrigins, origin) {
+		// non-browser clients
+		if origin == "" {
 			return true
 		}
-		if origin != "" {
-			log.Warn().Str("origin", origin).Msg("rejected WebSocket connection from unauthorized origin")
+		if slices.Contains(allowedOrigins, origin) {
+			return true
 		}
 		return false
 	}
