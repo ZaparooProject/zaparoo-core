@@ -2,6 +2,7 @@ version: "3"
 
 tasks:
   build-app:
+    desc: Build macOS universal app bundle
     cmds:
       - task: build-arm64
       - task: build-amd64
@@ -17,10 +18,12 @@ tasks:
       - cp ./_build/mac_universal/zaparoo "./_build/mac_universal/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
 
   build-arm64:
+    desc: Build macOS ARM64 binary
     cmds:
       - task: :zigcc:build-mac-arm64
 
   build-amd64:
+    desc: Build macOS AMD64 binary
     cmds:
       - task: :zigcc:build-mac-amd64
 

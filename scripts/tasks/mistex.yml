@@ -2,6 +2,7 @@ version: "3"
 
 tasks:
   build-arm64:
+    desc: Build MiSTeX ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:

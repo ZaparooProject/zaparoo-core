@@ -2,12 +2,14 @@ version: "3"
 
 tasks:
   build-amd64:
+    desc: Build RetroPie AMD64 binary
     cmds:
       - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: retropie
 
   build-arm64:
+    desc: Build RetroPie ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:

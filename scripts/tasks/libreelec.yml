@@ -2,12 +2,14 @@ version: "3"
 
 tasks:
   build-amd64:
+    desc: Build LibreELEC AMD64 binary
     cmds:
       - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: libreelec
 
   build-arm64:
+    desc: Build LibreELEC ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:

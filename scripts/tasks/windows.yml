@@ -33,6 +33,7 @@ tasks:
 #        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
 
   build-arm64:
+    desc: Build Windows ARM64 binary with installer
     cmds:
       - task: build-metadata
       - task: :zigcc:build-windows-arm64
@@ -41,6 +42,7 @@ tasks:
           BUILD_ARCH: arm64
 
   build-amd64:
+    desc: Build Windows AMD64 binary with installer
     cmds:
       - task: build-metadata
       - task: :zigcc:build-windows-amd64
@@ -49,6 +51,7 @@ tasks:
           BUILD_ARCH: amd64
 
   build-386:
+    desc: Build Windows 386 binary with installer
     cmds:
       - task: build-metadata
       - task: :zigcc:build-windows-386

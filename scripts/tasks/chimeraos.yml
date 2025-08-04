@@ -2,12 +2,14 @@ version: "3"
 
 tasks:
   build-amd64:
+    desc: Build ChimeraOS AMD64 binary
     cmds:
       - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: chimeraos
 
   build-arm64:
+    desc: Build ChimeraOS ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:

@@ -2,6 +2,7 @@ version: "3"
 
 tasks:
   build-arm:
+    desc: Build MiSTer ARM binary
     cmds:
       - task: :zigcc:build-linux-arm
         vars:

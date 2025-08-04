@@ -2,18 +2,21 @@ version: "3"
 
 tasks:
   build-amd64:
+    desc: Build Batocera AMD64 binary
     cmds:
       - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: batocera
 
   build-arm64:
+    desc: Build Batocera ARM64 binary
     cmds:
       - task: :zigcc:build-linux-arm64
         vars:
           PLATFORM: batocera
 
   build-arm:
+    desc: Build Batocera ARM binary
     cmds:
       - task: :zigcc:build-linux-arm
         vars:
