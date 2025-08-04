@@ -45,7 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 
-	syscallWindows "golang.org/x/sys/windows"
+	syswindows "golang.org/x/sys/windows"
 
 	_ "embed"
 )
@@ -57,30 +57,30 @@ const notificationTitle = "Zaparoo Core"
 
 func isElevated() (bool, error) {
 	// https://github.com/golang/go/issues/28804#issuecomment-505326268
-	var sid *syscallWindows.SID
+	var sid *syswindows.SID
 
 	// Although this looks scary, it is directly copied from the
 	// official Windows documentation.
 	// The Go API for this is a direct wrap around the official C++ API.
 	// See https://docs.microsoft.com/en-us/windows/desktop/api/securitybaseapi/nf-securitybaseapi-checktokenmembership
-	err := syscallWindows.AllocateAndInitializeSid(
-		&syscallWindows.SECURITY_NT_AUTHORITY,
+	err := syswindows.AllocateAndInitializeSid(
+		&syswindows.SECURITY_NT_AUTHORITY,
 		2,
-		syscallWindows.SECURITY_BUILTIN_DOMAIN_RID,
-		syscallWindows.DOMAIN_ALIAS_RID_ADMINS,
+		syswindows.SECURITY_BUILTIN_DOMAIN_RID,
+		syswindows.DOMAIN_ALIAS_RID_ADMINS,
 		0, 0, 0, 0, 0, 0,
 		&sid)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to allocate and initialize SID: %w", err)
 	}
-	defer func(sid *syscallWindows.SID) {
-		_ = syscallWindows.FreeSid(sid)
+	defer func(sid *syswindows.SID) {
+		_ = syswindows.FreeSid(sid)
 	}(sid)
 
 	// This appears to cast a null pointer, so I'm not sure why this
 	// works, but this guy says it does, and it Works for Me™:
 	// https://github.com/golang/go/issues/28804#issuecomment-438838144
-	token := syscallWindows.Token(0)
+	token := syswindows.Token(0)
 
 	// Also note that an admin is _not_ necessarily considered
 	// elevated.
@@ -89,15 +89,15 @@ func isElevated() (bool, error) {
 }
 
 func isRunning() bool {
-	_, err := syscallWindows.CreateMutex(
+	_, err := syswindows.CreateMutex(
 		nil, false,
-		syscallWindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
+		syswindows.StringToUTF16Ptr("MUTEX: Zaparoo Core"),
 	)
 	if err != nil {
 		log.Fatal().Err(err).Msg("error creating mutex")
 	}
-	lastError := syscallWindows.GetLastError()
-	return errors.Is(lastError, syscallWindows.ERROR_ALREADY_EXISTS)
+	lastError := syswindows.GetLastError()
+	return errors.Is(lastError, syswindows.ERROR_ALREADY_EXISTS)
 }
 
 func main() {
@@ -113,12 +113,12 @@ func run() error {
 
 	flags.Pre(pl)
 
-	elevated, err := isElevated()
-	if err != nil {
-		return fmt.Errorf("error checking elevated rights: %s", err)
+	elevated, elevatedErr := isElevated()
+	if elevatedErr != nil {
+		return fmt.Errorf("error checking elevated rights: %w", elevatedErr)
 	}
 	if elevated {
-		return fmt.Errorf("Zaparoo cannot be run with elevated rights")
+		return errors.New("Zaparoo cannot be run with elevated rights")
 	}
 
 	logWriters := []io.Writer{os.Stderr}
@@ -126,12 +126,11 @@ func run() error {
 	defaults := config.BaseDefaults
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
-		migrated, err := migrate.IniToToml(iniPath)
-		if err != nil {
-			return fmt.Errorf("error migrating config: %v", err)
-		} else {
-			defaults = migrated
+		migrated, migrateErr := migrate.IniToToml(iniPath)
+		if migrateErr != nil {
+			return fmt.Errorf("error migrating config: %w", migrateErr)
 		}
+		defaults = migrated
 	}
 
 	cfg := cli.Setup(
@@ -152,13 +151,13 @@ func run() error {
 	if isRunning() {
 		log.Error().Msg("core is already running")
 		_ = beeep.Notify(notificationTitle, "Zaparoo Core is already running.", "")
-		return fmt.Errorf("Zaparoo Core is already running")
+		return errors.New("Zaparoo Core is already running")
 	}
 
 	stopSvc, err := service.Start(pl, cfg)
 	if err != nil {
 		log.Error().Msgf("error starting service: %s", err)
-		return fmt.Errorf("error starting service: %s", err)
+		return fmt.Errorf("error starting service: %w", err)
 	}
 	err = beeep.Notify(notificationTitle, "Core service started.", "")
 	if err != nil {
@@ -174,9 +173,9 @@ func run() error {
 
 	systray.Run(cfg, pl, icon,
 		func(msg string) {
-			err := beeep.Notify(notificationTitle, msg, "")
-			if err != nil {
-				log.Error().Msgf("error notifying: %s", err)
+			notifyErr := beeep.Notify(notificationTitle, msg, "")
+			if notifyErr != nil {
+				log.Error().Msgf("error notifying: %s", notifyErr)
 			}
 		},
 		func() {
