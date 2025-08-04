@@ -22,6 +22,7 @@ package installer
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -90,6 +91,9 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
+	}
+	if resp == nil {
+		return errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

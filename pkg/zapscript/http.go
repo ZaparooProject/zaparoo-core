@@ -66,7 +66,6 @@ func cmdHTTPGet(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdHTTPPost(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	//nolint:gocritic // single-use parameter in command handler
 	if len(env.Cmd.Args) != 3 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
