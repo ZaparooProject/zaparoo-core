@@ -74,7 +74,8 @@ func createPIDFile(pl platforms.Platform) error {
 		return errors.New("PID file already exists")
 	}
 	pid := os.Getpid()
-	err := os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600)
+	//nolint:gosec // Safe: PID file may be read by other processes
+	err := os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
