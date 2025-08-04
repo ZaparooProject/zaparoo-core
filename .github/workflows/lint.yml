@@ -25,43 +25,8 @@ jobs:
         with:
           go-version: '1.23'
           
-      - name: Install Task (Linux/macOS)
-        if: runner.os != 'Windows'
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Install Task (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install task -y
-          
-      - name: Cache Go packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            ~/AppData/Local/go-build  # Windows
-            ~/Library/Caches/go-build  # macOS
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-            
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v2.3.0
           args: --timeout=5m
-          
-      - name: Run task lint (if available)
-        if: runner.os != 'Windows'
-        continue-on-error: true
-        run: task lint || echo "No task lint target found"
-        
-      - name: Run task lint (Windows)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: cmd
-        run: task lint || echo "No task lint target found"
