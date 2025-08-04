@@ -91,6 +91,9 @@ func DownloadHTTPFile(opts DownloaderArgs) error {
 	if err != nil {
 		return fmt.Errorf("error getting url: %w", err)
 	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("error closing response body")

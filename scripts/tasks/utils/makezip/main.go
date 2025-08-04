@@ -83,6 +83,9 @@ func downloadDoc(platformID, toDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
+	if resp == nil {
+		return fmt.Errorf("received nil response")
+	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)

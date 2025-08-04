@@ -89,6 +89,9 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
 	}
+	if resp == nil {
+		return 0, fmt.Errorf("received nil response")
+	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			log.Error().Err(closeErr).Msg("error closing response body")
@@ -165,6 +168,9 @@ func getRemoteZapScript(urlStr string) ([]byte, error) {
 	resp, err := zapFetchClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {

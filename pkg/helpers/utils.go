@@ -128,7 +128,7 @@ func WaitForInternet(maxTries int) bool {
 
 		resp, err := http.DefaultClient.Do(req)
 		cancel()
-		if err == nil {
+		if err == nil && resp != nil {
 			if err := resp.Body.Close(); err != nil {
 				log.Error().Err(err).Msg("error closing response body")
 			}
