@@ -230,7 +230,7 @@ func (s *Service) Start() error {
 
 	tempPath := filepath.Join(s.pl.Settings().TempDir, filepath.Base(binPath))
 	//nolint:gosec // Safe: creates temporary binary file for service restart in controlled directory
-	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	tempFile, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700)
 	if err != nil {
 		return fmt.Errorf("error creating temp binary: %w", err)
 	}
@@ -324,36 +324,35 @@ func (s *Service) ServiceHandler(cmd *string) error {
 	case "start":
 		err := s.Start()
 		if err != nil {
-			log.Error().Msg(err.Error())
-			return err
+			log.Error().Err(err).Msg("error starting service")
+			os.Exit(1)
 		}
-		return nil
+		os.Exit(0)
 	case "stop":
 		err := s.Stop()
 		if err != nil {
-			log.Error().Msg(err.Error())
-			return err
+			log.Error().Err(err).Msg("error stopping service")
+			os.Exit(1)
 		}
-		return nil
+		os.Exit(0)
 	case "restart":
 		err := s.Restart()
 		if err != nil {
-			log.Error().Msg(err.Error())
-			return err
+			log.Error().Err(err).Msg("error restarting service")
+			os.Exit(1)
 		}
-		return nil
+		os.Exit(0)
 	case "status":
 		if s.Running() {
 			_, _ = fmt.Println("started")
-			return nil
+			os.Exit(0)
 		}
 		_, _ = fmt.Println("stopped")
-		return errors.New("service not running")
+		os.Exit(1)
 	case "":
-		// Do nothing for empty command
-		return nil
+		return nil // no command provided, do nothing
 	default:
-		_, _ = fmt.Printf("Unknown service argument: %s", *cmd)
 		return fmt.Errorf("unknown service argument: %s", *cmd)
 	}
+	return nil
 }
