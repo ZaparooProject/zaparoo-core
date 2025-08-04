@@ -338,7 +338,7 @@ func loadRecent(filename string) error {
 		return nil
 	}
 
-	file, err := os.Open(filename)
+	file, err := os.Open(filename) //nolint:gosec // Internal game file path
 	if err != nil {
 		return fmt.Errorf("error opening game file: %w", err)
 	}
@@ -384,7 +384,7 @@ func loadRecent(filename string) error {
 }
 
 func (tr *Tracker) runPickerSelection(name string) {
-	contents, err := os.ReadFile(name)
+	contents, err := os.ReadFile(name) //nolint:gosec // Internal picker selection file
 	switch {
 	case err != nil:
 		log.Error().Msgf("error reading main picker selected: %s", err)
@@ -395,7 +395,7 @@ func (tr *Tracker) runPickerSelection(name string) {
 		path = mrextconfig.SdFolder + "/" + path
 		log.Info().Msgf("main picker selected path: %s", path)
 
-		pickerContents, err := os.ReadFile(path)
+		pickerContents, err := os.ReadFile(path) //nolint:gosec // Internal picker content path
 		if err != nil {
 			log.Error().Msgf("error reading main picker selected path: %s", err)
 		} else {
@@ -461,7 +461,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}()
 
 	if _, statErr := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(statErr) {
-		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
+		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
 		if writeErr != nil {
 			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
@@ -474,7 +474,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statErr := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(statErr) {
-		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
+		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755) //nolint:gosec // MiSTer system directory, needs to be accessible by other apps
 		if mkdirErr != nil {
 			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
 		}
@@ -487,7 +487,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statActiveErr := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
-		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
+		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
 		if writeActiveErr != nil {
 			return nil, fmt.Errorf("failed to write active game file: %w", writeActiveErr)
 		}
@@ -500,7 +500,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statPathErr := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
-		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
+		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
 		if writePathErr != nil {
 			return nil, fmt.Errorf("failed to write current path file: %w", writePathErr)
 		}

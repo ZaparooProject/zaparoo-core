@@ -14,7 +14,7 @@ const (
 	SDRootDir          = "/media/fat"
 	TempDir            = "/tmp/zaparoo"
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
-	TokenReadFile      = "/tmp/TOKENREAD"
+	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Temp file path, not credentials
 	DataDir            = SDRootDir + "/zaparoo"
 	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
 	ArcadeDbFile       = "ArcadeDatabase.csv"

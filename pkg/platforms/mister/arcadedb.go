@@ -4,7 +4,7 @@ package mister
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -65,7 +65,7 @@ type ArcadeDbEntry struct {
 }
 
 func getGitBlobSha1(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) //nolint:gosec // Internal path for arcade DB verification
 	if err != nil {
 		return "", fmt.Errorf("failed to open file: %w", err)
 	}
@@ -84,7 +84,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 	size := info.Size()
 	header := fmt.Sprintf("blob %d\x00", size)
 
-	hasher := sha1.New()
+	hasher := sha1.New() //nolint:gosec // Required for git blob SHA1 verification against GitHub API
 	_, _ = hasher.Write([]byte(header))
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", fmt.Errorf("failed to copy file to hasher: %w", err)
@@ -128,7 +128,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o755)
+	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o750)
 	if err != nil {
 		return false, fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -162,7 +162,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to read download body: %w", err)
 	}
 
-	err = os.WriteFile(arcadeDBPath, body, 0o644)
+	err = os.WriteFile(arcadeDBPath, body, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
 	}
@@ -181,7 +181,7 @@ func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 		return nil, fmt.Errorf("arcadedb file does not exist: %w", err)
 	}
 
-	dbFile, err := os.Open(arcadeDBPath)
+	dbFile, err := os.Open(arcadeDBPath) //nolint:gosec // Internal path for arcade DB reading
 	if err != nil {
 		return nil, fmt.Errorf("failed to open arcadedb file: %w", err)
 	}

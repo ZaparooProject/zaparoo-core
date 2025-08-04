@@ -302,7 +302,7 @@ type ESGameList struct {
 }
 
 func readESGameListXML(path string) (ESGameList, error) {
-	xmlFile, err := os.Open(path)
+	xmlFile, err := os.Open(path) //nolint:gosec // Internal EmulationStation gamelist XML path
 	if err != nil {
 		return ESGameList{}, fmt.Errorf("failed to open ES game list XML file %s: %w", path, err)
 	}

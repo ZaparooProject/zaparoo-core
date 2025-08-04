@@ -360,7 +360,7 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 			return fmt.Errorf("error setting video mode: %w", err)
 		}
 
-		cmd := exec.CommandContext(
+		cmd := exec.CommandContext( //nolint:gosec // Path comes from internal launcher system, not user input
 			context.Background(),
 			"nice",
 			"-n",
@@ -432,7 +432,7 @@ func killMPlayer(_ *config.Instance) error {
 		log.Info().Msgf("killing mplayer process with PID: %s", pid)
 
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid)
+		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid) //nolint:gosec // PID from system ps command, not user input
 		if err := killCmd.Run(); err != nil {
 			log.Error().Msgf("failed to kill process %s: %v", pid, err)
 		}

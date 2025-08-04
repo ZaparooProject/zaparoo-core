@@ -156,7 +156,7 @@ cd $(dirname "%s")
 %s
 `, runScript, bin, bin+" "+args)
 
-	err = os.WriteFile(scriptPath, []byte(launcher), 0o755)
+	err = os.WriteFile(scriptPath, []byte(launcher), 0o750) //nolint:gosec // Script file needs execute permissions
 	if err != nil {
 		return fmt.Errorf("failed to write script file: %w", err)
 	}
@@ -199,7 +199,7 @@ cd $(dirname "%s")
 }
 
 func echoFile(path, s string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // Internal path for script output
 	if err != nil {
 		return fmt.Errorf("failed to open file for echo: %w", err)
 	}

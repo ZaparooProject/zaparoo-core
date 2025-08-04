@@ -51,12 +51,12 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(mister.TempDir, 0o755)
+	err := os.MkdirAll(mister.TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	err = os.MkdirAll(helpers.DataDir(p), 0o755)
+	err = os.MkdirAll(helpers.DataDir(p), 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}

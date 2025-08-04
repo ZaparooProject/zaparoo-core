@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -172,7 +173,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				return exec.CommandContext(
+
+				if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+					return fmt.Errorf("invalid Steam game ID: %s", id)
+				}
+
+				return exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
 					context.Background(),
 					"steam",
 					"steam://rungameid/"+id,

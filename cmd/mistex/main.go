@@ -61,7 +61,7 @@ WantedBy=multi-user.target
 		return false, nil
 	}
 
-	err = os.WriteFile(unitPath, []byte(unitFile), 0o644)
+	err = os.WriteFile(unitPath, []byte(unitFile), 0o644) //nolint:gosec // Systemd unit file needs to be readable by system
 	if err != nil {
 		return false, fmt.Errorf("failed to write unit file: %w", err)
 	}

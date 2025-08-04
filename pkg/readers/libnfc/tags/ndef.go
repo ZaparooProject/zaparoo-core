@@ -84,6 +84,9 @@ func CalculateNdefHeader(ndefRecord []byte) ([]byte, error) {
 
 	// NFCForum-TS-Type-2-Tag_1.1.pdf Page 9
 	// > 255 Use three consecutive bytes format
+	if recordLength > 65535 {
+		return nil, fmt.Errorf("NDEF record length %d exceeds uint16 maximum", recordLength)
+	}
 	buf := new(bytes.Buffer)
 	err := binary.Write(buf, binary.BigEndian, uint16(recordLength))
 	if err != nil {

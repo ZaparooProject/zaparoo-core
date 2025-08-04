@@ -107,11 +107,11 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 
 func (p *Platform) StartPre(_ *config.Instance) error {
 	if MainHasFeature(MainFeaturePicker) {
-		err := os.MkdirAll(MainPickerDir, 0o755)
+		err := os.MkdirAll(MainPickerDir, 0o750)
 		if err != nil {
 			return fmt.Errorf("failed to create picker directory: %w", err)
 		}
-		err = os.WriteFile(MainPickerSelected, []byte(""), 0o644)
+		err = os.WriteFile(MainPickerSelected, []byte(""), 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to write picker selected file: %w", err)
 		}
@@ -256,7 +256,7 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
-		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0o644)
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0o644) //nolint:gosec // SAM integration temp file
 		if err != nil {
 			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
 		}
@@ -438,7 +438,7 @@ type Romsets struct {
 }
 
 func readRomsets(filePath string) ([]Romset, error) {
-	f, err := os.Open(filePath)
+	f, err := os.Open(filePath) //nolint:gosec // Internal romset file path
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -491,7 +491,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				for _, txt := range []string{aGamesPath, aDemosPath} {
 					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
 					if err == nil {
-						f, err := os.Open(tp)
+						f, err := os.Open(tp) //nolint:gosec // Internal amiga games/demos path
 						if err != nil {
 							log.Warn().Err(err).Msg("unable to open amiga txt")
 							continue

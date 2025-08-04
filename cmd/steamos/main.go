@@ -91,7 +91,7 @@ func run() error {
 		return errors.New("service must not be run as root")
 	}
 
-	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o755)
+	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o750)
 	if err != nil {
 		return fmt.Errorf("error creating data directory: %w", err)
 	}
