@@ -3,6 +3,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"github.com/rivo/tview"
 )
 
@@ -10,5 +12,8 @@ func tryRunApp(
 	app *tview.Application,
 	_ func() (*tview.Application, error),
 ) error {
-	return app.Run()
+	if err := app.Run(); err != nil {
+		return fmt.Errorf("failed to run application: %w", err)
+	}
+	return nil
 }
