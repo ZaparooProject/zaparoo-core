@@ -7,7 +7,7 @@ tasks:
       - go run scripts/tasks/utils/windowsmeta/main.go -version "${APP_VERSION}"
       - task: :docker:run
         vars:
-          IMAGE_NAME: zaparoo/cross-build
+          IMAGE_NAME: zaparoo/zigcc
           EXEC: sh -c 'cd cmd/windows && go-winres make --arch="amd64,arm64,386"'
 
   build-installer:
@@ -32,67 +32,29 @@ tasks:
 #        amake/innosetup
 #        "_build/windows_{{.BUILD_ARCH}}/setup.iss"
 
-  setup:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/cross-build
-          DOCKERFILE: scripts/cross
-
   build-arm64:
+    desc: Build Windows ARM64 binary with installer
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: arm64
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: zig cc -w --target=aarch64-windows-gnu
-          CXX: zig c++ -w --target=aarch64-windows-gnu
+      - task: :zigcc:build-windows-arm64
       - task: build-installer
         vars:
           BUILD_ARCH: arm64
 
   build-amd64:
+    desc: Build Windows AMD64 binary with installer
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: amd64
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: x86_64-w64-mingw32-gcc
-          CXX: x86_64-w64-mingw32-g++
+      - task: :zigcc:build-windows-amd64
       - task: build-installer
         vars:
           BUILD_ARCH: amd64
 
   build-386:
+    desc: Build Windows 386 binary with installer
     cmds:
-      - task: setup
       - task: build-metadata
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: windows
-          BUILD_ARCH: 386
-          PLATFORM: windows
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          APP_BIN: Zaparoo.exe
-          EXTRA_LDFLAGS: -H=windowsgui
-          CC: i686-w64-mingw32-gcc-win32
-          CXX: i686-w64-mingw32-g++-win32
+      - task: :zigcc:build-windows-386
       - task: build-installer
         vars:
-          BUILD_ARCH: 386
+          BUILD_ARCH: "386"

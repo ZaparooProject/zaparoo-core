@@ -1,24 +1,12 @@
 version: "3"
 
 tasks:
-  setup-arm:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-arm-build
-          DOCKERFILE: "./scripts/linux_arm"
-          DOCKER_PLATFORM: linux/arm/v7
-
   build-arm:
+    desc: Build MiSTer ARM binary
     cmds:
-      - task: setup-arm
-      - task: :docker:build-app
+      - task: :zigcc:build-linux-arm
         vars:
           PLATFORM: mister
-          BUILD_ARCH: arm
-          DOCKER_PLATFORM: linux/arm/v7
-          IMAGE_NAME: zaparoo/linux-arm-build
           APP_BIN: zaparoo.sh
 
   deploy-arm:

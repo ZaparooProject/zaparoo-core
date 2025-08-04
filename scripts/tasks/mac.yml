@@ -2,6 +2,7 @@ version: "3"
 
 tasks:
   build-app:
+    desc: Build macOS universal app bundle
     cmds:
       - task: build-arm64
       - task: build-amd64
@@ -12,61 +13,19 @@ tasks:
           BUILD_OS: darwin
           BUILD_ARCH: arm64
           PLATFORM: mac
-          IMAGE_NAME: zaparoo/cross-build
+          IMAGE_NAME: zaparoo/zigcc
           EXEC: lipo -output ./_build/mac_universal/zaparoo -create ./_build/mac_arm64/zaparoo ./_build/mac_amd64/zaparoo
       - cp ./_build/mac_universal/zaparoo "./_build/mac_universal/Zaparoo Core.app/Contents/MacOS/Zaparoo Core"
 
-  setup:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/cross-build
-          DOCKERFILE: "./scripts/cross"
-
   build-arm64:
+    desc: Build macOS ARM64 binary
     cmds:
-      - task: setup
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: darwin
-          BUILD_ARCH: arm64
-          PLATFORM: mac
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          NO_STATIC: true
-          CC: >-
-            zig cc -w --target=aarch64-macos
-            -I/opt/macosx-sdk/usr/include
-            -L/opt/macosx-sdk/usr/lib
-            -F/opt/macosx-sdk/System/Library/Frameworks
-          CXX: >-
-            zig c++ -w --target=aarch64-macos
-            -I/opt/macosx-sdk/usr/include
-            -L/opt/macosx-sdk/usr/lib
-            -F/opt/macosx-sdk/System/Library/Frameworks
+      - task: :zigcc:build-mac-arm64
 
   build-amd64:
+    desc: Build macOS AMD64 binary
     cmds:
-      - task: setup
-      - task: :docker:build-app
-        vars:
-          BUILD_OS: darwin
-          BUILD_ARCH: amd64
-          PLATFORM: mac
-          IMAGE_NAME: zaparoo/cross-build
-          NO_LIBNFC: true
-          NO_STATIC: true
-          CC: >-
-            zig cc -w --target=x86_64-macos
-            -I/opt/macosx-sdk/usr/include
-            -L/opt/macosx-sdk/usr/lib
-            -F/opt/macosx-sdk/System/Library/Frameworks
-          CXX: >-
-            zig c++ -w --target=x86_64-macos
-            -I/opt/macosx-sdk/usr/include
-            -L/opt/macosx-sdk/usr/lib
-            -F/opt/macosx-sdk/System/Library/Frameworks
+      - task: :zigcc:build-mac-amd64
 
   dev:
     cmds:

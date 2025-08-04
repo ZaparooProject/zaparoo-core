@@ -1,25 +1,12 @@
 version: "3"
 
 tasks:
-  setup-amd64:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-amd64-build
-          DOCKERFILE: "./scripts/linux_amd64"
-          DOCKER_PLATFORM: linux/amd64
-
   build-amd64:
+    desc: Build SteamOS AMD64 binary
     cmds:
-      - task: setup-amd64
-      - task: :docker:build-app
+      - task: :zigcc:build-linux-amd64
         vars:
           PLATFORM: steamos
-          BUILD_ARCH: amd64
-          DOCKER_PLATFORM: linux/amd64
-          IMAGE_NAME: zaparoo/linux-amd64-build
-          APP_BIN: zaparoo
 
   deploy-amd64:
     cmds:

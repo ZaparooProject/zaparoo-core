@@ -1,0 +1,43 @@
+# Git files
+.git
+.gitignore
+
+# Build artifacts
+_build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go artifacts
+vendor/
+*.mod
+*.sum
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+.circleci/
+
+# Test artifacts
+coverage.out
+*.test
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log

@@ -1,6 +1,7 @@
 name: Generate MiSTer Downloader repo
 on:
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions: write-all
 jobs:

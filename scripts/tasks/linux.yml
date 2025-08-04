@@ -1,42 +1,17 @@
 version: "3"
 
 tasks:
-  setup-arm64:
-    internal: true
+  build-amd64:
+    desc: Build Linux AMD64 binary
     cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-arm64-build
-          DOCKERFILE: "./scripts/linux_arm64"
-          DOCKER_PLATFORM: linux/arm64/v8
-
-  setup-amd64:
-    internal: true
-    cmds:
-      - task: :docker:build-image
-        vars:
-          IMAGE_NAME: zaparoo/linux-amd64-build
-          DOCKERFILE: "./scripts/linux_amd64"
-          DOCKER_PLATFORM: linux/amd64
+      - task: :zigcc:build-linux-amd64
 
   build-arm64:
+    desc: Build Linux ARM64 binary
     cmds:
-      - task: setup-arm64
-      - task: :docker:build-app
-        vars:
-          PLATFORM: linux
-          BUILD_ARCH: arm64
-          DOCKER_PLATFORM: linux/arm64/v8
-          IMAGE_NAME: zaparoo/linux-arm64-build
-          APP_BIN: zaparoo
+      - task: :zigcc:build-linux-arm64
 
-  build-amd64:
+  build-arm:
+    desc: Build Linux ARM binary
     cmds:
-      - task: setup-amd64
-      - task: :docker:build-app
-        vars:
-          PLATFORM: linux
-          BUILD_ARCH: amd64
-          DOCKER_PLATFORM: linux/amd64
-          IMAGE_NAME: zaparoo/linux-amd64-build
-          APP_BIN: zaparoo
+      - task: :zigcc:build-linux-arm
