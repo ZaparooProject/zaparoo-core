@@ -88,10 +88,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
 
-		if err := launch(game.Path); err != nil {
+		if launchErr := launch(game.Path); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to launch random game: %w", err)
+			}, fmt.Errorf("failed to launch random game: %w", launchErr)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -120,10 +120,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
 		}
 
-		if err := launch(file); err != nil {
+		if launchErr := launch(file); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to launch file '%s': %w", file, err)
+			}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -166,10 +166,10 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to select random game: %w", randomErr)
 		}
 
-		if err := launch(game.Path); err != nil {
+		if launchErr := launch(game.Path); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to launch game '%s': %w", game.Path, err)
+			}, fmt.Errorf("failed to launch game '%s': %w", game.Path, launchErr)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,

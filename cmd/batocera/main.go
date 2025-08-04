@@ -77,11 +77,13 @@ func run() error {
 	flags.Pre(pl)
 
 	if *doInstall {
-		err := os.MkdirAll(path.Dir(serviceFilePath), 0o755) //nolint:gosec // System service directory needs standard permissions
+		//nolint:gosec // System service directory needs standard permissions
+		err := os.MkdirAll(path.Dir(serviceFilePath), 0o755)
 		if err != nil {
 			return fmt.Errorf("error creating service directory: %w", err)
 		}
-		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0o644) //nolint:gosec // System service file needs to be readable by system
+		//nolint:gosec // System service file needs to be readable by system
+		err = os.WriteFile(serviceFilePath, []byte(serviceFile), 0o644)
 		if err != nil {
 			return fmt.Errorf("error writing service file: %w", err)
 		}

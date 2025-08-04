@@ -99,7 +99,9 @@ func downloadDoc(platformID, toDir string) error {
 		processedContent = stripFrontmatter(processedContent)
 	}
 
-	if err := os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0o600); err != nil {
+	readmePath := filepath.Join(toDir, "README.txt")
+	readmeContent := []byte(strings.TrimSpace(processedContent) + "\n")
+	if err := os.WriteFile(readmePath, readmeContent, 0o600); err != nil {
 		return fmt.Errorf("failed to write README.txt: %w", err)
 	}
 	return nil

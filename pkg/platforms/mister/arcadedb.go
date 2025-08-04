@@ -28,7 +28,7 @@ type GithubLinks struct {
 }
 
 type GithubContentsItem struct {
-	Links       GithubLinks `json:"_links"`       //nolint:tagliatelle // GitHub API format
+	Links       GithubLinks `json:"_links"` //nolint:tagliatelle // GitHub API format
 	Name        string      `json:"name"`
 	Path        string      `json:"path"`
 	Sha         string      `json:"sha"`

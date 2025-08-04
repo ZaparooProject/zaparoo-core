@@ -64,12 +64,6 @@ func (p *Platform) setLastLauncher(l *platforms.Launcher) {
 	p.lastLauncher = *l
 }
 
-func (p *Platform) getLastLauncher() platforms.Launcher {
-	p.platformMu.Lock()
-	defer p.platformMu.Unlock()
-	return p.lastLauncher
-}
-
 type oldDb struct {
 	Uids  map[string]string
 	Texts map[string]string
@@ -256,7 +250,8 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 
 	// stop SAM from playing anything else
 	if _, err := os.Stat("/tmp/.SAM_tmp/SAM_Joy_Activity"); err == nil {
-		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0o644) //nolint:gosec // SAM integration temp file
+		//nolint:gosec // SAM integration temp file
+		err = os.WriteFile("/tmp/.SAM_tmp/SAM_Joy_Activity", []byte("zaparoo"), 0o644)
 		if err != nil {
 			log.Error().Msgf("error writing to SAM_Joy_Activity: %s", err)
 		}

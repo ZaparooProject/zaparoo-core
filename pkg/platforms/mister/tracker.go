@@ -461,7 +461,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}()
 
 	if _, statErr := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(statErr) {
-		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
+		//nolint:gosec // MiSTer system file, needs to be readable by other apps
+		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
 		if writeErr != nil {
 			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
@@ -474,7 +475,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statErr := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(statErr) {
-		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755) //nolint:gosec // MiSTer system directory, needs to be accessible by other apps
+		//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
+		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
 		if mkdirErr != nil {
 			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
 		}
@@ -487,7 +489,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statActiveErr := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
-		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
+		//nolint:gosec // MiSTer system file, needs to be readable by other apps
+		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
 		if writeActiveErr != nil {
 			return nil, fmt.Errorf("failed to write active game file: %w", writeActiveErr)
 		}
@@ -500,7 +503,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	}
 
 	if _, statPathErr := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
-		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644) //nolint:gosec // MiSTer system file, needs to be readable by other apps
+		//nolint:gosec // MiSTer system file, needs to be readable by other apps
+		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
 		if writePathErr != nil {
 			return nil, fmt.Errorf("failed to write current path file: %w", writePathErr)
 		}

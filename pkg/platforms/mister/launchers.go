@@ -84,10 +84,10 @@ func launch(systemID string) func(*config.Instance, string) error {
 				return fmt.Errorf("failed to launch generic file: %w", err)
 			}
 			err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+			if err != nil {
+				return fmt.Errorf("failed to set active game: %w", err)
+			}
+			return nil
 		}
 
 		s, err := games.GetSystem(systemID)
@@ -104,10 +104,10 @@ func launch(systemID string) func(*config.Instance, string) error {
 
 		log.Debug().Msgf("setting active game: %s", path)
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -149,10 +149,10 @@ func launchSinden(
 		}
 
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -211,13 +211,14 @@ func launchAltCore(
 		}
 
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
 }
 
+//nolint:unused // keeping as reference for future implementation
 func launchGroovyCore() func(*config.Instance, string) error {
 	// Merge into mrext?
 	return func(cfg *config.Instance, path string) error {
@@ -251,10 +252,10 @@ func launchGroovyCore() func(*config.Instance, string) error {
 		}
 
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -267,10 +268,10 @@ func launchDOS() func(*config.Instance, string) error {
 				return fmt.Errorf("failed to launch generic file: %w", err)
 			}
 			err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+			if err != nil {
+				return fmt.Errorf("failed to set active game: %w", err)
+			}
+			return nil
 		}
 
 		s, err := games.GetSystem("ao486")
@@ -287,10 +288,10 @@ func launchDOS() func(*config.Instance, string) error {
 
 		log.Debug().Msgf("setting active game: %s", path)
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -320,19 +321,11 @@ func launchAtari2600() func(*config.Instance, string) error {
 		}
 
 		err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
+		if err != nil {
+			return fmt.Errorf("failed to set active game: %w", err)
+		}
+		return nil
 	}
-	return nil
-	}
-}
-
-func killCore(_ *config.Instance) error {
-	err := mister.LaunchMenu()
-	if err != nil {
-		return fmt.Errorf("failed to launch menu: %w", err)
-	}
-	return nil
 }
 
 func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
@@ -342,7 +335,6 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 		}
 
 		vt := "4"
-
 
 		err := cleanConsole(vt)
 		if err != nil {
@@ -432,7 +424,8 @@ func killMPlayer(_ *config.Instance) error {
 		log.Info().Msgf("killing mplayer process with PID: %s", pid)
 
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid) //nolint:gosec // PID from system ps command, not user input
+		//nolint:gosec // PID from system ps command, not user input
+		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid)
 		if err := killCmd.Run(); err != nil {
 			log.Error().Msgf("failed to kill process %s: %v", pid, err)
 		}
@@ -1366,10 +1359,10 @@ var Launchers = []platforms.Launcher{
 			}
 			log.Debug().Msgf("setting active game: %s", path)
 			err = mister.SetActiveGame(path)
-	if err != nil {
-		return fmt.Errorf("failed to set active game: %w", err)
-	}
-	return nil
+			if err != nil {
+				return fmt.Errorf("failed to set active game: %w", err)
+			}
+			return nil
 		},
 	},
 }

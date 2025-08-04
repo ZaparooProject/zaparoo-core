@@ -170,5 +170,5 @@ func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // sin
 	if err != nil {
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
 	}
-	return nil, nil
+	return NoContent{}, nil
 }

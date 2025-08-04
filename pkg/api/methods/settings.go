@@ -141,5 +141,5 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
-	return nil, nil
+	return NoContent{}, nil
 }
