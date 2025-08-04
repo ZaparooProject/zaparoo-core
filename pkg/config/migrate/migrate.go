@@ -20,6 +20,7 @@
 package migrate
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -38,12 +39,12 @@ func IniToToml(iniPath string) (config.Values, error) {
 
 	iniCfg, err := ini.ShadowLoad(iniPath)
 	if err != nil {
-		return vals, err
+		return vals, fmt.Errorf("failed to load ini file: %w", err)
 	}
 
 	err = iniCfg.StrictMapTo(&iniVals)
 	if err != nil {
-		return vals, err
+		return vals, fmt.Errorf("failed to map config: %w", err)
 	}
 
 	// readers

@@ -82,12 +82,12 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnownURL, http.NoBody)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to create request for '%s': %w", wellKnownURL, err)
 	}
 
 	resp, err := zapFetchClient.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to fetch '%s': %w", wellKnownURL, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -102,7 +102,7 @@ func queryZapLinkSupport(u *url.URL) (int, error) {
 	var wellKnown WellKnown
 	err = json.NewDecoder(resp.Body).Decode(&wellKnown)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to decode JSON from '%s': %w", wellKnownURL, err)
 	}
 
 	log.Debug().Msgf("zap link well known result for %s: %v", wellKnownURL, wellKnown)
@@ -157,14 +157,14 @@ func getRemoteZapScript(urlStr string) ([]byte, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, http.NoBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request for '%s': %w", urlStr, err)
 	}
 
 	req.Header.Set("Accept", strings.Join(AcceptedMimeTypes, ", "))
 
 	resp, err := zapFetchClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch zapscript from '%s': %w", urlStr, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -275,7 +275,7 @@ func checkZapLink(
 	if isOfflineError(err) {
 		zapscript, cacheErr := db.UserDB.GetZapLinkCache(value)
 		if cacheErr != nil {
-			return "", cacheErr
+			return "", fmt.Errorf("failed to get zaplink cache for '%s': %w", value, cacheErr)
 		}
 		if zapscript != "" {
 			return zapscript, nil

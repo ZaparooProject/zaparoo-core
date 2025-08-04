@@ -20,6 +20,7 @@
 package service
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -56,7 +57,7 @@ func runTokenZapScript(
 	reader := parser.NewParser(token.Text)
 	script, err := reader.ParseScript()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse script: %w", err)
 	}
 
 	log.Info().Msgf("running script (%d cmds): %s", len(script.Cmds), token.Text)
@@ -81,7 +82,7 @@ func runTokenZapScript(
 			st,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to run zapscript command: %w", err)
 		}
 
 		if result.MediaChanged && !token.FromAPI {

@@ -273,7 +273,11 @@ func sendWSError(session *melody.Session, id uuid.UUID, errObj models.ErrorObjec
 		return fmt.Errorf("error marshalling error response: %w", err)
 	}
 
-	return session.Write(data)
+	err = session.Write(data)
+	if err != nil {
+		return fmt.Errorf("failed to write to session: %w", err)
+	}
+	return nil
 }
 
 func handleResponse(resp models.ResponseObject) error {

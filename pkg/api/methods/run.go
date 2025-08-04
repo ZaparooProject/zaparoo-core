@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -165,5 +166,9 @@ func HandleRunRest(
 
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
-	return nil, env.Platform.StopActiveLauncher()
+	err := env.Platform.StopActiveLauncher()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
+	return nil, nil
 }

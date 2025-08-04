@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -66,12 +67,12 @@ func connect(name string) (serial.Port, error) {
 		StopBits: serial.OneStopBit,
 	})
 	if err != nil {
-		return port, err
+		return port, fmt.Errorf("failed to open serial port: %w", err)
 	}
 
 	err = port.SetReadTimeout(50 * time.Millisecond)
 	if err != nil {
-		return port, err
+		return port, fmt.Errorf("failed to set read timeout: %w", err)
 	}
 
 	err = SamConfiguration(port)
@@ -97,7 +98,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 	if runtime.GOOS != "windows" {
 		if _, err := os.Stat(name); err != nil {
-			return err
+			return fmt.Errorf("device path does not exist: %w", err)
 		}
 	}
 
@@ -260,7 +261,7 @@ func (r *PN532UARTReader) Close() error {
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to close serial port: %w", err)
 		}
 	}
 	return nil

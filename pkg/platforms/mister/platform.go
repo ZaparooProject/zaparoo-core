@@ -109,23 +109,23 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	if MainHasFeature(MainFeaturePicker) {
 		err := os.MkdirAll(MainPickerDir, 0o755)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create picker directory: %w", err)
 		}
 		err = os.WriteFile(MainPickerSelected, []byte(""), 0o644)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write picker selected file: %w", err)
 		}
 	}
 
 	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create keyboard: %w", err)
 	}
 	p.kbd = kbd
 
 	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gamepad: %w", err)
 	}
 	p.gpd = gpd
 
@@ -299,16 +299,24 @@ func (p *Platform) PlayAudio(path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "aplay", path).Start()
+	err := exec.CommandContext(ctx, "aplay", path).Start()
+	if err != nil {
+		return fmt.Errorf("failed to start aplay: %w", err)
+	}
+	return nil
 }
 
 func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	system, err := games.LookupSystem(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	return mister.LaunchCore(UserConfigToMrext(cfg), *system)
+	err = mister.LaunchCore(UserConfigToMrext(cfg), *system)
+	if err != nil {
+		return fmt.Errorf("failed to launch core: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
@@ -354,9 +362,17 @@ func (p *Platform) KeyboardPress(arg string) error {
 	}
 
 	if len(codes) == 1 {
-		return p.kbd.Press(codes[0])
+		err := p.kbd.Press(codes[0])
+		if err != nil {
+			return fmt.Errorf("failed to press keyboard key: %w", err)
+		}
+		return nil
 	}
-	return p.kbd.Combo(codes...)
+	err := p.kbd.Combo(codes...)
+	if err != nil {
+		return fmt.Errorf("failed to press keyboard combo: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) GamepadPress(name string) error {
@@ -364,7 +380,11 @@ func (p *Platform) GamepadPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-	return p.gpd.Press(code)
+	err := p.gpd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press gamepad button: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -463,7 +483,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			s, err := systemdefs.GetSystem(systemdefs.SystemAmiga)
 			if err != nil {
-				return results, err
+				return results, fmt.Errorf("failed to get Amiga system: %w", err)
 			}
 
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
@@ -528,7 +548,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			s, err := systemdefs.GetSystem(systemdefs.SystemNeoGeo)
 			if err != nil {
-				return results, err
+				return results, fmt.Errorf("failed to get NeoGeo system: %w", err)
 			}
 
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})

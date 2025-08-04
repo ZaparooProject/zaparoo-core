@@ -267,7 +267,7 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 		}
 	}()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare update mapping statement: %w", err)
 	}
 	_, err = stmt.ExecContext(ctx,
 		m.Added,
@@ -279,7 +279,10 @@ func sqlUpdateMapping(ctx context.Context, db *sql.DB, id int64, m database.Mapp
 		m.Override,
 		id,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute update mapping statement: %w", err)
+	}
+	return nil
 }
 
 func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
@@ -291,7 +294,7 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 		from Mappings;
 	`)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to prepare get all mappings statement: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -301,7 +304,7 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 
 	rows, err := q.QueryContext(ctx)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to execute get all mappings query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -321,12 +324,15 @@ func sqlGetAllMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, err
 			&row.Override,
 		)
 		if scanErr != nil {
-			return list, scanErr
+			return list, fmt.Errorf("failed to scan mapping row: %w", scanErr)
 		}
 		list = append(list, row)
 	}
 	err = rows.Err()
-	return list, err
+	if err != nil {
+		return list, fmt.Errorf("failed to iterate over mapping rows: %w", err)
+	}
+	return list, nil
 }
 
 func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping, error) {
@@ -339,7 +345,7 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 		where Enabled = ?
 	`)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to prepare enabled mappings statement: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -349,7 +355,7 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 
 	rows, err := q.QueryContext(ctx, true)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to execute enabled mappings query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -369,12 +375,15 @@ func sqlGetEnabledMappings(ctx context.Context, db *sql.DB) ([]database.Mapping,
 			&row.Override,
 		)
 		if scanErr != nil {
-			return list, scanErr
+			return list, fmt.Errorf("failed to scan enabled mapping row: %w", scanErr)
 		}
 		list = append(list, row)
 	}
 	err = rows.Err()
-	return list, err
+	if err != nil {
+		return list, fmt.Errorf("failed to iterate over enabled mapping rows: %w", err)
+	}
+	return list, nil
 }
 
 func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscript int) error {
@@ -386,7 +395,7 @@ func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscrip
 			CheckedAt = CURRENT_TIMESTAMP;
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare update zap link host statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -395,7 +404,10 @@ func sqlUpdateZapLinkHost(ctx context.Context, db *sql.DB, host string, zapscrip
 	}()
 
 	_, err = stmt.ExecContext(ctx, host, zapscript)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute update zap link host statement: %w", err)
+	}
+	return nil
 }
 
 func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported, ok bool, err error) {
@@ -408,7 +420,7 @@ func sqlGetZapLinkHost(ctx context.Context, db *sql.DB, host string) (supported,
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	} else if err != nil {
-		return false, false, err
+		return false, false, fmt.Errorf("failed to scan zap link host row: %w", err)
 	}
 
 	return zapscript != 0, true, nil
@@ -423,7 +435,7 @@ func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url, zapscript strin
 			UpdatedAt = CURRENT_TIMESTAMP;
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to prepare update zap link cache statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -432,7 +444,10 @@ func sqlUpdateZapLinkCache(ctx context.Context, db *sql.DB, url, zapscript strin
 	}()
 
 	_, err = stmt.ExecContext(ctx, url, zapscript)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to execute update zap link cache statement: %w", err)
+	}
+	return nil
 }
 
 func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, error) {
@@ -445,7 +460,7 @@ func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, er
 		return "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to scan zap link cache row: %w", err)
 	}
 	return zapscript, nil
 }

@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,12 +59,12 @@ func (db *MediaDB) Open() error {
 		exists = false
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
-			return mkdirErr
+			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
 		}
 	}
 	sqlInstance, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open database: %w", err)
 	}
 	db.sql = sqlInstance
 	if !exists {
@@ -130,7 +131,11 @@ func (db *MediaDB) Close() error {
 	if db.sql == nil {
 		return nil
 	}
-	return db.sql.Close()
+	err := db.sql.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+	return nil
 }
 
 func (db *MediaDB) BeginTransaction() error {
@@ -217,7 +222,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 
 	system, err := helpers.RandomElem(systems)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("failed to select random system: %w", err)
 	}
 
 	return sqlRandomGame(db.ctx, db.sql, system)

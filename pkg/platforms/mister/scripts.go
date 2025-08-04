@@ -19,12 +19,12 @@ import (
 func getTTY() (string, error) {
 	sys := "/sys/devices/virtual/tty/tty0/active"
 	if _, err := os.Stat(sys); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to stat tty active file: %w", err)
 	}
 
 	tty, err := os.ReadFile(sys)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read tty active file: %w", err)
 	}
 
 	return strings.TrimSpace(string(tty)), nil
@@ -54,7 +54,7 @@ func openConsole(pl platforms.Platform, vt string) error {
 	err := exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
 		log.Debug().Err(err).Msg("open console: error running chvt")
-		return err
+		return fmt.Errorf("failed to run chvt: %w", err)
 	}
 
 	tries := 0
@@ -66,7 +66,7 @@ func openConsole(pl platforms.Platform, vt string) error {
 		// switch to console
 		err := pl.KeyboardPress("{f9}")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to press F9 key: %w", err)
 		}
 		time.Sleep(50 * time.Millisecond)
 		tty, err = getTTY()
@@ -84,7 +84,7 @@ func openConsole(pl platforms.Platform, vt string) error {
 
 func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if _, err := os.Stat(bin); err != nil {
-		return err
+		return fmt.Errorf("failed to stat script file: %w", err)
 	}
 
 	active := scriptIsActive()
@@ -98,7 +98,11 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LC_ALL=en_US.UTF-8", "HOME=/root", "LESSKEY=/media/fat/linux/lesskey", "ZAPAROO_RUN_SCRIPT=1")
 		cmd.Dir = filepath.Dir(bin)
-		return cmd.Run()
+		err := cmd.Run()
+		if err != nil {
+			return fmt.Errorf("failed to run script: %w", err)
+		}
+		return nil
 	}
 
 	if pl.activeMedia() != nil {
@@ -139,7 +143,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	defer cancel()
 	err = exec.CommandContext(ctx, "chvt", vt).Run()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
 	}
 
 	// this is how mister launches scripts itself
@@ -154,7 +158,7 @@ cd $(dirname "%s")
 
 	err = os.WriteFile(scriptPath, []byte(launcher), 0o755)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write script file: %w", err)
 	}
 
 	cmd := exec.CommandContext(
@@ -187,7 +191,7 @@ cd $(dirname "%s")
 		if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
 			exit()
 		}
-		return err
+		return fmt.Errorf("failed to run script command: %w", err)
 	}
 
 	exit()
@@ -197,15 +201,19 @@ cd $(dirname "%s")
 func echoFile(path, s string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file for echo: %w", err)
 	}
 
 	_, err = f.WriteString(s)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to file: %w", err)
 	}
 
-	return f.Close()
+	err = f.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close file: %w", err)
+	}
+	return nil
 }
 
 func writeTty(id, s string) error {

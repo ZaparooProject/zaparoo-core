@@ -67,7 +67,7 @@ type ArcadeDbEntry struct {
 func getGitBlobSha1(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to open file: %w", err)
 	}
 	defer func(file *os.File) {
 		closeErr := file.Close()
@@ -78,7 +78,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 
 	info, err := file.Stat()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	size := info.Size()
@@ -87,7 +87,7 @@ func getGitBlobSha1(filePath string) (string, error) {
 	hasher := sha1.New()
 	_, _ = hasher.Write([]byte(header))
 	if _, err := io.Copy(hasher, file); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to copy file to hasher: %w", err)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
@@ -103,11 +103,11 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, http.NoBody)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -117,20 +117,20 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var contents []GithubContentsItem
 	err = json.Unmarshal(body, &contents)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	} else if len(contents) == 0 {
 		return false, nil
 	}
 
 	err = os.MkdirAll(filepath.Dir(arcadeDBPath), 0o755)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	latestFile := contents[len(contents)-1]
@@ -145,11 +145,11 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	defer cancel()
 	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, http.NoBody)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to create download request: %w", err)
 	}
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to download arcadedb: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -159,12 +159,12 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	body, err = io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read download body: %w", err)
 	}
 
 	err = os.WriteFile(arcadeDBPath, body, 0o644)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to write arcadedb file: %w", err)
 	}
 
 	return true, nil
@@ -178,12 +178,12 @@ func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	)
 
 	if _, err := os.Stat(arcadeDBPath); os.IsNotExist(err) {
-		return nil, err
+		return nil, fmt.Errorf("arcadedb file does not exist: %w", err)
 	}
 
 	dbFile, err := os.Open(arcadeDBPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open arcadedb file: %w", err)
 	}
 	defer func(c io.Closer) {
 		_ = c.Close()
@@ -192,7 +192,7 @@ func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	entries := make([]ArcadeDbEntry, 0)
 	err = gocsv.Unmarshal(dbFile, &entries)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal arcadedb CSV: %w", err)
 	}
 
 	return entries, nil

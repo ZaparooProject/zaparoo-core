@@ -54,7 +54,11 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	return t.Base.RoundTrip(req)
+	resp, err := t.Base.RoundTrip(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform HTTP round trip: %w", err)
+	}
+	return resp, nil
 }
 
 var timeoutTr = &http.Transport{

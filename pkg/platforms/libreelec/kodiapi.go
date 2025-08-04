@@ -168,7 +168,7 @@ func kodiLaunchMovieRequest(cfg *config.Instance, path string) error {
 
 	movieID, err := strconv.Atoi(pathID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse movie ID %q: %w", pathID, err)
 	}
 
 	params := KodiPlayerOpenParams{
@@ -194,7 +194,7 @@ func kodiLaunchTVRequest(cfg *config.Instance, path string) error {
 	id = strings.SplitN(id, "/", 2)[0]
 	intID, err := strconv.Atoi(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse episode ID %q: %w", id, err)
 	}
 	params = KodiPlayerOpenParams{
 		Item: KodiItem{
@@ -223,7 +223,7 @@ func kodiScanMovies(
 	var scanResults KodiVideoLibraryGetMoviesResponse
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal movies response: %w", err)
 	}
 
 	for _, movie := range scanResults.Movies {
@@ -254,7 +254,7 @@ func kodiScanTV(
 	var scanResults KodiVideoLibraryGetTVShowsResponse
 	err = json.Unmarshal(resp, &scanResults)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal TV shows response: %w", err)
 	}
 
 	for _, show := range scanResults.TVShows {
@@ -269,7 +269,7 @@ func kodiScanTV(
 		var epsResults KodiVideoLibraryGetEpisodesResponse
 		err = json.Unmarshal(epsResp, &epsResults)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to unmarshal episodes response: %w", err)
 		}
 
 		for _, ep := range epsResults.Episodes {
@@ -298,7 +298,7 @@ func kodiStop(cfg *config.Instance) error {
 	var players KodiPlayerGetActivePlayersResponse
 	err = json.Unmarshal(playersResp, &players)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal players response: %w", err)
 	}
 
 	if len(players) == 0 {

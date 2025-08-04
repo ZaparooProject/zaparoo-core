@@ -61,7 +61,7 @@ func setupEnvironment(pl platforms.Platform) error {
 	for _, dir := range dirs {
 		err := os.MkdirAll(dir, 0o750)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
@@ -114,7 +114,7 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
-		return db, err
+		return db, fmt.Errorf("failed to open media database: %w", err)
 	}
 
 	err = mediaDB.MigrateUp()
@@ -126,7 +126,7 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
-		return db, err
+		return db, fmt.Errorf("failed to open user database: %w", err)
 	}
 
 	err = userDB.MigrateUp()
@@ -168,7 +168,7 @@ func Start(
 	err = pl.StartPre(cfg)
 	if err != nil {
 		log.Error().Err(err).Msg("platform start pre error")
-		return nil, err
+		return nil, fmt.Errorf("platform start pre failed: %w", err)
 	}
 
 	log.Info().Msg("opening databases")
@@ -208,7 +208,7 @@ func Start(
 	err = pl.StartPost(cfg, st.ActiveMedia, st.SetActiveMedia)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
-		return nil, err
+		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
 
 	return func() error {

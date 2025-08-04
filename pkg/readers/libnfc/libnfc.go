@@ -142,7 +142,11 @@ func (r *Reader) Close() error {
 		return nil
 	}
 	log.Debug().Msgf("closing device: %s", r.conn)
-	return r.pnd.Close()
+	err := r.pnd.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close NFC device: %w", err)
+	}
+	return nil
 }
 
 func (*Reader) IDs() []string {
@@ -324,11 +328,11 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 				continue
 			}
 
-			return pnd, err
+			return pnd, nil
 		}
 
 		if tries >= connectMaxTries {
-			return pnd, err
+			return pnd, fmt.Errorf("failed to open NFC device after %d tries: %w", connectMaxTries, err)
 		}
 
 		tries++
@@ -345,7 +349,7 @@ func (r *Reader) pollDevice(
 
 	count, target, err := pnd.InitiatorPollTarget(tags.SupportedCardTypes, ttp, pbp)
 	if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
-		return nil, false, err
+		return nil, false, fmt.Errorf("failed to poll NFC target: %w", err)
 	}
 
 	if count > 1 {

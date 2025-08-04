@@ -97,7 +97,11 @@ var cmdMap = map[string]func(
 
 //nolint:gocritic // single-use parameter in command handler
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	return pl.ForwardCmd(&env)
+	result, err := pl.ForwardCmd(&env)
+	if err != nil {
+		return result, fmt.Errorf("failed to forward command: %w", err)
+	}
+	return result, nil
 }
 
 // Check all games folders for a relative path to a file

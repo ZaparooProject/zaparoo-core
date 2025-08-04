@@ -164,7 +164,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				root := "/home/deck/.steam/steam/steamapps"
 				appResults, err := helpers.ScanSteamApps(root)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
 				return append(results, appResults...), nil
 			},

@@ -83,7 +83,7 @@ func tryAddStartup() error {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove tapto from startup: %w", err)
 		}
 	}
 
@@ -99,8 +99,12 @@ func tryAddStartup() error {
 
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
-	return tui.BuildAndRetry(func() (*tview.Application, error) {
+	err := tui.BuildAndRetry(func() (*tview.Application, error) {
 		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
 		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
+	if err != nil {
+		return fmt.Errorf("failed to build and display service info: %w", err)
+	}
+	return nil
 }

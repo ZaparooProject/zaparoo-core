@@ -22,6 +22,7 @@ package opticaldrive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,7 +82,7 @@ func (r *FileReader) Open(
 	}
 
 	if _, err := os.Stat(parent); err != nil {
-		return err
+		return fmt.Errorf("failed to stat device parent directory: %w", err)
 	}
 
 	r.device = device

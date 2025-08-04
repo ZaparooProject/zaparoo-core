@@ -72,7 +72,7 @@ func run() error {
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
-		return err
+		return fmt.Errorf("service handler failed: %w", err)
 	}
 
 	flags.Post(cfg, pl)

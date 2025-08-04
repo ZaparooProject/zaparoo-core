@@ -50,12 +50,12 @@ const (
 func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse, error) {
 	resp, err := client.LocalClient(ctx, cfg, models.MethodTokens, "")
 	if err != nil {
-		return models.TokensResponse{}, err
+		return models.TokensResponse{}, fmt.Errorf("failed to get tokens from local client: %w", err)
 	}
 	var tokens models.TokensResponse
 	err = json.Unmarshal([]byte(resp), &tokens)
 	if err != nil {
-		return models.TokensResponse{}, err
+		return models.TokensResponse{}, fmt.Errorf("failed to unmarshal tokens response: %w", err)
 	}
 	return tokens, nil
 }

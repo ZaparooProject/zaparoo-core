@@ -20,6 +20,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/gdamore/tcell/v2"
@@ -45,18 +46,18 @@ func tryRunApp(
 
 		tty, err := tcell.NewDevTtyFromDev(ttyPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create tty from device %s: %w", ttyPath, err)
 		}
 
 		screen, err := tcell.NewTerminfoScreenFromTty(tty)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create screen from tty: %w", err)
 		}
 
 		appTty2.SetScreen(screen)
 
 		if err := appTty2.Run(); err != nil {
-			return err
+			return fmt.Errorf("failed to run TUI application: %w", err)
 		}
 	}
 	return nil

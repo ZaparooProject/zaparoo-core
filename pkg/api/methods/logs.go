@@ -21,6 +21,7 @@ package methods
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -39,7 +40,7 @@ func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocriti
 	data, err := os.ReadFile(logFilePath)
 	if err != nil {
 		log.Error().Err(err).Str("path", logFilePath).Msg("failed to read log file")
-		return nil, err
+		return nil, fmt.Errorf("failed to read log file: %w", err)
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)

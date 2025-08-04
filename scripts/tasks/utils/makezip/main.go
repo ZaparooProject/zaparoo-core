@@ -76,12 +76,12 @@ func downloadDoc(platformID, toDir string) error {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -91,7 +91,7 @@ func downloadDoc(platformID, toDir string) error {
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	processedContent := string(content)
@@ -99,7 +99,10 @@ func downloadDoc(platformID, toDir string) error {
 		processedContent = stripFrontmatter(processedContent)
 	}
 
-	return os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0o600)
+	if err := os.WriteFile(filepath.Join(toDir, "README.txt"), []byte(strings.TrimSpace(processedContent)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("failed to write README.txt: %w", err)
+	}
+	return nil
 }
 
 func main() {
@@ -216,7 +219,7 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 	//nolint:gosec // Safe: opens files in build script with controlled paths
 	file, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file %s: %w", filePath, err)
 	}
 	defer func(file *os.File) {
 		_ = file.Close()
@@ -224,27 +227,30 @@ func addFileToZip(zipWriter *zip.Writer, filePath, arcname string) error {
 
 	info, err := file.Stat()
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 
 	header, err := zip.FileInfoHeader(info)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 	header.Name = arcname
 	header.Method = zip.Deflate
 
 	writer, err := zipWriter.CreateHeader(header)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
 
 	_, err = io.Copy(writer, file)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to copy file content to zip: %w", err)
+	}
+	return nil
 }
 
 func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
-	return filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -252,12 +258,12 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 		if !info.IsDir() {
 			relPath, err := filepath.Rel(dirPath, path)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to get relative path: %w", err)
 			}
 
 			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
 			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
-				return err
+				return fmt.Errorf("failed to create directory: %w", err)
 			}
 
 			if err := copyFile(path, destPath); err != nil {
@@ -267,14 +273,20 @@ func addDirToZip(zipWriter *zip.Writer, dirPath, buildDir string) error {
 			return addFileToZip(zipWriter, destPath, filepath.Join(filepath.Base(dirPath), relPath))
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {
 	//nolint:gosec // Safe: reads files in build script with controlled paths
 	input, err := os.ReadFile(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("operation failed: %w", err)
 	}
-	return os.WriteFile(dst, input, 0o600)
+	if err := os.WriteFile(dst, input, 0o600); err != nil {
+		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+	return nil
 }

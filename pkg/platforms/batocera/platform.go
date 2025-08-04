@@ -61,13 +61,13 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 func (p *Platform) StartPre(_ *config.Instance) error {
 	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create keyboard input device: %w", err)
 	}
 	p.kbd = kbd
 
 	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gamepad input device: %w", err)
 	}
 	p.gpd = gpd
 
@@ -94,7 +94,7 @@ func (p *Platform) StartPost(
 
 		systemMeta, err := assets.GetSystemMetadata(systemID)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get system metadata for %s: %w", systemID, err)
 		}
 
 		p.setActiveMedia(&models.ActiveMedia{
@@ -187,7 +187,11 @@ func (p *Platform) PlayAudio(path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "aplay", path).Start()
+	err := exec.CommandContext(ctx, "aplay", path).Start()
+	if err != nil {
+		return fmt.Errorf("failed to start aplay command: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) StopActiveLauncher() error {
@@ -260,7 +264,11 @@ func (p *Platform) KeyboardPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown keyboard key: %s", name)
 	}
-	return p.kbd.Press(code)
+	err := p.kbd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press keyboard key %s: %w", name, err)
+	}
+	return nil
 }
 
 func (p *Platform) GamepadPress(name string) error {
@@ -268,7 +276,11 @@ func (p *Platform) GamepadPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-	return p.gpd.Press(code)
+	err := p.gpd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
+	}
+	return nil
 }
 
 func (*Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -292,7 +304,7 @@ type ESGameList struct {
 func readESGameListXML(path string) (ESGameList, error) {
 	xmlFile, err := os.Open(path)
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to open ES game list XML file %s: %w", path, err)
 	}
 	defer func(xmlFile *os.File) {
 		closeErr := xmlFile.Close()
@@ -303,13 +315,13 @@ func readESGameListXML(path string) (ESGameList, error) {
 
 	data, err := io.ReadAll(xmlFile)
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to read ES game list XML file %s: %w", path, err)
 	}
 
 	var gameList ESGameList
 	err = xml.Unmarshal(data, &gameList)
 	if err != nil {
-		return ESGameList{}, err
+		return ESGameList{}, fmt.Errorf("failed to unmarshal ES game list XML: %w", err)
 	}
 
 	return gameList, nil

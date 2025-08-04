@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -97,7 +98,7 @@ func validateAddMappingParams(amr *models.AddMappingParams) error {
 	if amr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(amr.Pattern)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to compile regex pattern: %w", err)
 		}
 	}
 
@@ -142,7 +143,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	err = env.Database.UserDB.AddMapping(m)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to add mapping: %w", err)
 	}
 
 	return NoContent{}, nil
@@ -164,7 +165,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 
 	err = env.Database.UserDB.DeleteMapping(int64(params.ID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to delete mapping: %w", err)
 	}
 
 	return NoContent{}, nil
@@ -191,7 +192,7 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 	if umr.Match != nil && *umr.Match == userdb.MatchTypeRegex {
 		_, err := regexp.Compile(*umr.Pattern)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to compile regex pattern: %w", err)
 		}
 	}
 
@@ -230,7 +231,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 
 	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.ID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get mapping: %w", err)
 	}
 
 	newMapping := oldMapping
@@ -261,7 +262,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 
 	err = env.Database.UserDB.UpdateMapping(int64(params.ID), newMapping)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to update mapping: %w", err)
 	}
 
 	return NoContent{}, nil

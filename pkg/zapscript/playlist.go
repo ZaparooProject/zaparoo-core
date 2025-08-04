@@ -69,7 +69,7 @@ func readPlsFile(path string) ([]playlists.PlaylistItem, error) {
 	//nolint:gosec // Safe: reads playlist files for media management
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read playlist file '%s': %w", path, err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -204,12 +204,12 @@ func readPlaylistFolder(path string) ([]playlists.PlaylistItem, error) {
 	}
 
 	if _, err := os.Stat(path); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat path '%s': %w", path, err)
 	}
 
 	dir, err := os.ReadDir(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read directory '%s': %w", path, err)
 	}
 
 	files := make([]string, 0)
@@ -387,14 +387,20 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	log.Info().Any("items", pls.Items).Msgf("open playlist: %s", env.Cmd.Args)
 	env.Playlist.Queue <- pls
 
-	return platforms.CmdResult{
+	if err := pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
+		Title:    pls.Name,
+		Items:    items,
+		Selected: pls.Index,
+	}); err != nil {
+		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,
-		}, pl.ShowPicker(env.Cfg, widgetmodels.PickerArgs{
-			Title:    pls.Name,
-			Items:    items,
-			Selected: pls.Index,
-		})
+		}, fmt.Errorf("failed to show picker: %w", err)
+	}
+	return platforms.CmdResult{
+		PlaylistChanged: true,
+		Playlist:        pls,
+	}, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -439,7 +445,7 @@ func cmdPlaylistGoto(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdR
 
 	indexArg, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("invalid index '%s': %w", env.Cmd.Args[0], err)
 	}
 
 	newIndex := indexArg - 1
@@ -466,10 +472,16 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 	env.Playlist.Queue <- nil
 
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        nil,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        nil,
-	}, pl.StopActiveLauncher()
+	}, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -481,8 +493,14 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 	pls := playlists.Pause(*env.Playlist.Active)
 	env.Playlist.Queue <- pls
 
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			PlaylistChanged: true,
+			Playlist:        pls,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		PlaylistChanged: true,
 		Playlist:        pls,
-	}, pl.StopActiveLauncher()
+	}, nil
 }

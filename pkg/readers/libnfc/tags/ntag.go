@@ -153,7 +153,7 @@ func getNtagBlockCount(pnd nfc.Device) (int, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to read NTAG page count: %w", err)
 	}
 
 	switch rx[2] {
@@ -180,7 +180,7 @@ func getNtagCapacity(pnd nfc.Device) (int, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to read NTAG capacity: %w", err)
 	}
 
 	// https://github.com/adafruit/Adafruit_MFRC630/blob/master/docs/NTAG.md#capability-container

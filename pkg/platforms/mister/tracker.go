@@ -425,7 +425,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create file watcher: %w", err)
 	}
 
 	go func() {
@@ -463,59 +463,59 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	if _, statErr := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(statErr) {
 		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
 		if writeErr != nil {
-			return nil, writeErr
+			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
 		log.Info().Msgf("created core name file: %s", mrextconfig.CoreNameFile)
 	}
 
 	err = watcher.Add(mrextconfig.CoreNameFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to watch core name file: %w", err)
 	}
 
 	if _, statErr := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(statErr) {
 		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
 		if mkdirErr != nil {
-			return nil, mkdirErr
+			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
 		}
 		log.Info().Msgf("created core config folder: %s", mrextconfig.CoreConfigFolder)
 	}
 
 	err = watcher.Add(mrextconfig.CoreConfigFolder)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to watch core config folder: %w", err)
 	}
 
 	if _, statActiveErr := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
 		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
 		if writeActiveErr != nil {
-			return nil, writeActiveErr
+			return nil, fmt.Errorf("failed to write active game file: %w", writeActiveErr)
 		}
 		log.Info().Msgf("created active game file: %s", mrextconfig.ActiveGameFile)
 	}
 
 	err = watcher.Add(mrextconfig.ActiveGameFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to watch active game file: %w", err)
 	}
 
 	if _, statPathErr := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
 		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
 		if writePathErr != nil {
-			return nil, writePathErr
+			return nil, fmt.Errorf("failed to write current path file: %w", writePathErr)
 		}
 		log.Info().Msgf("created current path file: %s", mrextconfig.CurrentPathFile)
 	}
 
 	err = watcher.Add(mrextconfig.CurrentPathFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to watch current path file: %w", err)
 	}
 
 	if _, err := os.Stat(MainPickerSelected); err == nil && MainHasFeature(MainFeaturePicker) {
 		err = watcher.Add(MainPickerSelected)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)
 		}
 	}
 

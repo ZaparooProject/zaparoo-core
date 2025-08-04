@@ -36,12 +36,12 @@ import (
 func getMediaState(ctx context.Context, cfg *config.Instance) (models.MediaResponse, error) {
 	resp, err := client.LocalClient(ctx, cfg, models.MethodMedia, "")
 	if err != nil {
-		return models.MediaResponse{}, err
+		return models.MediaResponse{}, fmt.Errorf("failed to get media state from local client: %w", err)
 	}
 	var tokens models.MediaResponse
 	err = json.Unmarshal([]byte(resp), &tokens)
 	if err != nil {
-		return models.MediaResponse{}, err
+		return models.MediaResponse{}, fmt.Errorf("failed to unmarshal media response: %w", err)
 	}
 	return tokens, nil
 }
@@ -52,12 +52,12 @@ func waitGenerateUpdate(ctx context.Context, cfg *config.Instance) (models.Index
 		cfg, models.NotificationMediaIndexing,
 	)
 	if err != nil {
-		return models.IndexingStatusResponse{}, err
+		return models.IndexingStatusResponse{}, fmt.Errorf("failed to wait for notification: %w", err)
 	}
 	var status models.IndexingStatusResponse
 	err = json.Unmarshal([]byte(resp), &status)
 	if err != nil {
-		return models.IndexingStatusResponse{}, err
+		return models.IndexingStatusResponse{}, fmt.Errorf("failed to unmarshal indexing status response: %w", err)
 	}
 	return status, nil
 }

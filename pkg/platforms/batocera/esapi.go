@@ -119,7 +119,7 @@ func apiRunningGame() (APIRunningGameResponse, bool, error) {
 	var game APIRunningGameResponse
 	err = json.Unmarshal(resp, &game)
 	if err != nil {
-		return APIRunningGameResponse{}, false, err
+		return APIRunningGameResponse{}, false, fmt.Errorf("failed to unmarshal running game response: %w", err)
 	}
 
 	return game, true, nil

@@ -125,20 +125,20 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 
 		contents, marshalErr := json.Marshal(item)
 		if marshalErr != nil {
-			return marshalErr
+			return fmt.Errorf("failed to marshal picker item: %w", marshalErr)
 		}
 
 		path := filepath.Join(MainPickerDir, name+".txt")
 		err = os.WriteFile(path, contents, 0o644)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write picker item file: %w", err)
 		}
 	}
 
 	// launch
 	err = os.WriteFile(CmdInterface, []byte("show_picker\n"), 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write show_picker command: %w", err)
 	}
 
 	return nil
@@ -162,11 +162,11 @@ func showPicker(
 	argsPath := filepath.Join(pl.Settings().TempDir, "picker.json")
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal picker args: %w", err)
 	}
 	err = os.WriteFile(argsPath, argsJSON, 0o644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write picker args file: %w", err)
 	}
 
 	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-picker %s", argsPath)

@@ -19,7 +19,7 @@ import (
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
 	inis, err := mister.GetAllMisterIni()
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to get MiSTer ini files: %w", err)
 	}
 
 	if len(inis) == 0 {
@@ -32,7 +32,7 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 
 	id, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to parse ini ID %q: %w", env.Cmd.Args[0], err)
 	}
 
 	if id < 1 || id > len(inis) {
@@ -44,7 +44,7 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 
 	err = mister.SetActiveIni(id, doRelaunch)
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to set active ini: %w", err)
 	}
 
 	return platforms.CmdResult{
@@ -57,9 +57,13 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
 
+	err := mister.LaunchShortCore(env.Cmd.Args[0])
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to launch core: %w", err)
+	}
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, mister.LaunchShortCore(env.Cmd.Args[0])
+	}, nil
 }
 
 func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -132,22 +136,22 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 
 	tmpFile, err := os.CreateTemp("", "*.mgl")
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to create temp mgl file: %w", err)
 	}
 
 	_, err = tmpFile.WriteString(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to write to temp mgl file: %w", err)
 	}
 
 	err = tmpFile.Close()
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to close temp mgl file: %w", err)
 	}
 
 	cmd, err := os.OpenFile(CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func(cmd *os.File) {
 		closeErr := cmd.Close()
@@ -158,7 +162,7 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 
 	_, err = fmt.Fprintf(cmd, "load_core %s\n", tmpFile.Name())
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to write command: %w", err)
 	}
 
 	go func() {

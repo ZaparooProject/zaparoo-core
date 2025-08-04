@@ -52,7 +52,7 @@ func FindPath(path string) (string, error) {
 
 	files, err := os.ReadDir(parent)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read directory %s: %w", parent, err)
 	}
 
 	for _, file := range files {
@@ -177,7 +177,7 @@ func GetFiles(
 
 	system, err := systemdefs.GetSystem(systemID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
 	var scanner func(path string, file fs.DirEntry, err error) error
@@ -188,7 +188,7 @@ func GetFiles(
 			if file.Type()&os.ModeSymlink != 0 {
 				realPath, symlinkErr := filepath.EvalSymlinks(path)
 				if symlinkErr != nil {
-					return symlinkErr
+					return fmt.Errorf("failed to evaluate symlink %s: %w", path, symlinkErr)
 				}
 				key = realPath
 			}
@@ -202,17 +202,17 @@ func GetFiles(
 		if file.Type()&os.ModeSymlink != 0 {
 			absSym, absErr := filepath.Abs(path)
 			if absErr != nil {
-				return absErr
+				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
 			}
 
 			realPath, realPathErr := filepath.EvalSymlinks(absSym)
 			if realPathErr != nil {
-				return realPathErr
+				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
 			}
 
 			file, statErr := os.Stat(realPath)
 			if statErr != nil {
-				return statErr
+				return fmt.Errorf("failed to stat symlink target %s: %w", realPath, statErr)
 			}
 
 			if file.IsDir() {
@@ -221,7 +221,7 @@ func GetFiles(
 
 				walkErr := filepath.WalkDir(realPath, scanner)
 				if walkErr != nil {
-					return walkErr
+					return fmt.Errorf("failed to walk directory %s: %w", realPath, walkErr)
 				}
 
 				results, stackErr := stack.get()
@@ -270,7 +270,7 @@ func GetFiles(
 
 	root, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
 	}
 
 	// handle symlinks on the root game folder because WalkDir fails silently on them
@@ -280,13 +280,13 @@ func GetFiles(
 	} else {
 		realPath, err = filepath.EvalSymlinks(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to evaluate symlink %s: %w", path, err)
 		}
 	}
 
 	realRoot, err := os.Stat(realPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat real path %s: %w", realPath, err)
 	}
 
 	if !realRoot.IsDir() {
@@ -295,7 +295,7 @@ func GetFiles(
 
 	err = filepath.WalkDir(realPath, scanner)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
 
 	results, err := stack.get()
@@ -345,11 +345,11 @@ func NewNamesIndex(
 
 	err := db.Truncate()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to truncate database: %w", err)
 	}
 	err = db.BeginTransaction()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
 	status := IndexStatus{
@@ -508,19 +508,19 @@ func NewNamesIndex(
 	scanState.TagIDs = make(map[string]int)
 	err = db.ReindexTables()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to reindex tables: %w", err)
 	}
 	err = db.CommitTransaction()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	err = db.Vacuum()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to vacuum database: %w", err)
 	}
 	err = db.UpdateLastGenerated()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
 	// MiSTer needs the love here

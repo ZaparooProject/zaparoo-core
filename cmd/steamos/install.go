@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,17 +45,17 @@ func install() error {
 		//nolint:gosec // System service file needs to be readable
 		err = os.WriteFile(servicePath, []byte(serviceFile), 0o644)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write service file: %w", err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to reload systemd daemon: %w", err)
 		}
 		err = exec.CommandContext(ctx, "systemctl", "enable", "zaparoo").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to enable zaparoo service: %w", err)
 		}
 	}
 
@@ -62,17 +63,17 @@ func install() error {
 	if _, err := os.Stat(udevPath); os.IsNotExist(err) {
 		err = os.WriteFile(udevPath, []byte(udevFile), 0o644) //nolint:gosec // udev rules need to be readable by system
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write udev rules: %w", err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err = exec.CommandContext(ctx, "udevadm", "control", "--reload-rules").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to reload udev rules: %w", err)
 		}
 		err = exec.CommandContext(ctx, "udevadm", "trigger").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to trigger udev: %w", err)
 		}
 	}
 
@@ -81,7 +82,7 @@ func install() error {
 		//nolint:gosec // modprobe config needs to be readable by system
 		err = os.WriteFile(modprobePath, []byte(modprobeFile), 0o644)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write modprobe config: %w", err)
 		}
 	}
 
@@ -94,33 +95,33 @@ func uninstall() error {
 		defer cancel()
 		err = exec.CommandContext(ctx, "systemctl", "disable", "zaparoo").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to disable zaparoo service: %w", err)
 		}
 		err = exec.CommandContext(ctx, "systemctl", "stop", "zaparoo").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to stop zaparoo service: %w", err)
 		}
 		err = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to reload systemd daemon: %w", err)
 		}
 		err = os.Remove(servicePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove service file: %w", err)
 		}
 	}
 
 	if _, err := os.Stat(modprobePath); !os.IsNotExist(err) {
 		err = os.Remove(modprobePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove modprobe config: %w", err)
 		}
 	}
 
 	if _, err := os.Stat(udevPath); !os.IsNotExist(err) {
 		err = os.Remove(udevPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove udev rules: %w", err)
 		}
 	}
 

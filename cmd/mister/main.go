@@ -49,7 +49,7 @@ func addToStartup() error {
 
 	err := startup.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load startup config: %w", err)
 	}
 
 	changed := false
@@ -58,7 +58,7 @@ func addToStartup() error {
 	if startup.Exists("mrext/tapto") {
 		err = startup.Remove("mrext/tapto")
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to remove tapto from startup: %w", err)
 		}
 		changed = true
 	}
@@ -66,7 +66,7 @@ func addToStartup() error {
 	if !startup.Exists("mrext/" + config.AppName) {
 		err = startup.AddService("mrext/" + config.AppName)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to add service to startup: %w", err)
 		}
 		changed = true
 	}
@@ -74,7 +74,7 @@ func addToStartup() error {
 	if changed && len(startup.Entries) > 0 {
 		err = startup.Save()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to save startup config: %w", err)
 		}
 	}
 
@@ -186,7 +186,7 @@ func run() error {
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
-		return err
+		return fmt.Errorf("service handler failed: %w", err)
 	}
 
 	flags.Post(cfg, pl)

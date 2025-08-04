@@ -63,7 +63,7 @@ WantedBy=multi-user.target
 
 	err = os.WriteFile(unitPath, []byte(unitFile), 0o644)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to write unit file: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -71,7 +71,7 @@ WantedBy=multi-user.target
 	cmd := exec.CommandContext(ctx, "systemctl", "daemon-reload")
 	err = cmd.Run()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to reload systemd daemon: %w", err)
 	}
 
 	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
@@ -79,7 +79,7 @@ WantedBy=multi-user.target
 	cmd = exec.CommandContext(ctx, "systemctl", "enable", "zaparoo.service")
 	err = cmd.Run()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to enable zaparoo service: %w", err)
 	}
 
 	return true, nil
@@ -137,7 +137,7 @@ func run() error {
 	}
 	err = svc.ServiceHandler(serviceFlag)
 	if err != nil {
-		return err
+		return fmt.Errorf("service handler error: %w", err)
 	}
 
 	flags.Post(cfg, pl)

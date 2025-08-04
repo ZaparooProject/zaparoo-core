@@ -25,6 +25,7 @@ package mister
 import (
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -52,7 +53,7 @@ func LoadCsvMappings() (uids, texts map[string]string, err error) {
 
 	f, err := os.Open(LegacyMappingsPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to open legacy mappings file: %w", err)
 	}
 	defer func(c io.Closer) {
 		_ = c.Close()
@@ -61,7 +62,7 @@ func LoadCsvMappings() (uids, texts map[string]string, err error) {
 	entries := make([]CsvMappingEntry, 0)
 	err = gocsv.Unmarshal(f, &entries)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("failed to unmarshal CSV mappings: %w", err)
 	}
 
 	count := 0

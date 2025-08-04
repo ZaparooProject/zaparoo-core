@@ -349,7 +349,7 @@ type LaunchBoxGame struct {
 func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get user home directory: %w", err)
 	}
 
 	dirs := []string{
@@ -392,7 +392,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				root := "C:\\Program Files (x86)\\Steam\\steamapps"
 				appResults, err := helpers.ScanSteamApps(root)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
 				return append(results, appResults...), nil
 			},
@@ -470,7 +470,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				//nolint:gosec // Safe: reads game database XML files from controlled directories
 				xmlFile, err := os.Open(xmlPath)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to open XML file %s: %w", xmlPath, err)
 				}
 				defer func(xmlFile *os.File) {
 					if closeErr := xmlFile.Close(); closeErr != nil {
@@ -480,13 +480,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				data, err := io.ReadAll(xmlFile)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to read XML file: %w", err)
 				}
 
 				var lbXML LaunchBox
 				err = xml.Unmarshal(data, &lbXML)
 				if err != nil {
-					return results, err
+					return results, fmt.Errorf("failed to unmarshal XML: %w", err)
 				}
 
 				for _, game := range lbXML.Games {

@@ -133,7 +133,7 @@ func (sr *ScriptReader) read() (rune, error) {
 	if errors.Is(err, io.EOF) {
 		return eof, nil
 	} else if err != nil {
-		return eof, err
+		return eof, fmt.Errorf("failed to read rune: %w", err)
 	}
 	sr.pos++
 	return ch, nil
@@ -142,7 +142,7 @@ func (sr *ScriptReader) read() (rune, error) {
 func (sr *ScriptReader) unread() error {
 	err := sr.r.UnreadRune()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unread rune: %w", err)
 	}
 	sr.pos--
 	return nil
@@ -946,7 +946,7 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 		if part.Type == ArgPartTypeExpression {
 			output, err := expr.Eval(part.Value, exprEnv)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("failed to evaluate expression %q: %w", part.Value, err)
 			}
 
 			switch v := output.(type) {

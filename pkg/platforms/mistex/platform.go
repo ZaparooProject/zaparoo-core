@@ -53,23 +53,23 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 func (p *Platform) StartPre(_ *config.Instance) error {
 	err := os.MkdirAll(mister.TempDir, 0o755)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	err = os.MkdirAll(helpers.DataDir(p), 0o755)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create keyboard: %w", err)
 	}
 	p.kbd = kbd
 
 	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create gamepad: %w", err)
 	}
 	p.gpd = gpd
 
@@ -92,7 +92,7 @@ func (p *Platform) StartPost(
 		setActiveMedia,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start tracker: %w", err)
 	}
 
 	p.tr = tr
@@ -188,7 +188,7 @@ func LaunchMenu() error {
 
 	cmd, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func() {
 		if err := cmd.Close(); err != nil {
@@ -233,7 +233,11 @@ func (p *Platform) PlayAudio(path string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "aplay", path).Start()
+	err := exec.CommandContext(ctx, "aplay", path).Start()
+	if err != nil {
+		return fmt.Errorf("failed to start audio playback: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) ActiveSystem() string {
@@ -255,10 +259,14 @@ func (p *Platform) ActiveGamePath() string {
 func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	system, err := games.LookupSystem(id)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	return mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
+	err = mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
+	if err != nil {
+		return fmt.Errorf("failed to launch core: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
@@ -282,7 +290,11 @@ func (p *Platform) KeyboardPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown keyboard key: %s", name)
 	}
-	return p.kbd.Press(code)
+	err := p.kbd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press keyboard key: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) GamepadPress(name string) error {
@@ -290,7 +302,11 @@ func (p *Platform) GamepadPress(name string) error {
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
 	}
-	return p.gpd.Press(code)
+	err := p.gpd.Press(code)
+	if err != nil {
+		return fmt.Errorf("failed to press gamepad button: %w", err)
+	}
+	return nil
 }
 
 func (p *Platform) ForwardCmd(env *platforms.CmdEnv) (platforms.CmdResult, error) {

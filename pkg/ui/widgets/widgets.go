@@ -74,18 +74,26 @@ func createPIDFile(pl platforms.Platform) error {
 		return errors.New("PID file already exists")
 	}
 	pid := os.Getpid()
-	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600)
+	err := os.WriteFile(path, []byte(strconv.Itoa(pid)), 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to write PID file: %w", err)
+	}
+	return nil
 }
 
 func removePIDFile(pl platforms.Platform) error {
 	path := pidPath(pl)
 	_, err := os.Stat(path)
 	if err == nil {
-		return os.Remove(path)
+		err = os.Remove(path)
+		if err != nil {
+			return fmt.Errorf("failed to remove PID file: %w", err)
+		}
+		return nil
 	} else if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	return fmt.Errorf("failed to stat PID file: %w", err)
 }
 
 // killWidgetIfRunning checks if a widget is running via the PID file and
@@ -96,43 +104,43 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, err
+		return false, fmt.Errorf("failed to stat PID file: %w", err)
 	}
 
 	pid := 0
 	//nolint:gosec // Safe: reads PID files for process management
 	pidBytes, err := os.ReadFile(path)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to read PID file: %w", err)
 	}
 	pid, err = strconv.Atoi(string(pidBytes))
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to parse PID: %w", err)
 	}
 
 	if !isProcessRunning(pid) {
 		// clean up stale file
 		if removeErr := os.Remove(path); removeErr != nil {
-			return false, removeErr
+			return false, fmt.Errorf("failed to remove stale PID file: %w", removeErr)
 		}
 		return false, nil
 	}
 
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to find process: %w", err)
 	}
 
 	err = proc.Signal(syscall.SIGTERM)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to send SIGTERM: %w", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(path); err == nil {
 		err := os.Remove(path)
 		if err != nil {
-			return true, err
+			return true, fmt.Errorf("failed to remove PID file after kill: %w", err)
 		}
 	}
 
@@ -167,12 +175,12 @@ func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview
 	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read args file: %w", err)
 	}
 
 	err = json.Unmarshal(args, &noticeArgs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal notice args: %w", err)
 	}
 
 	if noticeArgs.Text == "" && loader {
@@ -290,20 +298,23 @@ func NoticeUI(pl platforms.Platform, argsPath string, loader bool) error {
 		return NoticeUIBuilder(pl, argsPath, loader)
 	})
 	log.Debug().Msg("exiting notice widget")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to build and retry notice widget: %w", err)
+	}
+	return nil
 }
 
 func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string) (*tview.Application, error) {
 	//nolint:gosec // Safe: reads widget argument files from controlled directories
 	args, err := os.ReadFile(argsPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read picker args file: %w", err)
 	}
 
 	var pickerArgs widgetmodels.PickerArgs
 	err = json.Unmarshal(args, &pickerArgs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal picker args: %w", err)
 	}
 
 	if len(pickerArgs.Items) < 1 {
@@ -459,5 +470,8 @@ func PickerUI(cfg *config.Instance, pl platforms.Platform, argsPath string) erro
 		return PickerUIBuilder(cfg, pl, argsPath)
 	})
 	log.Debug().Msg("exiting picker widget")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to build and run picker UI: %w", err)
+	}
+	return nil
 }

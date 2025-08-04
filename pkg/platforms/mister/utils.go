@@ -62,7 +62,7 @@ func RunDevCmd(cmd, args string) error {
 
 	dev, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func(dev *os.File) {
 		closeErr := dev.Close()
@@ -73,7 +73,7 @@ func RunDevCmd(cmd, args string) error {
 
 	_, err = fmt.Fprintf(dev, "%s %s\n", cmd, args)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return nil

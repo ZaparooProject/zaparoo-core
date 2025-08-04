@@ -43,14 +43,24 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	systemID := env.Cmd.Args[0]
 
 	if strings.EqualFold(systemID, "menu") {
+		if err := pl.StopActiveLauncher(); err != nil {
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, fmt.Errorf("failed to stop active launcher: %w", err)
+		}
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, pl.StopActiveLauncher()
+		}, nil
 	}
 
+	if err := pl.LaunchSystem(env.Cfg, systemID); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to launch system '%s': %w", systemID, err)
+	}
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, pl.LaunchSystem(env.Cfg, systemID)
+	}, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -75,12 +85,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if strings.EqualFold(query, "all") {
 		game, gameErr := gamesdb.RandomGame(systemdefs.AllSystems())
 		if gameErr != nil {
-			return platforms.CmdResult{}, gameErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
 
+		if err := launch(game.Path); err != nil {
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, fmt.Errorf("failed to launch random game: %w", err)
+		}
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(game.Path)
+		}, nil
 	}
 
 	// absolute path, try read dir and pick random file
@@ -88,12 +103,12 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// TODO: doesn't filter on extensions
 	if filepath.IsAbs(query) {
 		if _, statErr := os.Stat(query); statErr != nil {
-			return platforms.CmdResult{}, statErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to stat path '%s': %w", query, statErr)
 		}
 
 		files, globErr := filepath.Glob(filepath.Join(query, "*"))
 		if globErr != nil {
-			return platforms.CmdResult{}, globErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to glob files in '%s': %w", query, globErr)
 		}
 
 		if len(files) == 0 {
@@ -102,12 +117,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		file, randomErr := helpers.RandomElem(files)
 		if randomErr != nil {
-			return platforms.CmdResult{}, randomErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
 		}
 
+		if err := launch(file); err != nil {
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, fmt.Errorf("failed to launch file '%s': %w", file, err)
+		}
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(file)
+		}, nil
 	}
 
 	// perform a search similar to launch.search and pick randomly
@@ -123,7 +143,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		} else {
 			system, lookupErr := systemdefs.LookupSystem(systemID)
 			if lookupErr != nil {
-				return platforms.CmdResult{}, lookupErr
+				return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, lookupErr)
 			} else if system == nil {
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
@@ -134,7 +154,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
 		if searchErr != nil {
-			return platforms.CmdResult{}, searchErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to search for games matching '%s': %w", query, searchErr)
 		}
 
 		if len(res) == 0 {
@@ -143,12 +163,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 		game, randomErr := helpers.RandomElem(res)
 		if randomErr != nil {
-			return platforms.CmdResult{}, randomErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to select random game: %w", randomErr)
 		}
 
+		if err := launch(game.Path); err != nil {
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, fmt.Errorf("failed to launch game '%s': %w", game.Path, err)
+		}
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, launch(game.Path)
+		}, nil
 	}
 
 	// assume given a list of system ids
@@ -166,12 +191,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	game, err := gamesdb.RandomGame(systems)
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
 
+	if err := launch(game.Path); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, err)
+	}
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, launch(game.Path)
+	}, nil
 }
 
 func getAltLauncher(
@@ -247,7 +277,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			dler,
 		)
 		if err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to install remote file: %w", err)
 		}
 		path = installPath
 	}
@@ -295,7 +325,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	system, err := systemdefs.LookupSystem(systemID)
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
@@ -348,7 +378,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		)
 
 		if err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to search for exact path '%s': %w", lookupPath, err)
 		} else if len(res) == 0 {
 			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", lookupPath)
 		}
@@ -390,7 +420,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		// search all systems
 		res, searchErr := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
 		if searchErr != nil {
-			return platforms.CmdResult{}, searchErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to search all systems for '%s': %w", query, searchErr)
 		}
 
 		if len(res) == 0 {
@@ -420,7 +450,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	} else {
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {
-			return platforms.CmdResult{}, lookupErr
+			return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, lookupErr)
 		}
 
 		systems = append(systems, *system)
@@ -428,7 +458,7 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
 	if searchErr != nil {
-		return platforms.CmdResult{}, searchErr
+		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", query, searchErr)
 	}
 
 	if len(res) == 0 {

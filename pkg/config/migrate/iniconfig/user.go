@@ -22,6 +22,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package iniconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -215,12 +216,12 @@ func (c *UserConfig) LoadConfig() error {
 
 	cfg, err := ini.ShadowLoad(c.IniPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load ini file: %w", err)
 	}
 
 	err = cfg.StrictMapTo(c)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to map config: %w", err)
 	}
 
 	return nil
@@ -237,12 +238,12 @@ func (c *UserConfig) SaveConfig() error {
 
 	err := cfg.ReflectFrom(c)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to reflect config: %w", err)
 	}
 
 	err = cfg.SaveTo(c.IniPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	return nil
@@ -253,7 +254,7 @@ func NewUserConfig(defaultConfig *UserConfig) (*UserConfig, error) {
 
 	exePath, err := os.Executable()
 	if err != nil {
-		return defaultConfig, err
+		return defaultConfig, fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	appPath := os.Getenv(UserAppPathEnv)

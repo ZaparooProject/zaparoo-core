@@ -41,9 +41,14 @@ func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 //nolint:gocritic // unused parameter required by interface
 func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg("stopping media")
+	if err := pl.StopActiveLauncher(); err != nil {
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, fmt.Errorf("failed to stop active launcher: %w", err)
+	}
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, pl.StopActiveLauncher()
+	}, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -54,7 +59,7 @@ func cmdDelay(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 	amount, err := strconv.Atoi(env.Cmd.Args[0])
 	if err != nil {
-		return platforms.CmdResult{}, err
+		return platforms.CmdResult{}, fmt.Errorf("invalid delay amount '%s': %w", env.Cmd.Args[0], err)
 	}
 
 	log.Info().Msgf("delaying for: %d", amount)
@@ -114,5 +119,8 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
-	return platforms.CmdResult{}, exec.CommandContext(ctx, cmd, cmdArgs...).Run()
+	if err := exec.CommandContext(ctx, cmd, cmdArgs...).Run(); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", cmd, err)
+	}
+	return platforms.CmdResult{}, nil
 }

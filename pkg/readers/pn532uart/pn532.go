@@ -58,14 +58,14 @@ func wakeUp(port serial.Port) error {
 		0x00, 0x00, 0x00, 0x00,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write wakeup bytes: %w", err)
 	} else if n != 16 {
 		return errors.New("wakeup write error, not all bytes written")
 	}
 
 	err = port.Drain()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to drain port: %w", err)
 	}
 
 	return nil
@@ -77,12 +77,15 @@ func sendAck(port serial.Port) error {
 
 	n, err := port.Write(ackFrame)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write ACK frame: %w", err)
 	} else if n != len(ackFrame) {
 		return errors.New("ack write error, not all bytes written")
 	}
 
-	return port.Drain()
+	if err := port.Drain(); err != nil {
+		return fmt.Errorf("failed to drain port after ACK: %w", err)
+	}
+	return nil
 }
 
 // Block and wait to receive an ACK frame on the serial port, returning any
@@ -106,7 +109,7 @@ func waitAck(port serial.Port) ([]byte, error) {
 
 		n, err := port.Read(buf)
 		if err != nil {
-			return preAck, err
+			return preAck, fmt.Errorf("failed to read from port while waiting for ACK: %w", err)
 		} else if n == 0 {
 			tries++
 			continue
@@ -131,12 +134,15 @@ func sendNack(port serial.Port) error {
 	// tells the PN532 there was a problem and to resend previous data
 	n, err := port.Write(nackFrame)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write NACK frame: %w", err)
 	} else if n != len(nackFrame) {
 		return errors.New("nack write error, not all bytes written")
 	}
 
-	return port.Drain()
+	if err := port.Drain(); err != nil {
+		return fmt.Errorf("failed to drain port after NACK: %w", err)
+	}
+	return nil
 }
 
 func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
@@ -171,14 +177,14 @@ func sendFrame(port serial.Port, cmd byte, args []byte) ([]byte, error) {
 
 	n, err := port.Write(frm)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to write frame: %w", err)
 	} else if n != len(frm) {
 		return []byte{}, errors.New("write error, not all bytes written")
 	}
 
 	err = port.Drain()
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to drain port after frame write: %w", err)
 	}
 
 	return waitAck(port)
@@ -203,7 +209,7 @@ retry:
 
 	_, err := port.Read(buf)
 	if err != nil {
-		return []byte{}, err
+		return []byte{}, fmt.Errorf("failed to read response frame: %w", err)
 	}
 
 	// find middle of packet code (0x00 0xff) and skip preamble

@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -55,12 +56,12 @@ func (db *UserDB) Open() error {
 		exists = false
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
-			return mkdirErr
+			return fmt.Errorf("failed to create directory for database: %w", mkdirErr)
 		}
 	}
 	sqlInstance, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open database: %w", err)
 	}
 	db.sql = sqlInstance
 	if !exists {
@@ -109,7 +110,11 @@ func (db *UserDB) Close() error {
 	if db.sql == nil {
 		return nil
 	}
-	return db.sql.Close()
+	err := db.sql.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+	return nil
 }
 
 // TODO: reader source (physical reader vs web)

@@ -22,6 +22,7 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -136,5 +137,9 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
 	}
 
-	return nil, env.Config.Save()
+	err = env.Config.Save()
+	if err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+	return nil, nil
 }

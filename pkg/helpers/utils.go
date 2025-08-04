@@ -200,7 +200,7 @@ func CopyFile(sourcePath, destPath string) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open source file %s: %w", sourcePath, err)
 	}
 	defer func(inputFile *os.File) {
 		_ = inputFile.Close()

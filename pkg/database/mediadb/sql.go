@@ -69,7 +69,10 @@ func sqlUpdateLastGenerated(ctx context.Context, db *sql.DB) error {
 		),
 		strconv.FormatInt(time.Now().Unix(), 10),
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to set last generated timestamp: %w", err)
+	}
+	return nil
 }
 
 func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
@@ -83,12 +86,12 @@ func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, nil
 	} else if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("failed to scan timestamp: %w", err)
 	}
 
 	timestamp, err := strconv.Atoi(rawTimestamp)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("failed to parse timestamp: %w", err)
 	}
 
 	return time.Unix(int64(timestamp), 0), nil
@@ -110,7 +113,10 @@ func sqlIndexTables(ctx context.Context, db *sql.DB) error {
 	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+	return nil
 }
 
 //goland:noinspection SqlWithoutWhere
@@ -127,7 +133,10 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to truncate database: %w", err)
+	}
+	return nil
 }
 
 func sqlVacuum(ctx context.Context, db *sql.DB) error {
@@ -135,17 +144,26 @@ func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	vacuum;
 	`
 	_, err := db.ExecContext(ctx, sqlStmt)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to vacuum database: %w", err)
+	}
+	return nil
 }
 
 func sqlBeginTransaction(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, "BEGIN")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	return nil
 }
 
 func sqlCommitTransaction(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, "COMMIT")
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
 }
 
 func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
@@ -159,7 +177,7 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 		limit 1;
 	`)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find system statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -174,7 +192,10 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 		&row.SystemID,
 		&row.Name,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan system row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (database.System, error) {
@@ -189,7 +210,7 @@ func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (data
 		values (?, ?, ?)
 	`)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert system statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -202,11 +223,14 @@ func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (data
 		row.Name,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert system statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for system: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
@@ -220,7 +244,7 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 		LIMIT 1;
 	`)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media title statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -236,7 +260,10 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 		&row.Slug,
 		&row.Name,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media title row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {
@@ -250,14 +277,14 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitl
 		(DBID, SystemDBID, Slug, Name)
 		values (?, ?, ?, ?)
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare insert media title statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, err
-	}
 	res, err := stmt.ExecContext(ctx,
 		dbID,
 		row.SystemDBID,
@@ -265,11 +292,14 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitl
 		row.Name,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media title statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media title: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (database.Media, error) {
@@ -291,7 +321,7 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 		}
 	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media statement: %w", err)
 	}
 	err = stmt.QueryRowContext(ctx,
 		media.DBID,
@@ -302,7 +332,10 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 		&row.MediaTitleDBID,
 		&row.Path,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (database.Media, error) {
@@ -322,7 +355,7 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		}
 	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert media statement: %w", err)
 	}
 	res, err := stmt.ExecContext(ctx,
 		dbID,
@@ -330,11 +363,14 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		row.Path,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (database.TagType, error) {
@@ -347,14 +383,14 @@ func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (
 		or Type = ?
 		LIMIT 1;
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find tag type statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, err
-	}
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Type,
@@ -362,7 +398,10 @@ func sqlFindTagType(ctx context.Context, db *sql.DB, tagType database.TagType) (
 		&row.DBID,
 		&row.Type,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan tag type row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (database.TagType, error) {
@@ -376,24 +415,27 @@ func sqlInsertTagType(ctx context.Context, db *sql.DB, row database.TagType) (da
 		(DBID, Type)
 		values (?, ?)
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare insert tag type statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, err
-	}
 	res, err := stmt.ExecContext(ctx,
 		dbID,
 		row.Type,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert tag type statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag type: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database.Tag, error) {
@@ -407,14 +449,14 @@ func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database
 		LIMIT 1;
 	`)
 	// TODO: Add TagType dependency when unknown tags supported
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find tag statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, err
-	}
 	err = stmt.QueryRowContext(ctx,
 		tagType.DBID,
 		tagType.Tag,
@@ -423,7 +465,10 @@ func sqlFindTag(ctx context.Context, db *sql.DB, tagType database.Tag) (database
 		&row.TypeDBID,
 		&row.Tag,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan tag row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.Tag, error) {
@@ -437,25 +482,28 @@ func sqlInsertTag(ctx context.Context, db *sql.DB, row database.Tag) (database.T
 		(DBID, TypeDBID, Tag)
 		values (?, ?, ?)
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare insert tag statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, err
-	}
 	res, err := stmt.ExecContext(ctx,
 		dbID,
 		row.TypeDBID,
 		row.Tag,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag) (database.MediaTag, error) {
@@ -477,7 +525,7 @@ func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag
 		}
 	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare find media tag statement: %w", err)
 	}
 	err = stmt.QueryRowContext(ctx,
 		mediaTag.DBID,
@@ -488,7 +536,10 @@ func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag
 		&row.MediaDBID,
 		&row.TagDBID,
 	)
-	return row, err
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media tag row: %w", err)
+	}
+	return row, nil
 }
 
 func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
@@ -508,7 +559,7 @@ func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (
 		}
 	}()
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare insert media tag statement: %w", err)
 	}
 	res, err := stmt.ExecContext(ctx,
 		dbID,
@@ -516,11 +567,14 @@ func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (
 		row.TagDBID,
 	)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to execute insert media tag statement: %w", err)
 	}
 	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
+	}
 	row.DBID = lastID
-	return row, err
+	return row, nil
 }
 
 // Not in use
@@ -598,7 +652,7 @@ func sqlSearchMediaPathExact(
 		LIMIT 1
 	`)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to prepare media path exact search statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -610,7 +664,7 @@ func sqlSearchMediaPathExact(
 		args...,
 	)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to execute media path exact search query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -623,7 +677,7 @@ func sqlSearchMediaPathExact(
 			&result.SystemID,
 			&result.Path,
 		); scanErr != nil {
-			return results, scanErr
+			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
@@ -678,7 +732,7 @@ func sqlSearchMediaPathParts(
 		` LIMIT 250
 	`)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to prepare media path parts search statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -690,7 +744,7 @@ func sqlSearchMediaPathParts(
 		args...,
 	)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to execute media path parts search query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -703,7 +757,7 @@ func sqlSearchMediaPathParts(
 			&result.SystemID,
 			&result.Path,
 		); scanErr != nil {
-			return results, scanErr
+			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
@@ -745,7 +799,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 		select SystemID from Systems;
 	`)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to prepare indexed systems query: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -755,7 +809,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 
 	rows, err := q.QueryContext(ctx)
 	if err != nil {
-		return list, err
+		return list, fmt.Errorf("failed to execute indexed systems query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -765,7 +819,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	for rows.Next() {
 		row := ""
 		if scanErr := rows.Scan(&row); scanErr != nil {
-			return list, scanErr
+			return list, fmt.Errorf("failed to scan indexed systems result: %w", scanErr)
 		}
 		list = append(list, row)
 	}
@@ -785,7 +839,7 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 		ORDER BY RANDOM() LIMIT 1;
 	`)
 	if err != nil {
-		return row, err
+		return row, fmt.Errorf("failed to prepare random game query: %w", err)
 	}
 	defer func() {
 		if closeErr := q.Close(); closeErr != nil {
@@ -796,6 +850,9 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 		&row.SystemID,
 		&row.Path,
 	)
+	if err != nil {
+		return row, fmt.Errorf("failed to scan random game row: %w", err)
+	}
 	row.Name = helpers.FilenameFromPath(row.Path)
-	return row, err
+	return row, nil
 }

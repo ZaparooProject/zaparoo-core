@@ -47,7 +47,10 @@ func cmdKey(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 	if code == "" {
 		return platforms.CmdResult{}, fmt.Errorf("invalid legacy key code: %s", env.Cmd.Args[0])
 	}
-	return platforms.CmdResult{}, pl.KeyboardPress(code)
+	if err := pl.KeyboardPress(code); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key: %w", err)
+	}
+	return platforms.CmdResult{}, nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -63,7 +66,7 @@ func cmdKeyboard(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResu
 
 	for _, name := range env.Cmd.Args {
 		if err := pl.KeyboardPress(name); err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to press keyboard key '%s': %w", name, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -81,7 +84,7 @@ func cmdGamepad(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResul
 
 	for _, name := range env.Cmd.Args {
 		if err := pl.GamepadPress(name); err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("failed to press gamepad button '%s': %w", name, err)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -103,7 +106,7 @@ func insertCoin(
 		var err error
 		amount, err = strconv.Atoi(env.Cmd.Args[0])
 		if err != nil {
-			return platforms.CmdResult{}, err
+			return platforms.CmdResult{}, fmt.Errorf("invalid amount '%s': %w", env.Cmd.Args[0], err)
 		}
 	}
 
