@@ -190,6 +190,9 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 	}
 
 	if umr.Match != nil && *umr.Match == userdb.MatchTypeRegex {
+		if umr.Pattern == nil {
+			return errors.New("pattern is required for regex match")
+		}
 		_, err := regexp.Compile(*umr.Pattern)
 		if err != nil {
 			return fmt.Errorf("failed to compile regex pattern: %w", err)
