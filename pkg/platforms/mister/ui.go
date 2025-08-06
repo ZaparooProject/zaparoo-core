@@ -35,7 +35,10 @@ func showNotice(
 	loader bool,
 ) (string, error) {
 	log.Info().Msgf("showing notice: %s", text)
-	argsID := helpers.RandSeq(10)
+	argsID, err := helpers.RandSeq(10)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate random sequence: %w", err)
+	}
 	argsName := "notice-" + argsID + ".json"
 	if loader {
 		argsName = "loader-" + argsID + ".json"

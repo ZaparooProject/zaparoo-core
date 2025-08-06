@@ -60,13 +60,16 @@ tasks:
 
   clean: '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build'
 
-  test: go test ./...
-
-  test-coverage:
+  test:
+    desc: Run all tests
     cmds:
-      - go test -coverprofile=coverage.out ./...
-      - go tool cover -html=coverage.out
-      - '{{if eq OS "windows"}}powershell rm {{else}}rm {{end}} coverage.out'
+      - go test -v -race ./...
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -v -race -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
 
   lint:
     desc: Run golangci-lint

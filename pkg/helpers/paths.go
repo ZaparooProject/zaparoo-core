@@ -261,7 +261,7 @@ type PathInfo struct {
 func GetPathInfo(path string) PathInfo {
 	var info PathInfo
 	info.Path = path
-	info.Base = filepath.Base(path)
+	info.Base = filepath.Dir(path)
 	info.Filename = filepath.Base(path)
 	info.Extension = filepath.Ext(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)
