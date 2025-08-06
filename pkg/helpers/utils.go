@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -57,9 +58,9 @@ func TokensEqual(a, b *tokens.Token) bool {
 	return a.UID == b.UID && a.Text == b.Text
 }
 
-func GetMd5Hash(path string) (string, error) {
+func GetMd5Hash(filePath string) (string, error) {
 	//nolint:gosec // Safe: opens files for MD5 hashing, used for game file identification
-	file, err := os.Open(path)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open file for MD5 hash: %w", err)
 	}
@@ -70,9 +71,9 @@ func GetMd5Hash(path string) (string, error) {
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
-func GetFileSize(path string) (int64, error) {
+func GetFileSize(filePath string) (int64, error) {
 	//nolint:gosec // Safe: opens files to get file size, used for game file analysis
-	file, err := os.Open(path)
+	file, err := os.Open(filePath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open file for size check: %w", err)
 	}
@@ -157,13 +158,13 @@ func GetLocalIP() string {
 	return ""
 }
 
-func IsZip(path string) bool {
-	return filepath.Ext(strings.ToLower(path)) == ".zip"
+func IsZip(filePath string) bool {
+	return filepath.Ext(strings.ToLower(filePath)) == ".zip"
 }
 
 // ListZip returns a slice of all filenames in a zip file.
-func ListZip(path string) ([]string, error) {
-	r, err := zip.OpenReader(path)
+func ListZip(filePath string) ([]string, error) {
+	r, err := zip.OpenReader(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zip file: %w", err)
 	}
@@ -228,18 +229,16 @@ func CopyFile(sourcePath, destPath string) error {
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
-func RandSeq(n int) string {
+func RandSeq(n int) (string, error) {
 	b := make([]rune, n)
 	for i := range b {
 		randInt, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
 		if err != nil {
-			// Fallback to timestamp-based selection if crypto/rand fails
-			b[i] = letters[int(time.Now().UnixNano())%len(letters)]
-		} else {
-			b[i] = letters[randInt.Int64()]
+			return "", fmt.Errorf("failed to generate secure random sequence: %w", err)
 		}
+		b[i] = letters[randInt.Int64()]
 	}
-	return string(b)
+	return string(b), nil
 }
 
 func YesNoPrompt(label string, def bool) bool {
@@ -277,10 +276,15 @@ func SlugifyString(input string) string {
 	return strings.ToLower(rep)
 }
 
-func FilenameFromPath(path string) string {
-	p := filepath.Clean(path)
-	b := filepath.Base(p)
-	e := filepath.Ext(p)
+func FilenameFromPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	// Convert to forward slash format for consistent cross-platform parsing
+	// Replace backslashes with forward slashes to handle Windows paths on any OS
+	normalizedPath := strings.ReplaceAll(p, "\\", "/")
+	b := path.Base(normalizedPath)
+	e := path.Ext(normalizedPath)
 	if HasSpace(e) {
 		e = ""
 	}
@@ -288,8 +292,8 @@ func FilenameFromPath(path string) string {
 	return r
 }
 
-func SlugifyPath(path string) string {
-	fn := FilenameFromPath(path)
+func SlugifyPath(filePath string) string {
+	fn := FilenameFromPath(filePath)
 	return SlugifyString(fn)
 }
 
