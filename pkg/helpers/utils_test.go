@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTokensEqual(t *testing.T) {
@@ -999,7 +1000,7 @@ func TestRandSeq(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result, err := RandSeq(tt.length)
-			assert.NoError(t, err, "RandSeq should not return error")
+			require.NoError(t, err, "RandSeq should not return error")
 
 			// Check length
 			assert.Len(t, result, tt.length, "RandSeq length mismatch")
@@ -1021,7 +1022,7 @@ func TestRandSeq(t *testing.T) {
 
 		for i := 0; i < iterations; i++ {
 			result, err := RandSeq(length)
-			assert.NoError(t, err, "RandSeq should not return error")
+			require.NoError(t, err, "RandSeq should not return error")
 			results[result] = true
 		}
 
@@ -1144,10 +1145,10 @@ func TestRandomElem(t *testing.T) {
 				result, err := RandomElem(tt.slice)
 
 				if tt.wantErr {
-					assert.Error(t, err, "RandomElem should return error for empty slice")
+					require.Error(t, err, "RandomElem should return error for empty slice")
 					assert.Equal(t, "empty slice", err.Error())
 				} else {
-					assert.NoError(t, err)
+					require.NoError(t, err)
 					assert.Contains(t, tt.slice, result, "RandomElem result should be from the slice")
 				}
 			})
@@ -1159,7 +1160,7 @@ func TestRandomElem(t *testing.T) {
 
 		slice := []int{10, 20, 30, 40, 50}
 		result, err := RandomElem(slice)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Contains(t, slice, result, "RandomElem result should be from the slice")
 	})
 
@@ -1167,18 +1168,18 @@ func TestRandomElem(t *testing.T) {
 		t.Parallel()
 
 		type testStruct struct {
-			ID   int
 			Name string
+			ID   int
 		}
 
 		slice := []testStruct{
-			{1, "first"},
-			{2, "second"},
-			{3, "third"},
+			{"first", 1},
+			{"second", 2},
+			{"third", 3},
 		}
 
 		result, err := RandomElem(slice)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		found := false
 		for _, item := range slice {
@@ -1200,7 +1201,7 @@ func TestRandomElem(t *testing.T) {
 		// Run multiple times to ensure different elements are selected
 		for i := 0; i < 50; i++ {
 			result, err := RandomElem(slice)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			selected[result] = true
 
 			// If we've seen at least 2 different results, that's good enough
@@ -1248,10 +1249,10 @@ func TestGetMd5Hash(t *testing.T) {
 			result, err := GetMd5Hash(tt.path)
 
 			if tt.wantErr {
-				assert.Error(t, err, "GetMd5Hash should return error for non-existent file")
+				require.Error(t, err, "GetMd5Hash should return error for non-existent file")
 				assert.Contains(t, err.Error(), "failed to open file for MD5 hash")
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expectedHash, result, "GetMd5Hash result mismatch")
 			}
 		})
@@ -1293,10 +1294,10 @@ func TestGetFileSize(t *testing.T) {
 			result, err := GetFileSize(tt.path)
 
 			if tt.wantErr {
-				assert.Error(t, err, "GetFileSize should return error for non-existent file")
+				require.Error(t, err, "GetFileSize should return error for non-existent file")
 				assert.Contains(t, err.Error(), "failed to open file for size check")
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tt.expectedSize, result, "GetFileSize result mismatch")
 			}
 		})
@@ -1349,10 +1350,10 @@ func TestListZip(t *testing.T) {
 			result, err := ListZip(tt.path)
 
 			if tt.wantErr {
-				assert.Error(t, err, "ListZip should return error for invalid zip file")
+				require.Error(t, err, "ListZip should return error for invalid zip file")
 				assert.Contains(t, err.Error(), "failed to open zip file")
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.ElementsMatch(t, tt.expectedFiles, result, "ListZip result mismatch")
 			}
 		})
@@ -1366,75 +1367,75 @@ func TestCopyFile(t *testing.T) {
 	tempDir := t.TempDir()
 
 	tests := []struct {
+		checkFunc  func(t *testing.T, destPath string)
 		name       string
 		sourcePath string
 		destPath   string
 		wantErr    bool
-		checkFunc  func(t *testing.T, destPath string)
 	}{
 		{
+			checkFunc: func(t *testing.T, destPath string) {
+				// Verify file exists and content matches
+				content, err := os.ReadFile(destPath) //nolint:gosec // Test file with controlled path
+				require.NoError(t, err)
+				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
+			},
 			name:       "copy_regular_file",
 			sourcePath: "testdata/test.txt",
 			destPath:   tempDir + "/copy_test.txt",
 			wantErr:    false,
-			checkFunc: func(t *testing.T, destPath string) {
-				// Verify file exists and content matches
-				content, err := os.ReadFile(destPath)
-				assert.NoError(t, err)
-				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
-			},
 		},
 		{
+			checkFunc: func(t *testing.T, destPath string) {
+				// Verify empty file exists
+				info, err := os.Stat(destPath)
+				require.NoError(t, err)
+				assert.Equal(t, int64(0), info.Size())
+			},
 			name:       "copy_empty_file",
 			sourcePath: "testdata/empty.txt",
 			destPath:   tempDir + "/copy_empty.txt",
 			wantErr:    false,
-			checkFunc: func(t *testing.T, destPath string) {
-				// Verify empty file exists
-				info, err := os.Stat(destPath)
-				assert.NoError(t, err)
-				assert.Equal(t, int64(0), info.Size())
-			},
 		},
 		{
+			checkFunc: func(t *testing.T, destPath string) {
+				// First create a file to overwrite
+				err := os.WriteFile(destPath, []byte("old content"), 0o600)
+				require.NoError(t, err)
+
+				// Copy should overwrite
+				err = CopyFile("testdata/test.txt", destPath)
+				require.NoError(t, err)
+
+				// Verify new content
+				content, err := os.ReadFile(destPath) //nolint:gosec // Test file with controlled path
+				require.NoError(t, err)
+				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
+			},
 			name:       "overwrite_existing_file",
 			sourcePath: "testdata/test.txt",
 			destPath:   tempDir + "/overwrite.txt",
 			wantErr:    false,
-			checkFunc: func(t *testing.T, destPath string) {
-				// First create a file to overwrite
-				err := os.WriteFile(destPath, []byte("old content"), 0644)
-				assert.NoError(t, err)
-
-				// Copy should overwrite
-				err = CopyFile("testdata/test.txt", destPath)
-				assert.NoError(t, err)
-
-				// Verify new content
-				content, err := os.ReadFile(destPath)
-				assert.NoError(t, err)
-				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
-			},
 		},
 		{
+			checkFunc:  nil,
 			name:       "source_file_not_exist",
 			sourcePath: "testdata/nonexistent.txt",
 			destPath:   tempDir + "/dest.txt",
 			wantErr:    true,
-			checkFunc:  nil,
 		},
 		{
+			checkFunc:  nil,
 			name:       "dest_directory_not_exist",
 			sourcePath: "testdata/test.txt",
 			destPath:   tempDir + "/nonexistent/dest.txt",
 			wantErr:    true,
-			checkFunc:  nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Don't run in parallel due to file operations
+			t.Parallel()
 
 			if tt.checkFunc != nil && tt.name == "overwrite_existing_file" {
 				// Special handling for overwrite test
@@ -1445,7 +1446,7 @@ func TestCopyFile(t *testing.T) {
 			err := CopyFile(tt.sourcePath, tt.destPath)
 
 			if tt.wantErr {
-				assert.Error(t, err, "CopyFile should return error")
+				require.Error(t, err, "CopyFile should return error")
 				assert.Contains(t, err.Error(), "failed to")
 			} else {
 				assert.NoError(t, err)

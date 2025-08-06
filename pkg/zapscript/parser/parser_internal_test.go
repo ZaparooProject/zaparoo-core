@@ -290,7 +290,7 @@ func TestIsWhitespace(t *testing.T) {
 		{
 			name:     "unicode_space",
 			char:     '\u00A0', // Non-breaking space
-			expected: false, // Function only checks for specific ASCII whitespace
+			expected: false,    // Function only checks for specific ASCII whitespace
 		},
 		{
 			name:     "form_feed",
@@ -308,7 +308,8 @@ func TestIsWhitespace(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := isWhitespace(tt.char)
-			assert.Equal(t, tt.expected, result, "isWhitespace result mismatch for character '%c' (0x%X)", tt.char, tt.char)
+			assert.Equal(t, tt.expected, result,
+				"isWhitespace result mismatch for character '%c' (0x%X)", tt.char, tt.char)
 		})
 	}
 }
