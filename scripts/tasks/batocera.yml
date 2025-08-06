@@ -22,8 +22,8 @@ tasks:
         vars:
           PLATFORM: batocera
 
-  deploy-arm64:
+  deploy:
     cmds:
-      - task: build-arm64
-      - scp _build/batocera_arm64/zaparoo root@${BATOCERA_IP}:/userdata/system/zaparoo
+      - task: build-{{.CLI_ARGS}}
+      - scp _build/batocera_{{.CLI_ARGS}}/zaparoo root@${BATOCERA_IP}:/userdata/system/zaparoo
       - ssh root@${BATOCERA_IP} /userdata/system/zaparoo -service restart

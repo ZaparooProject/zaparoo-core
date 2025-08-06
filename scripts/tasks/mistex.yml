@@ -9,8 +9,8 @@ tasks:
           PLATFORM: mistex
           APP_BIN: zaparoo.sh
 
-  deploy-arm64:
+  deploy:
     cmds:
-      - task: build-arm64
-      - scp _build/mistex_arm64/zaparoo.sh root@${MISTEX_IP}:/media/fat/Scripts/zaparoo.sh
+      - task: build-{{.CLI_ARGS}}
+      - scp _build/mistex_{{.CLI_ARGS}}/zaparoo.sh root@${MISTEX_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTEX_IP} /media/fat/Scripts/zaparoo.sh -service restart

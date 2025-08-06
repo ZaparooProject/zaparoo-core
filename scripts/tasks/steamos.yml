@@ -8,7 +8,7 @@ tasks:
         vars:
           PLATFORM: steamos
 
-  deploy-amd64:
+  deploy:
     cmds:
-      - task: build-amd64
-      - scp _build/steamos_amd64/zaparoo deck@${STEAMOS_IP}:/home/deck/zaparoo/zaparoo
+      - task: build-{{.CLI_ARGS}}
+      - scp _build/steamos_{{.CLI_ARGS}}/zaparoo deck@${STEAMOS_IP}:/home/deck/zaparoo/zaparoo
