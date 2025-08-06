@@ -58,7 +58,14 @@ tasks:
         -o "{{.BUILD_DIR}}/{{.APP_BIN}}"
         "./cmd/${PLATFORM}"
 
-  clean: '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} _build'
+  clean:
+    desc: Clean build artifacts (optionally specific platform/arch)
+    vars:
+      PLATFORM: '{{default "" .PLATFORM}}'
+      ARCH: '{{default "" .ARCH}}'
+      TARGET_DIR: '{{if and .PLATFORM .ARCH}}_build/{{.PLATFORM}}_{{.ARCH}}{{else if .PLATFORM}}_build/{{.PLATFORM}}_*{{else}}_build{{end}}'
+    cmds:
+      - '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} {{.TARGET_DIR}}'
 
   test:
     desc: Run all tests

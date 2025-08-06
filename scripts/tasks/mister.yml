@@ -9,8 +9,8 @@ tasks:
           PLATFORM: mister
           APP_BIN: zaparoo.sh
 
-  deploy-arm:
+  deploy:
     cmds:
-      - task: build-arm
-      - scp _build/mister_arm/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
+      - task: build-{{.CLI_ARGS}}
+      - scp _build/mister_{{.CLI_ARGS}}/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart
