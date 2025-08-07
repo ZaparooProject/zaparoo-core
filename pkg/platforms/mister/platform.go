@@ -309,7 +309,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = LaunchCore(cfg, p, *system)
+	err = LaunchCore(cfg, p, system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}

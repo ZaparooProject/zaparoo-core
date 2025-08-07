@@ -56,8 +56,6 @@ func SetVideoMode(width, height int) error {
 		height,
 	)
 
-	fmt.Println(cmdStr)
-
 	_, err = cmd.WriteString(cmdStr)
 	if err != nil {
 		return err

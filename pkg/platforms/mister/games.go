@@ -22,6 +22,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package mister
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -37,26 +38,25 @@ import (
 func GetSystem(id string) (*Core, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
-	} else {
-		return nil, fmt.Errorf("unknown system: %s", id)
 	}
+	return nil, fmt.Errorf("unknown system: %s", id)
 }
 
-func GetGroup(groupId string) (Core, error) {
+func GetGroup(groupID string) (Core, error) {
 	var merged Core
-	if _, ok := CoreGroups[groupId]; !ok {
-		return merged, fmt.Errorf("no system group found for %s", groupId)
+	if _, ok := CoreGroups[groupID]; !ok {
+		return merged, fmt.Errorf("no system group found for %s", groupID)
 	}
 
-	if len(CoreGroups[groupId]) < 1 {
-		return merged, fmt.Errorf("no systems in %s", groupId)
-	} else if len(CoreGroups[groupId]) == 1 {
-		return CoreGroups[groupId][0], nil
+	if len(CoreGroups[groupID]) < 1 {
+		return merged, fmt.Errorf("no systems in %s", groupID)
+	} else if len(CoreGroups[groupID]) == 1 {
+		return CoreGroups[groupID][0], nil
 	}
 
-	merged = CoreGroups[groupId][0]
+	merged = CoreGroups[groupID][0]
 	merged.Slots = make([]Slot, 0)
-	for _, s := range CoreGroups[groupId] {
+	for _, s := range CoreGroups[groupID] {
 		merged.Slots = append(merged.Slots, s.Slots...)
 	}
 
@@ -97,9 +97,9 @@ func MatchSystemFile(system *Core, path string) bool {
 }
 
 func AllSystems() []Core {
-	var systems []Core
-
 	keys := helpers.AlphaMapKeys(Systems)
+	systems := make([]Core, 0, len(keys))
+
 	for _, k := range keys {
 		systems = append(systems, Systems[k])
 	}
@@ -122,7 +122,7 @@ func (r *resultsStack) pop() {
 
 func (r *resultsStack) get() (*[]string, error) {
 	if len(*r) == 0 {
-		return nil, fmt.Errorf("nothing on stack")
+		return nil, errors.New("nothing on stack")
 	}
 	return &(*r)[len(*r)-1], nil
 }
@@ -131,12 +131,12 @@ func (r *resultsStack) get() (*[]string, error) {
 // files. This function deep searches .zip files and handles symlinks at all
 // levels.
 // TODO: get rid of this
-func GetFiles(systemId string, path string) ([]string, error) {
+func GetFiles(systemID, path string) ([]string, error) {
 	var allResults []string
 	var stack resultsStack
 	visited := make(map[string]struct{})
 
-	system, err := GetSystem(systemId)
+	system, err := GetSystem(systemID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +152,8 @@ func GetFiles(systemId string, path string) ([]string, error) {
 		if file.IsDir() {
 			if _, ok := visited[path]; ok {
 				return filepath.SkipDir
-			} else {
-				visited[path] = struct{}{}
 			}
+			visited[path] = struct{}{}
 		}
 
 		// handle symlinked directories
@@ -258,7 +257,7 @@ func GetFiles(systemId string, path string) ([]string, error) {
 	}
 
 	if !realRoot.IsDir() {
-		return nil, fmt.Errorf("root is not a directory")
+		return nil, errors.New("root is not a directory")
 	}
 
 	err = filepath.WalkDir(realPath, scanner)
@@ -288,20 +287,20 @@ func GetFiles(systemId string, path string) ([]string, error) {
 	return allResults, nil
 }
 
-func GetAllFiles(systemPaths map[string][]string, statusFn func(systemId string, path string)) ([][2]string, error) {
+func GetAllFiles(systemPaths map[string][]string, statusFn func(systemID string, path string)) ([][2]string, error) {
 	var allFiles [][2]string
 
-	for systemId, paths := range systemPaths {
+	for systemID, paths := range systemPaths {
 		for i := range paths {
-			statusFn(systemId, paths[i])
+			statusFn(systemID, paths[i])
 
-			files, err := GetFiles(systemId, paths[i])
+			files, err := GetFiles(systemID, paths[i])
 			if err != nil {
 				return nil, err
 			}
 
 			for i := range files {
-				allFiles = append(allFiles, [2]string{systemId, files[i]})
+				allFiles = append(allFiles, [2]string{systemID, files[i]})
 			}
 		}
 	}
@@ -310,16 +309,15 @@ func GetAllFiles(systemPaths map[string][]string, statusFn func(systemId string,
 }
 
 func FilterUniqueFilenames(files []string) []string {
-	var filtered []string
+	filtered := make([]string, 0, len(files))
 	filenames := make(map[string]struct{})
 	for i := range files {
 		fn := filepath.Base(files[i])
 		if _, ok := filenames[fn]; ok {
 			continue
-		} else {
-			filenames[fn] = struct{}{}
-			filtered = append(filtered, files[i])
 		}
+		filenames[fn] = struct{}{}
+		filtered = append(filtered, files[i])
 	}
 	return filtered
 }
@@ -402,9 +400,8 @@ func shallowScanRbf() ([]RbfInfo, error) {
 			}
 
 			return ParseRbf(newPath), nil
-		} else {
-			return ParseRbf(path), nil
 		}
+		return ParseRbf(path), nil
 	}
 
 	files, err := os.ReadDir(misterconfig.SDRootDir)

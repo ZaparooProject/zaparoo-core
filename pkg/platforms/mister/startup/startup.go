@@ -20,6 +20,7 @@
 package startup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -102,7 +103,7 @@ func (s *Startup) Load() error {
 
 func (s *Startup) Save() error {
 	if len(s.Entries) == 0 {
-		return fmt.Errorf("no startup entries to save")
+		return errors.New("no startup entries to save")
 	}
 
 	contents := "#!/bin/sh\n\n"

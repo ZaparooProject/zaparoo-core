@@ -59,7 +59,7 @@ func unmapSharedMem(mem *[]byte, file *os.File) error {
 	}
 
 	if file == nil {
-		return fmt.Errorf("/dev/mem file reference is nil")
+		return errors.New("/dev/mem file reference is nil")
 	}
 
 	err = file.Close()
@@ -70,7 +70,7 @@ func unmapSharedMem(mem *[]byte, file *os.File) error {
 	return nil
 }
 
-func GetActiveIni() (int, error) { //nolint:unused // used for reference later
+func GetActiveIni() (int, error) { // used for reference later
 	mem, file, err := mapSharedMem(0x1FFFF000)
 	if err != nil {
 		return 0, err
@@ -86,9 +86,8 @@ func GetActiveIni() (int, error) { //nolint:unused // used for reference later
 
 	if vs[0] == 0x34 && vs[1] == 0x99 && vs[2] == 0xBA {
 		return int(vs[3] + 1), nil
-	} else {
-		return 0, nil
 	}
+	return 0, nil
 }
 
 func SetActiveIni(ini int, relaunchCore bool) error {
@@ -125,9 +124,8 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		err = LaunchMenu()
 		if err != nil {
 			return err
-		} else {
-			return nil
 		}
+		return nil
 	}
 
 	return LaunchMenu()

@@ -31,7 +31,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func GenerateMgl(cfg *config.Instance, system *Core, path string, override string) (string, error) {
+func GenerateMgl(_ *config.Instance, system *Core, path, override string) (string, error) {
 	// override the system rbf with the user specified one
 	// TODO: this needs to look up the core by launcher using the zaparoo config
 	// for _, setCore := range cfg.Systems.SetCore {
@@ -44,7 +44,7 @@ func GenerateMgl(cfg *config.Instance, system *Core, path string, override strin
 	//		system.RBF = parts[1]
 	//		break
 	//	}
-	//}
+	// }
 
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", system.RBF)
 
@@ -71,7 +71,10 @@ func GenerateMgl(cfg *config.Instance, system *Core, path string, override strin
 		return "", err
 	}
 
-	mgl += fmt.Sprintf("<file delay=\"%d\" type=\"%s\" index=\"%d\" path=\"../../../../..%s\"/>\n", mglDef.Delay, mglDef.Method, mglDef.Index, path)
+	mgl += fmt.Sprintf(
+		"<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
+		mglDef.Delay, mglDef.Method, mglDef.Index, path,
+	)
 	mgl += "</mistergamedescription>"
 	return mgl, nil
 }
@@ -100,7 +103,8 @@ func launchFile(path string) error {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	if !s.HasSuffix(s.ToLower(path), ".mgl") && !s.HasSuffix(s.ToLower(path), ".mra") && !s.HasSuffix(s.ToLower(path), ".rbf") {
+	lowerPath := s.ToLower(path)
+	if !s.HasSuffix(lowerPath, ".mgl") && !s.HasSuffix(lowerPath, ".mra") && !s.HasSuffix(lowerPath, ".rbf") {
 		return fmt.Errorf("not a valid launch file: %s", path)
 	}
 
@@ -191,22 +195,20 @@ func LaunchGame(cfg *config.Instance, system *Core, path string) error {
 }
 
 // LaunchCore Launch a core given a possibly partial path, as per MGL files.
-func LaunchCore(cfg *config.Instance, pl platforms.Platform, system Core) error {
+func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *Core) error {
 	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
 	if system.SetName != "" {
-		return LaunchGame(cfg, &system, "")
+		return LaunchGame(cfg, system, "")
 	}
 
-	var path string
 	rbfs := SystemsWithRbf()
-	if _, ok := rbfs[system.ID]; ok {
-		path = rbfs[system.ID].Path
-	} else {
+	if _, ok := rbfs[system.ID]; !ok {
 		return fmt.Errorf("no core found for system %s", system.ID)
 	}
+	path := rbfs[system.ID].Path
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {

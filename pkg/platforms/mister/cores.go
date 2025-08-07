@@ -178,7 +178,7 @@ var Systems = map[string]Core{
 					Index:  1,
 				},
 			},
-			//{
+			// {
 			//	Label: "BIOS",
 			//	Exts:  []string{".rom", ".bin"},
 			//	Mgl: &MGLParams{
@@ -278,7 +278,7 @@ var Systems = map[string]Core{
 					Index:  1,
 				},
 			},
-			//{
+			// {
 			//	Label: "Bios",
 			//	Exts:  []string{".rom", ".bin"},
 			//	Mgl: &MGLParams{
@@ -313,7 +313,7 @@ var Systems = map[string]Core{
 					Index:  1,
 				},
 			},
-			//{
+			// {
 			//	Label: "FDS BIOS",
 			//	Exts:  []string{".bin"},
 			//	Mgl: &MGLParams{
@@ -613,7 +613,7 @@ var Systems = map[string]Core{
 					Index:  1,
 				},
 			},
-			//{
+			// {
 			//	Label: "XROM",
 			//	Exts:  []string{".rom"},
 			//	Mgl: &MGLParams{
@@ -853,7 +853,7 @@ var Systems = map[string]Core{
 					Index:  1,
 				},
 			},
-			//{
+			// {
 			//	Label: "Overlay",
 			//	Exts:  []string{".ovr"},
 			//	Mgl: &MGLParams{

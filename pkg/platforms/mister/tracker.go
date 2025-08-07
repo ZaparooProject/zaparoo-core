@@ -508,7 +508,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch current path file: %w", err)
 	}
 
-	if _, err := os.Stat(misterconfig.MainPickerSelected); err == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+	_, pickerExists := os.Stat(misterconfig.MainPickerSelected)
+	if pickerExists == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
 		err = watcher.Add(misterconfig.MainPickerSelected)
 		if err != nil {
 			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)

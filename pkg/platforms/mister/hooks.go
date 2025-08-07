@@ -174,7 +174,7 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	// exception for Top 300 pack which uses 2 disks
 	if strings.HasSuffix(path, "IDE 0-1 Top 300 DOS Games.vhd") {
 		mgl += fmt.Sprintf(
-			"\t<file delay=\"%d\" type=\"%s\" index=\"%d\" path=%q/>\n",
+			"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 			mglDef.Delay,
 			mglDef.Method,
 			mglDef.Index,
@@ -182,7 +182,7 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 		)
 
 		mgl += fmt.Sprintf(
-			"\t<file delay=\"%d\" type=\"%s\" index=\"%d\" path=%q/>\n",
+			"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 			mglDef.Delay,
 			mglDef.Method,
 			mglDef.Index+1,
@@ -201,9 +201,10 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 
 	// if there's an iso in the same folder, mount it too
 	for _, file := range files {
-		if (strings.HasSuffix(strings.ToLower(file.Name()), ".iso") || strings.HasSuffix(strings.ToLower(file.Name()), ".chd")) && file.Name() != filename {
+		fileName := strings.ToLower(file.Name())
+		if (strings.HasSuffix(fileName, ".iso") || strings.HasSuffix(fileName, ".chd")) && file.Name() != filename {
 			mgl += fmt.Sprintf(
-				"\t<file delay=\"%d\" type=\"%s\" index=\"%d\" path=%q/>\n",
+				"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 				mglDef.Delay,
 				mglDef.Method,
 				4,
@@ -214,7 +215,7 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	}
 
 	mgl += fmt.Sprintf(
-		"\t<file delay=\"%d\" type=\"%s\" index=\"%d\" path=%q/>\n",
+		"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 		mglDef.Delay,
 		mglDef.Method,
 		mglDef.Index,
@@ -227,7 +228,8 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 }
 
 func hookAmiga(_ *config.Instance, _ *Core, path string) (string, error) {
-	if !strings.HasSuffix(strings.ToLower(filepath.Dir(path)), "listings/games.txt") && !strings.HasSuffix(strings.ToLower(filepath.Dir(path)), "listings/demos.txt") {
+	dirPath := strings.ToLower(filepath.Dir(path))
+	if !strings.HasSuffix(dirPath, "listings/games.txt") && !strings.HasSuffix(dirPath, "listings/demos.txt") {
 		return "", nil
 	}
 
@@ -249,7 +251,7 @@ func hookNeoGeo(_ *config.Instance, _ *Core, path string) (string, error) {
 	// neogeo core allows launching zips and folders
 	if strings.HasSuffix(strings.ToLower(path), ".zip") || filepath.Ext(path) == "" {
 		return fmt.Sprintf(
-			"\t<file delay=\"%d\" type=\"%s\" index=\"%d\" path=\"../../../../..%s\"/>\n",
+			"\t<file delay=\"%d\" type=%q index=\"%d\" path=\"../../../../..%s\"/>\n",
 			1,
 			"f",
 			1,
