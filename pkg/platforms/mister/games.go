@@ -1,3 +1,24 @@
+/*
+Zaparoo Core
+Copyright (c) 2025 The Zaparoo Project Contributors.
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This file is part of Zaparoo Core.
+
+Zaparoo Core is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Zaparoo Core is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 package mister
 
 import (
@@ -58,7 +79,7 @@ func LookupCore(id string) (*Core, error) {
 }
 
 // MatchSystemFile returns true if a given file's extension is valid for a system.
-func MatchSystemFile(system Core, path string) bool {
+func MatchSystemFile(system *Core, path string) bool {
 	// ignore dot files
 	if strings.HasPrefix(filepath.Base(path), ".") {
 		return false
@@ -109,6 +130,7 @@ func (r *resultsStack) get() (*[]string, error) {
 // GetFiles searches for all valid games in a given path and return a list of
 // files. This function deep searches .zip files and handles symlinks at all
 // levels.
+// TODO: get rid of this
 func GetFiles(systemId string, path string) ([]string, error) {
 	var allResults []string
 	var stack resultsStack
@@ -142,20 +164,20 @@ func GetFiles(systemId string, path string) ([]string, error) {
 				return err
 			}
 
-			realPath, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return err
+			realPath, evalErr := filepath.EvalSymlinks(path)
+			if evalErr != nil {
+				return evalErr
 			}
 
-			file, err := os.Stat(realPath)
-			if err != nil {
-				return err
+			file, statErr := os.Stat(realPath)
+			if statErr != nil {
+				return fmt.Errorf("failed to stat file %s: %w", realPath, statErr)
 			}
 
 			if file.IsDir() {
 				err = os.Chdir(path)
 				if err != nil {
-					return err
+					return fmt.Errorf("failed to change directory to %s: %w", path, err)
 				}
 
 				stack.new()
@@ -163,12 +185,12 @@ func GetFiles(systemId string, path string) ([]string, error) {
 
 				err = filepath.WalkDir(realPath, scanner)
 				if err != nil {
-					return err
+					return fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 				}
 
-				results, err := stack.get()
-				if err != nil {
-					return err
+				results, stackErr := stack.get()
+				if stackErr != nil {
+					return stackErr
 				}
 
 				for i := range *results {
@@ -179,30 +201,28 @@ func GetFiles(systemId string, path string) ([]string, error) {
 			}
 		}
 
-		results, err := stack.get()
-		if err != nil {
-			return err
+		results, stackErr := stack.get()
+		if stackErr != nil {
+			return stackErr
 		}
 
 		if strings.HasSuffix(strings.ToLower(path), ".zip") {
 			// zip files
-			zipFiles, err := helpers.ListZip(path)
-			if err != nil {
+			zipFiles, zipErr := helpers.ListZip(path)
+			if zipErr != nil {
 				// skip invalid zip files
 				return nil
 			}
 
 			for i := range zipFiles {
-				if MatchSystemFile(*system, zipFiles[i]) {
+				if MatchSystemFile(system, zipFiles[i]) {
 					abs := filepath.Join(path, zipFiles[i])
 					*results = append(*results, abs)
 				}
 			}
-		} else {
+		} else if MatchSystemFile(system, path) {
 			// regular files
-			if MatchSystemFile(*system, path) {
-				*results = append(*results, path)
-			}
+			*results = append(*results, path)
 		}
 
 		return nil
@@ -213,12 +233,12 @@ func GetFiles(systemId string, path string) ([]string, error) {
 
 	root, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to lstat path %s: %w", path, err)
 	}
 
 	err = os.Chdir(filepath.Dir(path))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to change directory to %s: %w", filepath.Dir(path), err)
 	}
 
 	// handle symlinks on root game folder because WalkDir fails silently on them
@@ -228,7 +248,7 @@ func GetFiles(systemId string, path string) ([]string, error) {
 	} else {
 		realPath, err = filepath.EvalSymlinks(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to evaluate symlinks for %s: %w", path, err)
 		}
 	}
 
@@ -243,7 +263,7 @@ func GetFiles(systemId string, path string) ([]string, error) {
 
 	err = filepath.WalkDir(realPath, scanner)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
 
 	results, err := stack.get()
@@ -372,13 +392,13 @@ func shallowScanRbf() ([]RbfInfo, error) {
 	infoSymlink := func(path string) (RbfInfo, error) {
 		info, err := os.Lstat(path)
 		if err != nil {
-			return RbfInfo{}, err
+			return RbfInfo{}, fmt.Errorf("failed to lstat %s: %w", path, err)
 		}
 
 		if info.Mode()&os.ModeSymlink != 0 {
 			newPath, err := os.Readlink(path)
 			if err != nil {
-				return RbfInfo{}, err
+				return RbfInfo{}, fmt.Errorf("failed to readlink %s: %w", path, err)
 			}
 
 			return ParseRbf(newPath), nil
@@ -389,7 +409,7 @@ func shallowScanRbf() ([]RbfInfo, error) {
 
 	files, err := os.ReadDir(misterconfig.SDRootDir)
 	if err != nil {
-		return results, err
+		return results, fmt.Errorf("failed to read SD root directory %s: %w", misterconfig.SDRootDir, err)
 	}
 
 	for _, file := range files {

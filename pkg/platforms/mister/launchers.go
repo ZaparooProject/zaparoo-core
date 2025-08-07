@@ -96,7 +96,7 @@ func launch(systemID string) func(*config.Instance, string) error {
 
 		path = checkInZip(path)
 
-		err = LaunchGame(cfg, *s, path)
+		err = LaunchGame(cfg, s, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -142,7 +142,7 @@ func launchSinden(
 
 		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
 
-		err = LaunchGame(cfg, sn, path)
+		err = LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -175,7 +175,7 @@ func launchAggGnw(cfg *config.Instance, path string) error {
 		},
 	}
 
-	err = LaunchGame(cfg, sn, path)
+	err = LaunchGame(cfg, &sn, path)
 	if err != nil {
 		return fmt.Errorf("failed to launch game: %w", err)
 	}
@@ -203,7 +203,7 @@ func launchAltCore(
 
 		log.Debug().Str("rbf", sn.RBF).Msgf("launching alt core: %v", sn)
 
-		err = LaunchGame(cfg, sn, path)
+		err = LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -238,7 +238,7 @@ func launchGroovyCore() func(*config.Instance, string) error {
 
 		log.Debug().Msgf("launching Groovy core: %v", sn)
 
-		err := LaunchGame(cfg, sn, path)
+		err := LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -273,7 +273,7 @@ func launchDOS() func(*config.Instance, string) error {
 
 		path = checkInZip(path)
 
-		err = LaunchGame(cfg, *s, path)
+		err = LaunchGame(cfg, s, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
@@ -307,7 +307,7 @@ func launchAtari2600() func(*config.Instance, string) error {
 			},
 		}
 
-		err = LaunchGame(cfg, sn, path)
+		err = LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}

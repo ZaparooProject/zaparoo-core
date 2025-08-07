@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mister
 
 import (
@@ -9,6 +28,7 @@ import (
 	"strings"
 
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/rs/zerolog/log"
 )
 
 func ActiveGameEnabled() bool {
@@ -21,7 +41,11 @@ func SetActiveGame(path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close active game file")
+		}
+	}()
 
 	_, err = file.WriteString(path)
 	if err != nil {
@@ -47,8 +71,14 @@ func ResolvePath(path string) string {
 	}
 
 	cwd, _ := os.Getwd()
-	defer os.Chdir(cwd)
-	os.Chdir(misterconfig.SDRootDir)
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			log.Error().Err(err).Str("path", cwd).Msg("failed to restore working directory")
+		}
+	}()
+	if err := os.Chdir(misterconfig.SDRootDir); err != nil {
+		return path
+	}
 
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -107,10 +137,10 @@ func ReadRecent(path string) ([]RecentEntry, error) {
 
 type MGLFile struct {
 	XMLName xml.Name `xml:"file"`
-	Delay   int      `xml:"delay,attr"`
 	Type    string   `xml:"type,attr"`
-	Index   int      `xml:"index,attr"`
 	Path    string   `xml:"path,attr"`
+	Delay   int      `xml:"delay,attr"`
+	Index   int      `xml:"index,attr"`
 }
 
 type MGL struct {

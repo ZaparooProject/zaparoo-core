@@ -50,13 +50,15 @@ func MainHasFeature(feature string) bool {
 
 const DefaultIniFilename = "MiSTer.ini"
 
-const MenuCore = "MENU"
-const LinuxFolder = SDRootDir + "/linux"
-const StartupFile = LinuxFolder + "/user-startup.sh"
-const ActiveGameFile = TempDir + "/ACTIVEGAME"
-const LastLaunchFile = SDRootDir + "/.LASTLAUNCH.mgl"
-const CoreNameFile = TempDir + "/CORENAME"
-const CurrentPathFile = TempDir + "/CURRENTPATH"
+const (
+	MenuCore        = "MENU"
+	LinuxFolder     = SDRootDir + "/linux"
+	StartupFile     = LinuxFolder + "/user-startup.sh"
+	ActiveGameFile  = TempDir + "/ACTIVEGAME"
+	LastLaunchFile  = SDRootDir + "/.LASTLAUNCH.mgl"
+	CoreNameFile    = TempDir + "/CORENAME"
+	CurrentPathFile = TempDir + "/CURRENTPATH"
+)
 const CoreConfigFolder = SDRootDir + "/config"
 
 var GamesFolders = []string{

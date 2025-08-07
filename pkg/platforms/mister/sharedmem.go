@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mister
 
 import (
@@ -16,7 +35,7 @@ func mapSharedMem(address int64) (*[]byte, *os.File, error) {
 		0,
 	)
 	if err != nil {
-		return &[]byte{}, nil, fmt.Errorf("error opening /dev/mem: %s", err)
+		return &[]byte{}, nil, fmt.Errorf("error opening /dev/mem: %w", err)
 	}
 
 	mem, err := syscall.Mmap(
@@ -27,7 +46,7 @@ func mapSharedMem(address int64) (*[]byte, *os.File, error) {
 		syscall.MAP_SHARED,
 	)
 	if err != nil {
-		return &[]byte{}, nil, fmt.Errorf("error mapping /dev/mem: %s", err)
+		return &[]byte{}, nil, fmt.Errorf("error mapping /dev/mem: %w", err)
 	}
 
 	return &mem, file, nil
@@ -36,7 +55,7 @@ func mapSharedMem(address int64) (*[]byte, *os.File, error) {
 func unmapSharedMem(mem *[]byte, file *os.File) error {
 	err := syscall.Munmap(*mem)
 	if err != nil {
-		return fmt.Errorf("error unmapping /dev/mem: %s", err)
+		return fmt.Errorf("error unmapping /dev/mem: %w", err)
 	}
 
 	if file == nil {
@@ -45,13 +64,13 @@ func unmapSharedMem(mem *[]byte, file *os.File) error {
 
 	err = file.Close()
 	if err != nil {
-		return fmt.Errorf("error closing /dev/mem: %s", err)
+		return fmt.Errorf("error closing /dev/mem: %w", err)
 	}
 
 	return nil
 }
 
-func GetActiveIni() (int, error) {
+func GetActiveIni() (int, error) { //nolint:unused // used for reference later
 	mem, file, err := mapSharedMem(0x1FFFF000)
 	if err != nil {
 		return 0, err

@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mister
 
 import (
@@ -9,10 +28,10 @@ import (
 )
 
 type INIFile struct {
-	ID          int
 	DisplayName string
 	Filename    string
 	Path        string
+	ID          int
 }
 
 func GetAllINIFiles() ([]INIFile, error) {
@@ -40,7 +59,7 @@ func GetAllINIFiles() ([]INIFile, error) {
 	for _, filename := range iniFilenames {
 		lower := strings.ToLower(filename)
 
-		if lower == strings.ToLower(config.DefaultIniFilename) {
+		if strings.EqualFold(lower, config.DefaultIniFilename) {
 			inis = append(inis, INIFile{
 				ID:          currentID,
 				DisplayName: "Main",
@@ -60,13 +79,14 @@ func GetAllINIFiles() ([]INIFile, error) {
 			iniFile.DisplayName = filename[7:]
 			iniFile.DisplayName = strings.TrimSuffix(iniFile.DisplayName, filepath.Ext(iniFile.DisplayName))
 
-			if iniFile.DisplayName == "" {
+			switch iniFile.DisplayName {
+			case "":
 				iniFile.DisplayName = " -- "
-			} else if iniFile.DisplayName == "alt_1" {
+			case "alt_1":
 				iniFile.DisplayName = "Alt1"
-			} else if iniFile.DisplayName == "alt_2" {
+			case "alt_2":
 				iniFile.DisplayName = "Alt2"
-			} else if iniFile.DisplayName == "alt_3" {
+			case "alt_3":
 				iniFile.DisplayName = "Alt3"
 			}
 

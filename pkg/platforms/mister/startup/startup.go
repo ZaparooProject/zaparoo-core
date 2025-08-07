@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package startup
 
 import (
@@ -17,8 +36,8 @@ type Startup struct {
 
 type Entry struct {
 	Name    string
-	Enabled bool
 	Cmds    []string
+	Enabled bool
 }
 
 func (s *Startup) Load() error {
@@ -40,10 +59,10 @@ func (s *Startup) Load() error {
 			continue
 		}
 
-		if len(line) == 0 && len(section) != 0 {
+		if line == "" && len(section) != 0 {
 			sections = append(sections, section)
 			section = make([]string, 0)
-		} else if len(line) > 0 {
+		} else if line != "" {
 			section = append(section, line)
 		}
 	}
@@ -53,7 +72,7 @@ func (s *Startup) Load() error {
 		cmds := make([]string, 0)
 		enabled := false
 
-		if len(section[0]) > 0 && section[0][0] == '#' {
+		if section[0] != "" && section[0][0] == '#' {
 			name = strings.TrimSpace(section[0][1:])
 			cmds = append(cmds, section[1:]...)
 		} else {
@@ -61,7 +80,7 @@ func (s *Startup) Load() error {
 		}
 
 		for _, line := range cmds {
-			if len(line) > 0 && line[0] != '#' {
+			if line != "" && line[0] != '#' {
 				enabled = true
 				break
 			}
@@ -89,7 +108,7 @@ func (s *Startup) Save() error {
 	contents := "#!/bin/sh\n\n"
 
 	for _, entry := range s.Entries {
-		if len(entry.Name) != 0 {
+		if entry.Name != "" {
 			contents += "# " + entry.Name + "\n"
 		}
 
@@ -100,7 +119,7 @@ func (s *Startup) Save() error {
 		contents += "\n"
 	}
 
-	return os.WriteFile(config.StartupFile, []byte(contents), 0644)
+	return os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
 }
 
 func (s *Startup) Exists(name string) bool {
@@ -118,7 +137,7 @@ func (s *Startup) Enable(name string) error {
 		if entry.Name == name && !entry.Enabled {
 			s.Entries[i].Enabled = true
 			for j, cmd := range entry.Cmds {
-				if len(cmd) > 0 && cmd[0] == '#' {
+				if cmd != "" && cmd[0] == '#' {
 					s.Entries[i].Cmds[j] = cmd[1:]
 				}
 			}
@@ -130,7 +149,7 @@ func (s *Startup) Enable(name string) error {
 	return fmt.Errorf("startup entry not found: %s", name)
 }
 
-func (s *Startup) Add(name string, cmd string) error {
+func (s *Startup) Add(name, cmd string) error {
 	if s.Exists(name) {
 		return fmt.Errorf("startup entry already exists: %s", name)
 	}

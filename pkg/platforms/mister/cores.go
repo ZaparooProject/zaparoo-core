@@ -1,3 +1,22 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mister
 
 import (
@@ -6,23 +25,23 @@ import (
 )
 
 type MGLParams struct {
-	Delay  int
 	Method string
+	Delay  int
 	Index  int
 }
 
 type Slot struct {
+	Mgl   *MGLParams
 	Label string
 	Exts  []string
-	Mgl   *MGLParams
 }
 
 type Core struct {
 	ID             string
 	SetName        string
-	SetNameSameDir bool
 	RBF            string
 	Slots          []Slot
+	SetNameSameDir bool
 }
 
 // CoreGroups is a list of common MiSTer aliases that map back to a system.
@@ -50,7 +69,7 @@ var CoreGroups = map[string][]Core{
 	"TGFX16": {Systems["TurboGrafx16"], Systems["SuperGrafx"]},
 }
 
-func PathToMGLDef(system Core, path string) (*MGLParams, error) {
+func PathToMGLDef(system *Core, path string) (*MGLParams, error) {
 	var mglDef *MGLParams
 
 	for _, ft := range system.Slots {
@@ -167,7 +186,7 @@ var Systems = map[string]Core{
 			//		Method: "f",
 			//		Index:  2,
 			//	},
-			//},
+			// },
 		},
 	},
 	"AtariLynx": {
@@ -267,7 +286,7 @@ var Systems = map[string]Core{
 			//		Method: "f",
 			//		Index:  2,
 			//	},
-			//},
+			// },
 			{
 				Label: "BASIC",
 				Exts:  []string{".bas"},
@@ -302,7 +321,7 @@ var Systems = map[string]Core{
 			//		Method: "f",
 			//		Index:  2,
 			//	},
-			//},
+			// },
 		},
 	},
 	"Gamate": {
@@ -439,7 +458,7 @@ var Systems = map[string]Core{
 		RBF: "_Console/Intellivision",
 		Slots: []Slot{
 			{
-				//Exts: []string{".rom", ".int", ".bin"},
+				// Exts: []string{".rom", ".int", ".bin"},
 				Exts: []string{".int", ".bin"},
 				Mgl: &MGLParams{
 					Delay:  1,
@@ -602,7 +621,7 @@ var Systems = map[string]Core{
 			//		Method: "f",
 			//		Index:  2,
 			//	},
-			//},
+			// },
 		},
 	},
 	"PocketChallengeV2": {
@@ -842,7 +861,7 @@ var Systems = map[string]Core{
 			//		Method: "f",
 			//		Index:  2,
 			//	},
-			//},
+			// },
 		},
 	},
 	"WonderSwan": {
