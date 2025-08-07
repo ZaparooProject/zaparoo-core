@@ -22,32 +22,6 @@ func GetGamesFolders(cfg *config.UserConfig) []string {
 	return folders
 }
 
-func FindFile(path string) (string, error) {
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-
-	parent := filepath.Dir(path)
-	name := filepath.Base(path)
-
-	files, err := os.ReadDir(parent)
-	if err != nil {
-		return "", err
-	}
-
-	for _, file := range files {
-		target := file.Name()
-
-		if len(target) != len(name) {
-			continue
-		} else if strings.EqualFold(target, name) {
-			return filepath.Join(parent, target), nil
-		}
-	}
-
-	return "", fmt.Errorf("file match not found: %s", path)
-}
-
 // FolderToSystems returns what systems a path could be for.
 func FolderToSystems(cfg *config.UserConfig, path string) []System {
 	path = strings.ToLower(path)
@@ -130,24 +104,6 @@ func BestSystemMatch(cfg *config.UserConfig, path string) (System, error) {
 type PathResult struct {
 	System System
 	Path   string
-}
-
-// GetSystemPaths returns all possible paths for each system.
-func GetSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
-	// Since System.Folder was removed, this function is deprecated
-	// TODO: Replace with zaparoo's launcher-based path resolution
-	return []PathResult{}
-}
-
-func GetAllSystemPaths(cfg *config.UserConfig) []PathResult {
-	return GetSystemPaths(cfg, AllSystems())
-}
-
-// GetActiveSystemPaths returns the active path for each system.
-func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
-	// Since System.Folder was removed, this function is deprecated
-	// TODO: Replace with zaparoo's launcher-based path resolution
-	return []PathResult{}
 }
 
 func GetPopulatedGamesFolders(cfg *config.UserConfig, systems []System) map[string][]string {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
 	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
@@ -27,7 +28,7 @@ func GetActiveCoreName() string {
 }
 
 func NormalizePath(cfg *config.Instance, path string) string {
-	sys, err := games.BestSystemMatch(UserConfigToMrext(cfg), path)
+	sys, err := games.BestSystemMatch(config2.UserConfigToMrext(cfg), path)
 	if err != nil {
 		return path
 	}

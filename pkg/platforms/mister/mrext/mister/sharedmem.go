@@ -3,10 +3,9 @@ package mister
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
 func mapSharedMem(address int64) (*[]byte, *os.File, error) {
@@ -111,23 +110,5 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		}
 	}
 
-	// TODO: can we check if this file has been modified recently?
-	recent, err := ReadRecent(config.CoresRecentFile)
-	if err != nil || len(recent) == 0 {
-		err = LaunchMenu()
-		if err != nil {
-			return err
-		} else {
-			return nil
-		}
-	} else {
-		corePath := filepath.Join(config.SdFolder, recent[0].Directory, recent[0].Name)
-		// TODO: use real config later
-		err = LaunchGenericFile(&config.UserConfig{}, corePath)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return LaunchMenu()
 }

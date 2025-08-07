@@ -1,6 +1,6 @@
 //go:build linux
 
-package mister
+package config
 
 import (
 	"os"
@@ -65,3 +65,7 @@ func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
 		},
 	}
 }
+
+const DefaultIniFilename = "MiSTer.ini"
+
+const MenuCore = "MENU"

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gocarina/gocsv"
 	"github.com/rs/zerolog/log"
@@ -46,12 +47,12 @@ func LoadCsvMappings() (uids, texts map[string]string, err error) {
 	uids = make(map[string]string)
 	texts = make(map[string]string)
 
-	if _, statErr := os.Stat(LegacyMappingsPath); errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(config.LegacyMappingsPath); errors.Is(statErr, os.ErrNotExist) {
 		log.Debug().Msg("no legacy mappings file found, skipping processing")
 		return nil, nil, nil
 	}
 
-	f, err := os.Open(LegacyMappingsPath)
+	f, err := os.Open(config.LegacyMappingsPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open legacy mappings file: %w", err)
 	}
@@ -137,9 +138,9 @@ func StartCsvMappingsWatcher(
 				} else if event.Has(fsnotify.Remove) {
 					// editors may also delete the file on write
 					time.Sleep(delay)
-					_, err := os.Stat(LegacyMappingsPath)
+					_, err := os.Stat(config.LegacyMappingsPath)
 					if err == nil {
-						err = dbWatcher.Add(LegacyMappingsPath)
+						err = dbWatcher.Add(config.LegacyMappingsPath)
 						if err != nil {
 							log.Error().Msgf("error watching database: %s", err)
 						}
@@ -161,8 +162,8 @@ func StartCsvMappingsWatcher(
 		}
 	}()
 
-	if _, err := os.Stat(LegacyMappingsPath); err == nil {
-		err = dbWatcher.Add(LegacyMappingsPath)
+	if _, err := os.Stat(config.LegacyMappingsPath); err == nil {
+		err = dbWatcher.Add(config.LegacyMappingsPath)
 		if err != nil {
 			log.Error().Msgf("error watching database: %s", err)
 		}

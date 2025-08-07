@@ -22,6 +22,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -30,8 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 type Platform struct {
@@ -100,12 +101,12 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	if MainHasFeature(MainFeaturePicker) {
-		err := os.MkdirAll(MainPickerDir, 0o750)
+	if config2.MainHasFeature(config2.MainFeaturePicker) {
+		err := os.MkdirAll(config2.MainPickerDir, 0o750)
 		if err != nil {
 			return fmt.Errorf("failed to create picker directory: %w", err)
 		}
-		err = os.WriteFile(MainPickerSelected, []byte(""), 0o600)
+		err = os.WriteFile(config2.MainPickerSelected, []byte(""), 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to write picker selected file: %w", err)
 		}
@@ -160,7 +161,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := StartTracker(
-		UserConfigToMrext(cfg),
+		config2.UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -233,9 +234,9 @@ func (p *Platform) Stop() error {
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
-	f, err := os.Create(TokenReadFile)
+	f, err := os.Create(config2.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %w", TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", config2.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -243,7 +244,7 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 
 	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %w", TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", config2.TokenReadFile, err)
 	}
 
 	p.lastScan = token
@@ -261,14 +262,14 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 }
 
 func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), games.GetGamesFolders(UserConfigToMrext(cfg))...)
+	return append(cfg.IndexRoots(), games.GetGamesFolders(config2.UserConfigToMrext(cfg))...)
 }
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    DataDir,
-		ConfigDir:  DataDir,
-		TempDir:    TempDir,
+		DataDir:    config2.DataDir,
+		ConfigDir:  config2.DataDir,
+		TempDir:    config2.TempDir,
 		ZipsAsDirs: true,
 	}
 }
@@ -307,7 +308,7 @@ func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mister.LaunchCore(UserConfigToMrext(cfg), *system)
+	err = mister.LaunchCore(config2.UserConfigToMrext(cfg), *system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
@@ -615,7 +616,7 @@ func (p *Platform) ShowNotice(
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !MainHasFeature(MainFeatureNotice) {
+	if time.Since(p.lastUIHidden) < 2*time.Second && !config2.MainHasFeature(config2.MainFeatureNotice) {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}
@@ -638,7 +639,7 @@ func (p *Platform) ShowLoader(
 ) (func() error, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !MainHasFeature(MainFeatureNotice) {
+	if time.Since(p.lastUIHidden) < 2*time.Second && !config2.MainHasFeature(config2.MainFeatureNotice) {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}

@@ -30,11 +30,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func buildTheInstallRequestApp() (*tview.Application, error) {
@@ -100,7 +100,7 @@ func tryAddStartup() error {
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
 	err := tui.BuildAndRetry(func() (*tview.Application, error) {
-		logDestinationPath := path.Join(mister.DataDir, config.LogFile)
+		logDestinationPath := path.Join(config2.DataDir, config.LogFile)
 		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
 	if err != nil {

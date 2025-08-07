@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
@@ -402,12 +403,12 @@ func (tr *Tracker) runPickerSelection(name string) {
 			}
 		}
 
-		files, err := os.ReadDir(MainPickerDir)
+		files, err := os.ReadDir(config2.MainPickerDir)
 		if err != nil {
 			log.Error().Msgf("error reading picker items dir: %s", err)
 		} else {
 			for _, file := range files {
-				err := os.Remove(filepath.Join(MainPickerDir, file.Name()))
+				err := os.Remove(filepath.Join(config2.MainPickerDir, file.Name()))
 				if err != nil {
 					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
 				}
@@ -443,7 +444,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
 						}
-					case event.Name == MainPickerSelected:
+					case event.Name == config2.MainPickerSelected:
 						log.Info().Msgf("main picker selected: %s", event.Name)
 						tr.runPickerSelection(event.Name)
 					}
@@ -513,8 +514,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch current path file: %w", err)
 	}
 
-	if _, err := os.Stat(MainPickerSelected); err == nil && MainHasFeature(MainFeaturePicker) {
-		err = watcher.Add(MainPickerSelected)
+	if _, err := os.Stat(config2.MainPickerSelected); err == nil && config2.MainHasFeature(config2.MainFeaturePicker) {
+		err = watcher.Add(config2.MainPickerSelected)
 		if err != nil {
 			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)
 		}

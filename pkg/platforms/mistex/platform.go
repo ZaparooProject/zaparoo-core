@@ -17,6 +17,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	mm "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -24,9 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	mm "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 type Platform struct {
@@ -51,7 +52,7 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(mister.TempDir, 0o750)
+	err := os.MkdirAll(config2.TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -85,7 +86,7 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := mister.StartTracker(
-		mister.UserConfigToMrext(cfg),
+		config2.UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -148,9 +149,9 @@ func (p *Platform) Stop() error {
 }
 
 func (*Platform) ScanHook(token *tokens.Token) error {
-	f, err := os.Create(mister.TokenReadFile)
+	f, err := os.Create(config2.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %w", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", config2.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -158,21 +159,21 @@ func (*Platform) ScanHook(token *tokens.Token) error {
 
 	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %w", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", config2.TokenReadFile, err)
 	}
 
 	return nil
 }
 
 func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), games.GetGamesFolders(mister.UserConfigToMrext(cfg))...)
+	return append(cfg.IndexRoots(), games.GetGamesFolders(config2.UserConfigToMrext(cfg))...)
 }
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    mister.DataDir,
-		ConfigDir:  mister.DataDir,
-		TempDir:    mister.TempDir,
+		DataDir:    config2.DataDir,
+		ConfigDir:  config2.DataDir,
+		TempDir:    config2.TempDir,
 		ZipsAsDirs: true,
 	}
 }
@@ -262,7 +263,7 @@ func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
+	err = mm.LaunchCore(config2.UserConfigToMrext(cfg), *system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}

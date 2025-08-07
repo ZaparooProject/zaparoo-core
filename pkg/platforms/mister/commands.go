@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/rs/zerolog/log"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	"github.com/rs/zerolog/log"
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
-	inis, err := mister.GetAllMisterIni()
+	inis, err := mister.GetAllINIFiles()
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get MiSTer ini files: %w", err)
 	}
@@ -87,7 +88,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 			return platforms.CmdResult{}, fmt.Errorf("invalid script: %s", script)
 		}
 
-		scriptPath := filepath.Join(ScriptsDir, script)
+		scriptPath := filepath.Join(config.ScriptsDir, script)
 		if _, err := os.Stat(scriptPath); err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("script not found: %s", script)
 		}
@@ -149,7 +150,7 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 		return platforms.CmdResult{}, fmt.Errorf("failed to close temp mgl file: %w", err)
 	}
 
-	cmd, err := os.OpenFile(CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to open command interface: %w", err)
 	}
