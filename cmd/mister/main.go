@@ -41,7 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"github.com/rs/zerolog/log"
-	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func addToStartup() error {

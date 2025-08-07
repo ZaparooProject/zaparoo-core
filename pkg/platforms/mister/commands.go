@@ -13,7 +13,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {

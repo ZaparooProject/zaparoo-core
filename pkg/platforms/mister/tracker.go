@@ -20,11 +20,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/metadata"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
-	mrextutils "github.com/wizzomafizzo/mrext/pkg/utils"
+	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/metadata"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	mrextutils "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
 )
 
 const ArcadeSystem = "Arcade"

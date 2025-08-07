@@ -30,8 +30,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 type Platform struct {

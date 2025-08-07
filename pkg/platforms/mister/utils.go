@@ -9,9 +9,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func ExitGame() {

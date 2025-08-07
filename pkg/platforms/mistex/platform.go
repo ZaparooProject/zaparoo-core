@@ -24,9 +24,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	mm "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	mm "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 type Platform struct {

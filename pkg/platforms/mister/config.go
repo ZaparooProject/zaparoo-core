@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
+	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 )
 
 const (

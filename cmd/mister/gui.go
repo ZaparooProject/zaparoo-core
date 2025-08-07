@@ -34,7 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
-	mrextmister "github.com/wizzomafizzo/mrext/pkg/mister"
+	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func buildTheInstallRequestApp() (*tview.Application, error) {
