@@ -341,7 +341,7 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 		}
 
 		time.Sleep(500 * time.Millisecond)
-		err = mister.SetVideoMode(640, 480)
+		err = SetVideoMode(640, 480)
 		if err != nil {
 			return fmt.Errorf("error setting video mode: %w", err)
 		}

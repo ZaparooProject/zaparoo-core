@@ -3,14 +3,10 @@ package mister
 import (
 	"bytes"
 	"encoding/xml"
-	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 )
@@ -69,84 +65,6 @@ func ResolvePath(path string) string {
 	}
 
 	return abs
-}
-
-// Search for directories in root that start with "_".
-func GetMenuFolders(root string) []string {
-	var folders []string
-
-	// TODO: confirm menu can't traverse symlinks
-	var scan func(path string)
-	scan = func(folder string) {
-		files, err := os.ReadDir(folder)
-		if err != nil {
-			return
-		}
-		for _, file := range files {
-			if file.IsDir() && file.Name()[0] == '_' {
-				path := filepath.Join(folder, file.Name())
-				folders = append(folders, path)
-				scan(path)
-			}
-		}
-	}
-
-	scan(root)
-	return folders
-}
-
-func isRbf(path string) bool {
-	return filepath.Ext(strings.ToLower(path)) == ".rbf"
-}
-
-// Do a shallow search of RBF files in root and return list of relative paths.
-func GetRbfs(root string) []string {
-	var rbfs []string
-
-	rootFiles, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-
-	for _, rootFile := range rootFiles {
-		if !rootFile.IsDir() && isRbf(rootFile.Name()) {
-			rbfs = append(rbfs, rootFile.Name())
-		} else if rootFile.IsDir() && rootFile.Name()[0] == '_' {
-			subFiles, err := os.ReadDir(filepath.Join(root, rootFile.Name()))
-			if err != nil {
-				continue
-			}
-
-			for _, subFile := range subFiles {
-				if !subFile.IsDir() && isRbf(subFile.Name()) {
-					rbfs = append(rbfs, rootFile.Name()+"/"+subFile.Name())
-				}
-			}
-		}
-	}
-
-	return rbfs
-}
-
-// Find an RBF in a list of all RBFs and return a value suitable for MGL.
-func MatchRbf(rbfs []string, match string) string {
-	if len(rbfs) == 0 {
-		return ""
-	}
-
-	for _, rbf := range rbfs {
-		parts := strings.Split(rbf, "/")
-		file := parts[len(parts)-1]
-		if strings.HasPrefix(strings.ToLower(file), strings.ToLower(match)) {
-			if len(parts) == 1 {
-				return match
-			} else {
-				return strings.Join(append(parts[0:len(parts)-1], match), "/")
-			}
-		}
-	}
-
-	return ""
 }
 
 type RecentEntry struct {
@@ -232,119 +150,4 @@ func ReadMgl(path string) (MGL, error) {
 	}
 
 	return mgl, nil
-}
-
-type MenuConfig struct {
-	BackgroundMode int
-}
-
-const (
-	BackgroundModeNone      = 0
-	BackgroundModeWallpaper = 2
-	BackgroundModeHBars1    = 4
-	BackgroundModeHBars2    = 6
-	BackgroundModeVBars1    = 8
-	BackgroundModeVBars2    = 10
-	BackgroundModeSpectrum  = 12
-	BackgroundModeBlack     = 14
-)
-
-func ReadMenuConfig() (MenuConfig, error) {
-	var cfg MenuConfig
-
-	if _, err := os.Stat(config.MenuConfigFile); err != nil {
-		return cfg, err
-	}
-
-	file, err := os.ReadFile(config.MenuConfigFile)
-	if err != nil {
-		return cfg, err
-	}
-
-	cfg.BackgroundMode = int(file[0])
-
-	return cfg, nil
-}
-
-func SetMenuBackgroundMode(mode int) error {
-	if !helpers.Contains([]int{
-		BackgroundModeNone,
-		BackgroundModeWallpaper,
-		BackgroundModeHBars1,
-		BackgroundModeHBars2,
-		BackgroundModeVBars1,
-		BackgroundModeVBars2,
-		BackgroundModeSpectrum,
-		BackgroundModeBlack,
-	}, mode) {
-		return fmt.Errorf("invalid background mode")
-	}
-
-	cfg, err := ReadMenuConfig()
-	if err != nil {
-		return err
-	}
-
-	if cfg.BackgroundMode == mode {
-		return nil
-	}
-
-	file, err := os.ReadFile(config.MenuConfigFile)
-	if err != nil {
-		return err
-	}
-
-	file[0] = byte(mode)
-
-	return os.WriteFile(config.MenuConfigFile, file, 0644)
-}
-
-func GetMounts(cfg *config.UserConfig) ([]string, error) {
-	file, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return nil, err
-	}
-
-	var mounts []string
-	gamesFolders := games.GetGamesFolders(cfg)
-
-	for _, line := range strings.Split(string(file), "\n") {
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, " ")
-
-		if len(parts) < 2 {
-			continue
-		}
-
-		if helpers.Contains(gamesFolders, parts[1]) {
-			mounts = append(mounts, parts[1])
-		}
-	}
-
-	return mounts, nil
-}
-
-type DiskUsage struct {
-	Total uint64
-	Free  uint64
-	Used  uint64
-}
-
-func GetDiskUsage(path string) (DiskUsage, error) {
-	var usage DiskUsage
-
-	stat := syscall.Statfs_t{}
-	err := syscall.Statfs(path, &stat)
-	if err != nil {
-		return usage, err
-	}
-
-	usage.Total = stat.Blocks * uint64(stat.Bsize)
-	usage.Free = stat.Bfree * uint64(stat.Bsize)
-	usage.Used = usage.Total - usage.Free
-
-	return usage, nil
 }

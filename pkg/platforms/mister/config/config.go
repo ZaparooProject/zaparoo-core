@@ -69,3 +69,5 @@ func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
 const DefaultIniFilename = "MiSTer.ini"
 
 const MenuCore = "MENU"
+const LinuxFolder = SDRootDir + "/linux"
+const StartupFile = LinuxFolder + "/user-startup.sh"

@@ -18,7 +18,7 @@ import (
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
-	inis, err := mister.GetAllINIFiles()
+	inis, err := GetAllINIFiles()
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get MiSTer ini files: %w", err)
 	}
@@ -43,7 +43,7 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 	doRelaunch := env.TotalCommands <= 1 || env.CurrentIndex >= env.TotalCommands-1
 	// only relaunch if there aren't any more commands
 
-	err = mister.SetActiveIni(id, doRelaunch)
+	err = SetActiveIni(id, doRelaunch)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to set active ini: %w", err)
 	}

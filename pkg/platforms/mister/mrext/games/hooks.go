@@ -10,6 +10,44 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 )
 
+func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
+	var matches []PathResult
+
+	gamesFolders := GetGamesFolders(cfg)
+	for _, system := range systems {
+		for _, gamesFolder := range gamesFolders {
+			gf, err := FindFile(gamesFolder)
+			if err != nil {
+				continue
+			}
+
+			found := false
+
+			for _, folder := range system.Folder {
+				systemFolder := filepath.Join(gf, folder)
+				path, err := FindFile(systemFolder)
+				if err != nil {
+					continue
+				}
+
+				matches = append(matches, PathResult{system, path})
+				found = true
+				break
+			}
+
+			if found {
+				break
+			}
+		}
+
+		if len(matches) == len(systems) {
+			break
+		}
+	}
+
+	return matches
+}
+
 func copySetnameBios(cfg *config.UserConfig, origSystem System, newSystem System, name string) error {
 	var biosPath string
 

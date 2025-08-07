@@ -6,6 +6,7 @@ import (
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	mister2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func mapSharedMem(address int64) (*[]byte, *os.File, error) {
@@ -96,13 +97,13 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		return nil
 	}
 
-	coreName, err := GetActiveCoreName()
+	coreName, err := mister2.GetActiveCoreName()
 	if err != nil {
 		return err
 	}
 
 	if coreName == config.MenuCore {
-		err = LaunchMenu()
+		err = mister2.LaunchMenu()
 		if err != nil {
 			return err
 		} else {
@@ -110,5 +111,5 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		}
 	}
 
-	return LaunchMenu()
+	return mister2.LaunchMenu()
 }

@@ -3,12 +3,9 @@ package config
 const SdFolder = "/media/fat"
 const CoreConfigFolder = SdFolder + "/config"
 const TempFolder = "/tmp"
-const LinuxFolder = SdFolder + "/linux"
 const ScriptsFolder = SdFolder + "/Scripts"
 
 const MenuConfigFile = CoreConfigFolder + "/MENU.CFG"
-
-const StartupFile = LinuxFolder + "/user-startup.sh"
 
 const CoreNameFile = TempFolder + "/CORENAME"
 const CurrentPathFile = TempFolder + "/CURRENTPATH"

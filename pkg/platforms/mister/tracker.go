@@ -18,7 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
@@ -190,7 +190,7 @@ func (tr *Tracker) LoadCore() {
 		return
 	}
 
-	if coreName == mrextconfig.MenuCore {
+	if coreName == misterconfig.MenuCore {
 		err := mister.SetActiveGame("")
 		if err != nil {
 			log.Error().Msgf("error setting active game: %s", err)
@@ -204,7 +204,7 @@ func (tr *Tracker) LoadCore() {
 	tr.stopCore()
 	tr.ActiveCore = coreName
 
-	if coreName == mrextconfig.MenuCore {
+	if coreName == misterconfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")
 		tr.stopGame()
 		return
@@ -403,12 +403,12 @@ func (tr *Tracker) runPickerSelection(name string) {
 			}
 		}
 
-		files, err := os.ReadDir(config2.MainPickerDir)
+		files, err := os.ReadDir(misterconfig.MainPickerDir)
 		if err != nil {
 			log.Error().Msgf("error reading picker items dir: %s", err)
 		} else {
 			for _, file := range files {
-				err := os.Remove(filepath.Join(config2.MainPickerDir, file.Name()))
+				err := os.Remove(filepath.Join(misterconfig.MainPickerDir, file.Name()))
 				if err != nil {
 					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
 				}
@@ -444,7 +444,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
 						}
-					case event.Name == config2.MainPickerSelected:
+					case event.Name == misterconfig.MainPickerSelected:
 						log.Info().Msgf("main picker selected: %s", event.Name)
 						tr.runPickerSelection(event.Name)
 					}
@@ -514,8 +514,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		return nil, fmt.Errorf("failed to watch current path file: %w", err)
 	}
 
-	if _, err := os.Stat(config2.MainPickerSelected); err == nil && config2.MainHasFeature(config2.MainFeaturePicker) {
-		err = watcher.Add(config2.MainPickerSelected)
+	if _, err := os.Stat(misterconfig.MainPickerSelected); err == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		err = watcher.Add(misterconfig.MainPickerSelected)
 		if err != nil {
 			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)
 		}

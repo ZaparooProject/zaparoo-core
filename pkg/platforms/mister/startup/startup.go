@@ -1,28 +1,28 @@
-package mister
+package startup
 
 import (
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
 // TODO: delete entry from startup
 // TODO: enable/disable entry in startup
 
 type Startup struct {
-	Entries []StartupEntry
+	Entries []Entry
 }
 
-type StartupEntry struct {
+type Entry struct {
 	Name    string
 	Enabled bool
 	Cmds    []string
 }
 
 func (s *Startup) Load() error {
-	var entries []StartupEntry
+	var entries []Entry
 
 	contents, err := os.ReadFile(config.StartupFile)
 	if os.IsNotExist(err) {
@@ -68,7 +68,7 @@ func (s *Startup) Load() error {
 		}
 
 		if len(cmds) != 0 {
-			entries = append(entries, StartupEntry{
+			entries = append(entries, Entry{
 				Name:    name,
 				Enabled: enabled,
 				Cmds:    cmds,
@@ -135,7 +135,7 @@ func (s *Startup) Add(name string, cmd string) error {
 		return fmt.Errorf("startup entry already exists: %s", name)
 	}
 
-	s.Entries = append(s.Entries, StartupEntry{
+	s.Entries = append(s.Entries, Entry{
 		Name:    name,
 		Enabled: true,
 		Cmds:    strings.Split(cmd, "\n"),

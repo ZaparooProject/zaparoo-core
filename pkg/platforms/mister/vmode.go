@@ -2,8 +2,9 @@ package mister
 
 import (
 	"fmt"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"os"
+
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 )
 
 const (

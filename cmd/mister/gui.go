@@ -31,7 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
