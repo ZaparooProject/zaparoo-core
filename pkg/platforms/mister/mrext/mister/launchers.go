@@ -10,7 +10,7 @@ import (
 	s "strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
@@ -24,13 +24,13 @@ func GenerateMgl(cfg *config.UserConfig, system *games.System, path string, over
 			continue
 		}
 
-		if s.EqualFold(parts[0], system.Id) {
-			system.Rbf = parts[1]
+		if s.EqualFold(parts[0], system.ID) {
+			system.RBF = parts[1]
 			break
 		}
 	}
 
-	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", system.Rbf)
+	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", system.RBF)
 
 	if system.SetName != "" {
 		sameDir := ""
@@ -161,7 +161,7 @@ func LaunchGame(cfg *config.UserConfig, system games.System, path string) error 
 }
 
 func GetLauncherFilename(system *games.System, folder string, name string) string {
-	if system.Id == "Arcade" {
+	if system.ID == "Arcade" {
 		return filepath.Join(folder, name+".mra")
 	} else {
 		return filepath.Join(folder, name+".mgl")
@@ -240,7 +240,7 @@ func CreateLauncher(cfg *config.UserConfig, system *games.System, gameFile strin
 		return "", fmt.Errorf("no system specified")
 	}
 
-	if system.Id == "Arcade" {
+	if system.ID == "Arcade" {
 		mraPath := GetLauncherFilename(system, folder, name)
 		if _, err := os.Lstat(mraPath); err == nil {
 			err := os.Remove(mraPath)
@@ -294,10 +294,10 @@ func LaunchCore(cfg *config.UserConfig, system games.System) error {
 
 	var path string
 	rbfs := games.SystemsWithRbf()
-	if _, ok := rbfs[system.Id]; ok {
-		path = rbfs[system.Id].Path
+	if _, ok := rbfs[system.ID]; ok {
+		path = rbfs[system.ID].Path
 	} else {
-		return fmt.Errorf("no core found for system %s", system.Id)
+		return fmt.Errorf("no core found for system %s", system.ID)
 	}
 
 	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
@@ -389,7 +389,7 @@ func TryPickRandomGame(system *games.System, folder string) (string, error) {
 	for _, file := range files {
 		if file.IsDir() {
 			validFiles = append(validFiles, file)
-		} else if utils.IsZip(file.Name()) {
+		} else if helpers.IsZip(file.Name()) {
 			validFiles = append(validFiles, file)
 		} else if games.MatchSystemFile(*system, file.Name()) {
 			validFiles = append(validFiles, file)
@@ -400,7 +400,7 @@ func TryPickRandomGame(system *games.System, folder string) (string, error) {
 		return "", fmt.Errorf("no valid files in %s", folder)
 	}
 
-	file, err := utils.RandomElem(validFiles)
+	file, err := helpers.RandomElem(validFiles)
 	if err != nil {
 		return "", err
 	}
@@ -408,9 +408,9 @@ func TryPickRandomGame(system *games.System, folder string) (string, error) {
 	path := filepath.Join(folder, file.Name())
 	if file.IsDir() {
 		return TryPickRandomGame(system, path)
-	} else if utils.IsZip(path) {
+	} else if helpers.IsZip(path) {
 		// zip files
-		zipFiles, err := utils.ListZip(path)
+		zipFiles, err := helpers.ListZip(path)
 		if err != nil {
 			return "", err
 		}
@@ -418,7 +418,7 @@ func TryPickRandomGame(system *games.System, folder string) (string, error) {
 			return "", fmt.Errorf("no files in %s", path)
 		}
 		// just shoot our shot on a zip instead of checking every file
-		randomZip, err := utils.RandomElem(zipFiles)
+		randomZip, err := helpers.RandomElem(zipFiles)
 		if err != nil {
 			return "", err
 		}
@@ -442,7 +442,7 @@ func LaunchRandomGame(cfg *config.UserConfig, systems []games.System) error {
 	}
 
 	for i := 0; i < maxTries; i++ {
-		systemId, err := utils.RandomElem(utils.MapKeys(populated))
+		systemId, err := helpers.RandomElem(helpers.MapKeys(populated))
 		if err != nil {
 			return err
 		}
@@ -466,7 +466,7 @@ func LaunchRandomGame(cfg *config.UserConfig, systems []games.System) error {
 			return err
 		}
 
-		game, err := utils.RandomElem(files)
+		game, err := helpers.RandomElem(files)
 		if err != nil {
 			return err
 		}

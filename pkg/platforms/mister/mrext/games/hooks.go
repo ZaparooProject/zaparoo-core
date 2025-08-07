@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
 )
 
 func copySetnameBios(cfg *config.UserConfig, origSystem System, newSystem System, name string) error {
@@ -38,7 +38,7 @@ func copySetnameBios(cfg *config.UserConfig, origSystem System, newSystem System
 		return err
 	}
 
-	return utils.CopyFile(biosPath, filepath.Join(newFolder, name))
+	return helpers.CopyFile(biosPath, filepath.Join(newFolder, name))
 }
 
 func hookFDS(cfg *config.UserConfig, system System, _ string) (string, error) {
@@ -177,7 +177,7 @@ var systemHooks = map[string]func(*config.UserConfig, System, string) (string, e
 }
 
 func RunSystemHook(cfg *config.UserConfig, system System, path string) (string, error) {
-	if hook, ok := systemHooks[system.Id]; ok {
+	if hook, ok := systemHooks[system.ID]; ok {
 		return hook(cfg, system, path)
 	}
 

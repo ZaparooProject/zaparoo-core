@@ -52,12 +52,10 @@ func FindFile(path string) (string, error) {
 func FolderToSystems(cfg *config.UserConfig, path string) []System {
 	path = strings.ToLower(path)
 	validGamesFolder := false
-	gamesFolder := ""
 
 	for _, folder := range GetGamesFolders(cfg) {
 		if strings.HasPrefix(path, strings.ToLower(folder)) {
 			validGamesFolder = true
-			gamesFolder = folder
 			break
 		}
 	}
@@ -66,14 +64,11 @@ func FolderToSystems(cfg *config.UserConfig, path string) []System {
 		return nil
 	}
 
+	// Since System.Folder was removed, match systems by file extension only
 	var validSystems []System
 	for _, system := range Systems {
-		for _, folder := range system.Folder {
-			systemPath := strings.ToLower(filepath.Join(gamesFolder, folder))
-			if strings.HasPrefix(path, systemPath) {
-				validSystems = append(validSystems, system)
-				break
-			}
+		if MatchSystemFile(system, path) {
+			validSystems = append(validSystems, system)
 		}
 	}
 
@@ -139,29 +134,9 @@ type PathResult struct {
 
 // GetSystemPaths returns all possible paths for each system.
 func GetSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
-	var matches []PathResult
-
-	gamesFolders := GetGamesFolders(cfg)
-	for _, system := range systems {
-		for _, gamesFolder := range gamesFolders {
-			gf, err := FindFile(gamesFolder)
-			if err != nil {
-				continue
-			}
-
-			for _, folder := range system.Folder {
-				systemFolder := filepath.Join(gf, folder)
-				path, err := FindFile(systemFolder)
-				if err != nil {
-					continue
-				}
-
-				matches = append(matches, PathResult{system, path})
-			}
-		}
-	}
-
-	return matches
+	// Since System.Folder was removed, this function is deprecated
+	// TODO: Replace with zaparoo's launcher-based path resolution
+	return []PathResult{}
 }
 
 func GetAllSystemPaths(cfg *config.UserConfig) []PathResult {
@@ -170,41 +145,9 @@ func GetAllSystemPaths(cfg *config.UserConfig) []PathResult {
 
 // GetActiveSystemPaths returns the active path for each system.
 func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
-	var matches []PathResult
-
-	gamesFolders := GetGamesFolders(cfg)
-	for _, system := range systems {
-		for _, gamesFolder := range gamesFolders {
-			gf, err := FindFile(gamesFolder)
-			if err != nil {
-				continue
-			}
-
-			found := false
-
-			for _, folder := range system.Folder {
-				systemFolder := filepath.Join(gf, folder)
-				path, err := FindFile(systemFolder)
-				if err != nil {
-					continue
-				}
-
-				matches = append(matches, PathResult{system, path})
-				found = true
-				break
-			}
-
-			if found {
-				break
-			}
-		}
-
-		if len(matches) == len(systems) {
-			break
-		}
-	}
-
-	return matches
+	// Since System.Folder was removed, this function is deprecated
+	// TODO: Replace with zaparoo's launcher-based path resolution
+	return []PathResult{}
 }
 
 func GetPopulatedGamesFolders(cfg *config.UserConfig, systems []System) map[string][]string {
@@ -223,7 +166,7 @@ func GetPopulatedGamesFolders(cfg *config.UserConfig, systems []System) map[stri
 		}
 
 		if len(files) > 0 {
-			populated[folder.System.Id] = append(populated[folder.System.Id], folder.Path)
+			populated[folder.System.ID] = append(populated[folder.System.ID], folder.Path)
 		}
 	}
 

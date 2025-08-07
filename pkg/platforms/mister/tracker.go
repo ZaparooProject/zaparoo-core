@@ -18,13 +18,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/fsnotify/fsnotify"
-	"github.com/rs/zerolog/log"
 	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/metadata"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
-	mrextutils "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
+	"github.com/fsnotify/fsnotify"
+	"github.com/rs/zerolog/log"
 )
 
 const ArcadeSystem = "Arcade"
@@ -61,21 +59,20 @@ func generateNameMap() []NameMapping {
 		case system.SetName != "":
 			nameMap = append(nameMap, NameMapping{
 				CoreName: system.SetName,
-				System:   system.Id,
-				Name:     system.Name,
-			})
-		case len(system.Folder) > 0:
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.Folder[0],
-				System:   system.Id,
-				Name:     system.Name,
+				System:   system.ID,
+				Name:     system.ID,
 			})
 		default:
-			log.Warn().Msgf("system %s has no setname or folder", system.Id)
+			nameMap = append(nameMap, NameMapping{
+				CoreName: system.ID,
+				System:   system.ID,
+				Name:     system.ID,
+			})
 		}
 	}
 
-	arcadeDbEntries, err := metadata.ReadArcadeDb()
+	// Use zaparoo's ArcadeDB implementation instead of mrext's
+	arcadeDbEntries, err := ReadArcadeDb(nil) // TODO: pass platform instance
 	if err != nil {
 		log.Error().Msgf("error reading arcade db: %s", err)
 	} else {
@@ -267,7 +264,7 @@ func (tr *Tracker) loadGame() {
 
 	path := mister.ResolvePath(activeGame)
 	filename := filepath.Base(path)
-	name := mrextutils.RemoveFileExt(filename)
+	name := helpers.FilenameFromPath(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mister.ReadMgl(path)

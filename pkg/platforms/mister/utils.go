@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/rs/zerolog/log"
 	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
 	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	"github.com/rs/zerolog/log"
 )
 
 func ExitGame() {
@@ -51,7 +51,7 @@ func NormalizePath(cfg *config.Instance, path string) string {
 		return path
 	}
 
-	return sys.Id + "/" + strings.Join(parts[1:], "/")
+	return sys.ID + "/" + strings.Join(parts[1:], "/")
 }
 
 func RunDevCmd(cmd, args string) error {

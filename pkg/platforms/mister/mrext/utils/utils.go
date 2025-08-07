@@ -1,74 +1,28 @@
 package utils
 
 import (
-	"archive/zip"
 	"bufio"
-	"crypto/md5"
 	"fmt"
-	"io"
 	"io/fs"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"golang.org/x/exp/constraints"
 	"golang.org/x/term"
 )
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 
-func IsZip(path string) bool {
-	// TODO: this should check the file header
-	return filepath.Ext(strings.ToLower(path)) == ".zip"
-}
 
-// ListZip returns a slice of all filenames in a zip file.
-func ListZip(path string) ([]string, error) {
-	r, err := zip.OpenReader(path)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-
-	var files []string
-	for _, f := range r.File {
-		files = append(files, f.Name)
-	}
-
-	return files, nil
-}
-
-func CopyFile(sourcePath, destPath string) error {
-	inputFile, err := os.Open(sourcePath)
-	if err != nil {
-		return err
-	}
-	defer inputFile.Close()
-
-	outputFile, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer outputFile.Close()
-
-	_, err = io.Copy(outputFile, inputFile)
-	if err != nil {
-		return err
-	}
-	outputFile.Sync()
-	inputFile.Close()
-
-	return nil
-}
 
 // MoveFile moves a file. Supports moving between filesystems.
 func MoveFile(sourcePath, destPath string) error {
-	err := CopyFile(sourcePath, destPath)
+	err := helpers.CopyFile(sourcePath, destPath)
 	if err != nil {
 		return err
 	}
@@ -111,44 +65,6 @@ func Min[T constraints.Ordered](xs []T) T {
 	return min
 }
 
-// Contains returns true if slice contains value.
-func Contains[T comparable](xs []T, x T) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
-}
-
-// RandomElem picks and returns a random element from a slice.
-func RandomElem[T any](xs []T) (T, error) {
-	var item T
-	if len(xs) == 0 {
-		return item, fmt.Errorf("empty slice")
-	} else {
-		item = xs[r.Intn(len(xs))]
-		return item, nil
-	}
-}
-
-// MapKeys returns a list of all keys in a map.
-func MapKeys[K comparable, V any](m map[K]V) []K {
-	keys := make([]K, len(m))
-	i := 0
-	for k := range m {
-		keys[i] = k
-		i++
-	}
-	return keys
-}
-
-// SortedMapKeys return a sorted list of all keys in a map.
-func SortedMapKeys[V any](m map[string]V) []string {
-	keys := MapKeys(m)
-	sort.Strings(keys)
-	return keys
-}
 
 func StripChars(s string, chars string) string {
 	for _, c := range chars {
@@ -162,21 +78,10 @@ func StripBadFileChars(s string) string {
 	return StripChars(s, "/\\:*?\"<>|")
 }
 
-// Md5Sum returns the MD5 hash of a file on disk.
-func Md5Sum(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := md5.New()
-	io.Copy(hash, file)
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
-}
 
 // YesOrNoPrompt displays a simple yes/no prompt for use with a controller.
 func YesOrNoPrompt(prompt string) bool {
-	fmt.Printf(prompt + " [DOWN=Yes/UP=No] ")
+	fmt.Printf("%s [DOWN=Yes/UP=No] ", prompt)
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
@@ -293,22 +198,7 @@ func GetLocalIp() (net.IP, error) {
 	return localAddr.IP, nil
 }
 
-func WaitForInternet(maxTries int) bool {
-	for i := 0; i < maxTries; i++ {
-		_, err := http.Get("https://api.github.com")
-		if err == nil {
-			return true
-		}
-		time.Sleep(1 * time.Second)
-	}
-	return false
-}
 
-func AlphaMapKeys[V any](m map[string]V) []string {
-	keys := MapKeys(m)
-	sort.Strings(keys)
-	return keys
-}
 
 func Reverse[S ~[]E, E any](s S) {
 	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {

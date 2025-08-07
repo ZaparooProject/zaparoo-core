@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
 )
 
 // GetSystem looks up an exact system definition by ID.
@@ -42,7 +42,7 @@ func GetGroup(groupId string) (System, error) {
 	return merged, nil
 }
 
-// LookupSystem case-insensitively looks up system ID definition including aliases.
+// LookupSystem case-insensitively looks up system ID definition.
 func LookupSystem(id string) (*System, error) {
 	if system, err := GetGroup(id); err == nil {
 		return &system, nil
@@ -51,12 +51,6 @@ func LookupSystem(id string) (*System, error) {
 	for k, v := range Systems {
 		if strings.EqualFold(k, id) {
 			return &v, nil
-		}
-
-		for _, alias := range v.Alias {
-			if strings.EqualFold(alias, id) {
-				return &v, nil
-			}
 		}
 	}
 
@@ -84,7 +78,7 @@ func MatchSystemFile(system System, path string) bool {
 func AllSystems() []System {
 	var systems []System
 
-	keys := utils.AlphaMapKeys(Systems)
+	keys := helpers.AlphaMapKeys(Systems)
 	for _, k := range keys {
 		systems = append(systems, Systems[k])
 	}
@@ -192,7 +186,7 @@ func GetFiles(systemId string, path string) ([]string, error) {
 
 		if strings.HasSuffix(strings.ToLower(path), ".zip") {
 			// zip files
-			zipFiles, err := utils.ListZip(path)
+			zipFiles, err := helpers.ListZip(path)
 			if err != nil {
 				// skip invalid zip files
 				return nil
@@ -323,7 +317,7 @@ func FileExists(path string) bool {
 		zipPath := zipMatch[1]
 		file := zipMatch[2]
 
-		zipFiles, err := utils.ListZip(zipPath)
+		zipFiles, err := helpers.ListZip(zipPath)
 		if err != nil {
 			return false
 		}
@@ -440,14 +434,14 @@ func SystemsWithRbf() map[string]RbfInfo {
 
 	for _, rbfFile := range rbfFiles {
 		for _, system := range Systems {
-			shortName := system.Rbf
+			shortName := system.RBF
 
 			if strings.Contains(shortName, "/") {
 				shortName = shortName[strings.LastIndex(shortName, "/")+1:]
 			}
 
 			if strings.EqualFold(rbfFile.ShortName, shortName) {
-				results[system.Id] = rbfFile
+				results[system.ID] = rbfFile
 			}
 		}
 	}

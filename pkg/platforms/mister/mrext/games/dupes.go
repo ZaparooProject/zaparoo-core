@@ -3,7 +3,7 @@ package games
 import (
 	"os"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 )
 
 type fileChecker struct {
@@ -19,7 +19,7 @@ func (fc *fileChecker) cacheZip(zipPath string, files []string) {
 
 func (fc *fileChecker) existsZip(zipPath string, file string) bool {
 	if _, ok := fc.zipCache[zipPath]; !ok {
-		files, err := utils.ListZip(zipPath)
+		files, err := helpers.ListZip(zipPath)
 		if err != nil {
 			return false
 		}

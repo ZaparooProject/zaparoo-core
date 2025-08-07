@@ -21,7 +21,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hsanjuan/go-ndef v0.0.1
-	github.com/libp2p/zeroconf/v2 v2.2.0
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.2.1
@@ -30,7 +29,6 @@ require (
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0
-	github.com/txn2/txeh v1.4.0
 	go.bug.st/serial v1.6.2
 	go.etcd.io/bbolt v1.4.0
 	golang.design/x/clipboard v0.7.0
@@ -65,7 +63,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
-	github.com/miekg/dns v1.1.55 // indirect
 	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -77,9 +74,7 @@ require (
 	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
 	golang.org/x/image v0.20.0 // indirect
 	golang.org/x/mobile v0.0.0-20231127183840-76ac6878050a // indirect
-	golang.org/x/mod v0.25.0 // indirect
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/sync v0.15.0 // indirect
-	golang.org/x/tools v0.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

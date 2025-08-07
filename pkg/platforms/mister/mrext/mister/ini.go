@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"gopkg.in/ini.v1"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
@@ -215,11 +215,11 @@ func (mi *MisterIni) Save() error {
 }
 
 func (mi *MisterIni) IsValidKey(key string) bool {
-	return utils.Contains(ValidIniKeys, key)
+	return helpers.Contains(ValidIniKeys, key)
 }
 
 func (mi *MisterIni) IsShadowedKey(key string) bool {
-	return utils.Contains(ShadowedIniKeys, key)
+	return helpers.Contains(ShadowedIniKeys, key)
 }
 
 func (mi *MisterIni) GetKey(key string) (string, error) {
@@ -385,7 +385,7 @@ func GetInisWithout(key string, value string) ([]MisterIni, error) {
 
 		if mi.IsShadowedKey(key) {
 			vals := strings.Split(val, ShadowDelimiter)
-			if !utils.Contains(vals, value) {
+			if !helpers.Contains(vals, value) {
 				without = append(without, mi)
 			}
 		} else {

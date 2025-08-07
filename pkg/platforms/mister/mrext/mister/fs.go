@@ -5,7 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/utils"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"io"
 	"os"
 	"path/filepath"
@@ -267,7 +267,7 @@ func ReadMenuConfig() (MenuConfig, error) {
 }
 
 func SetMenuBackgroundMode(mode int) error {
-	if !utils.Contains([]int{
+	if !helpers.Contains([]int{
 		BackgroundModeNone,
 		BackgroundModeWallpaper,
 		BackgroundModeHBars1,
@@ -319,7 +319,7 @@ func GetMounts(cfg *config.UserConfig) ([]string, error) {
 			continue
 		}
 
-		if utils.Contains(gamesFolders, parts[1]) {
+		if helpers.Contains(gamesFolders, parts[1]) {
 			mounts = append(mounts, parts[1])
 		}
 	}

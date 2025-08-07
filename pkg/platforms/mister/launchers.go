@@ -16,9 +16,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/rs/zerolog/log"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	"github.com/rs/zerolog/log"
 )
 
 func checkInZip(path string) string {
@@ -132,16 +132,16 @@ func launchSinden(
 			log.Debug().Err(err).Msg("error checking for new Sinden RBF")
 		}
 		if len(newMatches) > 0 {
-			sn.Rbf = newRBF
+			sn.RBF = newRBF
 		} else {
 			// just fallback on trying the old path
-			sn.Rbf = oldRBF
+			sn.RBF = oldRBF
 		}
 
 		sn.SetName = rbfName + "_Sinden"
 		sn.SetNameSameDir = true
 
-		log.Debug().Str("rbf", sn.Rbf).Msgf("launching Sinden: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
 
 		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
 		if err != nil {
@@ -164,8 +164,7 @@ func launchAggGnw(cfg *config.Instance, path string) error {
 	path = checkInZip(path)
 
 	sn := *s
-	sn.Rbf = "_Console/GameAndWatch"
-	sn.Folder = []string{"Game and Watch"}
+	sn.RBF = "_Console/GameAndWatch"
 	sn.Slots = []games.Slot{
 		{
 			Exts: []string{".gnw"},
@@ -201,9 +200,9 @@ func launchAltCore(
 		path = checkInZip(path)
 
 		sn := *s
-		sn.Rbf = rbfPath
+		sn.RBF = rbfPath
 
-		log.Debug().Str("rbf", sn.Rbf).Msgf("launching alt core: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Msgf("launching alt core: %v", sn)
 
 		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
 		if err != nil {
@@ -223,14 +222,8 @@ func launchGroovyCore() func(*config.Instance, string) error {
 	// Merge into mrext?
 	return func(cfg *config.Instance, path string) error {
 		sn := games.System{
-			Id:           "Groovy",
-			Name:         "Groovy",
-			Category:     games.CategoryOther,
-			Manufacturer: "Sergi Clara",
-			ReleaseDate:  "2024-03-02",
-			Alias:        []string{"Groovy"},
-			Folder:       []string{"Groovy"},
-			Rbf:          "_Utility/Groovy",
+			ID:  "Groovy",
+			RBF: "_Utility/Groovy",
 			Slots: []games.Slot{
 				{
 					Label: "GMC",
