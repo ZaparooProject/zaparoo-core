@@ -13,7 +13,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 	"github.com/rs/zerolog/log"
 )
 
@@ -58,7 +57,7 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
 
-	err := mister.LaunchShortCore(env.Cmd.Args[0])
+	err := LaunchShortCore(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to launch core: %w", err)
 	}

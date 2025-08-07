@@ -22,9 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -101,12 +99,12 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	if config2.MainHasFeature(config2.MainFeaturePicker) {
-		err := os.MkdirAll(config2.MainPickerDir, 0o750)
+	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		err := os.MkdirAll(misterconfig.MainPickerDir, 0o750)
 		if err != nil {
 			return fmt.Errorf("failed to create picker directory: %w", err)
 		}
-		err = os.WriteFile(config2.MainPickerSelected, []byte(""), 0o600)
+		err = os.WriteFile(misterconfig.MainPickerSelected, []byte(""), 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to write picker selected file: %w", err)
 		}
@@ -161,7 +159,6 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := StartTracker(
-		config2.UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -234,9 +231,9 @@ func (p *Platform) Stop() error {
 }
 
 func (p *Platform) ScanHook(token *tokens.Token) error {
-	f, err := os.Create(config2.TokenReadFile)
+	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %w", config2.TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -244,7 +241,7 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 
 	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %w", config2.TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 
 	p.lastScan = token
@@ -262,24 +259,28 @@ func (p *Platform) ScanHook(token *tokens.Token) error {
 }
 
 func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), games.GetGamesFolders(config2.UserConfigToMrext(cfg))...)
+	// don't change this, only update misterconfig.RootDirs
+	return misterconfig.RootDirs(cfg)
 }
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    config2.DataDir,
-		ConfigDir:  config2.DataDir,
-		TempDir:    config2.TempDir,
+		DataDir:    misterconfig.DataDir,
+		ConfigDir:  misterconfig.DataDir,
+		TempDir:    misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }
 
-func (*Platform) NormalizePath(cfg *config.Instance, path string) string {
-	return NormalizePath(cfg, path)
+func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+	return NormalizePath(cfg, p, path)
 }
 
 func (p *Platform) StopActiveLauncher() error {
-	ExitGame()
+	err := LaunchMenu()
+	if err != nil {
+		return err
+	}
 	p.setActiveMedia(nil)
 	return nil
 }
@@ -302,13 +303,13 @@ func (p *Platform) PlayAudio(path string) error {
 	return nil
 }
 
-func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	system, err := games.LookupSystem(id)
+func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	system, err := LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mister.LaunchCore(config2.UserConfigToMrext(cfg), *system)
+	err = LaunchCore(cfg, p, *system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
@@ -616,7 +617,7 @@ func (p *Platform) ShowNotice(
 ) (func() error, time.Duration, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !config2.MainHasFeature(config2.MainFeatureNotice) {
+	if time.Since(p.lastUIHidden) < 2*time.Second && !misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}
@@ -639,7 +640,7 @@ func (p *Platform) ShowLoader(
 ) (func() error, error) {
 	p.platformMu.Lock()
 	defer p.platformMu.Unlock()
-	if time.Since(p.lastUIHidden) < 2*time.Second && !config2.MainHasFeature(config2.MainFeatureNotice) {
+	if time.Since(p.lastUIHidden) < 2*time.Second && !misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
 		log.Debug().Msg("waiting for previous notice to finish")
 		time.Sleep(3 * time.Second)
 	}

@@ -1,4 +1,4 @@
-package games
+package mister
 
 import (
 	"fmt"
@@ -6,14 +6,47 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
-func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult {
+// TODO: is there a zaparoo findfile somewhere?
+func FindFile(path string) (string, error) {
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+
+	parent := filepath.Dir(path)
+	name := filepath.Base(path)
+
+	files, err := os.ReadDir(parent)
+	if err != nil {
+		return "", err
+	}
+
+	for _, file := range files {
+		target := file.Name()
+
+		if len(target) != len(name) {
+			continue
+		} else if strings.EqualFold(target, name) {
+			return filepath.Join(parent, target), nil
+		}
+	}
+
+	return "", fmt.Errorf("file match not found: %s", path)
+}
+
+type PathResult struct {
+	System Core
+	Path   string
+}
+
+func GetActiveSystemPaths(cfg *config.Instance, systems []Core) []PathResult {
 	var matches []PathResult
 
-	gamesFolders := GetGamesFolders(cfg)
+	gamesFolders := misterconfig.RootDirs(cfg)
 	for _, system := range systems {
 		for _, gamesFolder := range gamesFolders {
 			gf, err := FindFile(gamesFolder)
@@ -23,7 +56,7 @@ func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult
 
 			found := false
 
-			for _, folder := range system.Folder {
+			for _, folder := range []string{} { // TODO: this should use the systems defs on zaparoo itself
 				systemFolder := filepath.Join(gf, folder)
 				path, err := FindFile(systemFolder)
 				if err != nil {
@@ -48,10 +81,10 @@ func GetActiveSystemPaths(cfg *config.UserConfig, systems []System) []PathResult
 	return matches
 }
 
-func copySetnameBios(cfg *config.UserConfig, origSystem System, newSystem System, name string) error {
+func copySetnameBios(cfg *config.Instance, origSystem Core, newSystem Core, name string) error {
 	var biosPath string
 
-	for _, folder := range GetActiveSystemPaths(cfg, []System{origSystem}) {
+	for _, folder := range GetActiveSystemPaths(cfg, []Core{origSystem}) {
 		checkPath := filepath.Join(folder.Path, name)
 		if _, err := os.Stat(checkPath); err == nil {
 			biosPath = checkPath
@@ -79,7 +112,7 @@ func copySetnameBios(cfg *config.UserConfig, origSystem System, newSystem System
 	return helpers.CopyFile(biosPath, filepath.Join(newFolder, name))
 }
 
-func hookFDS(cfg *config.UserConfig, system System, _ string) (string, error) {
+func hookFDS(cfg *config.Instance, system Core, _ string) (string, error) {
 	nesSystem, err := GetSystem("NES")
 	if err != nil {
 		return "", err
@@ -88,7 +121,7 @@ func hookFDS(cfg *config.UserConfig, system System, _ string) (string, error) {
 	return "", copySetnameBios(cfg, *nesSystem, system, "boot0.rom")
 }
 
-func hookWSC(cfg *config.UserConfig, system System, _ string) (string, error) {
+func hookWSC(cfg *config.Instance, system Core, _ string) (string, error) {
 	wsSystem, err := GetSystem("WonderSwan")
 	if err != nil {
 		return "", err
@@ -102,8 +135,8 @@ func hookWSC(cfg *config.UserConfig, system System, _ string) (string, error) {
 	return "", copySetnameBios(cfg, *wsSystem, system, "boot1.rom")
 }
 
-func hookAo486(_ *config.UserConfig, system System, path string) (string, error) {
-	mglDef, err := PathToMglDef(system, path)
+func hookAo486(_ *config.Instance, system Core, path string) (string, error) {
+	mglDef, err := PathToMGLDef(system, path)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +205,7 @@ func hookAo486(_ *config.UserConfig, system System, path string) (string, error)
 	return mgl, nil
 }
 
-func hookAmiga(_ *config.UserConfig, system System, path string) (string, error) {
+func hookAmiga(_ *config.Instance, _ Core, path string) (string, error) {
 	if !strings.HasSuffix(strings.ToLower(filepath.Dir(path)), "listings/games.txt") && !strings.HasSuffix(strings.ToLower(filepath.Dir(path)), "listings/demos.txt") {
 		return "", nil
 	}
@@ -191,7 +224,7 @@ func hookAmiga(_ *config.UserConfig, system System, path string) (string, error)
 	return "\t<setname>Amiga</setname>\n", nil
 }
 
-func hookNeoGeo(_ *config.UserConfig, _ System, path string) (string, error) {
+func hookNeoGeo(_ *config.Instance, _ Core, path string) (string, error) {
 	// neogeo core allows launching zips and folders
 	if strings.HasSuffix(strings.ToLower(path), ".zip") || filepath.Ext(path) == "" {
 		return fmt.Sprintf(
@@ -206,7 +239,7 @@ func hookNeoGeo(_ *config.UserConfig, _ System, path string) (string, error) {
 	return "", nil
 }
 
-var systemHooks = map[string]func(*config.UserConfig, System, string) (string, error){
+var systemHooks = map[string]func(*config.Instance, Core, string) (string, error){
 	"FDS":             hookFDS,
 	"WonderSwanColor": hookWSC,
 	"ao486":           hookAo486,
@@ -214,7 +247,7 @@ var systemHooks = map[string]func(*config.UserConfig, System, string) (string, e
 	"NeoGeo":          hookNeoGeo,
 }
 
-func RunSystemHook(cfg *config.UserConfig, system System, path string) (string, error) {
+func RunSystemHook(cfg *config.Instance, system Core, path string) (string, error) {
 	if hook, ok := systemHooks[system.ID]; ok {
 		return hook(cfg, system, path)
 	}

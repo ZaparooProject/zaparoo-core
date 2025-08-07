@@ -8,34 +8,35 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
 )
 
-func ExitGame() {
-	_ = mrextmister.LaunchMenu()
-}
-
 func GetActiveCoreName() string {
-	coreName, err := mrextmister.GetActiveCoreName()
+	data, err := os.ReadFile(misterconfig.CoreNameFile)
 	if err != nil {
 		log.Error().Msgf("error trying to get the core name: %s", err)
+		return ""
 	}
-	return coreName
+
+	return string(data)
 }
 
-func NormalizePath(cfg *config.Instance, path string) string {
-	sys, err := games.BestSystemMatch(config2.UserConfigToMrext(cfg), path)
-	if err != nil {
+func NormalizePath(cfg *config.Instance, pl platforms.Platform, path string) string {
+	launchers := helpers.PathToLaunchers(cfg, pl, path)
+	if len(launchers) == 0 {
 		return path
 	}
 
+	// TODO: something smarter than first match
+	launcher := launchers[0]
+
+	lowerPath := strings.ToLower(path)
 	var match string
-	for _, parent := range mrextconfig.GamesFolders {
-		if strings.HasPrefix(path, parent) {
+	for _, parent := range pl.RootDirs(cfg) {
+		if strings.HasPrefix(lowerPath, strings.ToLower(parent)) {
 			match = path[len(parent):]
 			break
 		}
@@ -52,16 +53,16 @@ func NormalizePath(cfg *config.Instance, path string) string {
 		return path
 	}
 
-	return sys.ID + "/" + strings.Join(parts[1:], "/")
+	return launcher.SystemID + "/" + strings.Join(parts[1:], "/")
 }
 
 func RunDevCmd(cmd, args string) error {
-	_, err := os.Stat(mrextconfig.CmdInterface)
+	_, err := os.Stat(misterconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	dev, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
+	dev, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open command interface: %w", err)
 	}

@@ -4,36 +4,24 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
-const (
-	VideoModeScaleFull    = "1"
-	VideoModeScaleHalf    = "2"
-	VideoModeScaleThird   = "3"
-	VideoModeScaleQuarter = "4"
-	VideoModeFormatRGB32  = "18888"
-	VideoModeFormatRGB15  = "11555"
-	VideoModeFormatRGB16  = "1565"
-	VideoModeFormatBGR32  = "08888"
-	VideoModeFormatBGR15  = "01555"
-	VideoModeFormatBGR16  = "0565"
-	VideoModeFormatIDX8   = "08"
-	ResCountPath          = "/sys/module/MiSTer_fb/parameters/res_count"
-)
+const VideoModeFormatRGB32 = "18888"
 
 // fb_cmd0 = scaled = fb_cmd0 $fmt $rb $scale
 // fb_cmd1 = exact = fb_cmd1 $fmt $rb $width $height
 
 // in vmode script, checks for rescount contents at start, sets mode,
 // then polls until it's the same value (up to 5 times)
+// /sys/module/MiSTer_fb/parameters/res_count
 
 func SetVideoMode(width int, height int) error {
-	if _, err := os.Stat(config.CmdInterface); err != nil {
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %s", err)
 	}
 
-	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

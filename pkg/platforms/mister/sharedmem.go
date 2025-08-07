@@ -1,12 +1,12 @@
 package mister
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	mister2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
 )
 
 func mapSharedMem(address int64) (*[]byte, *os.File, error) {
@@ -97,13 +97,13 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		return nil
 	}
 
-	coreName, err := mister2.GetActiveCoreName()
-	if err != nil {
-		return err
+	coreName := GetActiveCoreName()
+	if coreName == "" {
+		return errors.New("error checking active core")
 	}
 
 	if coreName == config.MenuCore {
-		err = mister2.LaunchMenu()
+		err = LaunchMenu()
 		if err != nil {
 			return err
 		} else {
@@ -111,5 +111,5 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 		}
 	}
 
-	return mister2.LaunchMenu()
+	return LaunchMenu()
 }

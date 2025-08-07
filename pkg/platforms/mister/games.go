@@ -1,4 +1,4 @@
-package games
+package mister
 
 import (
 	"fmt"
@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
 // GetSystem looks up an exact system definition by ID.
-func GetSystem(id string) (*System, error) {
+func GetSystem(id string) (*Core, error) {
 	if system, ok := Systems[id]; ok {
 		return &system, nil
 	} else {
@@ -21,8 +21,8 @@ func GetSystem(id string) (*System, error) {
 	}
 }
 
-func GetGroup(groupId string) (System, error) {
-	var merged System
+func GetGroup(groupId string) (Core, error) {
+	var merged Core
 	if _, ok := CoreGroups[groupId]; !ok {
 		return merged, fmt.Errorf("no system group found for %s", groupId)
 	}
@@ -42,8 +42,8 @@ func GetGroup(groupId string) (System, error) {
 	return merged, nil
 }
 
-// LookupSystem case-insensitively looks up system ID definition.
-func LookupSystem(id string) (*System, error) {
+// LookupCore case-insensitively looks up system ID definition.
+func LookupCore(id string) (*Core, error) {
 	if system, err := GetGroup(id); err == nil {
 		return &system, nil
 	}
@@ -58,7 +58,7 @@ func LookupSystem(id string) (*System, error) {
 }
 
 // MatchSystemFile returns true if a given file's extension is valid for a system.
-func MatchSystemFile(system System, path string) bool {
+func MatchSystemFile(system Core, path string) bool {
 	// ignore dot files
 	if strings.HasPrefix(filepath.Base(path), ".") {
 		return false
@@ -75,8 +75,8 @@ func MatchSystemFile(system System, path string) bool {
 	return false
 }
 
-func AllSystems() []System {
-	var systems []System
+func AllSystems() []Core {
+	var systems []Core
 
 	keys := helpers.AlphaMapKeys(Systems)
 	for _, k := range keys {
@@ -351,8 +351,8 @@ func ParseRbf(path string) RbfInfo {
 		info.ShortName = strings.TrimSuffix(info.Filename, filepath.Ext(info.Filename))
 	}
 
-	if strings.HasPrefix(path, config.SdFolder) {
-		relDir := strings.TrimPrefix(filepath.Dir(path), config.SdFolder+"/")
+	if strings.HasPrefix(path, misterconfig.SDRootDir) {
+		relDir := strings.TrimPrefix(filepath.Dir(path), misterconfig.SDRootDir+"/")
 		info.MglName = filepath.Join(relDir, info.ShortName)
 	} else {
 		info.MglName = path
@@ -387,21 +387,21 @@ func shallowScanRbf() ([]RbfInfo, error) {
 		}
 	}
 
-	files, err := os.ReadDir(config.SdFolder)
+	files, err := os.ReadDir(misterconfig.SDRootDir)
 	if err != nil {
 		return results, err
 	}
 
 	for _, file := range files {
 		if file.IsDir() && strings.HasPrefix(file.Name(), "_") {
-			subFiles, err := os.ReadDir(filepath.Join(config.SdFolder, file.Name()))
+			subFiles, err := os.ReadDir(filepath.Join(misterconfig.SDRootDir, file.Name()))
 			if err != nil {
 				continue
 			}
 
 			for _, subFile := range subFiles {
 				if isRbf(subFile) {
-					path := filepath.Join(config.SdFolder, file.Name(), subFile.Name())
+					path := filepath.Join(misterconfig.SDRootDir, file.Name(), subFile.Name())
 					info, err := infoSymlink(path)
 					if err != nil {
 						continue
@@ -410,7 +410,7 @@ func shallowScanRbf() ([]RbfInfo, error) {
 				}
 			}
 		} else if isRbf(file) {
-			path := filepath.Join(config.SdFolder, file.Name())
+			path := filepath.Join(misterconfig.SDRootDir, file.Name())
 			info, err := infoSymlink(path)
 			if err != nil {
 				continue

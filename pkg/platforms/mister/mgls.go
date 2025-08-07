@@ -6,23 +6,25 @@ import (
 	"path/filepath"
 	s "strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
-func GenerateMgl(cfg *config.UserConfig, system *games.System, path string, override string) (string, error) {
+func GenerateMgl(cfg *config.Instance, system *Core, path string, override string) (string, error) {
 	// override the system rbf with the user specified one
-	for _, setCore := range cfg.Systems.SetCore {
-		parts := s.SplitN(setCore, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		if s.EqualFold(parts[0], system.ID) {
-			system.RBF = parts[1]
-			break
-		}
-	}
+	// TODO: this needs to look up the core by launcher using the zaparoo config
+	//for _, setCore := range cfg.Systems.SetCore {
+	//	parts := s.SplitN(setCore, ":", 2)
+	//	if len(parts) != 2 {
+	//		continue
+	//	}
+	//
+	//	if s.EqualFold(parts[0], system.ID) {
+	//		system.RBF = parts[1]
+	//		break
+	//	}
+	//}
 
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", system.RBF)
 
@@ -44,7 +46,7 @@ func GenerateMgl(cfg *config.UserConfig, system *games.System, path string, over
 		return mgl, nil
 	}
 
-	mglDef, err := games.PathToMglDef(*system, path)
+	mglDef, err := PathToMGLDef(*system, path)
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +57,7 @@ func GenerateMgl(cfg *config.UserConfig, system *games.System, path string, over
 }
 
 func writeTempFile(content string) (string, error) {
-	tmpFile, err := os.Create(config.LastLaunchFile)
+	tmpFile, err := os.Create(misterconfig.LastLaunchFile)
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +71,7 @@ func writeTempFile(content string) (string, error) {
 }
 
 func launchFile(path string) error {
-	_, err := os.Stat(config.CmdInterface)
+	_, err := os.Stat(misterconfig.CmdInterface)
 	if err != nil {
 		return fmt.Errorf("command interface not accessible: %s", err)
 	}
@@ -78,7 +80,7 @@ func launchFile(path string) error {
 		return fmt.Errorf("not a valid launch file: %s", path)
 	}
 
-	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
@@ -89,8 +91,8 @@ func launchFile(path string) error {
 	return nil
 }
 
-func launchTempMgl(cfg *config.UserConfig, system *games.System, path string) error {
-	override, err := games.RunSystemHook(cfg, *system, path)
+func launchTempMgl(cfg *config.Instance, system *Core, path string) error {
+	override, err := RunSystemHook(cfg, *system, path)
 	if err != nil {
 		return err
 	}
@@ -124,7 +126,7 @@ func LaunchShortCore(path string) error {
 	return launchFile(tmpFile)
 }
 
-func LaunchGame(cfg *config.UserConfig, system games.System, path string) error {
+func LaunchGame(cfg *config.Instance, system Core, path string) error {
 	switch s.ToLower(filepath.Ext(path)) {
 	case ".mra":
 		err := launchFile(path)
@@ -155,8 +157,8 @@ func LaunchGame(cfg *config.UserConfig, system games.System, path string) error 
 }
 
 // LaunchCore Launch a core given a possibly partial path, as per MGL files.
-func LaunchCore(cfg *config.UserConfig, system games.System) error {
-	if _, err := os.Stat(config.CmdInterface); err != nil {
+func LaunchCore(cfg *config.Instance, pl platforms.Platform, system Core) error {
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %s", err)
 	}
 
@@ -165,14 +167,14 @@ func LaunchCore(cfg *config.UserConfig, system games.System) error {
 	}
 
 	var path string
-	rbfs := games.SystemsWithRbf()
+	rbfs := SystemsWithRbf()
 	if _, ok := rbfs[system.ID]; ok {
 		path = rbfs[system.ID].Path
 	} else {
 		return fmt.Errorf("no core found for system %s", system.ID)
 	}
 
-	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
@@ -184,24 +186,24 @@ func LaunchCore(cfg *config.UserConfig, system games.System) error {
 }
 
 func LaunchMenu() error {
-	if _, err := os.Stat(config.CmdInterface); err != nil {
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %s", err)
 	}
 
-	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
 	defer cmd.Close()
 
 	// TODO: don't hardcode here
-	cmd.WriteString(fmt.Sprintf("load_core %s\n", filepath.Join(config.SdFolder, "menu.rbf")))
+	cmd.WriteString(fmt.Sprintf("load_core %s\n", filepath.Join(misterconfig.SDRootDir, "menu.rbf")))
 
 	return nil
 }
 
 // LaunchGenericFile Given a generic file path, launch it using the correct method, if possible.
-func LaunchGenericFile(cfg *config.UserConfig, path string) error {
+func LaunchGenericFile(cfg *config.Instance, path string, core *Core) error {
 	var err error
 	isGame := false
 	ext := s.ToLower(filepath.Ext(path))
@@ -223,12 +225,11 @@ func LaunchGenericFile(cfg *config.UserConfig, path string) error {
 			return err
 		}
 	default:
-		system, err := games.BestSystemMatch(cfg, path)
-		if err != nil {
+		if core == nil {
 			return fmt.Errorf("unknown file type: %s", ext)
 		}
 
-		err = launchTempMgl(cfg, &system, path)
+		err = launchTempMgl(cfg, core, path)
 		if err != nil {
 			return err
 		}

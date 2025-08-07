@@ -1,11 +1,11 @@
-package games
+package mister
 
 import (
 	"fmt"
 	s "strings"
 )
 
-type MglParams struct {
+type MGLParams struct {
 	Delay  int
 	Method string
 	Index  int
@@ -14,10 +14,10 @@ type MglParams struct {
 type Slot struct {
 	Label string
 	Exts  []string
-	Mgl   *MglParams
+	Mgl   *MGLParams
 }
 
-type System struct {
+type Core struct {
 	ID             string
 	SetName        string
 	SetNameSameDir bool
@@ -28,17 +28,17 @@ type System struct {
 // CoreGroups is a list of common MiSTer aliases that map back to a system.
 // First in list takes precendence for simple attributes in case there's a
 // conflict in the future.
-var CoreGroups = map[string][]System{
+var CoreGroups = map[string][]Core{
 	"Atari7800": {Systems["Atari7800"], Systems["Atari2600"]},
 	"Coleco":    {Systems["ColecoVision"], Systems["SG1000"]},
 	"Gameboy":   {Systems["Gameboy"], Systems["GameboyColor"]},
 	"NES":       {Systems["NES"], Systems["NESMusic"], Systems["FDS"]},
-	"SMS": {Systems["MasterSystem"], Systems["GameGear"], System{
+	"SMS": {Systems["MasterSystem"], Systems["GameGear"], Core{
 		ID: "SG1000",
 		Slots: []Slot{
 			{
 				Exts: []string{".sg"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -50,8 +50,8 @@ var CoreGroups = map[string][]System{
 	"TGFX16": {Systems["TurboGrafx16"], Systems["SuperGrafx"]},
 }
 
-func PathToMglDef(system System, path string) (*MglParams, error) {
-	var mglDef *MglParams
+func PathToMGLDef(system Core, path string) (*MGLParams, error) {
+	var mglDef *MGLParams
 
 	for _, ft := range system.Slots {
 		for _, ext := range ft.Exts {
@@ -71,7 +71,7 @@ func PathToMglDef(system System, path string) (*MglParams, error) {
 // TODO: custom launch function
 // TODO: support globbing on extensions
 
-var Systems = map[string]System{
+var Systems = map[string]Core{
 	// Consoles
 	"AdventureVision": {
 		ID:  "AdventureVision",
@@ -80,7 +80,7 @@ var Systems = map[string]System{
 			{
 				Label: "Game",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -95,7 +95,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -109,7 +109,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -124,7 +124,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".a26"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -139,7 +139,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cart",
 				Exts:  []string{".car", ".a52", ".bin", ".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -153,7 +153,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".a78", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -162,7 +162,7 @@ var Systems = map[string]System{
 			//{
 			//	Label: "BIOS",
 			//	Exts:  []string{".rom", ".bin"},
-			//	Mgl: &MglParams{
+			//	Mgl: &MGLParams{
 			//		Delay:  1,
 			//		Method: "f",
 			//		Index:  2,
@@ -176,7 +176,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".lnx"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -196,7 +196,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -210,7 +210,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -224,7 +224,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".rom", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -238,7 +238,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".col", ".bin", ".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -253,7 +253,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".rom", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -262,7 +262,7 @@ var Systems = map[string]System{
 			//{
 			//	Label: "Bios",
 			//	Exts:  []string{".rom", ".bin"},
-			//	Mgl: &MglParams{
+			//	Mgl: &MGLParams{
 			//		Delay:  1,
 			//		Method: "f",
 			//		Index:  2,
@@ -271,7 +271,7 @@ var Systems = map[string]System{
 			{
 				Label: "BASIC",
 				Exts:  []string{".bas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  3,
@@ -288,7 +288,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".fds"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -297,7 +297,7 @@ var Systems = map[string]System{
 			//{
 			//	Label: "FDS BIOS",
 			//	Exts:  []string{".bin"},
-			//	Mgl: &MglParams{
+			//	Mgl: &MGLParams{
 			//		Delay:  1,
 			//		Method: "f",
 			//		Index:  2,
@@ -311,7 +311,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -325,7 +325,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gb"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -340,7 +340,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gbc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -355,7 +355,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gb", ".gbc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -370,7 +370,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gg"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -384,7 +384,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -398,7 +398,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gba"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -412,7 +412,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gba"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -426,7 +426,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin", ".gen", ".md"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -441,7 +441,7 @@ var Systems = map[string]System{
 			{
 				//Exts: []string{".rom", ".int", ".bin"},
 				Exts: []string{".int", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -455,7 +455,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".jag", ".j64", ".rom", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -470,7 +470,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".sms"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -485,7 +485,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -499,7 +499,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -516,7 +516,7 @@ var Systems = map[string]System{
 				// Exts: []strings{".*"}
 				Label: "ROM set",
 				Exts:  []string{".neo"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -531,7 +531,7 @@ var Systems = map[string]System{
 			{
 				Label: "CD Image",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -545,7 +545,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".nes"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -559,7 +559,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".nsf"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -573,7 +573,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".n64", ".z64"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -588,7 +588,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -597,7 +597,7 @@ var Systems = map[string]System{
 			//{
 			//	Label: "XROM",
 			//	Exts:  []string{".rom"},
-			//	Mgl: &MglParams{
+			//	Mgl: &MGLParams{
 			//		Delay:  1,
 			//		Method: "f",
 			//		Index:  2,
@@ -613,7 +613,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM",
 				Exts:  []string{".pc2"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -628,7 +628,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM",
 				Exts:  []string{".min"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -643,7 +643,7 @@ var Systems = map[string]System{
 			{
 				Label: "CD",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -652,7 +652,7 @@ var Systems = map[string]System{
 			{
 				Label: "Exe",
 				Exts:  []string{".exe"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -666,7 +666,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".32x"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -682,7 +682,7 @@ var Systems = map[string]System{
 			{
 				Label: "SG-1000",
 				Exts:  []string{".sg"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  0,
@@ -696,7 +696,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".gb", ".gbc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -711,7 +711,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin", ".sv"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -726,7 +726,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -740,7 +740,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".sfc", ".smc", ".bin", ".bs"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  0,
@@ -754,7 +754,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".spc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  2,
 					Method: "f",
 					Index:  1,
@@ -769,7 +769,7 @@ var Systems = map[string]System{
 			{
 				Label: "SuperGrafx",
 				Exts:  []string{".sgx"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -784,7 +784,7 @@ var Systems = map[string]System{
 			{
 				Label: "TurboGrafx",
 				Exts:  []string{".bin", ".pce"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  0,
@@ -799,7 +799,7 @@ var Systems = map[string]System{
 			{
 				Label: "CD",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -814,7 +814,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -828,7 +828,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".vec", ".bin", ".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -837,7 +837,7 @@ var Systems = map[string]System{
 			//{
 			//	Label: "Overlay",
 			//	Exts:  []string{".ovr"},
-			//	Mgl: &MglParams{
+			//	Mgl: &MGLParams{
 			//		Delay:  1,
 			//		Method: "f",
 			//		Index:  2,
@@ -852,7 +852,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM",
 				Exts:  []string{".ws"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -868,7 +868,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM",
 				Exts:  []string{".wsc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -883,7 +883,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -897,7 +897,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -912,7 +912,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".c10"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -929,7 +929,7 @@ var Systems = map[string]System{
 			{
 				Label: "df0",
 				Exts:  []string{".adf"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  0,
@@ -944,7 +944,7 @@ var Systems = map[string]System{
 			{
 				Label: "CD Image",
 				Exts:  []string{".cue", ".chd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -959,7 +959,7 @@ var Systems = map[string]System{
 			{
 				Label: "A:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -968,7 +968,7 @@ var Systems = map[string]System{
 			{
 				Label: "B:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -977,7 +977,7 @@ var Systems = map[string]System{
 			{
 				Label: "Expansion",
 				Exts:  []string{".e??"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  3,
@@ -986,7 +986,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".cdt"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  4,
@@ -1001,7 +1001,7 @@ var Systems = map[string]System{
 			{
 				Label: "A:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1010,7 +1010,7 @@ var Systems = map[string]System{
 			{
 				Label: "B:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1025,7 +1025,7 @@ var Systems = map[string]System{
 			{
 				Label: "Floppy A:",
 				Exts:  []string{".img", ".ima", ".vfd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1034,7 +1034,7 @@ var Systems = map[string]System{
 			// {
 			// 	Label: "Floppy B:",
 			// 	Exts:  []string{".img", ".ima", ".vfd"},
-			// 	Mgl: &MglParams{
+			// 	Mgl: &MGLParams{
 			// 		Delay:  1,
 			// 		Method: "s",
 			// 		Index:  1,
@@ -1043,7 +1043,7 @@ var Systems = map[string]System{
 			{
 				Label: "IDE 0-0",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1052,7 +1052,7 @@ var Systems = map[string]System{
 			// {
 			// 	Label: "IDE 0-1",
 			// 	Exts:  []string{".vhd"},
-			// 	Mgl: &MglParams{
+			// 	Mgl: &MGLParams{
 			// 		Delay:  1,
 			// 		Method: "s",
 			// 		Index:  3,
@@ -1061,7 +1061,7 @@ var Systems = map[string]System{
 			// {
 			// 	Label: "IDE 1-0",
 			// 	Exts:  []string{".vhd", ".iso", ".cue", ".chd"},
-			// 	Mgl: &MglParams{
+			// 	Mgl: &MGLParams{
 			// 		Delay:  1,
 			// 		Method: "s",
 			// 		Index:  4,
@@ -1070,7 +1070,7 @@ var Systems = map[string]System{
 			// {
 			// 	Label: "IDE 1-1",
 			// 	Exts:  []string{".vhd", ".iso", ".cue", ".chd"},
-			// 	Mgl: &MglParams{
+			// 	Mgl: &MGLParams{
 			// 		Delay:  1,
 			// 		Method: "s",
 			// 		Index:  5,
@@ -1084,7 +1084,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".rka", ".rkr", ".gam"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1099,7 +1099,7 @@ var Systems = map[string]System{
 			{
 				Label: "ASCII",
 				Exts:  []string{".txt"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1113,7 +1113,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".nib", ".dsk", ".do", ".po"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1121,7 +1121,7 @@ var Systems = map[string]System{
 			},
 			{
 				Exts: []string{".hdv"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1136,7 +1136,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1145,7 +1145,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".caq"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1162,7 +1162,7 @@ var Systems = map[string]System{
 			{
 				Label: "D1",
 				Exts:  []string{".atr", ".xex", ".xfd", ".atx"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1171,7 +1171,7 @@ var Systems = map[string]System{
 			{
 				Label: "D2",
 				Exts:  []string{".atr", ".xex", ".xfd", ".atx"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1180,7 +1180,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".car", ".rom", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1196,7 +1196,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1204,7 +1204,7 @@ var Systems = map[string]System{
 			},
 			{
 				Exts: []string{".ssd", ".dsd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1212,7 +1212,7 @@ var Systems = map[string]System{
 			},
 			{
 				Exts: []string{".ssd", ".dsd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1226,7 +1226,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1235,7 +1235,7 @@ var Systems = map[string]System{
 			{
 				Label: "FDD(A)",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1244,7 +1244,7 @@ var Systems = map[string]System{
 			{
 				Label: "FDD(B)",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1253,7 +1253,7 @@ var Systems = map[string]System{
 			{
 				Label: "HDD",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1268,7 +1268,7 @@ var Systems = map[string]System{
 			{
 				Label: "#8",
 				Exts:  []string{".d64", ".g64"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1277,7 +1277,7 @@ var Systems = map[string]System{
 			{
 				Label: "#9",
 				Exts:  []string{".d64", ".g64"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1286,7 +1286,7 @@ var Systems = map[string]System{
 			{
 				// TODO: This has a hidden option with only .prg and .tap.
 				Exts: []string{".prg", ".tap", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1301,7 +1301,7 @@ var Systems = map[string]System{
 			{
 				Label: "#8",
 				Exts:  []string{".d64", ".g64", ".t64", ".d81"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1310,7 +1310,7 @@ var Systems = map[string]System{
 			{
 				Label: "#9",
 				Exts:  []string{".d64", ".g64", ".t64", ".d81"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1318,7 +1318,7 @@ var Systems = map[string]System{
 			},
 			{
 				Exts: []string{".prg", ".crt", ".reu", ".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1333,7 +1333,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1348,7 +1348,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".rom", ".ccc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1357,7 +1357,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk Drive 0",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1366,7 +1366,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk Drive 1",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1375,7 +1375,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk Drive 2",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1384,7 +1384,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk Drive 3",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  3,
@@ -1393,7 +1393,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cassette",
 				Exts:  []string{".cas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1413,7 +1413,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1427,7 +1427,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1442,7 +1442,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".cin", ".k7"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1456,7 +1456,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".ace"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1471,7 +1471,7 @@ var Systems = map[string]System{
 			{
 				Label: "VZ Image",
 				Exts:  []string{".vz"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1486,7 +1486,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cassette",
 				Exts:  []string{".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1501,7 +1501,7 @@ var Systems = map[string]System{
 			{
 				Label: "Pri Floppy",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1510,7 +1510,7 @@ var Systems = map[string]System{
 			{
 				Label: "Sec Floppy",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1519,7 +1519,7 @@ var Systems = map[string]System{
 			{
 				Label: "SCSI-6",
 				Exts:  []string{".img", ".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1528,7 +1528,7 @@ var Systems = map[string]System{
 			{
 				Label: "SCSI-5",
 				Exts:  []string{".img", ".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1542,7 +1542,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1557,7 +1557,7 @@ var Systems = map[string]System{
 			{
 				Label: "Drive A:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1566,7 +1566,7 @@ var Systems = map[string]System{
 			{
 				Label: "SLOT A",
 				Exts:  []string{".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1575,7 +1575,7 @@ var Systems = map[string]System{
 			{
 				Label: "SLOT B",
 				Exts:  []string{".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  3,
@@ -1589,7 +1589,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".img"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1605,7 +1605,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1620,7 +1620,7 @@ var Systems = map[string]System{
 			{
 				Label: "Drive A:",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1637,7 +1637,7 @@ var Systems = map[string]System{
 			{
 				Label: "Floppy A:",
 				Exts:  []string{".img", ".ima", ".vfd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1646,7 +1646,7 @@ var Systems = map[string]System{
 			{
 				Label: "Floppy B:",
 				Exts:  []string{".img", ".ima", ".vfd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1655,7 +1655,7 @@ var Systems = map[string]System{
 			{
 				Label: "IDE 0-0",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -1664,7 +1664,7 @@ var Systems = map[string]System{
 			{
 				Label: "IDE 0-1",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  3,
@@ -1678,7 +1678,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".pdp", ".rim", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1692,7 +1692,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".prg", ".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1707,7 +1707,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM Pack",
 				Exts:  []string{".rmm"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1722,7 +1722,7 @@ var Systems = map[string]System{
 			{
 				Label: "HD Image",
 				Exts:  []string{".win"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1731,7 +1731,7 @@ var Systems = map[string]System{
 			{
 				Label: "MDV Image",
 				Exts:  []string{".mdv"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1746,7 +1746,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1761,7 +1761,7 @@ var Systems = map[string]System{
 			{
 				Label: "Drive 1",
 				Exts:  []string{".dsk", ".mgt", ".img"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1770,7 +1770,7 @@ var Systems = map[string]System{
 			{
 				Label: "Drive 2",
 				Exts:  []string{".dsk", ".mgt", ".img"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1787,7 +1787,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM",
 				Exts:  []string{".bin", ".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1796,7 +1796,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".cas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1811,7 +1811,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".rks"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  0,
@@ -1820,7 +1820,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk",
 				Exts:  []string{".odi"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1835,7 +1835,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin", ".rom"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1844,7 +1844,7 @@ var Systems = map[string]System{
 			{
 				Label: "CAS File",
 				Exts:  []string{".cas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1859,7 +1859,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk 0",
 				Exts:  []string{".dsk"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1874,7 +1874,7 @@ var Systems = map[string]System{
 			{
 				Label: "Full Cart",
 				Exts:  []string{".m99", ".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1883,7 +1883,7 @@ var Systems = map[string]System{
 			{
 				Label: "ROM Cart",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1892,7 +1892,7 @@ var Systems = map[string]System{
 			{
 				Label: "GROM Cart",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  3,
@@ -1908,7 +1908,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cartridge",
 				Exts:  []string{".bin"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1917,7 +1917,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape Image",
 				Exts:  []string{".cas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1932,7 +1932,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk 0",
 				Exts:  []string{".dsk", ".jvi"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1941,7 +1941,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk 1",
 				Exts:  []string{".dsk", ".jvi"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -1950,7 +1950,7 @@ var Systems = map[string]System{
 			{
 				Label: "Program",
 				Exts:  []string{".cmd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -1959,7 +1959,7 @@ var Systems = map[string]System{
 			{
 				Label: "Cassette",
 				Exts:  []string{".cas"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -1974,7 +1974,7 @@ var Systems = map[string]System{
 			{
 				Label: "Virtual SD",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -1989,7 +1989,7 @@ var Systems = map[string]System{
 			{
 				Label: "ASCII",
 				Exts:  []string{".txt", ".bas", ".lod"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2003,7 +2003,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".rom", ".com", ".c00", ".edd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2012,7 +2012,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk A",
 				Exts:  []string{".fdd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -2021,7 +2021,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk B",
 				Exts:  []string{".fdd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -2036,7 +2036,7 @@ var Systems = map[string]System{
 			{
 				Label: "#8",
 				Exts:  []string{".d64", ".g64"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -2045,7 +2045,7 @@ var Systems = map[string]System{
 			{
 				Label: "#9",
 				Exts:  []string{".d64", ".g64"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -2053,7 +2053,7 @@ var Systems = map[string]System{
 			},
 			{
 				Exts: []string{".prg", ".crt", ".ct?", ".tap"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2068,7 +2068,7 @@ var Systems = map[string]System{
 			{
 				Label: "FDD0",
 				Exts:  []string{".d88"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -2077,7 +2077,7 @@ var Systems = map[string]System{
 			{
 				Label: "FDD1",
 				Exts:  []string{".d88"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -2086,7 +2086,7 @@ var Systems = map[string]System{
 			{
 				Label: "SASI Hard Disk",
 				Exts:  []string{".hdf"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  2,
@@ -2095,7 +2095,7 @@ var Systems = map[string]System{
 			{
 				Label: "RAM",
 				Exts:  []string{".ram"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  3,
@@ -2112,7 +2112,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".0", ".p"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2127,7 +2127,7 @@ var Systems = map[string]System{
 			{
 				Label: "Disk",
 				Exts:  []string{".trd", ".img", ".dsk", ".mgt"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -2136,7 +2136,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".tap", ".csw", ".tzx"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  2,
@@ -2145,7 +2145,7 @@ var Systems = map[string]System{
 			{
 				Label: "Snapshot",
 				Exts:  []string{".z80", ".sna"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  4,
@@ -2154,7 +2154,7 @@ var Systems = map[string]System{
 			{
 				Label: "DivMMC",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -2169,7 +2169,7 @@ var Systems = map[string]System{
 			{
 				Label: "C:",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  0,
@@ -2178,7 +2178,7 @@ var Systems = map[string]System{
 			{
 				Label: "D:",
 				Exts:  []string{".vhd"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",
 					Index:  1,
@@ -2187,7 +2187,7 @@ var Systems = map[string]System{
 			{
 				Label: "Tape",
 				Exts:  []string{".tzx", ".csw"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2211,7 +2211,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".bin", ".hex"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  0,
@@ -2225,7 +2225,7 @@ var Systems = map[string]System{
 		Slots: []Slot{
 			{
 				Exts: []string{".ch8"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -2240,7 +2240,7 @@ var Systems = map[string]System{
 			{
 				Label: "GMC",
 				Exts:  []string{".gmc"},
-				Mgl: &MglParams{
+				Mgl: &MGLParams{
 					Delay:  3,
 					Method: "f",
 					Index:  1,

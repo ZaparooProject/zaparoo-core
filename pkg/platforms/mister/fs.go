@@ -8,25 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
-func GetActiveCoreName() (string, error) {
-	data, err := os.ReadFile(config.CoreNameFile)
-	if err != nil {
-		return "", err
-	}
-
-	return string(data), nil
-}
-
 func ActiveGameEnabled() bool {
-	_, err := os.Stat(config.ActiveGameFile)
+	_, err := os.Stat(misterconfig.ActiveGameFile)
 	return err == nil
 }
 
 func SetActiveGame(path string) error {
-	file, err := os.Create(config.ActiveGameFile)
+	file, err := os.Create(misterconfig.ActiveGameFile)
 	if err != nil {
 		return err
 	}
@@ -41,7 +32,7 @@ func SetActiveGame(path string) error {
 }
 
 func GetActiveGame() (string, error) {
-	data, err := os.ReadFile(config.ActiveGameFile)
+	data, err := os.ReadFile(misterconfig.ActiveGameFile)
 	if err != nil {
 		return "", err
 	}
@@ -57,7 +48,7 @@ func ResolvePath(path string) string {
 
 	cwd, _ := os.Getwd()
 	defer os.Chdir(cwd)
-	os.Chdir(config.SdFolder)
+	os.Chdir(misterconfig.SDRootDir)
 
 	abs, err := filepath.Abs(path)
 	if err != nil {

@@ -16,13 +16,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
 func preNoticeTime() time.Duration {
-	if config2.MainHasFeature(config2.MainFeatureNotice) {
+	if misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
 		return 3 * time.Second
 	}
 	// accounting for the time it takes to boot up the console
@@ -47,7 +47,7 @@ func showNotice(
 	argsPath := filepath.Join(pl.Settings().TempDir, argsName)
 	completePath := argsPath + ".complete"
 
-	if config2.MainHasFeature(config2.MainFeatureNotice) {
+	if misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
 		err := RunDevCmd("show_notice", text)
 		if err != nil {
 			return "", fmt.Errorf("error running dev cmd: %w", err)
@@ -89,7 +89,7 @@ func showNotice(
 }
 
 func hideNotice(argsPath string) error {
-	if !config2.MainHasFeature(config2.MainFeatureNotice) {
+	if !misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
 		err := os.Remove(argsPath)
 		if err != nil {
 			return fmt.Errorf("error removing notice args: %w", err)
@@ -104,12 +104,12 @@ func hideNotice(argsPath string) error {
 
 func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 	// remove existing items
-	files, err := os.ReadDir(config2.MainPickerDir)
+	files, err := os.ReadDir(misterconfig.MainPickerDir)
 	if err != nil {
 		log.Error().Msgf("error reading picker items dir: %s", err)
 	} else {
 		for _, file := range files {
-			removeErr := os.Remove(filepath.Join(config2.MainPickerDir, file.Name()))
+			removeErr := os.Remove(filepath.Join(misterconfig.MainPickerDir, file.Name()))
 			if removeErr != nil {
 				log.Error().Msgf("error deleting file %s: %s", file.Name(), removeErr)
 			}
@@ -132,7 +132,7 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 			return fmt.Errorf("failed to marshal picker item: %w", marshalErr)
 		}
 
-		path := filepath.Join(config2.MainPickerDir, name+".txt")
+		path := filepath.Join(misterconfig.MainPickerDir, name+".txt")
 		err = os.WriteFile(path, contents, 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to write picker item file: %w", err)
@@ -140,7 +140,7 @@ func misterSetupMainPicker(args widgetmodels.PickerArgs) error {
 	}
 
 	// launch
-	err = os.WriteFile(config2.CmdInterface, []byte("show_picker\n"), 0o600)
+	err = os.WriteFile(misterconfig.CmdInterface, []byte("show_picker\n"), 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to write show_picker command: %w", err)
 	}
@@ -154,7 +154,7 @@ func showPicker(
 	args widgetmodels.PickerArgs,
 ) error {
 	// use custom main ui if available
-	if config2.MainHasFeature(config2.MainFeaturePicker) {
+	if misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
 		err := misterSetupMainPicker(args)
 		if err != nil {
 			return err

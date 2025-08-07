@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
 )
 
 const (
@@ -49,25 +48,42 @@ func MainHasFeature(feature string) bool {
 	return false
 }
 
-func UserConfigToMrext(cfg *config.Instance) *mrextconfig.UserConfig {
-	systemDefaults := cfg.SystemDefaults()
-	setCore := make([]string, 0, len(systemDefaults))
-	for _, v := range systemDefaults {
-		if v.Launcher == "" {
-			continue
-		}
-		setCore = append(setCore, v.System+":"+v.Launcher)
-	}
-	return &mrextconfig.UserConfig{
-		Systems: mrextconfig.SystemsConfig{
-			GamesFolder: cfg.IndexRoots(),
-			SetCore:     setCore,
-		},
-	}
-}
-
 const DefaultIniFilename = "MiSTer.ini"
 
 const MenuCore = "MENU"
 const LinuxFolder = SDRootDir + "/linux"
 const StartupFile = LinuxFolder + "/user-startup.sh"
+const ActiveGameFile = TempDir + "/ACTIVEGAME"
+const LastLaunchFile = SDRootDir + "/.LASTLAUNCH.mgl"
+const CoreNameFile = TempDir + "/CORENAME"
+const CurrentPathFile = TempDir + "/CURRENTPATH"
+const CoreConfigFolder = SDRootDir + "/config"
+
+var GamesFolders = []string{
+	"/media/usb0/games",
+	"/media/usb0",
+	"/media/usb1/games",
+	"/media/usb1",
+	"/media/usb2/games",
+	"/media/usb2",
+	"/media/usb3/games",
+	"/media/usb3",
+	"/media/usb4/games",
+	"/media/usb4",
+	"/media/usb5/games",
+	"/media/usb5",
+	"/media/network/games",
+	"/media/network",
+	"/media/fat/cifs/games",
+	"/media/fat/cifs",
+	"/media/fat/games",
+	"/media/fat",
+}
+
+// FIXME: splitting this out of the platform so it can be called without
+// passing platform to the launch/test launcher functions. better solution
+// would be to update the platform interface to give launchers methods
+// access to the platform
+func RootDirs(cfg *config.Instance) []string {
+	return append(cfg.IndexRoots(), GamesFolders...)
+}

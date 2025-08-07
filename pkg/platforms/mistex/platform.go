@@ -17,10 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	mrextconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/games"
-	mm "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mrext/mister"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -52,7 +49,7 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(config2.TempDir, 0o750)
+	err := os.MkdirAll(misterconfig.TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -86,7 +83,6 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	tr, stopTr, err := mister.StartTracker(
-		config2.UserConfigToMrext(cfg),
 		cfg,
 		p,
 		activeMedia,
@@ -149,9 +145,9 @@ func (p *Platform) Stop() error {
 }
 
 func (*Platform) ScanHook(token *tokens.Token) error {
-	f, err := os.Create(config2.TokenReadFile)
+	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %w", config2.TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -159,35 +155,35 @@ func (*Platform) ScanHook(token *tokens.Token) error {
 
 	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %w", config2.TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 
 	return nil
 }
 
 func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), games.GetGamesFolders(config2.UserConfigToMrext(cfg))...)
+	return misterconfig.RootDirs(cfg)
 }
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    config2.DataDir,
-		ConfigDir:  config2.DataDir,
-		TempDir:    config2.TempDir,
+		DataDir:    misterconfig.DataDir,
+		ConfigDir:  misterconfig.DataDir,
+		TempDir:    misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }
 
-func (*Platform) NormalizePath(cfg *config.Instance, path string) string {
-	return mister.NormalizePath(cfg, path)
+func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+	return mister.NormalizePath(cfg, p, path)
 }
 
 func LaunchMenu() error {
-	if _, err := os.Stat(mrextconfig.CmdInterface); err != nil {
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	cmd, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open command interface: %w", err)
 	}
@@ -198,7 +194,7 @@ func LaunchMenu() error {
 	}()
 
 	// TODO: hardcoded for xilinx variant, should read pref from mister.ini
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(mrextconfig.SdFolder, "menu.bit")); err != nil {
+	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(misterconfig.SDRootDir, "menu.bit")); err != nil {
 		log.Warn().Err(err).Msg("failed to write to command")
 	}
 
@@ -216,7 +212,7 @@ func (p *Platform) StopActiveLauncher() error {
 func (*Platform) GetActiveLauncher() string {
 	core := mister.GetActiveCoreName()
 
-	if core == mrextconfig.MenuCore {
+	if core == misterconfig.MenuCore {
 		return ""
 	}
 
@@ -257,13 +253,13 @@ func (p *Platform) ActiveGamePath() string {
 	return p.tr.ActiveGamePath
 }
 
-func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	system, err := games.LookupSystem(id)
+func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	system, err := mister.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mm.LaunchCore(config2.UserConfigToMrext(cfg), *system)
+	err = mister.LaunchCore(cfg, p, *system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}
