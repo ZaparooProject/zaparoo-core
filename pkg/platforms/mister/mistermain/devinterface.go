@@ -35,7 +35,7 @@ func LaunchMenu() error {
 
 	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func() {
 		if err := cmd.Close(); err != nil {
@@ -45,7 +45,7 @@ func LaunchMenu() error {
 
 	// TODO: don't hardcode here
 	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(config.SDRootDir, "menu.rbf")); err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return nil

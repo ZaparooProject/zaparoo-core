@@ -42,7 +42,7 @@ func SetVideoMode(width, height int) error {
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func(cmd *os.File) {
 		_ = cmd.Close()
@@ -58,7 +58,7 @@ func SetVideoMode(width, height int) error {
 
 	_, err = cmd.WriteString(cmdStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return nil

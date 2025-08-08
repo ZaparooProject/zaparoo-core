@@ -20,6 +20,7 @@
 package activegame
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
@@ -34,7 +35,7 @@ func ActiveGameEnabled() bool {
 func SetActiveGame(path string) error {
 	file, err := os.Create(config.ActiveGameFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create active game file: %w", err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
@@ -44,7 +45,7 @@ func SetActiveGame(path string) error {
 
 	_, err = file.WriteString(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to active game file: %w", err)
 	}
 
 	return nil
@@ -53,7 +54,7 @@ func SetActiveGame(path string) error {
 func GetActiveGame() (string, error) {
 	data, err := os.ReadFile(config.ActiveGameFile)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read active game file: %w", err)
 	}
 
 	return string(data), nil

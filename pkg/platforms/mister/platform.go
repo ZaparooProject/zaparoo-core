@@ -170,7 +170,7 @@ func (p *Platform) StartPost(
 		setActiveMedia,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start tracker: %w", err)
 	}
 
 	p.tracker = tr
@@ -316,7 +316,7 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 func (p *Platform) StopActiveLauncher() error {
 	err := mistermain.LaunchMenu()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to launch menu: %w", err)
 	}
 	p.setActiveMedia(nil)
 	return nil

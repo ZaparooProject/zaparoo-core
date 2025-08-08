@@ -199,7 +199,7 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read directory: %w", err)
 	}
 
 	// if there's an iso in the same folder, mount it too
@@ -239,12 +239,12 @@ func hookAmiga(_ *config.Instance, _ *Core, path string) (string, error) {
 	gameName := filepath.Base(path)
 	sharedPath, err := filepath.Abs(filepath.Join(filepath.Dir(path), "..", "..", "shared"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
 	bootFile := filepath.Join(sharedPath, "ags_boot")
 	if err := os.WriteFile(bootFile, []byte(gameName+"\n"), 0o600); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to write boot file: %w", err)
 	}
 
 	return "\t<setname>Amiga</setname>\n", nil

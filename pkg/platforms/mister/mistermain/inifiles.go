@@ -20,6 +20,7 @@
 package mistermain
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func GetAllINIFiles() ([]INIFile, error) {
 
 	files, err := os.ReadDir(config.SDRootDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
 
 	var iniFilenames []string

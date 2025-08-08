@@ -72,7 +72,7 @@ func GenerateMgl(_ *config.Instance, system *cores.Core, path, override string) 
 
 	mglDef, err := cores.PathToMGLDef(system, path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get MGL definition: %w", err)
 	}
 
 	mgl += fmt.Sprintf(
@@ -86,7 +86,7 @@ func GenerateMgl(_ *config.Instance, system *cores.Core, path, override string) 
 func writeTempFile(content string) (string, error) {
 	tmpFile, err := os.Create(misterconfig.LastLaunchFile)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer func() {
 		if closeErr := tmpFile.Close(); closeErr != nil {
@@ -96,7 +96,7 @@ func writeTempFile(content string) (string, error) {
 
 	_, err = tmpFile.WriteString(content)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to write to temp file: %w", err)
 	}
 	return tmpFile.Name(), nil
 }
@@ -114,7 +114,7 @@ func launchFile(path string) error {
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func() {
 		if err := cmd.Close(); err != nil {
@@ -123,7 +123,7 @@ func launchFile(path string) error {
 	}()
 
 	if _, err := fmt.Fprintf(cmd, "load_core %s\n", path); err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return nil
@@ -132,17 +132,17 @@ func launchFile(path string) error {
 func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error {
 	override, err := cores.RunSystemHook(cfg, system, path)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to run system hook: %w", err)
 	}
 
 	mgl, err := GenerateMgl(cfg, system, path, override)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
 	return launchFile(tmpFile)
@@ -158,7 +158,7 @@ func LaunchShortCore(path string) error {
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return launchFile(tmpFile)
@@ -169,12 +169,12 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 	case ".mra":
 		err := launchFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 	case ".mgl":
 		err := launchFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 
 		if activegame.ActiveGameEnabled() {
@@ -185,7 +185,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 	default:
 		err := launchTempMgl(cfg, system, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 
 		if activegame.ActiveGameEnabled() {
@@ -216,7 +216,7 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open command interface: %w", err)
 	}
 	defer func() {
 		if err := cmd.Close(); err != nil {
@@ -225,7 +225,7 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 	}()
 
 	if _, err := fmt.Fprintf(cmd, "load_core %s\n", path); err != nil {
-		return err
+		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 
 	return nil
@@ -239,18 +239,18 @@ func LaunchBasicFile(path string) error {
 	case ".mra":
 		err = launchFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 	case ".mgl":
 		err = launchFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 		isGame = true
 	case ".rbf":
 		err = launchFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
 	default:
 		return fmt.Errorf("unknown file type: %s", ext)
@@ -259,7 +259,7 @@ func LaunchBasicFile(path string) error {
 	if activegame.ActiveGameEnabled() && isGame {
 		err := activegame.SetActiveGame(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to set active game: %w", err)
 		}
 	}
 
@@ -286,12 +286,12 @@ func ReadMgl(path string) (MGL, error) {
 
 	cleanPath := filepath.Clean(path)
 	if _, err := os.Stat(cleanPath); err != nil {
-		return mgl, err
+		return mgl, fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	file, err := os.ReadFile(cleanPath) // #nosec G304 -- Reading trusted MGL configuration files
 	if err != nil {
-		return mgl, err
+		return mgl, fmt.Errorf("failed to read file: %w", err)
 	}
 
 	decoder := xml.NewDecoder(bytes.NewReader(file))
@@ -299,7 +299,7 @@ func ReadMgl(path string) (MGL, error) {
 
 	err = decoder.Decode(&mgl)
 	if err != nil {
-		return mgl, err
+		return mgl, fmt.Errorf("failed to decode MGL: %w", err)
 	}
 
 	return mgl, nil

@@ -20,6 +20,7 @@
 package mistermain
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,12 +38,12 @@ func ReadRecent(path string) ([]RecentEntry, error) {
 
 	cleanPath := filepath.Clean(path)
 	if _, err := os.Stat(cleanPath); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	file, err := os.Open(cleanPath) // #nosec G304 -- Reading trusted MiSTer recent files
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 
 	for {
@@ -51,7 +52,7 @@ func ReadRecent(path string) ([]RecentEntry, error) {
 		if err == io.EOF || n == 0 {
 			break
 		} else if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
 
 		empty := true
