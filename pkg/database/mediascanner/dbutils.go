@@ -22,7 +22,6 @@ package mediascanner
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
@@ -153,7 +152,7 @@ type MediaPathFragments struct {
 }
 
 func getTagsFromFileName(filename string) []string {
-	re := regexp.MustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
+	re := helpers.CachedMustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
 	matches := re.FindAllString(filename, -1)
 	tags := make([]string, 0)
 	for _, padded := range matches {
@@ -167,7 +166,7 @@ func getTagsFromFileName(filename string) []string {
 }
 
 func getTitleFromFilename(filename string) string {
-	r := regexp.MustCompile(`^([^(\[]*)`)
+	r := helpers.CachedMustCompile(`^([^(\[]*)`)
 	title := r.FindString(filename)
 	return strings.TrimSpace(title)
 }
