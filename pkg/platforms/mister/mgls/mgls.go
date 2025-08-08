@@ -123,6 +123,7 @@ func launchFile(path string) error {
 		return fmt.Errorf("not a valid launch file: %s", path)
 	}
 
+	log.Debug().Str("file", path).Msg("sending to command interface")
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open command interface: %w", err)
@@ -145,11 +146,15 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 	if err != nil {
 		return fmt.Errorf("failed to run system hook: %w", err)
 	}
+	if override != "" {
+		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
+	}
 
 	mgl, err := GenerateMgl(cfg, system, path, override)
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}
+	log.Debug().Str("system", system.ID).Str("rbf", system.RBF).Msg("MGL generated successfully")
 
 	tmpFile, err := writeTempFile(mgl)
 	if err != nil {
@@ -176,17 +181,22 @@ func LaunchShortCore(path string) error {
 }
 
 func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
-	switch s.ToLower(filepath.Ext(path)) {
+	ext := s.ToLower(filepath.Ext(path))
+	log.Info().Str("system", system.ID).Str("path", path).Str("type", ext).Msg("launching game")
+
+	switch ext {
 	case ".mra":
 		err := launchFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		log.Debug().Str("path", path).Msg("arcade game launched via MRA")
 	case ".mgl":
 		err := launchFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		log.Debug().Str("path", path).Msg("game launched via MGL file")
 
 		if activegame.ActiveGameEnabled() {
 			if err := activegame.SetActiveGame(path); err != nil {
@@ -198,6 +208,7 @@ func LaunchGame(cfg *config.Instance, system *cores.Core, path string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write to command interface: %w", err)
 		}
+		log.Debug().Str("system", system.ID).Str("path", path).Msg("game launched via generated MGL")
 
 		if activegame.ActiveGameEnabled() {
 			if err := activegame.SetActiveGame(path); err != nil {

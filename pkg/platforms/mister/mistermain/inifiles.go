@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/rs/zerolog/log"
 )
 
 type INIFile struct {
@@ -103,5 +104,6 @@ func GetAllINIFiles() ([]INIFile, error) {
 		}
 	}
 
+	log.Debug().Int("total_ini_files", len(iniFilenames)).Int("usable_ini_files", len(inis)).Msg("discovered INI files")
 	return inis, nil
 }

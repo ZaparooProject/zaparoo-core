@@ -127,11 +127,14 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.gpd = gpd
 
+	log.Debug().Msg("input devices initialized successfully")
+
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
 		log.Error().Msgf("error loading mappings: %s", err)
 	} else {
 		p.SetDB(uids, texts)
+		log.Info().Int("uid_count", len(uids)).Int("text_count", len(texts)).Msg("CSV mappings loaded")
 	}
 
 	closeMappingsWatcher, err := StartCsvMappingsWatcher(
@@ -356,12 +359,17 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	log.Info().Msgf("launch media: %s", path)
 	path = checkInZip(path)
+	launchers := helpers.PathToLaunchers(cfg, p, path)
 	launcher, err := helpers.FindLauncher(cfg, p, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error finding launcher: %w", err)
 	}
 
-	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
+	log.Info().
+		Str("launcher", launcher.ID).
+		Str("path", path).
+		Int("available_launchers", len(launchers)).
+		Msg("launching media")
 	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)

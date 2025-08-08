@@ -68,13 +68,21 @@ func checkInZip(path string) string {
 
 	if matchingFilePath != "" {
 		log.Debug().Msgf("found matching file: %s", matchingFilePath)
-		return filepath.Join(path, matchingFilePath)
+		result := filepath.Join(path, matchingFilePath)
+		log.Debug().
+			Str("zip", path).
+			Str("selected", matchingFilePath).
+			Int("total_files", len(zipReader.File)).
+			Msg("zip file processed successfully")
+		return result
 	} else if firstFilePath != "" && len(zipReader.File) == 1 {
 		log.Debug().Msgf("found single file in zip archive: %s", firstFilePath)
-		return filepath.Join(path, firstFilePath)
+		result := filepath.Join(path, firstFilePath)
+		log.Debug().Str("zip", path).Str("selected", firstFilePath).Msg("single-file zip processed")
+		return result
 	}
 
-	log.Warn().Msgf("no suitable file found in zip archive: %s", path)
+	log.Warn().Str("zip", path).Int("files", len(zipReader.File)).Msgf("no suitable file found in zip archive")
 	return path
 }
 

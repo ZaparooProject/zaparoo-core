@@ -44,6 +44,13 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 	doRelaunch := env.TotalCommands <= 1 || env.CurrentIndex >= env.TotalCommands-1
 	// only relaunch if there aren't any more commands
 
+	selectedIni := inis[id-1]
+	log.Info().
+		Str("ini_file", selectedIni.Filename).
+		Str("display_name", selectedIni.DisplayName).
+		Bool("will_relaunch", doRelaunch).
+		Msg("setting active INI")
+
 	err = mistermain.SetActiveIni(id, doRelaunch)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to set active ini: %w", err)
@@ -59,7 +66,10 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
 
-	err := mgls.LaunchShortCore(env.Cmd.Args[0])
+	corePath := env.Cmd.Args[0]
+	log.Info().Str("core_path", corePath).Msg("launching core via command")
+
+	err := mgls.LaunchShortCore(corePath)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to launch core: %w", err)
 	}

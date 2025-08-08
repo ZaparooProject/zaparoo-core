@@ -199,8 +199,10 @@ func (tr *Tracker) LoadCore() {
 		return
 	}
 
+	oldCore := tr.ActiveCore
 	tr.stopCore()
 	tr.ActiveCore = coreName
+	log.Info().Str("old_core", oldCore).Str("new_core", coreName).Msg("core changed")
 
 	if coreName == misterconfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")
@@ -210,6 +212,7 @@ func (tr *Tracker) LoadCore() {
 
 	// set arcade core details
 	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
+		log.Info().Str("arcade_game", result.ArcadeName).Str("setname", result.CoreName).Msg("arcade game detected")
 		err := activegame.SetActiveGame(result.CoreName)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
@@ -257,9 +260,11 @@ func (tr *Tracker) loadGame() {
 		tr.stopGame()
 		return
 	case !filepath.IsAbs(activeGame):
-		log.Debug().Msgf("active game is not absolute, assuming arcade: %s", activeGame)
+		log.Debug().Str("active_game", activeGame).Msg("processing arcade game (non-absolute path)")
 		return
 	}
+
+	log.Debug().Str("active_game", activeGame).Msg("processing active game")
 
 	path := ResolvePath(activeGame)
 	filename := filepath.Base(path)
