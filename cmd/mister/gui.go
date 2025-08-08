@@ -30,15 +30,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	misterstartup "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )
 
 func buildTheInstallRequestApp() (*tview.Application, error) {
-	var startup mrextmister.Startup
+	var startup misterstartup.Startup
 	app := tview.NewApplication()
 	// create the main modal
 	modal := tview.NewModal()
@@ -72,7 +72,7 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 }
 
 func tryAddStartup() error {
-	var startup mrextmister.Startup
+	var startup misterstartup.Startup
 
 	err := startup.Load()
 	if err != nil {
@@ -100,7 +100,7 @@ func tryAddStartup() error {
 func displayServiceInfo(pl platforms.Platform, cfg *config.Instance, service *helpers.Service) error {
 	// Asturur > Wizzo
 	err := tui.BuildAndRetry(func() (*tview.Application, error) {
-		logDestinationPath := path.Join(config2.DataDir, config.LogFile)
+		logDestinationPath := path.Join(misterconfig.DataDir, config.LogFile)
 		return tui.BuildMain(cfg, pl, service.Running, logDestinationPath, "SD card")
 	})
 	if err != nil {

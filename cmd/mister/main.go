@@ -38,14 +38,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
-	mrextmister "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
+	misterstartup "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets"
 	"github.com/rs/zerolog/log"
 )
 
 func addToStartup() error {
-	var startup mrextmister.Startup
+	var startup misterstartup.Startup
 
 	err := startup.Load()
 	if err != nil {
