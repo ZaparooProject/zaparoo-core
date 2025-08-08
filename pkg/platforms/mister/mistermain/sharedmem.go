@@ -116,10 +116,6 @@ func SetActiveIni(ini int, relaunchCore bool) error {
 	}
 
 	coreName := GetActiveCoreName()
-	if coreName == "" {
-		return errors.New("error checking active core")
-	}
-
 	if coreName == config.MenuCore {
 		err = LaunchMenu()
 		if err != nil {

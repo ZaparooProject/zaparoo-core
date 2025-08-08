@@ -52,7 +52,7 @@ type Tracker struct {
 	mu               sync.Mutex
 }
 
-func generateNameMap() []NameMapping {
+func generateNameMap(pl platforms.Platform) []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
 	for key := range cores.Systems {
@@ -73,8 +73,7 @@ func generateNameMap() []NameMapping {
 		}
 	}
 
-	// Use zaparoo's ArcadeDB implementation instead of mrext's
-	arcadeDbEntries, err := arcadedb.ReadArcadeDb(nil) // TODO: pass platform instance
+	arcadeDbEntries, err := arcadedb.ReadArcadeDb(pl)
 	if err != nil {
 		log.Error().Msgf("error reading arcade db: %s", err)
 	} else {
@@ -100,7 +99,7 @@ func NewTracker(
 ) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
-	nameMap := generateNameMap()
+	nameMap := generateNameMap(pl)
 
 	log.Info().Msgf("loaded %d name mappings", len(nameMap))
 
@@ -123,7 +122,7 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	nameMap := generateNameMap()
+	nameMap := generateNameMap(tr.pl)
 	log.Info().Msgf("reloaded %d name mappings", len(nameMap))
 	tr.NameMap = nameMap
 }

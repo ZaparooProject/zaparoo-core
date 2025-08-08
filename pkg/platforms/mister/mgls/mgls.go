@@ -22,6 +22,7 @@ package mgls
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,30 +36,40 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func GenerateMgl(_ *config.Instance, system *cores.Core, path, override string) (string, error) {
-	// override the system rbf with the user specified one
-	// TODO: this needs to look up the core by launcher using the zaparoo config
-	// for _, setCore := range cfg.Systems.SetCore {
-	//	parts := s.SplitN(setCore, ":", 2)
-	//	if len(parts) != 2 {
-	//		continue
-	//	}
-	//
-	//	if s.EqualFold(parts[0], system.ID) {
-	//		system.RBF = parts[1]
-	//		break
-	//	}
-	// }
+func GenerateMgl(cfg *config.Instance, core *cores.Core, path, override string) (string, error) {
+	if core == nil {
+		return "", errors.New("no core supplied for MGL generation")
+	}
 
-	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", system.RBF)
+	// TODO: this only works because system IDs historically match core IDs
+	// better to have something more robust later that separates the two
+	userDefaultSystem, ok := cfg.LookupSystemDefaults(core.ID)
+	if ok {
+		newCore, err := cores.LookupCore(userDefaultSystem.System)
+		if err != nil {
+			log.Warn().
+				Str("core", core.ID).
+				Str("default_system", userDefaultSystem.System).
+				Msg("system default core not found, using original core")
+		} else {
+			log.Debug().
+				Str("original_core", core.ID).
+				Str("default_system_core", newCore.ID).
+				Str("rbf", newCore.RBF).
+				Msg("applying system default core override")
+			core = newCore
+		}
+	}
 
-	if system.SetName != "" {
+	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", core.RBF)
+
+	if core.SetName != "" {
 		sameDir := ""
-		if system.SetNameSameDir {
+		if core.SetNameSameDir {
 			sameDir = " same_dir=\"1\""
 		}
 
-		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, system.SetName)
+		mgl += fmt.Sprintf("\t<setname%s>%s</setname>\n", sameDir, core.SetName)
 	}
 
 	if path == "" {
@@ -70,7 +81,7 @@ func GenerateMgl(_ *config.Instance, system *cores.Core, path, override string) 
 		return mgl, nil
 	}
 
-	mglDef, err := cores.PathToMGLDef(system, path)
+	mglDef, err := cores.PathToMGLDef(core, path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get MGL definition: %w", err)
 	}

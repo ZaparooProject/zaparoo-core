@@ -60,5 +60,8 @@ func GetSystemMetadata(system string) (SystemMetadata, error) {
 	}
 
 	err = json.Unmarshal(data, &metadata)
-	return metadata, fmt.Errorf("failed to unmarshal system metadata: %w", err)
+	if err != nil {
+		return metadata, fmt.Errorf("failed to unmarshal system metadata: %w", err)
+	}
+	return metadata, nil
 }

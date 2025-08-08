@@ -13,7 +13,7 @@ const (
 	SDRootDir          = "/media/fat"
 	TempDir            = "/tmp/zaparoo"
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
-	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Temp file path, not credentials
+	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Zaparoo token, not credentials
 	DataDir            = SDRootDir + "/zaparoo"
 	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
@@ -25,6 +25,15 @@ const (
 	MainFeaturesFile   = "/tmp/MAINFEATURES"
 	MainFeaturePicker  = "PICKER"
 	MainFeatureNotice  = "NOTICE"
+	MenuCore           = "MENU"
+	LinuxFolder        = SDRootDir + "/linux"
+	StartupFile        = LinuxFolder + "/user-startup.sh"
+	ActiveGameFile     = "/tmp/ACTIVEGAME"
+	LastLaunchFile     = SDRootDir + "/.LASTLAUNCH.mgl"
+	CoreNameFile       = "/tmp/CORENAME"
+	CurrentPathFile    = "/tmp/CURRENTPATH"
+	CoreConfigFolder   = SDRootDir + "/config"
+	DefaultIniFilename = "MiSTer.ini"
 )
 
 func MainHasFeature(feature string) bool {
@@ -47,19 +56,6 @@ func MainHasFeature(feature string) bool {
 
 	return false
 }
-
-const DefaultIniFilename = "MiSTer.ini"
-
-const (
-	MenuCore        = "MENU"
-	LinuxFolder     = SDRootDir + "/linux"
-	StartupFile     = LinuxFolder + "/user-startup.sh"
-	ActiveGameFile  = TempDir + "/ACTIVEGAME"
-	LastLaunchFile  = SDRootDir + "/.LASTLAUNCH.mgl"
-	CoreNameFile    = TempDir + "/CORENAME"
-	CurrentPathFile = TempDir + "/CURRENTPATH"
-)
-const CoreConfigFolder = SDRootDir + "/config"
 
 var GamesFolders = []string{
 	"/media/usb0/games",

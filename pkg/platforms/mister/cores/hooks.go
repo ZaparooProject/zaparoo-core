@@ -32,92 +32,25 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 )
 
-// TODO: is there a zaparoo findfile somewhere?
-func FindFile(path string) (string, error) {
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
-	}
-
-	parent := filepath.Dir(path)
-	name := filepath.Base(path)
-
-	files, err := os.ReadDir(parent)
-	if err != nil {
-		return "", fmt.Errorf("failed to read directory %s: %w", parent, err)
-	}
-
-	for _, file := range files {
-		target := file.Name()
-
-		if len(target) != len(name) {
-			continue
-		} else if strings.EqualFold(target, name) {
-			return filepath.Join(parent, target), nil
-		}
-	}
-
-	return "", fmt.Errorf("file match not found: %s", path)
-}
-
-type PathResult struct {
-	Path   string
-	System Core
-}
-
-func GetActiveSystemPaths(cfg *config.Instance, systems []Core) []PathResult {
-	var matches []PathResult
-
-	gamesFolders := misterconfig.RootDirs(cfg)
-	for _, system := range systems {
-		for _, gamesFolder := range gamesFolders {
-			gf, err := FindFile(gamesFolder)
-			if err != nil {
-				continue
-			}
-
-			found := false
-
-			for _, folder := range []string{} { // TODO: this should use the systems defs on zaparoo itself
-				systemFolder := filepath.Join(gf, folder)
-				path, err := FindFile(systemFolder)
-				if err != nil {
-					continue
-				}
-
-				matches = append(matches, PathResult{path, system})
-				found = true
-				break
-			}
-
-			if found {
-				break
-			}
-		}
-
-		if len(matches) == len(systems) {
-			break
-		}
-	}
-
-	return matches
-}
-
-func copySetnameBios(cfg *config.Instance, origSystem, newSystem *Core, name string) error {
+func copySetnameBios(cfg *config.Instance, origCore, newCore *Core, name string) error {
 	var biosPath string
 
-	for _, folder := range GetActiveSystemPaths(cfg, []Core{*origSystem}) {
-		checkPath := filepath.Join(folder.Path, name)
+	// TODO: this will not work on 100% of cores anymore because some core IDs
+	// don't match to the name of their games folder. will need to be fixed later
+	// with a way to reverse lookup a core back to a system (which has the folder)
+	for _, folder := range misterconfig.RootDirs(cfg) {
+		checkPath := filepath.Join(folder, origCore.ID, name)
 		if _, err := os.Stat(checkPath); err == nil {
 			biosPath = checkPath
 			break
 		}
 	}
 
-	if biosPath == "" || newSystem.SetName == "" {
+	if biosPath == "" || newCore.SetName == "" {
 		return nil
 	}
 
-	newFolder, err := filepath.Abs(filepath.Join(filepath.Dir(biosPath), "..", newSystem.SetName))
+	newFolder, err := filepath.Abs(filepath.Join(filepath.Dir(biosPath), "..", newCore.SetName))
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
