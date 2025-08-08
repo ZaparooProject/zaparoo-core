@@ -25,7 +25,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Info().Msg("received launchers refresh request")
 
 	// Refresh the launcher cache

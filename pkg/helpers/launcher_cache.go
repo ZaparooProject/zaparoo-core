@@ -29,9 +29,9 @@ import (
 // LauncherCache provides fast O(1) launcher lookups by system ID.
 // This replaces the expensive O(n*m) pl.Launchers() calls in hot paths.
 type LauncherCache struct {
-	mu           sync.RWMutex
 	bySystemID   map[string][]platforms.Launcher
 	allLaunchers []platforms.Launcher
+	mu           sync.RWMutex
 }
 
 // GlobalLauncherCache is the singleton instance used throughout the application.

@@ -69,8 +69,8 @@ func FindPath(path string) (string, error) {
 }
 
 func GetSystemPaths(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	_ *config.Instance,
+	_ platforms.Platform,
 	rootFolders []string,
 	systems []systemdefs.System,
 ) []PathResult {
