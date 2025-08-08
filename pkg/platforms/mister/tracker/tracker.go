@@ -1,6 +1,6 @@
 //go:build linux
 
-package mister
+package tracker
 
 import (
 	"context"
@@ -18,13 +18,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/arcadedb"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker/activegame"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/metadata"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
-	mrextutils "github.com/wizzomafizzo/mrext/pkg/utils"
 )
 
 const ArcadeSystem = "Arcade"
@@ -38,7 +39,6 @@ type NameMapping struct {
 
 type Tracker struct {
 	pl               platforms.Platform
-	Config           *mrextconfig.UserConfig
 	setActiveMedia   func(*models.ActiveMedia)
 	cfg              *config.Instance
 	activeMedia      func() *models.ActiveMedia
@@ -52,30 +52,28 @@ type Tracker struct {
 	mu               sync.Mutex
 }
 
-func generateNameMap() []NameMapping {
+func generateNameMap(pl platforms.Platform) []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
-	for key := range games.Systems {
-		system := games.Systems[key]
+	for key := range cores.Systems {
+		system := cores.Systems[key]
 		switch {
 		case system.SetName != "":
 			nameMap = append(nameMap, NameMapping{
 				CoreName: system.SetName,
-				System:   system.Id,
-				Name:     system.Name,
-			})
-		case len(system.Folder) > 0:
-			nameMap = append(nameMap, NameMapping{
-				CoreName: system.Folder[0],
-				System:   system.Id,
-				Name:     system.Name,
+				System:   system.ID,
+				Name:     system.ID,
 			})
 		default:
-			log.Warn().Msgf("system %s has no setname or folder", system.Id)
+			nameMap = append(nameMap, NameMapping{
+				CoreName: system.ID,
+				System:   system.ID,
+				Name:     system.ID,
+			})
 		}
 	}
 
-	arcadeDbEntries, err := metadata.ReadArcadeDb()
+	arcadeDbEntries, err := arcadedb.ReadArcadeDb(pl)
 	if err != nil {
 		log.Error().Msgf("error reading arcade db: %s", err)
 	} else {
@@ -94,7 +92,6 @@ func generateNameMap() []NameMapping {
 }
 
 func NewTracker(
-	mrextCfg *mrextconfig.UserConfig,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	activeMedia func() *models.ActiveMedia,
@@ -102,12 +99,11 @@ func NewTracker(
 ) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
-	nameMap := generateNameMap()
+	nameMap := generateNameMap(pl)
 
 	log.Info().Msgf("loaded %d name mappings", len(nameMap))
 
 	return &Tracker{
-		Config:           mrextCfg,
 		pl:               pl,
 		cfg:              cfg,
 		ActiveCore:       "",
@@ -126,7 +122,7 @@ func (tr *Tracker) ReloadNameMap() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	nameMap := generateNameMap()
+	nameMap := generateNameMap(tr.pl)
 	log.Info().Msgf("reloaded %d name mappings", len(nameMap))
 	tr.NameMap = nameMap
 }
@@ -184,7 +180,7 @@ func (tr *Tracker) LoadCore() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	data, err := os.ReadFile(mrextconfig.CoreNameFile)
+	data, err := os.ReadFile(misterconfig.CoreNameFile)
 	coreName := string(data)
 
 	if err != nil {
@@ -192,8 +188,8 @@ func (tr *Tracker) LoadCore() {
 		return
 	}
 
-	if coreName == mrextconfig.MenuCore {
-		err := mister.SetActiveGame("")
+	if coreName == misterconfig.MenuCore {
+		err := activegame.SetActiveGame("")
 		if err != nil {
 			log.Error().Msgf("error setting active game: %s", err)
 		}
@@ -203,10 +199,12 @@ func (tr *Tracker) LoadCore() {
 		return
 	}
 
+	oldCore := tr.ActiveCore
 	tr.stopCore()
 	tr.ActiveCore = coreName
+	log.Info().Str("old_core", oldCore).Str("new_core", coreName).Msg("core changed")
 
-	if coreName == mrextconfig.MenuCore {
+	if coreName == misterconfig.MenuCore {
 		log.Debug().Msg("in menu, stopping game")
 		tr.stopGame()
 		return
@@ -214,7 +212,8 @@ func (tr *Tracker) LoadCore() {
 
 	// set arcade core details
 	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
-		err := mister.SetActiveGame(result.CoreName)
+		log.Info().Str("arcade_game", result.ArcadeName).Str("setname", result.CoreName).Msg("arcade game detected")
+		err := activegame.SetActiveGame(result.CoreName)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
 		}
@@ -250,7 +249,7 @@ func (tr *Tracker) loadGame() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	activeGame, err := mister.GetActiveGame()
+	activeGame, err := activegame.GetActiveGame()
 	switch {
 	case err != nil:
 		log.Error().Msgf("error getting active game: %s", err)
@@ -261,20 +260,22 @@ func (tr *Tracker) loadGame() {
 		tr.stopGame()
 		return
 	case !filepath.IsAbs(activeGame):
-		log.Debug().Msgf("active game is not absolute, assuming arcade: %s", activeGame)
+		log.Debug().Str("active_game", activeGame).Msg("processing arcade game (non-absolute path)")
 		return
 	}
 
-	path := mister.ResolvePath(activeGame)
+	log.Debug().Str("active_game", activeGame).Msg("processing active game")
+
+	path := ResolvePath(activeGame)
 	filename := filepath.Base(path)
-	name := mrextutils.RemoveFileExt(filename)
+	name := helpers.FilenameFromPath(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
-		mgl, mglErr := mister.ReadMgl(path)
+		mgl, mglErr := mgls.ReadMgl(path)
 		if mglErr != nil {
 			log.Error().Msgf("error reading mgl: %s", mglErr)
 		} else {
-			path = mister.ResolvePath(mgl.File.Path)
+			path = ResolvePath(mgl.File.Path)
 			log.Info().Msgf("mgl path: %s", path)
 		}
 	}
@@ -349,7 +350,7 @@ func loadRecent(filename string) error {
 		}
 	}(file)
 
-	recents, err := mister.ReadRecent(filename)
+	recents, err := mistermain.ReadRecent(filename)
 	if err != nil {
 		return fmt.Errorf("error reading recent file: %w", err)
 	} else if len(recents) == 0 {
@@ -361,20 +362,20 @@ func loadRecent(filename string) error {
 	if strings.HasSuffix(filename, "cores_recent.cfg") {
 		// main menu's recent file, written when launching mgls
 		if strings.HasSuffix(strings.ToLower(newest.Name), ".mgl") {
-			mglPath := mister.ResolvePath(filepath.Join(newest.Directory, newest.Name))
-			mgl, mglErr := mister.ReadMgl(mglPath)
+			mglPath := ResolvePath(filepath.Join(newest.Directory, newest.Name))
+			mgl, mglErr := mgls.ReadMgl(mglPath)
 			if mglErr != nil {
 				return fmt.Errorf("error reading mgl file: %w", mglErr)
 			}
 
-			err = mister.SetActiveGame(mgl.File.Path)
+			err = activegame.SetActiveGame(mgl.File.Path)
 			if err != nil {
 				return fmt.Errorf("error setting active game: %w", err)
 			}
 		}
 	} else {
 		// individual core's recent file
-		err = mister.SetActiveGame(filepath.Join(newest.Directory, newest.Name))
+		err = activegame.SetActiveGame(filepath.Join(newest.Directory, newest.Name))
 		if err != nil {
 			return fmt.Errorf("error setting active game: %w", err)
 		}
@@ -392,7 +393,7 @@ func (tr *Tracker) runPickerSelection(name string) {
 		log.Error().Msgf("main picker selected is empty")
 	default:
 		path := strings.TrimSpace(string(contents))
-		path = mrextconfig.SdFolder + "/" + path
+		path = misterconfig.SDRootDir + "/" + path
 		log.Info().Msgf("main picker selected path: %s", path)
 
 		pickerContents, err := os.ReadFile(path) //nolint:gosec // Internal picker content path
@@ -405,12 +406,12 @@ func (tr *Tracker) runPickerSelection(name string) {
 			}
 		}
 
-		files, err := os.ReadDir(MainPickerDir)
+		files, err := os.ReadDir(misterconfig.MainPickerDir)
 		if err != nil {
 			log.Error().Msgf("error reading picker items dir: %s", err)
 		} else {
 			for _, file := range files {
-				err := os.Remove(filepath.Join(MainPickerDir, file.Name()))
+				err := os.Remove(filepath.Join(misterconfig.MainPickerDir, file.Name()))
 				if err != nil {
 					log.Error().Msgf("error deleting file %s: %s", file.Name(), err)
 				}
@@ -437,16 +438,16 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 				}
 				if event.Op&fsnotify.Write == fsnotify.Write {
 					switch {
-					case event.Name == mrextconfig.CoreNameFile:
+					case event.Name == misterconfig.CoreNameFile:
 						tr.LoadCore()
-					case event.Name == mrextconfig.ActiveGameFile:
+					case event.Name == misterconfig.ActiveGameFile:
 						tr.loadGame()
-					case strings.HasPrefix(event.Name, mrextconfig.CoreConfigFolder):
+					case strings.HasPrefix(event.Name, misterconfig.CoreConfigFolder):
 						err = loadRecent(event.Name)
 						if err != nil {
 							log.Error().Msgf("error loading recent file: %s", err)
 						}
-					case event.Name == MainPickerSelected:
+					case event.Name == misterconfig.MainPickerSelected:
 						log.Info().Msgf("main picker selected: %s", event.Name)
 						tr.runPickerSelection(event.Name)
 					}
@@ -460,64 +461,65 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		}
 	}()
 
-	if _, statErr := os.Stat(mrextconfig.CoreNameFile); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(misterconfig.CoreNameFile); os.IsNotExist(statErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writeErr := os.WriteFile(mrextconfig.CoreNameFile, []byte(""), 0o644)
+		writeErr := os.WriteFile(misterconfig.CoreNameFile, []byte(""), 0o644)
 		if writeErr != nil {
 			return nil, fmt.Errorf("failed to write core name file: %w", writeErr)
 		}
-		log.Info().Msgf("created core name file: %s", mrextconfig.CoreNameFile)
+		log.Info().Msgf("created core name file: %s", misterconfig.CoreNameFile)
 	}
 
-	err = watcher.Add(mrextconfig.CoreNameFile)
+	err = watcher.Add(misterconfig.CoreNameFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch core name file: %w", err)
 	}
 
-	if _, statErr := os.Stat(mrextconfig.CoreConfigFolder); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
 		//nolint:gosec // MiSTer system directory, needs to be accessible by other apps
-		mkdirErr := os.MkdirAll(mrextconfig.CoreConfigFolder, 0o755)
+		mkdirErr := os.MkdirAll(misterconfig.CoreConfigFolder, 0o755)
 		if mkdirErr != nil {
 			return nil, fmt.Errorf("failed to create core config folder: %w", mkdirErr)
 		}
-		log.Info().Msgf("created core config folder: %s", mrextconfig.CoreConfigFolder)
+		log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
 	}
 
-	err = watcher.Add(mrextconfig.CoreConfigFolder)
+	err = watcher.Add(misterconfig.CoreConfigFolder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch core config folder: %w", err)
 	}
 
-	if _, statActiveErr := os.Stat(mrextconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
+	if _, statActiveErr := os.Stat(misterconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writeActiveErr := os.WriteFile(mrextconfig.ActiveGameFile, []byte(""), 0o644)
+		writeActiveErr := os.WriteFile(misterconfig.ActiveGameFile, []byte(""), 0o644)
 		if writeActiveErr != nil {
 			return nil, fmt.Errorf("failed to write active game file: %w", writeActiveErr)
 		}
-		log.Info().Msgf("created active game file: %s", mrextconfig.ActiveGameFile)
+		log.Info().Msgf("created active game file: %s", misterconfig.ActiveGameFile)
 	}
 
-	err = watcher.Add(mrextconfig.ActiveGameFile)
+	err = watcher.Add(misterconfig.ActiveGameFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch active game file: %w", err)
 	}
 
-	if _, statPathErr := os.Stat(mrextconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
+	if _, statPathErr := os.Stat(misterconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
 		//nolint:gosec // MiSTer system file, needs to be readable by other apps
-		writePathErr := os.WriteFile(mrextconfig.CurrentPathFile, []byte(""), 0o644)
+		writePathErr := os.WriteFile(misterconfig.CurrentPathFile, []byte(""), 0o644)
 		if writePathErr != nil {
 			return nil, fmt.Errorf("failed to write current path file: %w", writePathErr)
 		}
-		log.Info().Msgf("created current path file: %s", mrextconfig.CurrentPathFile)
+		log.Info().Msgf("created current path file: %s", misterconfig.CurrentPathFile)
 	}
 
-	err = watcher.Add(mrextconfig.CurrentPathFile)
+	err = watcher.Add(misterconfig.CurrentPathFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to watch current path file: %w", err)
 	}
 
-	if _, err := os.Stat(MainPickerSelected); err == nil && MainHasFeature(MainFeaturePicker) {
-		err = watcher.Add(MainPickerSelected)
+	_, pickerExists := os.Stat(misterconfig.MainPickerSelected)
+	if pickerExists == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		err = watcher.Add(misterconfig.MainPickerSelected)
 		if err != nil {
 			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)
 		}
@@ -527,21 +529,20 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 }
 
 func StartTracker(
-	mrextCfg *mrextconfig.UserConfig,
 	cfg *config.Instance,
 	pl platforms.Platform,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) (*Tracker, func() error, error) {
-	tr, err := NewTracker(mrextCfg, pl, cfg, activeMedia, setActiveMedia)
+	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err
 	}
 
 	tr.LoadCore()
-	if !mister.ActiveGameEnabled() {
-		setErr := mister.SetActiveGame("")
+	if !activegame.ActiveGameEnabled() {
+		setErr := activegame.SetActiveGame("")
 		if setErr != nil {
 			log.Error().Msgf("error setting active game: %s", setErr)
 		}
@@ -561,4 +562,28 @@ func StartTracker(
 		tr.StopAll()
 		return nil
 	}, nil
+}
+
+// Convert a launchable path to an absolute path.
+func ResolvePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	cwd, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			log.Error().Err(err).Str("path", cwd).Msg("failed to restore working directory")
+		}
+	}()
+	if err := os.Chdir(misterconfig.SDRootDir); err != nil {
+		return path
+	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+
+	return abs
 }

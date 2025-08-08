@@ -16,9 +16,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func checkInZip(path string) string {
@@ -65,45 +68,53 @@ func checkInZip(path string) string {
 
 	if matchingFilePath != "" {
 		log.Debug().Msgf("found matching file: %s", matchingFilePath)
-		return filepath.Join(path, matchingFilePath)
+		result := filepath.Join(path, matchingFilePath)
+		log.Debug().
+			Str("zip", path).
+			Str("selected", matchingFilePath).
+			Int("total_files", len(zipReader.File)).
+			Msg("zip file processed successfully")
+		return result
 	} else if firstFilePath != "" && len(zipReader.File) == 1 {
 		log.Debug().Msgf("found single file in zip archive: %s", firstFilePath)
-		return filepath.Join(path, firstFilePath)
+		result := filepath.Join(path, firstFilePath)
+		log.Debug().Str("zip", path).Str("selected", firstFilePath).Msg("single-file zip processed")
+		return result
 	}
 
-	log.Warn().Msgf("no suitable file found in zip archive: %s", path)
+	log.Warn().Str("zip", path).Int("files", len(zipReader.File)).Msgf("no suitable file found in zip archive")
 	return path
 }
 
-func launch(systemID string) func(*config.Instance, string) error {
+func launch(coreID string) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
-			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			err := mgls.LaunchBasicFile(path)
 			if err != nil {
 				log.Error().Err(err).Msg("error launching mgl")
 				return fmt.Errorf("failed to launch generic file: %w", err)
 			}
-			err = mister.SetActiveGame(path)
+			err = activegame.SetActiveGame(path)
 			if err != nil {
 				return fmt.Errorf("failed to set active game: %w", err)
 			}
 			return nil
 		}
 
-		s, err := games.GetSystem(systemID)
+		s, err := cores.GetCore(coreID)
 		if err != nil {
-			return fmt.Errorf("failed to get system %s: %w", systemID, err)
+			return fmt.Errorf("failed to get system %s: %w", coreID, err)
 		}
 
 		path = checkInZip(path)
 
-		err = mister.LaunchGame(UserConfigToMrext(cfg), *s, path)
+		err = mgls.LaunchGame(cfg, s, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
 		log.Debug().Msgf("setting active game: %s", path)
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -116,7 +127,7 @@ func launchSinden(
 	rbfName string,
 ) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
-		s, err := games.GetSystem(systemID)
+		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return fmt.Errorf("failed to get system %s: %w", systemID, err)
 		}
@@ -127,28 +138,28 @@ func launchSinden(
 		newRBF := "Light Gun/" + rbfName + "-Sinden"
 		oldRBF := "_Sinden/" + rbfName + "_Sinden"
 
-		newMatches, err := filepath.Glob(filepath.Join(SDRootDir, newRBF) + "*")
+		newMatches, err := filepath.Glob(filepath.Join(misterconfig.SDRootDir, newRBF) + "*")
 		if err != nil {
 			log.Debug().Err(err).Msg("error checking for new Sinden RBF")
 		}
 		if len(newMatches) > 0 {
-			sn.Rbf = newRBF
+			sn.RBF = newRBF
 		} else {
 			// just fallback on trying the old path
-			sn.Rbf = oldRBF
+			sn.RBF = oldRBF
 		}
 
 		sn.SetName = rbfName + "_Sinden"
 		sn.SetNameSameDir = true
 
-		log.Debug().Str("rbf", sn.Rbf).Msgf("launching Sinden: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Msgf("launching Sinden: %v", sn)
 
-		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -157,19 +168,18 @@ func launchSinden(
 }
 
 func launchAggGnw(cfg *config.Instance, path string) error {
-	s, err := games.GetSystem("GameNWatch")
+	s, err := cores.GetCore("GameNWatch")
 	if err != nil {
 		return fmt.Errorf("failed to get GameNWatch system: %w", err)
 	}
 	path = checkInZip(path)
 
 	sn := *s
-	sn.Rbf = "_Console/GameAndWatch"
-	sn.Folder = []string{"Game and Watch"}
-	sn.Slots = []games.Slot{
+	sn.RBF = "_Console/GameAndWatch"
+	sn.Slots = []cores.Slot{
 		{
 			Exts: []string{".gnw"},
-			Mgl: &games.MglParams{
+			Mgl: &cores.MGLParams{
 				Delay:  1,
 				Method: "f",
 				Index:  1,
@@ -177,12 +187,12 @@ func launchAggGnw(cfg *config.Instance, path string) error {
 		},
 	}
 
-	err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+	err = mgls.LaunchGame(cfg, &sn, path)
 	if err != nil {
 		return fmt.Errorf("failed to launch game: %w", err)
 	}
 
-	err = mister.SetActiveGame(path)
+	err = activegame.SetActiveGame(path)
 	if err != nil {
 		return fmt.Errorf("failed to set active game: %w", err)
 	}
@@ -194,23 +204,23 @@ func launchAltCore(
 	rbfPath string,
 ) func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
-		s, err := games.GetSystem(systemID)
+		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return fmt.Errorf("failed to get system %s: %w", systemID, err)
 		}
 		path = checkInZip(path)
 
 		sn := *s
-		sn.Rbf = rbfPath
+		sn.RBF = rbfPath
 
-		log.Debug().Str("rbf", sn.Rbf).Msgf("launching alt core: %v", sn)
+		log.Debug().Str("rbf", sn.RBF).Msgf("launching alt core: %v", sn)
 
-		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -222,20 +232,14 @@ func launchAltCore(
 func launchGroovyCore() func(*config.Instance, string) error {
 	// Merge into mrext?
 	return func(cfg *config.Instance, path string) error {
-		sn := games.System{
-			Id:           "Groovy",
-			Name:         "Groovy",
-			Category:     games.CategoryOther,
-			Manufacturer: "Sergi Clara",
-			ReleaseDate:  "2024-03-02",
-			Alias:        []string{"Groovy"},
-			Folder:       []string{"Groovy"},
-			Rbf:          "_Utility/Groovy",
-			Slots: []games.Slot{
+		sn := cores.Core{
+			ID:  "Groovy",
+			RBF: "_Utility/Groovy",
+			Slots: []cores.Slot{
 				{
 					Label: "GMC",
 					Exts:  []string{".gmc"},
-					Mgl: &games.MglParams{
+					Mgl: &cores.MGLParams{
 						Delay:  2,
 						Method: "f",
 						Index:  1,
@@ -246,12 +250,12 @@ func launchGroovyCore() func(*config.Instance, string) error {
 
 		log.Debug().Msgf("launching Groovy core: %v", sn)
 
-		err := mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		err := mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -262,32 +266,32 @@ func launchGroovyCore() func(*config.Instance, string) error {
 func launchDOS() func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
-			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+			err := mgls.LaunchBasicFile(path)
 			if err != nil {
 				log.Error().Err(err).Msg("error launching mgl")
 				return fmt.Errorf("failed to launch generic file: %w", err)
 			}
-			err = mister.SetActiveGame(path)
+			err = activegame.SetActiveGame(path)
 			if err != nil {
 				return fmt.Errorf("failed to set active game: %w", err)
 			}
 			return nil
 		}
 
-		s, err := games.GetSystem("ao486")
+		s, err := cores.GetCore("ao486")
 		if err != nil {
 			return fmt.Errorf("failed to get ao486 system: %w", err)
 		}
 
 		path = checkInZip(path)
 
-		err = mister.LaunchGame(UserConfigToMrext(cfg), *s, path)
+		err = mgls.LaunchGame(cfg, s, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
 		log.Debug().Msgf("setting active game: %s", path)
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -297,17 +301,17 @@ func launchDOS() func(*config.Instance, string) error {
 
 func launchAtari2600() func(*config.Instance, string) error {
 	return func(cfg *config.Instance, path string) error {
-		s, err := games.GetSystem("Atari2600")
+		s, err := cores.GetCore("Atari2600")
 		if err != nil {
 			return fmt.Errorf("failed to get Atari2600 system: %w", err)
 		}
 		path = checkInZip(path)
 
 		sn := *s
-		sn.Slots = []games.Slot{
+		sn.Slots = []cores.Slot{
 			{
 				Exts: []string{".a26", ".bin"},
-				Mgl: &games.MglParams{
+				Mgl: &cores.MGLParams{
 					Delay:  1,
 					Method: "f",
 					Index:  1,
@@ -315,12 +319,12 @@ func launchAtari2600() func(*config.Instance, string) error {
 			},
 		}
 
-		err = mister.LaunchGame(UserConfigToMrext(cfg), sn, path)
+		err = mgls.LaunchGame(cfg, &sn, path)
 		if err != nil {
 			return fmt.Errorf("failed to launch game: %w", err)
 		}
 
-		err = mister.SetActiveGame(path)
+		err = activegame.SetActiveGame(path)
 		if err != nil {
 			return fmt.Errorf("failed to set active game: %w", err)
 		}
@@ -347,7 +351,7 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 		}
 
 		time.Sleep(500 * time.Millisecond)
-		err = mister.SetVideoMode(640, 480)
+		err = mistermain.SetVideoMode(640, 480)
 		if err != nil {
 			return fmt.Errorf("error setting video mode: %w", err)
 		}
@@ -357,18 +361,18 @@ func launchMPlayer(pl *Platform) func(*config.Instance, string) error {
 			"nice",
 			"-n",
 			"-20",
-			filepath.Join(LinuxDir, "mplayer"),
+			filepath.Join(misterconfig.LinuxDir, "mplayer"),
 			"-cache",
 			"8192",
 			path,
 		)
-		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+LinuxDir)
+		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
 		restore := func() {
-			menuErr := mister.LaunchMenu()
+			menuErr := mistermain.LaunchMenu()
 			if menuErr != nil {
 				log.Warn().Err(menuErr).Msg("error launching menu")
 			}
@@ -1352,13 +1356,13 @@ var Launchers = []platforms.Launcher{
 	{
 		ID:         "Generic",
 		Extensions: []string{".mgl", ".rbf", ".mra"},
-		Launch: func(cfg *config.Instance, path string) error {
-			err := mister.LaunchGenericFile(UserConfigToMrext(cfg), path)
+		Launch: func(_ *config.Instance, path string) error {
+			err := mgls.LaunchBasicFile(path)
 			if err != nil {
 				return fmt.Errorf("failed to launch generic file: %w", err)
 			}
 			log.Debug().Msgf("setting active game: %s", path)
-			err = mister.SetActiveGame(path)
+			err = activegame.SetActiveGame(path)
 			if err != nil {
 				return fmt.Errorf("failed to set active game: %w", err)
 			}

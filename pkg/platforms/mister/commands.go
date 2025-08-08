@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
-	"github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
-	inis, err := mister.GetAllMisterIni()
+	inis, err := mistermain.GetAllINIFiles()
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get MiSTer ini files: %w", err)
 	}
@@ -42,7 +44,14 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 	doRelaunch := env.TotalCommands <= 1 || env.CurrentIndex >= env.TotalCommands-1
 	// only relaunch if there aren't any more commands
 
-	err = mister.SetActiveIni(id, doRelaunch)
+	selectedIni := inis[id-1]
+	log.Info().
+		Str("ini_file", selectedIni.Filename).
+		Str("display_name", selectedIni.DisplayName).
+		Bool("will_relaunch", doRelaunch).
+		Msg("setting active INI")
+
+	err = mistermain.SetActiveIni(id, doRelaunch)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to set active ini: %w", err)
 	}
@@ -57,7 +66,10 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
 
-	err := mister.LaunchShortCore(env.Cmd.Args[0])
+	corePath := env.Cmd.Args[0]
+	log.Info().Str("core_path", corePath).Msg("launching core via command")
+
+	err := mgls.LaunchShortCore(corePath)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to launch core: %w", err)
 	}
@@ -87,7 +99,7 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 			return platforms.CmdResult{}, fmt.Errorf("invalid script: %s", script)
 		}
 
-		scriptPath := filepath.Join(ScriptsDir, script)
+		scriptPath := filepath.Join(config.ScriptsDir, script)
 		if _, err := os.Stat(scriptPath); err != nil {
 			return platforms.CmdResult{}, fmt.Errorf("script not found: %s", script)
 		}
@@ -149,7 +161,7 @@ func CmdMisterMgl(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRes
 		return platforms.CmdResult{}, fmt.Errorf("failed to close temp mgl file: %w", err)
 	}
 
-	cmd, err := os.OpenFile(CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(config.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to open command interface: %w", err)
 	}

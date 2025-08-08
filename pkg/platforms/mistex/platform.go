@@ -17,6 +17,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/arcadedb"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -24,13 +30,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
-	mrextconfig "github.com/wizzomafizzo/mrext/pkg/config"
-	"github.com/wizzomafizzo/mrext/pkg/games"
-	mm "github.com/wizzomafizzo/mrext/pkg/mister"
 )
 
 type Platform struct {
-	tr             *mister.Tracker
+	tr             *tracker.Tracker
 	stopTr         func() error
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
@@ -51,7 +54,7 @@ func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
-	err := os.MkdirAll(mister.TempDir, 0o750)
+	err := os.MkdirAll(misterconfig.TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
@@ -84,8 +87,7 @@ func (p *Platform) StartPost(
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
-	tr, stopTr, err := mister.StartTracker(
-		mister.UserConfigToMrext(cfg),
+	tr, stopTr, err := tracker.StartTracker(
 		cfg,
 		p,
 		activeMedia,
@@ -106,7 +108,7 @@ func (p *Platform) StartPost(
 			return
 		}
 
-		arcadeDbUpdated, err := mister.UpdateArcadeDb(p)
+		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to download arcade database: %s", err)
 		}
@@ -118,7 +120,7 @@ func (p *Platform) StartPost(
 			log.Info().Msg("arcade database is up to date")
 		}
 
-		m, err := mister.ReadArcadeDb(p)
+		m, err := arcadedb.ReadArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to read arcade database: %s", err)
 		} else {
@@ -148,9 +150,9 @@ func (p *Platform) Stop() error {
 }
 
 func (*Platform) ScanHook(token *tokens.Token) error {
-	f, err := os.Create(mister.TokenReadFile)
+	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
-		return fmt.Errorf("unable to create scan result file %s: %w", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to create scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 	defer func(f *os.File) {
 		_ = f.Close()
@@ -158,35 +160,35 @@ func (*Platform) ScanHook(token *tokens.Token) error {
 
 	_, err = fmt.Fprintf(f, "%s,%s", token.UID, token.Text)
 	if err != nil {
-		return fmt.Errorf("unable to write scan result file %s: %w", mister.TokenReadFile, err)
+		return fmt.Errorf("unable to write scan result file %s: %w", misterconfig.TokenReadFile, err)
 	}
 
 	return nil
 }
 
 func (*Platform) RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), games.GetGamesFolders(mister.UserConfigToMrext(cfg))...)
+	return misterconfig.RootDirs(cfg)
 }
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    mister.DataDir,
-		ConfigDir:  mister.DataDir,
-		TempDir:    mister.TempDir,
+		DataDir:    misterconfig.DataDir,
+		ConfigDir:  misterconfig.DataDir,
+		TempDir:    misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }
 
-func (*Platform) NormalizePath(cfg *config.Instance, path string) string {
-	return mister.NormalizePath(cfg, path)
+func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
+	return mister.NormalizePath(cfg, p, path)
 }
 
 func LaunchMenu() error {
-	if _, err := os.Stat(mrextconfig.CmdInterface); err != nil {
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
 
-	cmd, err := os.OpenFile(mrextconfig.CmdInterface, os.O_RDWR, 0)
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open command interface: %w", err)
 	}
@@ -197,7 +199,7 @@ func LaunchMenu() error {
 	}()
 
 	// TODO: hardcoded for xilinx variant, should read pref from mister.ini
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(mrextconfig.SdFolder, "menu.bit")); err != nil {
+	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(misterconfig.SDRootDir, "menu.bit")); err != nil {
 		log.Warn().Err(err).Msg("failed to write to command")
 	}
 
@@ -213,9 +215,9 @@ func (p *Platform) StopActiveLauncher() error {
 }
 
 func (*Platform) GetActiveLauncher() string {
-	core := mister.GetActiveCoreName()
+	core := mistermain.GetActiveCoreName()
 
-	if core == mrextconfig.MenuCore {
+	if core == misterconfig.MenuCore {
 		return ""
 	}
 
@@ -256,13 +258,13 @@ func (p *Platform) ActiveGamePath() string {
 	return p.tr.ActiveGamePath
 }
 
-func (*Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	system, err := games.LookupSystem(id)
+func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mm.LaunchCore(mister.UserConfigToMrext(cfg), *system)
+	err = mgls.LaunchCore(cfg, p, system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}

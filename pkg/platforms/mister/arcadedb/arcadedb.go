@@ -1,6 +1,6 @@
 //go:build linux
 
-package mister
+package arcadedb
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	config2 "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
 	"github.com/gocarina/gocsv"
 	"github.com/rs/zerolog/log"
 )
@@ -97,12 +98,12 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 	arcadeDBPath := filepath.Join(
 		helpers.DataDir(pl),
 		config.AssetsDir,
-		ArcadeDbFile,
+		config2.ArcadeDbFile,
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ArcadeDbURL, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config2.ArcadeDbURL, http.NoBody)
 	if err != nil {
 		return false, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -181,7 +182,7 @@ func ReadArcadeDb(pl platforms.Platform) ([]ArcadeDbEntry, error) {
 	arcadeDBPath := filepath.Join(
 		helpers.DataDir(pl),
 		config.AssetsDir,
-		ArcadeDbFile,
+		config2.ArcadeDbFile,
 	)
 
 	if _, err := os.Stat(arcadeDBPath); os.IsNotExist(err) {
