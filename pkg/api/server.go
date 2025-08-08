@@ -179,6 +179,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
+		// launchers
+		models.MethodLaunchersRefresh: methods.HandleLaunchersRefresh,
 		// mappings
 		models.MethodMappings:       methods.HandleMappings,
 		models.MethodMappingsNew:    methods.HandleAddMapping,
@@ -562,8 +564,9 @@ func Start(
 		ExposedHeaders: []string{},
 	}))
 
-	if strings.HasSuffix(config.AppVersion, "-dev") {
+	if strings.HasSuffix(config.AppVersion, "-dev") || config.AppVersion == "DEVELOPMENT" {
 		r.Mount("/debug", middleware.Profiler())
+		log.Info().Msg("pprof endpoints enabled at /debug/pprof/")
 	}
 
 	methodMap := NewMethodMap()

@@ -77,13 +77,7 @@ func GetSystemPaths(
 	var matches []PathResult
 
 	for _, system := range systems {
-		var launchers []platforms.Launcher
-		allLaunchers := pl.Launchers(cfg)
-		for i := range allLaunchers {
-			if allLaunchers[i].SystemID == system.ID {
-				launchers = append(launchers, allLaunchers[i])
-			}
-		}
+		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
 		for i := range launchers {
@@ -409,10 +403,10 @@ func NewNamesIndex(
 
 		// for each system launcher in a platform, run the results through its
 		// custom scan function if one exists
-		launchers := platform.Launchers(cfg)
+		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
 		for i := range launchers {
 			l := &launchers[i]
-			if l.SystemID == k && l.Scanner != nil {
+			if l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
 				files, scanErr = l.Scanner(cfg, systemID, files)
@@ -441,7 +435,7 @@ func NewNamesIndex(
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
-	launchers := platform.Launchers(cfg)
+	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
@@ -469,7 +463,7 @@ func NewNamesIndex(
 
 	// launcher scanners with no system defined are run against every system
 	var anyScanners []platforms.Launcher
-	allLaunchers := platform.Launchers(cfg)
+	allLaunchers := helpers.GlobalLauncherCache.GetAllLaunchers()
 	for i := range allLaunchers {
 		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
 			anyScanners = append(anyScanners, allLaunchers[i])
