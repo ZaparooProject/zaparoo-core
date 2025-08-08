@@ -13,11 +13,13 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
 )
 
 func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, error) {
-	inis, err := GetAllINIFiles()
+	inis, err := mistermain.GetAllINIFiles()
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get MiSTer ini files: %w", err)
 	}
@@ -42,7 +44,7 @@ func CmdIni(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdResult, e
 	doRelaunch := env.TotalCommands <= 1 || env.CurrentIndex >= env.TotalCommands-1
 	// only relaunch if there aren't any more commands
 
-	err = SetActiveIni(id, doRelaunch)
+	err = mistermain.SetActiveIni(id, doRelaunch)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to set active ini: %w", err)
 	}
@@ -57,7 +59,7 @@ func CmdLaunchCore(_ platforms.Platform, env *platforms.CmdEnv) (platforms.CmdRe
 		return platforms.CmdResult{}, errors.New("no core specified")
 	}
 
-	err := LaunchShortCore(env.Cmd.Args[0])
+	err := mgls.LaunchShortCore(env.Cmd.Args[0])
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to launch core: %w", err)
 	}

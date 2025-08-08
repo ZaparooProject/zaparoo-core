@@ -17,7 +17,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/arcadedb"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -28,7 +33,7 @@ import (
 )
 
 type Platform struct {
-	tr             *mister.Tracker
+	tr             *tracker.Tracker
 	stopTr         func() error
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
@@ -82,7 +87,7 @@ func (p *Platform) StartPost(
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
-	tr, stopTr, err := mister.StartTracker(
+	tr, stopTr, err := tracker.StartTracker(
 		cfg,
 		p,
 		activeMedia,
@@ -103,7 +108,7 @@ func (p *Platform) StartPost(
 			return
 		}
 
-		arcadeDbUpdated, err := mister.UpdateArcadeDb(p)
+		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to download arcade database: %s", err)
 		}
@@ -115,7 +120,7 @@ func (p *Platform) StartPost(
 			log.Info().Msg("arcade database is up to date")
 		}
 
-		m, err := mister.ReadArcadeDb(p)
+		m, err := arcadedb.ReadArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to read arcade database: %s", err)
 		} else {
@@ -210,7 +215,7 @@ func (p *Platform) StopActiveLauncher() error {
 }
 
 func (*Platform) GetActiveLauncher() string {
-	core := mister.GetActiveCoreName()
+	core := mistermain.GetActiveCoreName()
 
 	if core == misterconfig.MenuCore {
 		return ""
@@ -254,12 +259,12 @@ func (p *Platform) ActiveGamePath() string {
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	system, err := mister.LookupCore(id)
+	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = mister.LaunchCore(cfg, p, system)
+	err = mgls.LaunchCore(cfg, p, system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}

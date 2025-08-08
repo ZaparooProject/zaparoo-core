@@ -19,7 +19,7 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package mister
+package cores
 
 import (
 	"fmt"
@@ -134,7 +134,7 @@ func copySetnameBios(cfg *config.Instance, origSystem, newSystem *Core, name str
 }
 
 func hookFDS(cfg *config.Instance, system *Core, _ string) (string, error) {
-	nesSystem, err := GetSystem("NES")
+	nesSystem, err := GetCore("NES")
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +143,7 @@ func hookFDS(cfg *config.Instance, system *Core, _ string) (string, error) {
 }
 
 func hookWSC(cfg *config.Instance, system *Core, _ string) (string, error) {
-	wsSystem, err := GetSystem("WonderSwan")
+	wsSystem, err := GetCore("WonderSwan")
 	if err != nil {
 		return "", err
 	}

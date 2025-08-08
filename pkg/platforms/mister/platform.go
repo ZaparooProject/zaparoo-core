@@ -22,7 +22,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/arcadedb"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -38,7 +43,7 @@ type Platform struct {
 	lastUIHidden        time.Time
 	textMap             map[string]string
 	stopTracker         func() error
-	tracker             *Tracker
+	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
@@ -158,7 +163,7 @@ func (p *Platform) StartPost(
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
-	tr, stopTr, err := StartTracker(
+	tr, stopTr, err := tracker.StartTracker(
 		cfg,
 		p,
 		activeMedia,
@@ -179,7 +184,7 @@ func (p *Platform) StartPost(
 			return
 		}
 
-		arcadeDbUpdated, err := UpdateArcadeDb(p)
+		arcadeDbUpdated, err := arcadedb.UpdateArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to download arcade database: %s", err)
 		}
@@ -191,7 +196,7 @@ func (p *Platform) StartPost(
 			log.Info().Msg("arcade database is up to date")
 		}
 
-		m, err := ReadArcadeDb(p)
+		m, err := arcadedb.ReadArcadeDb(p)
 		if err != nil {
 			log.Error().Msgf("failed to read arcade database: %s", err)
 		} else {
@@ -272,12 +277,44 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
+func NormalizePath(cfg *config.Instance, pl platforms.Platform, path string) string {
+	launchers := helpers.PathToLaunchers(cfg, pl, path)
+	if len(launchers) == 0 {
+		return path
+	}
+
+	// TODO: something smarter than first match
+	launcher := launchers[0]
+
+	lowerPath := strings.ToLower(path)
+	var match string
+	for _, parent := range pl.RootDirs(cfg) {
+		if strings.HasPrefix(lowerPath, strings.ToLower(parent)) {
+			match = path[len(parent):]
+			break
+		}
+	}
+
+	if match == "" {
+		return path
+	}
+
+	match = strings.Trim(match, "/")
+
+	parts := strings.Split(match, "/")
+	if len(parts) < 2 {
+		return path
+	}
+
+	return launcher.SystemID + "/" + strings.Join(parts[1:], "/")
+}
+
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return NormalizePath(cfg, p, path)
 }
 
 func (p *Platform) StopActiveLauncher() error {
-	err := LaunchMenu()
+	err := mistermain.LaunchMenu()
 	if err != nil {
 		return err
 	}
@@ -304,12 +341,12 @@ func (p *Platform) PlayAudio(path string) error {
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
-	system, err := LookupCore(id)
+	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
 	}
 
-	err = LaunchCore(cfg, p, system)
+	err = mgls.LaunchCore(cfg, p, system)
 	if err != nil {
 		return fmt.Errorf("failed to launch core: %w", err)
 	}

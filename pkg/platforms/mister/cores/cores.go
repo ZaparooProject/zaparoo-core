@@ -17,7 +17,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package mister
+package cores
 
 import (
 	"fmt"
@@ -2276,4 +2276,48 @@ var Systems = map[string]Core{
 	//       https://github.com/dave18/MiSTER-SuperJacob
 	// TODO: TomyScramble
 	//       Has loadable files and a folder but is marked as "remove"?
+}
+
+// GetCore looks up an exact system definition by ID.
+func GetCore(id string) (*Core, error) {
+	if system, ok := Systems[id]; ok {
+		return &system, nil
+	}
+	return nil, fmt.Errorf("unknown system: %s", id)
+}
+
+func GetGroup(groupID string) (Core, error) {
+	var merged Core
+	if _, ok := CoreGroups[groupID]; !ok {
+		return merged, fmt.Errorf("no system group found for %s", groupID)
+	}
+
+	if len(CoreGroups[groupID]) < 1 {
+		return merged, fmt.Errorf("no systems in %s", groupID)
+	} else if len(CoreGroups[groupID]) == 1 {
+		return CoreGroups[groupID][0], nil
+	}
+
+	merged = CoreGroups[groupID][0]
+	merged.Slots = make([]Slot, 0)
+	for _, s := range CoreGroups[groupID] {
+		merged.Slots = append(merged.Slots, s.Slots...)
+	}
+
+	return merged, nil
+}
+
+// LookupCore case-insensitively looks up system ID definition.
+func LookupCore(id string) (*Core, error) {
+	if system, err := GetGroup(id); err == nil {
+		return &system, nil
+	}
+
+	for k, v := range Systems {
+		if s.EqualFold(k, id) {
+			return &v, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unknown system: %s", id)
 }

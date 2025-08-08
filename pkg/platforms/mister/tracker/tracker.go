@@ -1,6 +1,6 @@
 //go:build linux
 
-package mister
+package tracker
 
 import (
 	"context"
@@ -18,7 +18,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/arcadedb"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker/activegame"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 )
@@ -50,8 +55,8 @@ type Tracker struct {
 func generateNameMap() []NameMapping {
 	nameMap := make([]NameMapping, 0)
 
-	for key := range Systems {
-		system := Systems[key]
+	for key := range cores.Systems {
+		system := cores.Systems[key]
 		switch {
 		case system.SetName != "":
 			nameMap = append(nameMap, NameMapping{
@@ -69,7 +74,7 @@ func generateNameMap() []NameMapping {
 	}
 
 	// Use zaparoo's ArcadeDB implementation instead of mrext's
-	arcadeDbEntries, err := ReadArcadeDb(nil) // TODO: pass platform instance
+	arcadeDbEntries, err := arcadedb.ReadArcadeDb(nil) // TODO: pass platform instance
 	if err != nil {
 		log.Error().Msgf("error reading arcade db: %s", err)
 	} else {
@@ -185,7 +190,7 @@ func (tr *Tracker) LoadCore() {
 	}
 
 	if coreName == misterconfig.MenuCore {
-		err := SetActiveGame("")
+		err := activegame.SetActiveGame("")
 		if err != nil {
 			log.Error().Msgf("error setting active game: %s", err)
 		}
@@ -206,7 +211,7 @@ func (tr *Tracker) LoadCore() {
 
 	// set arcade core details
 	if result := tr.LookupCoreName(coreName); result != nil && result.ArcadeName != "" {
-		err := SetActiveGame(result.CoreName)
+		err := activegame.SetActiveGame(result.CoreName)
 		if err != nil {
 			log.Warn().Err(err).Msg("error setting active game")
 		}
@@ -242,7 +247,7 @@ func (tr *Tracker) loadGame() {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
-	activeGame, err := GetActiveGame()
+	activeGame, err := activegame.GetActiveGame()
 	switch {
 	case err != nil:
 		log.Error().Msgf("error getting active game: %s", err)
@@ -262,7 +267,7 @@ func (tr *Tracker) loadGame() {
 	name := helpers.FilenameFromPath(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
-		mgl, mglErr := ReadMgl(path)
+		mgl, mglErr := mgls.ReadMgl(path)
 		if mglErr != nil {
 			log.Error().Msgf("error reading mgl: %s", mglErr)
 		} else {
@@ -341,7 +346,7 @@ func loadRecent(filename string) error {
 		}
 	}(file)
 
-	recents, err := ReadRecent(filename)
+	recents, err := mistermain.ReadRecent(filename)
 	if err != nil {
 		return fmt.Errorf("error reading recent file: %w", err)
 	} else if len(recents) == 0 {
@@ -354,19 +359,19 @@ func loadRecent(filename string) error {
 		// main menu's recent file, written when launching mgls
 		if strings.HasSuffix(strings.ToLower(newest.Name), ".mgl") {
 			mglPath := ResolvePath(filepath.Join(newest.Directory, newest.Name))
-			mgl, mglErr := ReadMgl(mglPath)
+			mgl, mglErr := mgls.ReadMgl(mglPath)
 			if mglErr != nil {
 				return fmt.Errorf("error reading mgl file: %w", mglErr)
 			}
 
-			err = SetActiveGame(mgl.File.Path)
+			err = activegame.SetActiveGame(mgl.File.Path)
 			if err != nil {
 				return fmt.Errorf("error setting active game: %w", err)
 			}
 		}
 	} else {
 		// individual core's recent file
-		err = SetActiveGame(filepath.Join(newest.Directory, newest.Name))
+		err = activegame.SetActiveGame(filepath.Join(newest.Directory, newest.Name))
 		if err != nil {
 			return fmt.Errorf("error setting active game: %w", err)
 		}
@@ -532,8 +537,8 @@ func StartTracker(
 	}
 
 	tr.LoadCore()
-	if !ActiveGameEnabled() {
-		setErr := SetActiveGame("")
+	if !activegame.ActiveGameEnabled() {
+		setErr := activegame.SetActiveGame("")
 		if setErr != nil {
 			log.Error().Msgf("error setting active game: %s", setErr)
 		}
@@ -553,4 +558,28 @@ func StartTracker(
 		tr.StopAll()
 		return nil
 	}, nil
+}
+
+// Convert a launchable path to an absolute path.
+func ResolvePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	cwd, _ := os.Getwd()
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			log.Error().Err(err).Str("path", cwd).Msg("failed to restore working directory")
+		}
+	}()
+	if err := os.Chdir(misterconfig.SDRootDir); err != nil {
+		return path
+	}
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+
+	return abs
 }

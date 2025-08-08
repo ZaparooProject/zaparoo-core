@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
@@ -48,7 +49,7 @@ func showNotice(
 	completePath := argsPath + ".complete"
 
 	if misterconfig.MainHasFeature(misterconfig.MainFeatureNotice) {
-		err := RunDevCmd("show_notice", text)
+		err := mistermain.RunDevCmd("show_notice", text)
 		if err != nil {
 			return "", fmt.Errorf("error running dev cmd: %w", err)
 		}

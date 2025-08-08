@@ -1,6 +1,6 @@
 //go:build linux
 
-package mister
+package arcadedb
 
 import (
 	"context"
