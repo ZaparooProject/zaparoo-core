@@ -150,22 +150,6 @@ func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func sqlBeginTransaction(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, "BEGIN")
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	return nil
-}
-
-func sqlCommitTransaction(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, "COMMIT")
-	if err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
-}
-
 func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (database.System, error) {
 	var row database.System
 	stmt, err := db.PrepareContext(ctx, `

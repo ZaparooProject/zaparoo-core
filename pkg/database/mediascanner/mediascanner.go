@@ -25,7 +25,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -334,10 +333,10 @@ func NewNamesIndex(
 	systems []systemdefs.System,
 	fdb *database.Database,
 	update func(IndexStatus),
-) (int, error) {
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 
-	err := db.Truncate()
+	err = db.Truncate()
 	if err != nil {
 		return 0, fmt.Errorf("failed to truncate database: %w", err)
 	}
@@ -345,6 +344,15 @@ func NewNamesIndex(
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
+	// Ensure transaction rollback on any error
+	defer func() {
+		if err != nil {
+			if rbErr := db.RollbackTransaction(); rbErr != nil {
+				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
+			}
+		}
+	}()
 
 	status := IndexStatus{
 		Total: len(systems) + 2, // estimate steps
@@ -517,9 +525,6 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
-	// MiSTer needs the love here
-	runtime.GC()
-
 	indexedSystems := make([]string, 0)
 	log.Debug().Msgf("scanned systems: %v", scanned)
 	for k, v := range scanned {
@@ -529,5 +534,6 @@ func NewNamesIndex(
 	}
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	return status.Files, nil
+	indexedFiles = status.Files
+	return
 }

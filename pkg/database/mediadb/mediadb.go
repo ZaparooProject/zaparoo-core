@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
 )
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
@@ -43,6 +44,13 @@ type MediaDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
 	ctx context.Context
+	// Prepared statements for batch operations during scanning
+	tx                   *sql.Tx
+	stmtInsertSystem     *sql.Stmt
+	stmtInsertMediaTitle *sql.Stmt
+	stmtInsertMedia      *sql.Stmt
+	stmtInsertTag        *sql.Stmt
+	stmtInsertMediaTag   *sql.Stmt
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -138,15 +146,265 @@ func (db *MediaDB) Close() error {
 	return nil
 }
 
+// closeAllPreparedStatements closes all prepared statements and sets them to nil
+func (db *MediaDB) closeAllPreparedStatements() {
+	if db.stmtInsertSystem != nil {
+		_ = db.stmtInsertSystem.Close()
+		db.stmtInsertSystem = nil
+	}
+	if db.stmtInsertMediaTitle != nil {
+		_ = db.stmtInsertMediaTitle.Close()
+		db.stmtInsertMediaTitle = nil
+	}
+	if db.stmtInsertMedia != nil {
+		_ = db.stmtInsertMedia.Close()
+		db.stmtInsertMedia = nil
+	}
+	if db.stmtInsertTag != nil {
+		_ = db.stmtInsertTag.Close()
+		db.stmtInsertTag = nil
+	}
+	if db.stmtInsertMediaTag != nil {
+		_ = db.stmtInsertMediaTag.Close()
+		db.stmtInsertMediaTag = nil
+	}
+}
+
+// RollbackTransaction rolls back the current transaction and cleans up resources
+func (db *MediaDB) RollbackTransaction() error {
+	if db.tx == nil {
+		return nil // No active transaction
+	}
+
+	// Clean up prepared statements first
+	db.closeAllPreparedStatements()
+
+	// Rollback the transaction
+	err := db.tx.Rollback()
+	db.tx = nil
+	if err != nil {
+		return fmt.Errorf("failed to rollback transaction: %w", err)
+	}
+
+	return nil
+}
+
 func (db *MediaDB) BeginTransaction() error {
-	return sqlBeginTransaction(db.ctx, db.sql)
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	// Begin a proper transaction
+	tx, err := db.sql.BeginTx(db.ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	db.tx = tx
+
+	// Prepare statements for batch operations - clean up on any error
+	if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, `
+		INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)
+	`); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+		}
+		return fmt.Errorf("failed to prepare insert system statement: %w", err)
+	}
+
+	if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, `
+		INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)
+	`); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+		}
+		return fmt.Errorf("failed to prepare insert media title statement: %w", err)
+	}
+
+	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, `
+		INSERT INTO Media (DBID, Path, MediaTitleDBID) VALUES (?, ?, ?)
+	`); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+		}
+		return fmt.Errorf("failed to prepare insert media statement: %w", err)
+	}
+
+	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, `
+		INSERT INTO Tags (DBID, Tag, TypeDBID) VALUES (?, ?, ?)
+	`); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+		}
+		return fmt.Errorf("failed to prepare insert tag statement: %w", err)
+	}
+
+	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, `
+		INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)
+	`); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+		}
+		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
+	}
+
+	return nil
 }
 
 func (db *MediaDB) CommitTransaction() error {
-	return sqlCommitTransaction(db.ctx, db.sql)
+	if db.tx == nil {
+		return nil // No active transaction
+	}
+
+	// Always clean up prepared statements first
+	db.closeAllPreparedStatements()
+
+	// Commit the transaction
+	err := db.tx.Commit()
+	if err != nil {
+		// Try to rollback and combine errors if both fail
+		if rbErr := db.tx.Rollback(); rbErr != nil {
+			db.tx = nil
+			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
+		}
+		db.tx = nil
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	db.tx = nil
+	return nil
+}
+
+// Helper methods for prepared statement execution
+// These methods mirror the SQL queries in sql.go but use prepared statements for better performance
+// during batch operations within transactions. The logic must stay synchronized with sql.go counterparts.
+
+func (db *MediaDB) insertSystemWithPreparedStmt(row database.System) (database.System, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := db.stmtInsertSystem.ExecContext(db.ctx, dbID, row.SystemID, row.Name)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert system statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for system: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func (db *MediaDB) insertMediaTitleWithPreparedStmt(row database.MediaTitle) (database.MediaTitle, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := db.stmtInsertMediaTitle.ExecContext(db.ctx, dbID, row.SystemDBID, row.Slug, row.Name)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert media title statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media title: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func (db *MediaDB) insertMediaWithPreparedStmt(row database.Media) (database.Media, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := db.stmtInsertMedia.ExecContext(db.ctx, dbID, row.Path, row.MediaTitleDBID)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func (db *MediaDB) insertTagWithPreparedStmt(row database.Tag) (database.Tag, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := db.stmtInsertTag.ExecContext(db.ctx, dbID, row.Tag, row.TypeDBID)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert tag statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func (db *MediaDB) insertMediaTagWithPreparedStmt(row database.MediaTag) (database.MediaTag, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := db.stmtInsertMediaTag.ExecContext(db.ctx, dbID, row.MediaDBID, row.TagDBID)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert media tag statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func (db *MediaDB) reindexTablesWithTransaction() error {
+	sqlStmt := `
+	create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
+	create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
+	create index if not exists media_mediatitle_idx on Media (MediaTitleDBID);
+	create index if not exists tags_tag_idx on Tags (Tag);
+	create index if not exists tags_tagtype_idx on Tags (TypeDBID);
+	create index if not exists mediatags_media_idx on MediaTags (MediaDBID);
+	create index if not exists mediatags_tag_idx on MediaTags (TagDBID);
+	create index if not exists mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
+	create index if not exists mediatitletags_tag_idx on MediaTitleTags (TagDBID);
+	create index if not exists supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
+	create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
+	`
+	_, err := db.tx.ExecContext(db.ctx, sqlStmt)
+	if err != nil {
+		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+	return nil
 }
 
 func (db *MediaDB) ReindexTables() error {
+	// Use transaction if active, otherwise use direct database connection
+	if db.tx != nil {
+		return db.reindexTablesWithTransaction()
+	}
 	return sqlIndexTables(db.ctx, db.sql)
 }
 
@@ -233,6 +491,10 @@ func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertSystem != nil {
+		return db.insertSystemWithPreparedStmt(row)
+	}
 	return sqlInsertSystem(db.ctx, db.sql, row)
 }
 
@@ -249,6 +511,10 @@ func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle,
 }
 
 func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMediaTitle != nil {
+		return db.insertMediaTitleWithPreparedStmt(row)
+	}
 	return sqlInsertMediaTitle(db.ctx, db.sql, row)
 }
 
@@ -265,6 +531,10 @@ func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
 }
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMedia != nil {
+		return db.insertMediaWithPreparedStmt(row)
+	}
 	return sqlInsertMedia(db.ctx, db.sql, row)
 }
 
@@ -297,6 +567,10 @@ func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertTag != nil {
+		return db.insertTagWithPreparedStmt(row)
+	}
 	return sqlInsertTag(db.ctx, db.sql, row)
 }
 
@@ -313,6 +587,10 @@ func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMediaTag != nil {
+		return db.insertMediaTagWithPreparedStmt(row)
+	}
 	return sqlInsertMediaTag(db.ctx, db.sql, row)
 }
 
