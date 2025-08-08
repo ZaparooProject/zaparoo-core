@@ -1348,7 +1348,7 @@ var Launchers = []platforms.Launcher{
 	{
 		ID:         "Generic",
 		Extensions: []string{".mgl", ".rbf", ".mra"},
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(_ *config.Instance, path string) error {
 			err := mgls.LaunchBasicFile(path)
 			if err != nil {
 				return fmt.Errorf("failed to launch generic file: %w", err)

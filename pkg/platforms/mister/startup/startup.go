@@ -48,7 +48,7 @@ func (s *Startup) Load() error {
 	if os.IsNotExist(err) {
 		contents = []byte{}
 	} else if err != nil {
-		return err
+		return fmt.Errorf("failed to read startup file %s: %w", config.StartupFile, err)
 	}
 
 	lines := strings.Split(string(contents), "\n")
@@ -120,7 +120,11 @@ func (s *Startup) Save() error {
 		contents += "\n"
 	}
 
-	return os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
+	err := os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
+	if err != nil {
+		return fmt.Errorf("failed to write startup file %s: %w", config.StartupFile, err)
+	}
+	return nil
 }
 
 func (s *Startup) Exists(name string) bool {
@@ -167,7 +171,7 @@ func (s *Startup) Add(name, cmd string) error {
 func (s *Startup) AddService(name string) error {
 	path, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
 	cmd := fmt.Sprintf("[[ -e %s ]] && %s -service $1", path, path)

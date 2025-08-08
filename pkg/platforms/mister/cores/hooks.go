@@ -43,7 +43,7 @@ func FindFile(path string) (string, error) {
 
 	files, err := os.ReadDir(parent)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read directory %s: %w", parent, err)
 	}
 
 	for _, file := range files {
@@ -119,7 +119,7 @@ func copySetnameBios(cfg *config.Instance, origSystem, newSystem *Core, name str
 
 	newFolder, err := filepath.Abs(filepath.Join(filepath.Dir(biosPath), "..", newSystem.SetName))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(newFolder, name)); err == nil {
@@ -127,10 +127,13 @@ func copySetnameBios(cfg *config.Instance, origSystem, newSystem *Core, name str
 	}
 
 	if err := os.MkdirAll(newFolder, 0o755); err != nil { //nolint:gosec // shared games folders
-		return err
+		return fmt.Errorf("failed to create directory %s: %w", newFolder, err)
 	}
 
-	return helpers.CopyFile(biosPath, filepath.Join(newFolder, name))
+	if err := helpers.CopyFile(biosPath, filepath.Join(newFolder, name)); err != nil {
+		return fmt.Errorf("failed to copy file %s to %s: %w", biosPath, filepath.Join(newFolder, name), err)
+	}
+	return nil
 }
 
 func hookFDS(cfg *config.Instance, system *Core, _ string) (string, error) {

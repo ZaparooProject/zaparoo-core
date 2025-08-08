@@ -2300,8 +2300,8 @@ func GetGroup(groupID string) (Core, error) {
 
 	merged = CoreGroups[groupID][0]
 	merged.Slots = make([]Slot, 0)
-	for _, s := range CoreGroups[groupID] {
-		merged.Slots = append(merged.Slots, s.Slots...)
+	for _, core := range CoreGroups[groupID] {
+		merged.Slots = append(merged.Slots, core.Slots...)
 	}
 
 	return merged, nil

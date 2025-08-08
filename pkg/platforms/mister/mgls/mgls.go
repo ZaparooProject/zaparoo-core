@@ -284,11 +284,12 @@ type MGL struct {
 func ReadMgl(path string) (MGL, error) {
 	var mgl MGL
 
-	if _, err := os.Stat(path); err != nil {
+	cleanPath := filepath.Clean(path)
+	if _, err := os.Stat(cleanPath); err != nil {
 		return mgl, err
 	}
 
-	file, err := os.ReadFile(path)
+	file, err := os.ReadFile(cleanPath) // #nosec G304 -- Reading trusted MGL configuration files
 	if err != nil {
 		return mgl, err
 	}
