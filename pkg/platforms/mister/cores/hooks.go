@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
 Zaparoo Core
 Copyright (c) 2025 The Zaparoo Project Contributors.
