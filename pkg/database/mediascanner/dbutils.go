@@ -39,6 +39,8 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	ss.SystemIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
+	// Note: TagIDs and TagTypeIDs are preserved across batches for performance
+	// since tags are typically reused across different systems
 }
 
 func AddMediaPath(
@@ -138,15 +140,15 @@ func AddMediaPath(
 			continue
 		}
 
+		ss.MediaTagsIndex++
 		_, err := db.InsertMediaTag(database.MediaTag{
 			DBID:      int64(ss.MediaTagsIndex),
 			TagDBID:   int64(tagIndex),
 			MediaDBID: int64(mediaIndex),
 		})
 		if err != nil {
+			ss.MediaTagsIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting media tag relationship: %s", tagStr)
-		} else {
-			ss.MediaTagsIndex++
 		}
 	}
 	return titleIndex, mediaIndex
@@ -321,7 +323,6 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex // Only update cache on success
 		}
 	}
-	ss.TagTypeIDs = make(map[string]int)
 }
 
 func GetPathFragments(path string) MediaPathFragments {
