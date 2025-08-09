@@ -185,7 +185,7 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 const (
 	insertSystemSQL     = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
 	insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
-	insertMediaSQL      = `INSERT INTO Media (DBID, Path, MediaTitleDBID) VALUES (?, ?, ?)`
+	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
 	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
 	insertMediaTagSQL   = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
 )
@@ -335,14 +335,14 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 		)
 		LIMIT 1;
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find media statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare find media statement: %w", err)
-	}
 	err = stmt.QueryRowContext(ctx,
 		media.DBID,
 		media.MediaTitleDBID,
@@ -521,14 +521,14 @@ func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag
 		)
 		LIMIT 1;
 	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find media tag statement: %w", err)
+	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare find media tag statement: %w", err)
-	}
 	err = stmt.QueryRowContext(ctx,
 		mediaTag.DBID,
 		mediaTag.MediaDBID,

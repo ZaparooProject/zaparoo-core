@@ -221,7 +221,7 @@ func (db *MediaDB) BeginTransaction() error {
 	}
 
 	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, `
-		INSERT INTO Media (DBID, Path, MediaTitleDBID) VALUES (?, ?, ?)
+		INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)
 	`); err != nil {
 		if rbErr := db.RollbackTransaction(); rbErr != nil {
 			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
@@ -230,7 +230,7 @@ func (db *MediaDB) BeginTransaction() error {
 	}
 
 	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, `
-		INSERT INTO Tags (DBID, Tag, TypeDBID) VALUES (?, ?, ?)
+		INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)
 	`); err != nil {
 		if rbErr := db.RollbackTransaction(); rbErr != nil {
 			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
