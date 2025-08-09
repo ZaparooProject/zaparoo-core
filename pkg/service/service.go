@@ -213,6 +213,7 @@ func Start(
 		log.Error().Err(err).Msg("platform post start error")
 		return nil, fmt.Errorf("platform start post failed: %w", err)
 	}
+	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return func() error {
 		err = pl.Stop()
