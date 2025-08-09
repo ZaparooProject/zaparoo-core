@@ -527,7 +527,8 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		log.Debug().Msgf("adding watcher for picker selected file: %s", misterconfig.MainPickerSelected)
 		err = watcher.Add(misterconfig.MainPickerSelected)
 		if err != nil {
-			return nil, fmt.Errorf("failed to watch picker selected file (%s): %w", misterconfig.MainPickerSelected, err)
+			return nil, fmt.Errorf("failed to watch picker selected file (%s): %w",
+				misterconfig.MainPickerSelected, err)
 		}
 	}
 

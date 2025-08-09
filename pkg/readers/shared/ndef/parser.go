@@ -51,8 +51,7 @@ func ParseToText(data []byte) (string, error) {
 
 	// Find first text or URI record
 	for _, rec := range msg.Records {
-		switch rec.TNF() {
-		case ndef.NFCForumWellKnownType:
+		if rec.TNF() == ndef.NFCForumWellKnownType {
 			if result, err := handleWellKnownRecord(rec); err == nil {
 				return result, nil
 			}

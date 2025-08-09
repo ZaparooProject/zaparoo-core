@@ -40,8 +40,7 @@ const (
 
 var (
 	// NDEF markers
-	NdefEnd   = []byte{0xFE}
-	ndefStart = []byte{0x54, 0x02, 0x65, 0x6E} // Text record with "en" language
+	NdefEnd = []byte{0xFE}
 
 	// ErrNoNDEF is returned when no NDEF record is found.
 	ErrNoNDEF = errors.New("no NDEF record found")

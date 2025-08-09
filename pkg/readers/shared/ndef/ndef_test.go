@@ -53,7 +53,7 @@ func TestParseToText_TextRecord(t *testing.T) {
 		},
 		{
 			name:    "Unicode text",
-			input:   "test 测试",
+			input:   "test 测试", //nolint:gosmopolitan // testing Unicode support
 			wantErr: false,
 		},
 	}
@@ -218,7 +218,7 @@ func TestBuildTextMessage(t *testing.T) {
 		},
 		{
 			name:     "Unicode text",
-			input:    "test 测试",
+			input:    "test 测试", //nolint:gosmopolitan // testing Unicode support
 			checkLen: true,
 			minLen:   12,
 		},
@@ -239,12 +239,12 @@ func TestBuildTextMessage(t *testing.T) {
 
 			// Check TLV header
 			if len(result) < 2 || result[0] != 0x03 {
-				t.Errorf("BuildTextMessage() missing or invalid TLV header")
+				t.Error("BuildTextMessage() missing or invalid TLV header")
 			}
 
 			// Check NDEF terminator
 			if len(result) < 1 || result[len(result)-1] != 0xFE {
-				t.Errorf("BuildTextMessage() missing NDEF terminator")
+				t.Error("BuildTextMessage() missing NDEF terminator")
 			}
 		})
 	}
@@ -257,7 +257,7 @@ func TestBuildTextMessage_RoundTrip(t *testing.T) {
 		"test",
 		"hello world",
 		"",
-		"test 测试",
+		"test 测试", //nolint:gosmopolitan // testing Unicode support
 		"special chars: !@#$%^&*()",
 	}
 
