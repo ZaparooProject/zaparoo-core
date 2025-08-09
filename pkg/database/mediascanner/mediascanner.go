@@ -435,12 +435,11 @@ func NewNamesIndex(
 			AddMediaPath(db, &scanState, systemID, p.Path)
 		}
 
-		FlushScanStateMaps(&scanState)
-
 		// Commit in batches to reduce lock time and allow API operations
 		if commitErr := db.CommitTransaction(); commitErr != nil {
 			return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 		}
+		FlushScanStateMaps(&scanState)
 		if beginErr := db.BeginTransaction(); beginErr != nil {
 			return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 		}
@@ -474,11 +473,11 @@ func NewNamesIndex(
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 				}
+				FlushScanStateMaps(&scanState)
 				if beginErr := db.BeginTransaction(); beginErr != nil {
 					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 			}
-			FlushScanStateMaps(&scanState)
 		}
 	}
 
@@ -516,11 +515,11 @@ func NewNamesIndex(
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
 				}
+				FlushScanStateMaps(&scanState)
 				if beginErr := db.BeginTransaction(); beginErr != nil {
 					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 			}
-			FlushScanStateMaps(&scanState)
 		}
 	}
 
