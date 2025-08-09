@@ -114,18 +114,17 @@ func PathIsLauncher(
 }
 
 // MatchSystemFile returns true if a given path is for a given system.
+// This function now uses the launcher cache for O(1) system lookup instead of O(n*m).
 func MatchSystemFile(
 	cfg *config.Instance,
 	pl platforms.Platform,
 	systemID string,
 	path string,
 ) bool {
-	launchers := pl.Launchers(cfg)
+	launchers := GlobalLauncherCache.GetLaunchersBySystem(systemID)
 	for i := range launchers {
-		if launchers[i].SystemID == systemID {
-			if PathIsLauncher(cfg, pl, &launchers[i], path) {
-				return true
-			}
+		if PathIsLauncher(cfg, pl, &launchers[i], path) {
+			return true
 		}
 	}
 	return false
@@ -139,7 +138,7 @@ func PathToLaunchers(
 	path string,
 ) []platforms.Launcher {
 	var launchers []platforms.Launcher
-	allLaunchers := pl.Launchers(cfg)
+	allLaunchers := GlobalLauncherCache.GetAllLaunchers()
 	for i := range allLaunchers {
 		if PathIsLauncher(cfg, pl, &allLaunchers[i], path) {
 			launchers = append(launchers, allLaunchers[i])

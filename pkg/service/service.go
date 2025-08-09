@@ -190,6 +190,9 @@ func Start(
 		log.Error().Err(err).Msgf("error loading custom launchers")
 	}
 
+	log.Info().Msg("initializing launcher cache")
+	helpers.GlobalLauncherCache.Initialize(pl, cfg)
+
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 

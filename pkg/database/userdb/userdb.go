@@ -36,6 +36,8 @@ import (
 
 var ErrNullSQL = errors.New("UserDB is not connected")
 
+const sqliteConnParams = "?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000"
+
 type UserDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
@@ -59,7 +61,7 @@ func (db *UserDB) Open() error {
 			return fmt.Errorf("failed to create directory for database: %w", mkdirErr)
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite3", dbPath)
+	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}

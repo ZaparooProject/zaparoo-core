@@ -56,6 +56,7 @@ const (
 	MethodClientsNew           = "clients.new"
 	MethodClientsDelete        = "clients.delete"
 	MethodSystems              = "systems"
+	MethodLaunchersRefresh     = "launchers.refresh"
 	MethodHistory              = "tokens.history"
 	MethodMappings             = "mappings"
 	MethodMappingsNew          = "mappings.new"

@@ -22,12 +22,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package service
 
 import (
-	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -47,7 +47,7 @@ func checkMappingUID(m *database.Mapping, t *tokens.Token) bool {
 	case userdb.MatchTypeRegex:
 		// don't normalize regex pattern
 		log.Debug().Msgf("checking regex match: %s matches %s", m.Pattern, uid)
-		re, err := regexp.Compile(m.Pattern)
+		re, err := helpers.CachedCompile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
 			return false
@@ -65,7 +65,7 @@ func checkMappingText(m *database.Mapping, t *tokens.Token) bool {
 	case userdb.MatchTypePartial:
 		return strings.Contains(t.Text, m.Pattern)
 	case userdb.MatchTypeRegex:
-		re, err := regexp.Compile(m.Pattern)
+		re, err := helpers.CachedCompile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
 			return false
@@ -83,7 +83,7 @@ func checkMappingData(m *database.Mapping, t *tokens.Token) bool {
 	case userdb.MatchTypePartial:
 		return strings.Contains(t.Data, m.Pattern)
 	case userdb.MatchTypeRegex:
-		re, err := regexp.Compile(m.Pattern)
+		re, err := helpers.CachedCompile(m.Pattern)
 		if err != nil {
 			log.Error().Err(err).Msgf("error compiling regex")
 			return false

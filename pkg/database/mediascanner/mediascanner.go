@@ -25,7 +25,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
@@ -69,21 +68,15 @@ func FindPath(path string) (string, error) {
 }
 
 func GetSystemPaths(
-	cfg *config.Instance,
-	pl platforms.Platform,
+	_ *config.Instance,
+	_ platforms.Platform,
 	rootFolders []string,
 	systems []systemdefs.System,
 ) []PathResult {
 	var matches []PathResult
 
 	for _, system := range systems {
-		var launchers []platforms.Launcher
-		allLaunchers := pl.Launchers(cfg)
-		for i := range allLaunchers {
-			if allLaunchers[i].SystemID == system.ID {
-				launchers = append(launchers, allLaunchers[i])
-			}
-		}
+		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
 		for i := range launchers {
@@ -302,9 +295,6 @@ func GetFiles(
 	if err != nil {
 		return nil, err
 	}
-	if results == nil {
-		return nil, errors.New("results stack is nil")
-	}
 
 	allResults = append(allResults, *results...)
 
@@ -340,10 +330,10 @@ func NewNamesIndex(
 	systems []systemdefs.System,
 	fdb *database.Database,
 	update func(IndexStatus),
-) (int, error) {
+) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 
-	err := db.Truncate()
+	err = db.Truncate()
 	if err != nil {
 		return 0, fmt.Errorf("failed to truncate database: %w", err)
 	}
@@ -351,6 +341,15 @@ func NewNamesIndex(
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
+	// Ensure transaction rollback on any error
+	defer func() {
+		if err != nil {
+			if rbErr := db.RollbackTransaction(); rbErr != nil {
+				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
+			}
+		}
+	}()
 
 	status := IndexStatus{
 		Total: len(systems) + 2, // estimate steps
@@ -409,10 +408,10 @@ func NewNamesIndex(
 
 		// for each system launcher in a platform, run the results through its
 		// custom scan function if one exists
-		launchers := platform.Launchers(cfg)
+		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(k)
 		for i := range launchers {
 			l := &launchers[i]
-			if l.SystemID == k && l.Scanner != nil {
+			if l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
 				files, scanErr = l.Scanner(cfg, systemID, files)
@@ -436,12 +435,19 @@ func NewNamesIndex(
 			AddMediaPath(db, &scanState, systemID, p.Path)
 		}
 
+		// Commit in batches to reduce lock time and allow API operations
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+		}
 		FlushScanStateMaps(&scanState)
+		if beginErr := db.BeginTransaction(); beginErr != nil {
+			return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+		}
 	}
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
-	launchers := platform.Launchers(cfg)
+	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
@@ -462,14 +468,22 @@ func NewNamesIndex(
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
+
+				// Commit in batches to reduce lock time and allow API operations
+				if commitErr := db.CommitTransaction(); commitErr != nil {
+					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+				}
+				FlushScanStateMaps(&scanState)
+				if beginErr := db.BeginTransaction(); beginErr != nil {
+					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+				}
 			}
-			FlushScanStateMaps(&scanState)
 		}
 	}
 
 	// launcher scanners with no system defined are run against every system
 	var anyScanners []platforms.Launcher
-	allLaunchers := platform.Launchers(cfg)
+	allLaunchers := helpers.GlobalLauncherCache.GetAllLaunchers()
 	for i := range allLaunchers {
 		if allLaunchers[i].SystemID == "" && allLaunchers[i].Scanner != nil {
 			anyScanners = append(anyScanners, allLaunchers[i])
@@ -496,8 +510,16 @@ func NewNamesIndex(
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
+
+				// Commit in batches to reduce lock time and allow API operations
+				if commitErr := db.CommitTransaction(); commitErr != nil {
+					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+				}
+				FlushScanStateMaps(&scanState)
+				if beginErr := db.BeginTransaction(); beginErr != nil {
+					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+				}
 			}
-			FlushScanStateMaps(&scanState)
 		}
 	}
 
@@ -523,9 +545,6 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
-	// MiSTer needs the love here
-	runtime.GC()
-
 	indexedSystems := make([]string, 0)
 	log.Debug().Msgf("scanned systems: %v", scanned)
 	for k, v := range scanned {
@@ -535,5 +554,6 @@ func NewNamesIndex(
 	}
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
-	return status.Files, nil
+	indexedFiles = status.Files
+	return
 }

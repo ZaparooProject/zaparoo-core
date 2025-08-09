@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -448,7 +447,7 @@ func (p *Platform) LookupMapping(t *tokens.Token) (string, bool) {
 	// check nfc.csv texts
 	for pattern, cmd := range oldDb.Texts {
 		// check if pattern is a regex
-		re, err := regexp.Compile(pattern)
+		re, err := helpers.CachedCompile(pattern)
 		// not a regex
 		if err != nil {
 			if pattern, ok := oldDb.Texts[t.Text]; ok {
