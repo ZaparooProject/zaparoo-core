@@ -295,9 +295,6 @@ func GetFiles(
 	if err != nil {
 		return nil, err
 	}
-	if results == nil {
-		return nil, errors.New("results stack is nil")
-	}
 
 	allResults = append(allResults, *results...)
 
@@ -439,6 +436,14 @@ func NewNamesIndex(
 		}
 
 		FlushScanStateMaps(&scanState)
+
+		// Commit in batches to reduce lock time and allow API operations
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+		}
+		if beginErr := db.BeginTransaction(); beginErr != nil {
+			return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+		}
 	}
 
 	// run each custom scanner at least once, even if there are no paths
@@ -463,6 +468,14 @@ func NewNamesIndex(
 			if len(results) > 0 {
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
+				}
+
+				// Commit in batches to reduce lock time and allow API operations
+				if commitErr := db.CommitTransaction(); commitErr != nil {
+					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+				}
+				if beginErr := db.BeginTransaction(); beginErr != nil {
+					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 			}
 			FlushScanStateMaps(&scanState)
@@ -497,6 +510,14 @@ func NewNamesIndex(
 
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
+				}
+
+				// Commit in batches to reduce lock time and allow API operations
+				if commitErr := db.CommitTransaction(); commitErr != nil {
+					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+				}
+				if beginErr := db.BeginTransaction(); beginErr != nil {
+					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 			}
 			FlushScanStateMaps(&scanState)

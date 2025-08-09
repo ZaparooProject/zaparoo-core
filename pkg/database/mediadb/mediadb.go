@@ -40,6 +40,9 @@ import (
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
+const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
+	"&_cache_size=-64000&_temp_store=MEMORY"
+
 type MediaDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
@@ -70,7 +73,7 @@ func (db *MediaDB) Open() error {
 			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite3", dbPath)
+	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -149,23 +152,33 @@ func (db *MediaDB) Close() error {
 // closeAllPreparedStatements closes all prepared statements and sets them to nil
 func (db *MediaDB) closeAllPreparedStatements() {
 	if db.stmtInsertSystem != nil {
-		_ = db.stmtInsertSystem.Close()
+		if closeErr := db.stmtInsertSystem.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertSystem")
+		}
 		db.stmtInsertSystem = nil
 	}
 	if db.stmtInsertMediaTitle != nil {
-		_ = db.stmtInsertMediaTitle.Close()
+		if closeErr := db.stmtInsertMediaTitle.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMediaTitle")
+		}
 		db.stmtInsertMediaTitle = nil
 	}
 	if db.stmtInsertMedia != nil {
-		_ = db.stmtInsertMedia.Close()
+		if closeErr := db.stmtInsertMedia.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMedia")
+		}
 		db.stmtInsertMedia = nil
 	}
 	if db.stmtInsertTag != nil {
-		_ = db.stmtInsertTag.Close()
+		if closeErr := db.stmtInsertTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertTag")
+		}
 		db.stmtInsertTag = nil
 	}
 	if db.stmtInsertMediaTag != nil {
-		_ = db.stmtInsertMediaTag.Close()
+		if closeErr := db.stmtInsertMediaTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMediaTag")
+		}
 		db.stmtInsertMediaTag = nil
 	}
 }
@@ -189,6 +202,13 @@ func (db *MediaDB) RollbackTransaction() error {
 	return nil
 }
 
+// rollbackAndLogError helper function to handle rollback with error logging
+func (db *MediaDB) rollbackAndLogError() {
+	if rbErr := db.RollbackTransaction(); rbErr != nil {
+		log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+	}
+}
+
 func (db *MediaDB) BeginTransaction() error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -202,38 +222,28 @@ func (db *MediaDB) BeginTransaction() error {
 	db.tx = tx
 
 	// Prepare statements for batch operations - clean up on any error
-	if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, prepareSystemSQL); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-		}
+	if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, insertSystemSQL); err != nil {
+		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert system statement: %w", err)
 	}
 
-	if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, prepareMediaTitleSQL); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-		}
+	if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, insertMediaTitleSQL); err != nil {
+		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert media title statement: %w", err)
 	}
 
-	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, prepareMediaSQL); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-		}
+	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, insertMediaSQL); err != nil {
+		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert media statement: %w", err)
 	}
 
-	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, prepareTagSQL); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-		}
+	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, insertTagSQL); err != nil {
+		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert tag statement: %w", err)
 	}
 
-	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, prepareMediaTagSQL); err != nil {
-		if rbErr := db.RollbackTransaction(); rbErr != nil {
-			log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
-		}
+	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, insertMediaTagSQL); err != nil {
+		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
 	}
 

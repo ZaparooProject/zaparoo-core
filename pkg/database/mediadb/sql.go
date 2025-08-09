@@ -306,15 +306,6 @@ func sqlInsertMediaTagWithPreparedStmt(
 	return row, nil
 }
 
-// SQL constants for prepared statements
-const (
-	prepareSystemSQL     = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
-	prepareMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
-	prepareMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
-	prepareTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
-	prepareMediaTagSQL   = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
-)
-
 func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (database.System, error) {
 	var dbID any
 	if row.DBID != 0 {
