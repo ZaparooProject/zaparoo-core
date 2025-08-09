@@ -28,14 +28,8 @@ import (
 func HandleLaunchersRefresh(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use
 	log.Info().Msg("received launchers refresh request")
 
-	// Refresh the launcher cache
 	helpers.GlobalLauncherCache.Refresh(env.Platform, env.Config)
 
-	response := map[string]string{
-		"status":  "success",
-		"message": "launcher cache refreshed successfully",
-	}
-
 	log.Info().Msg("launcher cache refreshed")
-	return response, nil
+	return NoContent{}, nil
 }
