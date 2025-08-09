@@ -182,10 +182,55 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 	return row, nil
 }
 
+const (
+	insertSystemSQL     = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
+	insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
+	insertMediaSQL      = `INSERT INTO Media (DBID, Path, MediaTitleDBID) VALUES (?, ?, ?)`
+	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
+	insertMediaTagSQL   = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
+)
+
 // DBExecutor interface allows functions to work with both *sql.DB and *sql.Tx
 type DBExecutor interface {
 	PrepareContext(ctx context.Context, query string) (*sql.Stmt, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type PreparedStatementProvider interface {
+	GetInsertSystemStmt() *sql.Stmt
+	GetInsertMediaTitleStmt() *sql.Stmt
+	GetInsertMediaStmt() *sql.Stmt
+	GetInsertTagStmt() *sql.Stmt
+	GetInsertMediaTagStmt() *sql.Stmt
+}
+
+// execWithPreparedOrNew executes using prepared statement if available, otherwise creates a new one
+func execWithPreparedOrNew(
+	ctx context.Context, executor DBExecutor, preparedStmt *sql.Stmt, query string, args ...any,
+) (sql.Result, error) {
+	if preparedStmt != nil {
+		result, err := preparedStmt.ExecContext(ctx, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute prepared statement: %w", err)
+		}
+		return result, nil
+	}
+
+	stmt, err := executor.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	result, err := stmt.ExecContext(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute new statement: %w", err)
+	}
+	return result, nil
 }
 
 func sqlInsertSystem(ctx context.Context, executor DBExecutor, row database.System) (database.System, error) {
@@ -193,32 +238,23 @@ func sqlInsertSystem(ctx context.Context, executor DBExecutor, row database.Syst
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := executor.PrepareContext(ctx, `
-		insert into
-		Systems
-		(DBID, SystemID, Name)
-		values (?, ?, ?)
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert system statement: %w", err)
+
+	// Use prepared statement if available
+	var preparedStmt *sql.Stmt
+	if provider, ok := executor.(PreparedStatementProvider); ok {
+		preparedStmt = provider.GetInsertSystemStmt()
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.SystemID,
-		row.Name,
-	)
+
+	res, err := execWithPreparedOrNew(ctx, executor, preparedStmt, insertSystemSQL, dbID, row.SystemID, row.Name)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert system statement: %w", err)
 	}
+
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for system: %w", err)
 	}
+
 	row.DBID = lastID
 	return row, nil
 }
@@ -263,33 +299,25 @@ func sqlInsertMediaTitle(
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := executor.PrepareContext(ctx, `
-		insert into
-		MediaTitles
-		(DBID, SystemDBID, Slug, Name)
-		values (?, ?, ?, ?)
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert media title statement: %w", err)
+
+	// Use prepared statement if available
+	var preparedStmt *sql.Stmt
+	if provider, ok := executor.(PreparedStatementProvider); ok {
+		preparedStmt = provider.GetInsertMediaTitleStmt()
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.SystemDBID,
-		row.Slug,
-		row.Name,
+
+	res, err := execWithPreparedOrNew(
+		ctx, executor, preparedStmt, insertMediaTitleSQL, dbID, row.SystemDBID, row.Slug, row.Name,
 	)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media title statement: %w", err)
 	}
+
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for media title: %w", err)
 	}
+
 	row.DBID = lastID
 	return row, nil
 }
@@ -335,32 +363,23 @@ func sqlInsertMedia(ctx context.Context, executor DBExecutor, row database.Media
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := executor.PrepareContext(ctx, `
-		insert into
-		Media
-		(DBID, MediaTitleDBID, Path)
-		values (?, ?, ?)
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert media statement: %w", err)
+
+	// Use prepared statement if available
+	var preparedStmt *sql.Stmt
+	if provider, ok := executor.(PreparedStatementProvider); ok {
+		preparedStmt = provider.GetInsertMediaStmt()
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.MediaTitleDBID,
-		row.Path,
-	)
+
+	res, err := execWithPreparedOrNew(ctx, executor, preparedStmt, insertMediaSQL, dbID, row.MediaTitleDBID, row.Path)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
+
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for media: %w", err)
 	}
+
 	row.DBID = lastID
 	return row, nil
 }
@@ -468,32 +487,23 @@ func sqlInsertTag(ctx context.Context, executor DBExecutor, row database.Tag) (d
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := executor.PrepareContext(ctx, `
-		insert into
-		Tags
-		(DBID, TypeDBID, Tag)
-		values (?, ?, ?)
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert tag statement: %w", err)
+
+	// Use prepared statement if available
+	var preparedStmt *sql.Stmt
+	if provider, ok := executor.(PreparedStatementProvider); ok {
+		preparedStmt = provider.GetInsertTagStmt()
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.TypeDBID,
-		row.Tag,
-	)
+
+	res, err := execWithPreparedOrNew(ctx, executor, preparedStmt, insertTagSQL, dbID, row.TypeDBID, row.Tag)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert tag statement: %w", err)
 	}
+
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for tag: %w", err)
 	}
+
 	row.DBID = lastID
 	return row, nil
 }
@@ -539,32 +549,23 @@ func sqlInsertMediaTag(ctx context.Context, executor DBExecutor, row database.Me
 	if row.DBID != 0 {
 		dbID = row.DBID
 	}
-	stmt, err := executor.PrepareContext(ctx, `
-		insert into
-		MediaTags
-		(DBID, MediaDBID, TagDBID)
-		values (?, ?, ?)
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare insert media tag statement: %w", err)
+
+	// Use prepared statement if available
+	var preparedStmt *sql.Stmt
+	if provider, ok := executor.(PreparedStatementProvider); ok {
+		preparedStmt = provider.GetInsertMediaTagStmt()
 	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-	res, err := stmt.ExecContext(ctx,
-		dbID,
-		row.MediaDBID,
-		row.TagDBID,
-	)
+
+	res, err := execWithPreparedOrNew(ctx, executor, preparedStmt, insertMediaTagSQL, dbID, row.MediaDBID, row.TagDBID)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media tag statement: %w", err)
 	}
+
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
 	}
+
 	row.DBID = lastID
 	return row, nil
 }
