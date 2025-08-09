@@ -16,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc/tags"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
@@ -236,6 +237,12 @@ var (
 	serialBlockList []string
 )
 
+func GetSerialBlockListCount() int {
+	serialCacheMu.RLock()
+	defer serialCacheMu.RUnlock()
+	return len(serialBlockList)
+}
+
 func detectSerialReaders(connected []string) string {
 	devices, err := helpers.GetSerialDeviceList()
 	if err != nil {
@@ -397,7 +404,7 @@ func (r *Reader) pollDevice(
 	}
 
 	log.Debug().Msgf("record bytes: %s", hex.EncodeToString(record.Bytes))
-	tagText, err := tags.ParseRecordText(record.Bytes)
+	tagText, err := ndef.ParseToText(record.Bytes)
 	if err != nil {
 		log.Error().Err(err).Msgf("error parsing NDEF record")
 		tagText = ""

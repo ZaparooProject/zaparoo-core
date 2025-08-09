@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
@@ -99,7 +100,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 		allBlocks = append(allBlocks, blocks...)
 		currentBlock += 4
 
-		if bytes.Contains(allBlocks, NdefEnd) {
+		if bytes.Contains(allBlocks, ndef.NdefEnd) {
 			// Once we find the end of the NDEF text record there is no need to
 			// continue reading the rest of the card.
 			// This should make things "load" quicker
@@ -115,7 +116,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 }
 
 func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
-	payload, err := BuildMessage(text)
+	payload, err := ndef.BuildTextMessage(text)
 	if err != nil {
 		return nil, err
 	}

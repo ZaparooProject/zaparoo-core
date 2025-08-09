@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/ebfe/scard"
 	"github.com/rs/zerolog/log"
@@ -176,7 +177,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 
 			log.Debug().Msgf("data: %x", data)
 
-			text, err := ParseRecordText(data)
+			text, err := ndef.ParseToText(data)
 			if err != nil {
 				log.Debug().Msgf("error parsing NDEF record: %s", err)
 				text = ""
