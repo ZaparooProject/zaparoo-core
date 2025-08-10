@@ -110,7 +110,7 @@ func getMifareCapacityInBytes() int {
 func WriteMifare(pnd nfc.Device, text, cardUID string) ([]byte, error) {
 	payload, err := ndef.BuildMessage(text)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to build NDEF message: %w", err)
 	}
 
 	cardCapacity := getMifareCapacityInBytes()

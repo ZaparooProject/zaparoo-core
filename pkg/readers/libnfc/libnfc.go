@@ -3,6 +3,7 @@
 package libnfc
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,15 +24,92 @@ import (
 )
 
 const (
-	timeToForgetCard   = 500 * time.Millisecond
-	connectMaxTries    = 10
-	timesToPoll        = 1
-	periodBetweenPolls = 250 * time.Millisecond
-	periodBetweenLoop  = 250 * time.Millisecond
-	autoConnStr        = "libnfc_auto:"
+	timeToForgetCard          = 500 * time.Millisecond
+	connectMaxTries           = 10
+	timesToPoll               = 1
+	periodBetweenPolls        = 250 * time.Millisecond
+	periodBetweenLoop         = 250 * time.Millisecond
+	autoConnStr               = "libnfc_auto:"
+	maxMifareClassic1KSectors = 16
+	defaultWriteTimeoutTries  = 4 * 30 // ~30 seconds
 )
 
 var ErrWriteCancelled = errors.New("write operation was cancelled")
+
+type TransportTimeoutError struct {
+	Err    error
+	Device string
+}
+
+func (e *TransportTimeoutError) Error() string {
+	return fmt.Sprintf("transport timeout on device %s: %v", e.Device, e.Err)
+}
+
+func (e *TransportTimeoutError) Unwrap() error {
+	return e.Err
+}
+
+func (*TransportTimeoutError) IsRetryable() bool {
+	return true
+}
+
+type TagNotFoundError struct {
+	Err    error
+	Device string
+}
+
+func (e *TagNotFoundError) Error() string {
+	return fmt.Sprintf("tag not found on device %s: %v", e.Device, e.Err)
+}
+
+func (e *TagNotFoundError) Unwrap() error {
+	return e.Err
+}
+
+func (*TagNotFoundError) IsRetryable() bool {
+	return true
+}
+
+type DataCorruptedError struct {
+	Err    error
+	Device string
+}
+
+func (e *DataCorruptedError) Error() string {
+	return fmt.Sprintf("data corrupted on device %s: %v", e.Device, e.Err)
+}
+
+func (e *DataCorruptedError) Unwrap() error {
+	return e.Err
+}
+
+func (*DataCorruptedError) IsRetryable() bool {
+	return false
+}
+
+func IsRetryableError(err error) bool {
+	type retryable interface {
+		IsRetryable() bool
+	}
+	if r, ok := err.(retryable); ok {
+		return r.IsRetryable()
+	}
+	// Default timeout errors as retryable
+	return errors.Is(err, nfc.Error(nfc.ETIMEOUT))
+}
+
+func validateWriteParameters(r *Reader, text string) error {
+	if r == nil {
+		return errors.New("reader cannot be nil")
+	}
+	if !r.Connected() {
+		return errors.New("reader not connected")
+	}
+	if text == "" {
+		return errors.New("text cannot be empty")
+	}
+	return nil
+}
 
 type WriteRequestResult struct {
 	Token     *tokens.Token
@@ -40,6 +118,7 @@ type WriteRequestResult struct {
 }
 
 type WriteRequest struct {
+	Ctx    context.Context
 	Result chan WriteRequestResult
 	Cancel chan bool
 	Text   string
@@ -54,6 +133,7 @@ type Reader struct {
 	conn          config.ReadersConnect
 	activeWriteMu sync.RWMutex
 	polling       bool
+	acr122Only    bool // ACR122-only mode flag
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -61,6 +141,19 @@ func NewReader(cfg *config.Instance) *Reader {
 		cfg:           cfg,
 		write:         make(chan WriteRequest),
 		activeWriteMu: sync.RWMutex{},
+		acr122Only:    false, // Default behavior - detect all devices
+	}
+}
+
+// NewACR122Reader creates a reader that only works with ACR122 USB devices
+// and ignores PN532 UART/I2C devices. This is useful when a separate PN532
+// library handles UART/I2C devices and we want to prevent conflicts.
+func NewACR122Reader(cfg *config.Instance) *Reader {
+	return &Reader{
+		cfg:           cfg,
+		write:         make(chan WriteRequest),
+		activeWriteMu: sync.RWMutex{},
+		acr122Only:    true, // Skip UART/I2C detection
 	}
 }
 
@@ -150,12 +243,19 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-func (*Reader) IDs() []string {
+func (r *Reader) IDs() []string {
+	// When ACR122-only mode, exclude PN532 device types
+	if r.acr122Only {
+		return []string{
+			"acr122_usb",
+		}
+	}
+
+	// Default behavior - all device types
 	return []string{
 		"pn532_uart",
 		"pn532_i2c",
 		"acr122_usb",
-		"pcsc",
 	}
 }
 
@@ -164,11 +264,15 @@ func (r *Reader) Detect(connected []string) string {
 		return ""
 	}
 
-	device := detectSerialReaders(connected)
-	if device != "" && !helpers.Contains(connected, device) {
-		return device
+	// Skip serial detection when ACR122-only mode enabled
+	if !r.acr122Only {
+		device := detectSerialReaders(connected)
+		if device != "" && !helpers.Contains(connected, device) {
+			return device
+		}
 	}
 
+	// Auto-detect for ACR122 and other USB/PCSC devices
 	if !helpers.Contains(connected, autoConnStr) {
 		return autoConnStr
 	}
@@ -193,8 +297,12 @@ func (r *Reader) Info() string {
 }
 
 func (r *Reader) Write(text string) (*tokens.Token, error) {
-	if !r.Connected() {
-		return nil, errors.New("not connected")
+	return r.WriteWithContext(context.Background(), text)
+}
+
+func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Token, error) {
+	if err := validateWriteParameters(r, text); err != nil {
+		return nil, fmt.Errorf("invalid write parameters: %w", err)
 	}
 
 	r.activeWriteMu.RLock()
@@ -208,6 +316,7 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 		Text:   text,
 		Result: make(chan WriteRequestResult),
 		Cancel: make(chan bool),
+		Ctx:    ctx,
 	}
 
 	r.write <- req
@@ -297,7 +406,7 @@ func detectSerialReaders(connected []string) string {
 		}
 
 		// ignore if different resolved device and reader connected
-		if realPath != "" && strings.HasSuffix(realPath, ":"+realPath) {
+		if realPath != "" && strings.HasSuffix(realPath, ":"+device) {
 			continue
 		}
 
@@ -339,10 +448,25 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 		}
 
 		if tries >= connectMaxTries {
-			return pnd, fmt.Errorf("failed to open NFC device after %d tries: %w", connectMaxTries, err)
+			connProto := "unknown"
+			if device != "" {
+				connProto = strings.SplitN(strings.ToLower(device), ":", 2)[0]
+			}
+			return pnd, fmt.Errorf(
+				"failed to open NFC device '%s' (protocol: %s) after %d tries: %w",
+				device, connProto, connectMaxTries, err,
+			)
 		}
 
 		tries++
+
+		// Exponential backoff: 50ms, 200ms, 450ms, etc.
+		backoffMs := 50 * tries * tries
+		if backoffMs > 1000 { // Cap at 1 second
+			backoffMs = 1000
+		}
+		log.Trace().Msgf("retry %d/%d after %dms backoff", tries, connectMaxTries, backoffMs)
+		time.Sleep(time.Duration(backoffMs) * time.Millisecond)
 	}
 }
 
@@ -356,7 +480,11 @@ func (r *Reader) pollDevice(
 
 	count, target, err := pnd.InitiatorPollTarget(tags.SupportedCardTypes, ttp, pbp)
 	if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
-		return nil, false, fmt.Errorf("failed to poll NFC target: %w", err)
+		deviceInfo := "unknown"
+		if pnd != nil {
+			deviceInfo = pnd.String()
+		}
+		return nil, false, fmt.Errorf("failed to poll NFC target on device '%s': %w", deviceInfo, err)
 	}
 
 	if count > 1 {
@@ -399,7 +527,7 @@ func (r *Reader) pollDevice(
 		log.Info().Msg("MIFARE detected")
 		record, err = tags.ReadMifare(*pnd, tagUID)
 		if err != nil {
-			log.Error().Msgf("error reading mifare: %s", err)
+			return activeToken, removed, fmt.Errorf("error reading mifare: %w", err)
 		}
 	}
 
@@ -451,7 +579,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	var count int
 	var target nfc.Target
 	var err error
-	tries := 4 * 30 // ~30 seconds
+	tries := defaultWriteTimeoutTries
 
 	for tries > 0 {
 		select {
@@ -459,6 +587,12 @@ func (r *Reader) writeTag(req WriteRequest) {
 			log.Info().Msgf("write cancelled by user")
 			req.Result <- WriteRequestResult{
 				Cancelled: true,
+			}
+			return
+		case <-req.Ctx.Done():
+			log.Info().Msgf("write cancelled by context: %v", req.Ctx.Err())
+			req.Result <- WriteRequestResult{
+				Err: fmt.Errorf("write cancelled by context: %w", req.Ctx.Err()),
 			}
 			return
 		case <-time.After(periodBetweenLoop):
@@ -471,7 +605,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 			periodBetweenPolls,
 		)
 
-		if err != nil && err.Error() != "timeout" {
+		if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
 			log.Error().Msgf("could not poll: %s", err)
 		}
 
@@ -518,24 +652,40 @@ func (r *Reader) writeTag(req WriteRequest) {
 	default:
 		log.Error().Msgf("unsupported tag type: %s", cardType)
 		req.Result <- WriteRequestResult{
-			Err: err,
+			Err: fmt.Errorf("unsupported tag type: %s", cardType),
 		}
 		return
 	}
 
-	t, _, err := r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
-	if err != nil || t == nil {
-		log.Error().Msgf("error reading written tag: %s", err)
-		req.Result <- WriteRequestResult{
-			Err: err,
+	verificationTries := 3
+	var t *tokens.Token
+	for i := 0; i < verificationTries; i++ {
+		var verifyErr error
+		t, _, verifyErr = r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
+		if verifyErr == nil && t != nil {
+			break
 		}
-		return
+		if i >= verificationTries-1 {
+			log.Error().Msgf("write verification failed after %d attempts: %v", verificationTries, verifyErr)
+			req.Result <- WriteRequestResult{
+				Err: &DataCorruptedError{
+					Device: r.conn.ConnectionString(),
+					Err:    fmt.Errorf("write verification failed: %w", verifyErr),
+				},
+			}
+			return
+		}
+		log.Warn().Msgf("write verification attempt %d failed, retrying: %v", i+1, verifyErr)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if t.UID != cardUID {
 		log.Error().Msgf("ID mismatch after write: %s != %s", t.UID, cardUID)
 		req.Result <- WriteRequestResult{
-			Err: errors.New("ID mismatch after write"),
+			Err: &DataCorruptedError{
+				Device: r.conn.ConnectionString(),
+				Err:    fmt.Errorf("ID mismatch after write: expected %s, got %s", cardUID, t.UID),
+			},
 		}
 		return
 	}
@@ -543,7 +693,10 @@ func (r *Reader) writeTag(req WriteRequest) {
 	if t.Text != req.Text {
 		log.Error().Msgf("text mismatch after write: %s != %s", t.Text, req.Text)
 		req.Result <- WriteRequestResult{
-			Err: errors.New("text mismatch after write"),
+			Err: &DataCorruptedError{
+				Device: r.conn.ConnectionString(),
+				Err:    fmt.Errorf("text mismatch after write: expected %s, got %s", req.Text, t.Text),
+			},
 		}
 		return
 	}
