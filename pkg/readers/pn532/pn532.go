@@ -80,7 +80,7 @@ func createVIDPIDBlocklist() []string {
 	}
 }
 
-type cardState struct {
+type tagState struct {
 	lastUID  string
 	lastType string
 	present  bool
@@ -96,7 +96,7 @@ type Reader struct {
 	writeCancel context.CancelFunc
 	deviceInfo  config.ReadersConnect
 	name        string
-	cardState   cardState
+	tagState    tagState
 	mutex       sync.RWMutex
 	writeMutex  sync.RWMutex
 }
@@ -154,7 +154,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	var err error
 
 	// Check if this is an auto-detected device or a manual path
-	if device.Path == "auto" || device.Path == "" {
+	if device.Path == "" {
 		// Auto-detect device
 		opts := detection.DefaultOptions()
 		opts.Timeout = detectionTimeout
@@ -179,27 +179,18 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 		r.name = fmt.Sprintf("%s:%s", deviceInfo.Transport, deviceInfo.Path)
 		log.Debug().Msgf("auto-detected PN532 device: %s", r.name)
-
-		// Update device info with the resolved path for consistency
-		device.Path = r.name
 	} else {
-		// Manual device specification: format should be "driver:path"
-		parts := strings.SplitN(device.Path, ":", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid device path format, expected 'driver:path', got: %s", device.Path)
-		}
-
-		transportType := strings.TrimSpace(parts[0])
-		transportType = strings.TrimPrefix(transportType, "pn532_")
-		devicePath := strings.TrimSpace(parts[1])
-
-		if transportType == "" || devicePath == "" {
-			return fmt.Errorf("invalid device path: transport=%q path=%q", transportType, devicePath)
+		// Manual device specification
+		// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
+		transportType := strings.TrimPrefix(device.Driver, "pn532_")
+		if transportType == device.Driver {
+			// If no prefix was removed, assume it's just "pn532" and default to uart
+			transportType = "uart"
 		}
 
 		deviceInfo := detection.DeviceInfo{
 			Transport: transportType,
-			Path:      devicePath,
+			Path:      device.Path,
 		}
 
 		transport, err = r.createTransport(deviceInfo)
@@ -207,7 +198,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 			return fmt.Errorf("failed to create transport: %w", err)
 		}
 
-		r.name = device.Path
+		r.name = device.ConnectionString()
 		log.Debug().Msgf("opening manual PN532 device: %s", r.name)
 	}
 
@@ -286,14 +277,14 @@ func (r *Reader) handlePollingError(err error, iq chan<- readers.Scan, errCount 
 	}
 
 	if errors.Is(err, pn532.ErrNoTagDetected) {
-		// Handle card removal
-		r.handleCardRemoval(iq)
+		// Handle tag removal
+		r.handleTagRemoval(iq)
 		return
 	}
 
 	if errors.Is(err, context.DeadlineExceeded) {
-		// Timeout is normal - just handle as no card
-		r.handleCardRemoval(iq)
+		// Timeout is normal - just handle as no tag
+		r.handleTagRemoval(iq)
 		return
 	}
 
@@ -303,21 +294,21 @@ func (r *Reader) handlePollingError(err error, iq chan<- readers.Scan, errCount 
 	time.Sleep(errorBackoffDelay)
 }
 
-func (r *Reader) handleCardRemoval(iq chan<- readers.Scan) {
-	if r.cardState.present {
-		log.Info().Msgf("card removed: %s", r.cardState.lastUID)
+func (r *Reader) handleTagRemoval(iq chan<- readers.Scan) {
+	if r.tagState.present {
+		log.Info().Msgf("tag removed: %s", r.tagState.lastUID)
 		iq <- readers.Scan{
 			Source: r.deviceInfo.ConnectionString(),
 			Token:  nil,
 		}
-		r.resetCardState()
+		r.resetTagState()
 	}
 }
 
-func (r *Reader) resetCardState() {
-	r.cardState.present = false
-	r.cardState.lastUID = ""
-	r.cardState.lastType = ""
+func (r *Reader) resetTagState() {
+	r.tagState.present = false
+	r.tagState.lastUID = ""
+	r.tagState.lastType = ""
 	r.lastToken = nil
 }
 
@@ -325,40 +316,40 @@ func (r *Reader) processDetectedTag(detectedTag *pn532.DetectedTag, iq chan<- re
 	currentUID := detectedTag.UID
 	tagType := string(detectedTag.Type)
 
-	// Check if this is a new card or card change
-	cardChanged := r.updateCardState(currentUID, tagType)
-	if !cardChanged {
-		// Same card as before, no need to reprocess
+	// Check if this is a new tag or tag change
+	tagChanged := r.updateTagState(currentUID, tagType)
+	if !tagChanged {
+		// Same tag as before, no need to reprocess
 		return
 	}
 
-	// Process the new/changed card
-	r.processNewCard(detectedTag, iq)
+	// Process the new/changed tag
+	r.processNewTag(detectedTag, iq)
 }
 
-func (r *Reader) updateCardState(currentUID, tagType string) bool {
-	if !r.cardState.present {
-		// New card detected
-		log.Info().Msgf("new card detected: %s (%s)", tagType, currentUID)
-		r.cardState.present = true
-		r.cardState.lastUID = currentUID
-		r.cardState.lastType = tagType
+func (r *Reader) updateTagState(currentUID, tagType string) bool {
+	if !r.tagState.present {
+		// New tag detected
+		log.Info().Msgf("new tag detected: %s (%s)", tagType, currentUID)
+		r.tagState.present = true
+		r.tagState.lastUID = currentUID
+		r.tagState.lastType = tagType
 		return true
 	}
 
-	if r.cardState.lastUID != currentUID {
-		// Different card detected
-		log.Info().Msgf("different card detected: %s (%s)", tagType, currentUID)
-		r.cardState.lastUID = currentUID
-		r.cardState.lastType = tagType
+	if r.tagState.lastUID != currentUID {
+		// Different tag detected
+		log.Info().Msgf("different tag detected: %s (%s)", tagType, currentUID)
+		r.tagState.lastUID = currentUID
+		r.tagState.lastType = tagType
 		return true
 	}
 
-	// Same card as before
+	// Same tag as before
 	return false
 }
 
-func (r *Reader) processNewCard(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
+func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
 	// Convert tag type
 	tokenType := r.convertTagType(detectedTag.Type)
 
@@ -611,18 +602,16 @@ func (r *Reader) Close() error {
 
 // Static cache for failed detection attempts to avoid repeated failures
 var (
-	detectionCacheMu sync.RWMutex
-	detectionCache   = make(map[string]time.Time)
+	detectionCacheMu  sync.RWMutex
+	lastDetectionFail time.Time
 )
 
 func (*Reader) Detect(connected []string) string {
 	// Check cache first
 	detectionCacheMu.RLock()
-	if lastFail, exists := detectionCache["pn532"]; exists {
-		if time.Since(lastFail) < detectionCacheTimeout {
-			detectionCacheMu.RUnlock()
-			return ""
-		}
+	if !lastDetectionFail.IsZero() && time.Since(lastDetectionFail) < detectionCacheTimeout {
+		detectionCacheMu.RUnlock()
+		return ""
 	}
 	detectionCacheMu.RUnlock()
 
@@ -645,7 +634,7 @@ func (*Reader) Detect(connected []string) string {
 
 		// Cache the failure
 		detectionCacheMu.Lock()
-		detectionCache["pn532"] = time.Now()
+		lastDetectionFail = time.Now()
 		detectionCacheMu.Unlock()
 
 		return ""
@@ -654,7 +643,7 @@ func (*Reader) Detect(connected []string) string {
 	if len(devices) == 0 {
 		// Cache the failure
 		detectionCacheMu.Lock()
-		detectionCache["pn532"] = time.Now()
+		lastDetectionFail = time.Now()
 		detectionCacheMu.Unlock()
 
 		return ""
@@ -662,7 +651,7 @@ func (*Reader) Detect(connected []string) string {
 
 	// Clear cache on successful detection
 	detectionCacheMu.Lock()
-	delete(detectionCache, "pn532")
+	lastDetectionFail = time.Time{}
 	detectionCacheMu.Unlock()
 
 	// Return the first detected device
