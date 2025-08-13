@@ -16,6 +16,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_OS: linux
           BUILD_ARCH: amd64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
@@ -35,6 +36,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_OS: linux
           BUILD_ARCH: arm64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
@@ -54,6 +56,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: '{{default "linux" .PLATFORM}}'
+          BUILD_OS: linux
           BUILD_ARCH: arm
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
@@ -73,6 +76,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: windows
+          BUILD_OS: windows
           BUILD_ARCH: amd64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: Zaparoo.exe
@@ -88,6 +92,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: windows
+          BUILD_OS: windows
           BUILD_ARCH: arm64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: Zaparoo.exe
@@ -103,6 +108,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: windows
+          BUILD_OS: windows
           BUILD_ARCH: "386"
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: Zaparoo.exe
@@ -118,6 +124,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: mac
+          BUILD_OS: darwin
           BUILD_ARCH: amd64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: zaparoo
@@ -141,6 +148,7 @@ tasks:
       - task: :docker:build-app
         vars:
           PLATFORM: mac
+          BUILD_OS: darwin
           BUILD_ARCH: arm64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: zaparoo
