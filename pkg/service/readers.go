@@ -30,7 +30,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -40,10 +39,6 @@ import (
 type toConnectDevice struct {
 	connectionString string
 	device           config.ReadersConnect
-}
-
-func getSerialBlockListCount() int {
-	return libnfc.GetSerialBlockListCount()
 }
 
 func connectReaders(
@@ -317,8 +312,8 @@ func readerManager(
 					lastReaderCount = len(rs)
 				} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
 					// Only log if no readers for 2 minutes
-					log.Info().Msgf("no readers connected after %d attempts, auto-detect=%v, serial_blocklist=%d",
-						readerConnectAttempts, cfg.AutoDetect(), getSerialBlockListCount())
+					log.Info().Msgf("no readers connected after %d attempts, auto-detect=%v",
+						readerConnectAttempts, cfg.AutoDetect())
 				}
 
 				for _, device := range rs {
