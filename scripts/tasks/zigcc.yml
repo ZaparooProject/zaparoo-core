@@ -84,6 +84,8 @@ tasks:
           EXTRA_LDFLAGS: -H=windowsgui
           CC: "zig cc -w --target=x86_64-windows-gnu"
           CXX: "zig c++ -w --target=x86_64-windows-gnu"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
 
   build-windows-arm64:
     internal: true
@@ -100,6 +102,8 @@ tasks:
           EXTRA_LDFLAGS: -H=windowsgui
           CC: "zig cc -w --target=aarch64-windows-gnu"
           CXX: "zig c++ -w --target=aarch64-windows-gnu"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
 
   build-windows-386:
     internal: true
@@ -116,6 +120,8 @@ tasks:
           EXTRA_LDFLAGS: -H=windowsgui
           CC: "zig cc -w --target=i386-windows-gnu"
           CXX: "zig c++ -w --target=i386-windows-gnu"
+          EXTRA_DOCKER_ARGS: >-
+            -e CGO_LDFLAGS="-Wl,--subsystem,windows"
 
   build-mac-amd64:
     internal: true
