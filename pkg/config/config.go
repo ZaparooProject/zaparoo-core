@@ -68,10 +68,11 @@ type ZapScript struct {
 }
 
 type Service struct {
-	DeviceID   string   `toml:"device_id"`
-	AllowRun   []string `toml:"allow_run,omitempty,multiline"`
-	allowRunRe []*regexp.Regexp
-	APIPort    int `toml:"api_port"`
+	DeviceID       string   `toml:"device_id"`
+	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
+	allowRunRe     []*regexp.Regexp
+	AllowedOrigins []string `toml:"allowed_origins,omitempty"`
+	APIPort        int      `toml:"api_port"`
 }
 
 type Auth struct {
@@ -350,6 +351,12 @@ func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.APIPort
+}
+
+func (c *Instance) AllowedOrigins() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.AllowedOrigins
 }
 
 func (c *Instance) IsExecuteAllowed(s string) bool {
