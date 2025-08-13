@@ -41,7 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532uart"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
@@ -60,10 +60,10 @@ func (*Platform) ID() string {
 
 func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
+		pn532.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		acr122pcsc.NewAcr122Pcsc(cfg),
-		pn532uart.NewReader(cfg),
 	}
 }
 
