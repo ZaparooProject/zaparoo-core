@@ -341,11 +341,11 @@ func (r *Reader) CancelWrite() {
 	}
 }
 
-func (r *Reader) Capabilities() []readers.Capability {
+func (*Reader) Capabilities() []readers.Capability {
 	return []readers.Capability{readers.CapabilityWrite}
 }
 
-func (r *Reader) OnMediaChange(*models.ActiveMedia) error {
+func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 	return nil
 }
 
