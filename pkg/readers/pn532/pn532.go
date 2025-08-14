@@ -737,8 +737,29 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 
 	log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
 
+	// Detect tag again to get the tag type and UID after writing
+	detectCtx, detectCancel := context.WithTimeout(r.writeCtx, 2*time.Second)
+	defer detectCancel()
+
+	detectedTag, err := r.device.DetectTagContext(detectCtx)
+	var uid, tagType string
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to detect tag after writing, using fallback values")
+		uid = hex.EncodeToString(tagOps.GetUID())
+		tagType = tokens.TypeUnknown
+	} else {
+		uid = detectedTag.UID
+		tagType = r.convertTagType(detectedTag.Type)
+	}
+
+	// Update tag state to prevent immediate re-detection as new tag
+	r.tagState.present = true
+	r.tagState.lastUID = uid
+	r.tagState.lastType = tagType
+
 	return &tokens.Token{
-		UID:      hex.EncodeToString(tagOps.GetUID()),
+		UID:      uid,
+		Type:     tagType,
 		Text:     text,
 		ScanTime: time.Now(),
 		Source:   r.deviceInfo.ConnectionString(),

@@ -702,6 +702,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	}
 
 	log.Info().Msgf("successfully wrote to card: %s", hex.EncodeToString(bytesWritten))
+	r.prevToken = t
 	req.Result <- WriteRequestResult{
 		Token: t,
 	}
