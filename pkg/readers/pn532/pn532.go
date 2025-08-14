@@ -656,7 +656,7 @@ func (*Reader) Detect(connected []string) string {
 
 	// Return the first detected device
 	device := devices[0]
-	deviceStr := fmt.Sprintf("pn532:%s:%s", device.Transport, device.Path)
+	deviceStr := fmt.Sprintf("pn532_%s:%s", device.Transport, device.Path)
 
 	log.Debug().Msgf("detected PN532 device: %s", deviceStr)
 	return deviceStr

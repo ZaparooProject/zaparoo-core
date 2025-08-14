@@ -4,7 +4,7 @@ go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
-	github.com/ZaparooProject/go-pn532 v0.0.0-20250812021358-0060e1db7369
+	github.com/ZaparooProject/go-pn532 v0.2.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
