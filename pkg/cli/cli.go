@@ -162,7 +162,6 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-sigs
-			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}()
@@ -171,12 +170,10 @@ func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
 		if err != nil {
 			log.Error().Err(err).Msg("error writing tag")
 			_, _ = fmt.Fprintf(os.Stderr, "Error writing tag: %v\n", err)
-			close(sigs)
 			enableRun()
 			os.Exit(1)
 		}
 		_, _ = fmt.Fprintf(os.Stderr, "Tag: %s written successfully\n", *f.Write)
-		close(sigs)
 		enableRun()
 		os.Exit(0)
 	case *f.Read:

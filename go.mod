@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
+	github.com/ZaparooProject/go-pn532 v0.2.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -29,12 +30,11 @@ require (
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0
-	go.bug.st/serial v1.6.2
+	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.4.0
 	golang.design/x/clipboard v0.7.0
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
-	golang.org/x/sys v0.33.0
-	golang.org/x/term v0.32.0
+	golang.org/x/sys v0.35.0
 	golang.org/x/text v0.26.0
 	golang.org/x/time v0.12.0
 	gopkg.in/ini.v1 v1.67.0
@@ -45,7 +45,7 @@ require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
-	github.com/creack/goselect v0.1.2 // indirect
+	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
@@ -76,5 +76,8 @@ require (
 	golang.org/x/mobile v0.0.0-20231127183840-76ac6878050a // indirect
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/sync v0.15.0 // indirect
+	golang.org/x/term v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	periph.io/x/conn/v3 v3.7.2 // indirect
+	periph.io/x/host/v3 v3.8.5 // indirect
 )

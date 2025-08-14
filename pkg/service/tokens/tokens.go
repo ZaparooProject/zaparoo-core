@@ -28,6 +28,8 @@ const (
 	TypeMifare         = "MIFARE"
 	TypeAmiibo         = "Amiibo"
 	TypeLegoDimensions = "LegoDimensions"
+	TypeFeliCa         = "FeliCa"
+	TypeUnknown        = "Unknown"
 	SourcePlaylist     = "Playlist"
 )
 

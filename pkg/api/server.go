@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
@@ -548,6 +549,35 @@ func Start(
 	db *database.Database,
 	notifications <-chan models.Notification,
 ) {
+	port := cfg.APIPort()
+	dynamicAllowedOrigins := make([]string, 0, len(allowedOrigins)+10) // Pre-allocate capacity
+	dynamicAllowedOrigins = append(dynamicAllowedOrigins, allowedOrigins...)
+	dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+		fmt.Sprintf("http://localhost:%d", port),
+		fmt.Sprintf("https://localhost:%d", port),
+		fmt.Sprintf("http://127.0.0.1:%d", port),
+		fmt.Sprintf("https://127.0.0.1:%d", port),
+	)
+
+	if localIP := helpers.GetLocalIP(); localIP != "" {
+		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+			fmt.Sprintf("http://%s:%d", localIP, port),
+			fmt.Sprintf("https://%s:%d", localIP, port),
+		)
+	}
+
+	customOrigins := cfg.AllowedOrigins()
+	for _, origin := range customOrigins {
+		if !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://") {
+			dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+				fmt.Sprintf("http://%s", origin),
+				fmt.Sprintf("https://%s", origin),
+			)
+		} else {
+			dynamicAllowedOrigins = append(dynamicAllowedOrigins, origin)
+		}
+	}
+
 	r := chi.NewRouter()
 
 	rateLimiter := apimiddleware.NewIPRateLimiter()
@@ -558,13 +588,13 @@ func Start(
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: allowedOrigins,
+		AllowedOrigins: dynamicAllowedOrigins,
 		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
 
-	if strings.HasSuffix(config.AppVersion, "-dev") || config.AppVersion == "DEVELOPMENT" {
+	if strings.HasSuffix(config.AppVersion, "-dev") {
 		r.Mount("/debug", middleware.Profiler())
 		log.Info().Msg("pprof endpoints enabled at /debug/pprof/")
 	}
@@ -578,7 +608,7 @@ func Start(
 		if origin == "" {
 			return true
 		}
-		if slices.Contains(allowedOrigins, origin) {
+		if slices.Contains(dynamicAllowedOrigins, origin) {
 			return true
 		}
 		return false

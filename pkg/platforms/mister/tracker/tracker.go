@@ -423,6 +423,7 @@ func (tr *Tracker) runPickerSelection(name string) {
 // StartFileWatch Start thread for monitoring changes to all files relating to core/game launches.
 func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 	log.Info().Msg("starting file watcher")
+	startTime := time.Now()
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -470,9 +471,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		log.Info().Msgf("created core name file: %s", misterconfig.CoreNameFile)
 	}
 
+	log.Debug().Msgf("adding watcher for core name file: %s", misterconfig.CoreNameFile)
 	err = watcher.Add(misterconfig.CoreNameFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch core name file: %w", err)
+		return nil, fmt.Errorf("failed to watch core name file (%s): %w", misterconfig.CoreNameFile, err)
 	}
 
 	if _, statErr := os.Stat(misterconfig.CoreConfigFolder); os.IsNotExist(statErr) {
@@ -484,9 +486,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		log.Info().Msgf("created core config folder: %s", misterconfig.CoreConfigFolder)
 	}
 
+	log.Debug().Msgf("adding watcher for core config folder: %s", misterconfig.CoreConfigFolder)
 	err = watcher.Add(misterconfig.CoreConfigFolder)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch core config folder: %w", err)
+		return nil, fmt.Errorf("failed to watch core config folder (%s): %w", misterconfig.CoreConfigFolder, err)
 	}
 
 	if _, statActiveErr := os.Stat(misterconfig.ActiveGameFile); os.IsNotExist(statActiveErr) {
@@ -498,9 +501,10 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		log.Info().Msgf("created active game file: %s", misterconfig.ActiveGameFile)
 	}
 
+	log.Debug().Msgf("adding watcher for active game file: %s", misterconfig.ActiveGameFile)
 	err = watcher.Add(misterconfig.ActiveGameFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch active game file: %w", err)
+		return nil, fmt.Errorf("failed to watch active game file (%s): %w", misterconfig.ActiveGameFile, err)
 	}
 
 	if _, statPathErr := os.Stat(misterconfig.CurrentPathFile); os.IsNotExist(statPathErr) {
@@ -512,19 +516,24 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 		log.Info().Msgf("created current path file: %s", misterconfig.CurrentPathFile)
 	}
 
+	log.Debug().Msgf("adding watcher for current path file: %s", misterconfig.CurrentPathFile)
 	err = watcher.Add(misterconfig.CurrentPathFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to watch current path file: %w", err)
+		return nil, fmt.Errorf("failed to watch current path file (%s): %w", misterconfig.CurrentPathFile, err)
 	}
 
 	_, pickerExists := os.Stat(misterconfig.MainPickerSelected)
 	if pickerExists == nil && misterconfig.MainHasFeature(misterconfig.MainFeaturePicker) {
+		log.Debug().Msgf("adding watcher for picker selected file: %s", misterconfig.MainPickerSelected)
 		err = watcher.Add(misterconfig.MainPickerSelected)
 		if err != nil {
-			return nil, fmt.Errorf("failed to watch picker selected file: %w", err)
+			return nil, fmt.Errorf("failed to watch picker selected file (%s): %w",
+				misterconfig.MainPickerSelected, err)
 		}
 	}
 
+	elapsed := time.Since(startTime)
+	log.Info().Msgf("file watcher setup completed in %v", elapsed)
 	return watcher, nil
 }
 
@@ -540,6 +549,7 @@ func StartTracker(
 		return nil, nil, err
 	}
 
+	log.Debug().Msg("loading initial core state")
 	tr.LoadCore()
 	if !activegame.ActiveGameEnabled() {
 		setErr := activegame.SetActiveGame("")
@@ -548,11 +558,13 @@ func StartTracker(
 		}
 	}
 
+	log.Info().Msg("initializing file watcher for tracker")
 	watcher, err := StartFileWatch(tr)
 	if err != nil {
 		log.Error().Msgf("error starting file watch: %s", err)
 		return nil, nil, err
 	}
+	log.Info().Msg("tracker initialization completed successfully")
 
 	return tr, func() error {
 		err := watcher.Close()

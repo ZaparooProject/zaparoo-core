@@ -91,7 +91,9 @@ func connectReaders(
 
 	// auto-detect readers
 	if cfg.AutoDetect() {
-		for _, r := range pl.SupportedReaders(cfg) {
+		supportedReaders := pl.SupportedReaders(cfg)
+
+		for _, r := range supportedReaders {
 			detect := r.Detect(st.ListReaders())
 			if detect != "" {
 				ps := strings.SplitN(detect, ":", 2)
@@ -113,6 +115,7 @@ func connectReaders(
 
 			if r.Connected() {
 				st.SetReader(detect, r)
+				log.Info().Msgf("successfully connected auto-detected reader: %s", detect)
 			} else {
 				err := r.Close()
 				if err != nil {
@@ -288,12 +291,31 @@ func readerManager(
 
 	// manage reader connections
 	go func() {
+		log.Info().Msgf("reader manager started, auto-detect=%v", cfg.AutoDetect())
+		readerConnectAttempts := 0
+		lastReaderCount := 0
 		for {
 			select {
 			case <-st.GetContext().Done():
+				log.Info().Msg("reader manager shutting down via context cancellation")
 				return
 			case <-readerTicker.C:
+				readerConnectAttempts++
 				rs := st.ListReaders()
+
+				if len(rs) != lastReaderCount {
+					if len(rs) == 0 {
+						log.Info().Msg("all readers disconnected")
+					} else {
+						log.Info().Msgf("reader count changed: %d connected", len(rs))
+					}
+					lastReaderCount = len(rs)
+				} else if readerConnectAttempts%120 == 1 && len(rs) == 0 {
+					// Only log if no readers for 2 minutes
+					log.Info().Msgf("no readers connected after %d attempts, auto-detect=%v",
+						readerConnectAttempts, cfg.AutoDetect())
+				}
+
 				for _, device := range rs {
 					r, ok := st.GetReader(device)
 					if ok && r != nil && !r.Connected() {

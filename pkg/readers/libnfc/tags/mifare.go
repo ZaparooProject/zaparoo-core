@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
@@ -86,7 +87,7 @@ func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 
 		allBlocks = append(allBlocks, blockData...)
 
-		if bytes.Contains(blockData, NdefEnd) {
+		if bytes.Contains(blockData, ndef.NdefEnd) {
 			// Once we find the end of the NDEF text record there is no need to
 			// continue reading the rest of the card.
 			// This should make things "load" quicker
@@ -107,9 +108,9 @@ func getMifareCapacityInBytes() int {
 
 // WriteMifare writes the given text string to a Mifare card starting from sector, skipping any trailer blocks
 func WriteMifare(pnd nfc.Device, text, cardUID string) ([]byte, error) {
-	payload, err := BuildMessage(text)
+	payload, err := ndef.BuildMessage(text)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to build NDEF message: %w", err)
 	}
 
 	cardCapacity := getMifareCapacityInBytes()

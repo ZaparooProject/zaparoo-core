@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
@@ -99,7 +100,7 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 		allBlocks = append(allBlocks, blocks...)
 		currentBlock += 4
 
-		if bytes.Contains(allBlocks, NdefEnd) {
+		if bytes.Contains(allBlocks, ndef.NdefEnd) {
 			// Once we find the end of the NDEF text record there is no need to
 			// continue reading the rest of the card.
 			// This should make things "load" quicker
@@ -115,9 +116,9 @@ func ReadNtag(pnd nfc.Device) (TagData, error) {
 }
 
 func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
-	payload, err := BuildMessage(text)
+	payload, err := ndef.BuildTextMessage(text)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to build NDEF text message: %w", err)
 	}
 
 	cardCapacity, err := getNtagCapacity(pnd)
@@ -145,7 +146,7 @@ func WriteNtag(pnd nfc.Device, text string) ([]byte, error) {
 	return payload, nil
 }
 
-func getNtagBlockCount(pnd nfc.Device) (int, error) {
+func readCapabilityContainer(pnd nfc.Device) ([]byte, error) {
 	// Find tag capacity by looking in block 3 (capability container)
 	tx := []byte{ReadCommand, 0x03}
 	rx := make([]byte, 16)
@@ -153,7 +154,15 @@ func getNtagBlockCount(pnd nfc.Device) (int, error) {
 	timeout := 0
 	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read NTAG page count: %w", err)
+		return nil, fmt.Errorf("failed to read NTAG capability container: %w", err)
+	}
+	return rx, nil
+}
+
+func getNtagBlockCount(pnd nfc.Device) (int, error) {
+	rx, err := readCapabilityContainer(pnd)
+	if err != nil {
+		return 0, err
 	}
 
 	switch rx[2] {
@@ -173,14 +182,9 @@ func getNtagBlockCount(pnd nfc.Device) (int, error) {
 }
 
 func getNtagCapacity(pnd nfc.Device) (int, error) {
-	// Find tag capacity by looking in block 3 (capability container)
-	tx := []byte{ReadCommand, 0x03}
-	rx := make([]byte, 16)
-
-	timeout := 0
-	_, err := pnd.InitiatorTransceiveBytes(tx, rx, timeout)
+	rx, err := readCapabilityContainer(pnd)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read NTAG capacity: %w", err)
+		return 0, err
 	}
 
 	// https://github.com/adafruit/Adafruit_MFRC630/blob/master/docs/NTAG.md#capability-container

@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
@@ -219,7 +220,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 			log.Debug().Msgf("record bytes: %s", hex.EncodeToString(data))
 
-			tagText, err := ParseRecordText(data)
+			tagText, err := ndef.ParseToText(data)
 			if err != nil && ndefRetry < ndefRetryMax {
 				log.Error().Err(err).Msgf("no NDEF found, retrying data exchange")
 				ndefRetry++
