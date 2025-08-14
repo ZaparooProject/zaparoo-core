@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/rs/zerolog/log"
 )
 
@@ -46,16 +47,44 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, errors.New("no readers connected")
 	}
 
-	rid := rs[0]
+	// Filter readers that have write capability
+	var writeCapableReaders []string
+	for _, readerID := range rs {
+		reader, ok := env.State.GetReader(readerID)
+		if !ok || reader == nil {
+			continue
+		}
+
+		capabilities := reader.Capabilities()
+		for _, capability := range capabilities {
+			if capability == readers.CapabilityWrite {
+				writeCapableReaders = append(writeCapableReaders, readerID)
+				break
+			}
+		}
+	}
+
+	if len(writeCapableReaders) == 0 {
+		return nil, errors.New("no readers with write capability connected")
+	}
+
+	// Select the last used reader from the write-capable list
+	rid := writeCapableReaders[0]
 	lt := env.State.GetLastScanned()
 
 	if !lt.ScanTime.IsZero() && !lt.FromAPI {
-		rid = lt.Source
+		// Check if the last used reader is in our write-capable list
+		for _, writeReader := range writeCapableReaders {
+			if writeReader == lt.Source {
+				rid = lt.Source
+				break
+			}
+		}
 	}
 
 	reader, ok := env.State.GetReader(rid)
 	if !ok || reader == nil {
-		return nil, errors.New("reader not connected: " + rs[0])
+		return nil, errors.New("reader not connected: " + rid)
 	}
 
 	t, err := reader.Write(params.Text)

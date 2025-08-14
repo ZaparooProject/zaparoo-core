@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
 	"github.com/ZaparooProject/go-pn532/transport/spi"
 	"github.com/ZaparooProject/go-pn532/transport/uart"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -774,4 +775,12 @@ func (r *Reader) CancelWrite() {
 		log.Debug().Msg("cancelling ongoing write operation")
 		r.writeCancel()
 	}
+}
+
+func (r *Reader) Capabilities() []readers.Capability {
+	return []readers.Capability{readers.CapabilityWrite}
+}
+
+func (r *Reader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -171,4 +172,12 @@ func (*Reader) Write(_ string) (*tokens.Token, error) {
 
 func (*Reader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*Reader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*Reader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

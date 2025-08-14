@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -338,6 +339,14 @@ func (r *Reader) CancelWrite() {
 	if r.activeWrite != nil {
 		r.activeWrite.Cancel <- true
 	}
+}
+
+func (r *Reader) Capabilities() []readers.Capability {
+	return []readers.Capability{readers.CapabilityWrite}
+}
+
+func (r *Reader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }
 
 // keep track of serial devices that had failed opens

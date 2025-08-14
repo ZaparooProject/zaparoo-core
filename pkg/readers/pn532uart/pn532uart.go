@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -372,4 +373,12 @@ func (*PN532UARTReader) Write(_ string) (*tokens.Token, error) {
 
 func (*PN532UARTReader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*PN532UARTReader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*PN532UARTReader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

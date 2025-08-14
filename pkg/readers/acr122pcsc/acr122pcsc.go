@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -289,4 +290,12 @@ func (*ACR122PCSC) Write(_ string) (*tokens.Token, error) {
 
 func (*ACR122PCSC) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*ACR122PCSC) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*ACR122PCSC) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

@@ -20,8 +20,16 @@
 package readers
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+)
+
+type Capability string
+
+const (
+	CapabilityWrite   Capability = "write"
+	CapabilityDisplay Capability = "display"
 )
 
 type Scan struct {
@@ -54,4 +62,8 @@ type Reader interface {
 	Write(string) (*tokens.Token, error)
 	// CancelWrite sends a request to cancel an active write request.
 	CancelWrite()
+	// Capabilities returns the list of capabilities supported by this reader.
+	Capabilities() []Capability
+	// OnMediaChange is called when the active media changes.
+	OnMediaChange(*models.ActiveMedia) error
 }

@@ -243,6 +243,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		// media has stopped
 		s.activeMedia = media
 		notifications.MediaStopped(s.Notifications)
+		s.notifyDisplayReaders(media)
 		return
 	}
 	if oldMedia == nil {
@@ -254,6 +255,7 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
 		})
+		s.notifyDisplayReaders(media)
 		return
 	}
 	if !oldMedia.Equal(media) {
@@ -266,7 +268,32 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			MediaName:  media.Name,
 			MediaPath:  media.Path,
 		})
+		s.notifyDisplayReaders(media)
 		return
+	}
+}
+
+// notifyDisplayReaders calls OnMediaChange for all readers with display capability
+func (s *State) notifyDisplayReaders(media *models.ActiveMedia) {
+	for _, reader := range s.readers {
+		if reader == nil {
+			continue
+		}
+
+		capabilities := reader.Capabilities()
+		hasDisplayCapability := false
+		for _, cap := range capabilities {
+			if cap == readers.CapabilityDisplay {
+				hasDisplayCapability = true
+				break
+			}
+		}
+
+		if hasDisplayCapability {
+			if err := reader.OnMediaChange(media); err != nil {
+				log.Warn().Err(err).Msg("failed to notify display reader of media change")
+			}
+		}
 	}
 }
 
