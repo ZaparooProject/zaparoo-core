@@ -22,7 +22,6 @@ package mediascanner
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
@@ -40,6 +39,8 @@ func FlushScanStateMaps(ss *database.ScanState) {
 	ss.SystemIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
 	ss.MediaIDs = make(map[string]int)
+	// Note: TagIDs and TagTypeIDs are preserved across batches for performance
+	// since tags are typically reused across different systems
 }
 
 func AddMediaPath(
@@ -54,14 +55,16 @@ func AddMediaPath(
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
 		ss.SystemsIndex++
 		systemIndex = ss.SystemsIndex
-		ss.SystemIDs[systemID] = systemIndex
 		_, err := db.InsertSystem(database.System{
 			DBID:     int64(systemIndex),
 			SystemID: systemID,
 			Name:     systemID,
 		})
 		if err != nil {
+			ss.SystemsIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting system: %s", systemID)
+		} else {
+			ss.SystemIDs[systemID] = systemIndex // Only update cache on success
 		}
 	} else {
 		systemIndex = foundSystemIndex
@@ -71,7 +74,6 @@ func AddMediaPath(
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
-		ss.TitleIDs[titleKey] = titleIndex
 		_, err := db.InsertMediaTitle(database.MediaTitle{
 			DBID:       int64(titleIndex),
 			Slug:       pf.Slug,
@@ -79,7 +81,10 @@ func AddMediaPath(
 			SystemDBID: int64(systemIndex),
 		})
 		if err != nil {
+			ss.TitlesIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting media title: %s", pf.Title)
+		} else {
+			ss.TitleIDs[titleKey] = titleIndex // Only update cache on success
 		}
 	} else {
 		titleIndex = foundTitleIndex
@@ -89,14 +94,16 @@ func AddMediaPath(
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
-		ss.MediaIDs[mediaKey] = mediaIndex
 		_, err := db.InsertMedia(database.Media{
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
 		})
 		if err != nil {
+			ss.MediaIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
+		} else {
+			ss.MediaIDs[mediaKey] = mediaIndex // Only update cache on success
 		}
 	} else {
 		mediaIndex = foundMediaIndex
@@ -106,14 +113,16 @@ func AddMediaPath(
 		if _, ok := ss.TagIDs[pf.Ext]; !ok {
 			ss.TagsIndex++
 			tagIndex := ss.TagsIndex
-			ss.TagIDs[pf.Ext] = tagIndex
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(tagIndex),
 				Tag:      pf.Ext,
 				TypeDBID: int64(2),
 			})
 			if err != nil {
+				ss.TagsIndex-- // Rollback index increment on failure
 				log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
+			} else {
+				ss.TagIDs[pf.Ext] = tagIndex // Only update cache on success
 			}
 		}
 	}
@@ -131,12 +140,14 @@ func AddMediaPath(
 			continue
 		}
 
+		ss.MediaTagsIndex++
 		_, err := db.InsertMediaTag(database.MediaTag{
 			DBID:      int64(ss.MediaTagsIndex),
 			TagDBID:   int64(tagIndex),
 			MediaDBID: int64(mediaIndex),
 		})
 		if err != nil {
+			ss.MediaTagsIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting media tag relationship: %s", tagStr)
 		}
 	}
@@ -153,7 +164,7 @@ type MediaPathFragments struct {
 }
 
 func getTagsFromFileName(filename string) []string {
-	re := regexp.MustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
+	re := helpers.CachedMustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
 	matches := re.FindAllString(filename, -1)
 	tags := make([]string, 0)
 	for _, padded := range matches {
@@ -167,7 +178,7 @@ func getTagsFromFileName(filename string) []string {
 }
 
 func getTitleFromFilename(filename string) string {
-	r := regexp.MustCompile(`^([^(\[]*)`)
+	r := helpers.CachedMustCompile(`^([^(\[]*)`)
 	title := r.FindString(filename)
 	return strings.TrimSpace(title)
 }
@@ -242,21 +253,23 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 		Type: "Unknown",
 	})
 	if err != nil {
+		ss.TagTypesIndex-- // Rollback on failure
 		log.Warn().Err(err).Msgf("error inserting tag type Unknown")
 		return
 	}
 
 	ss.TagsIndex++
-	ss.TagIDs["unknown"] = ss.TagsIndex
 	_, err = db.InsertTag(database.Tag{
 		DBID:     int64(ss.TagsIndex),
 		Tag:      "unknown",
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
 	if err != nil {
+		ss.TagsIndex-- // Rollback on failure
 		log.Warn().Err(err).Msgf("error inserting tag unknown")
 		return
 	}
+	ss.TagIDs["unknown"] = ss.TagsIndex // Only update cache on success
 
 	ss.TagTypesIndex++
 	_, err = db.InsertTagType(database.TagType{
@@ -264,49 +277,52 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 		Type: "Extension",
 	})
 	if err != nil {
+		ss.TagTypesIndex-- // Rollback on failure
 		log.Warn().Err(err).Msgf("error inserting tag type Extension")
 		return
 	}
 
 	ss.TagsIndex++
-	ss.TagIDs[".ext"] = ss.TagsIndex
 	_, err = db.InsertTag(database.Tag{
 		DBID:     int64(ss.TagsIndex),
 		Tag:      ".ext",
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
 	if err != nil {
+		ss.TagsIndex-- // Rollback on failure
 		log.Warn().Err(err).Msgf("error inserting tag .ext")
 		return
 	}
+	ss.TagIDs[".ext"] = ss.TagsIndex // Only update cache on success
 
 	for typeStr, tags := range typeMatches {
 		ss.TagTypesIndex++
-		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
 		_, err := db.InsertTagType(database.TagType{
 			DBID: int64(ss.TagTypesIndex),
 			Type: typeStr,
 		})
 		if err != nil {
+			ss.TagTypesIndex-- // Rollback on failure
 			log.Warn().Err(err).Msgf("error inserting tag type %s", typeStr)
 			return
 		}
+		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex // Only update cache on success
 
 		for _, tag := range tags {
 			ss.TagsIndex++
-			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
 				Tag:      strings.ToLower(tag),
 				TypeDBID: int64(ss.TagTypesIndex),
 			})
 			if err != nil {
+				ss.TagsIndex-- // Rollback on failure
 				log.Warn().Err(err).Msgf("error inserting tag %s", tag)
 				return
 			}
+			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex // Only update cache on success
 		}
 	}
-	ss.TagTypeIDs = make(map[string]int)
 }
 
 func GetPathFragments(path string) MediaPathFragments {

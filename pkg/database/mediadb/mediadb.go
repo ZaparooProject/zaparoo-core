@@ -35,14 +35,25 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
 )
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
+
+const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
+	"&_cache_size=-64000&_temp_store=MEMORY"
 
 type MediaDB struct {
 	sql *sql.DB
 	pl  platforms.Platform
 	ctx context.Context
+	// Prepared statements for batch operations during scanning
+	tx                   *sql.Tx
+	stmtInsertSystem     *sql.Stmt
+	stmtInsertMediaTitle *sql.Stmt
+	stmtInsertMedia      *sql.Stmt
+	stmtInsertTag        *sql.Stmt
+	stmtInsertMediaTag   *sql.Stmt
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -62,7 +73,7 @@ func (db *MediaDB) Open() error {
 			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite3", dbPath)
+	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -138,15 +149,160 @@ func (db *MediaDB) Close() error {
 	return nil
 }
 
+// closeAllPreparedStatements closes all prepared statements and sets them to nil
+func (db *MediaDB) closeAllPreparedStatements() {
+	if db.stmtInsertSystem != nil {
+		if closeErr := db.stmtInsertSystem.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertSystem")
+		}
+		db.stmtInsertSystem = nil
+	}
+	if db.stmtInsertMediaTitle != nil {
+		if closeErr := db.stmtInsertMediaTitle.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMediaTitle")
+		}
+		db.stmtInsertMediaTitle = nil
+	}
+	if db.stmtInsertMedia != nil {
+		if closeErr := db.stmtInsertMedia.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMedia")
+		}
+		db.stmtInsertMedia = nil
+	}
+	if db.stmtInsertTag != nil {
+		if closeErr := db.stmtInsertTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertTag")
+		}
+		db.stmtInsertTag = nil
+	}
+	if db.stmtInsertMediaTag != nil {
+		if closeErr := db.stmtInsertMediaTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertMediaTag")
+		}
+		db.stmtInsertMediaTag = nil
+	}
+}
+
+// RollbackTransaction rolls back the current transaction and cleans up resources
+func (db *MediaDB) RollbackTransaction() error {
+	if db.tx == nil {
+		return nil // No active transaction
+	}
+
+	// Clean up prepared statements first
+	db.closeAllPreparedStatements()
+
+	// Rollback the transaction
+	err := db.tx.Rollback()
+	db.tx = nil
+	if err != nil {
+		return fmt.Errorf("failed to rollback transaction: %w", err)
+	}
+
+	return nil
+}
+
+// rollbackAndLogError helper function to handle rollback with error logging
+func (db *MediaDB) rollbackAndLogError() {
+	if rbErr := db.RollbackTransaction(); rbErr != nil {
+		log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
+	}
+}
+
 func (db *MediaDB) BeginTransaction() error {
-	return sqlBeginTransaction(db.ctx, db.sql)
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	// Begin a proper transaction
+	tx, err := db.sql.BeginTx(db.ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	db.tx = tx
+
+	// Prepare statements for batch operations - clean up on any error
+	if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, insertSystemSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert system statement: %w", err)
+	}
+
+	if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, insertMediaTitleSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert media title statement: %w", err)
+	}
+
+	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, insertMediaSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert media statement: %w", err)
+	}
+
+	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, insertTagSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert tag statement: %w", err)
+	}
+
+	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, insertMediaTagSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
+	}
+
+	return nil
 }
 
 func (db *MediaDB) CommitTransaction() error {
-	return sqlCommitTransaction(db.ctx, db.sql)
+	if db.tx == nil {
+		return nil // No active transaction
+	}
+
+	// Always clean up prepared statements first
+	db.closeAllPreparedStatements()
+
+	// Commit the transaction
+	err := db.tx.Commit()
+	if err != nil {
+		// Try to rollback and combine errors if both fail
+		if rbErr := db.tx.Rollback(); rbErr != nil {
+			db.tx = nil
+			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
+		}
+		db.tx = nil
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	db.tx = nil
+	return nil
+}
+
+func (db *MediaDB) reindexTablesWithTransaction() error {
+	return sqlIndexTablesWithTransaction(db.ctx, db.tx)
+}
+
+func (db *MediaDB) insertSystemWithPreparedStmt(row database.System) (database.System, error) {
+	return sqlInsertSystemWithPreparedStmt(db.ctx, db.stmtInsertSystem, row)
+}
+
+func (db *MediaDB) insertMediaTitleWithPreparedStmt(row database.MediaTitle) (database.MediaTitle, error) {
+	return sqlInsertMediaTitleWithPreparedStmt(db.ctx, db.stmtInsertMediaTitle, row)
+}
+
+func (db *MediaDB) insertMediaWithPreparedStmt(row database.Media) (database.Media, error) {
+	return sqlInsertMediaWithPreparedStmt(db.ctx, db.stmtInsertMedia, row)
+}
+
+func (db *MediaDB) insertTagWithPreparedStmt(row database.Tag) (database.Tag, error) {
+	return sqlInsertTagWithPreparedStmt(db.ctx, db.stmtInsertTag, row)
+}
+
+func (db *MediaDB) insertMediaTagWithPreparedStmt(row database.MediaTag) (database.MediaTag, error) {
+	return sqlInsertMediaTagWithPreparedStmt(db.ctx, db.stmtInsertMediaTag, row)
 }
 
 func (db *MediaDB) ReindexTables() error {
+	// Use transaction if active, otherwise use direct database connection
+	if db.tx != nil {
+		return db.reindexTablesWithTransaction()
+	}
 	return sqlIndexTables(db.ctx, db.sql)
 }
 
@@ -233,6 +389,10 @@ func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertSystem != nil {
+		return db.insertSystemWithPreparedStmt(row)
+	}
 	return sqlInsertSystem(db.ctx, db.sql, row)
 }
 
@@ -249,6 +409,10 @@ func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle,
 }
 
 func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMediaTitle != nil {
+		return db.insertMediaTitleWithPreparedStmt(row)
+	}
 	return sqlInsertMediaTitle(db.ctx, db.sql, row)
 }
 
@@ -265,6 +429,10 @@ func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
 }
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMedia != nil {
+		return db.insertMediaWithPreparedStmt(row)
+	}
 	return sqlInsertMedia(db.ctx, db.sql, row)
 }
 
@@ -297,6 +465,10 @@ func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertTag != nil {
+		return db.insertTagWithPreparedStmt(row)
+	}
 	return sqlInsertTag(db.ctx, db.sql, row)
 }
 
@@ -313,6 +485,10 @@ func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	// Use prepared statement if in transaction, otherwise fall back to original method
+	if db.stmtInsertMediaTag != nil {
+		return db.insertMediaTagWithPreparedStmt(row)
+	}
 	return sqlInsertMediaTag(db.ctx, db.sql, row)
 }
 

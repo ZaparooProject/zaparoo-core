@@ -160,6 +160,7 @@ type MediaDBI interface {
 	GenericDBI
 	BeginTransaction() error
 	CommitTransaction() error
+	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
 	GetLastGenerated() (time.Time, error)
