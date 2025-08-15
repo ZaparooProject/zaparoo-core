@@ -4,8 +4,8 @@ github.com/BurntSushi/toml v1.5.0 h1:W5quZX/G/csjUnuI8SUYlsHs9M38FC7znL0lIO+DvMg
 github.com/BurntSushi/toml v1.5.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
-github.com/ZaparooProject/go-pn532 v0.2.0 h1:jYr3AQV1YmOWdPHn4TXIeIKzYwGz/QR9AkwSmDhXdJU=
-github.com/ZaparooProject/go-pn532 v0.2.0/go.mod h1:XzfW6FLMSDLpW5WA9A5SGA2sVfl77Es7/QpGlML8yiA=
+github.com/ZaparooProject/go-pn532 v0.3.1 h1:Lf105Zz0iM9uEqvTtRTOem2+hiqVcBoYMGQjd2J85W0=
+github.com/ZaparooProject/go-pn532 v0.3.1/go.mod h1:XzfW6FLMSDLpW5WA9A5SGA2sVfl77Es7/QpGlML8yiA=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=

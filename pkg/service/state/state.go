@@ -37,13 +37,13 @@ import (
 type State struct {
 	platform       platforms.Platform
 	ctx            context.Context
-	Notifications  chan<- models.Notification
-	readers        map[string]readers.Reader
+	activePlaylist *playlists.Playlist
 	softwareToken  *tokens.Token
 	wroteToken     *tokens.Token
-	activePlaylist *playlists.Playlist
+	readers        map[string]readers.Reader
 	ctxCancelFunc  context.CancelFunc
 	activeMedia    *models.ActiveMedia
+	Notifications  chan<- models.Notification
 	lastScanned    tokens.Token
 	activeToken    tokens.Token
 	mu             sync.RWMutex

@@ -50,11 +50,9 @@ import (
 
 const (
 	maxErrorCount         = 5
-	pollTimeout           = 50 * time.Millisecond
-	pollInterval          = 50 * time.Millisecond
-	detectionTimeout      = 10 * time.Second
+	pollTimeout           = 1000 * time.Millisecond
+	pollInterval          = 100 * time.Millisecond
 	quickDetectionTimeout = 5 * time.Second
-	detectionCacheTimeout = 30 * time.Second
 	errorBackoffDelay     = 500 * time.Millisecond
 )
 
@@ -154,54 +152,26 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	var transport pn532.Transport
 	var err error
 
-	// Check if this is an auto-detected device or a manual path
-	if device.Path == "" {
-		// Auto-detect device
-		opts := detection.DefaultOptions()
-		opts.Timeout = detectionTimeout
-		opts.Mode = detection.Safe
-		opts.Blocklist = createVIDPIDBlocklist()
-
-		devices, detectErr := detection.DetectAll(&opts)
-		if detectErr != nil {
-			return fmt.Errorf("failed to detect PN532 devices: %w", detectErr)
-		}
-
-		if len(devices) == 0 {
-			return errors.New("no PN532 devices found")
-		}
-
-		// Use the first detected device
-		deviceInfo := devices[0]
-		transport, err = r.createTransport(deviceInfo)
-		if err != nil {
-			return fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		r.name = fmt.Sprintf("%s:%s", deviceInfo.Transport, deviceInfo.Path)
-		log.Debug().Msgf("auto-detected PN532 device: %s", r.name)
-	} else {
-		// Manual device specification
-		// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
-		transportType := strings.TrimPrefix(device.Driver, "pn532_")
-		if transportType == device.Driver {
-			// If no prefix was removed, assume it's just "pn532" and default to uart
-			transportType = "uart"
-		}
-
-		deviceInfo := detection.DeviceInfo{
-			Transport: transportType,
-			Path:      device.Path,
-		}
-
-		transport, err = r.createTransport(deviceInfo)
-		if err != nil {
-			return fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		r.name = device.ConnectionString()
-		log.Debug().Msgf("opening manual PN532 device: %s", r.name)
+	// Manual device specification
+	// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
+	transportType := strings.TrimPrefix(device.Driver, "pn532_")
+	if transportType == device.Driver {
+		// If no prefix was removed, assume it's just "pn532" and default to uart
+		transportType = "uart"
 	}
+
+	deviceInfo := detection.DeviceInfo{
+		Transport: transportType,
+		Path:      device.Path,
+	}
+
+	transport, err = r.createTransport(deviceInfo)
+	if err != nil {
+		return fmt.Errorf("failed to create transport: %w", err)
+	}
+
+	r.name = device.ConnectionString()
+	log.Debug().Msgf("opening PN532 device: %s", r.name)
 
 	// Create PN532 device
 	r.device, err = pn532.New(transport)
@@ -238,6 +208,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 }
 
 func (r *Reader) pollLoop(iq chan<- readers.Scan) {
+	log.Info().Msg("PN532 polling loop started")
 	errCount := 0
 
 	for {
@@ -253,9 +224,16 @@ func (r *Reader) pollLoop(iq chan<- readers.Scan) {
 			break
 		}
 
+		log.Debug().Msg("polling: starting DetectTagContext")
 		pollCtx, cancel := context.WithTimeout(r.ctx, pollTimeout)
 		detectedTag, err := r.device.DetectTagContext(pollCtx)
 		cancel()
+		log.Debug().Err(err).Msg("polling: DetectTagContext completed")
+
+		// Log if we're taking too long to detect (debugging transport issues)
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, pn532.ErrNoTagDetected) {
+			log.Debug().Err(err).Msg("DetectTagContext returned unexpected error")
+		}
 
 		if err != nil {
 			r.handlePollingError(err, iq, &errCount)
@@ -264,10 +242,18 @@ func (r *Reader) pollLoop(iq chan<- readers.Scan) {
 
 		// Tag detected successfully
 		errCount = 0
+		log.Debug().Str("uid", detectedTag.UID).Msg("polling: starting processDetectedTag")
 		r.processDetectedTag(detectedTag, iq)
+		log.Debug().Str("uid", detectedTag.UID).Msg("polling: processDetectedTag completed")
 
-		// Short sleep to prevent excessive CPU usage
-		time.Sleep(pollInterval)
+		// Short sleep to prevent excessive CPU usage - use context-aware sleep
+		select {
+		case <-r.ctx.Done():
+			log.Debug().Msg("PN532 polling cancelled during interval sleep")
+			return
+		case <-time.After(pollInterval):
+			// Continue with next poll attempt
+		}
 	}
 }
 
@@ -289,10 +275,17 @@ func (r *Reader) handlePollingError(err error, iq chan<- readers.Scan, errCount 
 		return
 	}
 
-	// Actual error
 	log.Error().Err(err).Msg("failed to detect tag")
 	*errCount++
-	time.Sleep(errorBackoffDelay)
+
+	// Use context-aware sleep so shutdown can interrupt
+	select {
+	case <-r.ctx.Done():
+		log.Debug().Msg("PN532 polling cancelled during error backoff")
+		return
+	case <-time.After(errorBackoffDelay):
+		// Continue with next poll attempt
+	}
 }
 
 func (r *Reader) handleTagRemoval(iq chan<- readers.Scan) {
@@ -388,7 +381,7 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 		return tokens.TypeMifare
 	case pn532.TagTypeFeliCa:
 		return tokens.TypeFeliCa
-	case pn532.TagTypeUnknown, pn532.CardTypeAny:
+	case pn532.TagTypeUnknown, pn532.TagTypeAny:
 		return tokens.TypeUnknown
 	default:
 		return tokens.TypeUnknown
@@ -396,19 +389,24 @@ func (*Reader) convertTagType(tagType pn532.TagType) string {
 }
 
 func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (text string, data []byte) {
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
 	tagOps := tagops.New(r.device)
 
-	// Detect tag first
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Detect tag first - use reader's context to ensure proper cancellation
+	ctx, cancel := context.WithTimeout(r.ctx, 2*time.Second)
 	defer cancel()
 
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.DetectTag")
 	if err := tagOps.DetectTag(ctx); err != nil {
-		log.Debug().Err(err).Msg("failed to detect tag for NDEF reading")
+		log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("failed to detect tag for NDEF reading")
 		return "", detectedTag.TargetData
 	}
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: tagOps.DetectTag completed")
 
 	// Read NDEF message
+	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.ReadNDEF")
 	ndefMessage, err := tagOps.ReadNDEF(ctx)
+	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to read NDEF data")
 		return "", detectedTag.TargetData
@@ -601,66 +599,63 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-// Static cache for failed detection attempts to avoid repeated failures
-var (
-	detectionCacheMu  sync.RWMutex
-	lastDetectionFail time.Time
-)
-
 func (*Reader) Detect(connected []string) string {
-	// Check cache first
-	detectionCacheMu.RLock()
-	if !lastDetectionFail.IsZero() && time.Since(lastDetectionFail) < detectionCacheTimeout {
-		detectionCacheMu.RUnlock()
-		return ""
-	}
-	detectionCacheMu.RUnlock()
-
-	// Check if a PN532 device is already connected
+	// Extract device paths from connected list (format: "transport:path")
+	ignorePaths := make([]string, 0, len(connected))
 	for _, conn := range connected {
-		if strings.HasPrefix(conn, "pn532:") {
-			return ""
+		parts := strings.SplitN(conn, ":", 2)
+		if len(parts) == 2 {
+			ignorePaths = append(ignorePaths, parts[1])
 		}
 	}
+	log.Debug().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
 	opts := detection.DefaultOptions()
 	opts.Timeout = quickDetectionTimeout
 	opts.Mode = detection.Safe
 	opts.Blocklist = createVIDPIDBlocklist()
+	opts.IgnorePaths = ignorePaths
 
 	devices, err := detection.DetectAll(&opts)
 	if err != nil {
 		log.Debug().Err(err).Msg("PN532 detection failed")
-
-		// Cache the failure
-		detectionCacheMu.Lock()
-		lastDetectionFail = time.Now()
-		detectionCacheMu.Unlock()
-
 		return ""
 	}
 
 	if len(devices) == 0 {
-		// Cache the failure
-		detectionCacheMu.Lock()
-		lastDetectionFail = time.Now()
-		detectionCacheMu.Unlock()
-
 		return ""
 	}
 
-	// Clear cache on successful detection
-	detectionCacheMu.Lock()
-	lastDetectionFail = time.Time{}
-	detectionCacheMu.Unlock()
+	// Check each detected device to find one not already connected
+	for _, device := range devices {
+		deviceStr := fmt.Sprintf("pn532_%s:%s", device.Transport, device.Path)
 
-	// Return the first detected device
-	device := devices[0]
-	deviceStr := fmt.Sprintf("pn532_%s:%s", device.Transport, device.Path)
+		// Check if this device path is already in use by any connected reader
+		deviceInUse := false
+		for _, connectedDevice := range connected {
+			// Parse connected device string (format: "driver:path")
+			parts := strings.SplitN(connectedDevice, ":", 2)
+			if len(parts) == 2 && parts[1] == device.Path {
+				log.Debug().
+					Str("device_path", device.Path).
+					Str("connected_as", connectedDevice).
+					Str("attempted_as", deviceStr).
+					Msg("pn532: device already connected, skipping")
+				deviceInUse = true
+				break
+			}
+		}
 
-	log.Debug().Msgf("detected PN532 device: %s", deviceStr)
-	return deviceStr
+		if !deviceInUse {
+			log.Debug().Msgf("detected PN532 device: %s", deviceStr)
+			return deviceStr
+		}
+	}
+
+	// All detected devices are already in use
+	log.Debug().Msg("pn532: all detected devices are already connected")
+	return ""
 }
 
 func (r *Reader) Device() string {
