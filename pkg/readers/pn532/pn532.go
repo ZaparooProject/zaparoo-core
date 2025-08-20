@@ -31,10 +31,10 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
-	// Import detection packages to register detectors
 	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
 	_ "github.com/ZaparooProject/go-pn532/detection/spi"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
+	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/tagops"
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
 	"github.com/ZaparooProject/go-pn532/transport/spi"
@@ -49,11 +49,11 @@ import (
 )
 
 const (
-	maxErrorCount         = 5
-	pollTimeout           = 1000 * time.Millisecond
-	pollInterval          = 100 * time.Millisecond
 	quickDetectionTimeout = 5 * time.Second
-	errorBackoffDelay     = 500 * time.Millisecond
+	ndefReadTimeout       = 2 * time.Second
+	writeTimeout          = 30 * time.Second
+	pollInterval          = 100 * time.Millisecond
+	cardRemovalTimeout    = 300 * time.Millisecond
 )
 
 func createVIDPIDBlocklist() []string {
@@ -79,25 +79,20 @@ func createVIDPIDBlocklist() []string {
 	}
 }
 
-type tagState struct {
-	lastUID  string
-	lastType string
-	present  bool
-}
-
 type Reader struct {
 	ctx         context.Context
 	writeCtx    context.Context
 	device      *pn532.Device
+	session     *polling.Session
 	cfg         *config.Instance
 	lastToken   *tokens.Token
 	cancel      context.CancelFunc
 	writeCancel context.CancelFunc
 	deviceInfo  config.ReadersConnect
 	name        string
-	tagState    tagState
 	mutex       sync.RWMutex
-	writeMutex  sync.RWMutex
+	writeMutex  sync.Mutex
+	wg          sync.WaitGroup
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -189,168 +184,67 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
 
-	// Configure optimized continuous polling (from nfctest)
-	pollConfig := pn532.DefaultContinuousPollConfig()
-	pollConfig.PollCount = 1
-	pollConfig.PollPeriod = 1
-	if err := r.device.SetPollConfig(pollConfig); err != nil {
-		log.Warn().Err(err).Msg("failed to set optimized poll config, using defaults")
-	}
-
 	r.deviceInfo = device
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 
-	// Start polling goroutine
-	go r.pollLoop(iq)
+	// Create session configuration
+	sessionConfig := polling.DefaultConfig()
+	sessionConfig.PollInterval = pollInterval
+	sessionConfig.CardRemovalTimeout = cardRemovalTimeout
+
+	// Create session with callbacks
+	r.session = polling.NewSession(r.device, sessionConfig)
+
+	// Set up callbacks
+	r.session.OnCardDetected = func(detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(detectedTag, iq)
+	}
+
+	r.session.OnCardRemoved = func() {
+		r.handleTagRemoved(iq)
+	}
+
+	r.session.OnCardChanged = func(detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(detectedTag, iq)
+	}
+
+	// Start session
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		if err := r.session.Start(r.ctx); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Error().Err(err).Msg("PN532 session ended with error")
+			}
+		}
+	}()
 
 	log.Info().Msgf("PN532 reader opened: %s", r.name)
 	return nil
 }
 
-func (r *Reader) pollLoop(iq chan<- readers.Scan) {
-	log.Info().Msg("PN532 polling loop started")
-	errCount := 0
-
-	for {
-		select {
-		case <-r.ctx.Done():
-			log.Debug().Msg("PN532 polling cancelled")
-			return
-		default:
-		}
-
-		if errCount >= maxErrorCount {
-			log.Error().Msg("too many errors, exiting PN532 reader")
-			break
-		}
-
-		log.Debug().Msg("polling: starting DetectTagContext")
-		pollCtx, cancel := context.WithTimeout(r.ctx, pollTimeout)
-		detectedTag, err := r.device.DetectTagContext(pollCtx)
-		cancel()
-		log.Debug().Err(err).Msg("polling: DetectTagContext completed")
-
-		// Log if we're taking too long to detect (debugging transport issues)
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, pn532.ErrNoTagDetected) {
-			log.Debug().Err(err).Msg("DetectTagContext returned unexpected error")
-		}
-
-		if err != nil {
-			r.handlePollingError(err, iq, &errCount)
-			continue
-		}
-
-		// Tag detected successfully
-		errCount = 0
-		log.Debug().Str("uid", detectedTag.UID).Msg("polling: starting processDetectedTag")
-		r.processDetectedTag(detectedTag, iq)
-		log.Debug().Str("uid", detectedTag.UID).Msg("polling: processDetectedTag completed")
-
-		// Short sleep to prevent excessive CPU usage - use context-aware sleep
-		select {
-		case <-r.ctx.Done():
-			log.Debug().Msg("PN532 polling cancelled during interval sleep")
-			return
-		case <-time.After(pollInterval):
-			// Continue with next poll attempt
-		}
-	}
-}
-
-func (r *Reader) handlePollingError(err error, iq chan<- readers.Scan, errCount *int) {
-	if errors.Is(err, context.Canceled) {
-		log.Debug().Msg("PN532 polling cancelled")
-		return
-	}
-
-	if errors.Is(err, pn532.ErrNoTagDetected) {
-		// Handle tag removal
-		r.handleTagRemoval(iq)
-		return
-	}
-
-	if errors.Is(err, context.DeadlineExceeded) {
-		// Timeout is normal - just handle as no tag
-		r.handleTagRemoval(iq)
-		return
-	}
-
-	log.Error().Err(err).Msg("failed to detect tag")
-	*errCount++
-
-	// Use context-aware sleep so shutdown can interrupt
-	select {
-	case <-r.ctx.Done():
-		log.Debug().Msg("PN532 polling cancelled during error backoff")
-		return
-	case <-time.After(errorBackoffDelay):
-		// Continue with next poll attempt
-	}
-}
-
-func (r *Reader) handleTagRemoval(iq chan<- readers.Scan) {
-	if r.tagState.present {
-		log.Info().Msgf("tag removed: %s", r.tagState.lastUID)
-		iq <- readers.Scan{
-			Source: r.deviceInfo.ConnectionString(),
-			Token:  nil,
-		}
-		r.resetTagState()
-	}
-}
-
-func (r *Reader) resetTagState() {
-	r.tagState.present = false
-	r.tagState.lastUID = ""
-	r.tagState.lastType = ""
-	r.lastToken = nil
-}
-
-func (r *Reader) processDetectedTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
-	currentUID := detectedTag.UID
-	tagType := string(detectedTag.Type)
-
-	// Check if this is a new tag or tag change
-	tagChanged := r.updateTagState(currentUID, tagType)
-	if !tagChanged {
-		// Same tag as before, no need to reprocess
-		return
-	}
-
-	// Process the new/changed tag
+func (r *Reader) handleTagDetected(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
+	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
 	r.processNewTag(detectedTag, iq)
+	return nil
 }
 
-func (r *Reader) updateTagState(currentUID, tagType string) bool {
-	if !r.tagState.present {
-		// New tag detected
-		log.Info().Msgf("new tag detected: %s (%s)", tagType, currentUID)
-		r.tagState.present = true
-		r.tagState.lastUID = currentUID
-		r.tagState.lastType = tagType
-		return true
+func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
+	log.Info().Msg("tag removed")
+	iq <- readers.Scan{
+		Source: r.deviceInfo.ConnectionString(),
+		Token:  nil,
 	}
 
-	if r.tagState.lastUID != currentUID {
-		// Different tag detected
-		log.Info().Msgf("different tag detected: %s (%s)", tagType, currentUID)
-		r.tagState.lastUID = currentUID
-		r.tagState.lastType = tagType
-		return true
-	}
-
-	// Same tag as before
-	return false
+	r.mutex.Lock()
+	r.lastToken = nil
+	r.mutex.Unlock()
 }
 
 func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
-	// Convert tag type
 	tokenType := r.convertTagType(detectedTag.Type)
-
-	// Try to read NDEF data using unified tagops approach
 	ndefText, rawData := r.readNDEFData(detectedTag)
 
-	// Create token
 	token := &tokens.Token{
 		Type:     tokenType,
 		UID:      detectedTag.UID,
@@ -370,7 +264,9 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 		Token:  token,
 	}
 
+	r.mutex.Lock()
 	r.lastToken = token
+	r.mutex.Unlock()
 }
 
 func (*Reader) convertTagType(tagType pn532.TagType) string {
@@ -393,7 +289,7 @@ func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (text string, data
 	tagOps := tagops.New(r.device)
 
 	// Detect tag first - use reader's context to ensure proper cancellation
-	ctx, cancel := context.WithTimeout(r.ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(r.ctx, ndefReadTimeout)
 	defer cancel()
 
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.DetectTag")
@@ -437,7 +333,7 @@ func (*Reader) convertNDEFToTokenText(ndefMessage *ndef.Message) string {
 	typeField := record.Type()
 
 	// Handle text records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && typeField == "T" {
+	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 1 && typeField[0] == 'T' {
 		payload, err := record.Payload()
 		if err != nil {
 			return ""
@@ -454,7 +350,7 @@ func (*Reader) convertNDEFToTokenText(ndefMessage *ndef.Message) string {
 	}
 
 	// Handle URI records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && typeField == "U" {
+	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 1 && typeField[0] == 'U' {
 		payload, err := record.Payload()
 		if err != nil {
 			return ""
@@ -473,7 +369,7 @@ func (*Reader) convertNDEFToTokenText(ndefMessage *ndef.Message) string {
 	}
 
 	// Handle Smart Poster records - convert to JSON
-	if tnf == ndef.NFCForumWellKnownType && typeField == "Sp" {
+	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 2 && typeField == "Sp" {
 		return convertSmartPosterToJSON(record)
 	}
 
@@ -498,6 +394,7 @@ func convertWiFiToJSON(record *ndef.Record) string {
 
 	jsonBytes, err := json.Marshal(wifiData)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to marshal WiFi data to JSON")
 		return ""
 	}
 	return string(jsonBytes)
@@ -538,6 +435,7 @@ func convertVCardToJSON(record *ndef.Record) string {
 
 	jsonBytes, err := json.Marshal(vcardData)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to marshal VCard data to JSON")
 		return ""
 	}
 	return string(jsonBytes)
@@ -556,6 +454,7 @@ func convertSmartPosterToJSON(record *ndef.Record) string {
 
 	jsonBytes, err := json.Marshal(posterData)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to marshal smart poster data to JSON")
 		return ""
 	}
 	return string(jsonBytes)
@@ -576,6 +475,7 @@ func convertGenericRecordToJSON(record *ndef.Record) string {
 
 	jsonBytes, err := json.Marshal(genericData)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to marshal generic record data to JSON")
 		return ""
 	}
 	return string(jsonBytes)
@@ -589,12 +489,15 @@ func (r *Reader) Close() error {
 		r.cancel()
 	}
 
-	if r.device != nil {
-		err := r.device.Close()
+	if r.session != nil {
+		err := r.session.Close()
 		if err != nil {
-			return fmt.Errorf("failed to close PN532 device: %w", err)
+			return fmt.Errorf("failed to close PN532 session: %w", err)
 		}
 	}
+
+	// Wait for session goroutine to complete
+	r.wg.Wait()
 
 	return nil
 }
@@ -604,7 +507,7 @@ func (*Reader) Detect(connected []string) string {
 	ignorePaths := make([]string, 0, len(connected))
 	for _, conn := range connected {
 		parts := strings.SplitN(conn, ":", 2)
-		if len(parts) == 2 {
+		if len(parts) >= 2 && parts[1] != "" {
 			ignorePaths = append(ignorePaths, parts[1])
 		}
 	}
@@ -681,20 +584,22 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 }
 
 func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Token, error) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	if r.device == nil {
-		return nil, errors.New("device not connected")
-	}
-
 	if text == "" {
 		return nil, errors.New("text cannot be empty")
 	}
 
-	// Create cancellable context for this write operation
+	// Lock for the entire write operation
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if r.session == nil {
+		return nil, errors.New("session not initialized")
+	}
+
+	// Create cancellable context for this write operation under writeMutex
 	r.writeMutex.Lock()
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
+	writeCtx := r.writeCtx
 	r.writeMutex.Unlock()
 
 	// Ensure cleanup
@@ -708,58 +613,47 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 		r.writeMutex.Unlock()
 	}()
 
-	// Use tagops for writing to all tag types (unified approach)
-	tagOps := tagops.New(r.device)
+	var resultToken *tokens.Token
+	var writeErr error
 
-	// Detect tag first
-	detectCtx, cancel := context.WithTimeout(r.writeCtx, 5*time.Second)
-	defer cancel()
+	err := r.session.WriteToNextTag(
+		ctx, writeCtx, writeTimeout,
+		func(writeCtx context.Context, tag pn532.Tag) error {
+			// Create NDEF message with text record
+			ndefMessage := &pn532.NDEFMessage{
+				Records: []pn532.NDEFRecord{{
+					Type: pn532.NDEFTypeText,
+					Text: text,
+				}},
+			}
 
-	if err := tagOps.DetectTag(detectCtx); err != nil {
-		return nil, fmt.Errorf("failed to detect tag for writing: %w", err)
-	}
+			// Write NDEF message to tag using the provided write context
+			if err := tag.WriteNDEFWithContext(writeCtx, ndefMessage); err != nil {
+				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
+				return writeErr
+			}
 
-	// Create NDEF message with text record
-	textRecord := ndef.NewTextRecord(text, "en")
-	ndefMessage := ndef.NewMessageFromRecords(textRecord)
+			log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
 
-	// Write NDEF message
-	writeCtx, writeCancel := context.WithTimeout(r.writeCtx, 10*time.Second)
-	defer writeCancel()
+			// Create result token - we'll use the text we wrote as the primary identifier
+			// The UID and type will be populated by the next card detection event
+			resultToken = &tokens.Token{
+				Text:     text,
+				ScanTime: time.Now(),
+				Source:   r.deviceInfo.ConnectionString(),
+				Type:     tokens.TypeNTAG, // Assume NTAG since we're writing NDEF
+			}
 
-	if err := tagOps.WriteNDEF(writeCtx, ndefMessage); err != nil {
-		return nil, fmt.Errorf("failed to write NDEF to tag: %w", err)
-	}
-
-	log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
-
-	// Detect tag again to get the tag type and UID after writing
-	detectCtx, detectCancel := context.WithTimeout(r.writeCtx, 2*time.Second)
-	defer detectCancel()
-
-	detectedTag, err := r.device.DetectTagContext(detectCtx)
-	var uid, tagType string
+			return nil
+		})
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to detect tag after writing, using fallback values")
-		uid = hex.EncodeToString(tagOps.GetUID())
-		tagType = tokens.TypeUnknown
-	} else {
-		uid = detectedTag.UID
-		tagType = r.convertTagType(detectedTag.Type)
+		if writeErr != nil {
+			return nil, writeErr
+		}
+		return nil, fmt.Errorf("failed to write to tag: %w", err)
 	}
 
-	// Update tag state to prevent immediate re-detection as new tag
-	r.tagState.present = true
-	r.tagState.lastUID = uid
-	r.tagState.lastType = tagType
-
-	return &tokens.Token{
-		UID:      uid,
-		Type:     tagType,
-		Text:     text,
-		ScanTime: time.Now(),
-		Source:   r.deviceInfo.ConnectionString(),
-	}, nil
+	return resultToken, nil
 }
 
 func (r *Reader) CancelWrite() {
