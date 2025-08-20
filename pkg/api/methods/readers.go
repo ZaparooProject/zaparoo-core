@@ -119,3 +119,38 @@ func HandleReaderWriteCancel(env requests.RequestEnv) (any, error) {
 
 	return NoContent{}, nil
 }
+
+func HandleReaders(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received readers request")
+
+	readerIDs := env.State.ListReaders()
+	readerInfos := make([]models.ReaderInfo, 0, len(readerIDs))
+
+	for _, readerID := range readerIDs {
+		reader, ok := env.State.GetReader(readerID)
+		if !ok || reader == nil {
+			continue
+		}
+
+		capabilities := reader.Capabilities()
+		capabilityStrings := make([]string, len(capabilities))
+		for i, capability := range capabilities {
+			capabilityStrings[i] = string(capability)
+		}
+
+		readerInfo := models.ReaderInfo{
+			ID:           readerID,
+			Info:         reader.Info(),
+			Connected:    reader.Connected(),
+			Capabilities: capabilityStrings,
+		}
+
+		readerInfos = append(readerInfos, readerInfo)
+	}
+
+	response := models.ReadersResponse{
+		Readers: readerInfos,
+	}
+
+	return response, nil
+}
