@@ -91,6 +91,36 @@ func (pm *PictureManager) GetPictureForSystem(systemID string) (string, error) {
 	return pm.downloadPictureForSystem(systemID)
 }
 
+// FindPictureOnDisk checks if a picture is immediately available on disk without downloading
+func (pm *PictureManager) FindPictureOnDisk(systemID string) (string, bool) {
+	if systemID == "" {
+		return "", false
+	}
+
+	// Ensure cache directory exists
+	if err := pm.ensureCacheDir(); err != nil {
+		return "", false
+	}
+
+	// Try to find picture in order of preference
+	for _, format := range PictureFormats {
+		picturePath, err := pm.findPicture(systemID, format)
+		if err == nil && picturePath != "" {
+			// Verify file exists and is readable
+			if _, err := os.Stat(picturePath); err == nil {
+				log.Debug().
+					Str("system", systemID).
+					Str("format", format).
+					Str("path", picturePath).
+					Msg("found picture on disk for system")
+				return picturePath, true
+			}
+		}
+	}
+
+	return "", false
+}
+
 // findPicture looks for a picture file in the cache directory
 func (pm *PictureManager) findPicture(systemID, format string) (string, error) {
 	formatDir := filepath.Join(pm.cacheDir, format)

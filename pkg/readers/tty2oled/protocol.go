@@ -29,11 +29,14 @@ const (
 	CmdHandshake = "QWERTZ"
 
 	// Core display commands
-	CmdCore     = "CMDCOR"   // CMDCOR,<corename>,<transition>
-	CmdContrast = "CMDCON"   // CMDCON,<contrast>
-	CmdRotate   = "CMDROT"   // CMDROT,1
-	CmdOrgLogo  = "CMDSORG"  // CMDSORG - show original logo after rotation
-	CmdClear    = "CMDCLEAR" // Clear display (custom command)
+	CmdCore       = "CMDCOR"   // CMDCOR,<corename>,<transition>
+	CmdText       = "CMDTXT"   // CMDTXT,<font>,<color>,<bgcolor>,<x>,<y>,<text>
+	CmdClearShow  = "CMDCLS"   // CMDCLS - clear display and update
+	CmdClearNoUpd = "CMDCLSWU" // CMDCLSWU - clear display without update
+	CmdContrast   = "CMDCON"   // CMDCON,<contrast>
+	CmdRotate     = "CMDROT"   // CMDROT,1
+	CmdOrgLogo    = "CMDSORG"  // CMDSORG - show original logo after rotation
+	CmdClear      = "CMDCLEAR" // Clear display (custom command - deprecated)
 
 	// Screensaver commands
 	CmdScreensaver = "CMDSAVER" // CMDSAVER,<mode>,<interval>,<start>

@@ -66,6 +66,7 @@ type Reader struct {
 	mu                    sync.RWMutex
 	connected             bool
 	operationInProgress   bool
+	originalReadTimeout   time.Duration // Store original timeout for restoration
 }
 
 func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
@@ -138,7 +139,7 @@ func (r *Reader) operationWorker() {
 		case operation := <-r.operationQueue:
 			// Only process if we're still connected
 			if r.getState() == StateConnected {
-				log.Debug().
+				log.Info().
 					Str("device", r.path).
 					Str("system", func() string {
 						if operation.media != nil {
@@ -146,7 +147,7 @@ func (r *Reader) operationWorker() {
 						}
 						return "none"
 					}()).
-					Msg("Processing queued media operation")
+					Msg("tty2oled: PROCESSING OPERATION")
 
 				// Execute the media display operation
 				if err := r.displayMedia(operation.media); err != nil {
@@ -172,18 +173,30 @@ func (r *Reader) queueOperation(media *models.ActiveMedia) {
 		timestamp: time.Now(),
 	}
 
-	// Drain any pending operations to ensure only the latest is processed
-	select {
-	case <-r.operationQueue:
-		log.Debug().Str("device", r.path).Msg("Cancelled pending media operation for newer one")
-	default:
-		// No pending operation to cancel
+	// Drain ALL pending operations to ensure only the latest is processed
+	drained := 0
+	for {
+		select {
+		case <-r.operationQueue:
+			drained++
+		default:
+			// No more pending operations to cancel
+			goto queueNew
+		}
+	}
+
+queueNew:
+	if drained > 0 {
+		log.Debug().
+			Str("device", r.path).
+			Int("cancelled_operations", drained).
+			Msg("Cancelled pending media operations for newer one")
 	}
 
 	// Queue the new operation (non-blocking due to buffer)
 	select {
 	case r.operationQueue <- operation:
-		log.Debug().
+		log.Info().
 			Str("device", r.path).
 			Str("system", func() string {
 				if media != nil {
@@ -191,14 +204,24 @@ func (r *Reader) queueOperation(media *models.ActiveMedia) {
 				}
 				return "none"
 			}()).
-			Msg("Queued media operation")
+			Msg("tty2oled: OPERATION QUEUED")
 	default:
 		log.Warn().Str("device", r.path).Msg("Operation queue full, dropping oldest operation")
-		// Queue is full, drop oldest and add new one
-		select {
-		case <-r.operationQueue:
-		default:
+		// Queue is full, drain all and add new one
+		drainedFull := 0
+		for {
+			select {
+			case <-r.operationQueue:
+				drainedFull++
+			default:
+				goto addNew
+			}
 		}
+	addNew:
+		log.Debug().
+			Str("device", r.path).
+			Int("dropped_operations", drainedFull).
+			Msg("Dropped all operations due to queue overflow")
 		r.operationQueue <- operation
 	}
 }
@@ -227,8 +250,9 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 		return fmt.Errorf("failed to open serial port: %w", err)
 	}
 
-	// Set read timeout for detection
-	err = port.SetReadTimeout(500 * time.Millisecond)
+	// Set read timeout for detection and store as original timeout
+	r.originalReadTimeout = 500 * time.Millisecond
+	err = port.SetReadTimeout(r.originalReadTimeout)
 	if err != nil {
 		_ = port.Close()
 		r.setState(StateDisconnected)
@@ -286,8 +310,9 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 		// Don't fail connection for welcome screen error - it's not critical
 	}
 
-	// Start background health check
-	r.startHealthCheck()
+	// TEMPORARILY DISABLED: Start background health check
+	// r.startHealthCheck()
+	log.Debug().Str("device", r.path).Msg("tty2oled: health check temporarily disabled for testing")
 
 	return nil
 }
@@ -413,6 +438,17 @@ func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {
 	}
 
 	r.mu.Lock()
+	// Check if this is the same media we're already showing to prevent duplicate operations
+	if r.currentMedia != nil && media != nil &&
+		r.currentMedia.SystemID == media.SystemID &&
+		r.currentMedia.Name == media.Name {
+		r.mu.Unlock()
+		log.Debug().
+			Str("system", media.SystemID).
+			Str("name", media.Name).
+			Msg("tty2oled: skipping duplicate media change")
+		return nil
+	}
 	r.currentMedia = media
 	r.mu.Unlock()
 
@@ -428,8 +464,8 @@ func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {
 		Str("name", media.Name).
 		Msg("tty2oled: queueing display update for media change")
 
-	// Queue the media operation instead of using a goroutine
-	// This ensures operations are processed sequentially and newer operations cancel older ones
+	// Queue the media operation - this will drain any pending clear operations
+	// The queue draining ensures we skip unnecessary clears when immediately followed by new media
 	r.queueOperation(media)
 
 	return nil
@@ -524,7 +560,7 @@ func (r *Reader) sendCommand(command string) error {
 		return fmt.Errorf("failed to write to port: %w", err)
 	}
 
-	log.Debug().Str("command", command).Msg("tty2oled: sent command")
+	log.Info().Str("command", command).Str("device", r.path).Msg("tty2oled: COMMAND SENT")
 
 	// Bash script timing: sleep ${WAITSECS} (0.2 seconds)
 	time.Sleep(WaitDuration)
@@ -607,10 +643,8 @@ func (*Reader) isDisconnectionError(err error) bool {
 }
 
 func (r *Reader) clearDisplay() error {
-	// Use standard tty2oled protocol to display blank screen
-	// CMDCOR with "BLANK" corename and no transition - just like bash script
-	command := CmdCore + ",BLANK," + TransitionNone
-	return r.sendCommand(command)
+	// Use CMDCLS to clear display without expecting picture data
+	return r.sendCommand(CmdClearShow)
 }
 
 func (r *Reader) displayMedia(media *models.ActiveMedia) error {
@@ -618,37 +652,155 @@ func (r *Reader) displayMedia(media *models.ActiveMedia) error {
 		return r.clearDisplay()
 	}
 
-	// Try to find picture for the system
+	// Mark operation as in progress for the ENTIRE sequence to prevent health check interference
+	r.mu.Lock()
+	r.operationInProgress = true
+	r.mu.Unlock()
+
+	defer func() {
+		r.mu.Lock()
+		r.operationInProgress = false
+		r.mu.Unlock()
+	}()
+
+	// Try to get picture for the system
 	picturePath, err := r.pictureManager.GetPictureForSystem(media.SystemID)
 	if err != nil {
-		log.Warn().
-			Err(err).
+		log.Info().
 			Str("system", media.SystemID).
-			Msg("failed to get picture for system, using system name fallback")
+			Msg("picture not available, displaying text only")
 
-		// Fallback to displaying system name without picture
-		return r.sendCommand(media.SystemID)
+		// Clear display first, then display system name as text using CMDTXT command
+		if err := r.sendCommandRaw(CmdClearShow); err != nil {
+			return fmt.Errorf("failed to clear display: %w", err)
+		}
+
+		// Format: CMDTXT,<font>,<color>,<bgcolor>,<x>,<y>,<text>
+		// Use reasonable defaults: font=0, color=15(white), bgcolor=0(black), x=0, y=16, text=systemID
+		textCommand := fmt.Sprintf("%s,0,15,0,0,16,%s", CmdText, media.SystemID)
+		if err := r.sendCommandRaw(textCommand); err != nil {
+			return fmt.Errorf("failed to send text command: %w", err)
+		}
+
+		return nil
 	}
 
 	// Use the base filename (without extension) as corename
 	baseName := filepath.Base(picturePath)
 	coreName := strings.TrimSuffix(baseName, filepath.Ext(baseName))
 
-	// Exactly replicate bash script senddata() function:
+	// Exactly replicate bash script senddata() function (NO ACK waiting):
 	// echo "CMDCOR,${1},${TRANSITION}" > ${TTYDEV}
 	// sleep ${WAITSECS}
 	// tail -n +4 "${picfnam}" | xxd -r -p > ${TTYDEV}
 
 	command := CmdCore + "," + coreName + "," + TransitionSlide
 
-	if err := r.sendCommand(command); err != nil {
+	// Send CMDCOR command exactly like bash script (without individual operationInProgress management)
+	if err := r.sendCommandRaw(command); err != nil {
 		return fmt.Errorf("failed to send CMDCOR command: %w", err)
 	}
 
-	// Send picture data exactly like bash script
-	if err := r.sendPictureData(picturePath); err != nil {
+	// Send picture data exactly like bash script (without individual operationInProgress management)
+	if err := r.sendPictureDataRaw(picturePath); err != nil {
 		return fmt.Errorf("failed to send picture data: %w", err)
 	}
+
+	return nil
+}
+
+// sendCommandRaw sends a command without managing operationInProgress (for use within larger operations)
+func (r *Reader) sendCommandRaw(command string) error {
+	if r.port == nil {
+		return errors.New("port not open")
+	}
+
+	// Send command exactly like bash script: echo "COMMAND" > ${TTYDEV}; sleep ${WAITSECS}
+	data := command + CommandTerminator
+	_, err := r.port.Write([]byte(data))
+	if err != nil {
+		// Check for disconnection errors
+		if r.isDisconnectionError(err) {
+			r.setState(StateDisconnected)
+			r.mu.Lock()
+			r.connected = false
+			r.mu.Unlock()
+			log.Info().Str("device", r.path).Err(err).Msg("tty2oled device disconnected - write error")
+		}
+		return fmt.Errorf("failed to write to port: %w", err)
+	}
+
+	log.Info().Str("command", command).Str("device", r.path).Msg("tty2oled: COMMAND SENT")
+
+	// Bash script timing: sleep ${WAITSECS} (0.2 seconds)
+	time.Sleep(WaitDuration)
+
+	return nil
+}
+
+// sendPictureDataRaw sends picture data without managing operationInProgress (for use within larger operations)
+func (r *Reader) sendPictureDataRaw(picturePath string) error {
+	if r.port == nil {
+		return errors.New("port not open")
+	}
+
+	// Read the picture file - exactly like bash script: tail -n +4 "$picfnam" | xxd -r -p
+	data, err := r.readPictureFile(picturePath)
+	if err != nil {
+		return fmt.Errorf("failed to read picture file: %w", err)
+	}
+
+	// Convert hex data to binary - exactly like bash script: xxd -r -p
+	binData, err := r.hexToBinary(data)
+	if err != nil {
+		return fmt.Errorf("failed to convert hex to binary: %w", err)
+	}
+
+	// Validate data size against Arduino expectations
+	expectedSizes := []int{2048, 8192} // XBM (1bpp) and GSC (4bpp) formats
+	isValidSize := false
+	for _, size := range expectedSizes {
+		if len(binData) == size {
+			isValidSize = true
+			break
+		}
+	}
+	if !isValidSize {
+		return fmt.Errorf("invalid picture data size: got %d bytes, expected 2048 (XBM) or 8192 (GSC)", len(binData))
+	}
+
+	// Send the binary data directly - exactly like bash script: > ${TTYDEV}
+	bytesWritten, err := r.port.Write(binData)
+	if err != nil {
+		// Check for disconnection errors during picture data transmission
+		if r.isDisconnectionError(err) {
+			r.setState(StateDisconnected)
+			r.mu.Lock()
+			r.connected = false
+			r.mu.Unlock()
+			log.Info().Str("device", r.path).Err(err).
+				Msg("tty2oled device disconnected during picture data transmission")
+		}
+		return fmt.Errorf("failed to write picture data to port: %w", err)
+	}
+
+	if bytesWritten != len(binData) {
+		return fmt.Errorf("incomplete picture data write: wrote %d of %d bytes", bytesWritten, len(binData))
+	}
+
+	log.Info().
+		Int("bytes_written", bytesWritten).
+		Str("format", func() string {
+			if len(binData) == 2048 {
+				return "XBM"
+			}
+			return "GSC"
+		}()).
+		Str("device", r.path).
+		Msg("tty2oled: PICTURE DATA SENT")
+
+	// Add sleep after picture data like bash script timing
+	time.Sleep(WaitDuration)
 
 	return nil
 }
@@ -761,53 +913,6 @@ func (*Reader) detectDevice(portName string) bool {
 	}
 }
 
-// sendPictureData reads a picture file and sends the binary data to the tty2oled device
-func (r *Reader) sendPictureData(picturePath string) error {
-	if r.port == nil {
-		return errors.New("port not open")
-	}
-
-	// Mark operation as in progress to prevent health check interference
-	r.mu.Lock()
-	r.operationInProgress = true
-	r.mu.Unlock()
-
-	defer func() {
-		r.mu.Lock()
-		r.operationInProgress = false
-		r.mu.Unlock()
-	}()
-
-	// Read the picture file - exactly like bash script: tail -n +4 "$picfnam" | xxd -r -p
-	data, err := r.readPictureFile(picturePath)
-	if err != nil {
-		return fmt.Errorf("failed to read picture file: %w", err)
-	}
-
-	// Convert hex data to binary - exactly like bash script: xxd -r -p
-	binData, err := r.hexToBinary(data)
-	if err != nil {
-		return fmt.Errorf("failed to convert hex to binary: %w", err)
-	}
-
-	// Send the binary data directly - exactly like bash script: > ${TTYDEV}
-	bytesWritten, err := r.port.Write(binData)
-	if err != nil {
-		return fmt.Errorf("failed to write picture data to port: %w", err)
-	}
-
-	if bytesWritten != len(binData) {
-		return fmt.Errorf("incomplete picture data write: wrote %d of %d bytes", bytesWritten, len(binData))
-	}
-
-	log.Debug().
-		Int("bytes_written", bytesWritten).
-		Msg("tty2oled: picture data sent")
-
-	// That's it! Bash script doesn't wait or do anything after sending the data
-	return nil
-}
-
 // readPictureFile reads a picture file and extracts the hex data (skipping first 3 lines)
 func (r *Reader) readPictureFile(filePath string) ([]string, error) {
 	content, err := os.ReadFile(filePath) //nolint:gosec // Picture file path is controlled by picture manager
@@ -894,92 +999,4 @@ func (*Reader) hexToBinary(hexValues []string) ([]byte, error) {
 		Msg("tty2oled: converted hex data to binary")
 
 	return result, nil
-}
-
-// startHealthCheck starts a background goroutine that performs health checks every 5 seconds
-// but only when no other operations are in progress
-func (r *Reader) startHealthCheck() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		log.Debug().Str("device", r.path).Msg("tty2oled: health check started")
-
-		for {
-			select {
-			case <-r.healthCheckCtx.Done():
-				log.Debug().Str("device", r.path).Msg("tty2oled: health check stopped")
-				return
-			case <-ticker.C:
-				r.performBackgroundHealthCheck()
-			}
-		}
-	}()
-}
-
-// performBackgroundHealthCheck checks device health only if no operations are in progress
-func (r *Reader) performBackgroundHealthCheck() {
-	r.mu.Lock()
-
-	// Skip health check if not connected or if any operation is in progress
-	if r.getState() != StateConnected || r.port == nil || r.operationInProgress {
-		r.mu.Unlock()
-		return
-	}
-
-	// Perform the health check while holding the lock to prevent interference
-	if !r.doHealthCheck() {
-		log.Info().Str("device", r.path).Msg("tty2oled device disconnected - background health check failed")
-		r.setState(StateDisconnected)
-		r.connected = false
-	}
-
-	r.mu.Unlock()
-}
-
-// doHealthCheck performs the actual hardware health check
-// NOTE: This method should only be called with the mutex held
-func (r *Reader) doHealthCheck() bool {
-	if r.port == nil {
-		return false
-	}
-
-	// Set a short timeout for health check
-	if err := r.port.SetReadTimeout(1 * time.Second); err != nil {
-		log.Debug().Err(err).Msg("tty2oled: failed to set health check timeout")
-		return false
-	}
-
-	// Send hardware info command - safe, read-only operation
-	_, err := r.port.Write([]byte(CmdHardwareInfo + CommandTerminator))
-	if err != nil {
-		if r.isDisconnectionError(err) {
-			log.Debug().Err(err).Msg("tty2oled: health check write failed - device disconnected")
-		} else {
-			log.Debug().Err(err).Msg("tty2oled: health check write failed")
-		}
-		return false
-	}
-
-	// Try to read response - Arduino should send hardware info like "HWESP32DE;"
-	buffer := make([]byte, 64)
-	n, err := r.port.Read(buffer)
-	if err != nil {
-		log.Debug().Err(err).Msg("tty2oled: health check read failed")
-		return false
-	}
-
-	if n > 0 {
-		response := strings.TrimSpace(string(buffer[:n]))
-		// Check for valid hardware response patterns
-		if (strings.HasPrefix(response, "HW") && strings.HasSuffix(response, ";")) ||
-			strings.Contains(response, "ttyack") {
-			log.Debug().Str("response", response).Msg("tty2oled: background health check passed")
-			return true
-		}
-		log.Debug().Str("response", response).Msg("tty2oled: health check got unexpected response")
-	}
-
-	log.Debug().Msg("tty2oled: background health check failed - no valid response")
-	return false
 }
