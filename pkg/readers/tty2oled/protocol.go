@@ -51,6 +51,7 @@ const (
 // Protocol parameters
 const (
 	// Transition effects
+	TransitionAuto  = "-1" // Auto transition (shell script default)
 	TransitionNone  = "0"
 	TransitionSlide = "1"
 	TransitionFade  = "2"
@@ -60,7 +61,7 @@ const (
 	ContrastMax     = 255
 	ContrastDefault = 128
 
-	// Screensaver modes
+	// Screensaver modes (legacy - for backward compatibility)
 	ScreensaverOff   = "0"
 	ScreensaverClock = "1"
 	ScreensaverBlank = "2"
@@ -68,9 +69,35 @@ const (
 
 	// Communication settings
 	CommandTerminator = "\n"
-	ReadTimeout       = 1 * time.Second // For device detection
-	WriteTimeout      = 100 * time.Millisecond
 	WaitDuration      = 200 * time.Millisecond // Shell script WAITSECS=0.2
+)
+
+// Configuration constants from MiSTer shell script
+const (
+	// Rotation settings
+	DefaultRotation = true // false = normal, true = 180° flipped
+
+	// Enhanced transitions
+	DefaultTransition = TransitionFade
+
+	// Screensaver mode flags (bitwise OR combinations)
+	ScreensaverModeTTY2OLED = 1  // Show tty2oled logo
+	ScreensaverModeMister   = 2  // Show MiSTer logo
+	ScreensaverModeCore     = 4  // Show core name
+	ScreensaverModeTime     = 8  // Show time
+	ScreensaverModeDate     = 16 // Show date
+	ScreensaverModeStars    = 32 // Starfield animation
+	ScreensaverModeToast    = 64 // Flying toaster animation
+
+	// Screensaver timing (from shell script defaults)
+	DefaultScreensaverStart    = 120 // Start after 120 seconds
+	DefaultScreensaverInterval = 10  // 10 second intervals
+	DefaultScreensaverMode     = ScreensaverModeTTY2OLED | ScreensaverModeMister |
+		ScreensaverModeCore | ScreensaverModeTime |
+		ScreensaverModeDate | ScreensaverModeStars | ScreensaverModeToast
+
+	// Additional timing delays
+	SleepModeDelay = 2 * time.Second // SLEEPMODEDELAY="2"
 )
 
 // Picture format priorities (in order of preference)

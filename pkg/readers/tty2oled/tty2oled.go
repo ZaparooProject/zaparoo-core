@@ -518,9 +518,25 @@ func (r *Reader) initializeDeviceOnPort(port serial.Port) error {
 		return fmt.Errorf("failed to send time command: %w", err)
 	}
 
+	// sendrotation: if rotation is enabled, send CMDROT,1 then CMDSORG
+	if DefaultRotation {
+		if err := r.sendCommandOnPort(port, fmt.Sprintf("%s,1", CmdRotate)); err != nil {
+			return fmt.Errorf("failed to send rotation command: %w", err)
+		}
+
+		// Send CMDSORG after rotation like bash script
+		if err := r.sendCommandOnPort(port, CmdOrgLogo); err != nil {
+			return fmt.Errorf("failed to send org logo command after rotation: %w", err)
+		}
+
+		// Bash script sleeps 4 seconds after CMDSORG
+		time.Sleep(4 * time.Second)
+	}
+
 	// sendscreensaver: echo "CMDSAVER,mode,interval,start" > ${TTYDEV}; sleep ${WAITSECS}
-	// TODO: Implement proper screensaver mode calculation like bash script
-	screensaverCmd := fmt.Sprintf("%s,0,0,0", CmdScreensaver)
+	// Use proper screensaver configuration like bash script
+	screensaverCmd := fmt.Sprintf("%s,%d,%d,%d", CmdScreensaver,
+		DefaultScreensaverMode, DefaultScreensaverInterval, DefaultScreensaverStart)
 	if err := r.sendCommandOnPort(port, screensaverCmd); err != nil {
 		return fmt.Errorf("failed to send screensaver command: %w", err)
 	}
@@ -694,7 +710,7 @@ func (r *Reader) displayMedia(media *models.ActiveMedia) error {
 	// sleep ${WAITSECS}
 	// tail -n +4 "${picfnam}" | xxd -r -p > ${TTYDEV}
 
-	command := CmdCore + "," + coreName + "," + TransitionSlide
+	command := CmdCore + "," + coreName + "," + DefaultTransition
 
 	// Send CMDCOR command exactly like bash script (without individual operationInProgress management)
 	if err := r.sendCommandRaw(command); err != nil {
