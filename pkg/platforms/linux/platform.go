@@ -37,10 +37,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
@@ -56,11 +56,12 @@ func (*Platform) ID() string {
 	return platforms.PlatformIDLinux
 }
 
-func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return []readers.Reader{
+		tty2oled.NewReader(cfg, p),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
-		libnfc.NewACR122Reader(cfg),
+		// libnfc.NewACR122Reader(cfg),
 		pn532.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 	}

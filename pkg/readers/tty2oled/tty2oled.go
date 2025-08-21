@@ -42,35 +42,165 @@ import (
 	"go.bug.st/serial"
 )
 
+// MediaOperation represents a queued display operation
+type MediaOperation struct {
+	media     *models.ActiveMedia
+	timestamp time.Time
+}
+
 // Reader represents a tty2oled display reader
 type Reader struct {
-	port                serial.Port
-	platform            platforms.Platform
-	healthCheckCtx      context.Context
-	cfg                 *config.Instance
-	currentMedia        *models.ActiveMedia
-	pictureManager      *PictureManager
-	healthCheckCancel   context.CancelFunc
-	deviceConfig        config.ReadersConnect
-	path                string
-	mu                  sync.RWMutex
-	connected           bool
-	operationInProgress bool
+	port                  serial.Port
+	platform              platforms.Platform
+	healthCheckCtx        context.Context
+	operationWorkerCtx    context.Context
+	stateManager          *StateManager
+	pictureManager        *PictureManager
+	healthCheckCancel     context.CancelFunc
+	currentMedia          *models.ActiveMedia
+	operationQueue        chan MediaOperation
+	cfg                   *config.Instance
+	operationWorkerCancel context.CancelFunc
+	deviceConfig          config.ReadersConnect
+	path                  string
+	mu                    sync.RWMutex
+	connected             bool
+	operationInProgress   bool
 }
 
 func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Reader{
-		cfg:               cfg,
-		platform:          pl,
-		pictureManager:    NewPictureManager(cfg, pl),
-		healthCheckCtx:    ctx,
-		healthCheckCancel: cancel,
+	operationCtx, operationCancel := context.WithCancel(context.Background())
+
+	r := &Reader{
+		cfg:                   cfg,
+		platform:              pl,
+		pictureManager:        NewPictureManager(cfg, pl),
+		healthCheckCtx:        ctx,
+		healthCheckCancel:     cancel,
+		stateManager:          NewStateManager(),
+		operationQueue:        make(chan MediaOperation, 10), // Buffer up to 10 operations
+		operationWorkerCtx:    operationCtx,
+		operationWorkerCancel: operationCancel,
 	}
+
+	// Start the operation worker goroutine
+	go r.operationWorker()
+
+	return r
 }
 
 func (*Reader) IDs() []string {
 	return []string{"tty2oled"}
+}
+
+// getState returns the current connection state
+func (r *Reader) getState() ConnectionState {
+	return r.stateManager.GetState()
+}
+
+// setState atomically sets the connection state if the transition is valid
+func (r *Reader) setState(newState ConnectionState) bool {
+	if !r.stateManager.SetState(newState) {
+		log.Warn().
+			Str("from", r.stateManager.GetState().String()).
+			Str("to", newState.String()).
+			Msg("Invalid state transition attempted")
+		return false
+	}
+
+	log.Debug().
+		Str("state", newState.String()).
+		Str("path", r.path).
+		Msg("TTY2OLED state changed")
+	return true
+}
+
+// validateStateForOperation checks if the current state allows the operation
+func (r *Reader) validateStateForOperation(operation string) error {
+	state := r.getState()
+	if state != StateConnected {
+		return fmt.Errorf("operation '%s' not allowed in state %s", operation, state.String())
+	}
+	return nil
+}
+
+// operationWorker processes media operations sequentially from the queue
+func (r *Reader) operationWorker() {
+	log.Debug().Str("device", r.path).Msg("TTY2OLED operation worker started")
+	defer log.Debug().Str("device", r.path).Msg("TTY2OLED operation worker stopped")
+
+	for {
+		select {
+		case <-r.operationWorkerCtx.Done():
+			return
+
+		case operation := <-r.operationQueue:
+			// Only process if we're still connected
+			if r.getState() == StateConnected {
+				log.Debug().
+					Str("device", r.path).
+					Str("system", func() string {
+						if operation.media != nil {
+							return operation.media.SystemID
+						}
+						return "none"
+					}()).
+					Msg("Processing queued media operation")
+
+				// Execute the media display operation
+				if err := r.displayMedia(operation.media); err != nil {
+					log.Error().
+						Err(err).
+						Str("device", r.path).
+						Msg("Failed to process queued media operation")
+				}
+			} else {
+				log.Debug().
+					Str("device", r.path).
+					Str("state", r.getState().String()).
+					Msg("Dropping queued operation - device not connected")
+			}
+		}
+	}
+}
+
+// queueOperation adds a media operation to the queue, canceling any pending operations
+func (r *Reader) queueOperation(media *models.ActiveMedia) {
+	operation := MediaOperation{
+		media:     media,
+		timestamp: time.Now(),
+	}
+
+	// Drain any pending operations to ensure only the latest is processed
+	select {
+	case <-r.operationQueue:
+		log.Debug().Str("device", r.path).Msg("Cancelled pending media operation for newer one")
+	default:
+		// No pending operation to cancel
+	}
+
+	// Queue the new operation (non-blocking due to buffer)
+	select {
+	case r.operationQueue <- operation:
+		log.Debug().
+			Str("device", r.path).
+			Str("system", func() string {
+				if media != nil {
+					return media.SystemID
+				}
+				return "none"
+			}()).
+			Msg("Queued media operation")
+	default:
+		log.Warn().Str("device", r.path).Msg("Operation queue full, dropping oldest operation")
+		// Queue is full, drop oldest and add new one
+		select {
+		case <-r.operationQueue:
+		default:
+		}
+		r.operationQueue <- operation
+	}
 }
 
 func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error {
@@ -80,6 +210,11 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 	r.path = device.Path
 	r.mu.Unlock()
 
+	// Transition to connecting state
+	if !r.setState(StateConnecting) {
+		return fmt.Errorf("cannot start connection from current state: %s", r.getState().String())
+	}
+
 	// Open serial port with proper configuration
 	port, err := serial.Open(r.path, &serial.Mode{
 		BaudRate: 115200,
@@ -88,6 +223,7 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 		StopBits: serial.OneStopBit,
 	})
 	if err != nil {
+		r.setState(StateDisconnected) // Revert to disconnected on failure
 		return fmt.Errorf("failed to open serial port: %w", err)
 	}
 
@@ -95,28 +231,60 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 	err = port.SetReadTimeout(500 * time.Millisecond)
 	if err != nil {
 		_ = port.Close()
+		r.setState(StateDisconnected)
 		return fmt.Errorf("failed to set read timeout: %w", err)
 	}
 
-	// Set port without holding mutex during handshake
-	r.mu.Lock()
-	r.port = port
-	r.mu.Unlock()
+	// Transition to handshaking state
+	if !r.setState(StateHandshaking) {
+		_ = port.Close()
+		return errors.New("invalid state transition to handshaking")
+	}
 
-	if err := r.handshake(); err != nil {
-		r.mu.Lock()
-		_ = r.port.Close()
-		r.port = nil
-		r.mu.Unlock()
+	// Perform handshake BEFORE setting r.port to avoid race conditions
+	// Keep port in local variable during handshake
+	if err := r.handshakeOnPort(port); err != nil {
+		_ = port.Close()
+		r.setState(StateDisconnected)
 		return err
 	}
 
-	// Mark as connected after successful handshake
+	// Transition to initializing state
+	if !r.setState(StateInitializing) {
+		_ = port.Close()
+		return errors.New("invalid state transition to initializing")
+	}
+
+	// Initialize the device
+	if err := r.initializeDeviceOnPort(port); err != nil {
+		_ = port.Close()
+		r.setState(StateDisconnected)
+		return fmt.Errorf("device initialization failed: %w", err)
+	}
+
+	// Only now set r.port when device is ready and mark as connected
 	r.mu.Lock()
+	r.port = port
 	r.connected = true
 	r.mu.Unlock()
 
+	// Transition to connected state
+	if !r.setState(StateConnected) {
+		_ = port.Close()
+		r.mu.Lock()
+		r.port = nil
+		r.connected = false
+		r.mu.Unlock()
+		return errors.New("invalid state transition to connected")
+	}
+
 	log.Info().Str("device", r.path).Msg("tty2oled display connected")
+
+	// Display welcome screen after successful connection
+	if err := r.showWelcomeScreen(); err != nil {
+		log.Warn().Err(err).Str("device", r.path).Msg("failed to show welcome screen")
+		// Don't fail connection for welcome screen error - it's not critical
+	}
 
 	// Start background health check
 	r.startHealthCheck()
@@ -125,8 +293,16 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 }
 
 func (r *Reader) Close() error {
+	// Transition to disconnected state
+	r.setState(StateDisconnected)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Stop operation worker goroutine
+	if r.operationWorkerCancel != nil {
+		r.operationWorkerCancel()
+	}
 
 	// Stop health check goroutine
 	if r.healthCheckCancel != nil {
@@ -202,12 +378,9 @@ func (r *Reader) Device() string {
 }
 
 func (r *Reader) Connected() bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// Just return cached connection status - no hardware probing
-	// Connection status is updated in sendCommand() when write errors occur
-	return r.connected && r.port != nil
+	// Use state manager to determine connection status
+	// Device is considered connected only when in the StateConnected state
+	return r.getState() == StateConnected
 }
 
 func (r *Reader) Info() string {
@@ -234,106 +407,85 @@ func (*Reader) Capabilities() []readers.Capability {
 }
 
 func (r *Reader) OnMediaChange(media *models.ActiveMedia) error {
-	r.mu.Lock()
-
-	if !r.connected {
-		r.mu.Unlock()
-		return nil // Device not connected, nothing to do
+	// Validate that we're in the correct state for media operations
+	if err := r.validateStateForOperation("media change"); err != nil {
+		return err // Return the validation error
 	}
 
+	r.mu.Lock()
 	r.currentMedia = media
+	r.mu.Unlock()
 
 	if media == nil {
 		log.Debug().Msg("tty2oled: clearing display (no active media)")
-		err := r.clearDisplay()
-		r.mu.Unlock()
-		return err
+		// Queue the clear operation
+		r.queueOperation(nil)
+		return nil
 	}
 
 	log.Debug().
 		Str("system", media.SystemID).
 		Str("name", media.Name).
-		Msg("tty2oled: updating display for media change")
+		Msg("tty2oled: queueing display update for media change")
 
-	// Copy media to avoid race conditions in goroutine
-	mediaCopy := *media
-	r.mu.Unlock()
-
-	// Move picture download to background to avoid blocking readers
-	go func() {
-		if err := r.displayMedia(&mediaCopy); err != nil {
-			log.Warn().
-				Err(err).
-				Str("system", mediaCopy.SystemID).
-				Msg("tty2oled: failed to update display in background")
-		}
-	}()
+	// Queue the media operation instead of using a goroutine
+	// This ensures operations are processed sequentially and newer operations cancel older ones
+	r.queueOperation(media)
 
 	return nil
 }
 
-func (r *Reader) handshake() error {
-	if r.port == nil {
-		return errors.New("port not open")
+// handshakeOnPort performs handshake on a specific port (used during Open to avoid race conditions)
+func (r *Reader) handshakeOnPort(port serial.Port) error {
+	if port == nil {
+		return errors.New("port not provided")
 	}
 
 	// Add timeout for entire handshake process to prevent hangs during autodetection
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	return r.handshakeWithContext(ctx)
+	return r.handshakeWithContextOnPort(ctx, port)
 }
 
-func (r *Reader) handshakeWithContext(ctx context.Context) error {
+// handshakeWithContextOnPort performs handshake on a specific port with context
+func (r *Reader) handshakeWithContextOnPort(_ context.Context, port serial.Port) error {
 	// Send QWERTZ as first transmission - exactly like bash script
 	// The bash script does: echo "QWERTZ" > $TTYDEV; sleep $WAITSECS
 	// Arduino code shows QWERTZ is one-way: just clears buffer, no response expected
-	if err := r.sendCommand(CmdHandshake); err != nil {
+	if err := r.sendCommandOnPort(port, CmdHandshake); err != nil {
 		return fmt.Errorf("failed to send handshake: %w", err)
 	}
 
 	// Initialize device with same sequence as bash script
-	if err := r.initializeDevice(); err != nil {
+	if err := r.initializeDeviceOnPort(port); err != nil {
 		return fmt.Errorf("failed to initialize device: %w", err)
 	}
 
 	return nil
 }
 
-// initializeDevice sends the initialization commands that the bash script sends after handshake
-func (r *Reader) initializeDevice() error {
+// initializeDeviceOnPort sends the initialization commands on a specific port
+func (r *Reader) initializeDeviceOnPort(port serial.Port) error {
 	// Bash script sequence after QWERTZ: sendcontrast, sendrotation, sendtime, sendscreensaver
 
 	// sendcontrast: echo "CMDCON,${CONTRAST}" > ${TTYDEV}; sleep ${WAITSECS}
 	contrastCmd := fmt.Sprintf("%s,%d", CmdContrast, ContrastDefault)
-	if err := r.sendCommand(contrastCmd); err != nil {
+	if err := r.sendCommandOnPort(port, contrastCmd); err != nil {
 		return fmt.Errorf("failed to send contrast command: %w", err)
 	}
-
-	// sendrotation: if rotation enabled, echo "CMDROT,1" > ${TTYDEV}; sleep ${WAITSECS}
-	// then echo "CMDSORG" > ${TTYDEV}; sleep 4
-	// TODO: Add rotation support based on config - for now skip rotation
-	// When implemented:
-	// rotateCmd := fmt.Sprintf("%s,1", CmdRotate)
-	// if err := r.sendCommand(rotateCmd); err != nil {
-	//     return fmt.Errorf("failed to send rotation command: %w", err)
-	// }
-	// if err := r.sendCommand(CmdOrgLogo); err != nil {
-	//     return fmt.Errorf("failed to send original logo command: %w", err)
-	// }
-	// time.Sleep(4 * time.Second) // bash script uses sleep 4 after CMDSORG
 
 	// sendtime: echo "CMDSETTIME,${localtime}" > ${TTYDEV}; sleep ${WAITSECS}
 	timestamp := time.Now().Unix()
 	timeCmd := fmt.Sprintf("%s,%d", CmdSetTime, timestamp)
-	if err := r.sendCommand(timeCmd); err != nil {
+	if err := r.sendCommandOnPort(port, timeCmd); err != nil {
 		return fmt.Errorf("failed to send time command: %w", err)
 	}
 
 	// sendscreensaver: echo "CMDSAVER,mode,interval,start" > ${TTYDEV}; sleep ${WAITSECS}
 	// TODO: Implement proper screensaver mode calculation like bash script
 	screensaverCmd := fmt.Sprintf("%s,0,0,0", CmdScreensaver)
-	if err := r.sendCommand(screensaverCmd); err != nil {
+	if err := r.sendCommandOnPort(port, screensaverCmd); err != nil {
 		return fmt.Errorf("failed to send screensaver command: %w", err)
 	}
 
@@ -362,6 +514,8 @@ func (r *Reader) sendCommand(command string) error {
 	if err != nil {
 		// Check for disconnection errors
 		if r.isDisconnectionError(err) {
+			// Update state manager to reflect disconnection
+			r.setState(StateDisconnected)
 			r.mu.Lock()
 			r.connected = false
 			r.mu.Unlock()
@@ -378,6 +532,41 @@ func (r *Reader) sendCommand(command string) error {
 	// Optional: Arduino sends "ttyack;" after processing commands
 	// For now, we don't wait for acknowledgment to maintain compatibility with shell script
 	// TODO: Add config option to enable acknowledgment checking for better reliability
+
+	return nil
+}
+
+// showWelcomeScreen displays the welcome/startup screen on the device
+func (r *Reader) showWelcomeScreen() error {
+	// Send CMDSORG command to display welcome screen exactly like bash script
+	if err := r.sendCommand(CmdOrgLogo); err != nil {
+		return fmt.Errorf("failed to send welcome screen command: %w", err)
+	}
+
+	// Bash script sleeps for 4 seconds after sending CMDSORG
+	time.Sleep(4 * time.Second)
+
+	log.Debug().Str("device", r.path).Msg("welcome screen displayed")
+	return nil
+}
+
+// sendCommandOnPort sends a command to a specific port (used during handshake)
+func (*Reader) sendCommandOnPort(port serial.Port, command string) error {
+	if port == nil {
+		return errors.New("port not provided")
+	}
+
+	// Send command exactly like bash script: echo "COMMAND" > ${TTYDEV}; sleep ${WAITSECS}
+	data := command + CommandTerminator
+	_, err := port.Write([]byte(data))
+	if err != nil {
+		return fmt.Errorf("failed to write to port: %w", err)
+	}
+
+	log.Debug().Str("command", command).Msg("tty2oled: sent command on port")
+
+	// Bash script timing: sleep ${WAITSECS} (0.2 seconds)
+	time.Sleep(WaitDuration)
 
 	return nil
 }
@@ -486,7 +675,11 @@ func (*Reader) detectDevice(portName string) bool {
 		})
 		if err != nil {
 			log.Debug().Err(err).Str("port", portName).Msg("failed to open serial port for tty2oled detection")
-			resultCh <- result{false}
+			select {
+			case resultCh <- result{false}:
+			case <-ctx.Done():
+				return
+			}
 			return
 		}
 		defer func() {
@@ -499,7 +692,11 @@ func (*Reader) detectDevice(portName string) bool {
 		err = port.SetReadTimeout(500 * time.Millisecond)
 		if err != nil {
 			log.Debug().Err(err).Str("port", portName).Msg("failed to set read timeout for detection")
-			resultCh <- result{false}
+			select {
+			case resultCh <- result{false}:
+			case <-ctx.Done():
+				return
+			}
 			return
 		}
 
@@ -507,7 +704,11 @@ func (*Reader) detectDevice(portName string) bool {
 		_, err = port.Write([]byte(CmdHardwareInfo + CommandTerminator))
 		if err != nil {
 			log.Debug().Err(err).Str("port", portName).Msg("failed to send probe command")
-			resultCh <- result{false}
+			select {
+			case resultCh <- result{false}:
+			case <-ctx.Done():
+				return
+			}
 			return
 		}
 
@@ -516,7 +717,11 @@ func (*Reader) detectDevice(portName string) bool {
 		n, err := port.Read(buffer)
 		if err != nil {
 			log.Debug().Err(err).Str("port", portName).Msg("no response from device")
-			resultCh <- result{false}
+			select {
+			case resultCh <- result{false}:
+			case <-ctx.Done():
+				return
+			}
 			return
 		}
 
@@ -530,13 +735,21 @@ func (*Reader) detectDevice(portName string) bool {
 				strings.Contains(response, "ttyack") || // Arduino sends ttyack; after commands
 				strings.Contains(response, "ttyrdy") { // Arduino sends ttyrdy; on startup
 				log.Debug().Str("port", portName).Str("response", response).Msg("detected tty2oled device")
-				resultCh <- result{true}
+				select {
+				case resultCh <- result{true}:
+				case <-ctx.Done():
+					return
+				}
 				return
 			}
 		}
 
 		log.Debug().Str("port", portName).Msg("no valid tty2oled response received")
-		resultCh <- result{false}
+		select {
+		case resultCh <- result{false}:
+		case <-ctx.Done():
+			return
+		}
 	}()
 
 	select {
@@ -597,7 +810,7 @@ func (r *Reader) sendPictureData(picturePath string) error {
 
 // readPictureFile reads a picture file and extracts the hex data (skipping first 3 lines)
 func (r *Reader) readPictureFile(filePath string) ([]string, error) {
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(filePath) //nolint:gosec // Picture file path is controlled by picture manager
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -709,7 +922,7 @@ func (r *Reader) performBackgroundHealthCheck() {
 	r.mu.Lock()
 
 	// Skip health check if not connected or if any operation is in progress
-	if !r.connected || r.port == nil || r.operationInProgress {
+	if r.getState() != StateConnected || r.port == nil || r.operationInProgress {
 		r.mu.Unlock()
 		return
 	}
@@ -717,6 +930,7 @@ func (r *Reader) performBackgroundHealthCheck() {
 	// Perform the health check while holding the lock to prevent interference
 	if !r.doHealthCheck() {
 		log.Info().Str("device", r.path).Msg("tty2oled device disconnected - background health check failed")
+		r.setState(StateDisconnected)
 		r.connected = false
 	}
 

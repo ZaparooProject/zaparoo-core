@@ -166,8 +166,8 @@ type LogDownloadResponse struct {
 type ReaderInfo struct {
 	ID           string   `json:"id"`
 	Info         string   `json:"info"`
-	Connected    bool     `json:"connected"`
 	Capabilities []string `json:"capabilities"`
+	Connected    bool     `json:"connected"`
 }
 
 type ReadersResponse struct {
