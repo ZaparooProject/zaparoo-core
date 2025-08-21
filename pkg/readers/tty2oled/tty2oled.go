@@ -679,28 +679,64 @@ func (r *Reader) displayMedia(media *models.ActiveMedia) error {
 		r.mu.Unlock()
 	}()
 
-	// Try to get picture for the system
+	// Check if picture is immediately available on disk (no download delay)
+	picturePath, foundOnDisk := r.pictureManager.FindPictureOnDisk(media.SystemID)
+	if foundOnDisk {
+		log.Debug().
+			Str("system", media.SystemID).
+			Str("path", picturePath).
+			Msg("picture found on disk, replacing text with image")
+		return r.displayPicture(picturePath)
+	} else {
+		// Show text immediately for instant feedback
+		if err := r.displaySystemName(media.SystemName); err != nil {
+			return fmt.Errorf("failed to display system name: %w", err)
+		}
+	}
+
+	// Try to download picture if not on disk
+	log.Debug().
+		Str("system", media.SystemID).
+		Msg("picture not on disk, attempting download")
+
 	picturePath, err := r.pictureManager.GetPictureForSystem(media.SystemID)
 	if err != nil {
 		log.Info().
 			Str("system", media.SystemID).
-			Msg("picture not available, displaying text only")
-
-		// Clear display first, then display system name as text using CMDTXT command
-		if err := r.sendCommandRaw(CmdClearShow); err != nil {
-			return fmt.Errorf("failed to clear display: %w", err)
-		}
-
-		// Format: CMDTXT,<font>,<color>,<bgcolor>,<x>,<y>,<text>
-		// Use reasonable defaults: font=0, color=15(white), bgcolor=0(black), x=0, y=16, text=systemID
-		textCommand := fmt.Sprintf("%s,0,15,0,0,16,%s", CmdText, media.SystemID)
-		if err := r.sendCommandRaw(textCommand); err != nil {
-			return fmt.Errorf("failed to send text command: %w", err)
-		}
-
-		return nil
+			Msg("picture download failed, keeping text display")
+		return nil // Text is already showing, no error
 	}
 
+	// Picture downloaded successfully, replace text with image
+	log.Debug().
+		Str("system", media.SystemID).
+		Str("path", picturePath).
+		Msg("picture downloaded successfully, replacing text with image")
+	return r.displayPicture(picturePath)
+}
+
+// displaySystemName shows the system name using CMDSNAM approach
+func (r *Reader) displaySystemName(systemID string) error {
+	// Clear display first, then display system name using CMDSNAM approach
+	if err := r.sendCommandRaw(CmdClearShow); err != nil {
+		return fmt.Errorf("failed to clear display: %w", err)
+	}
+
+	// CMDSNAM approach: send system name as raw command to set actCorename, then CMDSNAM to display centered
+	// This uses the Arduino's built-in centering with Commodore 64 font for better visual appeal
+	if err := r.sendCommandRaw(systemID); err != nil {
+		return fmt.Errorf("failed to set system name: %w", err)
+	}
+
+	if err := r.sendCommandRaw(CmdShowName); err != nil {
+		return fmt.Errorf("failed to display centered system name: %w", err)
+	}
+
+	return nil
+}
+
+// displayPicture shows the picture for the system
+func (r *Reader) displayPicture(picturePath string) error {
 	// Use the base filename (without extension) as corename
 	baseName := filepath.Base(picturePath)
 	coreName := strings.TrimSuffix(baseName, filepath.Ext(baseName))

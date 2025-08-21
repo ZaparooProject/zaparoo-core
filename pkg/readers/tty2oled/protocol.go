@@ -31,6 +31,7 @@ const (
 	// Core display commands
 	CmdCore       = "CMDCOR"   // CMDCOR,<corename>,<transition>
 	CmdText       = "CMDTXT"   // CMDTXT,<font>,<color>,<bgcolor>,<x>,<y>,<text>
+	CmdShowName   = "CMDSNAM"  // CMDSNAM - show centered system name (uses actCorename)
 	CmdClearShow  = "CMDCLS"   // CMDCLS - clear display and update
 	CmdClearNoUpd = "CMDCLSWU" // CMDCLSWU - clear display without update
 	CmdContrast   = "CMDCON"   // CMDCON,<contrast>
