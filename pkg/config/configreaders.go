@@ -26,9 +26,15 @@ import (
 )
 
 type Readers struct {
-	Connect    []ReadersConnect `toml:"connect,omitempty"`
-	Scan       ReadersScan      `toml:"scan,omitempty"`
-	AutoDetect bool             `toml:"auto_detect"`
+	Connect    []ReadersConnect        `toml:"connect,omitempty"`
+	Scan       ReadersScan             `toml:"scan,omitempty"`
+	AutoDetect bool                    `toml:"auto_detect"`
+	Drivers    map[string]DriverConfig `toml:"drivers,omitempty"`
+}
+
+type DriverConfig struct {
+	Enabled    *bool `toml:"enabled,omitempty"`
+	AutoDetect *bool `toml:"auto_detect,omitempty"`
 }
 
 type ReadersScan struct {
@@ -122,4 +128,25 @@ func (c *Instance) SetReaderConnections(rcs []ReadersConnect) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Readers.Connect = rcs
+}
+
+func (c *Instance) IsDriverEnabled(driverID string, defaultEnabled bool) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if cfg, ok := c.vals.Readers.Drivers[driverID]; ok && cfg.Enabled != nil {
+		return *cfg.Enabled
+	}
+	return defaultEnabled
+}
+
+func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect bool) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if cfg, ok := c.vals.Readers.Drivers[driverID]; ok && cfg.AutoDetect != nil {
+		return *cfg.AutoDetect
+	}
+
+	return c.vals.Readers.AutoDetect && defaultAutoDetect
 }

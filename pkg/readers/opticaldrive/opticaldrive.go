@@ -58,6 +58,15 @@ func NewReader(cfg *config.Instance) *FileReader {
 	}
 }
 
+func (*FileReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "opticaldrive",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "Optical drive CD/DVD reader",
+	}
+}
+
 func (*FileReader) IDs() []string {
 	return []string{"optical_drive"}
 }

@@ -51,6 +51,15 @@ func NewReader(cfg *config.Instance) *Reader {
 	}
 }
 
+func (*Reader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "file",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "File-based token reader",
+	}
+}
+
 func (*Reader) IDs() []string {
 	return []string{"file"}
 }

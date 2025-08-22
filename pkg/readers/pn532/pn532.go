@@ -98,6 +98,15 @@ func NewReader(cfg *config.Instance) *Reader {
 	}
 }
 
+func (*Reader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "pn532",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "PN532 NFC reader (UART/I2C/SPI)",
+	}
+}
+
 func (*Reader) IDs() []string {
 	return []string{
 		"pn532",

@@ -244,6 +244,24 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+func (r *Reader) Metadata() readers.DriverMetadata {
+	if r.acr122Only {
+		return readers.DriverMetadata{
+			ID:                "libnfc_acr122",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: true,
+			Description:       "LibNFC ACR122 USB NFC reader",
+		}
+	}
+
+	return readers.DriverMetadata{
+		ID:                "libnfc",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "LibNFC NFC reader (PN532/ACR122)",
+	}
+}
+
 func (r *Reader) IDs() []string {
 	// When ACR122-only mode, exclude PN532 device types
 	if r.acr122Only {

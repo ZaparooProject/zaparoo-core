@@ -59,6 +59,13 @@ func (ad *AutoDetector) DetectReaders(
 	ad.updateConnected(connectedReaders)
 
 	for _, reader := range supportedReaders {
+		metadata := reader.Metadata()
+
+		// Check if auto-detect is enabled for this driver
+		if !cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
+			continue
+		}
+
 		// Get failed connections specific to this reader type
 		readerFailedConnections := ad.getFailedConnectionsForReader(reader.IDs())
 

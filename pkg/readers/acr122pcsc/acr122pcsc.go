@@ -52,6 +52,15 @@ func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
 	}
 }
 
+func (*ACR122PCSC) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "acr122pcsc",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "ACR122 NFC reader via PC/SC",
+	}
+}
+
 func (*ACR122PCSC) IDs() []string {
 	return []string{"acr122_pcsc"}
 }

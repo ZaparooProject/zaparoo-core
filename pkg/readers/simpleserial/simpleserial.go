@@ -51,6 +51,15 @@ func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	}
 }
 
+func (*SimpleSerialReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "simpleserial",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "Simple serial protocol reader",
+	}
+}
+
 func (*SimpleSerialReader) IDs() []string {
 	return []string{"simple_serial"}
 }

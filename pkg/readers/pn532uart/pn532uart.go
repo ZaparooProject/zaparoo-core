@@ -56,6 +56,15 @@ func NewReader(cfg *config.Instance) *PN532UARTReader {
 	}
 }
 
+func (*PN532UARTReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "pn532uart",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "PN532 NFC reader via UART (legacy)",
+	}
+}
+
 func (*PN532UARTReader) IDs() []string {
 	return []string{"pn532_uart"}
 }

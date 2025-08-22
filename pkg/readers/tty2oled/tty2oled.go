@@ -91,6 +91,15 @@ func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
 	return r
 }
 
+func (*Reader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "tty2oled",
+		DefaultEnabled:    false,
+		DefaultAutoDetect: true,
+		Description:       "TTY2OLED serial display device",
+	}
+}
+
 func (*Reader) IDs() []string {
 	return []string{"tty2oled"}
 }

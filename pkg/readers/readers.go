@@ -32,6 +32,13 @@ const (
 	CapabilityDisplay Capability = "display"
 )
 
+type DriverMetadata struct {
+	ID                string
+	DefaultEnabled    bool
+	DefaultAutoDetect bool
+	Description       string
+}
+
 type Scan struct {
 	Error  error
 	Token  *tokens.Token
@@ -39,7 +46,8 @@ type Scan struct {
 }
 
 type Reader interface {
-	// TODO: type? file, libnfc, etc.
+	// Metadata returns static configuration for this driver.
+	Metadata() DriverMetadata
 	// IDs returns the device string prefixes supported by this reader.
 	IDs() []string
 	// Open any necessary connections to the device and start polling.

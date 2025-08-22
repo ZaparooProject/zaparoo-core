@@ -74,6 +74,13 @@ func connectReaders(
 		if _, ok := st.GetReader(device.connectionString); !ok {
 			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {
+				metadata := r.Metadata()
+
+				// Check if this driver is enabled
+				if !cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+					continue
+				}
+
 				ids := r.IDs()
 				if helpers.Contains(ids, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)

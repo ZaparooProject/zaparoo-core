@@ -57,7 +57,7 @@ func (*Platform) ID() string {
 }
 
 func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	return []readers.Reader{
+	allReaders := []readers.Reader{
 		tty2oled.NewReader(cfg, p),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
@@ -65,6 +65,15 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		pn532.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 	}
+
+	var enabled []readers.Reader
+	for _, r := range allReaders {
+		metadata := r.Metadata()
+		if cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+			enabled = append(enabled, r)
+		}
+	}
+	return enabled
 }
 
 func (*Platform) StartPre(_ *config.Instance) error {
