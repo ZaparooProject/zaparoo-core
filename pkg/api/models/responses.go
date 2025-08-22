@@ -162,3 +162,14 @@ type LogDownloadResponse struct {
 	Content  string `json:"content"`
 	Size     int    `json:"size"`
 }
+
+type ReaderInfo struct {
+	ID           string   `json:"id"`
+	Info         string   `json:"info"`
+	Capabilities []string `json:"capabilities"`
+	Connected    bool     `json:"connected"`
+}
+
+type ReadersResponse struct {
+	Readers []ReaderInfo `json:"readers"`
+}

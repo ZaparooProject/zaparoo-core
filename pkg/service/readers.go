@@ -20,7 +20,7 @@
 package service
 
 import (
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
@@ -46,6 +46,7 @@ func connectReaders(
 	cfg *config.Instance,
 	st *state.State,
 	iq chan<- readers.Scan,
+	autoDetector *AutoDetector,
 ) error {
 	rs := st.ListReaders()
 	var toConnect []toConnectDevice
@@ -73,6 +74,13 @@ func connectReaders(
 		if _, ok := st.GetReader(device.connectionString); !ok {
 			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {
+				metadata := r.Metadata()
+
+				// Check if this driver is enabled
+				if !cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+					continue
+				}
+
 				ids := r.IDs()
 				if helpers.Contains(ids, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
@@ -90,38 +98,9 @@ func connectReaders(
 	}
 
 	// auto-detect readers
-	if cfg.AutoDetect() {
-		supportedReaders := pl.SupportedReaders(cfg)
-
-		for _, r := range supportedReaders {
-			detect := r.Detect(st.ListReaders())
-			if detect != "" {
-				ps := strings.SplitN(detect, ":", 2)
-				if len(ps) != 2 {
-					log.Error().Msgf("invalid auto-detect string: %s", detect)
-					continue
-				}
-
-				device := config.ReadersConnect{
-					Driver: ps[0],
-					Path:   ps[1],
-				}
-
-				err := r.Open(device, iq)
-				if err != nil {
-					log.Error().Msgf("error opening detected reader %s: %s", detect, err)
-				}
-			}
-
-			if r.Connected() {
-				st.SetReader(detect, r)
-				log.Info().Msgf("successfully connected auto-detected reader: %s", detect)
-			} else {
-				err := r.Close()
-				if err != nil {
-					log.Debug().Msg("error closing reader")
-				}
-			}
+	if cfg.AutoDetect() && autoDetector != nil {
+		if err := autoDetector.DetectReaders(pl, cfg, st, iq); err != nil {
+			return fmt.Errorf("auto-detect failed: %w", err)
 		}
 	}
 
@@ -276,6 +255,11 @@ func readerManager(
 	var prevToken *tokens.Token
 	var exitTimer *time.Timer
 
+	var autoDetector *AutoDetector
+	if cfg.AutoDetect() {
+		autoDetector = NewAutoDetector(cfg)
+	}
+
 	readerTicker := time.NewTicker(1 * time.Second)
 
 	playFail := func() {
@@ -324,7 +308,7 @@ func readerManager(
 					}
 				}
 
-				if connectErr := connectReaders(pl, cfg, st, scanQueue); connectErr != nil {
+				if connectErr := connectReaders(pl, cfg, st, scanQueue, autoDetector); connectErr != nil {
 					log.Error().Msgf("error connecting rs: %s", connectErr)
 				}
 			}

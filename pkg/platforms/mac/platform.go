@@ -35,11 +35,20 @@ func (*Platform) ID() string {
 }
 
 func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	return []readers.Reader{
+	allReaders := []readers.Reader{
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		pn532uart.NewReader(cfg),
 	}
+
+	var enabled []readers.Reader
+	for _, r := range allReaders {
+		metadata := r.Metadata()
+		if cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+			enabled = append(enabled, r)
+		}
+	}
+	return enabled
 }
 
 func (*Platform) StartPre(_ *config.Instance) error {

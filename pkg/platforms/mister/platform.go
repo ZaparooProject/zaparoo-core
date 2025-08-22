@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
@@ -94,14 +95,24 @@ func (*Platform) ID() string {
 	return platforms.PlatformIDMister
 }
 
-func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	return []readers.Reader{
-		libnfc.NewACR122Reader(cfg),
+func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+	allReaders := []readers.Reader{
+		tty2oled.NewReader(cfg, p),
 		pn532.NewReader(cfg),
+		libnfc.NewACR122Reader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 	}
+
+	var enabled []readers.Reader
+	for _, r := range allReaders {
+		metadata := r.Metadata()
+		if cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+			enabled = append(enabled, r)
+		}
+	}
+	return enabled
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
