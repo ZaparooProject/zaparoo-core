@@ -66,6 +66,21 @@ func (pm *PictureManager) GetPictureForSystem(systemID string) (string, error) {
 		return "", errors.New("empty system ID")
 	}
 
+	// Map system ID to picture name
+	pictureName := mapSystemToPicture(systemID)
+	if pictureName == "" {
+		return "", fmt.Errorf("no picture mapping available for system: %s", systemID)
+	}
+
+	// Select variant (base or alternative)
+	selectedVariant := selectPictureVariant(pictureName)
+
+	log.Debug().
+		Str("system", systemID).
+		Str("mapped_picture", pictureName).
+		Str("selected_variant", selectedVariant).
+		Msg("mapped system to picture")
+
 	// Ensure cache directory exists
 	if err := pm.ensureCacheDir(); err != nil {
 		return "", fmt.Errorf("failed to create cache directory: %w", err)
@@ -73,12 +88,13 @@ func (pm *PictureManager) GetPictureForSystem(systemID string) (string, error) {
 
 	// Try to find picture in order of preference
 	for _, format := range PictureFormats {
-		picturePath, err := pm.findPicture(systemID, format)
+		picturePath, err := pm.findPicture(selectedVariant, format)
 		if err == nil && picturePath != "" {
 			// Verify file exists and is readable
 			if _, err := os.Stat(picturePath); err == nil {
 				log.Debug().
 					Str("system", systemID).
+					Str("variant", selectedVariant).
 					Str("format", format).
 					Str("path", picturePath).
 					Msg("found picture for system")
@@ -88,14 +104,33 @@ func (pm *PictureManager) GetPictureForSystem(systemID string) (string, error) {
 	}
 
 	// No picture found, try to download
-	return pm.downloadPictureForSystem(systemID)
+	return pm.downloadPictureForSystem(selectedVariant)
 }
 
 // FindPictureOnDisk checks if a picture is immediately available on disk without downloading
 func (pm *PictureManager) FindPictureOnDisk(systemID string) (string, bool) {
+	log.Debug().Str("system", systemID).Msg("FindPictureOnDisk: starting")
+
 	if systemID == "" {
 		return "", false
 	}
+
+	// Map system ID to picture name
+	log.Debug().Str("system", systemID).Msg("FindPictureOnDisk: mapping system to picture")
+	pictureName := mapSystemToPicture(systemID)
+	log.Debug().Str("system", systemID).Str("picture", pictureName).Msg("FindPictureOnDisk: mapped to picture")
+	if pictureName == "" {
+		log.Debug().Str("system", systemID).Msg("no picture mapping available for system")
+		return "", false
+	}
+
+	// Select variant (base or alternative) - same selection logic as GetPictureForSystem
+	log.Debug().Str("system", systemID).Str("picture", pictureName).Msg("FindPictureOnDisk: selecting variant")
+	selectedVariant := selectPictureVariant(pictureName)
+	log.Debug().
+		Str("system", systemID).
+		Str("selected_variant", selectedVariant).
+		Msg("FindPictureOnDisk: variant selected")
 
 	// Ensure cache directory exists
 	if err := pm.ensureCacheDir(); err != nil {
@@ -104,12 +139,13 @@ func (pm *PictureManager) FindPictureOnDisk(systemID string) (string, bool) {
 
 	// Try to find picture in order of preference
 	for _, format := range PictureFormats {
-		picturePath, err := pm.findPicture(systemID, format)
+		picturePath, err := pm.findPicture(selectedVariant, format)
 		if err == nil && picturePath != "" {
 			// Verify file exists and is readable
 			if _, err := os.Stat(picturePath); err == nil {
 				log.Debug().
 					Str("system", systemID).
+					Str("variant", selectedVariant).
 					Str("format", format).
 					Str("path", picturePath).
 					Msg("found picture on disk for system")
@@ -122,65 +158,41 @@ func (pm *PictureManager) FindPictureOnDisk(systemID string) (string, bool) {
 }
 
 // findPicture looks for a picture file in the cache directory
-func (pm *PictureManager) findPicture(systemID, format string) (string, error) {
+// Note: pictureName is now the exact picture name to find (e.g., "Genesis", "Genesis_alt1", "AO486", etc.)
+func (pm *PictureManager) findPicture(pictureName, format string) (string, error) {
 	formatDir := filepath.Join(pm.cacheDir, format)
 
-	// Try exact match first
-	exactPath := filepath.Join(formatDir, systemID+pm.getFileExtension(format))
+	// Look for the exact picture file
+	exactPath := filepath.Join(formatDir, pictureName+pm.getFileExtension(format))
 	if _, err := os.Stat(exactPath); err == nil {
 		return exactPath, nil
 	}
 
-	// Try with alternative suffixes (_alt1, _alt2, etc.)
-	for i := 1; i <= 5; i++ {
-		altPath := filepath.Join(formatDir, fmt.Sprintf("%s_alt%d%s", systemID, i, pm.getFileExtension(format)))
-		if _, err := os.Stat(altPath); err == nil {
-			return altPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("picture not found for system %s in format %s", systemID, format)
+	return "", fmt.Errorf("picture not found: %s in format %s", pictureName, format)
 }
 
-// downloadPictureForSystem attempts to download a picture for the given system
-func (pm *PictureManager) downloadPictureForSystem(systemID string) (string, error) {
-	log.Info().Str("system", systemID).Msg("attempting to download picture for system")
+// downloadPictureForSystem attempts to download a picture for the given picture name
+// Note: systemID is now the already-mapped picture name (e.g., "AO486", "Genesis", etc.)
+func (pm *PictureManager) downloadPictureForSystem(pictureName string) (string, error) {
+	log.Info().Str("picture", pictureName).Msg("attempting to download picture")
 
 	var lastErr error
 
-	// Try each format in order of preference (matching bash script priority)
+	// Try each format in order of preference
 	for _, format := range PictureFormats {
-		// Try progressively shorter versions of the system name (like bash script)
-		for length := len(systemID); length >= 1; length-- {
-			truncatedName := systemID[:length]
-
-			picturePath, err := pm.downloadPicture(truncatedName, format)
-			if err == nil {
-				log.Info().
-					Str("system", systemID).
-					Str("truncated_name", truncatedName).
-					Str("format", format).
-					Str("path", picturePath).
-					Msg("successfully downloaded picture")
-				return picturePath, nil
-			}
-			lastErr = err
-
-			// Also try with _alt1 suffix (like bash script)
-			altPicturePath, altErr := pm.downloadPicture(truncatedName+"_alt1", format)
-			if altErr == nil {
-				log.Info().
-					Str("system", systemID).
-					Str("truncated_name", truncatedName+"_alt1").
-					Str("format", format).
-					Str("path", altPicturePath).
-					Msg("successfully downloaded alternative picture")
-				return altPicturePath, nil
-			}
+		picturePath, err := pm.downloadPicture(pictureName, format)
+		if err == nil {
+			log.Info().
+				Str("picture", pictureName).
+				Str("format", format).
+				Str("path", picturePath).
+				Msg("successfully downloaded picture")
+			return picturePath, nil
 		}
+		lastErr = err
 	}
 
-	return "", fmt.Errorf("failed to download picture for system %s: %w", systemID, lastErr)
+	return "", fmt.Errorf("failed to download picture %s: %w", pictureName, lastErr)
 }
 
 // downloadPicture downloads a specific picture file from the GitHub repository
@@ -220,6 +232,9 @@ func (pm *PictureManager) downloadFile(url, localPath string) error {
 	resp, err := pm.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %w", err)
+	}
+	if resp == nil {
+		return errors.New("received nil response")
 	}
 	defer func() { _ = resp.Body.Close() }()
 

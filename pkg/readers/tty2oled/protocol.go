@@ -76,10 +76,10 @@ const (
 // Configuration constants from MiSTer shell script
 const (
 	// Rotation settings
-	DefaultRotation = true // false = normal, true = 180° flipped
+	DefaultRotation = false // false = normal, true = 180° flipped
 
 	// Enhanced transitions
-	DefaultTransition = TransitionFade
+	DefaultTransition = TransitionAuto
 
 	// Screensaver mode flags (bitwise OR combinations)
 	ScreensaverModeTTY2OLED = 1  // Show tty2oled logo

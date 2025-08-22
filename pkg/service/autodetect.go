@@ -63,8 +63,8 @@ func (ad *AutoDetector) DetectReaders(
 		readerFailedConnections := ad.getFailedConnectionsForReader(reader.IDs())
 
 		// Combine connected (all readers) and failed (this reader type only)
-		allBlockedConnections := append(connectedReaders, readerFailedConnections...)
-		detect := reader.Detect(allBlockedConnections)
+		connectedReaders = append(connectedReaders, readerFailedConnections...)
+		detect := reader.Detect(connectedReaders)
 		if detect == "" {
 			continue
 		}
@@ -166,17 +166,6 @@ func (ad *AutoDetector) setFailed(connectionString string) {
 	ad.mu.Lock()
 	defer ad.mu.Unlock()
 	ad.failed[connectionString] = true
-}
-
-func (ad *AutoDetector) getFailedConnections() []string {
-	ad.mu.RLock()
-	defer ad.mu.RUnlock()
-
-	failed := make([]string, 0, len(ad.failed))
-	for connectionString := range ad.failed {
-		failed = append(failed, connectionString)
-	}
-	return failed
 }
 
 func (ad *AutoDetector) getFailedConnectionsForReader(readerIDs []string) []string {
