@@ -1,0 +1,16 @@
+rules:
+  - match: "go test "
+    send: |-
+      Use "task test" instead for TDD integration. This command is a simple
+      wrapper around "go test" which forwards results to TDD Guard for
+      monitoring. By default it will run "go test ./..." but it supports
+      arguments exactly like "go test" too:
+      - task test -- -v -race ./...
+      - task test -- ./pkg/api
+      - task test -- ./pkg/api ./pkg/database
+      - task test -- -run TestHandleMessage ./pkg/api
+      - task test -- -timeout 30s ./...
+  - match: "^(gci|go vet|goimports|gofumpt|go fmt)"
+    send: Use "just lint fix" instead to resolve lint/formatting issues.
+  - match: "cd /tmp"
+    send: Create a "tmp" directory in the project root instead.

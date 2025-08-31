@@ -69,14 +69,15 @@ tasks:
 
   test:
     desc: Run all tests
+    vars:
+      TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go test -v -race ./...
-
-  test:coverage:
-    desc: Run tests with coverage report
-    cmds:
-      - go test -v -race -coverprofile=coverage.out ./...
-      - go tool cover -html=coverage.out -o coverage.html
+      - |
+        if command -v tdd-guard-go >/dev/null 2>&1; then
+          go test -json {{.TEST_ARGS}} 2>&1 | tdd-guard-go -project-root {{.ROOT_DIR}}
+        else
+          go test {{.TEST_ARGS}}
+        fi
 
   lint:
     desc: Run golangci-lint
