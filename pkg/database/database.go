@@ -142,12 +142,12 @@ type GenericDBI interface {
 
 type UserDBI interface {
 	GenericDBI
-	AddHistory(entry HistoryEntry) error
+	AddHistory(entry *HistoryEntry) error
 	GetHistory(lastID int) ([]HistoryEntry, error)
-	AddMapping(m Mapping) error
+	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error
-	UpdateMapping(id int64, m Mapping) error
+	UpdateMapping(id int64, m *Mapping) error
 	GetAllMappings() ([]Mapping, error)
 	GetEnabledMappings() ([]Mapping, error)
 	UpdateZapLinkHost(host string, zapscript int) error

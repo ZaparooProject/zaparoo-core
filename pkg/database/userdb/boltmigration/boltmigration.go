@@ -159,7 +159,7 @@ func MaybeMigrate(pl platforms.Platform, newDB *userdb.UserDB) error {
 			newMapping.Type = oldMapping.Type
 		}
 
-		addErr := newDB.AddMapping(newMapping)
+		addErr := newDB.AddMapping(&newMapping)
 		if addErr != nil {
 			log.Warn().Msgf("error migrating mapping: %s", addErr)
 			errors++

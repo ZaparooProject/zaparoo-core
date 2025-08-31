@@ -34,9 +34,9 @@ const (
 
 type DriverMetadata struct {
 	ID                string
+	Description       string
 	DefaultEnabled    bool
 	DefaultAutoDetect bool
-	Description       string
 }
 
 type Scan struct {

@@ -141,7 +141,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		Override: params.Override,
 	}
 
-	err = env.Database.UserDB.AddMapping(m)
+	err = env.Database.UserDB.AddMapping(&m)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add mapping: %w", err)
 	}
@@ -263,7 +263,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		newMapping.Override = *params.Override
 	}
 
-	err = env.Database.UserDB.UpdateMapping(int64(params.ID), newMapping)
+	err = env.Database.UserDB.UpdateMapping(int64(params.ID), &newMapping)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update mapping: %w", err)
 	}

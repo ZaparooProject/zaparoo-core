@@ -60,7 +60,7 @@ func NormalizeID(uid string) string {
 	return uid
 }
 
-func (db *UserDB) AddMapping(m database.Mapping) error { //nolint:gocritic // struct passed for DB insertion
+func (db *UserDB) AddMapping(m *database.Mapping) error {
 	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
@@ -86,7 +86,7 @@ func (db *UserDB) AddMapping(m database.Mapping) error { //nolint:gocritic // st
 
 	m.Added = time.Now().Unix()
 
-	return sqlAddMapping(db.ctx, db.sql, m)
+	return sqlAddMapping(db.ctx, db.sql, *m)
 }
 
 func (db *UserDB) GetMapping(id int64) (database.Mapping, error) {
@@ -97,7 +97,7 @@ func (db *UserDB) DeleteMapping(id int64) error {
 	return sqlDeleteMapping(db.ctx, db.sql, id)
 }
 
-func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error { //nolint:gocritic // struct passed for DB update
+func (db *UserDB) UpdateMapping(id int64, m *database.Mapping) error {
 	if !helpers.Contains(AllowedMappingTypes, m.Type) {
 		return fmt.Errorf("invalid mapping type: %s", m.Type)
 	}
@@ -121,7 +121,7 @@ func (db *UserDB) UpdateMapping(id int64, m database.Mapping) error { //nolint:g
 		}
 	}
 
-	return sqlUpdateMapping(db.ctx, db.sql, id, m)
+	return sqlUpdateMapping(db.ctx, db.sql, id, *m)
 }
 
 func (db *UserDB) GetAllMappings() ([]database.Mapping, error) {

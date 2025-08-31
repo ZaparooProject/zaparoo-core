@@ -26,10 +26,10 @@ import (
 )
 
 type Readers struct {
+	Drivers    map[string]DriverConfig `toml:"drivers,omitempty"`
 	Connect    []ReadersConnect        `toml:"connect,omitempty"`
 	Scan       ReadersScan             `toml:"scan,omitempty"`
 	AutoDetect bool                    `toml:"auto_detect"`
-	Drivers    map[string]DriverConfig `toml:"drivers,omitempty"`
 }
 
 type DriverConfig struct {
