@@ -23,9 +23,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/afero"
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 )
 
 // FSHelper provides utilities for filesystem mocking in tests
@@ -362,4 +364,33 @@ func SetupMemoryFilesystem() *FSHelper {
 	}
 
 	return helper
+}
+
+// NewTestConfig creates a config instance for testing using an in-memory filesystem
+func NewTestConfig(fs *FSHelper, configDir string) (*config.Instance, error) {
+	return NewTestConfigWithPort(fs, configDir, 0) // Use random port by default
+}
+
+// NewTestConfigWithPort creates a config instance for testing with a specific API port
+func NewTestConfigWithPort(fs *FSHelper, configDir string, port int) (*config.Instance, error) {
+	// For now, create a real temporary directory since config.Instance
+	// is tightly coupled with the OS filesystem
+	err := os.MkdirAll(configDir, 0o750)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp config dir: %w", err)
+	}
+	
+	// Create defaults with custom port
+	defaults := config.BaseDefaults
+	if port != 0 {
+		defaults.Service.APIPort = port
+	}
+	
+	// Create config instance using the real filesystem
+	cfg, err := config.NewConfig(configDir, defaults)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create test config: %w", err)
+	}
+	
+	return cfg, nil
 }

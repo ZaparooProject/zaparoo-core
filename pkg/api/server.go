@@ -605,6 +605,7 @@ func Start(
 	session := melody.New()
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
+		log.Debug().Msgf("websocket origin: %s", origin)
 		// non-browser clients
 		if origin == "" {
 			return true
@@ -661,15 +662,46 @@ func Start(
 	}
 
 	serverDone := make(chan error, 1)
+	serverReady := make(chan struct{})
+	
 	go func() {
 		log.Info().Msgf("starting HTTP server on port %d", cfg.APIPort())
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Debug().Msg("HTTP server goroutine started, attempting to bind to port")
+		
+		// Create a listener to ensure we can bind to the port before continuing
+		listener, err := net.Listen("tcp", server.Addr)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to bind to port")
+			serverDone <- err
+			return
+		}
+		
+		// Signal that server is ready to accept connections
+		log.Debug().Msg("HTTP server bound to port, ready to accept connections")
+		close(serverReady)
+		
+		// Start serving
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error().Err(err).Msg("HTTP server error")
 			serverDone <- err
 		} else {
+			log.Debug().Msg("HTTP server stopped normally")
 			serverDone <- nil
 		}
 	}()
+	
+	log.Debug().Msg("HTTP server goroutine launched, waiting for server to be ready")
+	
+	// Wait for server to be ready or fail to start
+	select {
+	case <-serverReady:
+		log.Debug().Msg("HTTP server is ready to accept connections")
+	case err := <-serverDone:
+		if err != nil {
+			log.Error().Err(err).Msg("server failed to start")
+			return
+		}
+	}
 
 	select {
 	case <-st.GetContext().Done():
