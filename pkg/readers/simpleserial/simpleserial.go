@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -47,6 +48,15 @@ type SimpleSerialReader struct {
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
 		cfg: cfg,
+	}
+}
+
+func (*SimpleSerialReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "simpleserial",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "Simple serial protocol reader",
 	}
 }
 
@@ -221,4 +231,12 @@ func (*SimpleSerialReader) Write(_ string) (*tokens.Token, error) {
 
 func (*SimpleSerialReader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*SimpleSerialReader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*SimpleSerialReader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

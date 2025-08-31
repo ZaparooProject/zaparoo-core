@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -47,6 +48,15 @@ type Reader struct {
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
 		cfg: cfg,
+	}
+}
+
+func (*Reader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "file",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "File-based token reader",
 	}
 }
 
@@ -171,4 +181,12 @@ func (*Reader) Write(_ string) (*tokens.Token, error) {
 
 func (*Reader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*Reader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*Reader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

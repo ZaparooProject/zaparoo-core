@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -54,6 +55,15 @@ type FileReader struct {
 func NewReader(cfg *config.Instance) *FileReader {
 	return &FileReader{
 		cfg: cfg,
+	}
+}
+
+func (*FileReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "opticaldrive",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "Optical drive CD/DVD reader",
 	}
 }
 
@@ -216,4 +226,12 @@ func (*FileReader) Write(_ string) (*tokens.Token, error) {
 
 func (*FileReader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*FileReader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*FileReader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

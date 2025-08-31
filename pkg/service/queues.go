@@ -148,7 +148,7 @@ func launchPlaylistMedia(
 		TokenData:  t.Data,
 	}
 	he.Success = err == nil
-	err = db.UserDB.AddHistory(he)
+	err = db.UserDB.AddHistory(&he)
 	if err != nil {
 		log.Error().Err(err).Msgf("error adding history")
 	}
@@ -251,7 +251,7 @@ func processTokenQueue(
 				}
 
 				he.Success = err == nil
-				err = db.UserDB.AddHistory(he)
+				err = db.UserDB.AddHistory(&he)
 				if err != nil {
 					log.Error().Err(err).Msgf("error adding history")
 				}

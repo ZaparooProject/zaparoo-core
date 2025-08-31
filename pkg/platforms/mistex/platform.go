@@ -46,11 +46,20 @@ func (*Platform) ID() string {
 }
 
 func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
-	return []readers.Reader{
+	allReaders := []readers.Reader{
 		libnfc.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 	}
+
+	var enabled []readers.Reader
+	for _, r := range allReaders {
+		metadata := r.Metadata()
+		if cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+			enabled = append(enabled, r)
+		}
+	}
+	return enabled
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {

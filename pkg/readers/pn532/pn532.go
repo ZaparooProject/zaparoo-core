@@ -22,7 +22,6 @@ package pn532
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,30 +30,27 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
-	// Import detection packages to register detectors
 	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
 	_ "github.com/ZaparooProject/go-pn532/detection/spi"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
-	"github.com/ZaparooProject/go-pn532/tagops"
+	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
 	"github.com/ZaparooProject/go-pn532/transport/spi"
 	"github.com/ZaparooProject/go-pn532/transport/uart"
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	"github.com/hsanjuan/go-ndef"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	maxErrorCount         = 5
-	pollTimeout           = 50 * time.Millisecond
-	pollInterval          = 50 * time.Millisecond
-	detectionTimeout      = 10 * time.Second
 	quickDetectionTimeout = 5 * time.Second
-	detectionCacheTimeout = 30 * time.Second
-	errorBackoffDelay     = 500 * time.Millisecond
+	ndefReadTimeout       = 2 * time.Second
+	writeTimeout          = 30 * time.Second
+	pollInterval          = 100 * time.Millisecond
+	cardRemovalTimeout    = 300 * time.Millisecond
 )
 
 func createVIDPIDBlocklist() []string {
@@ -80,30 +76,34 @@ func createVIDPIDBlocklist() []string {
 	}
 }
 
-type tagState struct {
-	lastUID  string
-	lastType string
-	present  bool
-}
-
 type Reader struct {
 	ctx         context.Context
 	writeCtx    context.Context
 	device      *pn532.Device
+	session     *polling.Session
 	cfg         *config.Instance
 	lastToken   *tokens.Token
 	cancel      context.CancelFunc
 	writeCancel context.CancelFunc
 	deviceInfo  config.ReadersConnect
 	name        string
-	tagState    tagState
 	mutex       sync.RWMutex
-	writeMutex  sync.RWMutex
+	writeMutex  sync.Mutex
+	wg          sync.WaitGroup
 }
 
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
 		cfg: cfg,
+	}
+}
+
+func (*Reader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "pn532",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "PN532 NFC reader (UART/I2C/SPI)",
 	}
 }
 
@@ -153,54 +153,26 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	var transport pn532.Transport
 	var err error
 
-	// Check if this is an auto-detected device or a manual path
-	if device.Path == "" {
-		// Auto-detect device
-		opts := detection.DefaultOptions()
-		opts.Timeout = detectionTimeout
-		opts.Mode = detection.Safe
-		opts.Blocklist = createVIDPIDBlocklist()
-
-		devices, detectErr := detection.DetectAll(&opts)
-		if detectErr != nil {
-			return fmt.Errorf("failed to detect PN532 devices: %w", detectErr)
-		}
-
-		if len(devices) == 0 {
-			return errors.New("no PN532 devices found")
-		}
-
-		// Use the first detected device
-		deviceInfo := devices[0]
-		transport, err = r.createTransport(deviceInfo)
-		if err != nil {
-			return fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		r.name = fmt.Sprintf("%s:%s", deviceInfo.Transport, deviceInfo.Path)
-		log.Debug().Msgf("auto-detected PN532 device: %s", r.name)
-	} else {
-		// Manual device specification
-		// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
-		transportType := strings.TrimPrefix(device.Driver, "pn532_")
-		if transportType == device.Driver {
-			// If no prefix was removed, assume it's just "pn532" and default to uart
-			transportType = "uart"
-		}
-
-		deviceInfo := detection.DeviceInfo{
-			Transport: transportType,
-			Path:      device.Path,
-		}
-
-		transport, err = r.createTransport(deviceInfo)
-		if err != nil {
-			return fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		r.name = device.ConnectionString()
-		log.Debug().Msgf("opening manual PN532 device: %s", r.name)
+	// Manual device specification
+	// Extract transport type from driver (e.g., "pn532_uart" -> "uart")
+	transportType := strings.TrimPrefix(device.Driver, "pn532_")
+	if transportType == device.Driver {
+		// If no prefix was removed, assume it's just "pn532" and default to uart
+		transportType = "uart"
 	}
+
+	deviceInfo := detection.DeviceInfo{
+		Transport: transportType,
+		Path:      device.Path,
+	}
+
+	transport, err = r.createTransport(deviceInfo)
+	if err != nil {
+		return fmt.Errorf("failed to create transport: %w", err)
+	}
+
+	r.name = device.ConnectionString()
+	log.Debug().Msgf("opening PN532 device: %s", r.name)
 
 	// Create PN532 device
 	r.device, err = pn532.New(transport)
@@ -218,145 +190,67 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
 
-	// Configure optimized continuous polling (from nfctest)
-	pollConfig := pn532.DefaultContinuousPollConfig()
-	pollConfig.PollCount = 1
-	pollConfig.PollPeriod = 1
-	if err := r.device.SetPollConfig(pollConfig); err != nil {
-		log.Warn().Err(err).Msg("failed to set optimized poll config, using defaults")
-	}
-
 	r.deviceInfo = device
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 
-	// Start polling goroutine
-	go r.pollLoop(iq)
+	// Create session configuration
+	sessionConfig := polling.DefaultConfig()
+	sessionConfig.PollInterval = pollInterval
+	sessionConfig.CardRemovalTimeout = cardRemovalTimeout
+
+	// Create session with callbacks
+	r.session = polling.NewSession(r.device, sessionConfig)
+
+	// Set up callbacks
+	r.session.OnCardDetected = func(detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(detectedTag, iq)
+	}
+
+	r.session.OnCardRemoved = func() {
+		r.handleTagRemoved(iq)
+	}
+
+	r.session.OnCardChanged = func(detectedTag *pn532.DetectedTag) error {
+		return r.handleTagDetected(detectedTag, iq)
+	}
+
+	// Start session
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		if err := r.session.Start(r.ctx); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				log.Error().Err(err).Msg("PN532 session ended with error")
+			}
+		}
+	}()
 
 	log.Info().Msgf("PN532 reader opened: %s", r.name)
 	return nil
 }
 
-func (r *Reader) pollLoop(iq chan<- readers.Scan) {
-	errCount := 0
-
-	for {
-		select {
-		case <-r.ctx.Done():
-			log.Debug().Msg("PN532 polling cancelled")
-			return
-		default:
-		}
-
-		if errCount >= maxErrorCount {
-			log.Error().Msg("too many errors, exiting PN532 reader")
-			break
-		}
-
-		pollCtx, cancel := context.WithTimeout(r.ctx, pollTimeout)
-		detectedTag, err := r.device.DetectTagContext(pollCtx)
-		cancel()
-
-		if err != nil {
-			r.handlePollingError(err, iq, &errCount)
-			continue
-		}
-
-		// Tag detected successfully
-		errCount = 0
-		r.processDetectedTag(detectedTag, iq)
-
-		// Short sleep to prevent excessive CPU usage
-		time.Sleep(pollInterval)
-	}
-}
-
-func (r *Reader) handlePollingError(err error, iq chan<- readers.Scan, errCount *int) {
-	if errors.Is(err, context.Canceled) {
-		log.Debug().Msg("PN532 polling cancelled")
-		return
-	}
-
-	if errors.Is(err, pn532.ErrNoTagDetected) {
-		// Handle tag removal
-		r.handleTagRemoval(iq)
-		return
-	}
-
-	if errors.Is(err, context.DeadlineExceeded) {
-		// Timeout is normal - just handle as no tag
-		r.handleTagRemoval(iq)
-		return
-	}
-
-	// Actual error
-	log.Error().Err(err).Msg("failed to detect tag")
-	*errCount++
-	time.Sleep(errorBackoffDelay)
-}
-
-func (r *Reader) handleTagRemoval(iq chan<- readers.Scan) {
-	if r.tagState.present {
-		log.Info().Msgf("tag removed: %s", r.tagState.lastUID)
-		iq <- readers.Scan{
-			Source: r.deviceInfo.ConnectionString(),
-			Token:  nil,
-		}
-		r.resetTagState()
-	}
-}
-
-func (r *Reader) resetTagState() {
-	r.tagState.present = false
-	r.tagState.lastUID = ""
-	r.tagState.lastType = ""
-	r.lastToken = nil
-}
-
-func (r *Reader) processDetectedTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
-	currentUID := detectedTag.UID
-	tagType := string(detectedTag.Type)
-
-	// Check if this is a new tag or tag change
-	tagChanged := r.updateTagState(currentUID, tagType)
-	if !tagChanged {
-		// Same tag as before, no need to reprocess
-		return
-	}
-
-	// Process the new/changed tag
+func (r *Reader) handleTagDetected(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) error {
+	log.Info().Msgf("new tag detected: %s (%s)", detectedTag.Type, detectedTag.UID)
 	r.processNewTag(detectedTag, iq)
+	return nil
 }
 
-func (r *Reader) updateTagState(currentUID, tagType string) bool {
-	if !r.tagState.present {
-		// New tag detected
-		log.Info().Msgf("new tag detected: %s (%s)", tagType, currentUID)
-		r.tagState.present = true
-		r.tagState.lastUID = currentUID
-		r.tagState.lastType = tagType
-		return true
+func (r *Reader) handleTagRemoved(iq chan<- readers.Scan) {
+	log.Info().Msg("tag removed")
+	iq <- readers.Scan{
+		Source: r.deviceInfo.ConnectionString(),
+		Token:  nil,
 	}
 
-	if r.tagState.lastUID != currentUID {
-		// Different tag detected
-		log.Info().Msgf("different tag detected: %s (%s)", tagType, currentUID)
-		r.tagState.lastUID = currentUID
-		r.tagState.lastType = tagType
-		return true
-	}
-
-	// Same tag as before
-	return false
+	r.mutex.Lock()
+	r.lastToken = nil
+	r.mutex.Unlock()
 }
 
 func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers.Scan) {
-	// Convert tag type
 	tokenType := r.convertTagType(detectedTag.Type)
-
-	// Try to read NDEF data using unified tagops approach
 	ndefText, rawData := r.readNDEFData(detectedTag)
 
-	// Create token
 	token := &tokens.Token{
 		Type:     tokenType,
 		UID:      detectedTag.UID,
@@ -376,210 +270,9 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 		Token:  token,
 	}
 
+	r.mutex.Lock()
 	r.lastToken = token
-}
-
-func (*Reader) convertTagType(tagType pn532.TagType) string {
-	switch tagType {
-	case pn532.TagTypeNTAG:
-		return tokens.TypeNTAG
-	case pn532.TagTypeMIFARE:
-		return tokens.TypeMifare
-	case pn532.TagTypeFeliCa:
-		return tokens.TypeFeliCa
-	case pn532.TagTypeUnknown, pn532.CardTypeAny:
-		return tokens.TypeUnknown
-	default:
-		return tokens.TypeUnknown
-	}
-}
-
-func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (text string, data []byte) {
-	tagOps := tagops.New(r.device)
-
-	// Detect tag first
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	if err := tagOps.DetectTag(ctx); err != nil {
-		log.Debug().Err(err).Msg("failed to detect tag for NDEF reading")
-		return "", detectedTag.TargetData
-	}
-
-	// Read NDEF message
-	ndefMessage, err := tagOps.ReadNDEF(ctx)
-	if err != nil {
-		log.Debug().Err(err).Msg("failed to read NDEF data")
-		return "", detectedTag.TargetData
-	}
-
-	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
-		return "", detectedTag.TargetData
-	}
-
-	// Process NDEF records and convert to token text
-	tokenText := r.convertNDEFToTokenText(ndefMessage)
-
-	// Return the token text and original target data
-	return tokenText, detectedTag.TargetData
-}
-
-// convertNDEFToTokenText converts NDEF message to token text:
-// - Text and URI records pass through directly
-// - All other types (WiFi, VCard, etc.) convert to JSON
-func (*Reader) convertNDEFToTokenText(ndefMessage *ndef.Message) string {
-	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
-		return ""
-	}
-
-	// Process first record (primary content)
-	record := ndefMessage.Records[0]
-	tnf := record.TNF()
-	typeField := record.Type()
-
-	// Handle text records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && typeField == "T" {
-		payload, err := record.Payload()
-		if err != nil {
-			return ""
-		}
-		payloadBytes := payload.Marshal()
-		if len(payloadBytes) > 3 {
-			// Skip language code to get actual text
-			langLen := int(payloadBytes[0] & 0x3F)
-			if len(payloadBytes) > langLen+1 {
-				return string(payloadBytes[langLen+1:])
-			}
-		}
-		return ""
-	}
-
-	// Handle URI records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && typeField == "U" {
-		payload, err := record.Payload()
-		if err != nil {
-			return ""
-		}
-		return string(payload.Marshal())
-	}
-
-	// Handle WiFi credentials - convert to JSON
-	if typeField == "application/vnd.wfa.wsc" {
-		return convertWiFiToJSON(record)
-	}
-
-	// Handle VCard records - convert to JSON
-	if typeField == "text/vcard" || typeField == "text/x-vcard" {
-		return convertVCardToJSON(record)
-	}
-
-	// Handle Smart Poster records - convert to JSON
-	if tnf == ndef.NFCForumWellKnownType && typeField == "Sp" {
-		return convertSmartPosterToJSON(record)
-	}
-
-	// For any other complex types, convert to generic JSON
-	return convertGenericRecordToJSON(record)
-}
-
-func convertWiFiToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
-	wifiData := map[string]any{
-		"type": "wifi",
-		"raw":  hex.EncodeToString(payload.Marshal()),
-	}
-
-	// Try to parse WiFi credentials if possible
-	// This is a simplified approach - full parsing would require WSC binary format parsing
-	wifiData["note"] = "WiFi credentials (binary format)"
-
-	jsonBytes, err := json.Marshal(wifiData)
-	if err != nil {
-		return ""
-	}
-	return string(jsonBytes)
-}
-
-func convertVCardToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
-	vcardText := string(payload.Marshal())
-
-	vcardData := map[string]any{
-		"type":  "vcard",
-		"vcard": vcardText,
-	}
-
-	// Try to extract basic contact info
-	lines := strings.Split(vcardText, "\n")
-	contact := make(map[string]string)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "FN:"):
-			contact["name"] = strings.TrimPrefix(line, "FN:")
-		case strings.HasPrefix(line, "TEL:"):
-			contact["phone"] = strings.TrimPrefix(line, "TEL:")
-		case strings.HasPrefix(line, "EMAIL:"):
-			contact["email"] = strings.TrimPrefix(line, "EMAIL:")
-		}
-	}
-
-	if len(contact) > 0 {
-		vcardData["contact"] = contact
-	}
-
-	jsonBytes, err := json.Marshal(vcardData)
-	if err != nil {
-		return ""
-	}
-	return string(jsonBytes)
-}
-
-func convertSmartPosterToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
-	posterData := map[string]any{
-		"type": "smartposter",
-		"raw":  hex.EncodeToString(payload.Marshal()),
-	}
-
-	jsonBytes, err := json.Marshal(posterData)
-	if err != nil {
-		return ""
-	}
-	return string(jsonBytes)
-}
-
-func convertGenericRecordToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
-	genericData := map[string]any{
-		"type":      "unknown",
-		"tnf":       record.TNF(),
-		"typeField": record.Type(),
-		"payload":   hex.EncodeToString(payload.Marshal()),
-	}
-
-	jsonBytes, err := json.Marshal(genericData)
-	if err != nil {
-		return ""
-	}
-	return string(jsonBytes)
+	r.mutex.Unlock()
 }
 
 func (r *Reader) Close() error {
@@ -590,76 +283,76 @@ func (r *Reader) Close() error {
 		r.cancel()
 	}
 
-	if r.device != nil {
-		err := r.device.Close()
+	if r.session != nil {
+		err := r.session.Close()
 		if err != nil {
-			return fmt.Errorf("failed to close PN532 device: %w", err)
+			return fmt.Errorf("failed to close PN532 session: %w", err)
 		}
 	}
+
+	// Wait for session goroutine to complete
+	r.wg.Wait()
 
 	return nil
 }
 
-// Static cache for failed detection attempts to avoid repeated failures
-var (
-	detectionCacheMu  sync.RWMutex
-	lastDetectionFail time.Time
-)
-
 func (*Reader) Detect(connected []string) string {
-	// Check cache first
-	detectionCacheMu.RLock()
-	if !lastDetectionFail.IsZero() && time.Since(lastDetectionFail) < detectionCacheTimeout {
-		detectionCacheMu.RUnlock()
-		return ""
-	}
-	detectionCacheMu.RUnlock()
-
-	// Check if a PN532 device is already connected
+	// Extract device paths from connected list (format: "transport:path")
+	ignorePaths := make([]string, 0, len(connected))
 	for _, conn := range connected {
-		if strings.HasPrefix(conn, "pn532:") {
-			return ""
+		parts := strings.SplitN(conn, ":", 2)
+		if len(parts) >= 2 && parts[1] != "" {
+			ignorePaths = append(ignorePaths, parts[1])
 		}
 	}
+	log.Debug().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
 	opts := detection.DefaultOptions()
 	opts.Timeout = quickDetectionTimeout
 	opts.Mode = detection.Safe
 	opts.Blocklist = createVIDPIDBlocklist()
+	opts.IgnorePaths = ignorePaths
 
 	devices, err := detection.DetectAll(&opts)
 	if err != nil {
 		log.Debug().Err(err).Msg("PN532 detection failed")
-
-		// Cache the failure
-		detectionCacheMu.Lock()
-		lastDetectionFail = time.Now()
-		detectionCacheMu.Unlock()
-
 		return ""
 	}
 
 	if len(devices) == 0 {
-		// Cache the failure
-		detectionCacheMu.Lock()
-		lastDetectionFail = time.Now()
-		detectionCacheMu.Unlock()
-
 		return ""
 	}
 
-	// Clear cache on successful detection
-	detectionCacheMu.Lock()
-	lastDetectionFail = time.Time{}
-	detectionCacheMu.Unlock()
+	// Check each detected device to find one not already connected
+	for _, device := range devices {
+		deviceStr := fmt.Sprintf("pn532_%s:%s", device.Transport, device.Path)
 
-	// Return the first detected device
-	device := devices[0]
-	deviceStr := fmt.Sprintf("pn532_%s:%s", device.Transport, device.Path)
+		// Check if this device path is already in use by any connected reader
+		deviceInUse := false
+		for _, connectedDevice := range connected {
+			// Parse connected device string (format: "driver:path")
+			parts := strings.SplitN(connectedDevice, ":", 2)
+			if len(parts) == 2 && parts[1] == device.Path {
+				log.Debug().
+					Str("device_path", device.Path).
+					Str("connected_as", connectedDevice).
+					Str("attempted_as", deviceStr).
+					Msg("pn532: device already connected, skipping")
+				deviceInUse = true
+				break
+			}
+		}
 
-	log.Debug().Msgf("detected PN532 device: %s", deviceStr)
-	return deviceStr
+		if !deviceInUse {
+			log.Debug().Msgf("detected PN532 device: %s", deviceStr)
+			return deviceStr
+		}
+	}
+
+	// All detected devices are already in use
+	log.Debug().Msg("pn532: all detected devices are already connected")
+	return ""
 }
 
 func (r *Reader) Device() string {
@@ -685,20 +378,22 @@ func (r *Reader) Write(text string) (*tokens.Token, error) {
 }
 
 func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Token, error) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	if r.device == nil {
-		return nil, errors.New("device not connected")
-	}
-
 	if text == "" {
 		return nil, errors.New("text cannot be empty")
 	}
 
-	// Create cancellable context for this write operation
+	// Lock for the entire write operation
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	if r.session == nil {
+		return nil, errors.New("session not initialized")
+	}
+
+	// Create cancellable context for this write operation under writeMutex
 	r.writeMutex.Lock()
 	r.writeCtx, r.writeCancel = context.WithCancel(ctx)
+	writeCtx := r.writeCtx
 	r.writeMutex.Unlock()
 
 	// Ensure cleanup
@@ -712,58 +407,47 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 		r.writeMutex.Unlock()
 	}()
 
-	// Use tagops for writing to all tag types (unified approach)
-	tagOps := tagops.New(r.device)
+	var resultToken *tokens.Token
+	var writeErr error
 
-	// Detect tag first
-	detectCtx, cancel := context.WithTimeout(r.writeCtx, 5*time.Second)
-	defer cancel()
+	err := r.session.WriteToNextTag(
+		ctx, writeCtx, writeTimeout,
+		func(writeCtx context.Context, tag pn532.Tag) error {
+			// Create NDEF message with text record
+			ndefMessage := &pn532.NDEFMessage{
+				Records: []pn532.NDEFRecord{{
+					Type: pn532.NDEFTypeText,
+					Text: text,
+				}},
+			}
 
-	if err := tagOps.DetectTag(detectCtx); err != nil {
-		return nil, fmt.Errorf("failed to detect tag for writing: %w", err)
-	}
+			// Write NDEF message to tag using the provided write context
+			if err := tag.WriteNDEFWithContext(writeCtx, ndefMessage); err != nil {
+				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
+				return writeErr
+			}
 
-	// Create NDEF message with text record
-	textRecord := ndef.NewTextRecord(text, "en")
-	ndefMessage := ndef.NewMessageFromRecords(textRecord)
+			log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
 
-	// Write NDEF message
-	writeCtx, writeCancel := context.WithTimeout(r.writeCtx, 10*time.Second)
-	defer writeCancel()
+			// Create result token - we'll use the text we wrote as the primary identifier
+			// The UID and type will be populated by the next card detection event
+			resultToken = &tokens.Token{
+				Text:     text,
+				ScanTime: time.Now(),
+				Source:   r.deviceInfo.ConnectionString(),
+				Type:     tokens.TypeNTAG, // Assume NTAG since we're writing NDEF
+			}
 
-	if err := tagOps.WriteNDEF(writeCtx, ndefMessage); err != nil {
-		return nil, fmt.Errorf("failed to write NDEF to tag: %w", err)
-	}
-
-	log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
-
-	// Detect tag again to get the tag type and UID after writing
-	detectCtx, detectCancel := context.WithTimeout(r.writeCtx, 2*time.Second)
-	defer detectCancel()
-
-	detectedTag, err := r.device.DetectTagContext(detectCtx)
-	var uid, tagType string
+			return nil
+		})
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to detect tag after writing, using fallback values")
-		uid = hex.EncodeToString(tagOps.GetUID())
-		tagType = tokens.TypeUnknown
-	} else {
-		uid = detectedTag.UID
-		tagType = r.convertTagType(detectedTag.Type)
+		if writeErr != nil {
+			return nil, writeErr
+		}
+		return nil, fmt.Errorf("failed to write to tag: %w", err)
 	}
 
-	// Update tag state to prevent immediate re-detection as new tag
-	r.tagState.present = true
-	r.tagState.lastUID = uid
-	r.tagState.lastType = tagType
-
-	return &tokens.Token{
-		UID:      uid,
-		Type:     tagType,
-		Text:     text,
-		ScanTime: time.Now(),
-		Source:   r.deviceInfo.ConnectionString(),
-	}, nil
+	return resultToken, nil
 }
 
 func (r *Reader) CancelWrite() {
@@ -774,4 +458,12 @@ func (r *Reader) CancelWrite() {
 		log.Debug().Msg("cancelling ongoing write operation")
 		r.writeCancel()
 	}
+}
+
+func (*Reader) Capabilities() []readers.Capability {
+	return []readers.Capability{readers.CapabilityWrite}
+}
+
+func (*Reader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }

@@ -69,14 +69,15 @@ tasks:
 
   test:
     desc: Run all tests
+    vars:
+      TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go test -v -race ./...
-
-  test:coverage:
-    desc: Run tests with coverage report
-    cmds:
-      - go test -v -race -coverprofile=coverage.out ./...
-      - go tool cover -html=coverage.out -o coverage.html
+      - |
+        if command -v tdd-guard-go >/dev/null 2>&1; then
+          go test -json {{.TEST_ARGS}} 2>&1 | tdd-guard-go -project-root {{.ROOT_DIR}}
+        else
+          go test {{.TEST_ARGS}}
+        fi
 
   lint:
     desc: Run golangci-lint
@@ -97,3 +98,20 @@ tasks:
     desc: Run nilaway for nil-pointer analysis
     cmds:
       - nilaway ./...
+
+  get-logs:
+    desc: Download and decode logs from Zaparoo API
+    vars:
+      ENDPOINT: '{{default "localhost:7497" .CLI_ARGS}}'
+      UUID:
+        sh: uuidgen
+    cmds:
+      - >-
+        curl -X POST http://{{.ENDPOINT}}/api/v0.1
+        -H "Content-Type: application/json"
+        -d '{
+          "jsonrpc": "2.0",
+          "method": "settings.logs.download",
+          "params": {},
+          "id": "{{.UUID}}"
+        }' | jq -r '.result.content' | base64 -d

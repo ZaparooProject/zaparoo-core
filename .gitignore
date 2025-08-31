@@ -12,6 +12,11 @@ go.work
 .vscode/
 .idea/
 qodana.yaml
+.claude/
+.claudeignore
+.codanna/
+.codannaignore
+.fastembed_cache/
 
 *.db
 *.tar

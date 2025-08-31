@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
@@ -52,6 +53,15 @@ type PN532UARTReader struct {
 func NewReader(cfg *config.Instance) *PN532UARTReader {
 	return &PN532UARTReader{
 		cfg: cfg,
+	}
+}
+
+func (*PN532UARTReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{
+		ID:                "pn532uart",
+		DefaultEnabled:    true,
+		DefaultAutoDetect: true,
+		Description:       "PN532 NFC reader via UART (legacy)",
 	}
 }
 
@@ -372,4 +382,12 @@ func (*PN532UARTReader) Write(_ string) (*tokens.Token, error) {
 
 func (*PN532UARTReader) CancelWrite() {
 	// no-op, writing not supported
+}
+
+func (*PN532UARTReader) Capabilities() []readers.Capability {
+	return []readers.Capability{}
+}
+
+func (*PN532UARTReader) OnMediaChange(*models.ActiveMedia) error {
+	return nil
 }
