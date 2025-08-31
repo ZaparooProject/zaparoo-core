@@ -40,6 +40,7 @@ The testing infrastructure is organized under `pkg/testing/`:
 
 ```
 pkg/testing/
+├── README.md           # Quick reference guide to all testing utilities ⭐
 ├── mocks/              # Interface mocks
 │   ├── reader.go       # Reader interface mock
 │   ├── platform.go     # Platform interface mock
@@ -61,6 +62,8 @@ pkg/testing/
     ├── service_zapscript_test.go
     └── service_state_management_test.go
 ```
+
+**New to testing in Zaparoo?** Start with `pkg/testing/README.md` for a quick reference guide to all available helpers and examples.
 
 ## Quick Start Guide
 

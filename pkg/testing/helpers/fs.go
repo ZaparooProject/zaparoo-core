@@ -17,6 +17,33 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
+// Package helpers provides testing utilities for filesystem operations.
+//
+// This package includes in-memory filesystem implementations and helper functions
+// for testing file operations without requiring real filesystem access. It uses
+// afero for filesystem abstraction.
+//
+// Example usage:
+//
+//	func TestFileOperations(t *testing.T) {
+//		// Create in-memory filesystem
+//		fs := helpers.NewMemoryFS()
+//
+//		// Create files and directories for testing
+//		fs.WriteFile("test.txt", []byte("content"))
+//		fs.MkdirAll("configs")
+//
+//		// Create test configuration
+//		cfg, err := helpers.NewTestConfig(fs, "/tmp/config")
+//		require.NoError(t, err)
+//
+//		// Use in your tests
+//		content, err := fs.ReadFile("test.txt")
+//		require.NoError(t, err)
+//		assert.Equal(t, "content", string(content))
+//	}
+//
+// For complete examples, see pkg/testing/examples/filesystem_example_test.go
 package helpers
 
 import (
@@ -26,8 +53,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spf13/afero"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/spf13/afero"
 )
 
 // FSHelper provides utilities for filesystem mocking in tests
@@ -372,25 +399,25 @@ func NewTestConfig(fs *FSHelper, configDir string) (*config.Instance, error) {
 }
 
 // NewTestConfigWithPort creates a config instance for testing with a specific API port
-func NewTestConfigWithPort(fs *FSHelper, configDir string, port int) (*config.Instance, error) {
+func NewTestConfigWithPort(_ *FSHelper, configDir string, port int) (*config.Instance, error) {
 	// For now, create a real temporary directory since config.Instance
 	// is tightly coupled with the OS filesystem
 	err := os.MkdirAll(configDir, 0o750)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp config dir: %w", err)
 	}
-	
+
 	// Create defaults with custom port
 	defaults := config.BaseDefaults
 	if port != 0 {
 		defaults.Service.APIPort = port
 	}
-	
+
 	// Create config instance using the real filesystem
 	cfg, err := config.NewConfig(configDir, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create test config: %w", err)
 	}
-	
+
 	return cfg, nil
 }

@@ -40,6 +40,8 @@
 //		require.NoError(t, err)
 //		userDB.AssertExpectations(t)
 //	}
+//
+// For complete examples, see pkg/testing/examples/database_example_test.go
 package helpers
 
 import (

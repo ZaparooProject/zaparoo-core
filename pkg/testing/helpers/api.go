@@ -17,6 +17,33 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
+// Package helpers provides testing utilities for API operations.
+//
+// This package includes WebSocket test servers and helper functions for testing
+// API endpoints, WebSocket communication, and JSON-RPC methods without requiring
+// a full API server setup.
+//
+// Example usage:
+//
+//	func TestWebSocketAPI(t *testing.T) {
+//		// Create message handler
+//		handler := func(session *melody.Session, msg []byte) {
+//			session.Write([]byte(`{"response": "ok"}`))
+//		}
+//
+//		// Create test WebSocket server
+//		server := helpers.NewWebSocketTestServer(t, handler)
+//		defer server.Close()
+//
+//		// Connect and test
+//		client := server.NewClient(t)
+//		defer client.Close()
+//
+//		err := client.SendMessage([]byte(`{"test": "message"}`))
+//		require.NoError(t, err)
+//	}
+//
+// For complete examples, see pkg/testing/examples/api_example_test.go
 package helpers
 
 import (
