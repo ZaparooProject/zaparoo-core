@@ -864,13 +864,13 @@ func NewSQLMock() (*sql.DB, sqlmock.Sqlmock, error) {
 //
 //	userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 func HistoryEntryMatcher() any {
-    return mock.MatchedBy(func(he *database.HistoryEntry) bool {
-        if he == nil {
-            return false
-        }
-        // Basic validation - entry has required fields
-        return !he.Time.IsZero() && he.TokenID != ""
-    })
+	return mock.MatchedBy(func(he *database.HistoryEntry) bool {
+		if he == nil {
+			return false
+		}
+		// Basic validation - entry has required fields
+		return !he.Time.IsZero() && he.TokenID != ""
+	})
 }
 
 // MappingMatcher returns a testify matcher for database.Mapping.

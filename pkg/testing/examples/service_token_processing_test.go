@@ -43,8 +43,8 @@ func TestTokenProcessingMockIntegration(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockReader := mocks.NewMockReader()
 
-    // Use a minimal in-memory config instance to avoid filesystem writes
-    cfg := &config.Instance{}
+	// Use a minimal in-memory config instance to avoid filesystem writes
+	cfg := &config.Instance{}
 
 	// Create test fixtures
 	testTokens := fixtures.NewTokenCollection()
@@ -72,7 +72,7 @@ func TestTokenProcessingMockIntegration(t *testing.T) {
 	assert.Equal(t, testDBMedia.DBID, foundMedia.DBID)
 
 	// Test 3: Platform operations
-    mockPlatform.On("LaunchMedia", cfg, testDBMedia.Path).Return(nil)
+	mockPlatform.On("LaunchMedia", cfg, testDBMedia.Path).Return(nil)
 	mockPlatform.On("ID").Return("test-platform")
 
 	// Verify platform works
@@ -144,11 +144,11 @@ func TestErrorHandlingWithMocks(t *testing.T) {
 		{
 			name: "Platform launch failure",
 			testFunc: func(t *testing.T) {
-            mockPlatform := mocks.NewMockPlatform()
-            // Use minimal config to avoid disk I/O
-            cfg := &config.Instance{}
+				mockPlatform := mocks.NewMockPlatform()
+				// Use minimal config to avoid disk I/O
+				cfg := &config.Instance{}
 
-            mockPlatform.On("LaunchMedia", cfg, "/invalid/path").Return(errors.New("launch failed"))
+				mockPlatform.On("LaunchMedia", cfg, "/invalid/path").Return(errors.New("launch failed"))
 
 				err := mockPlatform.LaunchMedia(cfg, "/invalid/path")
 				require.Error(t, err)
@@ -165,7 +165,7 @@ func TestErrorHandlingWithMocks(t *testing.T) {
 				_, err := mockReader.Write("invalid")
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "write failed")
-				
+
 				// In error scenarios, Close() might not be called depending on the error handling strategy
 				mockReader.AssertExpectations(t)
 			},

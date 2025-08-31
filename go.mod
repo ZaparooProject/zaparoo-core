@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/ZaparooProject/go-pn532 v0.6.1
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
@@ -29,6 +30,7 @@ require (
 	github.com/pressly/goose/v3 v3.24.3
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
+	github.com/spf13/afero v1.14.0
 	github.com/stretchr/testify v1.10.0
 	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.4.0
@@ -43,7 +45,6 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.5.0 // indirect
-	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/creack/goselect v0.1.3 // indirect
@@ -69,7 +70,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
-	github.com/spf13/afero v1.14.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	go.uber.org/multierr v1.11.0 // indirect

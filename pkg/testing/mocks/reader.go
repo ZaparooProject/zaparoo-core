@@ -155,11 +155,11 @@ func (*MockReader) SimulateError(scanChan chan<- readers.Scan, err error, source
 
 // NewMockReader creates a new MockReader instance
 func NewMockReader() *MockReader {
-    m := &MockReader{}
-    // Provide a safe optional default for Close() since it may or may not be called
-    // depending on error conditions, defer statements, or cleanup patterns.
-    m.On("Close").Return(nil).Maybe()
-    return m
+	m := &MockReader{}
+	// Provide a safe optional default for Close() since it may or may not be called
+	// depending on error conditions, defer statements, or cleanup patterns.
+	m.On("Close").Return(nil).Maybe()
+	return m
 }
 
 // SetupBasicMock configures the mock with typical default values for basic operations

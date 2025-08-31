@@ -136,8 +136,8 @@ func TestZapScriptExecution(t *testing.T) {
 			// Setup mocks
 			platform := mocks.NewMockPlatform()
 
-            // Create a minimal config without touching the filesystem
-            cfg := &config.Instance{}
+			// Create a minimal config without touching the filesystem
+			cfg := &config.Instance{}
 
 			// Setup database mocks
 			mockUserDB := helpers.NewMockUserDBI()
@@ -272,8 +272,8 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	// Setup comprehensive test environment
 	platform := mocks.NewMockPlatform()
 
-    // Minimal config instance for testing (avoid disk I/O)
-    cfg := &config.Instance{}
+	// Minimal config instance for testing (avoid disk I/O)
+	cfg := &config.Instance{}
 
 	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()

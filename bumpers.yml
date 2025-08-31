@@ -10,7 +10,7 @@ rules:
       - task test -- ./pkg/api ./pkg/database
       - task test -- -run TestHandleMessage ./pkg/api
       - task test -- -timeout 30s ./...
-  - match: "^(gci|go vet|goimports|gofumpt|go fmt)"
+  - match: "^(gci|go vet|goimports|gofumpt|go fmt|golangci-lint)"
     send: Use "just lint fix" instead to resolve lint/formatting issues.
   - match: "cd /tmp"
     send: Create a "tmp" directory in the project root instead.
