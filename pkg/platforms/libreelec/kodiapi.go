@@ -95,9 +95,18 @@ type KodiAPIResponse struct {
 }
 
 func apiRequest(
+	cfg *config.Instance,
+	method KodiAPIMethod,
+	params any,
+) (json.RawMessage, error) {
+	return apiRequestWithURL(cfg, method, params, "")
+}
+
+func apiRequestWithURL(
 	_ *config.Instance,
 	method KodiAPIMethod,
 	params any,
+	customURL string,
 ) (json.RawMessage, error) {
 	req := KodiAPIPayload{
 		JSONRPC: "2.0",
@@ -113,6 +122,9 @@ func apiRequest(
 	log.Debug().Msgf("request: %s", string(reqJSON))
 
 	kodiURL := "http://localhost:8080/jsonrpc" // TODO: allow setting from config
+	if customURL != "" {
+		kodiURL = customURL
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, kodiURL, bytes.NewBuffer(reqJSON))
@@ -163,6 +175,18 @@ func kodiLaunchFileRequest(cfg *config.Instance, path string) error {
 			Resume: true,
 		},
 	})
+	return err
+}
+
+func kodiLaunchFileRequestWithURL(cfg *config.Instance, path, customURL string) error {
+	_, err := apiRequestWithURL(cfg, KodiAPIMethodPlayerOpen, KodiPlayerOpenParams{
+		Item: KodiItem{
+			File: path,
+		},
+		Options: KodiItemOptions{
+			Resume: true,
+		},
+	}, customURL)
 	return err
 }
 
