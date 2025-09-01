@@ -27,10 +27,15 @@ import (
 )
 
 // ScanMovies scans movies from Kodi library using the provided client
-func ScanMovies(client KodiClient, cfg *config.Instance, path string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
+func ScanMovies(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
 	movies, err := client.GetMovies()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get movies: %w", err)
 	}
 
 	for _, movie := range movies {
@@ -49,16 +54,21 @@ func ScanMovies(client KodiClient, cfg *config.Instance, path string, results []
 }
 
 // ScanTV scans TV shows and episodes from Kodi library using the provided client
-func ScanTV(client KodiClient, cfg *config.Instance, path string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
+func ScanTV(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
 	tvShows, err := client.GetTVShows()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get TV shows: %w", err)
 	}
 
 	for _, show := range tvShows {
 		episodes, err := client.GetEpisodes(show.ID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get episodes for show %d: %w", show.ID, err)
 		}
 
 		for _, ep := range episodes {
@@ -77,4 +87,3 @@ func ScanTV(client KodiClient, cfg *config.Instance, path string, results []plat
 
 	return results, nil
 }
-

@@ -21,6 +21,7 @@ package helpers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -69,11 +70,17 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Make actual HTTP POST request to the server
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	// TODO: Accept context from parent test instead of using context.Background()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(jsonData))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() {
-		err := resp.Body.Close()
-		require.NoError(t, err)
+		closeErr := resp.Body.Close()
+		require.NoError(t, closeErr)
 	}()
 
 	// Server should respond with valid JSON-RPC response - this will fail until implemented
@@ -104,11 +111,22 @@ func TestMockKodiServer_WithActivePlayers(t *testing.T) {
 	jsonData, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	resp, err := http.Post(server.GetURLForConfig(), "application/json", bytes.NewBuffer(jsonData))
+	// TODO: Accept context from parent test instead of using context.Background()
+	req, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		server.GetURLForConfig(),
+		bytes.NewBuffer(jsonData),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer func() {
-		err := resp.Body.Close()
-		require.NoError(t, err)
+		closeErr := resp.Body.Close()
+		require.NoError(t, closeErr)
 	}()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

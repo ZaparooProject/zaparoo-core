@@ -33,7 +33,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
@@ -47,7 +46,6 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
-
 
 type Platform struct {
 	cfg            *config.Instance
@@ -120,7 +118,10 @@ func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 func (p *Platform) StopActiveLauncher() error {
 	p.setActiveMedia(nil)
 	client := kodi.NewClient(p.cfg)
-	return client.Stop()
+	if err := client.Stop(); err != nil {
+		return fmt.Errorf("failed to stop Kodi client: %w", err)
+	}
+	return nil
 }
 
 func (*Platform) PlayAudio(_ string) error {
@@ -165,45 +166,9 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
-		{
-			ID:       "KodiLocal",
-			SystemID: systemdefs.SystemVideo,
-			Folders:  []string{"videos", "tvshows"},
-			Extensions: []string{
-				".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
-				".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
-			},
-			Launch: func(cfg *config.Instance, path string) error {
-				client := kodi.NewClient(cfg)
-				return client.LaunchFile(path)
-			},
-		},
-		{
-			ID:       "KodiMovie",
-			SystemID: systemdefs.SystemMovie,
-			Schemes:  []string{kodi.SchemeKodiMovie},
-			Launch: func(cfg *config.Instance, path string) error {
-				client := kodi.NewClient(cfg)
-				return client.LaunchMovie(path)
-			},
-			Scanner: func(cfg *config.Instance, path string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
-				client := kodi.NewClient(cfg)
-				return kodi.ScanMovies(client, cfg, path, results)
-			},
-		},
-		{
-			ID:       "KodiTV",
-			SystemID: systemdefs.SystemTV,
-			Schemes:  []string{kodi.SchemeKodiEpisode},
-			Launch: func(cfg *config.Instance, path string) error {
-				client := kodi.NewClient(cfg)
-				return client.LaunchTVEpisode(path)
-			},
-			Scanner: func(cfg *config.Instance, path string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
-				client := kodi.NewClient(cfg)
-				return kodi.ScanTV(client, cfg, path, results)
-			},
-		},
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
@@ -237,4 +202,3 @@ func (*Platform) ShowPicker(
 ) error {
 	return platforms.ErrNotSupported
 }
-

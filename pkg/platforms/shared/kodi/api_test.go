@@ -34,6 +34,7 @@ func TestClient_APIRequest(t *testing.T) {
 	t.Parallel()
 
 	t.Run("successful API request", func(t *testing.T) {
+		t.Parallel()
 		// Create a mock Kodi server
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Verify the request
@@ -44,7 +45,7 @@ func TestClient_APIRequest(t *testing.T) {
 			// Parse the request body
 			var payload kodi.APIPayload
 			err := json.NewDecoder(r.Body).Decode(&payload)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 
 			// Verify payload structure
 			assert.Equal(t, "2.0", payload.JSONRPC)
@@ -60,7 +61,7 @@ func TestClient_APIRequest(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			err = json.NewEncoder(w).Encode(response)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}))
 		defer server.Close()
 
@@ -83,11 +84,12 @@ func TestClient_APIRequest(t *testing.T) {
 	})
 
 	t.Run("API error response", func(t *testing.T) {
+		t.Parallel()
 		// Create a mock server that returns an error
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var payload kodi.APIPayload
 			err := json.NewDecoder(r.Body).Decode(&payload)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 
 			response := kodi.APIResponse{
 				JSONRPC: "2.0",
@@ -100,7 +102,7 @@ func TestClient_APIRequest(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			err = json.NewEncoder(w).Encode(response)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}))
 		defer server.Close()
 
@@ -114,6 +116,7 @@ func TestClient_APIRequest(t *testing.T) {
 	})
 
 	t.Run("HTTP error", func(t *testing.T) {
+		t.Parallel()
 		client := kodi.NewClient(nil)
 		client.SetURL("http://invalid-url-that-does-not-exist.local/jsonrpc")
 

@@ -21,6 +21,7 @@ package kodi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,7 +42,7 @@ type Client struct {
 var _ KodiClient = (*Client)(nil)
 
 // NewClient creates a new Kodi client with configuration-based URL
-func NewClient(cfg *config.Instance) KodiClient {
+func NewClient(_ *config.Instance) KodiClient {
 	// TODO: Implement proper config-based URL resolution
 	// For now, use hardcoded default
 	url := "http://localhost:8080/jsonrpc"
@@ -218,7 +219,8 @@ func (c *Client) APIRequest(method APIMethod, params any) (json.RawMessage, erro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	kodiReq, err := http.NewRequest(http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
+	// TODO: Accept context from parent caller instead of using context.Background()
+	kodiReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

@@ -21,6 +21,7 @@ package mocks
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/stretchr/testify/mock"
@@ -38,49 +39,97 @@ var _ kodi.KodiClient = (*MockKodiClient)(nil)
 // LaunchFile mocks launching a file in Kodi
 func (m *MockKodiClient) LaunchFile(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchFile error: %w", err)
+	}
+	return nil
 }
 
 // LaunchMovie mocks launching a movie in Kodi
 func (m *MockKodiClient) LaunchMovie(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchMovie error: %w", err)
+	}
+	return nil
 }
 
 // LaunchTVEpisode mocks launching a TV episode in Kodi
 func (m *MockKodiClient) LaunchTVEpisode(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchTVEpisode error: %w", err)
+	}
+	return nil
 }
 
 // Stop mocks stopping all active players in Kodi
 func (m *MockKodiClient) Stop() error {
 	args := m.Called()
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Stop error: %w", err)
+	}
+	return nil
 }
 
 // GetActivePlayers mocks retrieving all active players in Kodi
 func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.Player), args.Error(1)
+	if players, ok := args.Get(0).([]kodi.Player); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
+		}
+		return players, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
+	}
+	return nil, nil
 }
 
 // GetMovies mocks retrieving all movies from Kodi's library
 func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.Movie), args.Error(1)
+	if movies, ok := args.Get(0).([]kodi.Movie); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetMovies error: %w", err)
+		}
+		return movies, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMovies error: %w", err)
+	}
+	return nil, nil
 }
 
 // GetTVShows mocks retrieving all TV shows from Kodi's library
 func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.TVShow), args.Error(1)
+	if shows, ok := args.Get(0).([]kodi.TVShow); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetTVShows error: %w", err)
+		}
+		return shows, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetTVShows error: %w", err)
+	}
+	return nil, nil
 }
 
 // GetEpisodes mocks retrieving all episodes for a specific TV show from Kodi's library
 func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
 	args := m.Called(tvShowID)
-	return args.Get(0).([]kodi.Episode), args.Error(1)
+	if episodes, ok := args.Get(0).([]kodi.Episode); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
+		}
+		return episodes, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
+	}
+	return nil, nil
 }
 
 // GetURL mocks returning the current Kodi API URL
@@ -97,7 +146,16 @@ func (m *MockKodiClient) SetURL(url string) {
 // APIRequest mocks making a raw JSON-RPC request to Kodi API
 func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.RawMessage, error) {
 	args := m.Called(method, params)
-	return args.Get(0).(json.RawMessage), args.Error(1)
+	if result, ok := args.Get(0).(json.RawMessage); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock APIRequest error: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock APIRequest error: %w", err)
+	}
+	return nil, nil
 }
 
 // SetupBasicMock configures the mock with common expectations
@@ -118,7 +176,7 @@ func (m *MockKodiClient) SetupBasicMock() {
 
 // NewMockKodiClient creates a new mock Kodi client with basic setup
 func NewMockKodiClient() *MockKodiClient {
-	mock := &MockKodiClient{}
-	mock.SetupBasicMock()
-	return mock
+	client := &MockKodiClient{}
+	client.SetupBasicMock()
+	return client
 }

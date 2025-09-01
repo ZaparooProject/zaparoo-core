@@ -21,11 +21,13 @@ package kodi_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockKodiClient is a mock implementation of KodiClient interface
@@ -35,42 +37,90 @@ type MockKodiClient struct {
 
 func (m *MockKodiClient) LaunchFile(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchFile error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchMovie(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchMovie error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchTVEpisode(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchTVEpisode error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) Stop() error {
 	args := m.Called()
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Stop error: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.Player), args.Error(1)
+	if players, ok := args.Get(0).([]kodi.Player); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
+		}
+		return players, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
+	}
+	return nil, nil
 }
 
 func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.Movie), args.Error(1)
+	if movies, ok := args.Get(0).([]kodi.Movie); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetMovies error: %w", err)
+		}
+		return movies, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetMovies error: %w", err)
+	}
+	return nil, nil
 }
 
 func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
 	args := m.Called()
-	return args.Get(0).([]kodi.TVShow), args.Error(1)
+	if shows, ok := args.Get(0).([]kodi.TVShow); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetTVShows error: %w", err)
+		}
+		return shows, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetTVShows error: %w", err)
+	}
+	return nil, nil
 }
 
 func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
 	args := m.Called(tvShowID)
-	return args.Get(0).([]kodi.Episode), args.Error(1)
+	if episodes, ok := args.Get(0).([]kodi.Episode); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
+		}
+		return episodes, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
+	}
+	return nil, nil
 }
 
 func (m *MockKodiClient) GetURL() string {
@@ -84,7 +134,16 @@ func (m *MockKodiClient) SetURL(url string) {
 
 func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.RawMessage, error) {
 	args := m.Called(method, params)
-	return args.Get(0).(json.RawMessage), args.Error(1)
+	if result, ok := args.Get(0).(json.RawMessage); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock APIRequest error: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock APIRequest error: %w", err)
+	}
+	return nil, nil
 }
 
 func TestKodiClient_CanBeMocked(t *testing.T) {
@@ -105,7 +164,7 @@ func TestKodiClient_CanBeMocked(t *testing.T) {
 	err := client.LaunchFile(testPath)
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mockClient.AssertExpectations(t)
 }
 
@@ -135,7 +194,7 @@ func TestKodiClient_LaunchMovie(t *testing.T) {
 
 	// Test LaunchMovie method exists and can be called
 	err := client.LaunchMovie("kodi-movie://123/Test Movie")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
 }
@@ -152,7 +211,7 @@ func TestKodiClient_LaunchTVEpisode(t *testing.T) {
 
 	// Test LaunchTVEpisode method exists and can be called
 	err := client.LaunchTVEpisode("kodi-episode://456/Test Episode")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
 }
@@ -169,7 +228,7 @@ func TestKodiClient_Stop(t *testing.T) {
 
 	// Test Stop method exists and can be called
 	err := client.Stop()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
 }
@@ -192,7 +251,7 @@ func TestKodiClient_GetActivePlayers(t *testing.T) {
 
 	// Test GetActivePlayers method exists and can be called
 	players, err := client.GetActivePlayers()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, players, 2)
 	assert.Equal(t, 1, players[0].ID)
 	assert.Equal(t, "video", players[0].Type)
@@ -220,7 +279,7 @@ func TestKodiClient_GetMovies(t *testing.T) {
 
 	// Test GetMovies method exists and can be called
 	movies, err := client.GetMovies()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, movies, 2)
 	assert.Equal(t, 123, movies[0].ID)
 	assert.Equal(t, "The Matrix", movies[0].Label)
@@ -250,7 +309,7 @@ func TestKodiClient_GetTVShows(t *testing.T) {
 
 	// Test GetTVShows method exists and can be called
 	shows, err := client.GetTVShows()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, shows, 2)
 	assert.Equal(t, 789, shows[0].ID)
 	assert.Equal(t, "Breaking Bad", shows[0].Label)
@@ -279,7 +338,7 @@ func TestKodiClient_GetEpisodes(t *testing.T) {
 
 	// Test GetEpisodes method exists and can be called
 	episodes, err := client.GetEpisodes(tvShowID)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, episodes, 2)
 	assert.Equal(t, 101, episodes[0].ID)
 	assert.Equal(t, "Pilot", episodes[0].Label)

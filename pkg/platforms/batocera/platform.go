@@ -20,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -338,6 +339,9 @@ func readESGameListXML(path string) (ESGameList, error) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
