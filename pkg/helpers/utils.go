@@ -158,6 +158,27 @@ func GetLocalIP() string {
 	return ""
 }
 
+// GetAllLocalIPs returns all non-loopback private IPv4 addresses
+func GetAllLocalIPs() []string {
+	var ips []string
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips
+	}
+
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok &&
+			!ipnet.IP.IsLoopback() && ipnet.IP.IsPrivate() {
+			if ipnet.IP.To4() != nil {
+				ips = append(ips, ipnet.IP.String())
+			}
+		}
+	}
+
+	return ips
+}
+
 func IsZip(filePath string) bool {
 	return filepath.Ext(strings.ToLower(filePath)) == ".zip"
 }

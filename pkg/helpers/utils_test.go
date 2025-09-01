@@ -22,6 +22,7 @@ package helpers
 import (
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -1455,5 +1456,37 @@ func TestCopyFile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetAllLocalIPs(t *testing.T) {
+	t.Parallel()
+
+	// Test GetAllLocalIPs returns all IPs
+	ips := GetAllLocalIPs()
+
+	// Should return a slice (could be empty on systems with no private IPs)
+	assert.NotNil(t, ips, "GetAllLocalIPs should never return nil")
+
+	// If GetLocalIP returns something, GetAllLocalIPs should include it
+	singleIP := GetLocalIP()
+	if singleIP != "" {
+		assert.Contains(t, ips, singleIP, "GetAllLocalIPs should contain the IP returned by GetLocalIP")
+		assert.GreaterOrEqual(t, len(ips), 1, "GetAllLocalIPs should return at least one IP if GetLocalIP works")
+	}
+
+	// All returned IPs should be valid private IPs
+	for _, ip := range ips {
+		assert.NotEmpty(t, ip, "No IP in the list should be empty")
+		// Basic IP format check
+		parts := strings.Split(ip, ".")
+		assert.Len(t, parts, 4, "IP should have 4 octets: %s", ip)
+	}
+
+	// Should not have duplicates
+	unique := make(map[string]bool)
+	for _, ip := range ips {
+		assert.False(t, unique[ip], "GetAllLocalIPs should not return duplicate IPs")
+		unique[ip] = true
 	}
 }
