@@ -20,11 +20,14 @@
 package kodi_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -650,4 +653,862 @@ func TestClient_GetEpisodes_MakesCorrectAPICall(t *testing.T) {
 	tvshowid, ok := params["tvshowid"].(float64)
 	require.True(t, ok, "tvshowid should be present")
 	assert.Equal(t, 1, int(tvshowid))
+}
+
+func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
+	t.Parallel()
+
+	// Test the hierarchical config lookup for Kodi client
+	// Should use: specific launcher ID → "Kodi" generic → hardcoded localhost fallback
+
+	tests := []struct {
+		name           string
+		launcherID     string
+		configDefaults map[string]string
+		expectedURL    string
+	}{
+		{
+			name:       "uses specific launcher ID configuration",
+			launcherID: "KodiSpecific",
+			configDefaults: map[string]string{
+				"KodiSpecific": "http://specific-kodi:8080/jsonrpc",
+				"Kodi":         "http://generic-kodi:8080/jsonrpc",
+			},
+			expectedURL: "http://specific-kodi:8080/jsonrpc",
+		},
+		{
+			name:       "falls back to Kodi generic when specific not found",
+			launcherID: "KodiSpecific",
+			configDefaults: map[string]string{
+				"Kodi": "http://generic-kodi:8080/jsonrpc",
+			},
+			expectedURL: "http://generic-kodi:8080/jsonrpc",
+		},
+		{
+			name:           "falls back to hardcoded localhost when no config found",
+			launcherID:     "KodiSpecific",
+			configDefaults: map[string]string{},
+			expectedURL:    "http://localhost:8080/jsonrpc",
+		},
+		{
+			name:       "handles trailing slashes in ServerURL",
+			launcherID: "KodiSpecific",
+			configDefaults: map[string]string{
+				"KodiSpecific": "http://specific-kodi:8080/",
+			},
+			expectedURL: "http://specific-kodi:8080/jsonrpc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// This test should drive the implementation to accept a launcher ID
+			// and perform hierarchical configuration lookup
+
+			// For now, the test will fail because NewClient doesn't accept launcher ID
+			// This drives us to modify the NewClient signature and implementation
+			client := kodi.NewClientWithLauncherID(nil, tt.launcherID, tt.configDefaults)
+
+			actualURL := client.GetURL()
+			assert.Equal(t, tt.expectedURL, actualURL)
+		})
+	}
+}
+
+func TestNewClient_UsesConfigurationSystem(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		config      *config.Instance
+		expectedURL string
+	}{
+		{
+			name:        "nil config falls back to localhost",
+			config:      nil,
+			expectedURL: "http://localhost:8080/jsonrpc",
+		},
+		{
+			name: "uses Kodi generic configuration",
+			config: createTestConfigWithKodiDefaults(t, config.LaunchersDefault{
+				Launcher:  "Kodi",
+				ServerURL: "http://configured-kodi:9090",
+			}),
+			expectedURL: "http://configured-kodi:9090/jsonrpc",
+		},
+		{
+			name: "handles trailing slash in ServerURL",
+			config: createTestConfigWithKodiDefaults(t, config.LaunchersDefault{
+				Launcher:  "Kodi",
+				ServerURL: "http://configured-kodi:9090/",
+			}),
+			expectedURL: "http://configured-kodi:9090/jsonrpc",
+		},
+		{
+			name: "preserves existing jsonrpc endpoint",
+			config: createTestConfigWithKodiDefaults(t, config.LaunchersDefault{
+				Launcher:  "Kodi",
+				ServerURL: "http://configured-kodi:9090/jsonrpc",
+			}),
+			expectedURL: "http://configured-kodi:9090/jsonrpc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := kodi.NewClient(tt.config)
+			actualURL := client.GetURL()
+			assert.Equal(t, tt.expectedURL, actualURL)
+		})
+	}
+}
+
+// Helper function to create config instance with Kodi defaults for testing
+func createTestConfigWithKodiDefaults(t *testing.T, defaults config.LaunchersDefault) *config.Instance {
+	t.Helper()
+
+	configDir := t.TempDir()
+	values := config.Values{
+		Launchers: config.Launchers{
+			Default: []config.LaunchersDefault{defaults},
+		},
+	}
+
+	cfg, err := config.NewConfig(configDir, values)
+	require.NoError(t, err)
+	return cfg
+}
+
+func TestClient_LaunchSong_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of LaunchSong to make real API requests
+	// It should parse the song ID from the path and use Player.Open with songid parameter
+
+	var receivedPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request format
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+		// Decode the payload
+		err := json.NewDecoder(r.Body).Decode(&receivedPayload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Mock successful response
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      receivedPayload["id"],
+			"result":  "OK",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test launching a song
+	songPath := "kodi-song://123/Artist - Song Title"
+	err := client.LaunchSong(songPath)
+	require.NoError(t, err)
+
+	// Verify the correct API call was made
+	assert.Equal(t, "Player.Open", receivedPayload["method"])
+	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
+
+	// Verify the parameters contain the song ID
+	params, ok := receivedPayload["params"].(map[string]any)
+	require.True(t, ok, "params should be a map")
+
+	item, ok := params["item"].(map[string]any)
+	require.True(t, ok, "item should be a map")
+
+	// The song should be launched by ID, not file path
+	songID, ok := item["songid"].(float64)
+	require.True(t, ok, "songid should be present")
+	assert.Equal(t, float64(123), songID)
+}
+
+func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of GetSongs to retrieve songs from Kodi's library
+	// It should use AudioLibrary.GetSongs API method
+
+	var receivedPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Decode the payload
+		err := json.NewDecoder(r.Body).Decode(&receivedPayload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Mock successful response with songs
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      receivedPayload["id"],
+			"result": map[string]any{
+				"songs": []map[string]any{
+					{
+						"songid":   123,
+						"label":    "Test Song 1",
+						"albumid":  456,
+						"artist":   "Test Artist",
+						"duration": 240,
+					},
+					{
+						"songid":   124,
+						"label":    "Test Song 2",
+						"albumid":  456,
+						"artist":   "Test Artist",
+						"duration": 180,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test getting songs
+	songs, err := client.GetSongs()
+	require.NoError(t, err)
+
+	// Verify the correct API call was made
+	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayload["method"])
+	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
+
+	// Verify the songs were parsed correctly
+	require.Len(t, songs, 2)
+	assert.Equal(t, 123, songs[0].ID)
+	assert.Equal(t, "Test Song 1", songs[0].Label)
+	assert.Equal(t, 456, songs[0].AlbumID)
+	assert.Equal(t, "Test Artist", songs[0].Artist)
+	assert.Equal(t, 240, songs[0].Duration)
+}
+
+func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of LaunchAlbum to make playlist-based API requests
+	// It should: 1) Clear music playlist, 2) Get album songs, 3) Add songs to playlist, 4) Start playback
+
+	var receivedPayloads []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		receivedPayloads = append(receivedPayloads, payload)
+
+		method := payload["method"].(string)
+
+		// Mock different responses based on method
+		var response map[string]any
+		switch method {
+		case "Playlist.Clear":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "AudioLibrary.GetSongs":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": map[string]any{
+					"songs": []map[string]any{
+						{
+							"songid":   123,
+							"label":    "Song 1",
+							"albumid":  456,
+							"artist":   "Test Artist",
+							"duration": 240,
+						},
+						{
+							"songid":   124,
+							"label":    "Song 2",
+							"albumid":  456,
+							"artist":   "Test Artist",
+							"duration": 180,
+						},
+					},
+				},
+			}
+		case "Playlist.Add":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "Player.Open":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		default:
+			http.Error(w, "Unknown method", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test launching an album
+	albumPath := "kodi-album://456/Test Artist - Test Album"
+	err := client.LaunchAlbum(albumPath)
+	require.NoError(t, err)
+
+	// Verify the correct sequence of API calls was made
+	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetSongs, Add, Open")
+
+	// 1. Clear music playlist (playlistid=0)
+	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
+	clearParams := receivedPayloads[0]["params"].(map[string]any)
+	assert.Equal(t, float64(0), clearParams["playlistid"])
+
+	// 2. Get songs (filtered by album)
+	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[1]["method"])
+
+	// 3. Add songs to playlist
+	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
+	addParams := receivedPayloads[2]["params"].(map[string]any)
+	assert.Equal(t, float64(0), addParams["playlistid"])
+
+	// 4. Start playback with playlist
+	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
+	openParams := receivedPayloads[3]["params"].(map[string]any)
+	item := openParams["item"].(map[string]any)
+	assert.Equal(t, float64(0), item["playlistid"])
+}
+
+func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of GetAlbums to retrieve albums from Kodi's library
+	// It should use AudioLibrary.GetAlbums API method
+
+	var receivedPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Decode the payload
+		err := json.NewDecoder(r.Body).Decode(&receivedPayload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Mock successful response with albums
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      receivedPayload["id"],
+			"result": map[string]any{
+				"albums": []map[string]any{
+					{
+						"albumid": 456,
+						"label":   "Test Album 1",
+						"artist":  "Test Artist 1",
+						"year":    2020,
+					},
+					{
+						"albumid": 457,
+						"label":   "Test Album 2",
+						"artist":  "Test Artist 2",
+						"year":    2021,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test getting albums
+	albums, err := client.GetAlbums()
+	require.NoError(t, err)
+
+	// Verify the correct API call was made
+	assert.Equal(t, "AudioLibrary.GetAlbums", receivedPayload["method"])
+	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
+
+	// Verify the albums were parsed correctly
+	require.Len(t, albums, 2)
+	assert.Equal(t, 456, albums[0].ID)
+	assert.Equal(t, "Test Album 1", albums[0].Label)
+	assert.Equal(t, "Test Artist 1", albums[0].Artist)
+	assert.Equal(t, 2020, albums[0].Year)
+
+	assert.Equal(t, 457, albums[1].ID)
+	assert.Equal(t, "Test Album 2", albums[1].Label)
+	assert.Equal(t, "Test Artist 2", albums[1].Artist)
+	assert.Equal(t, 2021, albums[1].Year)
+}
+
+func TestClient_GetArtists_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of GetArtists to retrieve artists from Kodi's library
+	// It should use AudioLibrary.GetArtists API method
+
+	var receivedPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Decode the payload
+		err := json.NewDecoder(r.Body).Decode(&receivedPayload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Mock successful response with artists
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      receivedPayload["id"],
+			"result": map[string]any{
+				"artists": []map[string]any{
+					{
+						"artistid": 789,
+						"label":    "Test Artist 1",
+					},
+					{
+						"artistid": 790,
+						"label":    "Test Artist 2",
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test getting artists
+	artists, err := client.GetArtists()
+	require.NoError(t, err)
+
+	// Verify the correct API call was made
+	assert.Equal(t, "AudioLibrary.GetArtists", receivedPayload["method"])
+	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
+
+	// Verify the artists were parsed correctly
+	require.Len(t, artists, 2)
+	assert.Equal(t, 789, artists[0].ID)
+	assert.Equal(t, "Test Artist 1", artists[0].Label)
+
+	assert.Equal(t, 790, artists[1].ID)
+	assert.Equal(t, "Test Artist 2", artists[1].Label)
+}
+
+func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of LaunchArtist to make playlist-based API requests
+	// It should: 1) Clear music playlist, 2) Get artists to find name, 3) Get all songs and filter by artist, 4) Add songs to playlist, 5) Start playback
+
+	var receivedPayloads []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		receivedPayloads = append(receivedPayloads, payload)
+
+		method := payload["method"].(string)
+
+		// Mock different responses based on method
+		var response map[string]any
+		switch method {
+		case "Playlist.Clear":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "AudioLibrary.GetArtists":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": map[string]any{
+					"artists": []map[string]any{
+						{
+							"artistid": 789,
+							"label":    "Test Artist",
+						},
+					},
+				},
+			}
+		case "AudioLibrary.GetSongs":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": map[string]any{
+					"songs": []map[string]any{
+						{
+							"songid":   123,
+							"label":    "Song 1",
+							"albumid":  456,
+							"artist":   "Test Artist",
+							"duration": 240,
+						},
+						{
+							"songid":   124,
+							"label":    "Song 2",
+							"albumid":  456,
+							"artist":   "Test Artist",
+							"duration": 180,
+						},
+					},
+				},
+			}
+		case "Playlist.Add":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "Player.Open":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		default:
+			http.Error(w, "Unknown method", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test launching an artist
+	artistPath := "kodi-artist://789/Test Artist"
+	err := client.LaunchArtist(artistPath)
+	require.NoError(t, err)
+
+	// Verify the correct sequence of API calls was made
+	require.Len(t, receivedPayloads, 5, "Should make 5 API calls: Clear, GetArtists, GetSongs, Add, Open")
+
+	// 1. Clear music playlist (playlistid=0)
+	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
+	clearParams := receivedPayloads[0]["params"].(map[string]any)
+	assert.Equal(t, float64(0), clearParams["playlistid"])
+
+	// 2. Get artists to find artist name
+	assert.Equal(t, "AudioLibrary.GetArtists", receivedPayloads[1]["method"])
+
+	// 3. Get songs (to filter by artist)
+	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[2]["method"])
+
+	// 4. Add songs to playlist
+	assert.Equal(t, "Playlist.Add", receivedPayloads[3]["method"])
+	addParams := receivedPayloads[3]["params"].(map[string]any)
+	assert.Equal(t, float64(0), addParams["playlistid"])
+
+	// 5. Start playback with playlist
+	assert.Equal(t, "Player.Open", receivedPayloads[4]["method"])
+	openParams := receivedPayloads[4]["params"].(map[string]any)
+	item := openParams["item"].(map[string]any)
+	assert.Equal(t, float64(0), item["playlistid"])
+}
+
+func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of LaunchTVShow to make playlist-based API requests
+	// It should: 1) Clear video playlist, 2) Get episodes for the show, 3) Add episodes to playlist, 4) Start playback
+
+	var receivedPayloads []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		receivedPayloads = append(receivedPayloads, payload)
+
+		method := payload["method"].(string)
+
+		// Mock different responses based on method
+		var response map[string]any
+		switch method {
+		case "Playlist.Clear":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "VideoLibrary.GetEpisodes":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result": map[string]any{
+					"episodes": []map[string]any{
+						{
+							"episodeid": 123,
+							"tvshowid":  456,
+							"label":     "Pilot",
+							"season":    1,
+							"episode":   1,
+						},
+						{
+							"episodeid": 124,
+							"tvshowid":  456,
+							"label":     "Episode 2",
+							"season":    1,
+							"episode":   2,
+						},
+					},
+				},
+			}
+		case "Playlist.Add":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		case "Player.Open":
+			response = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      payload["id"],
+				"result":  "OK",
+			}
+		default:
+			http.Error(w, "Unknown method", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create client
+	client := kodi.NewClient(nil)
+	client.SetURL(server.URL)
+
+	// Test launching a TV show
+	showPath := "kodi-show://456/Breaking Bad"
+	err := client.LaunchTVShow(showPath)
+	require.NoError(t, err)
+
+	// Verify the correct sequence of API calls was made
+	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetEpisodes, Add, Open")
+
+	// 1. Clear video playlist (playlistid=1)
+	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
+	clearParams := receivedPayloads[0]["params"].(map[string]any)
+	assert.Equal(t, float64(1), clearParams["playlistid"])
+
+	// 2. Get episodes for the show
+	assert.Equal(t, "VideoLibrary.GetEpisodes", receivedPayloads[1]["method"])
+	episodesParams := receivedPayloads[1]["params"].(map[string]any)
+	assert.Equal(t, float64(456), episodesParams["tvshowid"])
+
+	// 3. Add episodes to playlist
+	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
+	addParams := receivedPayloads[2]["params"].(map[string]any)
+	assert.Equal(t, float64(1), addParams["playlistid"])
+
+	// Verify episode items are properly structured
+	items, ok := addParams["item"].([]any)
+	require.True(t, ok, "item should be an array")
+	require.Len(t, items, 2, "should have 2 episodes")
+
+	firstItem := items[0].(map[string]any)
+	assert.Equal(t, float64(123), firstItem["episodeid"])
+
+	// 4. Start playbook with playlist
+	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
+	openParams := receivedPayloads[3]["params"].(map[string]any)
+	item := openParams["item"].(map[string]any)
+	assert.Equal(t, float64(1), item["playlistid"])
+}
+
+func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the implementation of authentication integration in APIRequest
+	// It should look up credentials using LookupAuth and add the appropriate headers
+
+	// Test 1: No authentication configured
+	t.Run("no auth configured", func(t *testing.T) {
+		t.Parallel()
+
+		var receivedHeaders http.Header
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedHeaders = r.Header.Clone()
+
+			response := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "test-id",
+				"result":  "OK",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+		}))
+		defer server.Close()
+
+		// Create client
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL)
+
+		// Make an API call - this should trigger authentication lookup
+		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		require.NoError(t, err)
+
+		// No auth headers should be present since no auth is configured
+		assert.Empty(t, receivedHeaders.Get("Authorization"))
+	})
+
+	// Test 2: Basic authentication configured
+	t.Run("basic auth configured", func(t *testing.T) {
+		t.Parallel()
+
+		// This test will fail until basic auth integration is implemented
+		// It drives the implementation to use config.LookupAuth and set basic auth headers
+
+		var receivedHeaders http.Header
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedHeaders = r.Header.Clone()
+
+			response := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "test-id",
+				"result":  "OK",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+		}))
+		defer server.Close()
+
+		// Mock auth config by temporarily setting it
+		// This simulates having auth configured for the server URL
+		originalAuthCfg := config.GetAuthCfg()
+		defer func() {
+			// Restore original config after test
+			if originalAuthCfg.Creds == nil {
+				config.ClearAuthCfgForTesting()
+			}
+		}()
+
+		// Set up test auth config
+		testAuthCfg := config.Auth{
+			Creds: map[string]config.CredentialEntry{
+				server.URL: {
+					Username: "testuser",
+					Password: "testpass",
+				},
+			},
+		}
+		config.SetAuthCfgForTesting(testAuthCfg)
+
+		// Create client
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL)
+
+		// Make an API call - this should add basic auth headers
+		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		require.NoError(t, err)
+
+		// Should have basic auth header
+		authHeader := receivedHeaders.Get("Authorization")
+		assert.True(t, strings.HasPrefix(authHeader, "Basic "), "Should have Basic auth header")
+
+		// Decode and verify credentials
+		basicAuth := strings.TrimPrefix(authHeader, "Basic ")
+		decoded, err := base64.StdEncoding.DecodeString(basicAuth)
+		require.NoError(t, err)
+		assert.Equal(t, "testuser:testpass", string(decoded))
+	})
+
+	// Test 3: Bearer token authentication configured
+	t.Run("bearer auth configured", func(t *testing.T) {
+		t.Parallel()
+
+		// This test will fail until bearer auth integration is implemented
+
+		var receivedHeaders http.Header
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedHeaders = r.Header.Clone()
+
+			response := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "test-id",
+				"result":  "OK",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response)
+		}))
+		defer server.Close()
+
+		// Mock auth config with bearer token
+		originalAuthCfg := config.GetAuthCfg()
+		defer func() {
+			if originalAuthCfg.Creds == nil {
+				config.ClearAuthCfgForTesting()
+			}
+		}()
+
+		testAuthCfg := config.Auth{
+			Creds: map[string]config.CredentialEntry{
+				server.URL: {
+					Bearer: "test-bearer-token-12345",
+				},
+			},
+		}
+		config.SetAuthCfgForTesting(testAuthCfg)
+
+		// Create client
+		client := kodi.NewClient(nil)
+		client.SetURL(server.URL)
+
+		// Make an API call - this should add bearer auth headers
+		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		require.NoError(t, err)
+
+		// Should have bearer auth header
+		authHeader := receivedHeaders.Get("Authorization")
+		assert.Equal(t, "Bearer test-bearer-token-12345", authHeader)
+	})
 }

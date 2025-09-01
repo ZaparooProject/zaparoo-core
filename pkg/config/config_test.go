@@ -336,3 +336,47 @@ func TestLookupAuth(t *testing.T) {
 		assert.True(t, validMatch, "Result should match one of the valid credentials")
 	})
 }
+
+func TestLaunchersDefaultServerURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		launcherCfg LaunchersDefault
+		expected    string
+	}{
+		{
+			name: "ServerURL field is properly set and retrieved",
+			launcherCfg: LaunchersDefault{
+				Launcher:   "Kodi",
+				InstallDir: "/opt/kodi",
+				ServerURL:  "http://kodi-server:8080/jsonrpc",
+			},
+			expected: "http://kodi-server:8080/jsonrpc",
+		},
+		{
+			name: "ServerURL field can be empty",
+			launcherCfg: LaunchersDefault{
+				Launcher:   "KodiLocal",
+				InstallDir: "/usr/bin/kodi",
+				ServerURL:  "",
+			},
+			expected: "",
+		},
+		{
+			name: "ServerURL field supports localhost URLs",
+			launcherCfg: LaunchersDefault{
+				Launcher:  "KodiTest",
+				ServerURL: "http://localhost:8080/jsonrpc",
+			},
+			expected: "http://localhost:8080/jsonrpc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.launcherCfg.ServerURL)
+		})
+	}
+}

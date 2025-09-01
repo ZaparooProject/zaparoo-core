@@ -22,12 +22,14 @@ package kodi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/google/uuid"
@@ -42,11 +44,52 @@ type Client struct {
 var _ KodiClient = (*Client)(nil)
 
 // NewClient creates a new Kodi client with configuration-based URL
-func NewClient(_ *config.Instance) KodiClient {
-	// TODO: Implement proper config-based URL resolution
-	// For now, use hardcoded default
-	url := "http://localhost:8080/jsonrpc"
-	return &Client{url: url}
+func NewClient(cfg *config.Instance) KodiClient {
+	var serverURL string
+
+	// Try to get generic "Kodi" configuration
+	if cfg != nil {
+		if defaults, found := cfg.LookupLauncherDefaults("Kodi"); found && defaults.ServerURL != "" {
+			serverURL = defaults.ServerURL
+		}
+	}
+
+	// Fall back to hardcoded localhost if no config found
+	if serverURL == "" {
+		serverURL = "http://localhost:8080"
+	}
+
+	// Handle trailing slashes and ensure /jsonrpc endpoint
+	serverURL = strings.TrimSuffix(serverURL, "/")
+	if !strings.HasSuffix(serverURL, "/jsonrpc") {
+		serverURL += "/jsonrpc"
+	}
+
+	return &Client{url: serverURL}
+}
+
+// NewClientWithLauncherID creates a new Kodi client with hierarchical configuration lookup
+func NewClientWithLauncherID(_ *config.Instance, launcherID string, configDefaults map[string]string) KodiClient {
+	var serverURL string
+
+	// Try specific launcher ID first
+	if url, exists := configDefaults[launcherID]; exists && url != "" {
+		serverURL = url
+	} else if url, exists := configDefaults["Kodi"]; exists && url != "" {
+		// Fall back to generic "Kodi" configuration
+		serverURL = url
+	} else {
+		// Fall back to hardcoded localhost
+		serverURL = "http://localhost:8080"
+	}
+
+	// Handle trailing slashes and ensure /jsonrpc endpoint
+	serverURL = strings.TrimSuffix(serverURL, "/")
+	if !strings.HasSuffix(serverURL, "/jsonrpc") {
+		serverURL += "/jsonrpc"
+	}
+
+	return &Client{url: serverURL}
 }
 
 // LaunchFile launches a local file or URL in Kodi
@@ -195,6 +238,249 @@ func (c *Client) GetEpisodes(tvShowID int) ([]Episode, error) {
 	return response.Episodes, nil
 }
 
+// GetSongs retrieves all songs from Kodi's library
+func (c *Client) GetSongs() ([]Song, error) {
+	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AudioLibraryGetSongsResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
+	}
+
+	return response.Songs, nil
+}
+
+// GetAlbums retrieves all albums from Kodi's library
+func (c *Client) GetAlbums() ([]Album, error) {
+	result, err := c.APIRequest(APIMethodAudioLibraryGetAlbums, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AudioLibraryGetAlbumsResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetAlbums response: %w", err)
+	}
+
+	return response.Albums, nil
+}
+
+// GetArtists retrieves all artists from Kodi's library
+func (c *Client) GetArtists() ([]Artist, error) {
+	result, err := c.APIRequest(APIMethodAudioLibraryGetArtists, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response AudioLibraryGetArtistsResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetArtists response: %w", err)
+	}
+
+	return response.Artists, nil
+}
+
+// LaunchSong launches a song by ID from Kodi's library
+func (c *Client) LaunchSong(path string) error {
+	pathID := strings.TrimPrefix(path, SchemeKodiSong+"://")
+	pathID = strings.SplitN(pathID, "/", 2)[0]
+
+	songID, err := strconv.Atoi(pathID)
+	if err != nil {
+		return fmt.Errorf("failed to parse song ID %q: %w", pathID, err)
+	}
+
+	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+		Item: Item{
+			SongID: songID,
+		},
+		Options: ItemOptions{
+			Resume: true,
+		},
+	})
+	return err
+}
+
+// LaunchAlbum launches an album by ID using playlist generation
+func (c *Client) LaunchAlbum(path string) error {
+	pathID := strings.TrimPrefix(path, SchemeKodiAlbum+"://")
+	pathID = strings.SplitN(pathID, "/", 2)[0]
+
+	albumID, err := strconv.Atoi(pathID)
+	if err != nil {
+		return fmt.Errorf("failed to parse album ID %q: %w", pathID, err)
+	}
+
+	// Step 1: Clear music playlist
+	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+		PlaylistID: 0,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get songs
+	allSongs, err := c.GetSongs()
+	if err != nil {
+		return err
+	}
+
+	// Filter by album
+	var albumSongs []PlaylistItemSongID
+	for _, song := range allSongs {
+		if song.AlbumID == albumID {
+			albumSongs = append(albumSongs, PlaylistItemSongID{SongID: song.ID})
+		}
+	}
+
+	// Step 3: Add to playlist
+	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddParams{
+		PlaylistID: 0,
+		Item:       albumSongs,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 4: Start playback
+	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+		Item: Item{
+			PlaylistID: 0,
+		},
+	})
+	return err
+}
+
+// LaunchArtist launches an artist by ID using playlist generation
+func (c *Client) LaunchArtist(path string) error {
+	pathID := strings.TrimPrefix(path, SchemeKodiArtist+"://")
+	pathID = strings.SplitN(pathID, "/", 2)[0]
+
+	artistID, err := strconv.Atoi(pathID)
+	if err != nil {
+		return fmt.Errorf("failed to parse artist ID %q: %w", pathID, err)
+	}
+
+	// Step 1: Clear music playlist
+	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+		PlaylistID: 0,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get all artists to find the target artist name
+	artists, err := c.GetArtists()
+	if err != nil {
+		return err
+	}
+
+	var targetArtistName string
+	for _, artist := range artists {
+		if artist.ID == artistID {
+			targetArtistName = artist.Label
+			break
+		}
+	}
+
+	if targetArtistName == "" {
+		return fmt.Errorf("artist with ID %d not found", artistID)
+	}
+
+	// Step 3: Get all songs and filter by artist name
+	allSongs, err := c.GetSongs()
+	if err != nil {
+		return err
+	}
+
+	// Filter songs by artist name
+	var artistSongs []PlaylistItemSongID
+	for _, song := range allSongs {
+		if song.Artist == targetArtistName {
+			artistSongs = append(artistSongs, PlaylistItemSongID{SongID: song.ID})
+		}
+	}
+
+	if len(artistSongs) == 0 {
+		return fmt.Errorf("no songs found for artist %s", targetArtistName)
+	}
+
+	// Step 4: Add songs to playlist
+	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddParams{
+		PlaylistID: 0,
+		Item:       artistSongs,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 5: Start playback
+	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+		Item: Item{
+			PlaylistID: 0,
+		},
+	})
+	return err
+}
+
+// LaunchTVShow launches a TV show by ID using playlist generation
+func (c *Client) LaunchTVShow(path string) error {
+	// Parse show ID
+	pathID := strings.TrimPrefix(path, SchemeKodiShow+"://")
+	pathID = strings.SplitN(pathID, "/", 2)[0]
+
+	showID, err := strconv.Atoi(pathID)
+	if err != nil {
+		return fmt.Errorf("failed to parse show ID %q: %w", pathID, err)
+	}
+
+	// Step 1: Clear video playlist (playlistid=1)
+	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+		PlaylistID: 1,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 2: Get episodes for the show
+	episodes, err := c.GetEpisodes(showID)
+	if err != nil {
+		return err
+	}
+
+	if len(episodes) == 0 {
+		return fmt.Errorf("no episodes found for show ID %d", showID)
+	}
+
+	// Step 3: Add episodes to playlist
+	episodeItems := make([]PlaylistItemEpisodeID, 0, len(episodes))
+	for _, episode := range episodes {
+		episodeItems = append(episodeItems, PlaylistItemEpisodeID{EpisodeID: episode.ID})
+	}
+
+	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddEpisodesParams{
+		PlaylistID: 1,
+		Item:       episodeItems,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 4: Start playback
+	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+		Item: Item{
+			PlaylistID: 1,
+		},
+	})
+	return err
+}
+
 // GetURL returns the current Kodi API URL
 func (c *Client) GetURL() string {
 	return c.url
@@ -219,14 +505,27 @@ func (c *Client) APIRequest(method APIMethod, params any) (json.RawMessage, erro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// TODO: Accept context from parent caller instead of using context.Background()
-	kodiReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
+	// Use a reasonable timeout context for API requests
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	kodiReq.Header.Set("Content-Type", "application/json")
 	kodiReq.Header.Set("Accept", "application/json")
+
+	// Add authentication if configured
+	authCfg := config.GetAuthCfg()
+	if cred := config.LookupAuth(authCfg, c.url); cred != nil {
+		if cred.Bearer != "" {
+			kodiReq.Header.Set("Authorization", "Bearer "+cred.Bearer)
+		} else if cred.Username != "" && cred.Password != "" {
+			auth := base64.StdEncoding.EncodeToString([]byte(cred.Username + ":" + cred.Password))
+			kodiReq.Header.Set("Authorization", "Basic "+auth)
+		}
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(kodiReq)

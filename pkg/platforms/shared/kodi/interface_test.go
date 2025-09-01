@@ -146,6 +146,68 @@ func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.Raw
 	return nil, nil
 }
 
+func (m *MockKodiClient) LaunchSong(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchAlbum(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchArtist(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchTVShow(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
+	args := m.Called()
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetSongs error: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
+	args := m.Called()
+	if albums, ok := args.Get(0).([]kodi.Album); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetAlbums error: %w", err)
+		}
+		return albums, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetAlbums error: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
+	args := m.Called()
+	if artists, ok := args.Get(0).([]kodi.Artist); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetArtists error: %w", err)
+		}
+		return artists, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetArtists error: %w", err)
+	}
+	return nil, nil
+}
+
 func TestKodiClient_CanBeMocked(t *testing.T) {
 	t.Parallel()
 
@@ -389,6 +451,36 @@ func TestKodiClient_SetURL(t *testing.T) {
 
 	// Test SetURL method exists and can be called
 	client.SetURL(newURL)
+
+	mockClient.AssertExpectations(t)
+}
+
+func TestKodiClient_CollectionLaunchMethods(t *testing.T) {
+	t.Parallel()
+
+	// This test drives the addition of collection launch methods for audio
+	mockClient := new(MockKodiClient)
+
+	// Test LaunchSong method
+	mockClient.On("LaunchSong", "kodi-song://123/Test Song").Return(nil)
+	var client kodi.KodiClient = mockClient
+	err := client.LaunchSong("kodi-song://123/Test Song")
+	require.NoError(t, err)
+
+	// Test LaunchAlbum method
+	mockClient.On("LaunchAlbum", "kodi-album://456/Test Album").Return(nil)
+	err = client.LaunchAlbum("kodi-album://456/Test Album")
+	require.NoError(t, err)
+
+	// Test LaunchArtist method
+	mockClient.On("LaunchArtist", "kodi-artist://789/Test Artist").Return(nil)
+	err = client.LaunchArtist("kodi-artist://789/Test Artist")
+	require.NoError(t, err)
+
+	// Test LaunchTVShow method
+	mockClient.On("LaunchTVShow", "kodi-show://012/Test Show").Return(nil)
+	err = client.LaunchTVShow("kodi-show://012/Test Show")
+	require.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
 }

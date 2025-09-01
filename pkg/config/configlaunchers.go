@@ -42,6 +42,7 @@ type Launchers struct {
 type LaunchersDefault struct {
 	Launcher   string `toml:"launcher"`
 	InstallDir string `toml:"install_dir,omitempty"`
+	ServerURL  string `toml:"server_url,omitempty"`
 }
 
 type LaunchersCustom struct {

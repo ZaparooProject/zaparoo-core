@@ -87,3 +87,121 @@ func ScanTV(
 
 	return results, nil
 }
+
+// ScanSongs scans songs from Kodi library using the provided client
+func ScanSongs(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	songs, err := client.GetSongs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get songs: %w", err)
+	}
+
+	for _, song := range songs {
+		name := song.Artist + " - " + song.Label
+		results = append(results, platforms.ScanResult{
+			Name: name,
+			Path: fmt.Sprintf(
+				"%s://%d/%s",
+				SchemeKodiSong,
+				song.ID,
+				name,
+			),
+		})
+	}
+
+	return results, nil
+}
+
+// ScanAlbums scans albums from Kodi library using the provided client
+func ScanAlbums(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	albums, err := client.GetAlbums()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get albums: %w", err)
+	}
+
+	for _, album := range albums {
+		name := album.Artist + " - " + album.Label
+		if album.Year > 0 {
+			name = fmt.Sprintf("%s (%d)", name, album.Year)
+		}
+		results = append(results, platforms.ScanResult{
+			Name: name,
+			Path: fmt.Sprintf(
+				"%s://%d/%s",
+				SchemeKodiAlbum,
+				album.ID,
+				name,
+			),
+		})
+	}
+
+	return results, nil
+}
+
+// ScanArtists scans artists from Kodi library using the provided client
+func ScanArtists(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	artists, err := client.GetArtists()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get artists: %w", err)
+	}
+
+	for _, artist := range artists {
+		// Skip "Various Artists" and compilation artists
+		if artist.Label == "Various Artists" || artist.Label == "Various" {
+			continue
+		}
+
+		results = append(results, platforms.ScanResult{
+			Name: artist.Label,
+			Path: fmt.Sprintf(
+				"%s://%d/%s",
+				SchemeKodiArtist,
+				artist.ID,
+				artist.Label,
+			),
+		})
+	}
+
+	return results, nil
+}
+
+// ScanTVShows scans TV shows from Kodi library using the provided client
+func ScanTVShows(
+	client KodiClient,
+	_ *config.Instance,
+	_ string,
+	results []platforms.ScanResult,
+) ([]platforms.ScanResult, error) {
+	shows, err := client.GetTVShows()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get TV shows: %w", err)
+	}
+
+	for _, show := range shows {
+		results = append(results, platforms.ScanResult{
+			Name: show.Label,
+			Path: fmt.Sprintf(
+				"%s://%d/%s",
+				SchemeKodiShow,
+				show.ID,
+				show.Label,
+			),
+		})
+	}
+
+	return results, nil
+}

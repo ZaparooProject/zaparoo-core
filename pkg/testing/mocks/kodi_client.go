@@ -63,6 +63,42 @@ func (m *MockKodiClient) LaunchTVEpisode(path string) error {
 	return nil
 }
 
+// LaunchAlbum mocks launching an album in Kodi
+func (m *MockKodiClient) LaunchAlbum(path string) error {
+	args := m.Called(path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchAlbum error: %w", err)
+	}
+	return nil
+}
+
+// LaunchArtist mocks launching an artist in Kodi
+func (m *MockKodiClient) LaunchArtist(path string) error {
+	args := m.Called(path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchArtist error: %w", err)
+	}
+	return nil
+}
+
+// LaunchSong mocks launching a song in Kodi
+func (m *MockKodiClient) LaunchSong(path string) error {
+	args := m.Called(path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchSong error: %w", err)
+	}
+	return nil
+}
+
+// LaunchTVShow mocks launching a TV show in Kodi
+func (m *MockKodiClient) LaunchTVShow(path string) error {
+	args := m.Called(path)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchTVShow error: %w", err)
+	}
+	return nil
+}
+
 // Stop mocks stopping all active players in Kodi
 func (m *MockKodiClient) Stop() error {
 	args := m.Called()
@@ -128,6 +164,51 @@ func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
 	}
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
+	}
+	return nil, nil
+}
+
+// GetAlbums mocks retrieving all albums from Kodi's library
+func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
+	args := m.Called()
+	if albums, ok := args.Get(0).([]kodi.Album); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetAlbums error: %w", err)
+		}
+		return albums, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetAlbums error: %w", err)
+	}
+	return nil, nil
+}
+
+// GetArtists mocks retrieving all artists from Kodi's library
+func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
+	args := m.Called()
+	if artists, ok := args.Get(0).([]kodi.Artist); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetArtists error: %w", err)
+		}
+		return artists, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetArtists error: %w", err)
+	}
+	return nil, nil
+}
+
+// GetSongs mocks retrieving all songs from Kodi's library
+func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
+	args := m.Called()
+	if songs, ok := args.Get(0).([]kodi.Song); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock GetSongs error: %w", err)
+		}
+		return songs, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetSongs error: %w", err)
 	}
 	return nil, nil
 }

@@ -406,3 +406,13 @@ func LookupAuth(authCfg Auth, reqURL string) *CredentialEntry {
 
 	return nil
 }
+
+// SetAuthCfgForTesting sets the global auth config for testing purposes
+func SetAuthCfgForTesting(auth Auth) {
+	authCfg.Store(auth)
+}
+
+// ClearAuthCfgForTesting clears the global auth config for testing purposes
+func ClearAuthCfgForTesting() {
+	authCfg.Store(Auth{})
+}

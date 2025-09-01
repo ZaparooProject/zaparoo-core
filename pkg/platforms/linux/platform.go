@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
@@ -162,6 +163,14 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
+		kodi.NewKodiMusicLauncher(),
+		kodi.NewKodiSongLauncher(),
+		kodi.NewKodiAlbumLauncher(),
+		kodi.NewKodiArtistLauncher(),
+		kodi.NewKodiTVShowLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

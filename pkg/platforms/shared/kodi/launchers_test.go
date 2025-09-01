@@ -70,3 +70,73 @@ func TestNewKodiTVLauncher(t *testing.T) {
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
 }
+
+// TestNewKodiSongLauncher tests the creation of KodiSong launcher for individual songs
+func TestNewKodiSongLauncher(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewKodiSongLauncher()
+
+	assert.Equal(t, "KodiSong", launcher.ID)
+	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, []string{SchemeKodiSong}, launcher.Schemes)
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	// Scanner will be tested when scanners are implemented
+	// assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
+}
+
+// TestNewKodiMusicLauncher tests the creation of KodiMusic launcher for local music files
+func TestNewKodiMusicLauncher(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewKodiMusicLauncher()
+
+	assert.Equal(t, "KodiMusic", launcher.ID)
+	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Contains(t, launcher.Folders, "music")
+	assert.Contains(t, launcher.Extensions, ".mp3")
+	assert.Contains(t, launcher.Extensions, ".flac")
+	assert.Contains(t, launcher.Extensions, ".ogg")
+	assert.Contains(t, launcher.Extensions, ".m4a")
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.Nil(t, launcher.Scanner, "Scanner function should not be set for local files")
+}
+
+// TestNewKodiAlbumLauncher tests the creation of KodiAlbum launcher for album collection playback
+func TestNewKodiAlbumLauncher(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewKodiAlbumLauncher()
+
+	assert.Equal(t, "KodiAlbum", launcher.ID)
+	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, []string{SchemeKodiAlbum}, launcher.Schemes)
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+}
+
+// TestNewKodiArtistLauncher tests the creation of KodiArtist launcher for artist collection playback
+func TestNewKodiArtistLauncher(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewKodiArtistLauncher()
+
+	assert.Equal(t, "KodiArtist", launcher.ID)
+	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, []string{SchemeKodiArtist}, launcher.Schemes)
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+}
+
+// TestNewKodiTVShowLauncher tests the creation of KodiTVShow launcher for TV show collection playback
+func TestNewKodiTVShowLauncher(t *testing.T) {
+	t.Parallel()
+
+	launcher := NewKodiTVShowLauncher()
+
+	assert.Equal(t, "KodiTVShow", launcher.ID)
+	assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+	assert.Equal(t, []string{SchemeKodiShow}, launcher.Schemes)
+	assert.NotNil(t, launcher.Launch, "Launch function should be set")
+	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
+}

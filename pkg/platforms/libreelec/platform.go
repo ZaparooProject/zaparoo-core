@@ -169,6 +169,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiLocalLauncher(),
 		kodi.NewKodiMovieLauncher(),
 		kodi.NewKodiTVLauncher(),
+		kodi.NewKodiMusicLauncher(),
+		kodi.NewKodiSongLauncher(),
+		kodi.NewKodiAlbumLauncher(),
+		kodi.NewKodiArtistLauncher(),
+		kodi.NewKodiTVShowLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

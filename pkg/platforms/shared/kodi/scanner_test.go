@@ -147,6 +147,50 @@ func (m *MockKodiClient) APIRequest(method APIMethod, params any) (json.RawMessa
 	return nil, nil
 }
 
+func (m *MockKodiClient) LaunchSong(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchAlbum(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchArtist(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) LaunchTVShow(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockKodiClient) GetSongs() ([]Song, error) {
+	args := m.Called()
+	if songs, ok := args.Get(0).([]Song); ok {
+		return songs, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKodiClient) GetAlbums() ([]Album, error) {
+	args := m.Called()
+	if albums, ok := args.Get(0).([]Album); ok {
+		return albums, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockKodiClient) GetArtists() ([]Artist, error) {
+	args := m.Called()
+	if artists, ok := args.Get(0).([]Artist); ok {
+		return artists, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func TestScanMovies(t *testing.T) {
 	t.Parallel()
 	// Create mock client
@@ -226,5 +270,111 @@ func TestScanTV(t *testing.T) {
 	assert.Equal(t, "kodi-episode://201/The Wire - The Target", results[2].Path)
 
 	// Verify all mocks were called
+	mockClient.AssertExpectations(t)
+}
+
+func TestScanSongs(t *testing.T) {
+	t.Parallel()
+	// Create mock client
+	mockClient := new(MockKodiClient)
+
+	// Mock songs data
+	expectedSongs := []Song{
+		{ID: 123, Label: "Bohemian Rhapsody", Artist: "Queen", AlbumID: 456, Duration: 355},
+		{ID: 124, Label: "Stairway to Heaven", Artist: "Led Zeppelin", AlbumID: 457, Duration: 482},
+	}
+
+	// Set up mock expectation
+	mockClient.On("GetSongs").Return(expectedSongs, nil)
+
+	// Execute function
+	cfg := &config.Instance{}
+	results, err := ScanSongs(mockClient, cfg, "", []platforms.ScanResult{})
+
+	// Assert results
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+
+	assert.Equal(t, "Queen - Bohemian Rhapsody", results[0].Name)
+	assert.Equal(t, "kodi-song://123/Queen - Bohemian Rhapsody", results[0].Path)
+
+	assert.Equal(t, "Led Zeppelin - Stairway to Heaven", results[1].Name)
+	assert.Equal(t, "kodi-song://124/Led Zeppelin - Stairway to Heaven", results[1].Path)
+
+	// Verify mock was called
+	mockClient.AssertExpectations(t)
+}
+
+func TestScanArtists(t *testing.T) {
+	t.Parallel()
+	// Create mock client
+	mockClient := new(MockKodiClient)
+
+	// Mock artists data - includes "Various Artists" that should be filtered
+	expectedArtists := []Artist{
+		{ID: 1, Label: "Queen"},
+		{ID: 2, Label: "Led Zeppelin"},
+		{ID: 3, Label: "Various Artists"}, // Should be filtered out
+		{ID: 4, Label: "Various"},         // Should be filtered out
+		{ID: 5, Label: "Pink Floyd"},
+	}
+
+	// Set up mock expectation
+	mockClient.On("GetArtists").Return(expectedArtists, nil)
+
+	// Execute function
+	cfg := &config.Instance{}
+	results, err := ScanArtists(mockClient, cfg, "", []platforms.ScanResult{})
+
+	// Assert results - should exclude "Various Artists" and "Various"
+	require.NoError(t, err)
+	assert.Len(t, results, 3) // Only Queen, Led Zeppelin, and Pink Floyd
+
+	assert.Equal(t, "Queen", results[0].Name)
+	assert.Equal(t, "kodi-artist://1/Queen", results[0].Path)
+
+	assert.Equal(t, "Led Zeppelin", results[1].Name)
+	assert.Equal(t, "kodi-artist://2/Led Zeppelin", results[1].Path)
+
+	assert.Equal(t, "Pink Floyd", results[2].Name)
+	assert.Equal(t, "kodi-artist://5/Pink Floyd", results[2].Path)
+
+	// Verify mock was called
+	mockClient.AssertExpectations(t)
+}
+
+func TestScanTVShows(t *testing.T) {
+	t.Parallel()
+	// Create mock client
+	mockClient := new(MockKodiClient)
+
+	// Mock TV shows data
+	expectedTVShows := []TVShow{
+		{ID: 1, Label: "Breaking Bad"},
+		{ID: 2, Label: "The Wire"},
+		{ID: 3, Label: "Better Call Saul"},
+	}
+
+	// Set up mock expectation
+	mockClient.On("GetTVShows").Return(expectedTVShows, nil)
+
+	// Execute function
+	cfg := &config.Instance{}
+	results, err := ScanTVShows(mockClient, cfg, "", []platforms.ScanResult{})
+
+	// Assert results
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+
+	assert.Equal(t, "Breaking Bad", results[0].Name)
+	assert.Equal(t, "kodi-show://1/Breaking Bad", results[0].Path)
+
+	assert.Equal(t, "The Wire", results[1].Name)
+	assert.Equal(t, "kodi-show://2/The Wire", results[1].Path)
+
+	assert.Equal(t, "Better Call Saul", results[2].Name)
+	assert.Equal(t, "kodi-show://3/Better Call Saul", results[2].Path)
+
+	// Verify mock was called
 	mockClient.AssertExpectations(t)
 }
