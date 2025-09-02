@@ -240,7 +240,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path: "steam://" + appID + "/" + appName,
+				Path: CreateVirtualPath("steam", appID, appName),
 				Name: appName,
 			})
 		}

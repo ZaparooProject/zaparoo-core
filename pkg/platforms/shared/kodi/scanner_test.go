@@ -223,10 +223,10 @@ func TestScanMovies(t *testing.T) {
 	assert.Len(t, results, 2)
 
 	assert.Equal(t, "The Matrix", results[0].Name)
-	assert.Equal(t, "kodi-movie://1/The Matrix", results[0].Path)
+	assert.Equal(t, "kodi-movie://1/The%20Matrix", results[0].Path)
 
 	assert.Equal(t, "Blade Runner", results[1].Name)
-	assert.Equal(t, "kodi-movie://2/Blade Runner", results[1].Path)
+	assert.Equal(t, "kodi-movie://2/Blade%20Runner", results[1].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)
@@ -269,14 +269,14 @@ func TestScanTV(t *testing.T) {
 
 	// Check Breaking Bad episodes
 	assert.Equal(t, "Breaking Bad - Pilot", results[0].Name)
-	assert.Equal(t, "kodi-episode://101/Breaking Bad - Pilot", results[0].Path)
+	assert.Equal(t, "kodi-episode://101/Breaking%20Bad%20-%20Pilot", results[0].Path)
 
 	assert.Equal(t, "Breaking Bad - Cat's in the Bag...", results[1].Name)
-	assert.Equal(t, "kodi-episode://102/Breaking Bad - Cat's in the Bag...", results[1].Path)
+	assert.Equal(t, "kodi-episode://102/Breaking%20Bad%20-%20Cat%27s%20in%20the%20Bag...", results[1].Path)
 
 	// Check The Wire episode
 	assert.Equal(t, "The Wire - The Target", results[2].Name)
-	assert.Equal(t, "kodi-episode://201/The Wire - The Target", results[2].Path)
+	assert.Equal(t, "kodi-episode://201/The%20Wire%20-%20The%20Target", results[2].Path)
 
 	// Verify all mocks were called
 	mockClient.AssertExpectations(t)
@@ -305,10 +305,10 @@ func TestScanSongs(t *testing.T) {
 	assert.Len(t, results, 2)
 
 	assert.Equal(t, "Queen - Bohemian Rhapsody", results[0].Name)
-	assert.Equal(t, "kodi-song://123/Queen - Bohemian Rhapsody", results[0].Path)
+	assert.Equal(t, "kodi-song://123/Queen%20-%20Bohemian%20Rhapsody", results[0].Path)
 
 	assert.Equal(t, "Led Zeppelin - Stairway to Heaven", results[1].Name)
-	assert.Equal(t, "kodi-song://124/Led Zeppelin - Stairway to Heaven", results[1].Path)
+	assert.Equal(t, "kodi-song://124/Led%20Zeppelin%20-%20Stairway%20to%20Heaven", results[1].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)
@@ -343,10 +343,10 @@ func TestScanArtists(t *testing.T) {
 	assert.Equal(t, "kodi-artist://1/Queen", results[0].Path)
 
 	assert.Equal(t, "Led Zeppelin", results[1].Name)
-	assert.Equal(t, "kodi-artist://2/Led Zeppelin", results[1].Path)
+	assert.Equal(t, "kodi-artist://2/Led%20Zeppelin", results[1].Path)
 
 	assert.Equal(t, "Pink Floyd", results[2].Name)
-	assert.Equal(t, "kodi-artist://5/Pink Floyd", results[2].Path)
+	assert.Equal(t, "kodi-artist://5/Pink%20Floyd", results[2].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)
@@ -376,13 +376,13 @@ func TestScanTVShows(t *testing.T) {
 	assert.Len(t, results, 3)
 
 	assert.Equal(t, "Breaking Bad", results[0].Name)
-	assert.Equal(t, "kodi-show://1/Breaking Bad", results[0].Path)
+	assert.Equal(t, "kodi-show://1/Breaking%20Bad", results[0].Path)
 
 	assert.Equal(t, "The Wire", results[1].Name)
-	assert.Equal(t, "kodi-show://2/The Wire", results[1].Path)
+	assert.Equal(t, "kodi-show://2/The%20Wire", results[1].Path)
 
 	assert.Equal(t, "Better Call Saul", results[2].Name)
-	assert.Equal(t, "kodi-show://3/Better Call Saul", results[2].Path)
+	assert.Equal(t, "kodi-show://3/Better%20Call%20Saul", results[2].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)

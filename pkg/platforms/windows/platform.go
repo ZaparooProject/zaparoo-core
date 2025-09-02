@@ -507,7 +507,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
-						Path: "launchbox://" + game.ID + "/" + game.Title,
+						Path: helpers.CreateVirtualPath("launchbox", game.ID, game.Title),
 						Name: game.Title,
 					})
 				}

@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 )
 
@@ -41,12 +42,7 @@ func ScanMovies(
 	for _, movie := range movies {
 		results = append(results, platforms.ScanResult{
 			Name: movie.Label,
-			Path: fmt.Sprintf(
-				"%s://%d/%s",
-				SchemeKodiMovie,
-				movie.ID,
-				movie.Label,
-			),
+			Path: helpers.CreateVirtualPath(SchemeKodiMovie, fmt.Sprintf("%d", movie.ID), movie.Label),
 		})
 	}
 
@@ -75,12 +71,7 @@ func ScanTV(
 			label := show.Label + " - " + ep.Label
 			results = append(results, platforms.ScanResult{
 				Name: label,
-				Path: fmt.Sprintf(
-					"%s://%d/%s",
-					SchemeKodiEpisode,
-					ep.ID,
-					label,
-				),
+				Path: helpers.CreateVirtualPath(SchemeKodiEpisode, fmt.Sprintf("%d", ep.ID), label),
 			})
 		}
 	}
@@ -104,12 +95,7 @@ func ScanSongs(
 		name := song.Artist + " - " + song.Label
 		results = append(results, platforms.ScanResult{
 			Name: name,
-			Path: fmt.Sprintf(
-				"%s://%d/%s",
-				SchemeKodiSong,
-				song.ID,
-				name,
-			),
+			Path: helpers.CreateVirtualPath(SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),
 		})
 	}
 
@@ -135,12 +121,7 @@ func ScanAlbums(
 		}
 		results = append(results, platforms.ScanResult{
 			Name: name,
-			Path: fmt.Sprintf(
-				"%s://%d/%s",
-				SchemeKodiAlbum,
-				album.ID,
-				name,
-			),
+			Path: helpers.CreateVirtualPath(SchemeKodiAlbum, fmt.Sprintf("%d", album.ID), name),
 		})
 	}
 
@@ -167,12 +148,7 @@ func ScanArtists(
 
 		results = append(results, platforms.ScanResult{
 			Name: artist.Label,
-			Path: fmt.Sprintf(
-				"%s://%d/%s",
-				SchemeKodiArtist,
-				artist.ID,
-				artist.Label,
-			),
+			Path: helpers.CreateVirtualPath(SchemeKodiArtist, fmt.Sprintf("%d", artist.ID), artist.Label),
 		})
 	}
 
@@ -194,12 +170,7 @@ func ScanTVShows(
 	for _, show := range shows {
 		results = append(results, platforms.ScanResult{
 			Name: show.Label,
-			Path: fmt.Sprintf(
-				"%s://%d/%s",
-				SchemeKodiShow,
-				show.ID,
-				show.Label,
-			),
+			Path: helpers.CreateVirtualPath(SchemeKodiShow, fmt.Sprintf("%d", show.ID), show.Label),
 		})
 	}
 

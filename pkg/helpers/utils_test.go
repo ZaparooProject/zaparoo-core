@@ -1490,3 +1490,73 @@ func TestGetAllLocalIPs(t *testing.T) {
 		unique[ip] = true
 	}
 }
+
+func TestCreateVirtualPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		scheme   string
+		id       string
+		pathName string
+		expected string
+	}{
+		{
+			name:     "simple_name",
+			scheme:   "kodi-movie",
+			id:       "123",
+			pathName: "The Matrix",
+			expected: "kodi-movie://123/The%20Matrix",
+		},
+		{
+			name:     "name_with_slash",
+			scheme:   "kodi-show",
+			id:       "456",
+			pathName: "Some Hot/Cold",
+			expected: "kodi-show://456/Some%20Hot%2FCold",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := CreateVirtualPath(tt.scheme, tt.id, tt.pathName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+
+func TestFilenameFromPath_VirtualPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "kodi_show_with_slash",
+			path:     "kodi-show://456/Some%20Hot%2FCold",
+			expected: "Some Hot/Cold",
+		},
+		{
+			name:     "regular_file_path",
+			path:     "/home/user/Games/Super Mario Bros.nes",
+			expected: "Super Mario Bros",
+		},
+		{
+			name:     "empty_path",
+			path:     "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := FilenameFromPath(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
