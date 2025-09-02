@@ -1,5 +1,5 @@
 rules:
-  - match: "^go test"
+  - match: "go test "
     send: |-
       Use "task test" instead for TDD integration. This command is a simple
       wrapper around "go test" which forwards results to TDD Guard for
@@ -11,7 +11,7 @@ rules:
       - task test -- -run TestHandleMessage ./pkg/api
       - task test -- -timeout 30s ./...
   - match: "^(gci|go vet|goimports|gofumpt|go fmt|golangci-lint)"
-    send: Use "just lint fix" instead to resolve lint/formatting issues.
+    send: Use "task lint-fix" instead to resolve lint/formatting issues.
   - match: "cd /tmp"
     send: Create a "tmp" directory in the project root instead.
   - match: "sed -i"

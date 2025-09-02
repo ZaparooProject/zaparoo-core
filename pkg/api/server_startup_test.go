@@ -224,3 +224,211 @@ func TestServerListenContextCancellation(t *testing.T) {
 		t.Fatal("Server did not respect context cancellation - likely using non-context-aware net.Listen")
 	}
 }
+
+func TestIsPrivateIP(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ip       string
+		expected bool
+	}{
+		{
+			name:     "private_10_0_0_1",
+			ip:       "10.0.0.1",
+			expected: true,
+		},
+		{
+			name:     "private_192_168_1_1",
+			ip:       "192.168.1.1",
+			expected: true,
+		},
+		{
+			name:     "private_172_16_0_1",
+			ip:       "172.16.0.1",
+			expected: true,
+		},
+		{
+			name:     "link_local_169_254",
+			ip:       "169.254.1.1",
+			expected: true,
+		},
+		{
+			name:     "public_8_8_8_8",
+			ip:       "8.8.8.8",
+			expected: false,
+		},
+		{
+			name:     "localhost",
+			ip:       "127.0.0.1",
+			expected: false,
+		},
+		{
+			name:     "invalid_ip",
+			ip:       "not.an.ip",
+			expected: false,
+		},
+		{
+			name:     "empty_string",
+			ip:       "",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isPrivateIP(tt.ip)
+			require.Equal(t, tt.expected, result, "isPrivateIP result mismatch for %s", tt.ip)
+		})
+	}
+}
+
+func TestCheckWebSocketOrigin(t *testing.T) {
+	t.Parallel()
+
+	allowedOrigins := []string{
+		"capacitor://localhost",
+		"ionic://localhost",
+		"http://localhost",
+		"https://localhost",
+		"http://localhost:7497",
+		"http://192.168.1.100:7497",
+	}
+	apiPort := 7497
+
+	tests := []struct {
+		name     string
+		origin   string
+		expected bool
+	}{
+		{
+			name:     "empty_origin_allowed",
+			origin:   "",
+			expected: true,
+		},
+		{
+			name:     "localhost_any_port_allowed",
+			origin:   "http://localhost:8100",
+			expected: true,
+		},
+		{
+			name:     "localhost_https_any_port_allowed",
+			origin:   "https://localhost:3000",
+			expected: true,
+		},
+		{
+			name:     "127_0_0_1_any_port_allowed",
+			origin:   "http://127.0.0.1:8100",
+			expected: true,
+		},
+		{
+			name:     "private_ip_correct_port_allowed",
+			origin:   "http://192.168.1.50:7497",
+			expected: true,
+		},
+		{
+			name:     "private_ip_wrong_port_rejected",
+			origin:   "http://192.168.1.50:8100",
+			expected: false,
+		},
+		{
+			name:     "public_ip_rejected",
+			origin:   "http://8.8.8.8:7497",
+			expected: false,
+		},
+		{
+			name:     "capacitor_origin_allowed",
+			origin:   "capacitor://localhost",
+			expected: true,
+		},
+		{
+			name:     "explicit_allowed_origin",
+			origin:   "http://localhost:7497",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := checkWebSocketOrigin(tt.origin, allowedOrigins, apiPort)
+			require.Equal(t, tt.expected, result, "checkWebSocketOrigin result mismatch for %s", tt.origin)
+		})
+	}
+}
+
+func TestMultipleLocalIPsInAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
+	// This test demonstrates the current limitation: server only uses first IP
+	// from GetLocalIP() instead of all IPs from GetAllLocalIPs()
+
+	// Simulate scenario where we have multiple local IPs
+	testIPs := []string{"192.168.1.100", "10.0.0.50"}
+	port := 7497
+
+	// Current server logic (single IP) - this is what currently happens
+	var currentLogicOrigins []string
+	if len(testIPs) > 0 {
+		localIP := testIPs[0] // Only first IP (simulating GetLocalIP behavior)
+		currentLogicOrigins = append(currentLogicOrigins,
+			fmt.Sprintf("http://%s:%d", localIP, port),
+			fmt.Sprintf("https://%s:%d", localIP, port),
+		)
+	}
+
+	// Desired logic (all IPs) - this is what should happen
+	improvedLogicOrigins := make([]string, 0, len(testIPs)*2)
+	for _, localIP := range testIPs { // ALL IPs (using GetAllLocalIPs)
+		improvedLogicOrigins = append(improvedLogicOrigins,
+			fmt.Sprintf("http://%s:%d", localIP, port),
+			fmt.Sprintf("https://%s:%d", localIP, port),
+		)
+	}
+
+	// Current logic only includes first IP
+	require.Len(t, currentLogicOrigins, 2, "Current logic includes only 2 origins (first IP)")
+	require.Contains(t, currentLogicOrigins, "http://192.168.1.100:7497")
+	require.NotContains(t, currentLogicOrigins, "http://10.0.0.50:7497")
+
+	// Improved logic includes all IPs
+	require.Len(t, improvedLogicOrigins, 4, "Improved logic should include all IPs")
+	require.Contains(t, improvedLogicOrigins, "http://192.168.1.100:7497")
+	require.Contains(t, improvedLogicOrigins, "http://10.0.0.50:7497")
+
+	// This demonstrates why we need to change from GetLocalIP() to GetAllLocalIPs()
+	t.Logf("Current: %d origins, Improved: %d origins", len(currentLogicOrigins), len(improvedLogicOrigins))
+}
+
+func TestBuildDynamicAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
+	// Test that the allowed origins builder correctly handles multiple local IPs
+	baseOrigins := []string{
+		"capacitor://localhost",
+		"ionic://localhost",
+		"http://localhost",
+		"https://localhost",
+	}
+
+	localIPs := []string{"192.168.1.100", "10.0.0.50"}
+	port := 7497
+	customOrigins := []string{"example.com"}
+
+	// This should fail because buildDynamicAllowedOrigins doesn't exist yet
+	result := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
+
+	// Should include base origins
+	require.Contains(t, result, "capacitor://localhost")
+
+	// Should include all local IPs
+	require.Contains(t, result, "http://192.168.1.100:7497")
+	require.Contains(t, result, "https://192.168.1.100:7497")
+	require.Contains(t, result, "http://10.0.0.50:7497")
+	require.Contains(t, result, "https://10.0.0.50:7497")
+
+	// Should include custom origins
+	require.Contains(t, result, "http://example.com")
+	require.Contains(t, result, "https://example.com")
+}

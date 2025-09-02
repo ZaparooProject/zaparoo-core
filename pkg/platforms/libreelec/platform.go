@@ -33,9 +33,9 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
@@ -45,11 +45,6 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
-)
-
-const (
-	SchemeKodiMovie   = "kodi-movie"
-	SchemeKodiEpisode = "kodi-episode"
 )
 
 type Platform struct {
@@ -122,7 +117,11 @@ func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 
 func (p *Platform) StopActiveLauncher() error {
 	p.setActiveMedia(nil)
-	return kodiStop(p.cfg)
+	client := kodi.NewClient(p.cfg)
+	if err := client.Stop(); err != nil {
+		return fmt.Errorf("failed to stop Kodi client: %w", err)
+	}
+	return nil
 }
 
 func (*Platform) PlayAudio(_ string) error {
@@ -167,30 +166,9 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
-		{
-			ID:       "KodiLocal",
-			SystemID: systemdefs.SystemVideo,
-			Folders:  []string{"videos", "tvshows"},
-			Extensions: []string{
-				".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
-				".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
-			},
-			Launch: kodiLaunchFileRequest,
-		},
-		{
-			ID:       "KodiMovie",
-			SystemID: systemdefs.SystemMovie,
-			Schemes:  []string{SchemeKodiMovie},
-			Launch:   kodiLaunchMovieRequest,
-			Scanner:  kodiScanMovies,
-		},
-		{
-			ID:       "KodiTV",
-			SystemID: systemdefs.SystemTV,
-			Schemes:  []string{SchemeKodiEpisode},
-			Launch:   kodiLaunchTVRequest,
-			Scanner:  kodiScanTV,
-		},
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

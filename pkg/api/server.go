@@ -29,8 +29,8 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -327,6 +327,105 @@ func handleApp(w http.ResponseWriter, r *http.Request) {
 	http.StripPrefix("/app", fsCustom404(http.FS(appFs))).ServeHTTP(w, r)
 }
 
+// isPrivateIP checks if an IP address is in private ranges
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+
+	// Check RFC1918 private ranges
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16", // Link-local
+	}
+
+	for _, cidr := range privateRanges {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network != nil && network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkWebSocketOrigin validates WebSocket origin requests based on security policy
+func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) bool {
+	// Allow empty origin (same-origin requests)
+	if origin == "" {
+		log.Debug().Msg("websocket origin: empty origin allowed (same-origin)")
+		return true
+	}
+
+	// Check explicit allowed origins first
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			log.Debug().Msgf("websocket origin: %s allowed (explicit match)", origin)
+			return true
+		}
+	}
+
+	// Parse origin URL
+	u, err := url.Parse(origin)
+	if err != nil {
+		log.Debug().Msgf("websocket origin: %s rejected (invalid URL: %v)", origin, err)
+		return false
+	}
+
+	// Allow localhost and 127.0.0.1 on any port (http or https)
+	hostname := u.Hostname()
+	if hostname == "localhost" || hostname == "127.0.0.1" {
+		log.Debug().Msgf("websocket origin: %s allowed (localhost any port)", origin)
+		return true
+	}
+
+	// Allow private IP addresses only on the correct API port
+	if isPrivateIP(hostname) {
+		port := u.Port()
+		if port == "" && (u.Scheme == "http" || u.Scheme == "https") {
+			log.Debug().Msgf("websocket origin: %s rejected (private IP needs explicit port)", origin)
+			return false // explicit port required for private IPs
+		}
+		if port == strconv.Itoa(apiPort) {
+			log.Debug().Msgf("websocket origin: %s allowed (private IP correct port)", origin)
+			return true
+		}
+		log.Debug().Msgf("websocket origin: %s rejected (private IP wrong port: %s, expected: %d)",
+			origin, port, apiPort)
+		return false
+	}
+
+	log.Debug().Msgf("websocket origin: %s rejected (not allowed)", origin)
+	return false
+}
+
+// buildDynamicAllowedOrigins creates the allowed origins list for CORS/WebSocket
+func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, customOrigins []string) []string {
+	result := make([]string, 0, len(baseOrigins)+len(localIPs)*2)
+	result = append(result, baseOrigins...)
+
+	// Add all provided local IPs
+	for _, localIP := range localIPs {
+		result = append(result,
+			fmt.Sprintf("http://%s:%d", localIP, port),
+			fmt.Sprintf("https://%s:%d", localIP, port),
+		)
+	}
+
+	// Add custom origins
+	for _, origin := range customOrigins {
+		result = append(result,
+			fmt.Sprintf("http://%s", origin),
+			fmt.Sprintf("https://%s", origin),
+		)
+	}
+
+	return result
+}
+
 // broadcastNotifications consumes and broadcasts all incoming API
 // notifications to all connected clients.
 func broadcastNotifications(
@@ -551,33 +650,24 @@ func Start(
 	notifications <-chan models.Notification,
 ) {
 	port := cfg.APIPort()
-	dynamicAllowedOrigins := make([]string, 0, len(allowedOrigins)+10) // Pre-allocate capacity
-	dynamicAllowedOrigins = append(dynamicAllowedOrigins, allowedOrigins...)
-	dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
+	baseOrigins = append(baseOrigins, allowedOrigins...)
+	baseOrigins = append(baseOrigins,
 		fmt.Sprintf("http://localhost:%d", port),
 		fmt.Sprintf("https://localhost:%d", port),
 		fmt.Sprintf("http://127.0.0.1:%d", port),
 		fmt.Sprintf("https://127.0.0.1:%d", port),
 	)
 
-	if localIP := helpers.GetLocalIP(); localIP != "" {
-		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
-			fmt.Sprintf("http://%s:%d", localIP, port),
-			fmt.Sprintf("https://%s:%d", localIP, port),
-		)
+	localIPs := helpers.GetAllLocalIPs()
+	for _, localIP := range localIPs {
+		log.Debug().Msgf("adding local IP to allowed origins: %s", localIP)
 	}
 
 	customOrigins := cfg.AllowedOrigins()
-	for _, origin := range customOrigins {
-		if !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://") {
-			dynamicAllowedOrigins = append(dynamicAllowedOrigins,
-				fmt.Sprintf("http://%s", origin),
-				fmt.Sprintf("https://%s", origin),
-			)
-		} else {
-			dynamicAllowedOrigins = append(dynamicAllowedOrigins, origin)
-		}
-	}
+	dynamicAllowedOrigins := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
+
+	log.Debug().Msgf("dynamicAllowedOrigins: %v", dynamicAllowedOrigins)
 
 	r := chi.NewRouter()
 
@@ -606,14 +696,7 @@ func Start(
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)
-		// non-browser clients
-		if origin == "" {
-			return true
-		}
-		if slices.Contains(dynamicAllowedOrigins, origin) {
-			return true
-		}
-		return false
+		return checkWebSocketOrigin(origin, dynamicAllowedOrigins, port)
 	}
 	go broadcastNotifications(st, session, notifications)
 
