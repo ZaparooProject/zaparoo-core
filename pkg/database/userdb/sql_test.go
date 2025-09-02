@@ -163,7 +163,7 @@ func TestSqlGetHistoryWithOffset_DatabaseError(t *testing.T) {
 
 	result, err := sqlGetHistoryWithOffset(context.Background(), db, 100)
 	require.Error(t, err)
-	assert.Empty(t, result)  // Should be empty slice, not nil
+	assert.Empty(t, result) // Should be empty slice, not nil
 	assert.Contains(t, err.Error(), "failed to query history")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

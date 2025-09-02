@@ -453,7 +453,8 @@ func NewNamesIndex(
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
-		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v", l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
+		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
+			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
 		if !scannedLaunchers[l.ID] && l.Scanner != nil {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})

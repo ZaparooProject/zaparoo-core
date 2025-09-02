@@ -1526,7 +1526,6 @@ func TestCreateVirtualPath(t *testing.T) {
 	}
 }
 
-
 func TestFilenameFromPath_VirtualPaths(t *testing.T) {
 	t.Parallel()
 

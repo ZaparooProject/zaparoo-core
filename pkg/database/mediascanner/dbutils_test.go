@@ -1,14 +1,32 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package mediascanner
 
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
 )
 
 // TestAddMediaPath_SystemInsertFailure tests the scenario where system insertion fails
@@ -20,7 +38,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 
 	// Create mock database
 	mockDB := &helpers.MockMediaDBI{}
-	
+
 	// Create fresh scan state - this simulates the state after FlushScanStateMaps
 	// which clears the SystemIDs cache between scanner batches
 	scanState := &database.ScanState{
@@ -70,9 +88,9 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 	}).Return(database.MediaTitle{DBID: 1}, nil).Once()
 
 	mockDB.On("InsertMedia", database.Media{
-		DBID:             int64(1),
-		Path:             "kodi-show://1/Loki",
-		MediaTitleDBID:   int64(1),
+		DBID:           int64(1),
+		Path:           "kodi-show://1/Loki",
+		MediaTitleDBID: int64(1),
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
 	// Call AddMediaPath with a TV show path
@@ -97,7 +115,7 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 
 	// Create mock database
 	mockDB := &helpers.MockMediaDBI{}
-	
+
 	// Create fresh scan state
 	scanState := &database.ScanState{
 		SystemIDs:      make(map[string]int),
@@ -146,7 +164,7 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// Create mock database
 	mockDB := &helpers.MockMediaDBI{}
-	
+
 	// Create fresh scan state
 	scanState := &database.ScanState{
 		SystemIDs:      make(map[string]int),

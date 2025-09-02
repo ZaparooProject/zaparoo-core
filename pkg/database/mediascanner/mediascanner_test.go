@@ -30,8 +30,8 @@ import (
 	testhelpers "github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
@@ -47,7 +47,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 
 	mockUserDB := &testhelpers.MockUserDBI{}
 	mockMediaDB := &testhelpers.MockMediaDBI{}
-	
+
 	// Set up basic mock expectations for database operations
 	mockMediaDB.On("Truncate").Return(nil)
 	mockMediaDB.On("BeginTransaction").Return(nil)
@@ -55,13 +55,14 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	mockMediaDB.On("ReindexTables").Return(nil)
 	mockMediaDB.On("Vacuum").Return(nil)
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
-	
+
 	// Mock SeedKnownTags operations - these are called during initialization
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
 	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle", mock.AnythingOfType("database.MediaTitle")).
+		Return(database.MediaTitle{}, nil).Maybe()
 	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
 	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
 
@@ -79,7 +80,9 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	launcher1 := platforms.Launcher{
 		ID:       "TestLauncher1",
 		SystemID: systemdefs.SystemTV,
-		Scanner: func(cfg *config.Instance, systemID string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
+		Scanner: func(_ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
 			scanner1Called = true
 			return []platforms.ScanResult{
 				{Name: "Test Item 1", Path: "test://1"},
@@ -88,9 +91,11 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	}
 
 	launcher2 := platforms.Launcher{
-		ID:       "TestLauncher2", 
+		ID:       "TestLauncher2",
 		SystemID: systemdefs.SystemTV, // Same system ID as launcher1
-		Scanner: func(cfg *config.Instance, systemID string, results []platforms.ScanResult) ([]platforms.ScanResult, error) {
+		Scanner: func(_ *config.Instance, _ string,
+			_ []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
 			scanner2Called = true
 			return []platforms.ScanResult{
 				{Name: "Test Item 2", Path: "test://2"},
@@ -101,19 +106,19 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	// Create mock platform that returns our test launchers
 	platform := mocks.NewMockPlatform()
 	launchers := []platforms.Launcher{launcher1, launcher2}
-	
+
 	// Set up basic mocks manually to avoid conflicting with our Launchers expectation
 	platform.On("ID").Return("mock-platform")
 	platform.On("Settings").Return(platforms.Settings{})
 	platform.On("RootDirs", mock.AnythingOfType("*config.Instance")).Return([]string{"/mock/roms"})
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
-	
+
 	// Initialize cache with our test launchers via the platform mock
 	originalCache := helpers.GlobalLauncherCache
 	testCache := &helpers.LauncherCache{}
-	
+
 	testCache.Initialize(platform, cfg)
-	
+
 	helpers.GlobalLauncherCache = testCache
 	defer func() {
 		helpers.GlobalLauncherCache = originalCache
@@ -127,7 +132,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	// Both scanners should have been called
 	assert.True(t, scanner1Called, "Scanner 1 should have been called")
 	assert.True(t, scanner2Called, "Scanner 2 should have been called") // This will fail with the current bug
-	
+
 	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 }
