@@ -11,12 +11,8 @@ go.work
 
 .vscode/
 .idea/
-qodana.yaml
 .claude/
 .claudeignore
-.codanna/
-.codannaignore
-.fastembed_cache/
 
 *.db
 *.tar
@@ -36,8 +32,9 @@ Taskfile.yml
 
 .DS_Store
 tmp/
+
 /cmd/scratch
 /cmd/windows/*.syso
 /cmd/windows/winres/winres.json
 
-worktree-*
+worktrees/

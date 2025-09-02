@@ -447,11 +447,15 @@ func NewNamesIndex(
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
+	scannedLaunchers := make(map[string]bool)
 	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
+	log.Debug().Msgf("checking %d launchers for custom scanners", len(launchers))
 	for i := range launchers {
 		l := &launchers[i]
 		systemID := l.SystemID
-		if !scanned[systemID] && l.Scanner != nil {
+		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
+			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
+		if !scannedLaunchers[l.ID] && l.Scanner != nil {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
@@ -463,6 +467,7 @@ func NewNamesIndex(
 
 			status.Files += len(results)
 			scanned[systemID] = true
+			scannedLaunchers[l.ID] = true
 
 			if len(results) > 0 {
 				for _, p := range results {

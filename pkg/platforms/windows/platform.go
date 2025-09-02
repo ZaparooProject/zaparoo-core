@@ -1,5 +1,3 @@
-//go:build windows
-
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -38,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
@@ -388,6 +387,14 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
+		kodi.NewKodiLocalLauncher(),
+		kodi.NewKodiMovieLauncher(),
+		kodi.NewKodiTVLauncher(),
+		kodi.NewKodiMusicLauncher(),
+		kodi.NewKodiSongLauncher(),
+		kodi.NewKodiAlbumLauncher(),
+		kodi.NewKodiArtistLauncher(),
+		kodi.NewKodiTVShowLauncher(),
 		{
 			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
@@ -500,7 +507,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
-						Path: "launchbox://" + game.ID + "/" + game.Title,
+						Path: helpers.CreateVirtualPath("launchbox", game.ID, game.Title),
 						Name: game.Title,
 					})
 				}

@@ -50,6 +50,31 @@ type KodiClient interface {
 	// GetEpisodes retrieves all episodes for a specific TV show from Kodi's library
 	GetEpisodes(tvShowID int) ([]Episode, error)
 
+	// GetSongs retrieves all songs from Kodi's library
+	GetSongs() ([]Song, error)
+
+	// GetAlbums retrieves all albums from Kodi's library
+	GetAlbums() ([]Album, error)
+
+	// GetArtists retrieves all artists from Kodi's library
+	GetArtists() ([]Artist, error)
+
+	// LaunchSong launches a song by ID from Kodi's library
+	// Path format: "kodi-song://[id]/[name]"
+	LaunchSong(path string) error
+
+	// LaunchAlbum launches an album by ID using playlist generation
+	// Path format: "kodi-album://[id]/[name]"
+	LaunchAlbum(path string) error
+
+	// LaunchArtist launches an artist by ID using playlist generation
+	// Path format: "kodi-artist://[id]/[name]"
+	LaunchArtist(path string) error
+
+	// LaunchTVShow launches a TV show by ID using playlist generation
+	// Path format: "kodi-show://[id]/[name]"
+	LaunchTVShow(path string) error
+
 	// GetURL returns the current Kodi API URL
 	GetURL() string
 

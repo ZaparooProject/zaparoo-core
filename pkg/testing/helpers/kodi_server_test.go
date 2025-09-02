@@ -35,7 +35,7 @@ import (
 func TestNewMockKodiServer_CanBeCreated(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the creation of a mock Kodi server for integration testing
+	// Test mock Kodi server for integration testing
 	server := helpers.NewMockKodiServer(t)
 	defer server.Close()
 
@@ -48,7 +48,7 @@ func TestNewMockKodiServer_CanBeCreated(t *testing.T) {
 func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the JSON-RPC handling functionality needed for shared Kodi client testing
+	// Test JSON-RPC handling functionality for shared Kodi client testing
 	server := helpers.NewMockKodiServer(t)
 	defer server.Close()
 
@@ -70,7 +70,7 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Make actual HTTP POST request to the server
-	// TODO: Accept context from parent test instead of using context.Background()
+	// TODO: Accept context from parent test for better test control and timeout handling
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewBuffer(jsonData))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -83,7 +83,7 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 		require.NoError(t, closeErr)
 	}()
 
-	// Server should respond with valid JSON-RPC response - this will fail until implemented
+	// Server should respond with valid JSON-RPC response
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Test that the response contains proper JSON-RPC structure
@@ -97,7 +97,7 @@ func TestMockKodiServer_HandlesPlayerGetActivePlayersRequest(t *testing.T) {
 func TestMockKodiServer_WithActivePlayers(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the need for configurable mock server responses
+	// Test configurable mock server responses
 	server := helpers.NewMockKodiServer(t).WithActivePlayers()
 	defer server.Close()
 
@@ -111,7 +111,7 @@ func TestMockKodiServer_WithActivePlayers(t *testing.T) {
 	jsonData, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	// TODO: Accept context from parent test instead of using context.Background()
+	// TODO: Accept context from parent test for better test control and timeout handling
 	req, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,

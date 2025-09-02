@@ -722,7 +722,7 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 
 // SetupSQLMock creates a new sqlmock database and mock for testing
 func SetupSQLMock() (*sql.DB, sqlmock.Sqlmock, error) {
-	db, mockDB, err := sqlmock.New()
+	db, mockDB, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create sqlmock: %w", err)
 	}

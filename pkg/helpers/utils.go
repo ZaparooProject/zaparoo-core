@@ -33,6 +33,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -297,10 +298,63 @@ func SlugifyString(input string) string {
 	return strings.ToLower(rep)
 }
 
+// CreateVirtualPath creates a properly encoded virtual path for media
+// Example: "kodi-show", "123", "Some Hot/Cold" -> "kodi-show://123/Some%20Hot%2FCold"
+func CreateVirtualPath(scheme, id, name string) string {
+	return fmt.Sprintf("%s://%s/%s", scheme, id, url.PathEscape(name))
+}
+
+// VirtualPathResult holds parsed virtual path components
+type VirtualPathResult struct {
+	Scheme string
+	ID     string
+	Name   string
+}
+
+// ParseVirtualPathStr parses a virtual path and returns its components with string ID
+func ParseVirtualPathStr(virtualPath string) (result VirtualPathResult, err error) {
+	if !strings.Contains(virtualPath, "://") {
+		return result, errors.New("not a virtual path")
+	}
+
+	parts := strings.SplitN(virtualPath, "://", 2)
+	if len(parts) != 2 {
+		return result, errors.New("invalid virtual path format")
+	}
+
+	result.Scheme = parts[0]
+	idAndName := strings.SplitN(parts[1], "/", 2)
+	if len(idAndName) < 1 {
+		return result, errors.New("missing ID in virtual path")
+	}
+
+	result.ID = idAndName[0]
+	if len(idAndName) == 2 {
+		decoded, decodeErr := url.PathUnescape(idAndName[1])
+		if decodeErr == nil {
+			result.Name = decoded
+		} else {
+			result.Name = idAndName[1] // Fallback to undecoded
+		}
+	}
+
+	return result, nil
+}
+
 func FilenameFromPath(p string) string {
 	if p == "" {
 		return ""
 	}
+
+	// Try to parse as virtual path first
+	if strings.Contains(p, "://") {
+		result, err := ParseVirtualPathStr(p)
+		if err == nil && result.Name != "" {
+			return result.Name
+		}
+	}
+
+	// Regular file path - use existing logic
 	// Convert to forward slash format for consistent cross-platform parsing
 	// Replace backslashes with forward slashes to handle Windows paths on any OS
 	normalizedPath := strings.ReplaceAll(p, "\\", "/")

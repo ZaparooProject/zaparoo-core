@@ -162,9 +162,8 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	select {
 	case err := <-connectionResult:
 		if err != nil && strings.Contains(err.Error(), "connection refused") {
-			t.Logf("Detected race condition - this is the issue we're trying to solve: %v", err)
-			// Don't fail the test, just log that we detected the race condition
-			// This documents the behavior we're observing
+			t.Logf("Connection refused detected during startup race test: %v", err)
+			// This logs potential race condition behavior for analysis
 		}
 	case <-time.After(100 * time.Millisecond):
 		// Connection attempt timed out - this is fine
@@ -416,7 +415,7 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 	port := 7497
 	customOrigins := []string{"example.com"}
 
-	// This should fail because buildDynamicAllowedOrigins doesn't exist yet
+	// Test that buildDynamicAllowedOrigins correctly builds allowed origins list
 	result := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
 
 	// Should include base origins

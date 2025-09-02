@@ -83,3 +83,103 @@ func NewKodiTVLauncher() platforms.Launcher {
 		},
 	}
 }
+
+// NewKodiMusicLauncher creates a KodiMusic launcher for local music files
+func NewKodiMusicLauncher() platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "KodiMusic",
+		SystemID: systemdefs.SystemMusic,
+		Folders:  []string{"music"},
+		Extensions: []string{
+			".mp3", ".flac", ".ogg", ".m4a", ".wav", ".wma", ".aac", ".opus",
+		},
+		Launch: func(cfg *config.Instance, path string) error {
+			client := NewClient(cfg)
+			return client.LaunchFile(path)
+		},
+	}
+}
+
+// NewKodiAlbumLauncher creates a KodiAlbum launcher for album collection playback
+func NewKodiAlbumLauncher() platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "KodiAlbum",
+		SystemID: systemdefs.SystemMusic,
+		Schemes:  []string{SchemeKodiAlbum},
+		Launch: func(cfg *config.Instance, path string) error {
+			client := NewClient(cfg)
+			return client.LaunchAlbum(path)
+		},
+		Scanner: func(
+			cfg *config.Instance,
+			path string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			client := NewClient(cfg)
+			return ScanAlbums(client, cfg, path, results)
+		},
+	}
+}
+
+// NewKodiArtistLauncher creates a KodiArtist launcher for artist collection playback
+func NewKodiArtistLauncher() platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "KodiArtist",
+		SystemID: systemdefs.SystemMusic,
+		Schemes:  []string{SchemeKodiArtist},
+		Launch: func(cfg *config.Instance, path string) error {
+			client := NewClient(cfg)
+			return client.LaunchArtist(path)
+		},
+		Scanner: func(
+			cfg *config.Instance,
+			path string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			client := NewClient(cfg)
+			return ScanArtists(client, cfg, path, results)
+		},
+	}
+}
+
+// NewKodiTVShowLauncher creates a KodiTVShow launcher for TV show collection playback
+func NewKodiTVShowLauncher() platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "KodiTVShow",
+		SystemID: systemdefs.SystemTV,
+		Schemes:  []string{SchemeKodiShow},
+		Launch: func(cfg *config.Instance, path string) error {
+			client := NewClient(cfg)
+			return client.LaunchTVShow(path)
+		},
+		Scanner: func(
+			cfg *config.Instance,
+			path string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			client := NewClient(cfg)
+			return ScanTVShows(client, cfg, path, results)
+		},
+	}
+}
+
+// NewKodiSongLauncher creates a KodiSong launcher for individual song playback
+func NewKodiSongLauncher() platforms.Launcher {
+	return platforms.Launcher{
+		ID:       "KodiSong",
+		SystemID: systemdefs.SystemMusic,
+		Schemes:  []string{SchemeKodiSong},
+		Launch: func(cfg *config.Instance, path string) error {
+			client := NewClient(cfg)
+			return client.LaunchSong(path)
+		},
+		Scanner: func(
+			cfg *config.Instance,
+			path string,
+			results []platforms.ScanResult,
+		) ([]platforms.ScanResult, error) {
+			client := NewClient(cfg)
+			return ScanSongs(client, cfg, path, results)
+		},
+	}
+}

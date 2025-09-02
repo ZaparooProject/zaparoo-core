@@ -16,3 +16,6 @@ rules:
     send: Create a "tmp" directory in the project root instead.
   - match: "sed -i"
     send: Editing with sed bypasses guards, edit manually instead.
+commands:
+  - name: lint
+    send: Run "task lint-fix" and fix ALL issues.
