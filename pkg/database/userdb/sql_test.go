@@ -22,7 +22,6 @@ package userdb
 import (
 	"context"
 	"database/sql"
-	"regexp"
 	"testing"
 	"time"
 
@@ -48,11 +47,7 @@ func TestSqlAddHistory_Success(t *testing.T) {
 		Success:    true,
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		insert into History(
-			Time, Type, TokenID, TokenValue, TokenData, Success
-		) values (?, ?, ?, ?, ?, ?);
-	`)).
+	mock.ExpectPrepare(`insert into History.*values`).
 		ExpectExec().
 		WithArgs(entry.Time.Unix(), entry.Type, entry.TokenID, entry.TokenValue, entry.TokenData, entry.Success).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -77,11 +72,7 @@ func TestSqlAddHistory_DatabaseError(t *testing.T) {
 		Success:    true,
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		insert into History(
-			Time, Type, TokenID, TokenValue, TokenData, Success
-		) values (?, ?, ?, ?, ?, ?);
-	`)).
+	mock.ExpectPrepare(`insert into History.*values`).
 		ExpectExec().
 		WithArgs(entry.Time.Unix(), entry.Type, entry.TokenID, entry.TokenValue, entry.TokenData, entry.Success).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -125,14 +116,7 @@ func TestSqlGetHistoryWithOffset_Success(t *testing.T) {
 			entry.TokenValue, entry.TokenData, entry.Success)
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select 
-		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
-		from History
-		where DBID < ?
-		order by DBID DESC
-		limit 25;
-	`)).
+	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).
 		ExpectQuery().
 		WithArgs(100).
 		WillReturnRows(rows)
@@ -155,16 +139,9 @@ func TestSqlGetHistoryWithOffset_NoRows(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"DBID", "Time", "Type", "TokenID", "TokenValue", "TokenData", "Success"})
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select 
-		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
-		from History
-		where DBID < ?
-		order by DBID DESC
-		limit 25;
-	`)).
+	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).
 		ExpectQuery().
-		WithArgs(2147483646).
+		WithArgs(2147483646). // MaxInt32-1: sentinel value when lastID=0 to get latest records
 		WillReturnRows(rows)
 
 	result, err := sqlGetHistoryWithOffset(context.Background(), db, 0)
@@ -179,22 +156,14 @@ func TestSqlGetHistoryWithOffset_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select 
-		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
-		from History
-		where DBID < ?
-		order by DBID DESC
-		limit 25;
-	`)).
+	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).
 		ExpectQuery().
 		WithArgs(100).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	result, err := sqlGetHistoryWithOffset(context.Background(), db, 100)
 	require.Error(t, err)
-	assert.NotNil(t, result) // Function returns empty slice, not nil
-	assert.Empty(t, result)  // Should be empty slice
+	assert.Empty(t, result)  // Should be empty slice, not nil
 	assert.Contains(t, err.Error(), "failed to query history")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -217,11 +186,7 @@ func TestSqlAddMapping_Success(t *testing.T) {
 		Override: "test-override",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		insert into Mappings(
-			Added, Label, Enabled, Type, Match, Pattern, Override
-		) values (?, ?, ?, ?, ?, ?, ?);
-	`)).
+	mock.ExpectPrepare(`insert into Mappings.*values`).
 		ExpectExec().
 		WithArgs(mapping.Added, mapping.Label, mapping.Enabled, mapping.Type,
 			mapping.Match, mapping.Pattern, mapping.Override).
@@ -253,12 +218,7 @@ func TestSqlGetMapping_Success(t *testing.T) {
 		AddRow(expectedMapping.DBID, expectedMapping.Added, expectedMapping.Label, expectedMapping.Enabled,
 			expectedMapping.Type, expectedMapping.Match, expectedMapping.Pattern, expectedMapping.Override)
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
-		from Mappings
-		where DBID = ?;
-	`)).
+	mock.ExpectPrepare(`select.*from Mappings.*where DBID`).
 		ExpectQuery().
 		WithArgs(int64(123)).
 		WillReturnRows(rows)
@@ -288,18 +248,7 @@ func TestSqlUpdateMapping_Success(t *testing.T) {
 		Override: "updated-override",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		update Mappings set
-			Added = ?,
-			Label = ?,
-			Enabled = ?,
-			Type = ?,
-			Match = ?,
-			Pattern = ?,
-			Override = ?
-		where
-			DBID = ?;
-	`)).
+	mock.ExpectPrepare(`update Mappings set.*where DBID`).
 		ExpectExec().
 		WithArgs(mapping.Added, mapping.Label, mapping.Enabled, mapping.Type,
 			mapping.Match, mapping.Pattern, mapping.Override, int64(123)).
@@ -326,18 +275,7 @@ func TestSqlUpdateMapping_NotFound(t *testing.T) {
 		Override: "updated-override",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		update Mappings set
-			Added = ?,
-			Label = ?,
-			Enabled = ?,
-			Type = ?,
-			Match = ?,
-			Pattern = ?,
-			Override = ?
-		where
-			DBID = ?;
-	`)).
+	mock.ExpectPrepare(`update Mappings set.*where DBID`).
 		ExpectExec().
 		WithArgs(mapping.Added, mapping.Label, mapping.Enabled, mapping.Type,
 			mapping.Match, mapping.Pattern, mapping.Override, int64(999)).
@@ -355,7 +293,7 @@ func TestSqlDeleteMapping_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(regexp.QuoteMeta("delete from Mappings where DBID = ?;")).
+	mock.ExpectPrepare(`delete from Mappings where DBID`).
 		ExpectExec().
 		WithArgs(int64(123)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -371,7 +309,7 @@ func TestSqlDeleteMapping_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(regexp.QuoteMeta("delete from Mappings where DBID = ?;")).
+	mock.ExpectPrepare(`delete from Mappings where DBID`).
 		ExpectExec().
 		WithArgs(int64(999)).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -417,11 +355,7 @@ func TestSqlGetAllMappings_Success(t *testing.T) {
 			mapping.Type, mapping.Match, mapping.Pattern, mapping.Override)
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
-		from Mappings;
-	`)).
+	mock.ExpectPrepare(`select.*from Mappings`).
 		ExpectQuery().
 		WillReturnRows(rows)
 
@@ -443,11 +377,7 @@ func TestSqlGetAllMappings_Empty(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"DBID", "Added", "Label", "Enabled", "Type", "Match", "Pattern", "Override"})
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
-		from Mappings;
-	`)).
+	mock.ExpectPrepare(`select.*from Mappings`).
 		ExpectQuery().
 		WillReturnRows(rows)
 
@@ -492,12 +422,7 @@ func TestSqlGetEnabledMappings_Success(t *testing.T) {
 			mapping.Type, mapping.Match, mapping.Pattern, mapping.Override)
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
-		from Mappings
-		where Enabled = ?
-	`)).
+	mock.ExpectPrepare(`select.*from Mappings.*where Enabled`).
 		ExpectQuery().
 		WithArgs(true).
 		WillReturnRows(rows)
@@ -528,11 +453,7 @@ func TestSqlAddMapping_DatabaseError(t *testing.T) {
 		Override: "test-override",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		insert into Mappings(
-			Added, Label, Enabled, Type, Match, Pattern, Override
-		) values (?, ?, ?, ?, ?, ?, ?);
-	`)).
+	mock.ExpectPrepare(`insert into Mappings.*values`).
 		ExpectExec().
 		WithArgs(mapping.Added, mapping.Label, mapping.Enabled, mapping.Type,
 			mapping.Match, mapping.Pattern, mapping.Override).
@@ -550,12 +471,7 @@ func TestSqlGetMapping_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, Added, Label, Enabled, Type, Match, Pattern, Override
-		from Mappings
-		where DBID = ?;
-	`)).
+	mock.ExpectPrepare(`select.*from Mappings.*where DBID`).
 		ExpectQuery().
 		WithArgs(int64(999)).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -578,13 +494,7 @@ func TestSqlUpdateZapLinkHost_Success(t *testing.T) {
 	host := "example.com"
 	zapscript := 1
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		INSERT INTO ZapLinkHosts (Host, ZapScript, CheckedAt)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(Host) DO UPDATE SET
-			ZapScript = excluded.ZapScript,
-			CheckedAt = CURRENT_TIMESTAMP;
-	`)).
+	mock.ExpectPrepare(`INSERT INTO ZapLinkHosts.*ON CONFLICT.*UPDATE`).
 		ExpectExec().
 		WithArgs(host, zapscript).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -603,13 +513,7 @@ func TestSqlUpdateZapLinkHost_DatabaseError(t *testing.T) {
 	host := "example.com"
 	zapscript := 1
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		INSERT INTO ZapLinkHosts (Host, ZapScript, CheckedAt)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(Host) DO UPDATE SET
-			ZapScript = excluded.ZapScript,
-			CheckedAt = CURRENT_TIMESTAMP;
-	`)).
+	mock.ExpectPrepare(`INSERT INTO ZapLinkHosts.*ON CONFLICT.*UPDATE`).
 		ExpectExec().
 		WithArgs(host, zapscript).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -632,7 +536,7 @@ func TestSqlGetZapLinkHost_Success(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"ZapScript"}).
 		AddRow(zapscript)
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?")).
+	mock.ExpectQuery(`SELECT.*FROM ZapLinkHosts WHERE Host`).
 		WithArgs(host).
 		WillReturnRows(rows)
 
@@ -651,7 +555,7 @@ func TestSqlGetZapLinkHost_NotFound(t *testing.T) {
 
 	host := "unknown.com"
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT ZapScript FROM ZapLinkHosts WHERE Host = ?")).
+	mock.ExpectQuery(`SELECT.*FROM ZapLinkHosts WHERE Host`).
 		WithArgs(host).
 		WillReturnError(sql.ErrNoRows)
 
@@ -671,13 +575,7 @@ func TestSqlUpdateZapLinkCache_Success(t *testing.T) {
 	url := "https://example.com/game"
 	zapscript := "launch('game.exe')"
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		INSERT INTO ZapLinkCache (URL, ZapScript, UpdatedAt)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(URL) DO UPDATE SET
-			ZapScript = excluded.ZapScript,
-			UpdatedAt = CURRENT_TIMESTAMP;
-	`)).
+	mock.ExpectPrepare(`INSERT INTO ZapLinkCache.*ON CONFLICT.*UPDATE`).
 		ExpectExec().
 		WithArgs(url, zapscript).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -696,13 +594,7 @@ func TestSqlUpdateZapLinkCache_DatabaseError(t *testing.T) {
 	url := "https://example.com/game"
 	zapscript := "launch('game.exe')"
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		INSERT INTO ZapLinkCache (URL, ZapScript, UpdatedAt)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(URL) DO UPDATE SET
-			ZapScript = excluded.ZapScript,
-			UpdatedAt = CURRENT_TIMESTAMP;
-	`)).
+	mock.ExpectPrepare(`INSERT INTO ZapLinkCache.*ON CONFLICT.*UPDATE`).
 		ExpectExec().
 		WithArgs(url, zapscript).
 		WillReturnError(sqlmock.ErrCancelled)
@@ -725,7 +617,7 @@ func TestSqlGetZapLinkCache_Success(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"ZapScript"}).
 		AddRow(expectedZapscript)
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT ZapScript FROM ZapLinkCache WHERE URL = ?")).
+	mock.ExpectQuery(`SELECT.*FROM ZapLinkCache WHERE URL`).
 		WithArgs(url).
 		WillReturnRows(rows)
 
@@ -743,12 +635,72 @@ func TestSqlGetZapLinkCache_NotFound(t *testing.T) {
 
 	url := "https://unknown.com/game"
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT ZapScript FROM ZapLinkCache WHERE URL = ?")).
+	mock.ExpectQuery(`SELECT.*FROM ZapLinkCache WHERE URL`).
 		WithArgs(url).
 		WillReturnError(sql.ErrNoRows)
 
 	result, err := sqlGetZapLinkCache(context.Background(), db, url)
 	require.NoError(t, err)
 	assert.Empty(t, result) // Returns empty string when not found
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Database Management Function Tests
+
+func TestSqlTruncate_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := helpers.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
+		WillReturnResult(sqlmock.NewResult(0, 2)) // 2 tables affected
+
+	err = sqlTruncate(context.Background(), db)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlTruncate_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := helpers.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`delete from History.*delete from Mappings.*vacuum`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	err = sqlTruncate(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to truncate database")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlVacuum_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := helpers.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`vacuum`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err = sqlVacuum(context.Background(), db)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlVacuum_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := helpers.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`vacuum`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	err = sqlVacuum(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to vacuum database")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

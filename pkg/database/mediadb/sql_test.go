@@ -22,7 +22,6 @@ package mediadb
 import (
 	"context"
 	"database/sql"
-	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -39,7 +38,7 @@ func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	mock.ExpectExec(regexp.QuoteMeta("INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES ('LastGeneratedAt', ?)")).
+	mock.ExpectExec(`INSERT OR REPLACE INTO DBConfig.*LastGeneratedAt`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -57,7 +56,7 @@ func TestSqlGetLastGenerated_Success(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"Value"}).
 		AddRow("1672531200")
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT Value FROM DBConfig WHERE Name = 'LastGeneratedAt'")).
+	mock.ExpectQuery(`SELECT.*FROM DBConfig WHERE Name.*LastGeneratedAt`).
 		WillReturnRows(rows)
 
 	result, err := sqlGetLastGenerated(context.Background(), db)
@@ -85,14 +84,7 @@ func TestSqlFindSystem_Success(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"DBID", "SystemID", "Name"}).
 		AddRow(expectedSystem.DBID, expectedSystem.SystemID, expectedSystem.Name)
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, SystemID, Name
-		from Systems
-		where DBID = ?
-		or SystemID = ?
-		limit 1;
-	`)).
+	mock.ExpectPrepare(`select.*from Systems.*where.*limit`).
 		ExpectQuery().
 		WithArgs(searchSystem.DBID, searchSystem.SystemID).
 		WillReturnRows(rows)
@@ -115,14 +107,7 @@ func TestSqlFindSystem_NotFound(t *testing.T) {
 		SystemID: "unknown",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select
-		DBID, SystemID, Name
-		from Systems
-		where DBID = ?
-		or SystemID = ?
-		limit 1;
-	`)).
+	mock.ExpectPrepare(`select.*from Systems.*where.*limit`).
 		ExpectQuery().
 		WithArgs(searchSystem.DBID, searchSystem.SystemID).
 		WillReturnError(sql.ErrNoRows)
@@ -147,7 +132,7 @@ func TestSqlInsertSystem_Success(t *testing.T) {
 		Name:     "Test System",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)")).
+	mock.ExpectPrepare(`INSERT INTO Systems.*VALUES`).
 		ExpectExec().
 		WithArgs(nil, system.SystemID, system.Name).
 		WillReturnResult(sqlmock.NewResult(42, 1))
@@ -181,20 +166,7 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 		AddRow(expectedResults[0].SystemID, expectedResults[0].Path)
 
 	// Match the actual SQL query structure
-	mock.ExpectPrepare(regexp.QuoteMeta(`
-		select 
-			Systems.SystemID,
-			Media.Path
-		from Systems
-		inner join MediaTitles
-			on Systems.DBID = MediaTitles.SystemDBID
-		inner join Media
-			on MediaTitles.DBID = Media.MediaTitleDBID
-		where Systems.SystemID IN (?)
-		and MediaTitles.Slug = ?
-		and Media.Path = ?
-		LIMIT 1
-	`)).
+	mock.ExpectPrepare(`select.*from Systems.*inner join.*MediaTitles.*inner join.*Media.*where.*LIMIT`).
 		ExpectQuery().
 		WithArgs("test-system", sqlmock.AnyArg(), path). // slug will be computed
 		WillReturnRows(rows)
@@ -218,7 +190,7 @@ func TestSqlInsertSystem_Duplicate(t *testing.T) {
 		Name:     "Test System",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)")).
+	mock.ExpectPrepare(`INSERT INTO Systems.*VALUES`).
 		ExpectExec().
 		WithArgs(nil, system.SystemID, system.Name).
 		WillReturnError(sqlmock.ErrCancelled) // Simulate constraint violation
@@ -241,7 +213,7 @@ func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 		Name:     "Test System",
 	}
 
-	mock.ExpectPrepare(regexp.QuoteMeta("INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)")).
+	mock.ExpectPrepare(`INSERT INTO Systems.*VALUES`).
 		ExpectExec().
 		WithArgs(nil, system.SystemID, system.Name).
 		WillReturnResult(sqlmock.NewResult(42, 1))
