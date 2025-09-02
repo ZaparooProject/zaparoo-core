@@ -45,11 +45,18 @@ var _ KodiClient = (*Client)(nil)
 
 // NewClient creates a new Kodi client with configuration-based URL
 func NewClient(cfg *config.Instance) KodiClient {
+	return NewClientWithLauncherID(cfg, "Kodi")
+}
+
+// NewClientWithLauncherID creates a new Kodi client with hierarchical configuration lookup
+func NewClientWithLauncherID(cfg *config.Instance, launcherID string) KodiClient {
 	var serverURL string
 
-	// Try to get generic "Kodi" configuration
+	// Try specific launcher ID first, then fall back to generic "Kodi"
 	if cfg != nil {
-		if defaults, found := cfg.LookupLauncherDefaults("Kodi"); found && defaults.ServerURL != "" {
+		if defaults, found := cfg.LookupLauncherDefaults(launcherID); found && defaults.ServerURL != "" {
+			serverURL = defaults.ServerURL
+		} else if defaults, found := cfg.LookupLauncherDefaults("Kodi"); found && defaults.ServerURL != "" {
 			serverURL = defaults.ServerURL
 		}
 	}
@@ -59,28 +66,9 @@ func NewClient(cfg *config.Instance) KodiClient {
 		serverURL = "http://localhost:8080"
 	}
 
-	// Handle trailing slashes and ensure /jsonrpc endpoint
-	serverURL = strings.TrimSuffix(serverURL, "/")
-	if !strings.HasSuffix(serverURL, "/jsonrpc") {
-		serverURL += "/jsonrpc"
-	}
-
-	return &Client{url: serverURL}
-}
-
-// NewClientWithLauncherID creates a new Kodi client with hierarchical configuration lookup
-func NewClientWithLauncherID(_ *config.Instance, launcherID string, configDefaults map[string]string) KodiClient {
-	var serverURL string
-
-	// Try specific launcher ID first
-	if url, exists := configDefaults[launcherID]; exists && url != "" {
-		serverURL = url
-	} else if url, exists := configDefaults["Kodi"]; exists && url != "" {
-		// Fall back to generic "Kodi" configuration
-		serverURL = url
-	} else {
-		// Fall back to hardcoded localhost
-		serverURL = "http://localhost:8080"
+	// Ensure URL has a scheme
+	if serverURL != "" && !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "http://" + serverURL
 	}
 
 	// Handle trailing slashes and ensure /jsonrpc endpoint
@@ -325,18 +313,31 @@ func (c *Client) LaunchAlbum(path string) error {
 		return err
 	}
 
-	// Step 2: Get songs
-	allSongs, err := c.GetSongs()
+	// Step 2: Get songs with album filter
+	filter := &FilterRule{
+		Field:    "albumid",
+		Operator: "is",
+		Value:    albumID,
+	}
+	params := AudioLibraryGetSongsParams{Filter: filter}
+
+	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return err
 	}
 
-	// Filter by album
-	var albumSongs []PlaylistItemSongID
+	var response AudioLibraryGetSongsResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
+	}
+
+	allSongs := response.Songs
+
+	// Convert to playlist items - no filtering needed since API filtered
+	albumSongs := make([]PlaylistItemSongID, 0, len(allSongs))
 	for _, song := range allSongs {
-		if song.AlbumID == albumID {
-			albumSongs = append(albumSongs, PlaylistItemSongID{SongID: song.ID})
-		}
+		albumSongs = append(albumSongs, PlaylistItemSongID{SongID: song.ID})
 	}
 
 	// Step 3: Add to playlist
@@ -375,43 +376,38 @@ func (c *Client) LaunchArtist(path string) error {
 		return err
 	}
 
-	// Step 2: Get all artists to find the target artist name
-	artists, err := c.GetArtists()
+	// Step 2: Get songs for specific artist using API filtering
+	filter := &FilterRule{
+		Field:    "artistid",
+		Operator: "is",
+		Value:    artistID,
+	}
+	params := AudioLibraryGetSongsParams{Filter: filter}
+
+	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return err
 	}
 
-	var targetArtistName string
-	for _, artist := range artists {
-		if artist.ID == artistID {
-			targetArtistName = artist.Label
-			break
-		}
-	}
-
-	if targetArtistName == "" {
-		return fmt.Errorf("artist with ID %d not found", artistID)
-	}
-
-	// Step 3: Get all songs and filter by artist name
-	allSongs, err := c.GetSongs()
+	var response AudioLibraryGetSongsResponse
+	err = json.Unmarshal(result, &response)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
 	}
 
-	// Filter songs by artist name
-	var artistSongs []PlaylistItemSongID
+	allSongs := response.Songs
+
+	// Convert to playlist items - no filtering needed since API filtered
+	artistSongs := make([]PlaylistItemSongID, 0, len(allSongs))
 	for _, song := range allSongs {
-		if song.Artist == targetArtistName {
-			artistSongs = append(artistSongs, PlaylistItemSongID{SongID: song.ID})
-		}
+		artistSongs = append(artistSongs, PlaylistItemSongID{SongID: song.ID})
 	}
 
 	if len(artistSongs) == 0 {
-		return fmt.Errorf("no songs found for artist %s", targetArtistName)
+		return fmt.Errorf("no songs found for artist ID %d", artistID)
 	}
 
-	// Step 4: Add songs to playlist
+	// Step 3: Add songs to playlist
 	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddParams{
 		PlaylistID: 0,
 		Item:       artistSongs,
@@ -420,7 +416,7 @@ func (c *Client) LaunchArtist(path string) error {
 		return err
 	}
 
-	// Step 5: Start playback
+	// Step 4: Start playback
 	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			PlaylistID: 0,

@@ -25,6 +25,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewMockKodiClient_ImplementsInterface(t *testing.T) {
@@ -39,13 +40,13 @@ func TestNewMockKodiClient_ImplementsInterface(t *testing.T) {
 
 	// Test that basic mock functionality works
 	err := client.LaunchFile("/test/path")
-	assert.NoError(t, err) // Should succeed due to SetupBasicMock
+	require.NoError(t, err) // Should succeed due to SetupBasicMock
 }
 
 func TestMockKodiClient_GetAlbums(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until GetAlbums is implemented in the mock
+	// Test GetAlbums mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -61,7 +62,7 @@ func TestMockKodiClient_GetAlbums(t *testing.T) {
 	albums, err := client.GetAlbums()
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, expectedAlbums, albums)
 	mock.AssertExpectations(t)
 }
@@ -69,7 +70,7 @@ func TestMockKodiClient_GetAlbums(t *testing.T) {
 func TestMockKodiClient_GetArtists(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until GetArtists is implemented in the mock
+	// Test GetArtists mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -85,7 +86,7 @@ func TestMockKodiClient_GetArtists(t *testing.T) {
 	artists, err := client.GetArtists()
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, expectedArtists, artists)
 	mock.AssertExpectations(t)
 }
@@ -93,7 +94,7 @@ func TestMockKodiClient_GetArtists(t *testing.T) {
 func TestMockKodiClient_GetSongs(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until GetSongs is implemented in the mock
+	// Test GetSongs mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -109,7 +110,7 @@ func TestMockKodiClient_GetSongs(t *testing.T) {
 	songs, err := client.GetSongs()
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, expectedSongs, songs)
 	mock.AssertExpectations(t)
 }
@@ -117,7 +118,7 @@ func TestMockKodiClient_GetSongs(t *testing.T) {
 func TestMockKodiClient_LaunchAlbum(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until LaunchAlbum is implemented in the mock
+	// Test LaunchAlbum mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -130,14 +131,14 @@ func TestMockKodiClient_LaunchAlbum(t *testing.T) {
 	err := client.LaunchAlbum("kodi-album://1/Test Album")
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mock.AssertExpectations(t)
 }
 
 func TestMockKodiClient_LaunchArtist(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until LaunchArtist is implemented in the mock
+	// Test LaunchArtist mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -150,14 +151,14 @@ func TestMockKodiClient_LaunchArtist(t *testing.T) {
 	err := client.LaunchArtist("kodi-artist://1/Test Artist")
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mock.AssertExpectations(t)
 }
 
 func TestMockKodiClient_LaunchSong(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until LaunchSong is implemented in the mock
+	// Test LaunchSong mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -170,14 +171,14 @@ func TestMockKodiClient_LaunchSong(t *testing.T) {
 	err := client.LaunchSong("kodi-song://1/Test Song")
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mock.AssertExpectations(t)
 }
 
 func TestMockKodiClient_LaunchTVShow(t *testing.T) {
 	t.Parallel()
 
-	// This test will fail until LaunchTVShow is implemented in the mock
+	// Test LaunchTVShow mock method
 	mock := &mocks.MockKodiClient{}
 
 	// Setup mock expectation
@@ -190,6 +191,6 @@ func TestMockKodiClient_LaunchTVShow(t *testing.T) {
 	err := client.LaunchTVShow("kodi-show://1/Test Show")
 
 	// Verify
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	mock.AssertExpectations(t)
 }

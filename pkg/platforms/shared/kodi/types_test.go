@@ -29,7 +29,7 @@ import (
 func TestTypes_CanBeCreated(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the creation of basic Kodi types that we need
+	// Test basic Kodi types for JSON marshaling
 
 	// Test Player type
 	player := kodi.Player{

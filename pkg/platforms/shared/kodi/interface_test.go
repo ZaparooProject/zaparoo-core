@@ -148,22 +148,22 @@ func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.Raw
 
 func (m *MockKodiClient) LaunchSong(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) LaunchAlbum(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) LaunchArtist(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) LaunchTVShow(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
@@ -211,8 +211,7 @@ func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
 func TestKodiClient_CanBeMocked(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the creation of the KodiClient interface
-	// It ensures we can mock the client for TDD
+	// Test that KodiClient interface can be mocked for testing
 	mockClient := new(MockKodiClient)
 
 	// Setup expectation
@@ -233,14 +232,13 @@ func TestKodiClient_CanBeMocked(t *testing.T) {
 func TestNewClient_ReturnsKodiClient(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the creation of NewClient function
-	// We need to be able to create a real client that implements the interface
+	// Test that NewClient function creates a client implementing the interface
 
 	// Simplified API - launcherID parameter removed since it was unused
 	// We can't actually test the config loading without more setup,
 	// so this test just ensures the constructor exists and returns the interface
 
-	// This will fail until we implement simplified NewClient
+	// Test that we can create a client that implements the interface
 	_ = kodi.NewClient(nil)
 }
 

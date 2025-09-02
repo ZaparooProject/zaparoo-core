@@ -698,6 +698,22 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 			},
 			expectedURL: "http://specific-kodi:8080/jsonrpc",
 		},
+		{
+			name:       "adds http scheme when missing in launcher config",
+			launcherID: "KodiSpecific",
+			configDefaults: map[string]string{
+				"KodiSpecific": "specific-kodi:8080",
+			},
+			expectedURL: "http://specific-kodi:8080/jsonrpc",
+		},
+		{
+			name:       "preserves https scheme in launcher config",
+			launcherID: "KodiSpecific",
+			configDefaults: map[string]string{
+				"KodiSpecific": "https://specific-kodi:8080",
+			},
+			expectedURL: "https://specific-kodi:8080/jsonrpc",
+		},
 	}
 
 	for _, tt := range tests {
@@ -709,7 +725,31 @@ func TestNewClient_HierarchicalConfigLookup(t *testing.T) {
 
 			// For now, the test will fail because NewClient doesn't accept launcher ID
 			// This drives us to modify the NewClient signature and implementation
-			client := kodi.NewClientWithLauncherID(nil, tt.launcherID, tt.configDefaults)
+			// Create config with the test defaults
+			var cfg *config.Instance
+			if len(tt.configDefaults) > 0 {
+				configDir := t.TempDir()
+				var launcherDefaults []config.LaunchersDefault
+
+				for launcherID, serverURL := range tt.configDefaults {
+					launcherDefaults = append(launcherDefaults, config.LaunchersDefault{
+						Launcher:  launcherID,
+						ServerURL: serverURL,
+					})
+				}
+
+				values := config.Values{
+					Launchers: config.Launchers{
+						Default: launcherDefaults,
+					},
+				}
+
+				var err error
+				cfg, err = config.NewConfig(configDir, values)
+				require.NoError(t, err)
+			}
+
+			client := kodi.NewClientWithLauncherID(cfg, tt.launcherID)
 
 			actualURL := client.GetURL()
 			assert.Equal(t, tt.expectedURL, actualURL)
@@ -753,6 +793,22 @@ func TestNewClient_UsesConfigurationSystem(t *testing.T) {
 				ServerURL: "http://configured-kodi:9090/jsonrpc",
 			}),
 			expectedURL: "http://configured-kodi:9090/jsonrpc",
+		},
+		{
+			name: "adds http scheme when missing",
+			config: createTestConfigWithKodiDefaults(t, config.LaunchersDefault{
+				Launcher:  "Kodi",
+				ServerURL: "configured-kodi:9090",
+			}),
+			expectedURL: "http://configured-kodi:9090/jsonrpc",
+		},
+		{
+			name: "preserves https scheme",
+			config: createTestConfigWithKodiDefaults(t, config.LaunchersDefault{
+				Launcher:  "Kodi",
+				ServerURL: "https://configured-kodi:9090",
+			}),
+			expectedURL: "https://configured-kodi:9090/jsonrpc",
 		},
 	}
 
@@ -836,7 +892,7 @@ func TestClient_LaunchSong_MakesCorrectAPICall(t *testing.T) {
 	// The song should be launched by ID, not file path
 	songID, ok := item["songid"].(float64)
 	require.True(t, ok, "songid should be present")
-	assert.Equal(t, float64(123), songID)
+	assert.Equal(t, 123, int(songID))
 }
 
 func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
@@ -919,7 +975,8 @@ func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
 		}
 		receivedPayloads = append(receivedPayloads, payload)
 
-		method := payload["method"].(string)
+		method, ok := payload["method"].(string)
+		assert.True(t, ok, "method should be a string")
 
 		// Mock different responses based on method
 		var response map[string]any
@@ -989,22 +1046,26 @@ func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
 
 	// 1. Clear music playlist (playlistid=0)
 	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams := receivedPayloads[0]["params"].(map[string]any)
-	assert.Equal(t, float64(0), clearParams["playlistid"])
+	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 0, int(clearParams["playlistid"].(float64)))
 
 	// 2. Get songs (filtered by album)
 	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[1]["method"])
 
 	// 3. Add songs to playlist
 	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
-	addParams := receivedPayloads[2]["params"].(map[string]any)
-	assert.Equal(t, float64(0), addParams["playlistid"])
+	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 0, int(addParams["playlistid"].(float64)))
 
 	// 4. Start playback with playlist
 	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
-	openParams := receivedPayloads[3]["params"].(map[string]any)
-	item := openParams["item"].(map[string]any)
-	assert.Equal(t, float64(0), item["playlistid"])
+	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	item, ok := openParams["item"].(map[string]any)
+	require.True(t, ok, "item should be a map[string]any")
+	assert.Equal(t, 0, int(item["playlistid"].(float64)))
 }
 
 func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
@@ -1135,7 +1196,7 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 	t.Parallel()
 
 	// This test drives the implementation of LaunchArtist to make playlist-based API requests
-	// It should: 1) Clear music playlist, 2) Get artists to find name, 3) Get all songs and filter by artist, 4) Add songs to playlist, 5) Start playback
+	// It should: 1) Clear music playlist, 2) Get songs with artist filter, 3) Add songs to playlist, 4) Start playback
 
 	var receivedPayloads []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1147,7 +1208,8 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 		}
 		receivedPayloads = append(receivedPayloads, payload)
 
-		method := payload["method"].(string)
+		method, ok := payload["method"].(string)
+		assert.True(t, ok, "method should be a string")
 
 		// Mock different responses based on method
 		var response map[string]any
@@ -1226,29 +1288,30 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the correct sequence of API calls was made
-	require.Len(t, receivedPayloads, 5, "Should make 5 API calls: Clear, GetArtists, GetSongs, Add, Open")
+	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetSongs, Add, Open")
 
 	// 1. Clear music playlist (playlistid=0)
 	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams := receivedPayloads[0]["params"].(map[string]any)
-	assert.Equal(t, float64(0), clearParams["playlistid"])
+	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 0, int(clearParams["playlistid"].(float64)))
 
-	// 2. Get artists to find artist name
-	assert.Equal(t, "AudioLibrary.GetArtists", receivedPayloads[1]["method"])
+	// 2. Get songs with artist filter
+	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[1]["method"])
 
-	// 3. Get songs (to filter by artist)
-	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[2]["method"])
+	// 3. Add songs to playlist
+	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
+	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 0, int(addParams["playlistid"].(float64)))
 
-	// 4. Add songs to playlist
-	assert.Equal(t, "Playlist.Add", receivedPayloads[3]["method"])
-	addParams := receivedPayloads[3]["params"].(map[string]any)
-	assert.Equal(t, float64(0), addParams["playlistid"])
-
-	// 5. Start playback with playlist
-	assert.Equal(t, "Player.Open", receivedPayloads[4]["method"])
-	openParams := receivedPayloads[4]["params"].(map[string]any)
-	item := openParams["item"].(map[string]any)
-	assert.Equal(t, float64(0), item["playlistid"])
+	// 4. Start playback with playlist
+	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
+	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	item, ok := openParams["item"].(map[string]any)
+	require.True(t, ok, "item should be a map[string]any")
+	assert.Equal(t, 0, int(item["playlistid"].(float64)))
 }
 
 func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
@@ -1267,7 +1330,8 @@ func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 		}
 		receivedPayloads = append(receivedPayloads, payload)
 
-		method := payload["method"].(string)
+		method, ok := payload["method"].(string)
+		assert.True(t, ok, "method should be a string")
 
 		// Mock different responses based on method
 		var response map[string]any
@@ -1337,32 +1401,38 @@ func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {
 
 	// 1. Clear video playlist (playlistid=1)
 	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams := receivedPayloads[0]["params"].(map[string]any)
-	assert.Equal(t, float64(1), clearParams["playlistid"])
+	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 1, int(clearParams["playlistid"].(float64)))
 
 	// 2. Get episodes for the show
 	assert.Equal(t, "VideoLibrary.GetEpisodes", receivedPayloads[1]["method"])
-	episodesParams := receivedPayloads[1]["params"].(map[string]any)
-	assert.Equal(t, float64(456), episodesParams["tvshowid"])
+	episodesParams, ok := receivedPayloads[1]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 456, int(episodesParams["tvshowid"].(float64)))
 
 	// 3. Add episodes to playlist
 	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
-	addParams := receivedPayloads[2]["params"].(map[string]any)
-	assert.Equal(t, float64(1), addParams["playlistid"])
+	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	assert.Equal(t, 1, int(addParams["playlistid"].(float64)))
 
 	// Verify episode items are properly structured
 	items, ok := addParams["item"].([]any)
 	require.True(t, ok, "item should be an array")
 	require.Len(t, items, 2, "should have 2 episodes")
 
-	firstItem := items[0].(map[string]any)
-	assert.Equal(t, float64(123), firstItem["episodeid"])
+	firstItem, ok := items[0].(map[string]any)
+	require.True(t, ok, "first item should be a map[string]any")
+	assert.Equal(t, 123, int(firstItem["episodeid"].(float64)))
 
 	// 4. Start playbook with playlist
 	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
-	openParams := receivedPayloads[3]["params"].(map[string]any)
-	item := openParams["item"].(map[string]any)
-	assert.Equal(t, float64(1), item["playlistid"])
+	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
+	require.True(t, ok, "params should be a map[string]any")
+	item, ok := openParams["item"].(map[string]any)
+	require.True(t, ok, "item should be a map[string]any")
+	assert.Equal(t, 1, int(item["playlistid"].(float64)))
 }
 
 func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
@@ -1405,8 +1475,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 	t.Run("basic auth configured", func(t *testing.T) {
 		t.Parallel()
 
-		// This test will fail until basic auth integration is implemented
-		// It drives the implementation to use config.LookupAuth and set basic auth headers
+		// Test basic auth integration using config.LookupAuth
 
 		var receivedHeaders http.Header
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1466,7 +1535,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 	t.Run("bearer auth configured", func(t *testing.T) {
 		t.Parallel()
 
-		// This test will fail until bearer auth integration is implemented
+		// Test bearer auth integration
 
 		var receivedHeaders http.Header
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

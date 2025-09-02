@@ -149,46 +149,55 @@ func (m *MockKodiClient) APIRequest(method APIMethod, params any) (json.RawMessa
 
 func (m *MockKodiClient) LaunchSong(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchSong failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchAlbum(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchAlbum failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchArtist(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock LaunchArtist failed: %w", err)
+	}
+	return nil
 }
 
 func (m *MockKodiClient) LaunchTVShow(path string) error {
 	args := m.Called(path)
-	return args.Error(0)
+	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) GetSongs() ([]Song, error) {
 	args := m.Called()
 	if songs, ok := args.Get(0).([]Song); ok {
-		return songs, args.Error(1)
+		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
-	return nil, args.Error(1)
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) GetAlbums() ([]Album, error) {
 	args := m.Called()
 	if albums, ok := args.Get(0).([]Album); ok {
-		return albums, args.Error(1)
+		return albums, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
-	return nil, args.Error(1)
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func (m *MockKodiClient) GetArtists() ([]Artist, error) {
 	args := m.Called()
 	if artists, ok := args.Get(0).([]Artist); ok {
-		return artists, args.Error(1)
+		return artists, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
-	return nil, args.Error(1)
+	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
 func TestScanMovies(t *testing.T) {

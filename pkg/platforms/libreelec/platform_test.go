@@ -63,13 +63,14 @@ func TestLibreELECHasKodiMusicLauncher(t *testing.T) {
 	// Check for KodiMusic launcher
 	var kodiMusic *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiMusic" {
-			kodiMusic = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
-			assert.Contains(t, launcher.Extensions, ".mp3")
-			assert.Contains(t, launcher.Extensions, ".flac")
-			break
+		if launcher.ID != "KodiMusic" {
+			continue
 		}
+		kodiMusic = &launcher.ID
+		assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+		assert.Contains(t, launcher.Extensions, ".mp3")
+		assert.Contains(t, launcher.Extensions, ".flac")
+		break
 	}
 
 	require.NotNil(t, kodiMusic, "KodiMusic launcher should exist")
