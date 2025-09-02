@@ -22,6 +22,69 @@ tasks:
         vars:
           PLATFORM: batocera
 
+  package:
+    desc: Build Batocera pacman packages for all architectures
+    deps: [build-amd64, build-arm64, build-arm]
+    vars:
+      TEMPLATE_DIR: scripts/batocera/template
+      BUILD_DIR: _build/packages/batocera
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - mkdir -p {{.BUILD_DIR}}
+      - task: package-arch
+        vars:
+          BUILD_ARCH: amd64
+          PKG_ARCH: x86_64
+          BUILD_DIR: "{{.BUILD_DIR}}"
+          TEMPLATE_DIR: "{{.TEMPLATE_DIR}}"
+          VERSION: "{{.APP_VERSION}}"
+      - task: package-arch
+        vars:
+          BUILD_ARCH: arm64
+          PKG_ARCH: aarch64
+          BUILD_DIR: "{{.BUILD_DIR}}"
+          TEMPLATE_DIR: "{{.TEMPLATE_DIR}}"
+          VERSION: "{{.APP_VERSION}}"
+      - task: package-arch
+        vars:
+          BUILD_ARCH: arm
+          PKG_ARCH: armv7l
+          BUILD_DIR: "{{.BUILD_DIR}}"
+          TEMPLATE_DIR: "{{.TEMPLATE_DIR}}"
+          VERSION: "{{.APP_VERSION}}"
+      - echo "Packages created in {{.BUILD_DIR}}:"
+      - ls -la {{.BUILD_DIR}}/*.pkg.tar.zst
+
+  package-arch:
+    desc: Build Batocera pacman package for specific architecture
+    vars:
+      BUILD_DIR: '{{.BUILD_DIR | default "_build/packages/batocera"}}'
+      TEMPLATE_DIR: '{{.TEMPLATE_DIR | default "scripts/batocera/template"}}'
+      PACKAGE_NAME: zaparoo-core-{{.VERSION}}-{{.PKG_ARCH}}
+      PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
+    cmds:
+      - echo "Creating package for {{.PKG_ARCH}}..."
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
+      - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - cp _build/batocera_{{.BUILD_ARCH}}/zaparoo {{.PACKAGE_DIR}}/userdata/system/
+      - sed -i "s/__VERSION__/{{.VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__ARCH__/{{.PKG_ARCH}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/services/zaparoo_service
+      - task: create-package
+        vars:
+          PACKAGE_DIR: "{{.PACKAGE_DIR}}"
+          PACKAGE_NAME: "{{.PACKAGE_NAME}}"
+          BUILD_DIR: "{{.BUILD_DIR}}"
+
+  create-package:
+    internal: true
+    dir: "{{.PACKAGE_DIR}}"
+    cmds:
+      - echo "Creating package manually..."
+      - tar -cf - .PKGINFO .BATOEXEC userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
+      - chmod go+r "../{{.PACKAGE_NAME}}.pkg.tar.zst"
+
   deploy:
     cmds:
       - task: build-{{.CLI_ARGS}}
