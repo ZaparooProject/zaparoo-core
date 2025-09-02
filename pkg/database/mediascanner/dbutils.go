@@ -20,13 +20,16 @@
 package mediascanner
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
+
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/rs/zerolog/log"
 )
 
 // We can't batch effectively without a sense of relationships
@@ -63,6 +66,27 @@ func AddMediaPath(
 		if err != nil {
 			ss.SystemsIndex-- // Rollback index increment on failure
 			log.Error().Err(err).Msgf("error inserting system: %s", systemID)
+			
+			// Only attempt recovery for UNIQUE constraint violations
+			// Other errors (connection issues, etc.) should fail fast
+			var sqliteErr sqlite3.Error
+			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+				return 0, 0
+			}
+			
+			// Try to get existing system ID from database when constraint violated
+			existingSystem, getErr := db.FindSystem(database.System{
+				SystemID: systemID,
+			})
+			if getErr == nil && existingSystem.DBID != 0 {
+				systemIndex = int(existingSystem.DBID)
+				ss.SystemIDs[systemID] = systemIndex // Update cache with existing ID
+				log.Debug().Msgf("Using existing system %s with DBID %d", systemID, systemIndex)
+			} else {
+				// If we can't get the system, we must fail properly
+				log.Error().Err(getErr).Msgf("Failed to get existing system %s after insert failed", systemID)
+				return 0, 0 // Return early to prevent invalid data
+			}
 		} else {
 			ss.SystemIDs[systemID] = systemIndex // Only update cache on success
 		}
