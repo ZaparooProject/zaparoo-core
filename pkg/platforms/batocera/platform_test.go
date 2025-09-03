@@ -197,3 +197,65 @@ func TestKodiCollectionLaunchersExist(t *testing.T) {
 	assert.Equal(t, systemdefs.SystemTV, kodiTVShow.SystemID)
 	assert.Contains(t, kodiTVShow.Schemes, kodi.SchemeKodiShow)
 }
+
+// TestLauncherExtensions tests that launchers have proper extensions from SystemInfo
+func TestLauncherExtensions(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	p := &Platform{}
+	launchers := p.Launchers(cfg)
+
+	// Find the 3DO launcher to test extensions
+	var threeDOLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "3DO" {
+			threeDOLauncher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, threeDOLauncher, "3DO launcher should exist")
+
+	// Test that 3DO launcher has proper extensions
+	expectedExtensions := []string{".iso", ".chd", ".cue"}
+	for _, ext := range expectedExtensions {
+		assert.Contains(t, threeDOLauncher.Extensions, ext, "3DO launcher should support %s files", ext)
+	}
+}
+
+// TestCommanderX16SystemImplemented tests that CommanderX16 system is properly implemented
+func TestCommanderX16SystemImplemented(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	p := &Platform{}
+	launchers := p.Launchers(cfg)
+
+	// Find the CommanderX16 launcher
+	var commanderX16Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "CommanderX16" {
+			commanderX16Launcher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, commanderX16Launcher, "CommanderX16 launcher should exist")
+
+	// Test that CommanderX16 launcher has proper system ID
+	assert.Equal(t, systemdefs.SystemCommanderX16, commanderX16Launcher.SystemID)
+
+	// Test that CommanderX16 launcher has proper extensions
+	expectedExtensions := []string{".prg", ".crt", ".bin", ".zip"}
+	for _, ext := range expectedExtensions {
+		assert.Contains(t, commanderX16Launcher.Extensions, ext, "CommanderX16 launcher should support %s files", ext)
+	}
+
+	// Test that CommanderX16 has proper folder mapping
+	assert.Contains(t, commanderX16Launcher.Folders, "commanderx16")
+}
