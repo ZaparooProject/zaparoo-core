@@ -365,9 +365,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		}
 
 		launchers = append(launchers, platforms.Launcher{
-			ID:       launcherID,
-			SystemID: v,
-			Folders:  []string{k},
+			ID:         launcherID,
+			SystemID:   v.SystemID,
+			Extensions: v.Extensions,
+			Folders:    []string{k},
 			Launch: func(_ *config.Instance, path string) error {
 				return apiLaunch(path)
 			},
