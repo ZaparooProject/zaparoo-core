@@ -144,8 +144,8 @@ func (r *Reader) getDevicePath() string {
 
 // operationWorker processes media operations sequentially from the queue
 func (r *Reader) operationWorker() {
-	log.Debug().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker started")
-	defer log.Debug().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker stopped")
+	log.Trace().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker started")
+	defer log.Trace().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker stopped")
 
 	for {
 		select {

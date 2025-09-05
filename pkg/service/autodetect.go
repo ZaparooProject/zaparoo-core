@@ -93,7 +93,7 @@ func (ad *AutoDetector) DetectReaders(
 		}
 
 		if err := ad.connectReader(reader, driverType, devicePath, detect, st, iq); err != nil {
-			log.Error().
+			log.Trace().
 				Str("device", detect).
 				Err(err).
 				Msg("failed to connect detected reader")
