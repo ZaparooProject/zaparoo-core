@@ -264,6 +264,7 @@ func TestCommanderX16SystemImplemented(t *testing.T) {
 // TestBatoceraGameLaunchersSkipFilesystemScan tests that Batocera game launchers
 // have SkipFilesystemScan set to true since they use gamelist.xml via custom Scanner
 func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
+	t.Parallel()
 	platform := &Platform{}
 	cfg := &config.Instance{}
 
@@ -295,12 +296,13 @@ func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
 	}
 
 	// Verify we found some game system launchers to test
-	assert.Greater(t, len(gameSystemLaunchers), 0, "Should find at least some Batocera game system launchers")
+	assert.NotEmpty(t, gameSystemLaunchers, "Should find at least some Batocera game system launchers")
 	t.Logf("Tested %d Batocera game system launchers: %v", len(gameSystemLaunchers), gameSystemLaunchers)
 }
 
 // TestKodiLaunchersAreIncluded tests that Batocera platform includes Kodi launchers
 func TestKodiLaunchersAreIncluded(t *testing.T) {
+	t.Parallel()
 	platform := &Platform{}
 	cfg := &config.Instance{}
 

@@ -138,6 +138,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 }
 
 func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
+	t.Parallel()
 	// Setup test launchers - one that skips filesystem scan, one that doesn't
 	skipLauncher := platforms.Launcher{
 		ID:                 "SkipLauncher",
@@ -159,10 +160,11 @@ func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 	originalCache := helpers.GlobalLauncherCache
 	defer func() { helpers.GlobalLauncherCache = originalCache }()
 
-	// Create a mock platform that returns our test launchers  
+	// Create a mock platform that returns our test launchers
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.SetupBasicMock()
-	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{skipLauncher, normalLauncher})
+	mockPlatform.On("Launchers", mock.AnythingOfType("*config.Instance")).
+		Return([]platforms.Launcher{skipLauncher, normalLauncher})
 
 	// Initialize the cache with our mock platform
 	mockCache := &helpers.LauncherCache{}
@@ -184,11 +186,12 @@ func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 	// we expect empty results, but the important part is that the function
 	// should only try to resolve folders from launchers that don't skip filesystem scan.
 	// For now, just verify we get a non-nil slice
-	assert.Equal(t, 0, len(results), "GetSystemPaths should return empty results with no real folders")
+	assert.Empty(t, results, "GetSystemPaths should return empty results with no real folders")
 }
 
 // TestScannerDoubleExecutionPrevention tests that the scanner tracking prevents double execution
 func TestScannerDoubleExecutionPrevention(t *testing.T) {
+	t.Parallel()
 	// This test documents the fix for scanners being called twice in NewNamesIndex:
 	// 1. Once in the per-system loop (lines 409-423)
 	// 2. Once in the "run each custom scanner at least once" loop (lines 448-487)

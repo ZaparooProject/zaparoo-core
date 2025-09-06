@@ -46,6 +46,7 @@ package helpers
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -718,29 +719,14 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 	return database.MediaTag{}, nil
 }
 
-// Helper functions for sqlmock setup
-
-// SetupSQLMock creates a new sqlmock database and mock for testing
-func SetupSQLMock() (*sql.DB, sqlmock.Sqlmock, error) {
-	db, mockDB, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create sqlmock: %w", err)
-	}
-	return db, mockDB, nil
-}
-
-// SetupSQLMockWithExpectations creates a sqlmock with common expectations
-func SetupSQLMockWithExpectations() (*sql.DB, sqlmock.Sqlmock, error) {
-	db, mockDB, err := SetupSQLMock()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Common expectations that most tests might need
-	mockDB.ExpectPing()
-
-	return db, mockDB, nil
-}
+// Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
+// These functions have been moved to avoid import cycles.
+// Use github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock instead.
+//
+// SQL Mock functions moved:
+// - SetupSQLMock() -> moved to pkg/testing/sqlmock
+// - SetupSQLMockWithExpectations() -> moved to pkg/testing/sqlmock
+// - NewSQLMock() -> moved to pkg/testing/sqlmock
 
 // ExpectHistoryInsert sets up expectations for history insertion
 func ExpectHistoryInsert(mockDB sqlmock.Sqlmock, entry *database.HistoryEntry) {
@@ -854,7 +840,8 @@ func NewMockMediaDBI() *MockMediaDBI {
 //		assert.NoError(t, mock.ExpectationsWereMet())
 //	}
 func NewSQLMock() (*sql.DB, sqlmock.Sqlmock, error) {
-	return SetupSQLMock()
+	return nil, nil, errors.New("NewSQLMock has been moved to pkg/testing/sqlmock package " +
+		"to avoid import cycles - use testsqlmock.NewSQLMock() instead")
 }
 
 // Matcher functions for common database types

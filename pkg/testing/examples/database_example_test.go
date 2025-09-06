@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/testing/fixtures"
 	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -132,7 +133,7 @@ func TestSQLMockUsage(t *testing.T) {
 	t.Run("SQLMock Setup and Usage", func(t *testing.T) {
 		t.Parallel()
 		// Create sqlmock database
-		db, mock, err := helpers.SetupSQLMock()
+		db, mock, err := testsqlmock.SetupSQLMock()
 		require.NoError(t, err)
 		defer func() {
 			// Note: SQLMock doesn't expect Close() calls unless explicitly set up
@@ -165,7 +166,7 @@ func TestSQLMockUsage(t *testing.T) {
 	t.Run("SQLMock Insert Operations", func(t *testing.T) {
 		t.Parallel()
 		// Create sqlmock database with expectations
-		db, mock, err := helpers.SetupSQLMockWithExpectations()
+		db, mock, err := testsqlmock.SetupSQLMockWithExpectations()
 		require.NoError(t, err)
 		defer func() {
 			// Note: SQLMock doesn't expect Close() calls unless explicitly set up
@@ -194,7 +195,7 @@ func TestSQLMockUsage(t *testing.T) {
 	t.Run("SQLMock Transaction Testing", func(t *testing.T) {
 		t.Parallel()
 		// Create sqlmock database
-		db, mock, err := helpers.SetupSQLMock()
+		db, mock, err := testsqlmock.SetupSQLMock()
 		require.NoError(t, err)
 		defer func() {
 			// Note: SQLMock doesn't expect Close() calls unless explicitly set up
@@ -310,7 +311,7 @@ func TestIntegrationExample(t *testing.T) {
 		mockMediaDB := &helpers.MockMediaDBI{}
 
 		// Set up sqlmock for direct database operations
-		db, mock, err := helpers.SetupSQLMock()
+		db, mock, err := testsqlmock.SetupSQLMock()
 		require.NoError(t, err)
 		defer func() {
 			// Note: SQLMock doesn't expect Close() calls unless explicitly set up

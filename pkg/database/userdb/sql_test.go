@@ -27,14 +27,14 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSqlAddHistory_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -59,7 +59,7 @@ func TestSqlAddHistory_Success(t *testing.T) {
 
 func TestSqlAddHistory_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -85,7 +85,7 @@ func TestSqlAddHistory_DatabaseError(t *testing.T) {
 
 func TestSqlGetHistoryWithOffset_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -133,7 +133,7 @@ func TestSqlGetHistoryWithOffset_Success(t *testing.T) {
 
 func TestSqlGetHistoryWithOffset_NoRows(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -152,7 +152,7 @@ func TestSqlGetHistoryWithOffset_NoRows(t *testing.T) {
 
 func TestSqlGetHistoryWithOffset_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -172,7 +172,7 @@ func TestSqlGetHistoryWithOffset_DatabaseError(t *testing.T) {
 
 func TestSqlAddMapping_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -199,7 +199,7 @@ func TestSqlAddMapping_Success(t *testing.T) {
 
 func TestSqlGetMapping_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -234,7 +234,7 @@ func TestSqlGetMapping_Success(t *testing.T) {
 
 func TestSqlUpdateMapping_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -261,7 +261,7 @@ func TestSqlUpdateMapping_Success(t *testing.T) {
 
 func TestSqlUpdateMapping_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -289,7 +289,7 @@ func TestSqlUpdateMapping_NotFound(t *testing.T) {
 
 func TestSqlDeleteMapping_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -305,7 +305,7 @@ func TestSqlDeleteMapping_Success(t *testing.T) {
 
 func TestSqlDeleteMapping_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -322,7 +322,7 @@ func TestSqlDeleteMapping_NotFound(t *testing.T) {
 
 func TestSqlGetAllMappings_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -371,7 +371,7 @@ func TestSqlGetAllMappings_Success(t *testing.T) {
 
 func TestSqlGetAllMappings_Empty(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -389,7 +389,7 @@ func TestSqlGetAllMappings_Empty(t *testing.T) {
 
 func TestSqlGetEnabledMappings_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -439,7 +439,7 @@ func TestSqlGetEnabledMappings_Success(t *testing.T) {
 
 func TestSqlAddMapping_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -467,7 +467,7 @@ func TestSqlAddMapping_DatabaseError(t *testing.T) {
 
 func TestSqlGetMapping_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -487,7 +487,7 @@ func TestSqlGetMapping_NotFound(t *testing.T) {
 
 func TestSqlUpdateZapLinkHost_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -506,7 +506,7 @@ func TestSqlUpdateZapLinkHost_Success(t *testing.T) {
 
 func TestSqlUpdateZapLinkHost_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -526,7 +526,7 @@ func TestSqlUpdateZapLinkHost_DatabaseError(t *testing.T) {
 
 func TestSqlGetZapLinkHost_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -549,7 +549,7 @@ func TestSqlGetZapLinkHost_Success(t *testing.T) {
 
 func TestSqlGetZapLinkHost_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -568,7 +568,7 @@ func TestSqlGetZapLinkHost_NotFound(t *testing.T) {
 
 func TestSqlUpdateZapLinkCache_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -587,7 +587,7 @@ func TestSqlUpdateZapLinkCache_Success(t *testing.T) {
 
 func TestSqlUpdateZapLinkCache_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -607,7 +607,7 @@ func TestSqlUpdateZapLinkCache_DatabaseError(t *testing.T) {
 
 func TestSqlGetZapLinkCache_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -629,7 +629,7 @@ func TestSqlGetZapLinkCache_Success(t *testing.T) {
 
 func TestSqlGetZapLinkCache_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -649,7 +649,7 @@ func TestSqlGetZapLinkCache_NotFound(t *testing.T) {
 
 func TestSqlTruncate_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -663,7 +663,7 @@ func TestSqlTruncate_Success(t *testing.T) {
 
 func TestSqlTruncate_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -678,7 +678,7 @@ func TestSqlTruncate_DatabaseError(t *testing.T) {
 
 func TestSqlVacuum_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -692,7 +692,7 @@ func TestSqlVacuum_Success(t *testing.T) {
 
 func TestSqlVacuum_DatabaseError(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 

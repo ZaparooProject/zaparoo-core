@@ -27,14 +27,14 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -49,7 +49,7 @@ func TestSqlUpdateLastGenerated_Success(t *testing.T) {
 
 func TestSqlGetLastGenerated_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -67,7 +67,7 @@ func TestSqlGetLastGenerated_Success(t *testing.T) {
 
 func TestSqlFindSystem_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -99,7 +99,7 @@ func TestSqlFindSystem_Success(t *testing.T) {
 
 func TestSqlFindSystem_NotFound(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -123,7 +123,7 @@ func TestSqlFindSystem_NotFound(t *testing.T) {
 
 func TestSqlInsertSystem_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -147,7 +147,7 @@ func TestSqlInsertSystem_Success(t *testing.T) {
 
 func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -181,7 +181,7 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 
 func TestSqlInsertSystem_Duplicate(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
@@ -204,7 +204,7 @@ func TestSqlInsertSystem_Duplicate(t *testing.T) {
 
 func TestSqlInsertSystemWithPreparedStmt_Success(t *testing.T) {
 	t.Parallel()
-	db, mock, err := helpers.NewSQLMock()
+	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 

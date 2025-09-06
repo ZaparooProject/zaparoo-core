@@ -149,6 +149,17 @@ func (db *MediaDB) Close() error {
 	return nil
 }
 
+// SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
+// This method should only be used in tests to set up in-memory databases.
+func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
+	db.sql = sqlDB
+	db.ctx = ctx
+	db.pl = platform
+
+	// Initialize the database schema
+	return db.Allocate()
+}
+
 // closeAllPreparedStatements closes all prepared statements and sets them to nil
 func (db *MediaDB) closeAllPreparedStatements() {
 	if db.stmtInsertSystem != nil {
