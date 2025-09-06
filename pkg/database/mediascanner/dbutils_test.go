@@ -131,12 +131,17 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 		MediaTagsIndex: 0,
 	}
 
-	// Mock the system insertion to fail
+	// Mock the system insertion to fail with a UNIQUE constraint error
+	// This ensures the code will attempt recovery by calling FindSystem
+	constraintErr := sqlite3.Error{
+		Code:         sqlite3.ErrConstraint,
+		ExtendedCode: sqlite3.ErrConstraintUnique,
+	}
 	mockDB.On("InsertSystem", database.System{
 		DBID:     int64(1),
 		SystemID: "TV",
 		Name:     "TV",
-	}).Return(database.System{}, assert.AnError).Once()
+	}).Return(database.System{}, constraintErr).Once()
 
 	// Mock FindSystem to also fail - this simulates a more serious database issue
 	mockDB.On("FindSystem", database.System{
