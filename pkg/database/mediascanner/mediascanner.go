@@ -80,6 +80,10 @@ func GetSystemPaths(
 
 		var folders []string
 		for i := range launchers {
+			// Skip filesystem scanning for launchers that don't need it
+			if launchers[i].SkipFilesystemScan {
+				continue
+			}
 			for _, folder := range launchers[i].Folders {
 				if !helpers.Contains(folders, folder) {
 					folders = append(folders, folder)
@@ -371,15 +375,18 @@ func NewNamesIndex(
 	}
 	SeedKnownTags(db, &scanState)
 
+	// Track which launchers have already been scanned to prevent double-execution
+	scannedLaunchers := make(map[string]bool)
+
 	update(status)
 	systemPaths := make(map[string][]string)
 	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 
-	scanned := make(map[string]bool)
+	scannedSystems := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
-		scanned[s.ID] = false
+		scannedSystems[s.ID] = false
 	}
 
 	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
@@ -419,6 +426,8 @@ func NewNamesIndex(
 					log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 					continue
 				}
+				// Mark launcher as scanned to prevent double-execution
+				scannedLaunchers[l.ID] = true
 			}
 		}
 
@@ -429,7 +438,7 @@ func NewNamesIndex(
 
 		status.Files += len(files)
 		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
-		scanned[systemID] = true
+		scannedSystems[systemID] = true
 
 		for _, p := range files {
 			AddMediaPath(db, &scanState, systemID, p.Path)
@@ -447,7 +456,6 @@ func NewNamesIndex(
 
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
-	scannedLaunchers := make(map[string]bool)
 	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
 	log.Debug().Msgf("checking %d launchers for custom scanners", len(launchers))
 	for i := range launchers {
@@ -466,7 +474,7 @@ func NewNamesIndex(
 			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemID)
 
 			status.Files += len(results)
-			scanned[systemID] = true
+			scannedSystems[systemID] = true
 			scannedLaunchers[l.ID] = true
 
 			if len(results) > 0 {
@@ -509,7 +517,7 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				scanned[s.ID] = true
+				scannedSystems[s.ID] = true
 				systemID := s.ID
 
 				for _, p := range results {
@@ -551,8 +559,8 @@ func NewNamesIndex(
 	}
 
 	indexedSystems := make([]string, 0)
-	log.Debug().Msgf("scanned systems: %v", scanned)
-	for k, v := range scanned {
+	log.Debug().Msgf("scanned systems: %v", scannedSystems)
+	for k, v := range scannedSystems {
 		if v {
 			indexedSystems = append(indexedSystems, k)
 		}

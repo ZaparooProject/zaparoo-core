@@ -9,6 +9,7 @@ package batocera
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
@@ -196,4 +197,142 @@ func TestKodiCollectionLaunchersExist(t *testing.T) {
 	require.True(t, exists, "KodiTVShow launcher should exist")
 	assert.Equal(t, systemdefs.SystemTV, kodiTVShow.SystemID)
 	assert.Contains(t, kodiTVShow.Schemes, kodi.SchemeKodiShow)
+}
+
+// TestLauncherExtensions tests that launchers have proper extensions from SystemInfo
+func TestLauncherExtensions(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	p := &Platform{}
+	launchers := p.Launchers(cfg)
+
+	// Find the 3DO launcher to test extensions
+	var threeDOLauncher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "3DO" {
+			threeDOLauncher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, threeDOLauncher, "3DO launcher should exist")
+
+	// Test that 3DO launcher has proper extensions
+	expectedExtensions := []string{".iso", ".chd", ".cue"}
+	for _, ext := range expectedExtensions {
+		assert.Contains(t, threeDOLauncher.Extensions, ext, "3DO launcher should support %s files", ext)
+	}
+}
+
+// TestCommanderX16SystemImplemented tests that CommanderX16 system is properly implemented
+func TestCommanderX16SystemImplemented(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	p := &Platform{}
+	launchers := p.Launchers(cfg)
+
+	// Find the CommanderX16 launcher
+	var commanderX16Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].ID == "CommanderX16" {
+			commanderX16Launcher = &launchers[i]
+			break
+		}
+	}
+	require.NotNil(t, commanderX16Launcher, "CommanderX16 launcher should exist")
+
+	// Test that CommanderX16 launcher has proper system ID
+	assert.Equal(t, systemdefs.SystemCommanderX16, commanderX16Launcher.SystemID)
+
+	// Test that CommanderX16 launcher has proper extensions
+	expectedExtensions := []string{".prg", ".crt", ".bin", ".zip"}
+	for _, ext := range expectedExtensions {
+		assert.Contains(t, commanderX16Launcher.Extensions, ext, "CommanderX16 launcher should support %s files", ext)
+	}
+
+	// Test that CommanderX16 has proper folder mapping
+	assert.Contains(t, commanderX16Launcher.Folders, "commanderx16")
+}
+
+// TestBatoceraGameLaunchersSkipFilesystemScan tests that Batocera game launchers
+// have SkipFilesystemScan set to true since they use gamelist.xml via custom Scanner
+func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
+	t.Parallel()
+	platform := &Platform{}
+	cfg := &config.Instance{}
+
+	launchers := platform.Launchers(cfg)
+
+	// Find Batocera game launchers (not Generic or Kodi launchers)
+	gameSystemLaunchers := []string{}
+	for _, launcher := range launchers {
+		// Skip non-game launchers
+		if launcher.ID == "Generic" ||
+			launcher.ID == "KodiLocal" ||
+			launcher.ID == "KodiMovie" ||
+			launcher.ID == "KodiTV" ||
+			launcher.ID == "KodiMusic" ||
+			launcher.ID == "KodiSong" ||
+			launcher.ID == "KodiAlbum" ||
+			launcher.ID == "KodiArtist" ||
+			launcher.ID == "KodiTVShow" {
+			continue
+		}
+
+		gameSystemLaunchers = append(gameSystemLaunchers, launcher.ID)
+
+		// EXPECTED: Batocera game system launchers should skip filesystem scanning
+		// ACTUAL (before fix): SkipFilesystemScan is false (default)
+		// This test will FAIL until we set SkipFilesystemScan = true on these launchers
+		assert.True(t, launcher.SkipFilesystemScan,
+			"Batocera game launcher %s should skip filesystem scanning (uses gamelist.xml)", launcher.ID)
+	}
+
+	// Verify we found some game system launchers to test
+	assert.NotEmpty(t, gameSystemLaunchers, "Should find at least some Batocera game system launchers")
+	t.Logf("Tested %d Batocera game system launchers: %v", len(gameSystemLaunchers), gameSystemLaunchers)
+}
+
+// TestKodiLaunchersAreIncluded tests that Batocera platform includes Kodi launchers
+func TestKodiLaunchersAreIncluded(t *testing.T) {
+	t.Parallel()
+	platform := &Platform{}
+	cfg := &config.Instance{}
+
+	launchers := platform.Launchers(cfg)
+
+	// Find Kodi library launchers that should have SkipFilesystemScan=true
+	kodiLibraryLaunchers := []string{"KodiMovie", "KodiTV", "KodiAlbum", "KodiArtist", "KodiTVShow", "KodiSong"}
+	foundKodiLaunchers := make(map[string]bool)
+
+	for _, launcher := range launchers {
+		for _, kodiID := range kodiLibraryLaunchers {
+			if launcher.ID == kodiID {
+				foundKodiLaunchers[kodiID] = true
+
+				// Kodi library launchers should skip filesystem scanning (use API)
+				assert.True(t, launcher.SkipFilesystemScan,
+					"Kodi library launcher %s should skip filesystem scanning (uses API)", launcher.ID)
+			}
+		}
+
+		// File-based Kodi launchers should allow filesystem scanning
+		if launcher.ID == "KodiLocal" || launcher.ID == "KodiMusic" {
+			assert.False(t, launcher.SkipFilesystemScan,
+				"Kodi file launcher %s should allow filesystem scanning", launcher.ID)
+		}
+	}
+
+	// Verify we found all expected Kodi library launchers
+	for _, expectedID := range kodiLibraryLaunchers {
+		assert.True(t, foundKodiLaunchers[expectedID],
+			"Should find Kodi library launcher %s in Batocera platform", expectedID)
+	}
 }

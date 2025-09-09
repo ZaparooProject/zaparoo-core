@@ -305,7 +305,7 @@ func (*Reader) Detect(connected []string) string {
 			ignorePaths = append(ignorePaths, parts[1])
 		}
 	}
-	log.Debug().Msgf("PN532: ignoring paths: %v", ignorePaths)
+	log.Trace().Msgf("PN532: ignoring paths: %v", ignorePaths)
 
 	// Try to detect PN532 devices
 	opts := detection.DefaultOptions()
@@ -316,7 +316,7 @@ func (*Reader) Detect(connected []string) string {
 
 	devices, err := detection.DetectAll(&opts)
 	if err != nil {
-		log.Debug().Err(err).Msg("PN532 detection failed")
+		log.Trace().Err(err).Msg("PN532 detection failed")
 		return ""
 	}
 
@@ -334,7 +334,7 @@ func (*Reader) Detect(connected []string) string {
 			// Parse connected device string (format: "driver:path")
 			parts := strings.SplitN(connectedDevice, ":", 2)
 			if len(parts) == 2 && parts[1] == device.Path {
-				log.Debug().
+				log.Trace().
 					Str("device_path", device.Path).
 					Str("connected_as", connectedDevice).
 					Str("attempted_as", deviceStr).
@@ -345,13 +345,13 @@ func (*Reader) Detect(connected []string) string {
 		}
 
 		if !deviceInUse {
-			log.Debug().Msgf("detected PN532 device: %s", deviceStr)
+			log.Trace().Msgf("detected PN532 device: %s", deviceStr)
 			return deviceStr
 		}
 	}
 
 	// All detected devices are already in use
-	log.Debug().Msg("pn532: all detected devices are already connected")
+	log.Trace().Msg("pn532: all detected devices are already connected")
 	return ""
 }
 

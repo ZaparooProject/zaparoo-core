@@ -234,6 +234,17 @@ const (
 	SystemZX81           = "ZX81"
 	SystemZXSpectrum     = "ZXSpectrum"
 	SystemZXNext         = "ZXNext"
+	SystemAtariST        = "AtariST"
+	SystemColecoAdam     = "ColecoAdam"
+	SystemFM7            = "FM7"
+	SystemFMTowns        = "FMTowns"
+	SystemGamePocket     = "GamePocket"
+	SystemGameMaster     = "GameMaster"
+	SystemGP32           = "GP32"
+	SystemPC88           = "PC88"
+	SystemPC98           = "PC98"
+	SystemX1             = "X1"
+	SystemCommanderX16   = "CommanderX16"
 )
 
 // Other
@@ -243,11 +254,16 @@ const (
 	SystemAtomiswave = "Atomiswave"
 	SystemArduboy    = "Arduboy"
 	SystemChip8      = "Chip8"
+	SystemCPS1       = "CPS1"
+	SystemCPS2       = "CPS2"
+	SystemCPS3       = "CPS3"
 	SystemDAPHNE     = "DAPHNE"
 	SystemIOS        = "iOS"
 	SystemModel3     = "Model3"
 	SystemNAOMI      = "NAOMI"
 	SystemNAOMI2     = "NAOMI2"
+	SystemPico8      = "Pico8"
+	SystemTIC80      = "TIC80"
 	SystemVideo      = "Video"
 	SystemAudio      = "Audio"
 	SystemMovie      = "Movie"
@@ -761,5 +777,53 @@ var Systems = map[string]System{
 	},
 	SystemMusic: {
 		ID: SystemMusic,
+	},
+	SystemCPS1: {
+		ID: SystemCPS1,
+	},
+	SystemCPS2: {
+		ID: SystemCPS2,
+	},
+	SystemCPS3: {
+		ID: SystemCPS3,
+	},
+	SystemAtariST: {
+		ID: SystemAtariST,
+	},
+	SystemColecoAdam: {
+		ID: SystemColecoAdam,
+	},
+	SystemFM7: {
+		ID: SystemFM7,
+	},
+	SystemFMTowns: {
+		ID: SystemFMTowns,
+	},
+	SystemGamePocket: {
+		ID: SystemGamePocket,
+	},
+	SystemGameMaster: {
+		ID: SystemGameMaster,
+	},
+	SystemGP32: {
+		ID: SystemGP32,
+	},
+	SystemPico8: {
+		ID: SystemPico8,
+	},
+	SystemTIC80: {
+		ID: SystemTIC80,
+	},
+	SystemPC88: {
+		ID: SystemPC88,
+	},
+	SystemPC98: {
+		ID: SystemPC98,
+	},
+	SystemX1: {
+		ID: SystemX1,
+	},
+	SystemCommanderX16: {
+		ID: SystemCommanderX16,
 	},
 }

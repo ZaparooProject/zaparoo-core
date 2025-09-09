@@ -120,6 +120,11 @@ type Launcher struct {
 	// If true, all resolved paths must be in the allow list before they
 	// can be launched.
 	AllowListOnly bool
+	// SkipFilesystemScan prevents the mediascanner from walking this launcher's
+	// folders during indexing. The launcher's Scanner (if any) still runs.
+	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
+	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
+	SkipFilesystemScan bool
 }
 
 // Settings defines all simple settings/configuration values available for a

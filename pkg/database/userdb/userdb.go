@@ -119,6 +119,17 @@ func (db *UserDB) Close() error {
 	return nil
 }
 
+// SetSQLForTesting allows injection of a sql.DB instance for testing purposes.
+// This method should only be used in tests to set up in-memory databases.
+func (db *UserDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform platforms.Platform) error {
+	db.sql = sqlDB
+	db.pl = platform
+	db.ctx = ctx
+
+	// Initialize the database schema
+	return db.Allocate()
+}
+
 // TODO: reader source (physical reader vs web)
 // TODO: metadata
 

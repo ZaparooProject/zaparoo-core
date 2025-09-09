@@ -45,9 +45,10 @@ func NewKodiLocalLauncher() platforms.Launcher {
 // NewKodiMovieLauncher creates a standard KodiMovie launcher for library movie playback
 func NewKodiMovieLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiMovie",
-		SystemID: systemdefs.SystemMovie,
-		Schemes:  []string{SchemeKodiMovie},
+		ID:                 "KodiMovie",
+		SystemID:           systemdefs.SystemMovie,
+		Schemes:            []string{SchemeKodiMovie},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchMovie(path)
@@ -66,9 +67,10 @@ func NewKodiMovieLauncher() platforms.Launcher {
 // NewKodiTVLauncher creates a standard KodiTV launcher for library TV episode playback
 func NewKodiTVLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiTV",
-		SystemID: systemdefs.SystemTV,
-		Schemes:  []string{SchemeKodiEpisode},
+		ID:                 "KodiTV",
+		SystemID:           systemdefs.SystemTV,
+		Schemes:            []string{SchemeKodiEpisode},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchTVEpisode(path)
@@ -103,9 +105,10 @@ func NewKodiMusicLauncher() platforms.Launcher {
 // NewKodiAlbumLauncher creates a KodiAlbum launcher for album collection playback
 func NewKodiAlbumLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiAlbum",
-		SystemID: systemdefs.SystemMusic,
-		Schemes:  []string{SchemeKodiAlbum},
+		ID:                 "KodiAlbum",
+		SystemID:           systemdefs.SystemMusic,
+		Schemes:            []string{SchemeKodiAlbum},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchAlbum(path)
@@ -124,9 +127,10 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 // NewKodiArtistLauncher creates a KodiArtist launcher for artist collection playback
 func NewKodiArtistLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiArtist",
-		SystemID: systemdefs.SystemMusic,
-		Schemes:  []string{SchemeKodiArtist},
+		ID:                 "KodiArtist",
+		SystemID:           systemdefs.SystemMusic,
+		Schemes:            []string{SchemeKodiArtist},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchArtist(path)
@@ -145,9 +149,10 @@ func NewKodiArtistLauncher() platforms.Launcher {
 // NewKodiTVShowLauncher creates a KodiTVShow launcher for TV show collection playback
 func NewKodiTVShowLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiTVShow",
-		SystemID: systemdefs.SystemTV,
-		Schemes:  []string{SchemeKodiShow},
+		ID:                 "KodiTVShow",
+		SystemID:           systemdefs.SystemTV,
+		Schemes:            []string{SchemeKodiShow},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchTVShow(path)
@@ -166,9 +171,10 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 // NewKodiSongLauncher creates a KodiSong launcher for individual song playback
 func NewKodiSongLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:       "KodiSong",
-		SystemID: systemdefs.SystemMusic,
-		Schemes:  []string{SchemeKodiSong},
+		ID:                 "KodiSong",
+		SystemID:           systemdefs.SystemMusic,
+		Schemes:            []string{SchemeKodiSong},
+		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) error {
 			client := NewClient(cfg)
 			return client.LaunchSong(path)
