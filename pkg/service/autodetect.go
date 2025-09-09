@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
@@ -32,9 +33,11 @@ import (
 )
 
 type AutoDetector struct {
-	connected map[string]bool
-	failed    map[string]bool // tracks failed connection attempts by connection string
-	mu        sync.RWMutex
+	lastLogTime          time.Time
+	connected            map[string]bool
+	failed               map[string]bool
+	lastDetectionSummary string
+	mu                   sync.RWMutex
 }
 
 func NewAutoDetector(_ *config.Instance) *AutoDetector {
@@ -57,6 +60,10 @@ func (ad *AutoDetector) DetectReaders(
 
 	connectedReaders := st.ListReaders()
 	ad.updateConnected(connectedReaders)
+
+	// Build detection summary for intelligent logging
+	var detectedDevices []string
+	var detectionErrors []string
 
 	for _, reader := range supportedReaders {
 		metadata := reader.Metadata()
@@ -82,6 +89,11 @@ func (ad *AutoDetector) DetectReaders(
 			continue
 		}
 
+		// Track detected devices for logging summary (only valid devices with actual paths)
+		if parts[1] != "" {
+			detectedDevices = append(detectedDevices, detect)
+		}
+
 		devicePath := parts[1]
 		driverType := parts[0]
 
@@ -103,7 +115,44 @@ func (ad *AutoDetector) DetectReaders(
 		}
 	}
 
+	// Intelligent logging: only log when detection state changes or on periodic heartbeat
+	ad.logDetectionResults(detectedDevices, connectedReaders, detectionErrors)
+
 	return nil
+}
+
+// logDetectionResults provides intelligent logging that only logs when detection state changes
+// or when a heartbeat is needed to show auto-detect is still active
+func (ad *AutoDetector) logDetectionResults(detectedDevices, _, _ []string) {
+	// Create a summary of the current detection state (only track what's relevant for changes)
+	summary := fmt.Sprintf("new_detected:%d total_failed:%d",
+		len(detectedDevices), len(ad.failed))
+
+	// Check if we should log (state changed or heartbeat timeout)
+	const heartbeatInterval = 30 * time.Second
+	stateChanged := summary != ad.lastDetectionSummary
+	heartbeatTime := ad.lastLogTime.IsZero() || time.Since(ad.lastLogTime) > heartbeatInterval
+
+	if stateChanged || heartbeatTime {
+		if len(detectedDevices) > 0 {
+			log.Debug().
+				Strs("new_devices_detected", detectedDevices).
+				Msg("auto-detect found new devices available for connection")
+		} else if heartbeatTime {
+			// Only show heartbeat if auto-detect is actually running
+			if len(ad.failed) > 0 {
+				log.Debug().
+					Int("total_failed_attempts", len(ad.failed)).
+					Msg("auto-detect active: no new devices found")
+			} else {
+				log.Debug().Msg("auto-detect active: no devices detected")
+			}
+		}
+
+		// Update tracking state
+		ad.lastDetectionSummary = summary
+		ad.lastLogTime = time.Now()
+	}
 }
 
 func (ad *AutoDetector) connectReader(

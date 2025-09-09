@@ -397,15 +397,15 @@ func (r *Reader) Detect(connected []string) string {
 		return ""
 	}
 
-	log.Debug().Int("port_count", len(ports)).Msg("tty2oled: checking serial ports")
+	log.Trace().Int("port_count", len(ports)).Msg("tty2oled: checking serial ports")
 
 	for _, name := range ports {
 		device := "tty2oled:" + name
 
-		log.Debug().Str("port", name).Str("device", device).Msg("tty2oled: checking port")
+		log.Trace().Str("port", name).Str("device", device).Msg("tty2oled: checking port")
 
 		if helpers.Contains(connected, device) {
-			log.Debug().Str("device", device).Msg("tty2oled: skipping already connected device")
+			log.Trace().Str("device", device).Msg("tty2oled: skipping already connected device")
 			continue
 		}
 
@@ -415,7 +415,7 @@ func (r *Reader) Detect(connected []string) string {
 			// Parse connected device string (format: "driver:path")
 			parts := strings.SplitN(connectedDevice, ":", 2)
 			if len(parts) == 2 && parts[1] == name {
-				log.Debug().
+				log.Trace().
 					Str("port", name).
 					Str("connected_as", connectedDevice).
 					Str("attempted_as", device).
@@ -430,12 +430,12 @@ func (r *Reader) Detect(connected []string) string {
 		}
 
 		// try to detect tty2oled device by attempting handshake
-		log.Debug().Str("port", name).Msg("tty2oled: attempting detection")
+		log.Trace().Str("port", name).Msg("tty2oled: attempting detection")
 		if r.detectDevice(name) {
-			log.Debug().Str("device", device).Msg("tty2oled: device detected successfully")
+			log.Trace().Str("device", device).Msg("tty2oled: device detected successfully")
 			return device
 		}
-		log.Debug().Str("port", name).Msg("tty2oled: detection failed for port")
+		log.Trace().Str("port", name).Msg("tty2oled: detection failed for port")
 	}
 
 	return ""

@@ -30,8 +30,6 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
-	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
-	_ "github.com/ZaparooProject/go-pn532/detection/spi"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
 	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
@@ -49,8 +47,7 @@ const (
 	quickDetectionTimeout = 5 * time.Second
 	ndefReadTimeout       = 2 * time.Second
 	writeTimeout          = 30 * time.Second
-	pollInterval          = 100 * time.Millisecond
-	cardRemovalTimeout    = 300 * time.Millisecond
+	deviceTimeout         = 5 * time.Second
 )
 
 func createVIDPIDBlocklist() []string {
@@ -190,13 +187,18 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
 
+	// Set timeout to match cmd/reader behavior (prevents constant LED blinking)
+	err = r.device.SetTimeout(deviceTimeout)
+	if err != nil {
+		_ = r.device.Close()
+		return fmt.Errorf("failed to set device timeout: %w", err)
+	}
+
 	r.deviceInfo = device
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 
 	// Create session configuration
 	sessionConfig := polling.DefaultConfig()
-	sessionConfig.PollInterval = pollInterval
-	sessionConfig.CardRemovalTimeout = cardRemovalTimeout
 
 	// Create session with callbacks
 	r.session = polling.NewSession(r.device, sessionConfig)

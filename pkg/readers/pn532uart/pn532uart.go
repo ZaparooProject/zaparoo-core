@@ -351,7 +351,7 @@ func (*PN532UARTReader) Detect(connected []string) string {
 		}
 
 		if err != nil {
-			log.Debug().Err(err).Msgf("failed to open detected serial port, blocklisting: %s", name)
+			log.Trace().Err(err).Msgf("failed to open detected serial port, blocklisting: %s", name)
 			serialCacheMu.Lock()
 			serialBlockList = append(serialBlockList, name)
 			serialCacheMu.Unlock()
