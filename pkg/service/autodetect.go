@@ -33,13 +33,11 @@ import (
 )
 
 type AutoDetector struct {
-	connected map[string]bool
-	failed    map[string]bool // tracks failed connection attempts by connection string
-	mu        sync.RWMutex
-
-	// Detection state tracking for intelligent logging
-	lastDetectionSummary string    // Summary of last detection results
-	lastLogTime          time.Time // Last time we logged detection results
+	lastLogTime          time.Time
+	connected            map[string]bool
+	failed               map[string]bool
+	lastDetectionSummary string
+	mu                   sync.RWMutex
 }
 
 func NewAutoDetector(_ *config.Instance) *AutoDetector {
@@ -125,7 +123,7 @@ func (ad *AutoDetector) DetectReaders(
 
 // logDetectionResults provides intelligent logging that only logs when detection state changes
 // or when a heartbeat is needed to show auto-detect is still active
-func (ad *AutoDetector) logDetectionResults(detectedDevices, connectedReaders []string, detectionErrors []string) {
+func (ad *AutoDetector) logDetectionResults(detectedDevices, _, _ []string) {
 	// Create a summary of the current detection state (only track what's relevant for changes)
 	summary := fmt.Sprintf("new_detected:%d total_failed:%d",
 		len(detectedDevices), len(ad.failed))
