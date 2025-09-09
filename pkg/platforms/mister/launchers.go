@@ -1144,10 +1144,10 @@ var Launchers = []platforms.Launcher{
 	},
 	{
 		ID:         "MSX1",
-		SystemID:   systemdefs.SystemMSX,
+		SystemID:   systemdefs.SystemMSX1,
 		Folders:    []string{"MSX1"},
 		Extensions: []string{".dsk", ".rom"},
-		Launch:     launchAltCore(systemdefs.SystemMSX, "_Console/MSX1"),
+		Launch:     launch(systemdefs.SystemMSX1),
 	},
 	{
 		ID:         systemdefs.SystemMultiComp,

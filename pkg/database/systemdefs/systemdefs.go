@@ -34,8 +34,9 @@ import (
 // be used to attempt to associate a file with a system.
 
 type System struct {
-	ID      string
-	Aliases []string
+	ID        string
+	Aliases   []string
+	Fallbacks []string
 }
 
 // MapKeys returns a list of all keys in a map.
@@ -206,6 +207,8 @@ const (
 	SystemMacPlus        = "MacPlus"
 	SystemMacOS          = "MacOS"
 	SystemMSX            = "MSX"
+	SystemMSX1           = "MSX1"
+	SystemMSX2           = "MSX2"
 	SystemMultiComp      = "MultiComp"
 	SystemOrao           = "Orao"
 	SystemOric           = "Oric"
@@ -288,19 +291,22 @@ var Systems = map[string]System{
 		ID: SystemArcadia,
 	},
 	SystemAmigaCD32: {
-		ID: SystemAmigaCD32,
+		ID:        SystemAmigaCD32,
+		Fallbacks: []string{SystemAmiga},
 	},
 	SystemAstrocade: {
 		ID: SystemAstrocade,
 	},
 	SystemAtari2600: {
-		ID: SystemAtari2600,
+		ID:        SystemAtari2600,
+		Fallbacks: []string{SystemAtari7800},
 	},
 	SystemAtari5200: {
 		ID: SystemAtari5200,
 	},
 	SystemAtari7800: {
-		ID: SystemAtari7800,
+		ID:        SystemAtari7800,
+		Fallbacks: []string{SystemAtari2600},
 	},
 	SystemAtariLynx: {
 		ID: SystemAtariLynx,
@@ -320,8 +326,9 @@ var Systems = map[string]System{
 		ID: SystemChannelF,
 	},
 	SystemColecoVision: {
-		ID:      SystemColecoVision,
-		Aliases: []string{"Coleco"},
+		ID:        SystemColecoVision,
+		Aliases:   []string{"Coleco"},
+		Fallbacks: []string{SystemSG1000},
 	},
 	SystemCreatiVision: {
 		ID: SystemCreatiVision,
@@ -341,8 +348,9 @@ var Systems = map[string]System{
 		Aliases: []string{"GB"},
 	},
 	SystemGameboyColor: {
-		ID:      SystemGameboyColor,
-		Aliases: []string{"GBC"},
+		ID:        SystemGameboyColor,
+		Aliases:   []string{"GBC"},
+		Fallbacks: []string{SystemGameboy},
 	},
 	SystemGameboy2P: {
 		// TODO: Split 2P core into GB and GBC?
@@ -379,15 +387,17 @@ var Systems = map[string]System{
 		ID: SystemJaguar,
 	},
 	SystemJaguarCD: {
-		ID: SystemJaguarCD,
+		ID:        SystemJaguarCD,
+		Fallbacks: []string{SystemJaguar},
 	},
 	SystemMasterSystem: {
 		ID:      SystemMasterSystem,
 		Aliases: []string{"SMS"},
 	},
 	SystemMegaCD: {
-		ID:      SystemMegaCD,
-		Aliases: []string{"SegaCD"},
+		ID:        SystemMegaCD,
+		Aliases:   []string{"SegaCD"},
+		Fallbacks: []string{SystemGenesis},
 	},
 	SystemMegaDuck: {
 		ID: SystemMegaDuck,
@@ -400,19 +410,22 @@ var Systems = map[string]System{
 		ID: SystemNeoGeo,
 	},
 	SystemNeoGeoCD: {
-		ID: SystemNeoGeoCD,
+		ID:        SystemNeoGeoCD,
+		Fallbacks: []string{SystemNeoGeo},
 	},
 	SystemNeoGeoPocket: {
 		ID: SystemNeoGeoPocket,
 	},
 	SystemNeoGeoPocketColor: {
-		ID: SystemNeoGeoPocketColor,
+		ID:        SystemNeoGeoPocketColor,
+		Fallbacks: []string{SystemNeoGeoPocket},
 	},
 	SystemNES: {
 		ID: SystemNES,
 	},
 	SystemNESMusic: {
-		ID: SystemNESMusic,
+		ID:        SystemNESMusic,
+		Fallbacks: []string{SystemNES},
 	},
 	SystemNintendo64: {
 		ID:      SystemNintendo64,
@@ -466,11 +479,13 @@ var Systems = map[string]System{
 		Aliases: []string{"SeriesX", "SeriesS"},
 	},
 	SystemSG1000: {
-		ID: SystemSG1000,
+		ID:        SystemSG1000,
+		Fallbacks: []string{SystemColecoVision},
 	},
 	SystemSuperGameboy: {
-		ID:      SystemSuperGameboy,
-		Aliases: []string{"SGB"},
+		ID:        SystemSuperGameboy,
+		Aliases:   []string{"SGB"},
+		Fallbacks: []string{SystemGameboy},
 	},
 	SystemSuperVision: {
 		ID: SystemSuperVision,
@@ -483,26 +498,31 @@ var Systems = map[string]System{
 		Aliases: []string{"SuperNintendo"},
 	},
 	SystemSNESMSU1: {
-		ID:      SystemSNESMSU1,
-		Aliases: []string{"MSU1", "MSU-1"},
+		ID:        SystemSNESMSU1,
+		Aliases:   []string{"MSU1", "MSU-1"},
+		Fallbacks: []string{SystemSNES},
 	},
 	SystemSNESMusic: {
-		ID: SystemSNESMusic,
+		ID:        SystemSNESMusic,
+		Fallbacks: []string{SystemSNES},
 	},
 	SystemSuperGrafx: {
-		ID: SystemSuperGrafx,
+		ID:        SystemSuperGrafx,
+		Fallbacks: []string{SystemTurboGrafx16},
 	},
 	SystemSwitch: {
 		ID:      SystemSwitch,
 		Aliases: []string{"NintendoSwitch"},
 	},
 	SystemTurboGrafx16: {
-		ID:      SystemTurboGrafx16,
-		Aliases: []string{"TGFX16", "PCEngine"},
+		ID:        SystemTurboGrafx16,
+		Aliases:   []string{"TGFX16", "PCEngine"},
+		Fallbacks: []string{SystemSuperGrafx},
 	},
 	SystemTurboGrafx16CD: {
-		ID:      SystemTurboGrafx16CD,
-		Aliases: []string{"TGFX16-CD", "PCEngineCD"},
+		ID:        SystemTurboGrafx16CD,
+		Aliases:   []string{"TGFX16-CD", "PCEngineCD"},
+		Fallbacks: []string{SystemTurboGrafx16},
 	},
 	SystemVC4000: {
 		ID: SystemVC4000,
@@ -529,7 +549,8 @@ var Systems = map[string]System{
 		ID: SystemWonderSwan,
 	},
 	SystemWonderSwanColor: {
-		ID: SystemWonderSwanColor,
+		ID:        SystemWonderSwanColor,
+		Fallbacks: []string{SystemWonderSwan},
 	},
 	SystemXbox: {
 		ID: SystemXbox,
@@ -551,16 +572,19 @@ var Systems = map[string]System{
 		ID: SystemAliceMC10,
 	},
 	SystemAmiga: {
-		ID:      SystemAmiga,
-		Aliases: []string{"Minimig"},
+		ID:        SystemAmiga,
+		Aliases:   []string{"Minimig"},
+		Fallbacks: []string{SystemAmiga500, SystemAmiga1200},
 	},
 	SystemAmiga500: {
-		ID:      SystemAmiga500,
-		Aliases: []string{"A500"},
+		ID:        SystemAmiga500,
+		Aliases:   []string{"A500"},
+		Fallbacks: []string{SystemAmiga},
 	},
 	SystemAmiga1200: {
-		ID:      SystemAmiga1200,
-		Aliases: []string{"A1200"},
+		ID:        SystemAmiga1200,
+		Aliases:   []string{"A1200"},
+		Fallbacks: []string{SystemAmiga},
 	},
 	SystemAmstrad: {
 		ID: SystemAmstrad,
@@ -570,8 +594,9 @@ var Systems = map[string]System{
 		Aliases: []string{"Amstrad-PCW"},
 	},
 	SystemDOS: {
-		ID:      SystemDOS,
-		Aliases: []string{"ao486", "MS-DOS"},
+		ID:        SystemDOS,
+		Aliases:   []string{"ao486", "MS-DOS"},
+		Fallbacks: []string{SystemPC},
 	},
 	SystemApogee: {
 		ID: SystemApogee,
@@ -635,7 +660,16 @@ var Systems = map[string]System{
 		ID: SystemMacOS,
 	},
 	SystemMSX: {
-		ID: SystemMSX,
+		ID:        SystemMSX,
+		Fallbacks: []string{SystemMSX1, SystemMSX2},
+	},
+	SystemMSX1: {
+		ID:        SystemMSX1,
+		Fallbacks: []string{SystemMSX},
+	},
+	SystemMSX2: {
+		ID:        SystemMSX2,
+		Fallbacks: []string{SystemMSX},
 	},
 	SystemMultiComp: {
 		ID: SystemMultiComp,
@@ -647,7 +681,8 @@ var Systems = map[string]System{
 		ID: SystemOric,
 	},
 	SystemPC: {
-		ID: SystemPC,
+		ID:        SystemPC,
+		Fallbacks: []string{SystemDOS, SystemWindows},
 	},
 	SystemPCXT: {
 		ID: SystemPCXT,
@@ -711,8 +746,9 @@ var Systems = map[string]System{
 		ID: SystemVIC20,
 	},
 	SystemWindows: {
-		ID:      SystemWindows,
-		Aliases: []string{"Win32", "Win16"},
+		ID:        SystemWindows,
+		Aliases:   []string{"Win32", "Win16"},
+		Fallbacks: []string{SystemPC},
 	},
 	SystemX68000: {
 		ID: SystemX68000,

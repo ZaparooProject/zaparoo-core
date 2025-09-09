@@ -366,6 +366,15 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 	}
 
+	// Also collect launchers from fallback systems
+	for _, fallbackID := range system.Fallbacks {
+		for i := range allLaunchers {
+			if allLaunchers[i].SystemID == fallbackID {
+				launchers = append(launchers, allLaunchers[i])
+			}
+		}
+	}
+
 	var folders []string
 	for i := range launchers {
 		for _, folder := range launchers[i].Folders {
