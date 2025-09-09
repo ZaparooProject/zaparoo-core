@@ -150,6 +150,23 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			systems = []systemdefs.System{*system}
 		}
 
+		// Handle the special case of /* pattern - use RandomGame directly
+		if query == "*" {
+			game, randomErr := gamesdb.RandomGame(systems)
+			if randomErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
+			}
+
+			if launchErr := launch(game.Path); launchErr != nil {
+				return platforms.CmdResult{
+					MediaChanged: true,
+				}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, launchErr)
+			}
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, nil
+		}
+
 		query = strings.ToLower(query)
 
 		res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
