@@ -117,6 +117,7 @@ func initStatePage(
 	app *tview.Application,
 	appPages *tview.Pages,
 	parentPages *tview.Pages,
+	cancel context.CancelFunc,
 ) tview.Primitive {
 	initialState := tview.NewFlex().SetDirection(tview.FlexRow)
 	explanationText := tview.NewTextView().
@@ -131,6 +132,7 @@ func initStatePage(
 
 	backButton := tview.NewButton("Go back").
 		SetSelectedFunc(func() {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 		})
 
@@ -174,6 +176,7 @@ func initStatePage(
 	initialState.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEscape {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 			return nil
 		}
@@ -187,6 +190,7 @@ func progressStatePage(
 	_ *tview.Application,
 	appPages *tview.Pages,
 	_ *tview.Pages,
+	cancel context.CancelFunc,
 ) (tview.Primitive, *ProgressBar, *tview.TextView) {
 	progressState := tview.NewFlex().SetDirection(tview.FlexRow)
 	progressText := tview.NewTextView().
@@ -202,6 +206,7 @@ func progressStatePage(
 
 	hideButton := tview.NewButton("Hide").
 		SetSelectedFunc(func() {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 		})
 
@@ -230,6 +235,7 @@ func progressStatePage(
 	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEscape {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 			return nil
 		}
@@ -243,6 +249,7 @@ func completeStatePage(
 	_ *tview.Application,
 	appPages *tview.Pages,
 	parentPages *tview.Pages,
+	cancel context.CancelFunc,
 ) (tview.Primitive, *tview.TextView) {
 	completeState := tview.NewFlex().SetDirection(tview.FlexRow)
 	completeText := tview.NewTextView().
@@ -250,6 +257,7 @@ func completeStatePage(
 
 	doneButton := tview.NewButton("Done").
 		SetSelectedFunc(func() {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 			parentPages.SwitchToPage("initial")
 		})
@@ -275,6 +283,7 @@ func completeStatePage(
 	layout.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
 		if k == tcell.KeyEscape {
+			cancel() // Cancel the goroutine
 			appPages.SwitchToPage(PageMain)
 			return nil
 		}
@@ -289,17 +298,20 @@ func BuildGenerateDBPage(
 	pages *tview.Pages,
 	app *tview.Application,
 ) tview.Primitive {
+	// Create a cancellable context for the goroutine
+	ctx, cancel := context.WithCancel(context.Background())
+
 	generateDB := tview.NewPages()
 	generateDB.SetTitle("Update Media DB")
 	generateDB.SetBorder(true)
 
-	progressState, progressBar, statusText := progressStatePage(app, pages, generateDB)
+	progressState, progressBar, statusText := progressStatePage(app, pages, generateDB, cancel)
 	generateDB.AddPage("progress", progressState, true, false)
 
-	initialState := initStatePage(cfg, app, pages, generateDB)
+	initialState := initStatePage(cfg, app, pages, generateDB, cancel)
 	generateDB.AddPage("initial", initialState, true, false)
 
-	completeState, completeText := completeStatePage(app, pages, generateDB)
+	completeState, completeText := completeStatePage(app, pages, generateDB, cancel)
 	generateDB.AddPage("complete", completeState, true, false)
 
 	updateProgress := func(current, total int, status string) {
@@ -319,47 +331,68 @@ func BuildGenerateDBPage(
 	media, err := getMediaState(context.Background(), cfg)
 	switch {
 	case err != nil:
-		log.Error().Err(err).Msg("error getting media state")
+		generateDB.SwitchToPage("initial")
 	case media.Database.Indexing:
-		updateProgress(
-			*media.Database.CurrentStep,
-			*media.Database.TotalSteps,
-			*media.Database.CurrentStepDisplay,
-		)
-		generateDB.SwitchToPage("progress")
+		// Check for nil pointers before dereferencing
+		if media.Database.CurrentStep == nil ||
+			media.Database.TotalSteps == nil ||
+			media.Database.CurrentStepDisplay == nil {
+			generateDB.SwitchToPage("initial")
+		} else {
+			// Set progress directly to avoid nested QueueUpdateDraw calls
+			progressBar.SetProgress(float64(*media.Database.CurrentStep) / float64(*media.Database.TotalSteps))
+			statusText.SetText(*media.Database.CurrentStepDisplay)
+			generateDB.SwitchToPage("progress")
+		}
 	default:
 		generateDB.SwitchToPage("initial")
 	}
 
 	go func() {
+		defer cancel() // Ensure cleanup on goroutine exit
+
+		// Continue with normal notification loop
 		var lastUpdate *models.IndexingStatusResponse
 		for {
-			indexing, err := waitGenerateUpdate(context.Background(), cfg)
-			if errors.Is(err, client.ErrRequestTimeout) {
-				continue
-			} else if err != nil {
-				log.Error().Err(err).Msg("error waiting for indexing update")
+			select {
+			case <-ctx.Done():
+				// Context cancelled, clean exit
 				return
-			}
-			log.Debug().Msgf("indexing update: %+v", indexing)
+			default:
+				indexing, err := waitGenerateUpdate(ctx, cfg)
+				if errors.Is(err, client.ErrRequestTimeout) {
+					continue
+				} else if err != nil {
+					if errors.Is(err, client.ErrRequestCancelled) {
+						// Context cancelled during request, clean exit
+						return
+					}
+					log.Error().Err(err).Msg("error waiting for indexing update")
+					return
+				}
 
-			if lastUpdate != nil &&
-				lastUpdate.Indexing &&
-				!indexing.Indexing &&
-				indexing.TotalFiles != nil {
-				showComplete(*indexing.TotalFiles)
-				updateProgress(0, 1, "")
-			} else if indexing.Indexing &&
-				indexing.CurrentStep != nil &&
-				indexing.TotalSteps != nil &&
-				indexing.CurrentStepDisplay != nil {
-				updateProgress(
-					*indexing.CurrentStep,
-					*indexing.TotalSteps,
-					*indexing.CurrentStepDisplay,
-				)
+				if lastUpdate != nil &&
+					lastUpdate.Indexing &&
+					!indexing.Indexing &&
+					indexing.TotalFiles != nil {
+					showComplete(*indexing.TotalFiles)
+					updateProgress(0, 1, "")
+				} else if indexing.Indexing &&
+					indexing.CurrentStep != nil &&
+					indexing.TotalSteps != nil &&
+					indexing.CurrentStepDisplay != nil {
+					updateProgress(
+						*indexing.CurrentStep,
+						*indexing.TotalSteps,
+						*indexing.CurrentStepDisplay,
+					)
+					// Switch to progress page if we're not already there
+					app.QueueUpdateDraw(func() {
+						generateDB.SwitchToPage("progress")
+					})
+				}
+				lastUpdate = &indexing
 			}
-			lastUpdate = &indexing
 		}
 	}()
 

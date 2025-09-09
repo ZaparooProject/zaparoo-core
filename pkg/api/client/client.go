@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"time"
@@ -106,7 +107,17 @@ func LocalClient(
 		return "", ErrInvalidParams
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(localWebsocketURL.String(), nil)
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: config.APIRequestTimeout,
+		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{
+				Timeout:   config.APIRequestTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+			return d.DialContext(dialCtx, network, addr)
+		},
+	}
+	c, _, err := dialer.DialContext(ctx, localWebsocketURL.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
@@ -154,7 +165,14 @@ func LocalClient(
 		return "", fmt.Errorf("failed to write json to websocket: %w", err)
 	}
 
-	timer := time.NewTimer(config.APIRequestTimeout)
+	timeout := config.APIRequestTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
 	select {
 	case <-done:
 
@@ -201,7 +219,22 @@ func WaitNotification(
 		Path:   APIPath,
 	}
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	dialTimeout := timeout
+	if dialTimeout <= 0 {
+		dialTimeout = config.APIRequestTimeout
+	}
+
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: dialTimeout,
+		NetDialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			d := &net.Dialer{
+				Timeout:   dialTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+			return d.DialContext(dialCtx, network, addr)
+		},
+	}
+	c, _, err := dialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial websocket: %w", err)
 	}
@@ -251,7 +284,14 @@ func WaitNotification(
 
 	var timerChan <-chan time.Time
 	if timeout == 0 {
-		timer := time.NewTimer(config.APIRequestTimeout)
+		effectiveTimeout := config.APIRequestTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining < effectiveTimeout {
+				effectiveTimeout = remaining
+			}
+		}
+		timer := time.NewTimer(effectiveTimeout)
 		timerChan = timer.C
 	} else if timeout > 0 {
 		timer := time.NewTimer(timeout)
