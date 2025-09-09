@@ -46,7 +46,7 @@ func TestServerStartupRaceCondition(t *testing.T) {
 	// in a goroutine but there's no synchronization to ensure it's ready
 
 	// Try multiple times to increase chance of hitting the race condition
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := range 10 {
 		t.Run(fmt.Sprintf("attempt_%d", attempt), func(t *testing.T) {
 			t.Parallel()
 
@@ -87,7 +87,7 @@ func TestServerStartupRaceCondition(t *testing.T) {
 			client := &http.Client{Timeout: 1 * time.Millisecond} // Very short timeout
 
 			// Make multiple rapid connection attempts to increase chance of hitting race condition
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				url := fmt.Sprintf("http://localhost:%d/api/v0.1", port)
 				req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 				require.NoError(t, err)

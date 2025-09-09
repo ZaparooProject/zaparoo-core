@@ -110,7 +110,7 @@ func insertCoin(
 		}
 	}
 
-	for i := 0; i < amount; i++ {
+	for range amount {
 		_ = pl.KeyboardPress(key)
 		time.Sleep(100 * time.Millisecond)
 	}

@@ -112,7 +112,7 @@ func BenchmarkRegexCacheVsStandard(b *testing.B) {
 	testString := "benchmark123"
 
 	b.Run("Standard", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			re := regexp.MustCompile(pattern)
 			re.MatchString(testString)
 		}
@@ -120,14 +120,14 @@ func BenchmarkRegexCacheVsStandard(b *testing.B) {
 
 	b.Run("Cached", func(b *testing.B) {
 		cache := NewRegexCache()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			re := cache.MustCompile(pattern)
 			re.MatchString(testString)
 		}
 	})
 
 	b.Run("GlobalCached", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			re := CachedMustCompile(pattern)
 			re.MatchString(testString)
 		}

@@ -686,7 +686,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	verificationTries := 3
 	var t *tokens.Token
-	for i := 0; i < verificationTries; i++ {
+	for i := range verificationTries {
 		var verifyErr error
 		t, _, verifyErr = r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
 		if verifyErr == nil && t != nil {

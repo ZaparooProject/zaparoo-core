@@ -57,7 +57,7 @@ func buildMifareAuthCommand(block byte, cardUID string) []byte {
 func ReadMifare(pnd nfc.Device, cardUID string) (TagData, error) {
 	permissionSectors := []int{4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60}
 	var allBlocks []byte
-	for block := 0; block < 64; block++ {
+	for block := range 64 {
 		if block <= 3 {
 			// The first sector contains infomation we don't care about and
 			// also has a different key (0xA0A1A2A3A4A5) YAGNI, so skip over
@@ -130,7 +130,7 @@ func WriteMifare(pnd nfc.Device, text, cardUID string) ([]byte, error) {
 	chunkIndex := 0
 	for sector := 1; sector <= 15; sector++ {
 		// Iterate over blocks in sector (0-2) skipping trailer block (3)
-		for sectorIndex := 0; sectorIndex < 3; sectorIndex++ {
+		for sectorIndex := range 3 {
 			blockToWrite := (sector * 4) + sectorIndex
 			if sectorIndex == 0 {
 				// We changed sectors, time to authenticate

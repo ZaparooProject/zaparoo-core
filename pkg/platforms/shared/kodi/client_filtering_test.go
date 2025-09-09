@@ -58,7 +58,7 @@ func TestLaunchAlbum_UsesAPIFiltering(t *testing.T) {
 
 			// Return a large dataset to highlight the inefficiency
 			songs := make([]Song, 1000) // Simulating a large music library
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				albumID := (i % 10) + 1 // Distribute across 10 albums
 				songs[i] = Song{
 					ID:      i + 1,

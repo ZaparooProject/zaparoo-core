@@ -166,7 +166,7 @@ func TestConcurrentStateAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				readerName := fmt.Sprintf("reader_%d", i)
 				mockReader := mocks.NewMockReader()
 				st.SetReader(readerName, mockReader)

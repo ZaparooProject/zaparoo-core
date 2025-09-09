@@ -102,7 +102,7 @@ func (p *ProgressBar) Draw(screen tcell.Screen) {
 		barWidth := width
 		filled := int(float64(barWidth) * p.progress)
 
-		for i := 0; i < filled; i++ {
+		for i := range filled {
 			screen.SetContent(x+i, y, p.filledRune, nil, tcell.StyleDefault.Foreground(tcell.ColorGreen))
 		}
 

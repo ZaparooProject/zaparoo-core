@@ -119,7 +119,7 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 }
 
 func WaitForInternet(maxTries int) bool {
-	for i := 0; i < maxTries; i++ {
+	for range maxTries {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", http.NoBody)
@@ -373,7 +373,7 @@ func SlugifyPath(filePath string) string {
 }
 
 func HasSpace(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == ' ' {
 			return true
 		}

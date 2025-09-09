@@ -159,7 +159,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 				break
 			}
 
-			for i := 0; i < n; i++ {
+			for i := range n {
 				if buf[i] == '\n' {
 					line := string(lineBuf)
 					lineBuf = nil
