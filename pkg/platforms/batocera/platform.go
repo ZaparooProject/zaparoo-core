@@ -92,27 +92,61 @@ func (p *Platform) StartPost(
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
-	game, running, err := apiRunningGame()
-	if err != nil {
-		return err
+	// Try to check for running game with retries during startup
+	maxRetries := 10
+	baseDelay := 100 * time.Millisecond
+	var game models.ActiveMedia
+	running := false
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		gameResp, isRunning, err := apiRunningGame()
+		if err != nil {
+			if attempt == maxRetries {
+				log.Warn().Err(err).Msg("ES API unavailable after retries, continuing without active media detection")
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			delay := time.Duration(1<<attempt) * baseDelay
+			if delay > 5*time.Second {
+				delay = 5 * time.Second
+			}
+
+			log.Debug().Msgf("ES API check failed during startup (attempt %d/%d), retrying in %v: %v",
+				attempt+1, maxRetries+1, delay, err)
+			time.Sleep(delay)
+			continue
+		}
+
+		// Success - process the result
+		if isRunning {
+			systemID, err := fromBatoceraSystem(gameResp.SystemName)
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to convert system %s, setting no active media", gameResp.SystemName)
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			systemMeta, err := assets.GetSystemMetadata(systemID)
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to get system metadata for %s, setting no active media", systemID)
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			game = models.ActiveMedia{
+				SystemID:   systemID,
+				SystemName: systemMeta.Name,
+				Name:       gameResp.Name,
+				Path:       p.NormalizePath(cfg, gameResp.Path),
+			}
+			running = true
+		}
+		break
 	}
+
 	if running {
-		systemID, err := fromBatoceraSystem(game.SystemName)
-		if err != nil {
-			return err
-		}
-
-		systemMeta, err := assets.GetSystemMetadata(systemID)
-		if err != nil {
-			return fmt.Errorf("failed to get system metadata for %s: %w", systemID, err)
-		}
-
-		p.setActiveMedia(&models.ActiveMedia{
-			SystemID:   systemID,
-			SystemName: systemMeta.Name,
-			Name:       game.Name,
-			Path:       p.NormalizePath(cfg, game.Path),
-		})
+		p.setActiveMedia(&game)
 	} else {
 		p.setActiveMedia(nil)
 	}
