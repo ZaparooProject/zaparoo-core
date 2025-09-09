@@ -345,6 +345,17 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
 
+	// Check system defaults for launcher if not already specified
+	if env.Cmd.AdvArgs["launcher"] == "" {
+		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
+			if env.Cmd.AdvArgs == nil {
+				env.Cmd.AdvArgs = make(map[string]string)
+			}
+			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+		}
+	}
+
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	var launchers []platforms.Launcher
