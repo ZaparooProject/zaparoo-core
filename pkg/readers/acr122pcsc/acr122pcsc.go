@@ -261,7 +261,7 @@ func (*ACR122PCSC) Detect(connected []string) string {
 	rs, err := ctx.ListReaders()
 	if err != nil {
 		detectErrorOnce.Do(func() {
-			log.Debug().Err(err).Msg("listing pcsc readers")
+			log.Trace().Err(err).Msg("listing pcsc readers")
 		})
 		return ""
 	}
@@ -277,7 +277,7 @@ func (*ACR122PCSC) Detect(connected []string) string {
 		return ""
 	}
 
-	log.Debug().Msgf("acr122 reader found: %s", acrs[0])
+	log.Trace().Msgf("acr122 reader found: %s", acrs[0])
 	return "acr122_pcsc:" + acrs[0]
 }
 

@@ -30,8 +30,6 @@ import (
 
 	"github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
-	_ "github.com/ZaparooProject/go-pn532/detection/i2c"
-	_ "github.com/ZaparooProject/go-pn532/detection/spi"
 	_ "github.com/ZaparooProject/go-pn532/detection/uart"
 	"github.com/ZaparooProject/go-pn532/polling"
 	"github.com/ZaparooProject/go-pn532/transport/i2c"
