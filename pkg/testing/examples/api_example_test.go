@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/stretchr/testify/assert"

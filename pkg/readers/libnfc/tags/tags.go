@@ -27,7 +27,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 )
 

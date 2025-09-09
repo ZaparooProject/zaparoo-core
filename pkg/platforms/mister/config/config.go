@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 )
 
 const (

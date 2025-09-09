@@ -23,7 +23,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/parser"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/go-cmp/cmp"
 )
 

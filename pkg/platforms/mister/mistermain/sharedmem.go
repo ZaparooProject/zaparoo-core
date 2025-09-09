@@ -27,7 +27,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 )
 
 func mapSharedMem(address int64) (*[]byte, *os.File, error) {

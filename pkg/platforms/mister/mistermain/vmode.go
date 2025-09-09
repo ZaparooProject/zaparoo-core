@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"os"
 
-	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 )
 
 const VideoModeFormatRGB32 = "18888"

@@ -22,7 +22,7 @@ package fixtures
 import (
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 )
 
 // Common test media fixtures for use in tests

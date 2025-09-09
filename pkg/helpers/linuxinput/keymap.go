@@ -3,7 +3,7 @@
 package linuxinput
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput/keyboardmap"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
 	"github.com/bendahl/uinput"
 )
 

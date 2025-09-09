@@ -1,4 +1,4 @@
-module github.com/ZaparooProject/zaparoo-core
+module github.com/ZaparooProject/zaparoo-core/v2
 
 go 1.24.5
 

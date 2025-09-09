@@ -22,7 +22,7 @@ package fixtures
 import (
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 )
 
 // Common test token fixtures for use in tests

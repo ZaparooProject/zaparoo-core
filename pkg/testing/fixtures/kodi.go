@@ -19,7 +19,7 @@
 
 package fixtures
 
-import "github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
+import "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 
 // TestMovies provides sample movie data for Kodi testing
 var TestMovies = []kodi.Movie{

@@ -22,8 +22,8 @@ package methods
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

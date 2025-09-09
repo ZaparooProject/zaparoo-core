@@ -3,8 +3,8 @@
 package mistex
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
 )
 
 var commandsMappings = map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error){

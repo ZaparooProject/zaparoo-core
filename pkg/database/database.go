@@ -23,7 +23,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 /*

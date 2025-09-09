@@ -19,7 +19,7 @@
 
 package models
 
-import "github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+import "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 
 type SearchParams struct {
 	Systems    *[]string `json:"systems"`

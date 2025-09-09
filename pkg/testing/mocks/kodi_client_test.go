@@ -22,8 +22,8 @@ package mocks_test
 import (
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

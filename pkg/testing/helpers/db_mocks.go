@@ -52,8 +52,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -721,7 +721,7 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
 // These functions have been moved to avoid import cycles.
-// Use github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock instead.
+// Use github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock instead.
 //
 // SQL Mock functions moved:
 // - SetupSQLMock() -> moved to pkg/testing/sqlmock

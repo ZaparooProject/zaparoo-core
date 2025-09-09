@@ -24,10 +24,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/fixtures"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
-	testsqlmock "github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

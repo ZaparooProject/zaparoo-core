@@ -26,8 +26,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/fixtures"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 )
 
 // MockKodiServer provides a mock Kodi JSON-RPC server for integration testing

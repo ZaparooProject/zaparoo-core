@@ -30,7 +30,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/rs/zerolog/log"
 )
 

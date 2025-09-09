@@ -27,7 +27,7 @@ import (
 
 	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/tagops"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/hsanjuan/go-ndef"
 	"github.com/rs/zerolog/log"
 )

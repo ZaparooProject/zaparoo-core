@@ -24,8 +24,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput/keyboardmap"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 

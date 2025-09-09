@@ -27,7 +27,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	goose "github.com/pressly/goose/v3"
 	"github.com/rs/zerolog/log"
 )

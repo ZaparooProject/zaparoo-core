@@ -59,7 +59,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
