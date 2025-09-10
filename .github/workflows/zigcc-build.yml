@@ -1,0 +1,79 @@
+name: Build zigcc Docker image
+
+on:
+  push:
+    paths:
+      - 'scripts/zigcc/**'
+      - '.github/workflows/zigcc-build.yml'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 1.0.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(cat scripts/zigcc/VERSION)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building zigcc version: $VERSION"
+      
+      - name: Set lowercase repository owner
+        run: |
+          echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
+        env:
+          OWNER: ${{ github.repository_owner }}
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Check if version exists
+        id: check
+        run: |
+          if docker manifest inspect ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.version.outputs.version }} > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Version ${{ steps.version.outputs.version }} already exists in registry"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Version ${{ steps.version.outputs.version }} will be built"
+          fi
+      
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.exists != 'true'
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build and push
+        if: steps.check.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./scripts/zigcc
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.version.outputs.version }}
+            ghcr.io/${{ env.OWNER_LC }}/zigcc:latest
+          build-args: |
+            UID=1000
+            GID=1000
+          cache-from: type=gha,scope=zigcc-build
+          cache-to: type=gha,mode=max,scope=zigcc-build

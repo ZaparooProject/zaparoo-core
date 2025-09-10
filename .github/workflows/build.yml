@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  ZIGCC_VERSION: "1.0.0"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -26,40 +29,6 @@ jobs:
           version: latest
           args: --timeout=5m
 
-  build-docker-image:
-    runs-on: ubuntu-latest
-    needs: lint
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set lowercase repository owner
-        run: |
-          echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
-        env:
-          OWNER: ${{ github.repository_owner }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build and push zigcc image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./scripts/zigcc
-          push: true
-          tags: |
-            ghcr.io/${{ env.OWNER_LC }}/zaparoo-zigcc:${{ github.sha }}
-            ghcr.io/${{ env.OWNER_LC }}/zaparoo-zigcc:latest
-          build-args: |
-            UID=1000
-            GID=1000
-          cache-from: type=gha,scope=zigcc-build
-          cache-to: type=gha,mode=max,scope=zigcc-build
 
   create-release:
     runs-on: ubuntu-latest
@@ -78,7 +47,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: [create-release, build-docker-image]
+    needs: [create-release]
     permissions:
       contents: write  # Needed for uploading release assets
       packages: read   # Needed for pulling Docker images from ghcr.io
@@ -163,8 +132,8 @@ jobs:
           OWNER: ${{ github.repository_owner }}
       - name: Pull zigcc image
         run: |
-          docker pull ghcr.io/${{ env.OWNER_LC }}/zaparoo-zigcc:${{ github.sha }}
-          docker tag ghcr.io/${{ env.OWNER_LC }}/zaparoo-zigcc:${{ github.sha }} zaparoo/zigcc
+          docker pull ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ env.ZIGCC_VERSION }}
+          docker tag ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ env.ZIGCC_VERSION }} zaparoo/zigcc
       - name: Build
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Add release
