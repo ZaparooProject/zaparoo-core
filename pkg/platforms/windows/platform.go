@@ -357,8 +357,17 @@ type LaunchBoxGame struct {
 	ID    string `xml:"ID"`
 }
 
-func findSteamDir() string {
+func findSteamDir(cfg *config.Instance) string {
 	const fallbackPath = "C:\\Program Files (x86)\\Steam"
+
+	// Check for user-configured Steam install directory first
+	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+		if _, err := os.Stat(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
+			return def.InstallDir
+		}
+		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
+	}
 
 	// Try 64-bit systems first (most common)
 	paths := []string{
@@ -439,11 +448,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				_ *config.Instance,
+				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				steamRoot := findSteamDir()
+				steamRoot := findSteamDir(cfg)
 				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
 
 				// Scan official Steam apps

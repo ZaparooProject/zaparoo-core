@@ -160,6 +160,44 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
+func findSteamDir(cfg *config.Instance) string {
+	const fallbackPath = "/home/deck/.steam/steam"
+
+	// Check for user-configured Steam install directory first
+	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+		if _, err := os.Stat(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
+			return def.InstallDir
+		}
+		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
+	}
+
+	// Try common Steam installation paths
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get user home directory")
+		return fallbackPath
+	}
+
+	paths := []string{
+		filepath.Join(home, ".steam", "steam"),
+		filepath.Join(home, ".local", "share", "Steam"),
+		"/home/deck/.steam/steam", // Steam Deck default
+		"/usr/games/steam",
+		"/opt/steam",
+	}
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			log.Debug().Msgf("found Steam installation: %s", path)
+			return path
+		}
+	}
+
+	log.Debug().Msgf("Steam detection failed, using fallback: %s", fallbackPath)
+	return fallbackPath
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		{
@@ -167,11 +205,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				_ *config.Instance,
+				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				steamRoot := "/home/deck/.steam/steam"
+				steamRoot := findSteamDir(cfg)
 				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
 
 				// Scan official Steam apps
