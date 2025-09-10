@@ -1,3 +1,5 @@
+//go:build windows
+
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -46,6 +48,7 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/windows/registry"
 )
 
 type Platform struct {
@@ -354,6 +357,42 @@ type LaunchBoxGame struct {
 	ID    string `xml:"ID"`
 }
 
+func findSteamDir() string {
+	const fallbackPath = "C:\\Program Files (x86)\\Steam"
+
+	// Try 64-bit systems first (most common)
+	paths := []string{
+		`SOFTWARE\Wow6432Node\Valve\Steam`,
+		`SOFTWARE\Valve\Steam`,
+	}
+
+	for _, path := range paths {
+		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		defer func(k registry.Key) {
+			if closeErr := k.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("error closing registry key")
+			}
+		}(key)
+
+		installPath, _, err := key.GetStringValue("InstallPath")
+		if err != nil {
+			continue
+		}
+
+		// Validate the path exists
+		if _, statErr := os.Stat(installPath); statErr == nil {
+			log.Debug().Msgf("found Steam installation via registry: %s", installPath)
+			return installPath
+		}
+	}
+
+	log.Debug().Msgf("Steam registry detection failed, using fallback: %s", fallbackPath)
+	return fallbackPath
+}
+
 func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -404,8 +443,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				// TODO: detect this path from registry
-				steamRoot := "C:\\Program Files (x86)\\Steam"
+				steamRoot := findSteamDir()
 				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
 
 				// Scan official Steam apps
