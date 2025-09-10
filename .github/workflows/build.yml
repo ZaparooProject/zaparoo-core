@@ -79,6 +79,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: [create-release, build-docker-image]
+    permissions:
+      contents: write  # Needed for uploading release assets
+      packages: read   # Needed for pulling Docker images from ghcr.io
     strategy:
       fail-fast: false
       matrix:
