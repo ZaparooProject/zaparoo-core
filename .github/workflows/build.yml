@@ -29,24 +29,32 @@ jobs:
   build-docker-image:
     runs-on: ubuntu-latest
     needs: lint
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Docker CLI
-        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          use: true
-          install: true
-      - name: Expose GitHub Runtime
-        uses: crazy-max/ghaction-github-runtime@v3
-      - name: Build and cache zigcc image
-        run: |
-          docker buildx build \
-            --build-arg UID=1000 --build-arg GID=1000 \
-            --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=zigcc-build \
-            --cache-from type=gha,scope=zigcc-build \
-            --load \
-            -t zaparoo/zigcc \
-            ./scripts/zigcc
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push zigcc image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./scripts/zigcc
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/zaparoo-zigcc:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/zaparoo-zigcc:latest
+          build-args: |
+            UID=1000
+            GID=1000
+          cache-from: type=gha,scope=zigcc-build
+          cache-to: type=gha,mode=max,scope=zigcc-build
 
   create-release:
     runs-on: ubuntu-latest
@@ -134,10 +142,16 @@ jobs:
         with:
           use: true
           install: true
-      - name: Expose GitHub Runtime
-        uses: crazy-max/ghaction-github-runtime@v3
-      - name: Add cache override
-        run: echo CACHE_ARGS=\"--load --cache-to type=gha,mode=max,repository=${GITHUB_REPOSITORY},scope=zigcc-build --cache-from type=gha,scope=zigcc-build\" > .env
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull zigcc image
+        run: |
+          docker pull ghcr.io/${{ github.repository_owner }}/zaparoo-zigcc:${{ github.sha }}
+          docker tag ghcr.io/${{ github.repository_owner }}/zaparoo-zigcc:${{ github.sha }} zaparoo/zigcc
       - name: Build
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Add release
