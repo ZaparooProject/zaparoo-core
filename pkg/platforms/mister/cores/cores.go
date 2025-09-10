@@ -964,7 +964,7 @@ var Systems = map[string]Core{
 		Slots: []Slot{
 			{
 				Label: "CD Image",
-				Exts:  []string{".cue", ".chd"},
+				Exts:  []string{".cue", ".chd", ".iso"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "s",

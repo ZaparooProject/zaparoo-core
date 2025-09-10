@@ -459,7 +459,7 @@ var Launchers = []platforms.Launcher{
 		ID:         systemdefs.SystemAmigaCD32,
 		SystemID:   systemdefs.SystemAmigaCD32,
 		Folders:    []string{"AmigaCD32"},
-		Extensions: []string{".cue", ".chd"},
+		Extensions: []string{".cue", ".chd", ".iso"},
 		Launch:     launch(systemdefs.SystemAmigaCD32),
 	},
 	{
