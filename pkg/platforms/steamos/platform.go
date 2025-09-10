@@ -171,12 +171,25 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				root := "/home/deck/.steam/steam/steamapps"
-				appResults, err := helpers.ScanSteamApps(root)
+				steamRoot := "/home/deck/.steam/steam"
+				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
+
+				// Scan official Steam apps
+				appResults, err := helpers.ScanSteamApps(steamAppsRoot)
 				if err != nil {
 					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
-				return append(results, appResults...), nil
+				results = append(results, appResults...)
+
+				// Scan non-Steam games (shortcuts)
+				shortcutResults, err := helpers.ScanSteamShortcuts(steamRoot)
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to scan Steam shortcuts, continuing without them")
+				} else {
+					results = append(results, shortcutResults...)
+				}
+
+				return results, nil
 			},
 			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
