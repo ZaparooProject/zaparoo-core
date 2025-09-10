@@ -33,13 +33,13 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/linux/installer"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rs/zerolog/log"
 )
 

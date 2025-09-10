@@ -24,31 +24,32 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
 type State struct {
-	platform       platforms.Platform
-	ctx            context.Context
-	activePlaylist *playlists.Playlist
-	softwareToken  *tokens.Token
-	wroteToken     *tokens.Token
-	readers        map[string]readers.Reader
-	ctxCancelFunc  context.CancelFunc
-	activeMedia    *models.ActiveMedia
-	Notifications  chan<- models.Notification
-	lastScanned    tokens.Token
-	activeToken    tokens.Token
-	mu             sync.RWMutex
-	stopService    bool
-	runZapScript   bool
+	platform         platforms.Platform
+	ctx              context.Context
+	activePlaylist   *playlists.Playlist
+	softwareToken    *tokens.Token
+	wroteToken       *tokens.Token
+	readers          map[string]readers.Reader
+	ctxCancelFunc    context.CancelFunc
+	activeMedia      *models.ActiveMedia
+	onMediaStartHook func(*models.ActiveMedia)
+	Notifications    chan<- models.Notification
+	lastScanned      tokens.Token
+	activeToken      tokens.Token
+	mu               sync.RWMutex
+	stopService      bool
+	runZapScript     bool
 }
 
 func NewState(platform platforms.Platform) (state *State, notificationChan <-chan models.Notification) {
@@ -119,6 +120,12 @@ func (s *State) RunZapScriptEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.runZapScript
+}
+
+func (s *State) SetOnMediaStartHook(hook func(*models.ActiveMedia)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onMediaStartHook = hook
 }
 
 func (s *State) GetReader(device string) (readers.Reader, bool) {
@@ -256,6 +263,11 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			MediaPath:  media.Path,
 		})
 		s.notifyDisplayReaders(media)
+
+		// Execute OnMediaStart hook if set
+		if s.onMediaStartHook != nil {
+			go s.onMediaStartHook(media)
+		}
 		return
 	}
 	if !oldMedia.Equal(media) {
@@ -269,6 +281,11 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 			MediaPath:  media.Path,
 		})
 		s.notifyDisplayReaders(media)
+
+		// Execute OnMediaStart hook if set (new media started)
+		if s.onMediaStartHook != nil {
+			go s.onMediaStartHook(media)
+		}
 		return
 	}
 }

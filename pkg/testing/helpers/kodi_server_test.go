@@ -26,8 +26,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

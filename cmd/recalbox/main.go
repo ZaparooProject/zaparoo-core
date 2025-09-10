@@ -31,10 +31,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/cli"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/recalbox"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/recalbox"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

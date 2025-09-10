@@ -4,30 +4,29 @@ package batocera
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers/linuxinput"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,27 +91,61 @@ func (p *Platform) StartPost(
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
-	game, running, err := apiRunningGame()
-	if err != nil {
-		return err
+	// Try to check for running game with retries during startup
+	maxRetries := 10
+	baseDelay := 100 * time.Millisecond
+	var game models.ActiveMedia
+	running := false
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		gameResp, isRunning, err := esapi.APIRunningGame()
+		if err != nil {
+			if attempt == maxRetries {
+				log.Warn().Err(err).Msg("ES API unavailable after retries, continuing without active media detection")
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			delay := time.Duration(1<<attempt) * baseDelay
+			if delay > 5*time.Second {
+				delay = 5 * time.Second
+			}
+
+			log.Debug().Msgf("ES API check failed during startup (attempt %d/%d), retrying in %v: %v",
+				attempt+1, maxRetries+1, delay, err)
+			time.Sleep(delay)
+			continue
+		}
+
+		// Success - process the result
+		if isRunning {
+			systemID, err := fromBatoceraSystem(gameResp.SystemName)
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to convert system %s, setting no active media", gameResp.SystemName)
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			systemMeta, err := assets.GetSystemMetadata(systemID)
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to get system metadata for %s, setting no active media", systemID)
+				p.setActiveMedia(nil)
+				return nil
+			}
+
+			game = models.ActiveMedia{
+				SystemID:   systemID,
+				SystemName: systemMeta.Name,
+				Name:       gameResp.Name,
+				Path:       p.NormalizePath(cfg, gameResp.Path),
+			}
+			running = true
+		}
+		break
 	}
+
 	if running {
-		systemID, err := fromBatoceraSystem(game.SystemName)
-		if err != nil {
-			return err
-		}
-
-		systemMeta, err := assets.GetSystemMetadata(systemID)
-		if err != nil {
-			return fmt.Errorf("failed to get system metadata for %s: %w", systemID, err)
-		}
-
-		p.setActiveMedia(&models.ActiveMedia{
-			SystemID:   systemID,
-			SystemName: systemMeta.Name,
-			Name:       game.Name,
-			Path:       p.NormalizePath(cfg, game.Path),
-		})
+		p.setActiveMedia(&game)
 	} else {
 		p.setActiveMedia(nil)
 	}
@@ -212,14 +245,14 @@ func (p *Platform) StopActiveLauncher() error {
 	killed := false
 	for tries < maxTries {
 		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
-		err := apiEmuKill()
+		err := esapi.APIEmuKill()
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return err
+			return fmt.Errorf("failed to kill emulator: %w", err)
 		}
 
-		_, running, err := apiRunningGame()
+		_, running, err := esapi.APIRunningGame()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to check running game status: %w", err)
 		} else if !running {
 			killed = true
 			break
@@ -248,9 +281,9 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	}
 
 	// exit current media if one is running
-	_, running, err := apiRunningGame()
+	_, running, err := esapi.APIRunningGame()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to check running game status: %w", err)
 	} else if running {
 		log.Info().Msg("exiting current media")
 		err = p.StopActiveLauncher()
@@ -301,42 +334,6 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
-type ESGame struct {
-	Name string `xml:"name"`
-	Path string `xml:"path"`
-}
-
-type ESGameList struct {
-	XMLName xml.Name `xml:"gameList"`
-	Games   []ESGame `xml:"game"`
-}
-
-func readESGameListXML(path string) (ESGameList, error) {
-	xmlFile, err := os.Open(path) //nolint:gosec // Internal EmulationStation gamelist XML path
-	if err != nil {
-		return ESGameList{}, fmt.Errorf("failed to open ES game list XML file %s: %w", path, err)
-	}
-	defer func(xmlFile *os.File) {
-		closeErr := xmlFile.Close()
-		if closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing xml file")
-		}
-	}(xmlFile)
-
-	data, err := io.ReadAll(xmlFile)
-	if err != nil {
-		return ESGameList{}, fmt.Errorf("failed to read ES game list XML file %s: %w", path, err)
-	}
-
-	var gameList ESGameList
-	err = xml.Unmarshal(data, &gameList)
-	if err != nil {
-		return ESGameList{}, fmt.Errorf("failed to unmarshal ES game list XML: %w", err)
-	}
-
-	return gameList, nil
-}
-
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		kodi.NewKodiLocalLauncher(),
@@ -371,7 +368,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Folders:            []string{k},
 			SkipFilesystemScan: true, // Use gamelist.xml via Scanner, no filesystem scanning needed
 			Launch: func(_ *config.Instance, path string) error {
-				return apiLaunch(path)
+				return esapi.APILaunch(path)
 			},
 			Scanner: func(
 				cfg *config.Instance,
@@ -388,7 +385,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				for _, batSysName := range batSysNames {
 					for _, rootDir := range p.RootDirs(cfg) {
 						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
-						gameList, err := readESGameListXML(gameListPath)
+						gameList, err := esapi.ReadGameListXML(gameListPath)
 						if err != nil {
 							log.Error().Msgf("error reading gamelist.xml: %s", err)
 							continue
@@ -433,14 +430,20 @@ func (*Platform) ShowNotice(
 	_ *config.Instance,
 	args widgetmodels.NoticeArgs,
 ) (func() error, time.Duration, error) {
-	return nil, 0, apiNotify(args.Text)
+	if err := esapi.APINotify(args.Text); err != nil {
+		return nil, 0, fmt.Errorf("failed to show notice: %w", err)
+	}
+	return nil, 0, nil
 }
 
 func (*Platform) ShowLoader(
 	_ *config.Instance,
 	args widgetmodels.NoticeArgs,
 ) (func() error, error) {
-	return nil, apiNotify(args.Text)
+	if err := esapi.APINotify(args.Text); err != nil {
+		return nil, fmt.Errorf("failed to show loader: %w", err)
+	}
+	return func() error { return nil }, nil
 }
 
 func (*Platform) ShowPicker(

@@ -1,3 +1,5 @@
+//go:build windows
+
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -31,21 +33,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/kodi"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/acr122pcsc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/pn532"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/acr122pcsc"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/windows/registry"
 )
 
 type Platform struct {
@@ -354,6 +357,49 @@ type LaunchBoxGame struct {
 	ID    string `xml:"ID"`
 }
 
+func findSteamDir(cfg *config.Instance) string {
+	const fallbackPath = "C:\\Program Files (x86)\\Steam"
+
+	// Check for user-configured Steam install directory first
+	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+		if _, err := os.Stat(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
+			return def.InstallDir
+		}
+		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
+	}
+
+	// Try 64-bit systems first (most common)
+	paths := []string{
+		`SOFTWARE\Wow6432Node\Valve\Steam`,
+		`SOFTWARE\Valve\Steam`,
+	}
+
+	for _, path := range paths {
+		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+
+		installPath, _, err := key.GetStringValue("InstallPath")
+		if closeErr := key.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing registry key")
+		}
+		if err != nil {
+			continue
+		}
+
+		// Validate the path exists
+		if _, statErr := os.Stat(installPath); statErr == nil {
+			log.Debug().Msgf("found Steam installation via registry: %s", installPath)
+			return installPath
+		}
+	}
+
+	log.Debug().Msgf("Steam registry detection failed, using fallback: %s", fallbackPath)
+	return fallbackPath
+}
+
 func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -400,17 +446,29 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				_ *config.Instance,
+				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				// TODO: detect this path from registry
-				root := "C:\\Program Files (x86)\\Steam\\steamapps"
-				appResults, err := helpers.ScanSteamApps(root)
+				steamRoot := findSteamDir(cfg)
+				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
+
+				// Scan official Steam apps
+				appResults, err := helpers.ScanSteamApps(steamAppsRoot)
 				if err != nil {
 					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
-				return append(results, appResults...), nil
+				results = append(results, appResults...)
+
+				// Scan non-Steam games (shortcuts)
+				shortcutResults, err := helpers.ScanSteamShortcuts(steamRoot)
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to scan Steam shortcuts, continuing without them")
+				} else {
+					results = append(results, shortcutResults...)
+				}
+
+				return results, nil
 			},
 			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")
@@ -534,6 +592,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 	}
+
+	// Add RetroBat launchers if available
+	retroBatLaunchers := getRetroBatLaunchers(cfg)
+	launchers = append(launchers, retroBatLaunchers...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }

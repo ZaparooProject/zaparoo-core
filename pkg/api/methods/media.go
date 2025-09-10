@@ -26,15 +26,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediascanner"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -352,12 +352,15 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		resp.Database.CurrentStepDisplay = &status.currentDesc
 		resp.Database.TotalFiles = &status.totalFiles
 	} else {
+		// Try to get last generated time, but don't fail if database is locked
 		lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
 		if err != nil {
-			return nil, fmt.Errorf("error getting last generated time: %w", err)
+			// Database might be locked during indexing transition - don't fail completely
+			log.Warn().Err(err).Msg("failed to get last generated time, assuming database doesn't exist")
+			resp.Database.Exists = false
+		} else {
+			resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
 		}
-
-		resp.Database.Exists = !time.Unix(0, 0).Equal(lastGenerated) && !status.indexing
 	}
 
 	return resp, nil

@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )

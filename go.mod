@@ -1,10 +1,11 @@
-module github.com/ZaparooProject/zaparoo-core
+module github.com/ZaparooProject/zaparoo-core/v2
 
 go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/TimDeve/valve-vdf-binary v0.0.1
 	github.com/ZaparooProject/go-pn532 v0.7.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0

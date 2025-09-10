@@ -27,10 +27,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
 
@@ -148,6 +148,23 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 				return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 			}
 			systems = []systemdefs.System{*system}
+		}
+
+		// Handle the special case of /* pattern - use RandomGame directly
+		if query == "*" {
+			game, randomErr := gamesdb.RandomGame(systems)
+			if randomErr != nil {
+				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
+			}
+
+			if launchErr := launch(game.Path); launchErr != nil {
+				return platforms.CmdResult{
+					MediaChanged: true,
+				}, fmt.Errorf("failed to launch random game '%s': %w", game.Path, launchErr)
+			}
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, nil
 		}
 
 		query = strings.ToLower(query)
@@ -328,6 +345,17 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
 
+	// Check system defaults for launcher if not already specified
+	if env.Cmd.AdvArgs["launcher"] == "" {
+		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
+			if env.Cmd.AdvArgs == nil {
+				env.Cmd.AdvArgs = make(map[string]string)
+			}
+			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+		}
+	}
+
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
 	var launchers []platforms.Launcher
@@ -335,6 +363,15 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	for i := range allLaunchers {
 		if allLaunchers[i].SystemID == system.ID {
 			launchers = append(launchers, allLaunchers[i])
+		}
+	}
+
+	// Also collect launchers from fallback systems
+	for _, fallbackID := range system.Fallbacks {
+		for i := range allLaunchers {
+			if allLaunchers[i].SystemID == fallbackID {
+				launchers = append(launchers, allLaunchers[i])
+			}
 		}
 	}
 

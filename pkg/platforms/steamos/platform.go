@@ -33,18 +33,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/opticaldrive"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/simpleserial"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
-	widgetmodels "github.com/ZaparooProject/zaparoo-core/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
 )
@@ -160,6 +160,44 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
+func findSteamDir(cfg *config.Instance) string {
+	const fallbackPath = "/home/deck/.steam/steam"
+
+	// Check for user-configured Steam install directory first
+	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+		if _, err := os.Stat(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
+			return def.InstallDir
+		}
+		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
+	}
+
+	// Try common Steam installation paths
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get user home directory")
+		return fallbackPath
+	}
+
+	paths := []string{
+		filepath.Join(home, ".steam", "steam"),
+		filepath.Join(home, ".local", "share", "Steam"),
+		"/home/deck/.steam/steam", // Steam Deck default
+		"/usr/games/steam",
+		"/opt/steam",
+	}
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			log.Debug().Msgf("found Steam installation: %s", path)
+			return path
+		}
+	}
+
+	log.Debug().Msgf("Steam detection failed, using fallback: %s", fallbackPath)
+	return fallbackPath
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		{
@@ -167,16 +205,29 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
-				_ *config.Instance,
+				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				root := "/home/deck/.steam/steam/steamapps"
-				appResults, err := helpers.ScanSteamApps(root)
+				steamRoot := findSteamDir(cfg)
+				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
+
+				// Scan official Steam apps
+				appResults, err := helpers.ScanSteamApps(steamAppsRoot)
 				if err != nil {
 					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
 				}
-				return append(results, appResults...), nil
+				results = append(results, appResults...)
+
+				// Scan non-Steam games (shortcuts)
+				shortcutResults, err := helpers.ScanSteamShortcuts(steamRoot)
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to scan Steam shortcuts, continuing without them")
+				} else {
+					results = append(results, shortcutResults...)
+				}
+
+				return results, nil
 			},
 			Launch: func(_ *config.Instance, path string) error {
 				id := strings.TrimPrefix(path, "steam://")

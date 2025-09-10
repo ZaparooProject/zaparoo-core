@@ -69,7 +69,7 @@ func ValidateNDEFMessage(data []byte) error {
 
 	// Look for NDEF TLV (0x03)
 	found := false
-	for i := 0; i < len(data)-1; i++ {
+	for i := range len(data) - 1 {
 		if data[i] == 0x03 {
 			found = true
 			break
@@ -86,7 +86,7 @@ func ValidateNDEFMessage(data []byte) error {
 // extractNDEFPayload extracts the NDEF message from TLV format
 func extractNDEFPayload(data []byte) []byte {
 	// Look for NDEF TLV (0x03)
-	for i := 0; i < len(data)-2; i++ {
+	for i := range len(data) - 2 {
 		if data[i] != 0x03 {
 			continue
 		}

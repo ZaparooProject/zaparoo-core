@@ -26,20 +26,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb/boltmigration"
-	"github.com/ZaparooProject/zaparoo-core/pkg/groovyproxy"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/state"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -177,6 +179,28 @@ func Start(
 		log.Error().Err(err).Msgf("error opening databases")
 		return nil, err
 	}
+
+	// Set up the OnMediaStart hook
+	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
+		onMediaStartScript := cfg.LaunchersOnMediaStart()
+		if onMediaStartScript == "" {
+			return
+		}
+
+		log.Info().Msgf("running on_media_start script: %s", onMediaStartScript)
+		plsc := playlists.PlaylistController{
+			Active: st.GetActivePlaylist(),
+			Queue:  plq,
+		}
+		t := tokens.Token{
+			ScanTime: time.Now(),
+			Text:     onMediaStartScript,
+		}
+
+		if scriptErr := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc); scriptErr != nil {
+			log.Error().Err(scriptErr).Msg("Error running on_media_start script")
+		}
+	})
 
 	log.Info().Msg("loading mapping files")
 	err = cfg.LoadMappings(filepath.Join(helpers.DataDir(pl), config.MappingsDir))

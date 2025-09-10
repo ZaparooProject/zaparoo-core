@@ -29,7 +29,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
 //go:embed conf/blacklist-zaparoo.conf

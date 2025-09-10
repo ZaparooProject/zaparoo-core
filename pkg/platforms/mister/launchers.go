@@ -13,14 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mgls"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/mistermain"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker/activegame"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
 )
 
@@ -459,7 +459,7 @@ var Launchers = []platforms.Launcher{
 		ID:         systemdefs.SystemAmigaCD32,
 		SystemID:   systemdefs.SystemAmigaCD32,
 		Folders:    []string{"AmigaCD32"},
-		Extensions: []string{".cue", ".chd"},
+		Extensions: []string{".cue", ".chd", ".iso"},
 		Launch:     launch(systemdefs.SystemAmigaCD32),
 	},
 	{
@@ -1005,7 +1005,7 @@ var Launchers = []platforms.Launcher{
 	{
 		ID:         systemdefs.SystemDOS,
 		SystemID:   systemdefs.SystemDOS,
-		Folders:    []string{"AO486"},
+		Folders:    []string{"AO486", "/media/fat/_DOS Games"},
 		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd", ".mgl"},
 		Launch:     launchDOS(),
 	},
@@ -1144,10 +1144,10 @@ var Launchers = []platforms.Launcher{
 	},
 	{
 		ID:         "MSX1",
-		SystemID:   systemdefs.SystemMSX,
+		SystemID:   systemdefs.SystemMSX1,
 		Folders:    []string{"MSX1"},
 		Extensions: []string{".dsk", ".rom"},
-		Launch:     launchAltCore(systemdefs.SystemMSX, "_Console/MSX1"),
+		Launch:     launch(systemdefs.SystemMSX1),
 	},
 	{
 		ID:         systemdefs.SystemMultiComp,

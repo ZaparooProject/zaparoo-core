@@ -6,8 +6,8 @@ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7Oputl
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaikHnASWpVZRjibOxu7y9LhAv04whugI=
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
-github.com/ZaparooProject/go-pn532 v0.6.1 h1:rYaKGr21Via3fZ+yZqg0/+S/Lw5t7z2udqpwWzy6hbY=
-github.com/ZaparooProject/go-pn532 v0.6.1/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
+github.com/TimDeve/valve-vdf-binary v0.0.1 h1:MhypwW2vt5tQiiHwujeu8FBX+GLM/whIyLeJhAK/nhg=
+github.com/TimDeve/valve-vdf-binary v0.0.1/go.mod h1:ImuIftZqbOSs276+cjAJI8gG3EM16eChvfmGgXUI02M=
 github.com/ZaparooProject/go-pn532 v0.7.0 h1:uKxamS4taGXgDwjD3HKsRVqJHI4Kmw7l9QzbX7r06pA=
 github.com/ZaparooProject/go-pn532 v0.7.0/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=

@@ -22,8 +22,8 @@ package helpers
 import (
 	"sync"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
 // LauncherCache provides fast O(1) launcher lookups by system ID.

@@ -112,7 +112,7 @@ func TestSelectPictureVariantConsistency(t *testing.T) {
 	baseName := "Genesis"
 
 	first := selectPictureVariant(baseName)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		result := selectPictureVariant(baseName)
 		if result != first {
 			t.Errorf("selectPictureVariant(%q) is not consistent: first=%q, iteration %d=%q",

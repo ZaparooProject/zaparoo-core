@@ -27,7 +27,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/cloudsoda/go-smb2"
 	"github.com/rs/zerolog/log"
 )

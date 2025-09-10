@@ -42,10 +42,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/client"
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
 
@@ -119,7 +119,7 @@ func AlphaMapKeys[V any](m map[string]V) []string {
 }
 
 func WaitForInternet(maxTries int) bool {
-	for i := 0; i < maxTries; i++ {
+	for range maxTries {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com", http.NoBody)
@@ -373,7 +373,7 @@ func SlugifyPath(filePath string) string {
 }
 
 func HasSpace(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == ' ' {
 			return true
 		}

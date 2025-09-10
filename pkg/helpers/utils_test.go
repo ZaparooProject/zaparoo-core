@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1021,7 +1021,7 @@ func TestRandSeq(t *testing.T) {
 		const length = 10
 		results := make(map[string]bool)
 
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			result, err := RandSeq(length)
 			require.NoError(t, err, "RandSeq should not return error")
 			results[result] = true
@@ -1200,7 +1200,7 @@ func TestRandomElem(t *testing.T) {
 		selected := make(map[string]bool)
 
 		// Run multiple times to ensure different elements are selected
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			result, err := RandomElem(slice)
 			require.NoError(t, err)
 			selected[result] = true

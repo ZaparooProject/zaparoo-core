@@ -24,9 +24,9 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/mediadb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database/userdb"
-	"github.com/ZaparooProject/zaparoo-core/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	_ "github.com/mattn/go-sqlite3"
 )
 

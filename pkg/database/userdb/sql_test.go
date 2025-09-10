@@ -26,8 +26,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/ZaparooProject/zaparoo-core/pkg/database"
-	testsqlmock "github.com/ZaparooProject/zaparoo-core/pkg/testing/sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

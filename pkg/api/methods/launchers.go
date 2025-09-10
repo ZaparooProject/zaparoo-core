@@ -20,8 +20,8 @@
 package methods
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models/requests"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
 )
 

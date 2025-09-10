@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/libnfc/tags"
-	"github.com/ZaparooProject/zaparoo-core/pkg/readers/shared/ndef"
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/clausecker/nfc/v2"
 	"github.com/rs/zerolog/log"
 )
@@ -686,7 +686,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	verificationTries := 3
 	var t *tokens.Token
-	for i := 0; i < verificationTries; i++ {
+	for i := range verificationTries {
 		var verifyErr error
 		t, _, verifyErr = r.pollDevice(r.pnd, nil, timesToPoll, periodBetweenPolls)
 		if verifyErr == nil && t != nil {

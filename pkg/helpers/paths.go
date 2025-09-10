@@ -20,6 +20,7 @@
 package helpers
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -27,10 +28,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
+	"github.com/TimDeve/valve-vdf-binary"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 )
@@ -242,6 +244,61 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			results = append(results, platforms.ScanResult{
 				Path: CreateVirtualPath("steam", appID, appName),
 				Name: appName,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
+	var results []platforms.ScanResult
+
+	userdataDir := filepath.Join(steamDir, "userdata")
+	if _, err := os.Stat(userdataDir); os.IsNotExist(err) {
+		log.Debug().Msg("Steam userdata directory not found")
+		return results, nil
+	}
+
+	userDirs, err := os.ReadDir(userdataDir)
+	if err != nil {
+		log.Error().Err(err).Msg("error reading Steam userdata directory")
+		return results, nil
+	}
+
+	for _, userDir := range userDirs {
+		if !userDir.IsDir() {
+			continue
+		}
+
+		shortcutsPath := filepath.Join(userdataDir, userDir.Name(), "config", "shortcuts.vdf")
+		if _, err := os.Stat(shortcutsPath); os.IsNotExist(err) {
+			continue
+		}
+
+		log.Debug().Msgf("reading shortcuts from: %s", shortcutsPath)
+
+		//nolint:gosec // Safe: reads Steam config files for game library scanning
+		shortcutsData, err := os.ReadFile(shortcutsPath)
+		if err != nil {
+			log.Error().Err(err).Msgf("error reading shortcuts.vdf: %s", shortcutsPath)
+			continue
+		}
+
+		shortcuts, err := valve_vdf_binary.ParseShortcuts(bytes.NewReader(shortcutsData))
+		if err != nil {
+			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
+			continue
+		}
+
+		for _, shortcut := range shortcuts {
+			if shortcut.AppName == "" {
+				continue
+			}
+
+			results = append(results, platforms.ScanResult{
+				Path: CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Name: shortcut.AppName,
 			})
 		}
 	}

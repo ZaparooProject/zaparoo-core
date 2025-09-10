@@ -16,6 +16,8 @@ rules:
     send: Create a "tmp" directory in the project root instead.
   - match: "sed -i"
     send: Editing with sed bypasses guards, edit manually instead.
+  - match: "task build"
+    send: Don't use "task build", use "task [linux/mac/windows]:build-[amd64/arm64" instead for testing.
 commands:
   - name: lint
     send: Run "task lint-fix" and fix ALL issues.

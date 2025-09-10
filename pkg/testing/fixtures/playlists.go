@@ -20,7 +20,7 @@
 package fixtures
 
 import (
-	"github.com/ZaparooProject/zaparoo-core/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 )
 
 // NewSamplePlaylist creates a sample playlist with typical values

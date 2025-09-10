@@ -31,12 +31,13 @@ import (
 )
 
 type Launchers struct {
-	IndexRoot   []string `toml:"index_root,omitempty,multiline"`
-	AllowFile   []string `toml:"allow_file,omitempty,multiline"`
-	allowFileRe []*regexp.Regexp
-	MediaDir    string             `toml:"media_dir,omitempty"`
-	Default     []LaunchersDefault `toml:"default,omitempty"`
-	Custom      []LaunchersCustom  `toml:"custom,omitempty"`
+	IndexRoot    []string `toml:"index_root,omitempty,multiline"`
+	AllowFile    []string `toml:"allow_file,omitempty,multiline"`
+	allowFileRe  []*regexp.Regexp
+	MediaDir     string             `toml:"media_dir,omitempty"`
+	OnMediaStart string             `toml:"on_media_start,omitempty"`
+	Default      []LaunchersDefault `toml:"default,omitempty"`
+	Custom       []LaunchersCustom  `toml:"custom,omitempty"`
 }
 
 type LaunchersDefault struct {
@@ -57,6 +58,12 @@ func (c *Instance) DefaultMediaDir() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Launchers.MediaDir
+}
+
+func (c *Instance) LaunchersOnMediaStart() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Launchers.OnMediaStart
 }
 
 func (c *Instance) IsLauncherFileAllowed(s string) bool {

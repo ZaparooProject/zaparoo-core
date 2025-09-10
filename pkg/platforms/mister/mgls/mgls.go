@@ -30,37 +30,17 @@ import (
 	"path/filepath"
 	s "strings"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/cores"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/tracker/activegame"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
 )
 
-func GenerateMgl(cfg *config.Instance, core *cores.Core, path, override string) (string, error) {
+func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")
-	}
-
-	// TODO: this only works because system IDs historically match core IDs
-	// better to have something more robust later that separates the two
-	userDefaultSystem, ok := cfg.LookupSystemDefaults(core.ID)
-	if ok {
-		newCore, err := cores.LookupCore(userDefaultSystem.System)
-		if err != nil {
-			log.Warn().
-				Str("core", core.ID).
-				Str("default_system", userDefaultSystem.System).
-				Msg("system default core not found, using original core")
-		} else {
-			log.Debug().
-				Str("original_core", core.ID).
-				Str("default_system_core", newCore.ID).
-				Str("rbf", newCore.RBF).
-				Msg("applying system default core override")
-			core = newCore
-		}
 	}
 
 	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", core.RBF)
@@ -152,7 +132,7 @@ func launchTempMgl(cfg *config.Instance, system *cores.Core, path string) error 
 		log.Debug().Str("system", system.ID).Str("hook_result", override).Msg("system hook executed")
 	}
 
-	mgl, err := GenerateMgl(cfg, system, path, override)
+	mgl, err := GenerateMgl(system, path, override)
 	if err != nil {
 		return fmt.Errorf("failed to generate MGL: %w", err)
 	}

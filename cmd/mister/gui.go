@@ -27,12 +27,12 @@ import (
 	"os"
 	"path"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/pkg/platforms"
-	misterconfig "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/config"
-	misterstartup "github.com/ZaparooProject/zaparoo-core/pkg/platforms/mister/startup"
-	"github.com/ZaparooProject/zaparoo-core/pkg/ui/tui"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	misterstartup "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/startup"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rivo/tview"
 	"github.com/rs/zerolog/log"
 )

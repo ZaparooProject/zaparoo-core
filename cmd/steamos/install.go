@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 )
 
 // TODO: allow updating if files have changed

@@ -30,7 +30,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/ZaparooProject/zaparoo-core/pkg/zapscript/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 	"github.com/expr-lang/expr"
 )
 
