@@ -60,7 +60,7 @@ tasks:
     vars:
       BUILD_DIR: '{{.BUILD_DIR | default "_build/packages/batocera"}}'
       TEMPLATE_DIR: '{{.TEMPLATE_DIR | default "scripts/batocera/template"}}'
-      PACKAGE_NAME: zaparoo-core-{{.VERSION}}-{{.PKG_ARCH}}
+      PACKAGE_NAME: zaparoo-batocera-{{.VERSION}}-{{.PKG_ARCH}}
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating package for {{.PKG_ARCH}}..."

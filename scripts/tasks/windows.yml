@@ -35,6 +35,7 @@ tasks:
   build-arm64:
     desc: Build Windows ARM64 binary with installer
     cmds:
+      - task: :zigcc:setup
       - task: build-metadata
       - task: :zigcc:build-windows-arm64
       - task: build-installer
@@ -44,6 +45,7 @@ tasks:
   build-amd64:
     desc: Build Windows AMD64 binary with installer
     cmds:
+      - task: :zigcc:setup
       - task: build-metadata
       - task: :zigcc:build-windows-amd64
       - task: build-installer
@@ -53,6 +55,7 @@ tasks:
   build-386:
     desc: Build Windows 386 binary with installer
     cmds:
+      - task: :zigcc:setup
       - task: build-metadata
       - task: :zigcc:build-windows-386
       - task: build-installer

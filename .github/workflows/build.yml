@@ -167,7 +167,7 @@ jobs:
           esac
           mkdir -p _build/packages/batocera
           BUILD_ARCH=${{matrix.arch}} PKG_ARCH=${PKG_ARCH} VERSION=${VERSION} task batocera:package-arch
-          gh release upload "$tag" _build/packages/batocera/zaparoo-core-${VERSION}-${PKG_ARCH}.pkg.tar.zst
+          gh release upload "$tag" _build/packages/batocera/zaparoo-batocera-${VERSION}-${PKG_ARCH}.pkg.tar.zst
 
   publish-release:
     runs-on: ubuntu-latest
