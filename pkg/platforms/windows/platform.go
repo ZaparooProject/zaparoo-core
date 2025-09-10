@@ -380,13 +380,11 @@ func findSteamDir(cfg *config.Instance) string {
 		if err != nil {
 			continue
 		}
-		defer func(k registry.Key) {
-			if closeErr := k.Close(); closeErr != nil {
-				log.Warn().Err(closeErr).Msg("error closing registry key")
-			}
-		}(key)
 
 		installPath, _, err := key.GetStringValue("InstallPath")
+		if closeErr := key.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("error closing registry key")
+		}
 		if err != nil {
 			continue
 		}
@@ -594,6 +592,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			},
 		},
 	}
+
+	// Add RetroBat launchers if available
+	retroBatLaunchers := getRetroBatLaunchers(cfg)
+	launchers = append(launchers, retroBatLaunchers...)
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), launchers...)
 }
