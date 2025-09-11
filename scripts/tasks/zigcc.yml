@@ -118,8 +118,8 @@ tasks:
           APP_BIN: Zaparoo.exe
           NO_LIBNFC: true
           EXTRA_LDFLAGS: -H=windowsgui
-          CC: "zig cc -w --target=i386-windows-gnu"
-          CXX: "zig c++ -w --target=i386-windows-gnu"
+          CC: "zig cc -w --target=x86-windows-gnu"
+          CXX: "zig c++ -w --target=x86-windows-gnu"
           EXTRA_DOCKER_ARGS: >-
             -e CGO_LDFLAGS="-Wl,--subsystem,windows"
 

@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 env:
-  ZIGCC_VERSION: "1.0.0"
+  ZIGCC_VERSION: "1.0.1"
 
 jobs:
   lint:

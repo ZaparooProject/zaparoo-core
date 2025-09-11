@@ -55,7 +55,6 @@ tasks:
       - >-
         docker run --rm
         {{if .DOCKER_PLATFORM}}--platform {{.DOCKER_PLATFORM}}{{end}}
-        {{if env "CI"}}--user 0:0{{end}}
         -v "{{.BUILDCACHE}}:{{.IMG_BUILDCACHE}}"
         -v "{{.GOCACHE}}:{{.IMG_GOCACHE}}"
         -v "${PWD}:/build"

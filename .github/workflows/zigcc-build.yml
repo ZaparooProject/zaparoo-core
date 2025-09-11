@@ -73,7 +73,7 @@ jobs:
             ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.version.outputs.version }}
             ghcr.io/${{ env.OWNER_LC }}/zigcc:latest
           build-args: |
-            UID=1000
-            GID=1000
+            UID=1001
+            GID=1001
           cache-from: type=gha,scope=zigcc-build
           cache-to: type=gha,mode=max,scope=zigcc-build
