@@ -3,8 +3,6 @@ version: "3"
 tasks:
   build-image:
     internal: true
-    sources:
-      - scripts/**/Dockerfile
     status:
       - docker image inspect {{.IMAGE_NAME}}
     cmds:
