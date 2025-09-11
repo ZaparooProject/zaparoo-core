@@ -135,6 +135,8 @@ jobs:
           docker pull ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ env.ZIGCC_VERSION }}
           docker tag ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ env.ZIGCC_VERSION }} zaparoo/zigcc
       - name: Build
+        env:
+          GOFLAGS: "-buildvcs=false"
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
       - name: Add release
         env:

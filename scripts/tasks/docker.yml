@@ -69,5 +69,6 @@ tasks:
         {{if .CC}}-e CC="{{.CC}}"{{end}}
         {{if .CXX}}-e CXX="{{.CXX}}"{{end}}
         {{if .EXTRA_LDFLAGS}}-e EXTRA_LDFLAGS="{{.EXTRA_LDFLAGS}}"{{end}}
+        {{if env "GOFLAGS"}}-e GOFLAGS="{{env "GOFLAGS"}}"{{end}}
         {{.EXTRA_DOCKER_ARGS}}
         {{.IMAGE_NAME}} {{.EXEC}}
