@@ -16,7 +16,7 @@ tasks:
       - go run scripts/tasks/utils/windowsiss/main.go -version "${APP_VERSION}" -arch "{{.BUILD_ARCH}}"
       - cp "cmd/windows/winres/icon.ico" "_build/windows_{{.BUILD_ARCH}}"
       - docker rm -f zaparoo-innosetup 2>/dev/null || true
-      - docker container create --name zaparoo-innosetup {{if env "CI"}}--user 0:0{{end}} --entrypoint sh amake/innosetup -c "chmod -R 777 /work && iscc setup.iss"
+      - docker container create --name zaparoo-innosetup {{if env "CI"}}--user 0:0{{end}} --entrypoint sh amake/innosetup -c "{{if env "CI"}}chown -R root:root /home/xclient && {{end}}chmod -R 777 /work && iscc setup.iss"
       - docker cp "_build/windows_{{.BUILD_ARCH}}/setup.iss" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/Zaparoo.exe" zaparoo-innosetup:/work/
       - docker cp "_build/windows_{{.BUILD_ARCH}}/LICENSE.txt" zaparoo-innosetup:/work/
