@@ -35,6 +35,8 @@ tasks:
           CXX: "{{.CXX}}"
           EXTRA_LDFLAGS: "{{.EXTRA_LDFLAGS}}"
           APP_BIN: "{{.APP_BIN}}"
+          APP_VERSION:
+            sh: echo -n "${APP_VERSION:-$(git rev-parse --short HEAD)-dev}"
       - >-
         go run scripts/tasks/utils/makezip/main.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
@@ -60,7 +62,7 @@ tasks:
         -v "${PWD}:/build"
         -e PLATFORM={{.PLATFORM}}
         -e APP_BIN={{.APP_BIN}}
-        -e APP_VERSION="${APP_VERSION}"
+        -e APP_VERSION="{{.APP_VERSION}}"
         {{if .BUILD_ARCH}}-e BUILD_ARCH={{.BUILD_ARCH}}{{end}}
         {{if .BUILD_OS}}-e BUILD_OS={{.BUILD_OS}}{{end}}
         {{if .NO_LIBNFC}}-e NO_LIBNFC={{.NO_LIBNFC}}{{end}}

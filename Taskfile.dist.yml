@@ -45,11 +45,10 @@ tasks:
       PLATFORM: '{{.PLATFORM}}'
       CC: "{{.CC}}"
       CXX: "{{.CXX}}"
-      APP_VERSION: '{{default "dev" .APP_VERSION}}'
     cmds:
       - >-
         go build
-        -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/pkg/config.AppVersion=${APP_VERSION}'
+        -ldflags "-X 'github.com/ZaparooProject/zaparoo-core/v2/pkg/config.AppVersion=${APP_VERSION}'
         -linkmode external -extldflags
         '{{if not .NO_LIBNFC}}${CGO_LDFLAGS}{{end}}
         {{if not .NO_STATIC}}-static{{end}}'
