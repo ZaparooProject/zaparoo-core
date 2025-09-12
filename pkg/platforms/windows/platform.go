@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
@@ -60,12 +61,13 @@ func (*Platform) ID() string {
 	return platforms.PlatformIDWindows
 }
 
-func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		acr122pcsc.NewAcr122Pcsc(cfg),
+		tty2oled.NewReader(cfg, p),
 	}
 
 	var enabled []readers.Reader

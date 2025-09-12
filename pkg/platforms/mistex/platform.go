@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/rs/zerolog/log"
@@ -46,12 +47,13 @@ func (*Platform) ID() string {
 	return platforms.PlatformIDMistex
 }
 
-func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
+func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		tty2oled.NewReader(cfg, p),
 	}
 
 	var enabled []readers.Reader
