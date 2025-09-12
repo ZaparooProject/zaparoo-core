@@ -17,7 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532uart"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
@@ -36,9 +36,9 @@ func (*Platform) ID() string {
 
 func (*Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
+		pn532.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
-		pn532uart.NewReader(cfg),
 	}
 
 	var enabled []readers.Reader
