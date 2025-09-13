@@ -54,11 +54,15 @@ type ClientMutexManager struct {
 	mutexes sync.Map // map[string]*clientMutex
 }
 
-type clientMutex struct {
+// ClientMutex represents a per-client mutex for thread-safe operations
+type ClientMutex struct {
 	lastUsed time.Time
 	clientID string
 	mu       sync.Mutex
 }
+
+// Legacy alias for backward compatibility
+type clientMutex = ClientMutex
 
 var globalClientMutexManager = &ClientMutexManager{}
 
@@ -353,23 +357,31 @@ func updateClientSequenceAndNonce(client *database.Client, seq uint64, nonce str
 }
 
 // getClientMutex retrieves or creates a mutex for the given client ID
-func (cm *ClientMutexManager) getClientMutex(clientID string) *clientMutex {
+func (cm *ClientMutexManager) getClientMutex(clientID string) *ClientMutex {
 	// Try to load existing mutex
 	if value, exists := cm.mutexes.Load(clientID); exists {
-		mutex := value.(*clientMutex)
+		mutex, ok := value.(*clientMutex)
+		if !ok {
+			log.Error().Str("client_id", clientID).Msg("invalid mutex type in cache")
+			return nil
+		}
 		mutex.lastUsed = time.Now()
 		return mutex
 	}
 
 	// Create new mutex
-	newMutex := &clientMutex{
+	newMutex := &ClientMutex{
 		lastUsed: time.Now(),
 		clientID: clientID,
 	}
 
 	// Store and return the mutex (LoadOrStore handles race conditions)
 	actual, _ := cm.mutexes.LoadOrStore(clientID, newMutex)
-	actualMutex := actual.(*clientMutex)
+	actualMutex, ok := actual.(*clientMutex)
+	if !ok {
+		log.Error().Str("client_id", clientID).Msg("invalid mutex type after LoadOrStore")
+		return nil
+	}
 	actualMutex.lastUsed = time.Now()
 	return actualMutex
 }
@@ -388,8 +400,12 @@ func (cm *ClientMutexManager) lockClient(clientID string) func() {
 // cleanup removes unused mutexes to prevent memory leaks
 func (cm *ClientMutexManager) cleanup() {
 	now := time.Now()
-	cm.mutexes.Range(func(key, value interface{}) bool {
-		mutex := value.(*clientMutex)
+	cm.mutexes.Range(func(key, value any) bool {
+		mutex, ok := value.(*clientMutex)
+		if !ok {
+			log.Error().Interface("key", key).Msg("invalid mutex type in cleanup")
+			return true
+		}
 		if now.Sub(mutex.lastUsed) > MutexMaxIdle {
 			cm.mutexes.Delete(key)
 			log.Debug().Str("client_id", mutex.clientID).Msg("cleaned up unused client mutex")
@@ -417,7 +433,7 @@ func (cm *ClientMutexManager) StartCleanupRoutine(ctx context.Context) {
 }
 
 // GetClientMutex is a convenience function to get a mutex for a client
-func GetClientMutex(clientID string) *clientMutex {
+func GetClientMutex(clientID string) *ClientMutex {
 	return globalClientMutexManager.getClientMutex(clientID)
 }
 

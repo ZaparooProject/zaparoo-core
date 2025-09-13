@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -88,16 +89,16 @@ var clientNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 func validateClientName(name string) error {
 	name = strings.TrimSpace(name)
 
-	if len(name) == 0 {
-		return fmt.Errorf("client name cannot be empty")
+	if name == "" {
+		return errors.New("client name cannot be empty")
 	}
 
 	if len(name) > 100 {
-		return fmt.Errorf("client name too long (max 100 characters)")
+		return errors.New("client name too long (max 100 characters)")
 	}
 
 	if !clientNameRegex.MatchString(name) {
-		return fmt.Errorf("client name contains invalid characters (only letters, numbers, underscore, and dash allowed)")
+		return errors.New("client name contains invalid characters (only letters, numbers, underscore, and dash)")
 	}
 
 	return nil

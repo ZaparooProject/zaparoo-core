@@ -708,12 +708,12 @@ func isSessionExpired(session *melody.Session) bool {
 	if !exists {
 		return true // No auth time means expired
 	}
-	
+
 	timestamp, ok := authTime.(time.Time)
 	if !ok {
 		return true // Invalid timestamp means expired
 	}
-	
+
 	return time.Since(timestamp) > sessionTimeout
 }
 
@@ -1047,7 +1047,6 @@ func Start(
 
 	// Pairing endpoints with CSRF protection and enhanced rate limiting
 	r.Route("/api/pair", func(r chi.Router) {
-
 		// CSRF protection for pairing endpoints
 		r.Use(csrf.Protect(
 			csrfKey,

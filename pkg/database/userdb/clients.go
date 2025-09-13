@@ -106,7 +106,7 @@ func (db *UserDB) getClientByAuthTokenConstantTime(authToken string) (*database.
 	for i := range clients {
 		client := &clients[i]
 		clientHashBytes := []byte(client.AuthTokenHash)
-		
+
 		// Ensure both hashes are same length to prevent timing attacks
 		if len(targetHashBytes) == len(clientHashBytes) {
 			if subtle.ConstantTimeCompare(targetHashBytes, clientHashBytes) == 1 {
@@ -117,7 +117,7 @@ func (db *UserDB) getClientByAuthTokenConstantTime(authToken string) (*database.
 	}
 
 	if foundClient == nil {
-		return nil, fmt.Errorf("client not found")
+		return nil, errors.New("client not found")
 	}
 
 	return foundClient, nil
@@ -275,4 +275,3 @@ func hashAuthToken(authToken string) string {
 	hash := sha256.Sum256([]byte(authToken))
 	return hex.EncodeToString(hash[:])
 }
-

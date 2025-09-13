@@ -104,6 +104,7 @@ func TestAuthMiddleware_RemoteRequiresAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			// Send regular JSON without proper auth fields - should fail at auth token lookup
 			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(`{"test": "data"}`)))
 			req.RemoteAddr = tt.remoteAddr
@@ -408,6 +409,7 @@ func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(tt.body)))
 			req.RemoteAddr = "192.168.1.100:5000" // Remote address to trigger auth
 
@@ -534,8 +536,10 @@ func TestClientMutexManager_ConcurrentAccess(t *testing.T) {
 			defer func() { done <- struct{}{} }()
 
 			mutex := dm.getClientMutex(deviceID)
-			require.NotNil(t, mutex)
-			assert.Equal(t, deviceID, mutex.clientID)
+			assert.NotNil(t, mutex)
+			if mutex != nil {
+				assert.Equal(t, deviceID, mutex.clientID)
+			}
 		}()
 	}
 
@@ -548,14 +552,15 @@ func TestClientMutexManager_ConcurrentAccess(t *testing.T) {
 	value, exists := dm.mutexes.Load(deviceID)
 	assert.True(t, exists, "Mutex should exist")
 
-	mutex := value.(*clientMutex)
+	mutex, ok := value.(*clientMutex)
+	require.True(t, ok)
 	assert.Equal(t, deviceID, mutex.clientID)
 }
 
 // TestShiftWindowRight verifies the bit manipulation for the sliding window
 func TestShiftWindowRight(t *testing.T) {
 	t.Parallel()
-	
+
 	tests := []struct {
 		name     string
 		input    []byte
@@ -589,9 +594,9 @@ func TestShiftWindowRight(t *testing.T) {
 			// Make a copy to avoid modifying the test input
 			window := make([]byte, len(tt.input))
 			copy(window, tt.input)
-			
+
 			shiftWindowRight(window)
-			
+
 			assert.Equal(t, tt.expected, window, "bit shift should match expected result")
 		})
 	}
@@ -600,36 +605,36 @@ func TestShiftWindowRight(t *testing.T) {
 // TestUpdateClientSequenceAndNonce verifies the sequence window updates correctly
 func TestUpdateClientSequenceAndNonce(t *testing.T) {
 	t.Parallel()
-	
+
 	tests := []struct {
-		name         string
-		initialSeq   uint64
+		name          string
+		nonce         string
 		initialWindow []byte
-		newSeq       uint64
-		nonce        string
-		expectedSeq  uint64
-		checkBitSet  bool
-		bitPosition  uint64
+		initialSeq    uint64
+		newSeq        uint64
+		expectedSeq   uint64
+		bitPosition   uint64
+		checkBitSet   bool
 	}{
 		{
-			name:         "increment sequence",
-			initialSeq:   5,
+			name:          "increment sequence",
+			initialSeq:    5,
 			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			newSeq:       6,
-			nonce:        "nonce6",
-			expectedSeq:  6,
-			checkBitSet:  true,
-			bitPosition:  0, // Latest sequence should be at position 0
+			newSeq:        6,
+			nonce:         "nonce6",
+			expectedSeq:   6,
+			checkBitSet:   true,
+			bitPosition:   0, // Latest sequence should be at position 0
 		},
 		{
-			name:         "large jump forward",
-			initialSeq:   5,
+			name:          "large jump forward",
+			initialSeq:    5,
 			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			newSeq:       100,
-			nonce:        "nonce100", 
-			expectedSeq:  100,
-			checkBitSet:  true,
-			bitPosition:  0, // Latest sequence should be at position 0 after window clear
+			newSeq:        100,
+			nonce:         "nonce100",
+			expectedSeq:   100,
+			checkBitSet:   true,
+			bitPosition:   0, // Latest sequence should be at position 0 after window clear
 		},
 	}
 
@@ -648,7 +653,7 @@ func TestUpdateClientSequenceAndNonce(t *testing.T) {
 
 			assert.Equal(t, tt.expectedSeq, client.CurrentSeq, "sequence should be updated")
 			assert.Contains(t, client.NonceCache, tt.nonce, "nonce should be added to cache")
-			
+
 			if tt.checkBitSet {
 				// Check that the bit at position 0 is set (latest sequence)
 				assert.NotZero(t, client.SeqWindow[0]&1, "bit 0 should be set for latest sequence")
