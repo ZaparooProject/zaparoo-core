@@ -570,6 +570,77 @@ func processRequestObject(
 // handleWSMessage parses all incoming WS requests, identifies what type of
 // JSON-RPC object they may be and forwards them to the appropriate function
 // to handle that type of message.
+// handleWSPing handles ping messages for heartbeat operation
+func handleWSPing(session *melody.Session, msg []byte) bool {
+	if bytes.Equal(msg, []byte("ping")) {
+		err := session.Write([]byte("pong"))
+		if err != nil {
+			log.Error().Err(err).Msg("sending pong")
+		}
+		return true
+	}
+	return false
+}
+
+// handleWSAuthentication handles authentication for remote WebSocket connections
+func handleWSRemoteAuth(session *melody.Session, msg []byte, db *database.Database) ([]byte, error) {
+	client, authenticated := session.Get("client")
+	if !authenticated {
+		// First message must be authentication
+		err := handleWSAuthentication(session, msg, db)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("remote_addr", session.Request.RemoteAddr).
+				Str("user_agent", session.Request.Header.Get("User-Agent")).
+				Msg("SECURITY: WebSocket authentication failed")
+			_ = session.Close()
+		}
+		return nil, err
+	}
+
+	// Check session timeout
+	if isSessionExpired(session) {
+		log.Warn().
+			Str("remote_addr", session.Request.RemoteAddr).
+			Msg("SECURITY: WebSocket session expired - closing connection")
+		_ = session.Close()
+		return nil, errors.New("session expired")
+	}
+
+	// Update last activity time
+	session.Set("auth_time", time.Now())
+
+	// Decrypt message for authenticated remote connection
+	clientObj, ok := client.(*database.Client)
+	if !ok {
+		log.Error().Msg("invalid client type in session")
+		return nil, errors.New("invalid client type")
+	}
+
+	decryptedMsg, err := handleWSDecryption(session, msg, clientObj, db)
+	if err != nil {
+		log.Error().Err(err).Msg("WebSocket decryption failed")
+		return nil, err
+	}
+
+	return decryptedMsg, nil
+}
+
+// sendWSResponseByType sends response based on connection type (local/remote)
+func sendWSResponseByType(session *melody.Session, isLocal bool, id uuid.UUID, resp any) error {
+	if !isLocal {
+		if client, authenticated := session.Get("client"); authenticated {
+			clientObj, ok := client.(*database.Client)
+			if !ok {
+				log.Error().Msg("invalid client type in session")
+				return errors.New("invalid client type")
+			}
+			return sendWSResponseEncrypted(session, id, resp, clientObj)
+		}
+	}
+	return sendWSResponse(session, id, resp)
+}
+
 func handleWSMessage(
 	methodMap *MethodMap,
 	platform platforms.Platform,
@@ -589,69 +660,33 @@ func handleWSMessage(
 			}
 		}()
 
-		// ping command for heartbeat operation
-		if bytes.Equal(msg, []byte("ping")) {
-			err := session.Write([]byte("pong"))
-			if err != nil {
-				log.Error().Err(err).Msg("sending pong")
-			}
+		// Handle ping/pong heartbeat
+		if handleWSPing(session, msg) {
 			return
 		}
 
+		// Determine if connection is local
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		isLocal := clientIP.IsLoopback()
 
-		// Handle authentication for remote connections
+		// Handle authentication and decryption for remote connections
 		if !isLocal {
-			client, authenticated := session.Get("client")
-			if !authenticated {
-				// First message must be authentication
-				err := handleWSAuthentication(session, msg, db)
-				if err != nil {
-					log.Warn().Err(err).
-						Str("remote_addr", session.Request.RemoteAddr).
-						Str("user_agent", session.Request.Header.Get("User-Agent")).
-						Msg("SECURITY: WebSocket authentication failed")
-					_ = session.Close()
-				}
-				return
-			}
-
-			// Check session timeout
-			if isSessionExpired(session) {
-				log.Warn().
-					Str("remote_addr", session.Request.RemoteAddr).
-					Msg("SECURITY: WebSocket session expired - closing connection")
-				_ = session.Close()
-				return
-			}
-
-			// Update last activity time
-			session.Set("auth_time", time.Now())
-
-			// Decrypt message for authenticated remote connection
-			clientObj, ok := client.(*database.Client)
-			if !ok {
-				log.Error().Msg("invalid client type in session")
-				err := sendWSError(session, uuid.Nil, JSONRPCErrorInternalError)
-				if err != nil {
-					log.Error().Err(err).Msg("failed to send WebSocket error")
-				}
-				return
-			}
-			decryptedMsg, err := handleWSDecryption(session, msg, clientObj, db)
+			decryptedMsg, err := handleWSRemoteAuth(session, msg, db)
 			if err != nil {
-				log.Error().Err(err).Msg("WebSocket decryption failed")
 				err := sendWSError(session, uuid.Nil, JSONRPCErrorInvalidRequest)
 				if err != nil {
-					log.Error().Err(err).Msg("error sending decryption error response")
+					log.Error().Err(err).Msg("error sending auth error response")
 				}
 				return
+			}
+			if decryptedMsg == nil {
+				return // Authentication in progress
 			}
 			msg = decryptedMsg
 		}
 
+		// Process the request
 		env := requests.RequestEnv{
 			Platform:   platform,
 			Config:     cfg,
@@ -668,24 +703,7 @@ func handleWSMessage(
 				log.Error().Err(err).Msg("error sending error response")
 			}
 		} else {
-			// Encrypt response for remote authenticated connections
-			if !isLocal {
-				if client, authenticated := session.Get("client"); authenticated {
-					clientObj, ok := client.(*database.Client)
-					if !ok {
-						log.Error().Msg("invalid client type in session")
-						return
-					}
-					err := sendWSResponseEncrypted(session, id, resp, clientObj)
-					if err != nil {
-						log.Error().Err(err).Msg("error sending encrypted response")
-					}
-					return
-				}
-			}
-
-			// Send unencrypted response for localhost
-			err := sendWSResponse(session, id, resp)
+			err := sendWSResponseByType(session, isLocal, id, resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
@@ -786,49 +804,22 @@ func handleWSDecryption(_ *melody.Session, msg []byte, client *database.Client, 
 		return nil, fmt.Errorf("failed to re-fetch client under lock: %w", err)
 	}
 
+	// Create replay protector from fresh client state
+	replayProtector := apimiddleware.NewReplayProtector(freshClient)
+
 	// Validate sequence and nonce with fresh client state
-	if !apimiddleware.ValidateSequenceAndNonce(freshClient, payload.Seq, payload.Nonce) {
+	if !replayProtector.ValidateSequenceAndNonce(payload.Seq, payload.Nonce) {
 		return nil, errors.New("invalid sequence or replay detected")
 	}
 
-	// Update client state with sequence and nonce
-	// Update nonce cache (keep last NonceCacheSize nonces)
-	freshClient.NonceCache = append(freshClient.NonceCache, payload.Nonce)
-	if len(freshClient.NonceCache) > 100 { // NonceCacheSize
-		freshClient.NonceCache = freshClient.NonceCache[1:] // Remove oldest
-	}
+	// Update replay protector state
+	replayProtector.UpdateSequenceAndNonce(payload.Seq, payload.Nonce)
 
-	// Update sequence window
-	if payload.Seq > freshClient.CurrentSeq {
-		// New highest sequence - shift window
-		shift := payload.Seq - freshClient.CurrentSeq
-		if shift >= 64 { // SequenceWindow
-			// Clear entire window
-			freshClient.SeqWindow = make([]byte, 8)
-		} else {
-			// Shift window right
-			for range shift {
-				for i := len(freshClient.SeqWindow) - 1; i > 0; i-- {
-					freshClient.SeqWindow[i] = (freshClient.SeqWindow[i] << 1) | (freshClient.SeqWindow[i-1] >> 7)
-				}
-				freshClient.SeqWindow[0] <<= 1
-			}
-		}
-		freshClient.CurrentSeq = payload.Seq
-
-		// Mark current sequence as processed (position 0 in window)
-		freshClient.SeqWindow[0] |= 1
-	} else {
-		// Mark this sequence as processed in the window
-		diff := freshClient.CurrentSeq - payload.Seq
-		windowPos := diff % 64 // SequenceWindow
-		bytePos := windowPos / 8
-		bitPos := windowPos % 8
-
-		if bytePos < uint64(len(freshClient.SeqWindow)) {
-			freshClient.SeqWindow[bytePos] |= (1 << bitPos)
-		}
-	}
+	// Get updated state for database storage
+	currentSeq, seqWindow, nonceCache := replayProtector.GetStateForDatabase()
+	freshClient.CurrentSeq = currentSeq
+	freshClient.SeqWindow = seqWindow
+	freshClient.NonceCache = nonceCache
 
 	if updateErr := db.UserDB.UpdateClientSequence(
 		freshClient.ClientID, freshClient.CurrentSeq, freshClient.SeqWindow, freshClient.NonceCache,
@@ -952,7 +943,7 @@ func handlePostRequest(
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		_, err = w.Write(respBody)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to write error response")

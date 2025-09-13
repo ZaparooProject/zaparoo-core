@@ -31,7 +31,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"slices"
 	"sync"
 	"time"
 
@@ -40,8 +39,6 @@ import (
 )
 
 const (
-	SequenceWindow       = 64               // Size of sliding window for sequence numbers
-	NonceCacheSize       = 100              // Maximum number of cached nonces
 	MutexCleanupInterval = 10 * time.Minute // Cleanup unused mutexes every 10 minutes
 	MutexMaxIdle         = 30 * time.Minute // Remove mutexes unused for 30 minutes
 )
@@ -139,8 +136,21 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Decrypt payload with initial client data
-			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, initialClient.SharedSecret)
+			// Acquire client lock BEFORE any decryption or validation
+			// to prevent race conditions between concurrent requests
+			unlockClient := LockClient(initialClient.ClientID)
+			defer unlockClient()
+
+			// Re-fetch client state under lock to get latest sequence/nonce state
+			client, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to re-fetch client under lock")
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			// Decrypt payload with locked client data
+			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, client.SharedSecret)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to decrypt payload")
 				http.Error(w, "Decryption failed", http.StatusBadRequest)
@@ -155,21 +165,11 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// CRITICAL: Acquire client lock BEFORE any sequence/nonce validation
-			// to prevent race conditions between concurrent requests
-			unlockClient := LockClient(initialClient.ClientID)
-			defer unlockClient()
-
-			// Re-fetch client state under lock to get latest sequence/nonce state
-			client, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
-			if err != nil {
-				log.Error().Err(err).Msg("failed to re-fetch client under lock")
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
+			// Create replay protector from client state
+			replayProtector := NewReplayProtector(client)
 
 			// Validate sequence number and nonce with locked client state
-			if !ValidateSequenceAndNonce(client, payload.Seq, payload.Nonce) {
+			if !replayProtector.ValidateSequenceAndNonce(payload.Seq, payload.Nonce) {
 				log.Warn().
 					Str("client_id", client.ClientID).
 					Uint64("seq", payload.Seq).
@@ -181,8 +181,14 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Update client state (sequence and nonce cache)
-			updateClientSequenceAndNonce(client, payload.Seq, payload.Nonce)
+			// Update replay protector state
+			replayProtector.UpdateSequenceAndNonce(payload.Seq, payload.Nonce)
+
+			// Get updated state for database storage
+			currentSeq, seqWindow, nonceCache := replayProtector.GetStateForDatabase()
+			client.CurrentSeq = currentSeq
+			client.SeqWindow = seqWindow
+			client.NonceCache = nonceCache
 
 			// Save to database (still under lock)
 			if updateErr := db.UserDB.UpdateClientSequence(
@@ -290,72 +296,6 @@ func EncryptPayload(data, key []byte) (encrypted, iv string, err error) {
 		base64.StdEncoding.EncodeToString(ivBytes), nil
 }
 
-func ValidateSequenceAndNonce(client *database.Client, seq uint64, nonce string) bool {
-	// Check if nonce was recently used (replay protection)
-	if slices.Contains(client.NonceCache, nonce) {
-		return false
-	}
-
-	// Validate sequence number with sliding window
-	if seq <= client.CurrentSeq {
-		// Check if sequence is within acceptable window
-		diff := client.CurrentSeq - seq
-		if diff >= SequenceWindow {
-			return false // Too old
-		}
-
-		// Check if this sequence was already processed (using seq_window bitmap)
-		windowPos := diff % SequenceWindow
-		bytePos := windowPos / 8
-		bitPos := windowPos % 8
-
-		if bytePos < uint64(len(client.SeqWindow)) {
-			if (client.SeqWindow[bytePos] & (1 << bitPos)) != 0 {
-				return false // Already processed
-			}
-		}
-	}
-
-	return true
-}
-
-func updateClientSequenceAndNonce(client *database.Client, seq uint64, nonce string) {
-	// Update nonce cache (keep last NonceCacheSize nonces)
-	client.NonceCache = append(client.NonceCache, nonce)
-	if len(client.NonceCache) > NonceCacheSize {
-		client.NonceCache = client.NonceCache[1:] // Remove oldest
-	}
-
-	// Update sequence window
-	if seq > client.CurrentSeq {
-		// New highest sequence - shift window
-		shift := seq - client.CurrentSeq
-		if shift >= SequenceWindow {
-			// Clear entire window
-			client.SeqWindow = make([]byte, 8)
-		} else {
-			// Shift window right
-			for range shift {
-				shiftWindowRight(client.SeqWindow)
-			}
-		}
-		client.CurrentSeq = seq
-
-		// Mark current sequence as processed (position 0 in window)
-		client.SeqWindow[0] |= 1
-	} else {
-		// Mark this sequence as processed in the window
-		diff := client.CurrentSeq - seq
-		windowPos := diff % SequenceWindow
-		bytePos := windowPos / 8
-		bitPos := windowPos % 8
-
-		if bytePos < uint64(len(client.SeqWindow)) {
-			client.SeqWindow[bytePos] |= (1 << bitPos)
-		}
-	}
-}
-
 // getClientMutex retrieves or creates a mutex for the given client ID
 func (cm *ClientMutexManager) getClientMutex(clientID string) *ClientMutex {
 	// Try to load existing mutex
@@ -445,15 +385,6 @@ func LockClient(clientID string) func() {
 // StartGlobalMutexCleanup starts the global mutex cleanup routine
 func StartGlobalMutexCleanup(ctx context.Context) {
 	globalClientMutexManager.StartCleanupRoutine(ctx)
-}
-
-func shiftWindowRight(window []byte) {
-	carry := byte(0)
-	for i := len(window) - 1; i >= 0; i-- {
-		newCarry := (window[i] & 1) << 7
-		window[i] = (window[i] >> 1) | carry
-		carry = newCarry
-	}
 }
 
 func IsAuthenticatedConnection(r *http.Request) bool {

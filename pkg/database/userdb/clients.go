@@ -22,7 +22,6 @@ package userdb
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -88,39 +87,43 @@ func (db *UserDB) GetClientByAuthToken(authToken string) (*database.Client, erro
 		return nil, ErrNullSQL
 	}
 
-	return db.getClientByAuthTokenConstantTime(authToken)
-}
+	authTokenHash := hashAuthToken(authToken)
 
-func (db *UserDB) getClientByAuthTokenConstantTime(authToken string) (*database.Client, error) {
-	targetHash := hashAuthToken(authToken)
-	targetHashBytes := []byte(targetHash)
+	query := `
+		SELECT client_id, client_name, auth_token_hash, shared_secret, current_seq, 
+			   seq_window, nonce_cache, created_at, last_seen
+		FROM clients 
+		WHERE auth_token_hash = ?
+	`
 
-	// Get all clients to prevent timing attacks through database query optimization
-	clients, err := db.GetAllClients()
+	var client database.Client
+	var nonceCacheJSON string
+	var createdAt, lastSeen int64
+
+	err := db.sql.QueryRowContext(context.Background(), query, authTokenHash).Scan(
+		&client.ClientID,
+		&client.ClientName,
+		&client.AuthTokenHash,
+		&client.SharedSecret,
+		&client.CurrentSeq,
+		&client.SeqWindow,
+		&nonceCacheJSON,
+		&createdAt,
+		&lastSeen,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get clients: %w", err)
+		// Use a generic error to avoid leaking information about whether the token exists
+		return nil, errors.New("invalid credentials")
 	}
 
-	var foundClient *database.Client
-	// Use constant-time comparison for all clients
-	for i := range clients {
-		client := &clients[i]
-		clientHashBytes := []byte(client.AuthTokenHash)
+	client.CreatedAt = time.Unix(createdAt, 0)
+	client.LastSeen = time.Unix(lastSeen, 0)
 
-		// Ensure both hashes are same length to prevent timing attacks
-		if len(targetHashBytes) == len(clientHashBytes) {
-			if subtle.ConstantTimeCompare(targetHashBytes, clientHashBytes) == 1 {
-				foundClient = client
-				// Don't break - continue checking all clients for constant time
-			}
-		}
+	if unmarshalErr := json.Unmarshal([]byte(nonceCacheJSON), &client.NonceCache); unmarshalErr != nil {
+		client.NonceCache = make([]string, 0) // Fallback to empty cache
 	}
 
-	if foundClient == nil {
-		return nil, errors.New("client not found")
-	}
-
-	return foundClient, nil
+	return &client, nil
 }
 
 func (db *UserDB) GetClientByID(clientID string) (*database.Client, error) {

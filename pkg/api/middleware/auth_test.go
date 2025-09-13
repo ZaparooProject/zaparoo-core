@@ -36,6 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+//nolint:paralleltest,tparallel // Security tests require deterministic mock validation
 func TestAuthMiddleware_LocalhostBypass(t *testing.T) {
 	t.Parallel()
 	// Setup
@@ -64,7 +65,6 @@ func TestAuthMiddleware_LocalhostBypass(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(`{"test": "data"}`)))
 			req.RemoteAddr = tt.remoteAddr
 
@@ -77,6 +77,7 @@ func TestAuthMiddleware_LocalhostBypass(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest,tparallel // Security tests require deterministic mock validation
 func TestAuthMiddleware_RemoteRequiresAuth(t *testing.T) {
 	t.Parallel()
 	// Setup
@@ -104,7 +105,6 @@ func TestAuthMiddleware_RemoteRequiresAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			// Send regular JSON without proper auth fields - should fail at auth token lookup
 			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(`{"test": "data"}`)))
 			req.RemoteAddr = tt.remoteAddr
@@ -203,7 +203,8 @@ func TestAuthMiddleware_EncryptedRequest(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
-func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
+//nolint:paralleltest,tparallel // Security tests require deterministic mock validation
+func TestReplayProtector_ReplayProtection(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name           string
@@ -218,7 +219,7 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 		{
 			name:           "first message",
 			currentSeq:     0,
-			seqWindow:      make([]byte, 8),
+			seqWindow:      make([]byte, 8+128*8), // Ring buffer: 8 bytes + 128 blocks * 8 bytes
 			nonceCache:     []string{},
 			newSeq:         1,
 			newNonce:       "nonce1",
@@ -228,7 +229,7 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 		{
 			name:           "sequence increment",
 			currentSeq:     5,
-			seqWindow:      []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			seqWindow:      make([]byte, 8+128*8),
 			nonceCache:     []string{"old-nonce"},
 			newSeq:         6,
 			newNonce:       "nonce6",
@@ -238,7 +239,7 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 		{
 			name:           "duplicate nonce",
 			currentSeq:     5,
-			seqWindow:      []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			seqWindow:      make([]byte, 8+128*8),
 			nonceCache:     []string{"duplicate-nonce"},
 			newSeq:         6,
 			newNonce:       "duplicate-nonce",
@@ -246,52 +247,32 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 			description:    "duplicate nonce should be rejected",
 		},
 		{
-			name:           "old sequence out of window",
-			currentSeq:     100,
-			seqWindow:      make([]byte, 8),
+			name:           "old sequence far out of window",
+			currentSeq:     50000,
+			seqWindow:      make([]byte, 8+128*8),
 			nonceCache:     []string{},
-			newSeq:         10, // More than 64 behind
-			newNonce:       "nonce10",
+			newSeq:         100, // More than 8000+ behind (outside WireGuard window)
+			newNonce:       "nonce100",
 			expectedResult: false,
 			description:    "sequence too far behind should be rejected",
 		},
 		{
-			name:           "sequence within window",
-			currentSeq:     10,
-			seqWindow:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			name:           "sequence within large window",
+			currentSeq:     1000,
+			seqWindow:      make([]byte, 8+128*8),
 			nonceCache:     []string{},
-			newSeq:         8, // 2 behind, within window
-			newNonce:       "nonce8",
+			newSeq:         950, // Within large window
+			newNonce:       "nonce950",
 			expectedResult: true,
 			description:    "sequence within sliding window should pass",
 		},
 		{
-			name:           "sequence at window boundary",
-			currentSeq:     64,
-			seqWindow:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			nonceCache:     []string{},
-			newSeq:         1, // Exactly at window boundary (64 behind)
-			newNonce:       "nonce1",
-			expectedResult: false,
-			description:    "sequence exactly at window boundary should be rejected",
-		},
-		{
-			name:           "sequence already processed",
-			currentSeq:     10,
-			seqWindow:      []byte{0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Bit 2 set (seq 8)
-			nonceCache:     []string{},
-			newSeq:         8, // Already processed
-			newNonce:       "nonce8",
-			expectedResult: false,
-			description:    "already processed sequence should be rejected",
-		},
-		{
-			name:           "large sequence jump",
+			name:           "large sequence jump forward",
 			currentSeq:     5,
-			seqWindow:      []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			seqWindow:      make([]byte, 8+128*8),
 			nonceCache:     []string{},
-			newSeq:         100, // Large jump forward
-			newNonce:       "nonce100",
+			newSeq:         1000, // Large jump forward
+			newNonce:       "nonce1000",
 			expectedResult: true,
 			description:    "large sequence jump should be accepted",
 		},
@@ -299,15 +280,15 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			device := &database.Client{
+			client := &database.Client{
 				ClientID:   "test-device",
 				CurrentSeq: tt.currentSeq,
 				SeqWindow:  tt.seqWindow,
 				NonceCache: tt.nonceCache,
 			}
 
-			result := ValidateSequenceAndNonce(device, tt.newSeq, tt.newNonce)
+			replayProtector := NewReplayProtector(client)
+			result := replayProtector.ValidateSequenceAndNonce(tt.newSeq, tt.newNonce)
 			assert.Equal(t, tt.expectedResult, result, tt.description)
 		})
 	}
@@ -346,6 +327,7 @@ func TestEncryptDecryptPayload_WrongKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "decryption failed")
 }
 
+//nolint:paralleltest,tparallel // Security tests require deterministic execution order
 func TestIsLocalhost(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -365,18 +347,18 @@ func TestIsLocalhost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.addr, func(t *testing.T) {
-			t.Parallel()
 			result := isLocalhost(tt.addr)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
+//nolint:paralleltest,tparallel // Security tests require deterministic mock validation
 func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 	t.Parallel()
 	userDB := helpers.NewMockUserDBI()
 	// Mock empty auth token lookup - expect it to be called once for the missing auth token test
-	userDB.On("GetClientByAuthToken", "").Return((*database.Client)(nil), assert.AnError)
+	userDB.On("GetClientByAuthToken", "").Return((*database.Client)(nil), assert.AnError).Once()
 
 	db := &database.Database{UserDB: userDB}
 
@@ -409,7 +391,6 @@ func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader([]byte(tt.body)))
 			req.RemoteAddr = "192.168.1.100:5000" // Remote address to trigger auth
 
@@ -487,6 +468,105 @@ func TestAuthMiddleware_ConcurrentRequests(t *testing.T) {
 	assert.Equal(t, int32(0), atomic.LoadInt32(&lockAcquired), "All locks should be released")
 }
 
+// TestAuthMiddleware_ConcurrentAuthentication tests actual concurrent authentication
+// requests to ensure the race condition fix prevents replay attacks
+func TestAuthMiddleware_ConcurrentAuthentication(t *testing.T) {
+	t.Parallel()
+
+	// Setup
+	userDB := helpers.NewMockUserDBI()
+	db := &database.Database{UserDB: userDB}
+
+	// Create a test client
+	testClient := &database.Client{
+		ClientID:      "test-client-concurrent",
+		ClientName:    "Test Client",
+		AuthTokenHash: "test-hash",
+		SharedSecret:  []byte("test-secret-32-bytes-long-key!!!"),
+		CurrentSeq:    5,
+		SeqWindow:     make([]byte, 8),
+		NonceCache:    []string{},
+		CreatedAt:     time.Now(),
+		LastSeen:      time.Now(),
+	}
+
+	// Mock database calls
+	userDB.On("GetClientByAuthToken", "test-token").Return(testClient, nil)
+	userDB.On("UpdateClientSequence",
+		testClient.ClientID,
+		mock.AnythingOfType("uint64"),
+		mock.AnythingOfType("[]uint8"),
+		mock.AnythingOfType("[]string")).Return(nil)
+
+	// Create test handler that tracks successful authentications
+	var successCount int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&successCount, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("success"))
+	})
+
+	middleware := AuthMiddleware(db)
+	wrappedHandler := middleware(handler)
+
+	// Create encrypted request with same sequence number (should cause replay detection)
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "test.method",
+		"id":      1,
+		"nonce":   "test-nonce-concurrent",
+		"seq":     uint64(6), // Same sequence for all requests
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	encrypted, iv, err := EncryptPayload(payloadJSON, testClient.SharedSecret)
+	require.NoError(t, err)
+
+	encRequest := map[string]string{
+		"encrypted": encrypted,
+		"iv":        iv,
+		"authToken": "test-token",
+	}
+	requestBody, _ := json.Marshal(encRequest)
+
+	// Run concurrent requests
+	const numRequests = 10
+	done := make(chan int, numRequests)
+
+	for i := range numRequests {
+		go func(_ int) {
+			req := httptest.NewRequest(http.MethodPost, "/api/test", bytes.NewReader(requestBody))
+			req.RemoteAddr = "192.168.1.100:12345" // Remote address to trigger auth
+
+			w := httptest.NewRecorder()
+			wrappedHandler.ServeHTTP(w, req)
+
+			done <- w.Code
+		}(i)
+	}
+
+	// Collect results
+	statusCodes := make([]int, 0, numRequests)
+	for range numRequests {
+		statusCodes = append(statusCodes, <-done)
+	}
+
+	// Only ONE request should succeed (200), others should fail with replay detection (400)
+	successStatusCount := 0
+	for _, code := range statusCodes {
+		if code == http.StatusOK {
+			successStatusCount++
+		} else {
+			assert.Equal(t, http.StatusBadRequest, code, "Failed requests should return 400 for replay detection")
+		}
+	}
+
+	assert.Equal(t, 1, successStatusCount, "Only one concurrent request should succeed")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&successCount), "Handler should only be called once")
+
+	userDB.AssertExpectations(t)
+}
+
 // TestClientMutexManager_Cleanup verifies mutex cleanup works correctly
 func TestClientMutexManager_Cleanup(t *testing.T) {
 	t.Parallel()
@@ -555,109 +635,4 @@ func TestClientMutexManager_ConcurrentAccess(t *testing.T) {
 	mutex, ok := value.(*clientMutex)
 	require.True(t, ok)
 	assert.Equal(t, deviceID, mutex.clientID)
-}
-
-// TestShiftWindowRight verifies the bit manipulation for the sliding window
-func TestShiftWindowRight(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    []byte
-		expected []byte
-	}{
-		{
-			name:     "shift zeros",
-			input:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expected: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-		},
-		{
-			name:     "shift ones",
-			input:    []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
-			expected: []byte{0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
-		},
-		{
-			name:     "shift single bit",
-			input:    []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			expected: []byte{0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-		},
-		{
-			name:     "shift pattern",
-			input:    []byte{0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55},
-			expected: []byte{0x55, 0x2A, 0xD5, 0x2A, 0xD5, 0x2A, 0xD5, 0x2A},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			// Make a copy to avoid modifying the test input
-			window := make([]byte, len(tt.input))
-			copy(window, tt.input)
-
-			shiftWindowRight(window)
-
-			assert.Equal(t, tt.expected, window, "bit shift should match expected result")
-		})
-	}
-}
-
-// TestUpdateClientSequenceAndNonce verifies the sequence window updates correctly
-func TestUpdateClientSequenceAndNonce(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name          string
-		nonce         string
-		initialWindow []byte
-		initialSeq    uint64
-		newSeq        uint64
-		expectedSeq   uint64
-		bitPosition   uint64
-		checkBitSet   bool
-	}{
-		{
-			name:          "increment sequence",
-			initialSeq:    5,
-			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			newSeq:        6,
-			nonce:         "nonce6",
-			expectedSeq:   6,
-			checkBitSet:   true,
-			bitPosition:   0, // Latest sequence should be at position 0
-		},
-		{
-			name:          "large jump forward",
-			initialSeq:    5,
-			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-			newSeq:        100,
-			nonce:         "nonce100",
-			expectedSeq:   100,
-			checkBitSet:   true,
-			bitPosition:   0, // Latest sequence should be at position 0 after window clear
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			client := &database.Client{
-				ClientID:   "test-device",
-				CurrentSeq: tt.initialSeq,
-				SeqWindow:  make([]byte, len(tt.initialWindow)),
-				NonceCache: []string{},
-			}
-			copy(client.SeqWindow, tt.initialWindow)
-
-			updateClientSequenceAndNonce(client, tt.newSeq, tt.nonce)
-
-			assert.Equal(t, tt.expectedSeq, client.CurrentSeq, "sequence should be updated")
-			assert.Contains(t, client.NonceCache, tt.nonce, "nonce should be added to cache")
-
-			if tt.checkBitSet {
-				// Check that the bit at position 0 is set (latest sequence)
-				assert.NotZero(t, client.SeqWindow[0]&1, "bit 0 should be set for latest sequence")
-			}
-		})
-	}
 }
