@@ -57,6 +57,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// Sentinel errors for mock functions
+var (
+	ErrMockNotConfigured = errors.New("mock not configured for this call")
+)
+
 // MockUserDBI is a mock implementation of the UserDBI interface using testify/mock
 type MockUserDBI struct {
 	mock.Mock
@@ -237,6 +242,81 @@ func (m *MockUserDBI) UpdateZapLinkCache(url, zapscript string) error {
 func (m *MockUserDBI) GetZapLinkCache(url string) (string, error) {
 	args := m.Called(url)
 	return args.String(0), args.Error(1)
+}
+
+// Device authentication methods
+func (m *MockUserDBI) CreateDevice(deviceName, authToken string, sharedSecret []byte) (*database.Device, error) {
+	args := m.Called(deviceName, authToken, sharedSecret)
+	if device, ok := args.Get(0).(*database.Device); ok {
+		if err := args.Error(1); err != nil {
+			return device, fmt.Errorf("mock UserDBI create device failed: %w", err)
+		}
+		return device, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI create device failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) GetDeviceByAuthToken(authToken string) (*database.Device, error) {
+	args := m.Called(authToken)
+	if device, ok := args.Get(0).(*database.Device); ok {
+		if err := args.Error(1); err != nil {
+			return device, fmt.Errorf("mock UserDBI get device by auth token failed: %w", err)
+		}
+		return device, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get device by auth token failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) GetDeviceByID(deviceID string) (*database.Device, error) {
+	args := m.Called(deviceID)
+	if device, ok := args.Get(0).(*database.Device); ok {
+		if err := args.Error(1); err != nil {
+			return device, fmt.Errorf("mock UserDBI get device by ID failed: %w", err)
+		}
+		return device, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get device by ID failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) UpdateDeviceSequence(
+	deviceID string, newSeq uint64, seqWindow []byte, nonceCache []string,
+) error {
+	args := m.Called(deviceID, newSeq, seqWindow, nonceCache)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update device sequence failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetAllDevices() ([]database.Device, error) {
+	args := m.Called()
+	if devices, ok := args.Get(0).([]database.Device); ok {
+		if err := args.Error(1); err != nil {
+			return devices, fmt.Errorf("mock UserDBI get all devices failed: %w", err)
+		}
+		return devices, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get all devices failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) DeleteDevice(deviceID string) error {
+	args := m.Called(deviceID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete device failed: %w", err)
+	}
+	return nil
 }
 
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock

@@ -69,6 +69,18 @@ type System struct {
 	DBID     int64
 }
 
+type Device struct {
+	CreatedAt     time.Time `json:"createdAt"`
+	LastSeen      time.Time `json:"lastSeen"`
+	DeviceID      string    `json:"deviceId"`
+	DeviceName    string    `json:"deviceName"`
+	AuthTokenHash string    `json:"-"`
+	SharedSecret  []byte    `json:"-"`
+	SeqWindow     []byte    `json:"-"`
+	NonceCache    []string  `json:"-"`
+	CurrentSeq    uint64    `json:"currentSeq"`
+}
+
 type MediaTitle struct {
 	Slug       string
 	Name       string
@@ -154,6 +166,12 @@ type UserDBI interface {
 	GetZapLinkHost(host string) (bool, bool, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
+	CreateDevice(deviceName, authToken string, sharedSecret []byte) (*Device, error)
+	GetDeviceByAuthToken(authToken string) (*Device, error)
+	GetDeviceByID(deviceID string) (*Device, error)
+	UpdateDeviceSequence(deviceID string, newSeq uint64, seqWindow []byte, nonceCache []string) error
+	GetAllDevices() ([]Device, error)
+	DeleteDevice(deviceID string) error
 }
 
 type MediaDBI interface {
