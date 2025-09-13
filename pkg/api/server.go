@@ -22,6 +22,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,7 +44,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -52,8 +52,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
+	"github.com/gorilla/csrf"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
+	"github.com/unrolled/secure"
 )
 
 var allowedOrigins = []string{
@@ -607,11 +609,26 @@ func handleWSMessage(
 				// First message must be authentication
 				err := handleWSAuthentication(session, msg, db)
 				if err != nil {
-					log.Error().Err(err).Msg("WebSocket authentication failed")
+					log.Warn().Err(err).
+						Str("remote_addr", session.Request.RemoteAddr).
+						Str("user_agent", session.Request.Header.Get("User-Agent")).
+						Msg("SECURITY: WebSocket authentication failed")
 					_ = session.Close()
 				}
 				return
 			}
+
+			// Check session timeout
+			if isSessionExpired(session) {
+				log.Warn().
+					Str("remote_addr", session.Request.RemoteAddr).
+					Msg("SECURITY: WebSocket session expired - closing connection")
+				_ = session.Close()
+				return
+			}
+
+			// Update last activity time
+			session.Set("auth_time", time.Now())
 
 			// Decrypt message for authenticated remote connection
 			clientObj, ok := client.(*database.Client)
@@ -680,6 +697,26 @@ type WSAuthMessage struct {
 	AuthToken string `json:"authToken"`
 }
 
+type CSRFTokenResponse struct {
+	CSRFToken string `json:"csrfToken"`
+}
+
+const sessionTimeout = 30 * time.Minute
+
+func isSessionExpired(session *melody.Session) bool {
+	authTime, exists := session.Get("auth_time")
+	if !exists {
+		return true // No auth time means expired
+	}
+	
+	timestamp, ok := authTime.(time.Time)
+	if !ok {
+		return true // Invalid timestamp means expired
+	}
+	
+	return time.Since(timestamp) > sessionTimeout
+}
+
 func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Database) error {
 	var authMsg WSAuthMessage
 	if err := json.Unmarshal(msg, &authMsg); err != nil {
@@ -696,8 +733,9 @@ func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Da
 		return fmt.Errorf("invalid auth token: %w", err)
 	}
 
-	// Store client in session
+	// Store client and auth timestamp in session
 	session.Set("client", client)
+	session.Set("auth_time", time.Now())
 
 	// Send authentication success response
 	authResponse := map[string]any{
@@ -711,7 +749,10 @@ func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Da
 		return fmt.Errorf("failed to send auth response: %w", err)
 	}
 
-	log.Debug().Str("client_id", client.ClientID).Msg("WebSocket authenticated")
+	log.Info().
+		Str("client_id", client.ClientID).
+		Str("remote_addr", session.Request.RemoteAddr).
+		Msg("SECURITY: WebSocket authenticated successfully")
 	return nil
 }
 
@@ -750,12 +791,48 @@ func handleWSDecryption(_ *melody.Session, msg []byte, client *database.Client, 
 		return nil, errors.New("invalid sequence or replay detected")
 	}
 
-	// Update client state under lock
-	userDB, ok := db.UserDB.(*userdb.UserDB)
-	if !ok {
-		return nil, errors.New("failed to cast UserDB to concrete type")
+	// Update client state with sequence and nonce
+	// Update nonce cache (keep last NonceCacheSize nonces)
+	freshClient.NonceCache = append(freshClient.NonceCache, payload.Nonce)
+	if len(freshClient.NonceCache) > 100 { // NonceCacheSize
+		freshClient.NonceCache = freshClient.NonceCache[1:] // Remove oldest
 	}
-	if updateErr := apimiddleware.UpdateClientState(userDB, freshClient, payload.Seq, payload.Nonce); updateErr != nil {
+
+	// Update sequence window
+	if payload.Seq > freshClient.CurrentSeq {
+		// New highest sequence - shift window
+		shift := payload.Seq - freshClient.CurrentSeq
+		if shift >= 64 { // SequenceWindow
+			// Clear entire window
+			freshClient.SeqWindow = make([]byte, 8)
+		} else {
+			// Shift window right
+			for range shift {
+				for i := len(freshClient.SeqWindow) - 1; i > 0; i-- {
+					freshClient.SeqWindow[i] = (freshClient.SeqWindow[i] << 1) | (freshClient.SeqWindow[i-1] >> 7)
+				}
+				freshClient.SeqWindow[0] <<= 1
+			}
+		}
+		freshClient.CurrentSeq = payload.Seq
+
+		// Mark current sequence as processed (position 0 in window)
+		freshClient.SeqWindow[0] |= 1
+	} else {
+		// Mark this sequence as processed in the window
+		diff := freshClient.CurrentSeq - payload.Seq
+		windowPos := diff % 64 // SequenceWindow
+		bytePos := windowPos / 8
+		bitPos := windowPos % 8
+
+		if bytePos < uint64(len(freshClient.SeqWindow)) {
+			freshClient.SeqWindow[bytePos] |= (1 << bitPos)
+		}
+	}
+
+	if updateErr := db.UserDB.UpdateClientSequence(
+		freshClient.ClientID, freshClient.CurrentSeq, freshClient.SeqWindow, freshClient.NonceCache,
+	); updateErr != nil {
 		return nil, fmt.Errorf("failed to update client state: %w", updateErr)
 	}
 
@@ -918,14 +995,39 @@ func Start(
 	rateLimiter.StartCleanup(st.GetContext())
 
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
+
+	// Start global mutex cleanup routine with proper context
+	apimiddleware.StartGlobalMutexCleanup(st.GetContext())
+
+	// Start pairing session cleanup routine with proper context
+	StartPairingCleanup(st.GetContext())
+
+	// Generate random CSRF key once at startup for security
+	csrfKey := make([]byte, 32)
+	if _, err := rand.Read(csrfKey); err != nil {
+		log.Fatal().Err(err).Msg("failed to generate CSRF key")
+	}
+
+	// Security headers middleware - protect against common attacks
+	secureMiddleware := secure.New(secure.Options{
+		FrameDeny:          true, // X-Frame-Options: DENY
+		ContentTypeNosniff: true, // X-Content-Type-Options: nosniff
+		BrowserXssFilter:   true, // X-XSS-Protection: 1; mode=block
+		ContentSecurityPolicy: "default-src 'self'; connect-src 'self' ws: wss:; " +
+			"img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+		ReferrerPolicy: "strict-origin-when-cross-origin",
+	})
+	r.Use(secureMiddleware.Handler)
+
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: dynamicAllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
-		ExposedHeaders: []string{},
+		AllowedOrigins:   dynamicAllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"X-CSRF-Token"},
+		AllowCredentials: true, // Required for CSRF protection
 	}))
 
 	if strings.HasSuffix(config.AppVersion, "-dev") {
@@ -943,9 +1045,39 @@ func Start(
 	}
 	go broadcastNotifications(st, session, notifications)
 
-	// Pairing endpoints (no authentication required)
-	r.Post("/api/pair/initiate", handlePairingInitiate(db))
-	r.Post("/api/pair/complete", handlePairingComplete(db))
+	// Pairing endpoints with CSRF protection and enhanced rate limiting
+	r.Route("/api/pair", func(r chi.Router) {
+
+		// CSRF protection for pairing endpoints
+		r.Use(csrf.Protect(
+			csrfKey,
+			csrf.Secure(false), // Set to true when using HTTPS
+			csrf.HttpOnly(true),
+			csrf.SameSite(csrf.SameSiteStrictMode),
+		))
+
+		// Enhanced rate limiting for pairing (more restrictive)
+		pairingLimiter := apimiddleware.NewIPRateLimiter()
+		pairingLimiter.StartCleanup(st.GetContext())
+		r.Use(apimiddleware.HTTPRateLimitMiddleware(pairingLimiter))
+
+		r.Post("/initiate", handlePairingInitiate(db))
+		r.Post("/complete", handlePairingComplete(db))
+
+		// CSRF token endpoint for clients
+		r.Get("/csrf-token", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			token := csrf.Token(r)
+
+			response := CSRFTokenResponse{
+				CSRFToken: token,
+			}
+
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				log.Error().Err(err).Msg("Failed to write CSRF token response")
+			}
+		})
+	})
 
 	// Protected API routes with authentication middleware
 	r.Route("/api", func(r chi.Router) {

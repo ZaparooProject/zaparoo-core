@@ -138,7 +138,7 @@ func TestAuthMiddleware_EncryptedRequest(t *testing.T) {
 
 	userDB := helpers.NewMockUserDBI()
 	userDB.On("GetClientByAuthToken", "test-auth-token").Return(testDevice, nil)
-	userDB.On("UpdateDeviceSequence", "test-device-id", uint64(1),
+	userDB.On("UpdateClientSequence", "test-device-id", uint64(1),
 		mock.AnythingOfType("[]uint8"), mock.AnythingOfType("[]string")).Return(nil)
 
 	db := &database.Database{UserDB: userDB}
@@ -263,6 +263,36 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 			newNonce:       "nonce8",
 			expectedResult: true,
 			description:    "sequence within sliding window should pass",
+		},
+		{
+			name:           "sequence at window boundary",
+			currentSeq:     64,
+			seqWindow:      []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			nonceCache:     []string{},
+			newSeq:         1, // Exactly at window boundary (64 behind)
+			newNonce:       "nonce1",
+			expectedResult: false,
+			description:    "sequence exactly at window boundary should be rejected",
+		},
+		{
+			name:           "sequence already processed",
+			currentSeq:     10,
+			seqWindow:      []byte{0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Bit 2 set (seq 8)
+			nonceCache:     []string{},
+			newSeq:         8, // Already processed
+			newNonce:       "nonce8",
+			expectedResult: false,
+			description:    "already processed sequence should be rejected",
+		},
+		{
+			name:           "large sequence jump",
+			currentSeq:     5,
+			seqWindow:      []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			nonceCache:     []string{},
+			newSeq:         100, // Large jump forward
+			newNonce:       "nonce100",
+			expectedResult: true,
+			description:    "large sequence jump should be accepted",
 		},
 	}
 
@@ -393,20 +423,20 @@ func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 
 func TestGetClientFromContext(t *testing.T) {
 	t.Parallel()
-	// Test with device in context
-	device := &database.Client{ClientID: "test-device"}
-	ctx := context.WithValue(context.Background(), clientKey("device"), device)
+	// Test with client in context
+	client := &database.Client{ClientID: "test-device"}
+	ctx := context.WithValue(context.Background(), clientKey("client"), client)
 
 	result := GetClientFromContext(ctx)
-	assert.Equal(t, device, result)
+	assert.Equal(t, client, result)
 
-	// Test with no device in context
+	// Test with no client in context
 	emptyCtx := context.Background()
 	result = GetClientFromContext(emptyCtx)
 	assert.Nil(t, result)
 
 	// Test with wrong type in context
-	badCtx := context.WithValue(context.Background(), clientKey("device"), "not-a-device")
+	badCtx := context.WithValue(context.Background(), clientKey("client"), "not-a-client")
 	result = GetClientFromContext(badCtx)
 	assert.Nil(t, result)
 }
@@ -520,4 +550,109 @@ func TestClientMutexManager_ConcurrentAccess(t *testing.T) {
 
 	mutex := value.(*clientMutex)
 	assert.Equal(t, deviceID, mutex.clientID)
+}
+
+// TestShiftWindowRight verifies the bit manipulation for the sliding window
+func TestShiftWindowRight(t *testing.T) {
+	t.Parallel()
+	
+	tests := []struct {
+		name     string
+		input    []byte
+		expected []byte
+	}{
+		{
+			name:     "shift zeros",
+			input:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			expected: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		},
+		{
+			name:     "shift ones",
+			input:    []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+			expected: []byte{0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+		},
+		{
+			name:     "shift single bit",
+			input:    []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			expected: []byte{0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		},
+		{
+			name:     "shift pattern",
+			input:    []byte{0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55},
+			expected: []byte{0x55, 0x2A, 0xD5, 0x2A, 0xD5, 0x2A, 0xD5, 0x2A},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Make a copy to avoid modifying the test input
+			window := make([]byte, len(tt.input))
+			copy(window, tt.input)
+			
+			shiftWindowRight(window)
+			
+			assert.Equal(t, tt.expected, window, "bit shift should match expected result")
+		})
+	}
+}
+
+// TestUpdateClientSequenceAndNonce verifies the sequence window updates correctly
+func TestUpdateClientSequenceAndNonce(t *testing.T) {
+	t.Parallel()
+	
+	tests := []struct {
+		name         string
+		initialSeq   uint64
+		initialWindow []byte
+		newSeq       uint64
+		nonce        string
+		expectedSeq  uint64
+		checkBitSet  bool
+		bitPosition  uint64
+	}{
+		{
+			name:         "increment sequence",
+			initialSeq:   5,
+			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			newSeq:       6,
+			nonce:        "nonce6",
+			expectedSeq:  6,
+			checkBitSet:  true,
+			bitPosition:  0, // Latest sequence should be at position 0
+		},
+		{
+			name:         "large jump forward",
+			initialSeq:   5,
+			initialWindow: []byte{0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			newSeq:       100,
+			nonce:        "nonce100", 
+			expectedSeq:  100,
+			checkBitSet:  true,
+			bitPosition:  0, // Latest sequence should be at position 0 after window clear
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client := &database.Client{
+				ClientID:   "test-device",
+				CurrentSeq: tt.initialSeq,
+				SeqWindow:  make([]byte, len(tt.initialWindow)),
+				NonceCache: []string{},
+			}
+			copy(client.SeqWindow, tt.initialWindow)
+
+			updateClientSequenceAndNonce(client, tt.newSeq, tt.nonce)
+
+			assert.Equal(t, tt.expectedSeq, client.CurrentSeq, "sequence should be updated")
+			assert.Contains(t, client.NonceCache, tt.nonce, "nonce should be added to cache")
+			
+			if tt.checkBitSet {
+				// Check that the bit at position 0 is set (latest sequence)
+				assert.NotZero(t, client.SeqWindow[0]&1, "bit 0 should be set for latest sequence")
+			}
+		})
+	}
 }

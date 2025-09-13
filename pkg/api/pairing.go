@@ -20,18 +20,23 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -78,9 +83,29 @@ var pairingManager = &PairingManager{
 	sessions: make(map[string]*PairingSession),
 }
 
-func init() {
-	// Start cleanup routine
-	go pairingManager.cleanup()
+var clientNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func validateClientName(name string) error {
+	name = strings.TrimSpace(name)
+
+	if len(name) == 0 {
+		return fmt.Errorf("client name cannot be empty")
+	}
+
+	if len(name) > 100 {
+		return fmt.Errorf("client name too long (max 100 characters)")
+	}
+
+	if !clientNameRegex.MatchString(name) {
+		return fmt.Errorf("client name contains invalid characters (only letters, numbers, underscore, and dash allowed)")
+	}
+
+	return nil
+}
+
+// StartPairingCleanup starts the pairing session cleanup routine
+func StartPairingCleanup(ctx context.Context) {
+	go pairingManager.cleanup(ctx)
 }
 
 func (pm *PairingManager) createSession() (*PairingSession, error) {
@@ -141,19 +166,32 @@ func (pm *PairingManager) consumeSession(token string) (*PairingSession, bool) {
 	return session, true
 }
 
-func (pm *PairingManager) cleanup() {
+func (pm *PairingManager) cleanup(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		pm.mu.Lock()
-		now := time.Now()
-		for token, session := range pm.sessions {
-			if now.Sub(session.CreatedAt) > PairingTokenExpiry {
-				delete(pm.sessions, token)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Debug().Msg("pairing manager cleanup routine stopped")
+			return
+		case <-ticker.C:
+			pm.mu.Lock()
+			now := time.Now()
+			for token, session := range pm.sessions {
+				if now.Sub(session.CreatedAt) > PairingTokenExpiry {
+					// Zero sensitive data before deletion
+					for i := range session.Challenge {
+						session.Challenge[i] = 0
+					}
+					for i := range session.Salt {
+						session.Salt[i] = 0
+					}
+					delete(pm.sessions, token)
+				}
 			}
+			pm.mu.Unlock()
 		}
-		pm.mu.Unlock()
 	}
 }
 
@@ -205,6 +243,17 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 			return
 		}
 
+		// Validate client name
+		if err := validateClientName(req.ClientName); err != nil {
+			log.Warn().
+				Str("client_name", req.ClientName).
+				Str("remote_addr", r.RemoteAddr).
+				Err(err).
+				Msg("SECURITY: invalid client name provided")
+			http.Error(w, fmt.Sprintf("Invalid client name: %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+
 		// Get and consume pairing session
 		session, exists := pairingManager.consumeSession(req.PairingToken)
 		if !exists {
@@ -212,10 +261,36 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 			return
 		}
 
-		// Derive shared secret using HKDF (challenge + verifier)
-		combinedSecret := make([]byte, len(session.Challenge)+len(req.Verifier))
+		// First, use Argon2id for strong key derivation from verifier
+		// Using security parameters recommended by OWASP (2023)
+		verifierKey := argon2.IDKey(
+			[]byte(req.Verifier), // password
+			session.Salt,         // salt (32 bytes)
+			3,                    // time parameter (iterations)
+			64*1024,              // memory parameter (64 MB)
+			4,                    // parallelism parameter
+			32,                   // key length (32 bytes)
+		)
+		// Ensure verifierKey is zeroed after use
+		defer func() {
+			for i := range verifierKey {
+				verifierKey[i] = 0
+			}
+			runtime.KeepAlive(verifierKey) // Prevent compiler optimization
+		}()
+
+		// Then combine with challenge using HKDF for domain separation
+		combinedSecret := make([]byte, len(session.Challenge)+len(verifierKey))
 		copy(combinedSecret, session.Challenge)
-		copy(combinedSecret[len(session.Challenge):], req.Verifier)
+		copy(combinedSecret[len(session.Challenge):], verifierKey)
+		// Ensure combinedSecret is zeroed after use
+		defer func() {
+			for i := range combinedSecret {
+				combinedSecret[i] = 0
+			}
+			runtime.KeepAlive(combinedSecret) // Prevent compiler optimization
+		}()
+
 		sharedSecret := make([]byte, 32) // 256 bits for AES-256
 
 		// Construct context-specific info string for domain separation
@@ -237,6 +312,14 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 			log.Error().Err(err).Msg("failed to create client")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
+		}
+
+		// Zero sensitive session data before removing
+		for i := range session.Challenge {
+			session.Challenge[i] = 0
+		}
+		for i := range session.Salt {
+			session.Salt[i] = 0
 		}
 
 		// Remove session from manager

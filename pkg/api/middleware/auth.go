@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/rs/zerolog/log"
 )
 
@@ -118,8 +117,8 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Validate auth token and get client
-			client, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
+			// First, validate auth token and get client for initial validation
+			initialClient, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
 			if err != nil {
 				tokenStr := "empty"
 				if len(encReq.AuthToken) >= 8 {
@@ -127,13 +126,17 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				} else if encReq.AuthToken != "" {
 					tokenStr = encReq.AuthToken
 				}
-				log.Error().Err(err).Str("token", tokenStr).Msg("invalid auth token")
+				log.Warn().Err(err).
+					Str("token", tokenStr).
+					Str("remote_addr", r.RemoteAddr).
+					Str("user_agent", r.Header.Get("User-Agent")).
+					Msg("SECURITY: invalid auth token - potential attack")
 				http.Error(w, "Invalid auth token", http.StatusUnauthorized)
 				return
 			}
 
-			// Decrypt payload
-			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, client.SharedSecret)
+			// Decrypt payload with initial client data
+			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, initialClient.SharedSecret)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to decrypt payload")
 				http.Error(w, "Decryption failed", http.StatusBadRequest)
@@ -148,45 +151,43 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Acquire client lock to prevent race conditions
-			// between validation and database update
-			unlockClient := LockClient(client.ClientID)
+			// CRITICAL: Acquire client lock BEFORE any sequence/nonce validation
+			// to prevent race conditions between concurrent requests
+			unlockClient := LockClient(initialClient.ClientID)
 			defer unlockClient()
 
 			// Re-fetch client state under lock to get latest sequence/nonce state
-			freshClient, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
+			client, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to re-fetch client under lock")
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
 
-			// Validate sequence number and nonce with fresh client state
-			if !ValidateSequenceAndNonce(freshClient, payload.Seq, payload.Nonce) {
+			// Validate sequence number and nonce with locked client state
+			if !ValidateSequenceAndNonce(client, payload.Seq, payload.Nonce) {
 				log.Warn().
-					Str("client_id", freshClient.ClientID).
+					Str("client_id", client.ClientID).
 					Uint64("seq", payload.Seq).
 					Str("nonce", payload.Nonce).
-					Msg("invalid sequence or replay attack detected")
+					Str("remote_addr", r.RemoteAddr).
+					Str("user_agent", r.Header.Get("User-Agent")).
+					Msg("SECURITY: replay attack detected")
 				http.Error(w, "Invalid sequence or replay detected", http.StatusBadRequest)
 				return
 			}
 
 			// Update client state (sequence and nonce cache)
-			updatedClient := *freshClient
-			updateClientSequenceAndNonce(&updatedClient, payload.Seq, payload.Nonce)
+			updateClientSequenceAndNonce(client, payload.Seq, payload.Nonce)
 
 			// Save to database (still under lock)
 			if updateErr := db.UserDB.UpdateClientSequence(
-				updatedClient.ClientID, updatedClient.CurrentSeq, updatedClient.SeqWindow, updatedClient.NonceCache,
+				client.ClientID, client.CurrentSeq, client.SeqWindow, client.NonceCache,
 			); updateErr != nil {
 				log.Error().Err(updateErr).Msg("failed to update client state")
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
-
-			// Update the client pointer for context (use fresh client with updates)
-			client = &updatedClient
 
 			// Replace request body with decrypted JSON-RPC payload
 			originalPayload := map[string]any{
@@ -213,11 +214,12 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 			ctx := context.WithValue(r.Context(), clientKey("client"), client)
 			r = r.WithContext(ctx)
 
-			log.Debug().
+			log.Info().
 				Str("client_id", client.ClientID).
 				Str("method", payload.Method).
 				Uint64("seq", payload.Seq).
-				Msg("authenticated request processed")
+				Str("remote_addr", r.RemoteAddr).
+				Msg("SECURITY: authenticated request processed")
 
 			next.ServeHTTP(w, r)
 		})
@@ -350,51 +352,6 @@ func updateClientSequenceAndNonce(client *database.Client, seq uint64, nonce str
 	}
 }
 
-func UpdateClientState(userDB *userdb.UserDB, client *database.Client, seq uint64, nonce string) error {
-	// Update nonce cache (keep last NonceCacheSize nonces)
-	client.NonceCache = append(client.NonceCache, nonce)
-	if len(client.NonceCache) > NonceCacheSize {
-		client.NonceCache = client.NonceCache[1:] // Remove oldest
-	}
-
-	// Update sequence window
-	if seq > client.CurrentSeq {
-		// New highest sequence - shift window
-		shift := seq - client.CurrentSeq
-		if shift >= SequenceWindow {
-			// Clear entire window
-			client.SeqWindow = make([]byte, 8)
-		} else {
-			// Shift window right
-			for range shift {
-				shiftWindowRight(client.SeqWindow)
-			}
-		}
-		client.CurrentSeq = seq
-
-		// Mark current sequence as processed (position 0 in window)
-		client.SeqWindow[0] |= 1
-	} else {
-		// Mark this sequence as processed in the window
-		diff := client.CurrentSeq - seq
-		windowPos := diff % SequenceWindow
-		bytePos := windowPos / 8
-		bitPos := windowPos % 8
-
-		if bytePos < uint64(len(client.SeqWindow)) {
-			client.SeqWindow[bytePos] |= (1 << bitPos)
-		}
-	}
-
-	// Update database
-	if err := userDB.UpdateClientSequence(
-		client.ClientID, client.CurrentSeq, client.SeqWindow, client.NonceCache,
-	); err != nil {
-		return fmt.Errorf("failed to update client sequence: %w", err)
-	}
-	return nil
-}
-
 // getClientMutex retrieves or creates a mutex for the given client ID
 func (cm *ClientMutexManager) getClientMutex(clientID string) *clientMutex {
 	// Try to load existing mutex
@@ -441,14 +398,20 @@ func (cm *ClientMutexManager) cleanup() {
 	})
 }
 
-// startCleanupRoutine starts a background goroutine to periodically clean up unused mutexes
-func (cm *ClientMutexManager) startCleanupRoutine() {
+// StartCleanupRoutine starts a background goroutine to periodically clean up unused mutexes
+func (cm *ClientMutexManager) StartCleanupRoutine(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(MutexCleanupInterval)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			cm.cleanup()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Debug().Msg("client mutex cleanup routine stopped")
+				return
+			case <-ticker.C:
+				cm.cleanup()
+			}
 		}
 	}()
 }
@@ -463,9 +426,9 @@ func LockClient(clientID string) func() {
 	return globalClientMutexManager.lockClient(clientID)
 }
 
-func init() {
-	// Start cleanup routine for client mutexes
-	globalClientMutexManager.startCleanupRoutine()
+// StartGlobalMutexCleanup starts the global mutex cleanup routine
+func StartGlobalMutexCleanup(ctx context.Context) {
+	globalClientMutexManager.StartCleanupRoutine(ctx)
 }
 
 func shiftWindowRight(window []byte) {
