@@ -359,6 +359,12 @@ func (c *Instance) AllowedOrigins() []string {
 	return c.vals.Service.AllowedOrigins
 }
 
+func (c *Instance) DeviceID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.DeviceID
+}
+
 func (c *Instance) IsExecuteAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

@@ -57,6 +57,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// Sentinel errors for mock functions
+var (
+	ErrMockNotConfigured = errors.New("mock not configured for this call")
+)
+
 // MockUserDBI is a mock implementation of the UserDBI interface using testify/mock
 type MockUserDBI struct {
 	mock.Mock
@@ -237,6 +242,81 @@ func (m *MockUserDBI) UpdateZapLinkCache(url, zapscript string) error {
 func (m *MockUserDBI) GetZapLinkCache(url string) (string, error) {
 	args := m.Called(url)
 	return args.String(0), args.Error(1)
+}
+
+// Client authentication methods
+func (m *MockUserDBI) CreateClient(clientName, authToken string, sharedSecret []byte) (*database.Client, error) {
+	args := m.Called(clientName, authToken, sharedSecret)
+	if client, ok := args.Get(0).(*database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return client, fmt.Errorf("mock UserDBI create client failed: %w", err)
+		}
+		return client, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI create client failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) GetClientByAuthToken(authToken string) (*database.Client, error) {
+	args := m.Called(authToken)
+	if client, ok := args.Get(0).(*database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return client, fmt.Errorf("mock UserDBI get client by auth token failed: %w", err)
+		}
+		return client, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get client by auth token failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) GetClientByID(clientID string) (*database.Client, error) {
+	args := m.Called(clientID)
+	if client, ok := args.Get(0).(*database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return client, fmt.Errorf("mock UserDBI get client by ID failed: %w", err)
+		}
+		return client, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get client by ID failed: %w", err)
+	}
+	return nil, ErrMockNotConfigured
+}
+
+func (m *MockUserDBI) UpdateClientSequence(
+	clientID string, newSeq uint64, seqWindow []byte, nonceCache []string,
+) error {
+	args := m.Called(clientID, newSeq, seqWindow, nonceCache)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update client sequence failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetAllClients() ([]database.Client, error) {
+	args := m.Called()
+	if clients, ok := args.Get(0).([]database.Client); ok {
+		if err := args.Error(1); err != nil {
+			return clients, fmt.Errorf("mock UserDBI get all clients failed: %w", err)
+		}
+		return clients, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get all clients failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) DeleteClient(clientID string) error {
+	args := m.Called(clientID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete client failed: %w", err)
+	}
+	return nil
 }
 
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock

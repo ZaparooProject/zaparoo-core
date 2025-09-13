@@ -22,6 +22,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,8 +52,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
+	"github.com/gorilla/csrf"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
+	"github.com/unrolled/secure"
 )
 
 var allowedOrigins = []string{
@@ -427,7 +430,7 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 }
 
 // broadcastNotifications consumes and broadcasts all incoming API
-// notifications to all connected clients.
+// notifications to all connected clients with appropriate encryption.
 func broadcastNotifications(
 	st *state.State,
 	session *melody.Melody,
@@ -451,11 +454,61 @@ func broadcastNotifications(
 				continue
 			}
 
-			// TODO: this will not work with encryption
-			err = session.Broadcast(data)
-			if err != nil {
-				log.Error().Err(err).Msg("broadcasting notification")
-			}
+			// Broadcast to localhost sessions (unencrypted)
+			_ = session.BroadcastFilter(data, func(s *melody.Session) bool {
+				rawIP := strings.SplitN(s.Request.RemoteAddr, ":", 2)
+				clientIP := net.ParseIP(rawIP[0])
+				return clientIP.IsLoopback()
+			})
+
+			// Broadcast to authenticated remote sessions (encrypted)
+			_ = session.BroadcastFilter(nil, func(s *melody.Session) bool {
+				// Check if this is a remote connection
+				rawIP := strings.SplitN(s.Request.RemoteAddr, ":", 2)
+				clientIP := net.ParseIP(rawIP[0])
+				if clientIP.IsLoopback() {
+					return false // Skip localhost
+				}
+
+				// Check if session is authenticated
+				client, authenticated := s.Get("client")
+				if !authenticated {
+					return false // Skip unauthenticated
+				}
+
+				// Encrypt notification for this session
+				clientObj, ok := client.(*database.Client)
+				if !ok {
+					log.Error().Msg("invalid client type in session")
+					return false
+				}
+				encrypted, iv, err := apimiddleware.EncryptPayload(data, clientObj.SharedSecret)
+				if err != nil {
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).Msg("failed to encrypt notification")
+					return false
+				}
+
+				encResponse := apimiddleware.EncryptedRequest{
+					Encrypted: encrypted,
+					IV:        iv,
+					AuthToken: "", // Not needed for notifications
+				}
+
+				encData, err := json.Marshal(encResponse)
+				if err != nil {
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).
+						Msg("failed to marshal encrypted notification")
+					return false
+				}
+
+				// Send encrypted data to this session
+				if err := s.Write(encData); err != nil {
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).
+						Msg("failed to send encrypted notification")
+				}
+
+				return false // Don't include in broadcast since we already sent manually
+			})
 		}
 	}
 }
@@ -517,6 +570,77 @@ func processRequestObject(
 // handleWSMessage parses all incoming WS requests, identifies what type of
 // JSON-RPC object they may be and forwards them to the appropriate function
 // to handle that type of message.
+// handleWSPing handles ping messages for heartbeat operation
+func handleWSPing(session *melody.Session, msg []byte) bool {
+	if bytes.Equal(msg, []byte("ping")) {
+		err := session.Write([]byte("pong"))
+		if err != nil {
+			log.Error().Err(err).Msg("sending pong")
+		}
+		return true
+	}
+	return false
+}
+
+// handleWSAuthentication handles authentication for remote WebSocket connections
+func handleWSRemoteAuth(session *melody.Session, msg []byte, db *database.Database) ([]byte, error) {
+	client, authenticated := session.Get("client")
+	if !authenticated {
+		// First message must be authentication
+		err := handleWSAuthentication(session, msg, db)
+		if err != nil {
+			log.Warn().Err(err).
+				Str("remote_addr", session.Request.RemoteAddr).
+				Str("user_agent", session.Request.Header.Get("User-Agent")).
+				Msg("SECURITY: WebSocket authentication failed")
+			_ = session.Close()
+		}
+		return nil, err
+	}
+
+	// Check session timeout
+	if isSessionExpired(session) {
+		log.Warn().
+			Str("remote_addr", session.Request.RemoteAddr).
+			Msg("SECURITY: WebSocket session expired - closing connection")
+		_ = session.Close()
+		return nil, errors.New("session expired")
+	}
+
+	// Update last activity time
+	session.Set("auth_time", time.Now())
+
+	// Decrypt message for authenticated remote connection
+	clientObj, ok := client.(*database.Client)
+	if !ok {
+		log.Error().Msg("invalid client type in session")
+		return nil, errors.New("invalid client type")
+	}
+
+	decryptedMsg, err := handleWSDecryption(session, msg, clientObj, db)
+	if err != nil {
+		log.Error().Err(err).Msg("WebSocket decryption failed")
+		return nil, err
+	}
+
+	return decryptedMsg, nil
+}
+
+// sendWSResponseByType sends response based on connection type (local/remote)
+func sendWSResponseByType(session *melody.Session, isLocal bool, id uuid.UUID, resp any) error {
+	if !isLocal {
+		if client, authenticated := session.Get("client"); authenticated {
+			clientObj, ok := client.(*database.Client)
+			if !ok {
+				log.Error().Msg("invalid client type in session")
+				return errors.New("invalid client type")
+			}
+			return sendWSResponseEncrypted(session, id, resp, clientObj)
+		}
+	}
+	return sendWSResponse(session, id, resp)
+}
+
 func handleWSMessage(
 	methodMap *MethodMap,
 	platform platforms.Platform,
@@ -536,24 +660,40 @@ func handleWSMessage(
 			}
 		}()
 
-		// ping command for heartbeat operation
-		if bytes.Equal(msg, []byte("ping")) {
-			err := session.Write([]byte("pong"))
-			if err != nil {
-				log.Error().Err(err).Msg("sending pong")
-			}
+		// Handle ping/pong heartbeat
+		if handleWSPing(session, msg) {
 			return
 		}
 
+		// Determine if connection is local
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
+		isLocal := clientIP.IsLoopback()
+
+		// Handle authentication and decryption for remote connections
+		if !isLocal {
+			decryptedMsg, err := handleWSRemoteAuth(session, msg, db)
+			if err != nil {
+				err := sendWSError(session, uuid.Nil, JSONRPCErrorInvalidRequest)
+				if err != nil {
+					log.Error().Err(err).Msg("error sending auth error response")
+				}
+				return
+			}
+			if decryptedMsg == nil {
+				return // Authentication in progress
+			}
+			msg = decryptedMsg
+		}
+
+		// Process the request
 		env := requests.RequestEnv{
 			Platform:   platform,
 			Config:     cfg,
 			State:      st,
 			Database:   db,
 			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
+			IsLocal:    isLocal,
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -563,12 +703,183 @@ func handleWSMessage(
 				log.Error().Err(err).Msg("error sending error response")
 			}
 		} else {
-			err := sendWSResponse(session, id, resp)
+			err := sendWSResponseByType(session, isLocal, id, resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
 		}
 	}
+}
+
+type WSAuthMessage struct {
+	AuthToken string `json:"authToken"`
+}
+
+type CSRFTokenResponse struct {
+	CSRFToken string `json:"csrfToken"`
+}
+
+const sessionTimeout = 30 * time.Minute
+
+func isSessionExpired(session *melody.Session) bool {
+	authTime, exists := session.Get("auth_time")
+	if !exists {
+		return true // No auth time means expired
+	}
+
+	timestamp, ok := authTime.(time.Time)
+	if !ok {
+		return true // Invalid timestamp means expired
+	}
+
+	return time.Since(timestamp) > sessionTimeout
+}
+
+func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Database) error {
+	var authMsg WSAuthMessage
+	if err := json.Unmarshal(msg, &authMsg); err != nil {
+		return fmt.Errorf("invalid auth message format: %w", err)
+	}
+
+	if authMsg.AuthToken == "" {
+		return errors.New("missing auth token")
+	}
+
+	// Validate auth token and get client
+	client, err := db.UserDB.GetClientByAuthToken(authMsg.AuthToken)
+	if err != nil {
+		return fmt.Errorf("invalid auth token: %w", err)
+	}
+
+	// Store client and auth timestamp in session
+	session.Set("client", client)
+	session.Set("auth_time", time.Now())
+
+	// Send authentication success response
+	authResponse := map[string]any{
+		"authenticated": true,
+		"client_id":     client.ClientID,
+	}
+
+	responseData, _ := json.Marshal(authResponse)
+	err = session.Write(responseData)
+	if err != nil {
+		return fmt.Errorf("failed to send auth response: %w", err)
+	}
+
+	log.Info().
+		Str("client_id", client.ClientID).
+		Str("remote_addr", session.Request.RemoteAddr).
+		Msg("SECURITY: WebSocket authenticated successfully")
+	return nil
+}
+
+func handleWSDecryption(_ *melody.Session, msg []byte, client *database.Client, db *database.Database) ([]byte, error) {
+	// Parse encrypted message
+	var encMsg apimiddleware.EncryptedRequest
+	if err := json.Unmarshal(msg, &encMsg); err != nil {
+		return nil, fmt.Errorf("invalid encrypted message format: %w", err)
+	}
+
+	// Decrypt payload (we can reuse the middleware function by creating a temporary import)
+	decryptedPayload, err := apimiddleware.DecryptPayload(encMsg.Encrypted, encMsg.IV, client.SharedSecret)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Parse and validate sequence/nonce
+	var payload apimiddleware.DecryptedPayload
+	if unmarshalErr := json.Unmarshal(decryptedPayload, &payload); unmarshalErr != nil {
+		return nil, fmt.Errorf("invalid decrypted payload: %w", unmarshalErr)
+	}
+
+	// Acquire client lock to prevent race conditions
+	// between validation and database update
+	unlockClient := apimiddleware.LockClient(client.ClientID)
+	defer unlockClient()
+
+	// Re-fetch client state under lock to get latest sequence/nonce state
+	freshClient, err := db.UserDB.GetClientByID(client.ClientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-fetch client under lock: %w", err)
+	}
+
+	// Create replay protector from fresh client state
+	replayProtector := apimiddleware.NewReplayProtector(freshClient)
+
+	// Validate sequence and nonce with fresh client state
+	if !replayProtector.ValidateSequenceAndNonce(payload.Seq, payload.Nonce) {
+		return nil, errors.New("invalid sequence or replay detected")
+	}
+
+	// Update replay protector state
+	replayProtector.UpdateSequenceAndNonce(payload.Seq, payload.Nonce)
+
+	// Get updated state for database storage
+	currentSeq, seqWindow, nonceCache := replayProtector.GetStateForDatabase()
+	freshClient.CurrentSeq = currentSeq
+	freshClient.SeqWindow = seqWindow
+	freshClient.NonceCache = nonceCache
+
+	if updateErr := db.UserDB.UpdateClientSequence(
+		freshClient.ClientID, freshClient.CurrentSeq, freshClient.SeqWindow, freshClient.NonceCache,
+	); updateErr != nil {
+		return nil, fmt.Errorf("failed to update client state: %w", updateErr)
+	}
+
+	// Return JSON-RPC payload without sequence/nonce
+	originalPayload := map[string]any{
+		"jsonrpc": payload.JSONRPC,
+		"method":  payload.Method,
+		"id":      payload.ID,
+	}
+	if payload.Params != nil {
+		originalPayload["params"] = payload.Params
+	}
+
+	result, err := json.Marshal(originalPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	return result, nil
+}
+
+func sendWSResponseEncrypted(session *melody.Session, id uuid.UUID, result any, client *database.Client) error {
+	// Create response object
+	resp := models.ResponseObject{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("error marshalling response: %w", err)
+	}
+
+	// Encrypt the response
+	encrypted, iv, err := apimiddleware.EncryptPayload(data, client.SharedSecret)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt response: %w", err)
+	}
+
+	// Send encrypted response
+	encResponse := apimiddleware.EncryptedRequest{
+		Encrypted: encrypted,
+		IV:        iv,
+		AuthToken: "", // Not needed for responses
+	}
+
+	encData, err := json.Marshal(encResponse)
+	if err != nil {
+		return fmt.Errorf("failed to marshal encrypted response: %w", err)
+	}
+
+	if err := session.Write(encData); err != nil {
+		return fmt.Errorf("failed to send encrypted response: %w", err)
+	}
+	return nil
 }
 
 func handlePostRequest(
@@ -632,7 +943,7 @@ func handlePostRequest(
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		_, err = w.Write(respBody)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to write error response")
@@ -675,14 +986,39 @@ func Start(
 	rateLimiter.StartCleanup(st.GetContext())
 
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
+
+	// Start global mutex cleanup routine with proper context
+	apimiddleware.StartGlobalMutexCleanup(st.GetContext())
+
+	// Start pairing session cleanup routine with proper context
+	StartPairingCleanup(st.GetContext())
+
+	// Generate random CSRF key once at startup for security
+	csrfKey := make([]byte, 32)
+	if _, err := rand.Read(csrfKey); err != nil {
+		log.Fatal().Err(err).Msg("failed to generate CSRF key")
+	}
+
+	// Security headers middleware - protect against common attacks
+	secureMiddleware := secure.New(secure.Options{
+		FrameDeny:          true, // X-Frame-Options: DENY
+		ContentTypeNosniff: true, // X-Content-Type-Options: nosniff
+		BrowserXssFilter:   true, // X-XSS-Protection: 1; mode=block
+		ContentSecurityPolicy: "default-src 'self'; connect-src 'self' ws: wss:; " +
+			"img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+		ReferrerPolicy: "strict-origin-when-cross-origin",
+	})
+	r.Use(secureMiddleware.Handler)
+
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins: dynamicAllowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type"},
-		ExposedHeaders: []string{},
+		AllowedOrigins:   dynamicAllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:   []string{"X-CSRF-Token"},
+		AllowCredentials: true, // Required for CSRF protection
 	}))
 
 	if strings.HasSuffix(config.AppVersion, "-dev") {
@@ -700,29 +1036,72 @@ func Start(
 	}
 	go broadcastNotifications(st, session, notifications)
 
-	r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: latest")
-		}
-	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	// Pairing endpoints with CSRF protection and enhanced rate limiting
+	r.Route("/api/pair", func(r chi.Router) {
+		// CSRF protection for pairing endpoints
+		r.Use(csrf.Protect(
+			csrfKey,
+			csrf.Secure(false), // Set to true when using HTTPS
+			csrf.HttpOnly(true),
+			csrf.SameSite(csrf.SameSiteStrictMode),
+		))
 
-	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v0")
-		}
-	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+		// Enhanced rate limiting for pairing (more restrictive)
+		pairingLimiter := apimiddleware.NewIPRateLimiter()
+		pairingLimiter.StartCleanup(st.GetContext())
+		r.Use(apimiddleware.HTTPRateLimitMiddleware(pairingLimiter))
 
-	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v0.1")
-		}
+		r.Post("/initiate", handlePairingInitiate(db))
+		r.Post("/complete", handlePairingComplete(db))
+
+		// CSRF token endpoint for clients
+		r.Get("/csrf-token", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			token := csrf.Token(r)
+
+			response := CSRFTokenResponse{
+				CSRFToken: token,
+			}
+
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				log.Error().Err(err).Msg("Failed to write CSRF token response")
+			}
+		})
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+
+	// Protected API routes with authentication middleware
+	r.Route("/api", func(r chi.Router) {
+		r.Use(apimiddleware.AuthMiddleware(db))
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: latest")
+			}
+		})
+		r.Post("/", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	})
+
+	r.Route("/api/v0", func(r chi.Router) {
+		r.Use(apimiddleware.AuthMiddleware(db))
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: v0")
+			}
+		})
+		r.Post("/", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	})
+
+	r.Route("/api/v0.1", func(r chi.Router) {
+		r.Use(apimiddleware.AuthMiddleware(db))
+		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: v0.1")
+			}
+		})
+		r.Post("/", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	})
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,

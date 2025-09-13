@@ -40,16 +40,19 @@ import (
 )
 
 type Flags struct {
-	Write      *string
-	Read       *bool
-	Run        *string
-	Launch     *string
-	API        *string
-	Version    *bool
-	Config     *bool
-	ShowLoader *string
-	ShowPicker *string
-	Reload     *bool
+	Write           *string
+	Read            *bool
+	Run             *string
+	Launch          *string
+	API             *string
+	Version         *bool
+	Config          *bool
+	ShowLoader      *string
+	ShowPairingCode *bool
+	ListClients     *bool
+	RevokeClient    *string
+	ShowPicker      *string
+	Reload          *bool
 }
 
 // SetupFlags defines all common CLI flags between platforms.
@@ -95,6 +98,21 @@ func SetupFlags() *Flags {
 			false,
 			"reload config and mappings from disk",
 		),
+		ShowPairingCode: flag.Bool(
+			"show-pairing-code",
+			false,
+			"display QR code for client pairing",
+		),
+		ListClients: flag.Bool(
+			"list-clients",
+			false,
+			"list all paired clients",
+		),
+		RevokeClient: flag.String(
+			"revoke-client",
+			"",
+			"revoke access for client by ID",
+		),
 	}
 }
 
@@ -139,8 +157,17 @@ func runFlag(cfg *config.Instance, value string) {
 
 // Post actions all remaining common flags that require the environment to be
 // set up. Logging is allowed.
-func (f *Flags) Post(cfg *config.Instance, _ platforms.Platform) {
+func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	switch {
+	case *f.ShowPairingCode:
+		handleShowPairingCode(cfg, pl)
+		os.Exit(0)
+	case *f.ListClients:
+		handleListClients(cfg, pl)
+		os.Exit(0)
+	case isFlagPassed("revoke-client"):
+		handleRevokeClient(cfg, pl, *f.RevokeClient)
+		os.Exit(0)
 	case isFlagPassed("write"):
 		if *f.Write == "" {
 			_, _ = fmt.Fprint(os.Stderr, "Error: write flag requires a value\n")
