@@ -136,7 +136,7 @@ type Item struct {
 	TVShowID   int    `json:"tvshowid,omitempty"`
 	EpisodeID  int    `json:"episodeid,omitempty"`
 	SongID     int    `json:"songid,omitempty"`
-	PlaylistID int    `json:"playlistid"`
+	PlaylistID int    `json:"playlistid,omitempty"`
 }
 
 // ItemOptions represents options for playing a media item
