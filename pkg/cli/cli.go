@@ -49,8 +49,8 @@ type Flags struct {
 	Config          *bool
 	ShowLoader      *string
 	ShowPairingCode *bool
-	ListDevices     *bool
-	RevokeDevice    *string
+	ListClients     *bool
+	RevokeClient    *string
 	ShowPicker      *string
 	Reload          *bool
 }
@@ -101,17 +101,17 @@ func SetupFlags() *Flags {
 		ShowPairingCode: flag.Bool(
 			"show-pairing-code",
 			false,
-			"display QR code for device pairing",
+			"display QR code for client pairing",
 		),
-		ListDevices: flag.Bool(
-			"list-devices",
+		ListClients: flag.Bool(
+			"list-clients",
 			false,
-			"list all paired devices",
+			"list all paired clients",
 		),
-		RevokeDevice: flag.String(
-			"revoke-device",
+		RevokeClient: flag.String(
+			"revoke-client",
 			"",
-			"revoke access for device by ID",
+			"revoke access for client by ID",
 		),
 	}
 }
@@ -162,11 +162,11 @@ func (f *Flags) Post(cfg *config.Instance, pl platforms.Platform) {
 	case *f.ShowPairingCode:
 		handleShowPairingCode(cfg, pl)
 		os.Exit(0)
-	case *f.ListDevices:
-		handleListDevices(cfg, pl)
+	case *f.ListClients:
+		handleListClients(cfg, pl)
 		os.Exit(0)
-	case isFlagPassed("revoke-device"):
-		handleRevokeDevice(cfg, pl, *f.RevokeDevice)
+	case isFlagPassed("revoke-client"):
+		handleRevokeClient(cfg, pl, *f.RevokeClient)
 		os.Exit(0)
 	case isFlagPassed("write"):
 		if *f.Write == "" {

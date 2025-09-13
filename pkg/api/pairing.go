@@ -54,7 +54,7 @@ type PairingManager struct {
 }
 
 type PairingInitiateRequest struct {
-	DeviceName string `json:"deviceName"`
+	ClientName string `json:"clientName"`
 }
 
 type PairingInitiateResponse struct {
@@ -65,11 +65,11 @@ type PairingInitiateResponse struct {
 type PairingCompleteRequest struct {
 	PairingToken string `json:"pairingToken"`
 	Verifier     string `json:"verifier"`
-	DeviceName   string `json:"deviceName"`
+	ClientName   string `json:"clientName"`
 }
 
 type PairingCompleteResponse struct {
-	DeviceID     string `json:"deviceId"`
+	ClientID     string `json:"clientId"`
 	AuthToken    string `json:"authToken"`
 	SharedSecret string `json:"sharedSecret"` // Base64 encoded
 }
@@ -200,7 +200,7 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 			return
 		}
 
-		if req.PairingToken == "" || req.Verifier == "" || req.DeviceName == "" {
+		if req.PairingToken == "" || req.Verifier == "" || req.ClientName == "" {
 			http.Error(w, "Missing required fields", http.StatusBadRequest)
 			return
 		}
@@ -219,7 +219,7 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 		sharedSecret := make([]byte, 32) // 256 bits for AES-256
 
 		// Construct context-specific info string for domain separation
-		info := []byte("zaparoo-pairing-v1|" + req.PairingToken + "|" + req.DeviceName)
+		info := []byte("zaparoo-pairing-v1|" + req.PairingToken + "|" + req.ClientName)
 
 		kdf := hkdf.New(sha256.New, combinedSecret, session.Salt, info)
 		if _, err := kdf.Read(sharedSecret); err != nil {
@@ -231,10 +231,10 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 		// Generate auth token
 		authToken := uuid.New().String()
 
-		// Create device in database
-		device, err := db.UserDB.CreateDevice(req.DeviceName, authToken, sharedSecret)
+		// Create client in database
+		client, err := db.UserDB.CreateClient(req.ClientName, authToken, sharedSecret)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to create device")
+			log.Error().Err(err).Msg("failed to create client")
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -245,7 +245,7 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 		pairingManager.mu.Unlock()
 
 		response := PairingCompleteResponse{
-			DeviceID:     device.DeviceID,
+			ClientID:     client.ClientID,
 			AuthToken:    authToken,
 			SharedSecret: hex.EncodeToString(sharedSecret),
 		}
@@ -258,9 +258,9 @@ func handlePairingComplete(db *database.Database) http.HandlerFunc {
 		}
 
 		log.Info().
-			Str("device_id", device.DeviceID).
-			Str("device_name", device.DeviceName).
-			Msg("device paired successfully")
+			Str("client_id", client.ClientID).
+			Str("client_name", client.ClientName).
+			Msg("client paired successfully")
 	}
 }
 

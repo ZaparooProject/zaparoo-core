@@ -32,18 +32,18 @@ import (
 	"github.com/google/uuid"
 )
 
-func (db *UserDB) CreateDevice(deviceName, authToken string, sharedSecret []byte) (*database.Device, error) {
+func (db *UserDB) CreateClient(clientName, authToken string, sharedSecret []byte) (*database.Client, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
-	deviceID := uuid.New().String()
+	clientID := uuid.New().String()
 	authTokenHash := hashAuthToken(authToken)
 	now := time.Now().Unix()
 
-	device := &database.Device{
-		DeviceID:      deviceID,
-		DeviceName:    deviceName,
+	client := &database.Client{
+		ClientID:      clientID,
+		ClientName:    clientName,
 		AuthTokenHash: authTokenHash,
 		SharedSecret:  sharedSecret,
 		CurrentSeq:    0,
@@ -53,36 +53,36 @@ func (db *UserDB) CreateDevice(deviceName, authToken string, sharedSecret []byte
 		LastSeen:      time.Unix(now, 0),
 	}
 
-	nonceCacheJSON, err := json.Marshal(device.NonceCache)
+	nonceCacheJSON, err := json.Marshal(client.NonceCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal nonce cache: %w", err)
 	}
 
 	query := `
-		INSERT INTO devices (device_id, device_name, auth_token_hash, shared_secret, 
+		INSERT INTO clients (client_id, client_name, auth_token_hash, shared_secret, 
 							 current_seq, seq_window, nonce_cache, created_at, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = db.sql.ExecContext(context.Background(), query,
-		device.DeviceID,
-		device.DeviceName,
-		device.AuthTokenHash,
-		device.SharedSecret,
-		device.CurrentSeq,
-		device.SeqWindow,
+		client.ClientID,
+		client.ClientName,
+		client.AuthTokenHash,
+		client.SharedSecret,
+		client.CurrentSeq,
+		client.SeqWindow,
 		string(nonceCacheJSON),
 		now,
 		now,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create device: %w", err)
+		return nil, fmt.Errorf("failed to create client: %w", err)
 	}
 
-	return device, nil
+	return client, nil
 }
 
-func (db *UserDB) GetDeviceByAuthToken(authToken string) (*database.Device, error) {
+func (db *UserDB) GetClientByAuthToken(authToken string) (*database.Client, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
@@ -90,85 +90,85 @@ func (db *UserDB) GetDeviceByAuthToken(authToken string) (*database.Device, erro
 	authTokenHash := hashAuthToken(authToken)
 
 	query := `
-		SELECT device_id, device_name, auth_token_hash, shared_secret, current_seq, 
+		SELECT client_id, client_name, auth_token_hash, shared_secret, current_seq, 
 			   seq_window, nonce_cache, created_at, last_seen
-		FROM devices 
+		FROM clients 
 		WHERE auth_token_hash = ?
 	`
 
-	var device database.Device
+	var client database.Client
 	var nonceCacheJSON string
 	var createdAt, lastSeen int64
 
 	err := db.sql.QueryRowContext(context.Background(), query, authTokenHash).Scan(
-		&device.DeviceID,
-		&device.DeviceName,
-		&device.AuthTokenHash,
-		&device.SharedSecret,
-		&device.CurrentSeq,
-		&device.SeqWindow,
+		&client.ClientID,
+		&client.ClientName,
+		&client.AuthTokenHash,
+		&client.SharedSecret,
+		&client.CurrentSeq,
+		&client.SeqWindow,
 		&nonceCacheJSON,
 		&createdAt,
 		&lastSeen,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("device not found: %w", err)
+		return nil, fmt.Errorf("client not found: %w", err)
 	}
 
-	device.CreatedAt = time.Unix(createdAt, 0)
-	device.LastSeen = time.Unix(lastSeen, 0)
+	client.CreatedAt = time.Unix(createdAt, 0)
+	client.LastSeen = time.Unix(lastSeen, 0)
 
-	err = json.Unmarshal([]byte(nonceCacheJSON), &device.NonceCache)
+	err = json.Unmarshal([]byte(nonceCacheJSON), &client.NonceCache)
 	if err != nil {
-		device.NonceCache = make([]string, 0) // Fallback to empty cache
+		client.NonceCache = make([]string, 0) // Fallback to empty cache
 	}
 
-	return &device, nil
+	return &client, nil
 }
 
-func (db *UserDB) GetDeviceByID(deviceID string) (*database.Device, error) {
+func (db *UserDB) GetClientByID(clientID string) (*database.Client, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
 	query := `
-		SELECT device_id, device_name, auth_token_hash, shared_secret, current_seq, 
+		SELECT client_id, client_name, auth_token_hash, shared_secret, current_seq, 
 			   seq_window, nonce_cache, created_at, last_seen
-		FROM devices 
-		WHERE device_id = ?
+		FROM clients 
+		WHERE client_id = ?
 	`
 
-	var device database.Device
+	var client database.Client
 	var nonceCacheJSON string
 	var createdAt, lastSeen int64
 
-	err := db.sql.QueryRowContext(context.Background(), query, deviceID).Scan(
-		&device.DeviceID,
-		&device.DeviceName,
-		&device.AuthTokenHash,
-		&device.SharedSecret,
-		&device.CurrentSeq,
-		&device.SeqWindow,
+	err := db.sql.QueryRowContext(context.Background(), query, clientID).Scan(
+		&client.ClientID,
+		&client.ClientName,
+		&client.AuthTokenHash,
+		&client.SharedSecret,
+		&client.CurrentSeq,
+		&client.SeqWindow,
 		&nonceCacheJSON,
 		&createdAt,
 		&lastSeen,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("device not found: %w", err)
+		return nil, fmt.Errorf("client not found: %w", err)
 	}
 
-	device.CreatedAt = time.Unix(createdAt, 0)
-	device.LastSeen = time.Unix(lastSeen, 0)
+	client.CreatedAt = time.Unix(createdAt, 0)
+	client.LastSeen = time.Unix(lastSeen, 0)
 
-	err = json.Unmarshal([]byte(nonceCacheJSON), &device.NonceCache)
+	err = json.Unmarshal([]byte(nonceCacheJSON), &client.NonceCache)
 	if err != nil {
-		device.NonceCache = make([]string, 0) // Fallback to empty cache
+		client.NonceCache = make([]string, 0) // Fallback to empty cache
 	}
 
-	return &device, nil
+	return &client, nil
 }
 
-func (db *UserDB) UpdateDeviceSequence(deviceID string, newSeq uint64, seqWindow []byte, nonceCache []string) error {
+func (db *UserDB) UpdateClientSequence(clientID string, newSeq uint64, seqWindow []byte, nonceCache []string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -179,87 +179,87 @@ func (db *UserDB) UpdateDeviceSequence(deviceID string, newSeq uint64, seqWindow
 	}
 
 	query := `
-		UPDATE devices 
+		UPDATE clients 
 		SET current_seq = ?, seq_window = ?, nonce_cache = ?, last_seen = ?
-		WHERE device_id = ?
+		WHERE client_id = ?
 	`
 
 	_, err = db.sql.ExecContext(
-		context.Background(), query, newSeq, seqWindow, string(nonceCacheJSON), time.Now().Unix(), deviceID,
+		context.Background(), query, newSeq, seqWindow, string(nonceCacheJSON), time.Now().Unix(), clientID,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to update device sequence: %w", err)
+		return fmt.Errorf("failed to update client sequence: %w", err)
 	}
 
 	return nil
 }
 
-func (db *UserDB) GetAllDevices() ([]database.Device, error) {
+func (db *UserDB) GetAllClients() ([]database.Client, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
 	query := `
-		SELECT device_id, device_name, auth_token_hash, shared_secret, current_seq, 
+		SELECT client_id, client_name, auth_token_hash, shared_secret, current_seq, 
 			   seq_window, nonce_cache, created_at, last_seen
-		FROM devices 
+		FROM clients 
 		ORDER BY last_seen DESC
 	`
 
 	rows, err := db.sql.QueryContext(context.Background(), query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query devices: %w", err)
+		return nil, fmt.Errorf("failed to query clients: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	devices := make([]database.Device, 0)
+	clients := make([]database.Client, 0)
 	for rows.Next() {
-		var device database.Device
+		var client database.Client
 		var nonceCacheJSON string
 		var createdAt, lastSeen int64
 
 		scanErr := rows.Scan(
-			&device.DeviceID,
-			&device.DeviceName,
-			&device.AuthTokenHash,
-			&device.SharedSecret,
-			&device.CurrentSeq,
-			&device.SeqWindow,
+			&client.ClientID,
+			&client.ClientName,
+			&client.AuthTokenHash,
+			&client.SharedSecret,
+			&client.CurrentSeq,
+			&client.SeqWindow,
 			&nonceCacheJSON,
 			&createdAt,
 			&lastSeen,
 		)
 		if scanErr != nil {
-			return nil, fmt.Errorf("failed to scan device row: %w", scanErr)
+			return nil, fmt.Errorf("failed to scan client row: %w", scanErr)
 		}
 
-		device.CreatedAt = time.Unix(createdAt, 0)
-		device.LastSeen = time.Unix(lastSeen, 0)
+		client.CreatedAt = time.Unix(createdAt, 0)
+		client.LastSeen = time.Unix(lastSeen, 0)
 
-		err = json.Unmarshal([]byte(nonceCacheJSON), &device.NonceCache)
+		err = json.Unmarshal([]byte(nonceCacheJSON), &client.NonceCache)
 		if err != nil {
-			device.NonceCache = make([]string, 0) // Fallback to empty cache
+			client.NonceCache = make([]string, 0) // Fallback to empty cache
 		}
 
-		devices = append(devices, device)
+		clients = append(clients, client)
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("error reading device rows: %w", err)
+		return nil, fmt.Errorf("error reading client rows: %w", err)
 	}
 
-	return devices, nil
+	return clients, nil
 }
 
-func (db *UserDB) DeleteDevice(deviceID string) error {
+func (db *UserDB) DeleteClient(clientID string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
 
-	query := `DELETE FROM devices WHERE device_id = ?`
-	result, err := db.sql.ExecContext(context.Background(), query, deviceID)
+	query := `DELETE FROM clients WHERE client_id = ?`
+	result, err := db.sql.ExecContext(context.Background(), query, clientID)
 	if err != nil {
-		return fmt.Errorf("failed to delete device: %w", err)
+		return fmt.Errorf("failed to delete client: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
@@ -268,7 +268,7 @@ func (db *UserDB) DeleteDevice(deviceID string) error {
 	}
 
 	if rowsAffected == 0 {
-		return errors.New("device not found")
+		return errors.New("client not found")
 	}
 
 	return nil

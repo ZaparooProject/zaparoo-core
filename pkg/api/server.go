@@ -469,20 +469,20 @@ func broadcastNotifications(
 				}
 
 				// Check if session is authenticated
-				device, authenticated := s.Get("device")
+				client, authenticated := s.Get("client")
 				if !authenticated {
 					return false // Skip unauthenticated
 				}
 
 				// Encrypt notification for this session
-				deviceObj, ok := device.(*database.Device)
+				clientObj, ok := client.(*database.Client)
 				if !ok {
-					log.Error().Msg("invalid device type in session")
+					log.Error().Msg("invalid client type in session")
 					return false
 				}
-				encrypted, iv, err := apimiddleware.EncryptPayload(data, deviceObj.SharedSecret)
+				encrypted, iv, err := apimiddleware.EncryptPayload(data, clientObj.SharedSecret)
 				if err != nil {
-					log.Error().Err(err).Str("device_id", deviceObj.DeviceID).Msg("failed to encrypt notification")
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).Msg("failed to encrypt notification")
 					return false
 				}
 
@@ -494,14 +494,14 @@ func broadcastNotifications(
 
 				encData, err := json.Marshal(encResponse)
 				if err != nil {
-					log.Error().Err(err).Str("device_id", deviceObj.DeviceID).
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).
 						Msg("failed to marshal encrypted notification")
 					return false
 				}
 
 				// Send encrypted data to this session
 				if err := s.Write(encData); err != nil {
-					log.Error().Err(err).Str("device_id", deviceObj.DeviceID).
+					log.Error().Err(err).Str("client_id", clientObj.ClientID).
 						Msg("failed to send encrypted notification")
 				}
 
@@ -602,7 +602,7 @@ func handleWSMessage(
 
 		// Handle authentication for remote connections
 		if !isLocal {
-			device, authenticated := session.Get("device")
+			client, authenticated := session.Get("client")
 			if !authenticated {
 				// First message must be authentication
 				err := handleWSAuthentication(session, msg, db)
@@ -614,16 +614,16 @@ func handleWSMessage(
 			}
 
 			// Decrypt message for authenticated remote connection
-			deviceObj, ok := device.(*database.Device)
+			clientObj, ok := client.(*database.Client)
 			if !ok {
-				log.Error().Msg("invalid device type in session")
+				log.Error().Msg("invalid client type in session")
 				err := sendWSError(session, uuid.Nil, JSONRPCErrorInternalError)
 				if err != nil {
 					log.Error().Err(err).Msg("failed to send WebSocket error")
 				}
 				return
 			}
-			decryptedMsg, err := handleWSDecryption(session, msg, deviceObj, db)
+			decryptedMsg, err := handleWSDecryption(session, msg, clientObj, db)
 			if err != nil {
 				log.Error().Err(err).Msg("WebSocket decryption failed")
 				err := sendWSError(session, uuid.Nil, JSONRPCErrorInvalidRequest)
@@ -653,13 +653,13 @@ func handleWSMessage(
 		} else {
 			// Encrypt response for remote authenticated connections
 			if !isLocal {
-				if device, authenticated := session.Get("device"); authenticated {
-					deviceObj, ok := device.(*database.Device)
+				if client, authenticated := session.Get("client"); authenticated {
+					clientObj, ok := client.(*database.Client)
 					if !ok {
-						log.Error().Msg("invalid device type in session")
+						log.Error().Msg("invalid client type in session")
 						return
 					}
-					err := sendWSResponseEncrypted(session, id, resp, deviceObj)
+					err := sendWSResponseEncrypted(session, id, resp, clientObj)
 					if err != nil {
 						log.Error().Err(err).Msg("error sending encrypted response")
 					}
@@ -690,19 +690,19 @@ func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Da
 		return errors.New("missing auth token")
 	}
 
-	// Validate auth token and get device
-	device, err := db.UserDB.GetDeviceByAuthToken(authMsg.AuthToken)
+	// Validate auth token and get client
+	client, err := db.UserDB.GetClientByAuthToken(authMsg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("invalid auth token: %w", err)
 	}
 
-	// Store device in session
-	session.Set("device", device)
+	// Store client in session
+	session.Set("client", client)
 
 	// Send authentication success response
 	authResponse := map[string]any{
 		"authenticated": true,
-		"device_id":     device.DeviceID,
+		"client_id":     client.ClientID,
 	}
 
 	responseData, _ := json.Marshal(authResponse)
@@ -711,11 +711,11 @@ func handleWSAuthentication(session *melody.Session, msg []byte, db *database.Da
 		return fmt.Errorf("failed to send auth response: %w", err)
 	}
 
-	log.Debug().Str("device_id", device.DeviceID).Msg("WebSocket authenticated")
+	log.Debug().Str("client_id", client.ClientID).Msg("WebSocket authenticated")
 	return nil
 }
 
-func handleWSDecryption(_ *melody.Session, msg []byte, device *database.Device, db *database.Database) ([]byte, error) {
+func handleWSDecryption(_ *melody.Session, msg []byte, client *database.Client, db *database.Database) ([]byte, error) {
 	// Parse encrypted message
 	var encMsg apimiddleware.EncryptedRequest
 	if err := json.Unmarshal(msg, &encMsg); err != nil {
@@ -723,7 +723,7 @@ func handleWSDecryption(_ *melody.Session, msg []byte, device *database.Device, 
 	}
 
 	// Decrypt payload (we can reuse the middleware function by creating a temporary import)
-	decryptedPayload, err := apimiddleware.DecryptPayload(encMsg.Encrypted, encMsg.IV, device.SharedSecret)
+	decryptedPayload, err := apimiddleware.DecryptPayload(encMsg.Encrypted, encMsg.IV, client.SharedSecret)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	}
@@ -734,29 +734,29 @@ func handleWSDecryption(_ *melody.Session, msg []byte, device *database.Device, 
 		return nil, fmt.Errorf("invalid decrypted payload: %w", unmarshalErr)
 	}
 
-	// CRITICAL SECTION: Acquire device lock to prevent race conditions
+	// Acquire client lock to prevent race conditions
 	// between validation and database update
-	unlockDevice := apimiddleware.LockDevice(device.DeviceID)
-	defer unlockDevice()
+	unlockClient := apimiddleware.LockClient(client.ClientID)
+	defer unlockClient()
 
-	// Re-fetch device state under lock to get latest sequence/nonce state
-	freshDevice, err := db.UserDB.GetDeviceByID(device.DeviceID)
+	// Re-fetch client state under lock to get latest sequence/nonce state
+	freshClient, err := db.UserDB.GetClientByID(client.ClientID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to re-fetch device under lock: %w", err)
+		return nil, fmt.Errorf("failed to re-fetch client under lock: %w", err)
 	}
-	
-	// Validate sequence and nonce with fresh device state
-	if !apimiddleware.ValidateSequenceAndNonce(freshDevice, payload.Seq, payload.Nonce) {
+
+	// Validate sequence and nonce with fresh client state
+	if !apimiddleware.ValidateSequenceAndNonce(freshClient, payload.Seq, payload.Nonce) {
 		return nil, errors.New("invalid sequence or replay detected")
 	}
 
-	// Update device state under lock
+	// Update client state under lock
 	userDB, ok := db.UserDB.(*userdb.UserDB)
 	if !ok {
 		return nil, errors.New("failed to cast UserDB to concrete type")
 	}
-	if updateErr := apimiddleware.UpdateDeviceState(userDB, freshDevice, payload.Seq, payload.Nonce); updateErr != nil {
-		return nil, fmt.Errorf("failed to update device state: %w", updateErr)
+	if updateErr := apimiddleware.UpdateClientState(userDB, freshClient, payload.Seq, payload.Nonce); updateErr != nil {
+		return nil, fmt.Errorf("failed to update client state: %w", updateErr)
 	}
 
 	// Return JSON-RPC payload without sequence/nonce
@@ -776,7 +776,7 @@ func handleWSDecryption(_ *melody.Session, msg []byte, device *database.Device, 
 	return result, nil
 }
 
-func sendWSResponseEncrypted(session *melody.Session, id uuid.UUID, result any, device *database.Device) error {
+func sendWSResponseEncrypted(session *melody.Session, id uuid.UUID, result any, client *database.Client) error {
 	// Create response object
 	resp := models.ResponseObject{
 		JSONRPC: "2.0",
@@ -791,7 +791,7 @@ func sendWSResponseEncrypted(session *melody.Session, id uuid.UUID, result any, 
 	}
 
 	// Encrypt the response
-	encrypted, iv, err := apimiddleware.EncryptPayload(data, device.SharedSecret)
+	encrypted, iv, err := apimiddleware.EncryptPayload(data, client.SharedSecret)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt response: %w", err)
 	}

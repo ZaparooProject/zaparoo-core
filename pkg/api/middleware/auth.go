@@ -41,27 +41,27 @@ import (
 )
 
 const (
-	SequenceWindow = 64  // Size of sliding window for sequence numbers
-	NonceCacheSize = 100 // Maximum number of cached nonces
+	SequenceWindow       = 64               // Size of sliding window for sequence numbers
+	NonceCacheSize       = 100              // Maximum number of cached nonces
 	MutexCleanupInterval = 10 * time.Minute // Cleanup unused mutexes every 10 minutes
-	MutexMaxIdle = 30 * time.Minute // Remove mutexes unused for 30 minutes
+	MutexMaxIdle         = 30 * time.Minute // Remove mutexes unused for 30 minutes
 )
 
-type deviceKey string
+type clientKey string
 
-// DeviceMutexManager handles per-device locking to prevent race conditions
+// ClientMutexManager handles per-client locking to prevent race conditions
 // in authentication state updates
-type DeviceMutexManager struct {
-	mutexes sync.Map // map[string]*deviceMutex
+type ClientMutexManager struct {
+	mutexes sync.Map // map[string]*clientMutex
 }
 
-type deviceMutex struct {
-	mu       sync.Mutex
+type clientMutex struct {
 	lastUsed time.Time
-	deviceID string
+	clientID string
+	mu       sync.Mutex
 }
 
-var globalDeviceMutexManager = &DeviceMutexManager{}
+var globalClientMutexManager = &ClientMutexManager{}
 
 type EncryptedRequest struct {
 	Encrypted string `json:"encrypted"`
@@ -118,8 +118,8 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Validate auth token and get device
-			device, err := db.UserDB.GetDeviceByAuthToken(encReq.AuthToken)
+			// Validate auth token and get client
+			client, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
 			if err != nil {
 				tokenStr := "empty"
 				if len(encReq.AuthToken) >= 8 {
@@ -133,7 +133,7 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 			}
 
 			// Decrypt payload
-			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, device.SharedSecret)
+			decryptedPayload, err := DecryptPayload(encReq.Encrypted, encReq.IV, client.SharedSecret)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to decrypt payload")
 				http.Error(w, "Decryption failed", http.StatusBadRequest)
@@ -148,23 +148,23 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// CRITICAL SECTION: Acquire device lock to prevent race conditions
+			// Acquire client lock to prevent race conditions
 			// between validation and database update
-			unlockDevice := LockDevice(device.DeviceID)
-			defer unlockDevice()
+			unlockClient := LockClient(client.ClientID)
+			defer unlockClient()
 
-			// Re-fetch device state under lock to get latest sequence/nonce state
-			freshDevice, err := db.UserDB.GetDeviceByAuthToken(encReq.AuthToken)
+			// Re-fetch client state under lock to get latest sequence/nonce state
+			freshClient, err := db.UserDB.GetClientByAuthToken(encReq.AuthToken)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to re-fetch device under lock")
+				log.Error().Err(err).Msg("failed to re-fetch client under lock")
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
 
-			// Validate sequence number and nonce with fresh device state
-			if !ValidateSequenceAndNonce(freshDevice, payload.Seq, payload.Nonce) {
+			// Validate sequence number and nonce with fresh client state
+			if !ValidateSequenceAndNonce(freshClient, payload.Seq, payload.Nonce) {
 				log.Warn().
-					Str("device_id", freshDevice.DeviceID).
+					Str("client_id", freshClient.ClientID).
 					Uint64("seq", payload.Seq).
 					Str("nonce", payload.Nonce).
 					Msg("invalid sequence or replay attack detected")
@@ -172,21 +172,21 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Update device state (sequence and nonce cache)
-			updatedDevice := *freshDevice
-			updateDeviceSequenceAndNonce(&updatedDevice, payload.Seq, payload.Nonce)
+			// Update client state (sequence and nonce cache)
+			updatedClient := *freshClient
+			updateClientSequenceAndNonce(&updatedClient, payload.Seq, payload.Nonce)
 
 			// Save to database (still under lock)
-			if updateErr := db.UserDB.UpdateDeviceSequence(
-				updatedDevice.DeviceID, updatedDevice.CurrentSeq, updatedDevice.SeqWindow, updatedDevice.NonceCache,
+			if updateErr := db.UserDB.UpdateClientSequence(
+				updatedClient.ClientID, updatedClient.CurrentSeq, updatedClient.SeqWindow, updatedClient.NonceCache,
 			); updateErr != nil {
-				log.Error().Err(updateErr).Msg("failed to update device state")
+				log.Error().Err(updateErr).Msg("failed to update client state")
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
 				return
 			}
 
-			// Update the device pointer for context (use fresh device with updates)
-			device = &updatedDevice
+			// Update the client pointer for context (use fresh client with updates)
+			client = &updatedClient
 
 			// Replace request body with decrypted JSON-RPC payload
 			originalPayload := map[string]any{
@@ -209,12 +209,12 @@ func AuthMiddleware(db *database.Database) func(http.Handler) http.Handler {
 			r.Body = io.NopCloser(bytes.NewReader(newBody))
 			r.ContentLength = int64(len(newBody))
 
-			// Store device in context for potential use by handlers
-			ctx := context.WithValue(r.Context(), deviceKey("device"), device)
+			// Store client in context for potential use by handlers
+			ctx := context.WithValue(r.Context(), clientKey("client"), client)
 			r = r.WithContext(ctx)
 
 			log.Debug().
-				Str("device_id", device.DeviceID).
+				Str("client_id", client.ClientID).
 				Str("method", payload.Method).
 				Uint64("seq", payload.Seq).
 				Msg("authenticated request processed")
@@ -284,16 +284,16 @@ func EncryptPayload(data, key []byte) (encrypted, iv string, err error) {
 		base64.StdEncoding.EncodeToString(ivBytes), nil
 }
 
-func ValidateSequenceAndNonce(device *database.Device, seq uint64, nonce string) bool {
+func ValidateSequenceAndNonce(client *database.Client, seq uint64, nonce string) bool {
 	// Check if nonce was recently used (replay protection)
-	if slices.Contains(device.NonceCache, nonce) {
+	if slices.Contains(client.NonceCache, nonce) {
 		return false
 	}
 
 	// Validate sequence number with sliding window
-	if seq <= device.CurrentSeq {
+	if seq <= client.CurrentSeq {
 		// Check if sequence is within acceptable window
-		diff := device.CurrentSeq - seq
+		diff := client.CurrentSeq - seq
 		if diff >= SequenceWindow {
 			return false // Too old
 		}
@@ -303,8 +303,8 @@ func ValidateSequenceAndNonce(device *database.Device, seq uint64, nonce string)
 		bytePos := windowPos / 8
 		bitPos := windowPos % 8
 
-		if bytePos < uint64(len(device.SeqWindow)) {
-			if (device.SeqWindow[bytePos] & (1 << bitPos)) != 0 {
+		if bytePos < uint64(len(client.SeqWindow)) {
+			if (client.SeqWindow[bytePos] & (1 << bitPos)) != 0 {
 				return false // Already processed
 			}
 		}
@@ -313,159 +313,159 @@ func ValidateSequenceAndNonce(device *database.Device, seq uint64, nonce string)
 	return true
 }
 
-func updateDeviceSequenceAndNonce(device *database.Device, seq uint64, nonce string) {
+func updateClientSequenceAndNonce(client *database.Client, seq uint64, nonce string) {
 	// Update nonce cache (keep last NonceCacheSize nonces)
-	device.NonceCache = append(device.NonceCache, nonce)
-	if len(device.NonceCache) > NonceCacheSize {
-		device.NonceCache = device.NonceCache[1:] // Remove oldest
+	client.NonceCache = append(client.NonceCache, nonce)
+	if len(client.NonceCache) > NonceCacheSize {
+		client.NonceCache = client.NonceCache[1:] // Remove oldest
 	}
 
 	// Update sequence window
-	if seq > device.CurrentSeq {
+	if seq > client.CurrentSeq {
 		// New highest sequence - shift window
-		shift := seq - device.CurrentSeq
+		shift := seq - client.CurrentSeq
 		if shift >= SequenceWindow {
 			// Clear entire window
-			device.SeqWindow = make([]byte, 8)
+			client.SeqWindow = make([]byte, 8)
 		} else {
 			// Shift window right
 			for range shift {
-				shiftWindowRight(device.SeqWindow)
+				shiftWindowRight(client.SeqWindow)
 			}
 		}
-		device.CurrentSeq = seq
+		client.CurrentSeq = seq
 
 		// Mark current sequence as processed (position 0 in window)
-		device.SeqWindow[0] |= 1
+		client.SeqWindow[0] |= 1
 	} else {
 		// Mark this sequence as processed in the window
-		diff := device.CurrentSeq - seq
+		diff := client.CurrentSeq - seq
 		windowPos := diff % SequenceWindow
 		bytePos := windowPos / 8
 		bitPos := windowPos % 8
 
-		if bytePos < uint64(len(device.SeqWindow)) {
-			device.SeqWindow[bytePos] |= (1 << bitPos)
+		if bytePos < uint64(len(client.SeqWindow)) {
+			client.SeqWindow[bytePos] |= (1 << bitPos)
 		}
 	}
 }
 
-func UpdateDeviceState(userDB *userdb.UserDB, device *database.Device, seq uint64, nonce string) error {
+func UpdateClientState(userDB *userdb.UserDB, client *database.Client, seq uint64, nonce string) error {
 	// Update nonce cache (keep last NonceCacheSize nonces)
-	device.NonceCache = append(device.NonceCache, nonce)
-	if len(device.NonceCache) > NonceCacheSize {
-		device.NonceCache = device.NonceCache[1:] // Remove oldest
+	client.NonceCache = append(client.NonceCache, nonce)
+	if len(client.NonceCache) > NonceCacheSize {
+		client.NonceCache = client.NonceCache[1:] // Remove oldest
 	}
 
 	// Update sequence window
-	if seq > device.CurrentSeq {
+	if seq > client.CurrentSeq {
 		// New highest sequence - shift window
-		shift := seq - device.CurrentSeq
+		shift := seq - client.CurrentSeq
 		if shift >= SequenceWindow {
 			// Clear entire window
-			device.SeqWindow = make([]byte, 8)
+			client.SeqWindow = make([]byte, 8)
 		} else {
 			// Shift window right
 			for range shift {
-				shiftWindowRight(device.SeqWindow)
+				shiftWindowRight(client.SeqWindow)
 			}
 		}
-		device.CurrentSeq = seq
+		client.CurrentSeq = seq
 
 		// Mark current sequence as processed (position 0 in window)
-		device.SeqWindow[0] |= 1
+		client.SeqWindow[0] |= 1
 	} else {
 		// Mark this sequence as processed in the window
-		diff := device.CurrentSeq - seq
+		diff := client.CurrentSeq - seq
 		windowPos := diff % SequenceWindow
 		bytePos := windowPos / 8
 		bitPos := windowPos % 8
 
-		if bytePos < uint64(len(device.SeqWindow)) {
-			device.SeqWindow[bytePos] |= (1 << bitPos)
+		if bytePos < uint64(len(client.SeqWindow)) {
+			client.SeqWindow[bytePos] |= (1 << bitPos)
 		}
 	}
 
 	// Update database
-	if err := userDB.UpdateDeviceSequence(
-		device.DeviceID, device.CurrentSeq, device.SeqWindow, device.NonceCache,
+	if err := userDB.UpdateClientSequence(
+		client.ClientID, client.CurrentSeq, client.SeqWindow, client.NonceCache,
 	); err != nil {
-		return fmt.Errorf("failed to update device sequence: %w", err)
+		return fmt.Errorf("failed to update client sequence: %w", err)
 	}
 	return nil
 }
 
-// getDeviceMutex retrieves or creates a mutex for the given device ID
-func (dm *DeviceMutexManager) getDeviceMutex(deviceID string) *deviceMutex {
+// getClientMutex retrieves or creates a mutex for the given client ID
+func (cm *ClientMutexManager) getClientMutex(clientID string) *clientMutex {
 	// Try to load existing mutex
-	if value, exists := dm.mutexes.Load(deviceID); exists {
-		mutex := value.(*deviceMutex)
+	if value, exists := cm.mutexes.Load(clientID); exists {
+		mutex := value.(*clientMutex)
 		mutex.lastUsed = time.Now()
 		return mutex
 	}
 
 	// Create new mutex
-	newMutex := &deviceMutex{
+	newMutex := &clientMutex{
 		lastUsed: time.Now(),
-		deviceID: deviceID,
+		clientID: clientID,
 	}
 
 	// Store and return the mutex (LoadOrStore handles race conditions)
-	actual, _ := dm.mutexes.LoadOrStore(deviceID, newMutex)
-	actualMutex := actual.(*deviceMutex)
+	actual, _ := cm.mutexes.LoadOrStore(clientID, newMutex)
+	actualMutex := actual.(*clientMutex)
 	actualMutex.lastUsed = time.Now()
 	return actualMutex
 }
 
-// lockDevice acquires a lock for the specified device, preventing race conditions
+// lockClient acquires a lock for the specified client, preventing race conditions
 // in authentication state updates. The returned function must be called to release the lock.
-func (dm *DeviceMutexManager) lockDevice(deviceID string) func() {
-	mutex := dm.getDeviceMutex(deviceID)
+func (cm *ClientMutexManager) lockClient(clientID string) func() {
+	mutex := cm.getClientMutex(clientID)
 	mutex.mu.Lock()
-	
+
 	return func() {
 		mutex.mu.Unlock()
 	}
 }
 
 // cleanup removes unused mutexes to prevent memory leaks
-func (dm *DeviceMutexManager) cleanup() {
+func (cm *ClientMutexManager) cleanup() {
 	now := time.Now()
-	dm.mutexes.Range(func(key, value interface{}) bool {
-		mutex := value.(*deviceMutex)
+	cm.mutexes.Range(func(key, value interface{}) bool {
+		mutex := value.(*clientMutex)
 		if now.Sub(mutex.lastUsed) > MutexMaxIdle {
-			dm.mutexes.Delete(key)
-			log.Debug().Str("device_id", mutex.deviceID).Msg("cleaned up unused device mutex")
+			cm.mutexes.Delete(key)
+			log.Debug().Str("client_id", mutex.clientID).Msg("cleaned up unused client mutex")
 		}
 		return true
 	})
 }
 
 // startCleanupRoutine starts a background goroutine to periodically clean up unused mutexes
-func (dm *DeviceMutexManager) startCleanupRoutine() {
+func (cm *ClientMutexManager) startCleanupRoutine() {
 	go func() {
 		ticker := time.NewTicker(MutexCleanupInterval)
 		defer ticker.Stop()
-		
+
 		for range ticker.C {
-			dm.cleanup()
+			cm.cleanup()
 		}
 	}()
 }
 
-// GetDeviceMutex is a convenience function to get a mutex for a device
-func GetDeviceMutex(deviceID string) *deviceMutex {
-	return globalDeviceMutexManager.getDeviceMutex(deviceID)
+// GetClientMutex is a convenience function to get a mutex for a client
+func GetClientMutex(clientID string) *clientMutex {
+	return globalClientMutexManager.getClientMutex(clientID)
 }
 
-// LockDevice is a convenience function to lock a device
-func LockDevice(deviceID string) func() {
-	return globalDeviceMutexManager.lockDevice(deviceID)
+// LockClient is a convenience function to lock a client
+func LockClient(clientID string) func() {
+	return globalClientMutexManager.lockClient(clientID)
 }
 
 func init() {
-	// Start cleanup routine for device mutexes
-	globalDeviceMutexManager.startCleanupRoutine()
+	// Start cleanup routine for client mutexes
+	globalClientMutexManager.startCleanupRoutine()
 }
 
 func shiftWindowRight(window []byte) {
@@ -481,9 +481,9 @@ func IsAuthenticatedConnection(r *http.Request) bool {
 	return !isLocalhost(r.RemoteAddr)
 }
 
-func GetDeviceFromContext(ctx context.Context) *database.Device {
-	if device, ok := ctx.Value(deviceKey("device")).(*database.Device); ok {
-		return device
+func GetClientFromContext(ctx context.Context) *database.Client {
+	if client, ok := ctx.Value(clientKey("client")).(*database.Client); ok {
+		return client
 	}
 	return nil
 }

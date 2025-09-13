@@ -244,77 +244,77 @@ func (m *MockUserDBI) GetZapLinkCache(url string) (string, error) {
 	return args.String(0), args.Error(1)
 }
 
-// Device authentication methods
-func (m *MockUserDBI) CreateDevice(deviceName, authToken string, sharedSecret []byte) (*database.Device, error) {
-	args := m.Called(deviceName, authToken, sharedSecret)
-	if device, ok := args.Get(0).(*database.Device); ok {
+// Client authentication methods
+func (m *MockUserDBI) CreateClient(clientName, authToken string, sharedSecret []byte) (*database.Client, error) {
+	args := m.Called(clientName, authToken, sharedSecret)
+	if client, ok := args.Get(0).(*database.Client); ok {
 		if err := args.Error(1); err != nil {
-			return device, fmt.Errorf("mock UserDBI create device failed: %w", err)
+			return client, fmt.Errorf("mock UserDBI create client failed: %w", err)
 		}
-		return device, nil
+		return client, nil
 	}
 	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI create device failed: %w", err)
+		return nil, fmt.Errorf("mock UserDBI create client failed: %w", err)
 	}
 	return nil, ErrMockNotConfigured
 }
 
-func (m *MockUserDBI) GetDeviceByAuthToken(authToken string) (*database.Device, error) {
+func (m *MockUserDBI) GetClientByAuthToken(authToken string) (*database.Client, error) {
 	args := m.Called(authToken)
-	if device, ok := args.Get(0).(*database.Device); ok {
+	if client, ok := args.Get(0).(*database.Client); ok {
 		if err := args.Error(1); err != nil {
-			return device, fmt.Errorf("mock UserDBI get device by auth token failed: %w", err)
+			return client, fmt.Errorf("mock UserDBI get client by auth token failed: %w", err)
 		}
-		return device, nil
+		return client, nil
 	}
 	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI get device by auth token failed: %w", err)
+		return nil, fmt.Errorf("mock UserDBI get client by auth token failed: %w", err)
 	}
 	return nil, ErrMockNotConfigured
 }
 
-func (m *MockUserDBI) GetDeviceByID(deviceID string) (*database.Device, error) {
-	args := m.Called(deviceID)
-	if device, ok := args.Get(0).(*database.Device); ok {
+func (m *MockUserDBI) GetClientByID(clientID string) (*database.Client, error) {
+	args := m.Called(clientID)
+	if client, ok := args.Get(0).(*database.Client); ok {
 		if err := args.Error(1); err != nil {
-			return device, fmt.Errorf("mock UserDBI get device by ID failed: %w", err)
+			return client, fmt.Errorf("mock UserDBI get client by ID failed: %w", err)
 		}
-		return device, nil
+		return client, nil
 	}
 	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI get device by ID failed: %w", err)
+		return nil, fmt.Errorf("mock UserDBI get client by ID failed: %w", err)
 	}
 	return nil, ErrMockNotConfigured
 }
 
-func (m *MockUserDBI) UpdateDeviceSequence(
-	deviceID string, newSeq uint64, seqWindow []byte, nonceCache []string,
+func (m *MockUserDBI) UpdateClientSequence(
+	clientID string, newSeq uint64, seqWindow []byte, nonceCache []string,
 ) error {
-	args := m.Called(deviceID, newSeq, seqWindow, nonceCache)
+	args := m.Called(clientID, newSeq, seqWindow, nonceCache)
 	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI update device sequence failed: %w", err)
+		return fmt.Errorf("mock UserDBI update client sequence failed: %w", err)
 	}
 	return nil
 }
 
-func (m *MockUserDBI) GetAllDevices() ([]database.Device, error) {
+func (m *MockUserDBI) GetAllClients() ([]database.Client, error) {
 	args := m.Called()
-	if devices, ok := args.Get(0).([]database.Device); ok {
+	if clients, ok := args.Get(0).([]database.Client); ok {
 		if err := args.Error(1); err != nil {
-			return devices, fmt.Errorf("mock UserDBI get all devices failed: %w", err)
+			return clients, fmt.Errorf("mock UserDBI get all clients failed: %w", err)
 		}
-		return devices, nil
+		return clients, nil
 	}
 	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock UserDBI get all devices failed: %w", err)
+		return nil, fmt.Errorf("mock UserDBI get all clients failed: %w", err)
 	}
 	return nil, nil
 }
 
-func (m *MockUserDBI) DeleteDevice(deviceID string) error {
-	args := m.Called(deviceID)
+func (m *MockUserDBI) DeleteClient(clientID string) error {
+	args := m.Called(clientID)
 	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI delete device failed: %w", err)
+		return fmt.Errorf("mock UserDBI delete client failed: %w", err)
 	}
 	return nil
 }

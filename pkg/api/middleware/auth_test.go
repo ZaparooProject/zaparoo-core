@@ -81,9 +81,9 @@ func TestAuthMiddleware_RemoteRequiresAuth(t *testing.T) {
 	t.Parallel()
 	// Setup
 	userDB := helpers.NewMockUserDBI()
-	// Mock the GetDeviceByAuthToken call to return an error for empty token
+	// Mock the GetClientByAuthToken call to return an error for empty token
 	// The middleware calls this once per test case (we have 2 test cases)
-	userDB.On("GetDeviceByAuthToken", "").Return((*database.Device)(nil), assert.AnError).Times(2)
+	userDB.On("GetClientByAuthToken", "").Return((*database.Client)(nil), assert.AnError).Times(2)
 
 	db := &database.Database{UserDB: userDB}
 
@@ -124,9 +124,9 @@ func TestAuthMiddleware_EncryptedRequest(t *testing.T) {
 	t.Parallel()
 	// Create a mock device with known shared secret
 	testSecret := []byte("test-secret-key-32-bytes-long-ok")
-	testDevice := &database.Device{
-		DeviceID:      "test-device-id",
-		DeviceName:    "Test Device",
+	testDevice := &database.Client{
+		ClientID:      "test-device-id",
+		ClientName:    "Test Device",
 		AuthTokenHash: "test-token-hash",
 		SharedSecret:  testSecret,
 		CurrentSeq:    0,
@@ -137,7 +137,7 @@ func TestAuthMiddleware_EncryptedRequest(t *testing.T) {
 	}
 
 	userDB := helpers.NewMockUserDBI()
-	userDB.On("GetDeviceByAuthToken", "test-auth-token").Return(testDevice, nil)
+	userDB.On("GetClientByAuthToken", "test-auth-token").Return(testDevice, nil)
 	userDB.On("UpdateDeviceSequence", "test-device-id", uint64(1),
 		mock.AnythingOfType("[]uint8"), mock.AnythingOfType("[]string")).Return(nil)
 
@@ -179,9 +179,9 @@ func TestAuthMiddleware_EncryptedRequest(t *testing.T) {
 		assert.InDelta(t, float64(1), jsonRPC["id"], 0.001) // JSON unmarshals numbers as float64
 
 		// Verify device is in context
-		device := GetDeviceFromContext(r.Context())
+		device := GetClientFromContext(r.Context())
 		assert.NotNil(t, device)
-		assert.Equal(t, "test-device-id", device.DeviceID)
+		assert.Equal(t, "test-device-id", device.ClientID)
 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("authenticated success"))
@@ -269,8 +269,8 @@ func TestValidateSequenceAndNonce_ReplayProtection(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			device := &database.Device{
-				DeviceID:   "test-device",
+			device := &database.Client{
+				ClientID:   "test-device",
 				CurrentSeq: tt.currentSeq,
 				SeqWindow:  tt.seqWindow,
 				NonceCache: tt.nonceCache,
@@ -345,7 +345,7 @@ func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 	t.Parallel()
 	userDB := helpers.NewMockUserDBI()
 	// Mock empty auth token lookup - expect it to be called once for the missing auth token test
-	userDB.On("GetDeviceByAuthToken", "").Return((*database.Device)(nil), assert.AnError)
+	userDB.On("GetClientByAuthToken", "").Return((*database.Client)(nil), assert.AnError)
 
 	db := &database.Database{UserDB: userDB}
 
@@ -391,23 +391,23 @@ func TestAuthMiddleware_InvalidRequests(t *testing.T) {
 	userDB.AssertExpectations(t)
 }
 
-func TestGetDeviceFromContext(t *testing.T) {
+func TestGetClientFromContext(t *testing.T) {
 	t.Parallel()
 	// Test with device in context
-	device := &database.Device{DeviceID: "test-device"}
-	ctx := context.WithValue(context.Background(), deviceKey("device"), device)
+	device := &database.Client{ClientID: "test-device"}
+	ctx := context.WithValue(context.Background(), clientKey("device"), device)
 
-	result := GetDeviceFromContext(ctx)
+	result := GetClientFromContext(ctx)
 	assert.Equal(t, device, result)
 
 	// Test with no device in context
 	emptyCtx := context.Background()
-	result = GetDeviceFromContext(emptyCtx)
+	result = GetClientFromContext(emptyCtx)
 	assert.Nil(t, result)
 
 	// Test with wrong type in context
-	badCtx := context.WithValue(context.Background(), deviceKey("device"), "not-a-device")
-	result = GetDeviceFromContext(badCtx)
+	badCtx := context.WithValue(context.Background(), clientKey("device"), "not-a-device")
+	result = GetClientFromContext(badCtx)
 	assert.Nil(t, result)
 }
 
@@ -415,109 +415,109 @@ func TestGetDeviceFromContext(t *testing.T) {
 // prevents concurrent requests from bypassing replay protection
 func TestAuthMiddleware_ConcurrentRequests(t *testing.T) {
 	t.Parallel()
-	
+
 	// This test verifies the mutex locking works correctly
 	// We'll just test that concurrent access to the mutex manager is safe
-	
+
 	const numConcurrentRequests = 20
 	const deviceID = "test-device-concurrent"
-	
+
 	done := make(chan struct{}, numConcurrentRequests)
 	var lockAcquired int32
-	
-	for i := 0; i < numConcurrentRequests; i++ {
+
+	for range numConcurrentRequests {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			
+
 			// Acquire device lock - this should be thread-safe
-			unlockDevice := LockDevice(deviceID)
-			
+			unlockDevice := LockClient(deviceID)
+
 			// Critical section - only one goroutine should be here at a time
 			current := atomic.AddInt32(&lockAcquired, 1)
 			if current != 1 {
 				t.Errorf("Race condition detected: %d goroutines in critical section", current)
 			}
-			
+
 			// Simulate some work
 			time.Sleep(1 * time.Millisecond)
-			
+
 			atomic.AddInt32(&lockAcquired, -1)
 			unlockDevice()
 		}()
 	}
 
 	// Wait for all requests to complete
-	for i := 0; i < numConcurrentRequests; i++ {
+	for range numConcurrentRequests {
 		<-done
 	}
-	
+
 	// Verify no race conditions occurred
 	assert.Equal(t, int32(0), atomic.LoadInt32(&lockAcquired), "All locks should be released")
 }
 
-// TestDeviceMutexManager_Cleanup verifies mutex cleanup works correctly
-func TestDeviceMutexManager_Cleanup(t *testing.T) {
+// TestClientMutexManager_Cleanup verifies mutex cleanup works correctly
+func TestClientMutexManager_Cleanup(t *testing.T) {
 	t.Parallel()
-	
-	dm := &DeviceMutexManager{}
-	
+
+	dm := &ClientMutexManager{}
+
 	// Create some mutexes
-	mutex1 := dm.getDeviceMutex("device1")
-	mutex2 := dm.getDeviceMutex("device2")
-	mutex3 := dm.getDeviceMutex("device3")
-	
+	mutex1 := dm.getClientMutex("device1")
+	mutex2 := dm.getClientMutex("device2")
+	mutex3 := dm.getClientMutex("device3")
+
 	require.NotNil(t, mutex1)
 	require.NotNil(t, mutex2)
 	require.NotNil(t, mutex3)
-	
+
 	// Age some mutexes
 	mutex1.lastUsed = time.Now().Add(-31 * time.Minute) // Should be cleaned
 	mutex2.lastUsed = time.Now().Add(-20 * time.Minute) // Should remain
-	mutex3.lastUsed = time.Now() // Should remain
-	
+	mutex3.lastUsed = time.Now()                        // Should remain
+
 	// Run cleanup
 	dm.cleanup()
-	
+
 	// Check that only old mutex was removed
 	_, exists1 := dm.mutexes.Load("device1")
 	_, exists2 := dm.mutexes.Load("device2")
 	_, exists3 := dm.mutexes.Load("device3")
-	
+
 	assert.False(t, exists1, "Old mutex should be cleaned up")
 	assert.True(t, exists2, "Recent mutex should remain")
 	assert.True(t, exists3, "Current mutex should remain")
 }
 
-// TestDeviceMutexManager_ConcurrentAccess verifies thread safety of mutex manager
-func TestDeviceMutexManager_ConcurrentAccess(t *testing.T) {
+// TestClientMutexManager_ConcurrentAccess verifies thread safety of mutex manager
+func TestClientMutexManager_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	
-	dm := &DeviceMutexManager{}
+
+	dm := &ClientMutexManager{}
 	const numGoroutines = 50
 	const deviceID = "concurrent-test-device"
-	
+
 	done := make(chan struct{}, numGoroutines)
-	
+
 	// Launch multiple goroutines that get/create mutex for same device
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			
-			mutex := dm.getDeviceMutex(deviceID)
+
+			mutex := dm.getClientMutex(deviceID)
 			require.NotNil(t, mutex)
-			assert.Equal(t, deviceID, mutex.deviceID)
+			assert.Equal(t, deviceID, mutex.clientID)
 		}()
 	}
-	
+
 	// Wait for all goroutines to complete
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		<-done
 	}
-	
+
 	// Verify only one mutex was created for the device
 	value, exists := dm.mutexes.Load(deviceID)
 	assert.True(t, exists, "Mutex should exist")
-	
-	mutex := value.(*deviceMutex)
-	assert.Equal(t, deviceID, mutex.deviceID)
+
+	mutex := value.(*clientMutex)
+	assert.Equal(t, deviceID, mutex.clientID)
 }

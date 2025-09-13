@@ -69,11 +69,11 @@ type System struct {
 	DBID     int64
 }
 
-type Device struct {
+type Client struct {
 	CreatedAt     time.Time `json:"createdAt"`
 	LastSeen      time.Time `json:"lastSeen"`
-	DeviceID      string    `json:"deviceId"`
-	DeviceName    string    `json:"deviceName"`
+	ClientID      string    `json:"clientId"`
+	ClientName    string    `json:"clientName"`
 	AuthTokenHash string    `json:"-"`
 	SharedSecret  []byte    `json:"-"`
 	SeqWindow     []byte    `json:"-"`
@@ -166,12 +166,12 @@ type UserDBI interface {
 	GetZapLinkHost(host string) (bool, bool, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
-	CreateDevice(deviceName, authToken string, sharedSecret []byte) (*Device, error)
-	GetDeviceByAuthToken(authToken string) (*Device, error)
-	GetDeviceByID(deviceID string) (*Device, error)
-	UpdateDeviceSequence(deviceID string, newSeq uint64, seqWindow []byte, nonceCache []string) error
-	GetAllDevices() ([]Device, error)
-	DeleteDevice(deviceID string) error
+	CreateClient(clientName, authToken string, sharedSecret []byte) (*Client, error)
+	GetClientByAuthToken(authToken string) (*Client, error)
+	GetClientByID(clientID string) (*Client, error)
+	UpdateClientSequence(clientID string, newSeq uint64, seqWindow []byte, nonceCache []string) error
+	GetAllClients() ([]Client, error)
+	DeleteClient(clientID string) error
 }
 
 type MediaDBI interface {

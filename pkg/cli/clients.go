@@ -120,7 +120,7 @@ func handleShowPairingCode(cfg *config.Instance, pl platforms.Platform) {
 	if _, err := fmt.Printf("Expires in: %d seconds\n", pairingResp.ExpiresIn); err != nil {
 		log.Error().Err(err).Msg("failed to print expiration time")
 	}
-	if _, err := fmt.Print("\nWaiting for device to pair... (Ctrl+C to cancel)\n"); err != nil {
+	if _, err := fmt.Print("\nWaiting for client to pair... (Ctrl+C to cancel)\n"); err != nil {
 		log.Error().Err(err).Msg("failed to print waiting message")
 	}
 
@@ -128,8 +128,8 @@ func handleShowPairingCode(cfg *config.Instance, pl platforms.Platform) {
 	select {}
 }
 
-func handleListDevices(_ *config.Instance, pl platforms.Platform) {
-	// Open user database to list devices
+func handleListClients(_ *config.Instance, pl platforms.Platform) {
+	// Open user database to list clients
 	userDB, err := userdb.OpenUserDB(context.Background(), pl)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to open user database")
@@ -140,54 +140,54 @@ func handleListDevices(_ *config.Instance, pl platforms.Platform) {
 	}
 	defer func() { _ = userDB.Close() }()
 
-	devices, err := userDB.GetAllDevices()
+	clients, err := userDB.GetAllClients()
 	if err != nil {
-		log.Error().Err(err).Msg("failed to get devices")
-		if _, writeErr := fmt.Fprintf(os.Stderr, "Error getting devices: %v\n", err); writeErr != nil {
+		log.Error().Err(err).Msg("failed to get clients")
+		if _, writeErr := fmt.Fprintf(os.Stderr, "Error getting clients: %v\n", err); writeErr != nil {
 			log.Error().Err(writeErr).Msg("failed to write error message")
 		}
 		return
 	}
 
-	if len(devices) == 0 {
-		if _, err := fmt.Println("No paired devices found."); err != nil {
+	if len(clients) == 0 {
+		if _, err := fmt.Println("No paired clients found."); err != nil {
 			log.Error().Err(err).Msg("failed to print message")
 		}
 		return
 	}
 
-	if _, err := fmt.Print("Paired devices:\n\n"); err != nil {
+	if _, err := fmt.Print("Paired clients:\n\n"); err != nil {
 		log.Error().Err(err).Msg("failed to print header")
 	}
-	if _, err := fmt.Printf("%-36s %-20s %-10s %s\n", "Device ID", "Name", "Sequence", "Last Seen"); err != nil {
+	if _, err := fmt.Printf("%-36s %-20s %-10s %s\n", "Client ID", "Name", "Sequence", "Last Seen"); err != nil {
 		log.Error().Err(err).Msg("failed to print column headers")
 	}
 	if _, err := fmt.Printf("%s\n", strings.Repeat("-", 80)); err != nil {
 		log.Error().Err(err).Msg("failed to print separator")
 	}
 
-	for i := range devices {
-		device := &devices[i]
+	for i := range clients {
+		client := &clients[i]
 		if _, err := fmt.Printf("%-36s %-20s %-10d %s\n",
-			device.DeviceID,
-			device.DeviceName,
-			device.CurrentSeq,
-			device.LastSeen.Format("2006-01-02 15:04:05"),
+			client.ClientID,
+			client.ClientName,
+			client.CurrentSeq,
+			client.LastSeen.Format("2006-01-02 15:04:05"),
 		); err != nil {
-			log.Error().Err(err).Msg("failed to print device info")
+			log.Error().Err(err).Msg("failed to print client info")
 		}
 	}
 }
 
-func handleRevokeDevice(_ *config.Instance, pl platforms.Platform, deviceID string) {
-	if deviceID == "" {
-		if _, err := fmt.Fprint(os.Stderr, "Error: device ID is required\n"); err != nil {
+func handleRevokeClient(_ *config.Instance, pl platforms.Platform, clientID string) {
+	if clientID == "" {
+		if _, err := fmt.Fprint(os.Stderr, "Error: client ID is required\n"); err != nil {
 			log.Error().Err(err).Msg("failed to write error message")
 		}
 		os.Exit(1)
 	}
 
-	// Open user database to revoke device
+	// Open user database to revoke client
 	userDB, err := userdb.OpenUserDB(context.Background(), pl)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to open user database")
@@ -198,16 +198,16 @@ func handleRevokeDevice(_ *config.Instance, pl platforms.Platform, deviceID stri
 	}
 	defer func() { _ = userDB.Close() }()
 
-	err = userDB.DeleteDevice(deviceID)
+	err = userDB.DeleteClient(clientID)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to delete device")
-		if _, writeErr := fmt.Fprintf(os.Stderr, "Error deleting device: %v\n", err); writeErr != nil {
+		log.Error().Err(err).Msg("failed to delete client")
+		if _, writeErr := fmt.Fprintf(os.Stderr, "Error deleting client: %v\n", err); writeErr != nil {
 			log.Error().Err(writeErr).Msg("failed to write error message")
 		}
 		return
 	}
 
-	if _, err := fmt.Printf("Device %s has been revoked successfully.\n", deviceID); err != nil {
+	if _, err := fmt.Printf("Client %s has been revoked successfully.\n", clientID); err != nil {
 		log.Error().Err(err).Msg("failed to print success message")
 	}
 }
