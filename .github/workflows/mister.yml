@@ -2,6 +2,12 @@ name: Generate MiSTer Downloader repo
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to generate repo for (optional, defaults to latest)'
+        required: false
+        type: string
 
 permissions: write-all
 jobs:
@@ -11,11 +17,15 @@ jobs:
       GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
     steps:
       - uses: actions/checkout@v4
-      - name: Get latest Zaparoo release
+        with:
+          ref: main
+      - name: Get release info
         id: zaparooreleaseinfo
         uses: cardinalby/git-get-release-action@v1
         with:
-          latest: true
+          # Use provided tag, or current release tag (for release event), or latest
+          tag: ${{ github.event.inputs.tag || github.event.release.tag_name || '' }}
+          latest: ${{ !github.event.inputs.tag && github.event_name != 'release' }}
           repo: ZaparooProject/zaparoo-core
       - name: Create repo database
         run: |
@@ -24,3 +34,5 @@ jobs:
         uses: EndBug/add-and-commit@v9
         with:
           add: scripts/mister/repo/tapto.json -f -A
+          default_author: github_actions
+          message: 'Update MiSTer repo for ${{ steps.zaparooreleaseinfo.outputs.tag_name }}'
