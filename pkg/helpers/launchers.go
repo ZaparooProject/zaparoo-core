@@ -20,7 +20,6 @@
 package helpers
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,7 +70,8 @@ func ParseCustomLaunchers(
 			SystemID:   systemID,
 			Folders:    v.MediaDirs,
 			Extensions: formatExtensions(v.FileExts),
-			Launch: func(_ *config.Instance, path string) error {
+			Lifecycle:  platforms.LifecycleBlocking,
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
 					log.Debug().Err(err).Msgf("error getting hostname, continuing")
@@ -91,36 +91,32 @@ func ParseCustomLaunchers(
 				parseReader := parser.NewParser(v.Execute)
 				parsed, err := parseReader.ParseExpressions()
 				if err != nil {
-					return fmt.Errorf("error parsing expressions: %w", err)
+					return nil, fmt.Errorf("error parsing expressions: %w", err)
 				}
 
 				evalReader := parser.NewParser(parsed)
 				output, err := evalReader.EvalExpressions(exprEnv)
 				if err != nil {
-					return fmt.Errorf("error evaluating execute expression: %w", err)
+					return nil, fmt.Errorf("error evaluating execute expression: %w", err)
 				}
 
-				// Use background context for game launchers - games should run indefinitely
-				// until user stops them, not be killed by timeout
-				// TODO: consider storing this context to enable programmatic game termination/quit functionality
-				ctx := context.Background()
+				var cmd *exec.Cmd
 
 				if runtime.GOOS == "windows" {
-					//nolint:gosec // Intentional: executes user-configured game launcher commands
-					cmd := exec.CommandContext(ctx, "cmd", "/c", output)
-					err = cmd.Start()
+					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
+					cmd = exec.Command("cmd", "/c", output)
 				} else {
-					//nolint:gosec // Intentional: executes user-configured game launcher commands
-					cmd := exec.CommandContext(ctx, "sh", "-c", output)
-					err = cmd.Start()
+					//nolint:gosec,noctx // User-configured launcher commands, managed via lifecycle
+					cmd = exec.Command("sh", "-c", output)
 				}
 
-				if err != nil {
+				if err = cmd.Start(); err != nil {
 					log.Error().Err(err).Msgf("error running custom launcher: %s", output)
-					return fmt.Errorf("failed to start custom launcher command: %w", err)
+					return nil, fmt.Errorf("failed to start custom launcher command: %w", err)
 				}
 
-				return nil
+				// Custom launchers can be tracked - return process for lifecycle management
+				return cmd.Process, nil
 			},
 		})
 	}

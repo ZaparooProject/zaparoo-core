@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -43,8 +44,10 @@ const (
 type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	trackedProcess *os.Process
 	kbd            linuxinput.Keyboard
 	gpd            linuxinput.Gamepad
+	processMu      sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -171,6 +174,12 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
+func (p *Platform) SetTrackedProcess(proc *os.Process) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	p.trackedProcess = proc
+}
+
 func (*Platform) ScanHook(_ *tokens.Token) error {
 	return nil
 }
@@ -267,6 +276,19 @@ func (p *Platform) StopActiveLauncher() error {
 
 	if killed {
 		log.Info().Msg("stopped active launcher")
+
+		// Also kill tracked process if it exists
+		p.processMu.Lock()
+		if p.trackedProcess != nil {
+			if err := p.trackedProcess.Kill(); err != nil {
+				log.Warn().Err(err).Msg("failed to kill tracked process")
+			} else {
+				log.Debug().Msg("killed tracked process")
+			}
+			p.trackedProcess = nil
+		}
+		p.processMu.Unlock()
+
 		p.setActiveMedia(nil)
 		return nil
 	}
@@ -277,11 +299,15 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := helpers.FindLauncher(cfg, p, path)
-	if err != nil {
-		return fmt.Errorf("launch media: error finding launcher: %w", err)
+
+	if launcher == nil {
+		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
+		if err != nil {
+			return fmt.Errorf("launch media: error finding launcher: %w", err)
+		}
+		launcher = &foundLauncher
 	}
 
 	// exit current media if one is running
@@ -298,7 +324,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
+	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -352,8 +378,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string) error {
-				return exec.CommandContext(context.Background(), path).Start()
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				err := exec.CommandContext(context.Background(), path).Start()
+				return nil, err
 			},
 		},
 	}
@@ -371,8 +398,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:         v.Extensions,
 			Folders:            []string{k},
 			SkipFilesystemScan: true, // Use gamelist.xml via Scanner, no filesystem scanning needed
-			Launch: func(_ *config.Instance, path string) error {
-				return esapi.APILaunch(path)
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				err := esapi.APILaunch(path)
+				return nil, err
 			},
 			Scanner: func(
 				cfg *config.Instance,

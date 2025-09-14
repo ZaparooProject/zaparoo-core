@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -156,7 +157,7 @@ func TestZapScriptExecution(t *testing.T) {
 					// Mock media database search
 					mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), tt.commands[1]).
 						Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
-					platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path).Return(nil)
+					platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path, (*platforms.Launcher)(nil)).Return(nil)
 				case "SENDKEY":
 					platform.On("KeyboardPress", tt.commands[1]).Return(nil)
 				case "SENDPAD":
@@ -176,7 +177,7 @@ func TestZapScriptExecution(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, results, 1, "Should find media")
 
-					err = platform.LaunchMedia(cfg, results[0].Path)
+					err = platform.LaunchMedia(cfg, results[0].Path, nil)
 					require.NoError(t, err)
 
 					// Verify launch was tracked
@@ -282,7 +283,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	mockUserDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 	mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), "Complex Game").
 		Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
-	platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path).Return(nil)
+	platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path, (*platforms.Launcher)(nil)).Return(nil)
 	platform.On("KeyboardPress", "RETURN").Return(nil)
 
 	// Database struct available if needed for more complex scenarios
@@ -299,7 +300,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "Should find media")
 
-	err = platform.LaunchMedia(cfg, results[0].Path)
+	err = platform.LaunchMedia(cfg, results[0].Path, nil)
 	require.NoError(t, err)
 
 	// Step 2: Send keyboard input

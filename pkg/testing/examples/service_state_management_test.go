@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
@@ -395,7 +396,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 	userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 	mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
 		helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
-	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), mock.AnythingOfType("string")).Return(nil)
+	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
 
 	t.Run("Token processing updates state", func(t *testing.T) {
 		t.Parallel()
@@ -426,7 +427,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Use the first search result path for launch
 		mediaPath := searchResults[0].Path
-		err = platform.LaunchMedia(cfg, mediaPath)
+		err = platform.LaunchMedia(cfg, mediaPath, nil)
 		require.NoError(t, err)
 
 		// 5. Record history

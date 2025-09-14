@@ -21,6 +21,7 @@ package mocks
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -147,8 +148,8 @@ func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error
 }
 
 // LaunchMedia launches some media by path and sets the active media if it was successful
-func (m *MockPlatform) LaunchMedia(cfg *config.Instance, path string) error {
-	args := m.Called(cfg, path)
+func (m *MockPlatform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+	args := m.Called(cfg, path, launcher)
 	m.launchedMedia = append(m.launchedMedia, path)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
@@ -274,6 +275,13 @@ func (m *MockPlatform) ClearHistory() {
 	m.launchedSystems = m.launchedSystems[:0]
 	m.keyboardPresses = m.keyboardPresses[:0]
 	m.gamepadPresses = m.gamepadPresses[:0]
+}
+
+// SetTrackedProcess stores a process handle for lifecycle management
+func (m *MockPlatform) SetTrackedProcess(proc *os.Process) {
+	// Mock implementation - just store for testing
+	args := m.Called(proc)
+	_ = args // Silence unused variable warning if no return values configured
 }
 
 // NewMockPlatform creates a new MockPlatform instance

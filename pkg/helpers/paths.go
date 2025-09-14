@@ -28,7 +28,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/TimDeve/valve-vdf-binary"
+	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -285,7 +285,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			continue
 		}
 
-		shortcuts, err := valve_vdf_binary.ParseShortcuts(bytes.NewReader(shortcutsData))
+		shortcuts, err := valvevdfbinary.ParseShortcuts(bytes.NewReader(shortcutsData))
 		if err != nil {
 			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
 			continue
@@ -358,9 +358,53 @@ func DoLaunch(
 ) error {
 	log.Debug().Msgf("launching with: %v", launcher)
 
-	err := launcher.Launch(cfg, path)
-	if err != nil {
-		return fmt.Errorf("failed to launch: %w", err)
+	// Handle different lifecycle modes
+	switch launcher.Lifecycle {
+	case platforms.LifecycleTracked:
+		// Launch and store process handle for future stopping
+		proc, err := launcher.Launch(cfg, path)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
+		// Store process in platform for tracking and later killing
+		if proc != nil {
+			pl.SetTrackedProcess(proc)
+		}
+		log.Debug().Msgf("launched tracked process for: %s", path)
+	case platforms.LifecycleBlocking:
+		// Launch in goroutine to avoid blocking the service
+		go func() {
+			log.Debug().Msgf("launching blocking process for: %s", path)
+			proc, err := launcher.Launch(cfg, path)
+			if err != nil {
+				log.Error().Err(err).Msgf("blocking launcher failed for: %s", path)
+				setActiveMedia(nil)
+				return
+			}
+
+			// Store process in platform for tracking (blocking processes can also be killed)
+			if proc != nil {
+				pl.SetTrackedProcess(proc)
+
+				// Wait for process to finish naturally
+				_, waitErr := proc.Wait()
+				if waitErr != nil {
+					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", path)
+				} else {
+					log.Debug().Msgf("blocking process completed for: %s", path)
+				}
+
+				// Clear active media when process ends (naturally or killed)
+				setActiveMedia(nil)
+				log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+			}
+		}()
+	case platforms.LifecycleFireAndForget:
+		// Default behavior - just launch and forget (ignore process)
+		_, err := launcher.Launch(cfg, path)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
 	}
 
 	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)
@@ -368,6 +412,7 @@ func DoLaunch(
 		log.Warn().Err(err).Msgf("no system metadata for: %s", launcher.SystemID)
 	}
 
+	// Set active media immediately (non-blocking for all lifecycle modes)
 	setActiveMedia(&models.ActiveMedia{
 		LauncherID: launcher.ID,
 		SystemID:   launcher.SystemID,

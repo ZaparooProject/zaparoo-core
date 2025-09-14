@@ -25,6 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -72,12 +73,12 @@ func TestTokenProcessingMockIntegration(t *testing.T) {
 	assert.Equal(t, testDBMedia.DBID, foundMedia.DBID)
 
 	// Test 3: Platform operations
-	mockPlatform.On("LaunchMedia", cfg, testDBMedia.Path).Return(nil)
+	mockPlatform.On("LaunchMedia", cfg, testDBMedia.Path, (*platforms.Launcher)(nil)).Return(nil)
 	mockPlatform.On("ID").Return("test-platform")
 
 	// Verify platform works
 	assert.Equal(t, "test-platform", mockPlatform.ID())
-	err = mockPlatform.LaunchMedia(cfg, testDBMedia.Path)
+	err = mockPlatform.LaunchMedia(cfg, testDBMedia.Path, nil)
 	require.NoError(t, err)
 
 	// Verify launch tracking
@@ -148,9 +149,9 @@ func TestErrorHandlingWithMocks(t *testing.T) {
 				// Use minimal config to avoid disk I/O
 				cfg := &config.Instance{}
 
-				mockPlatform.On("LaunchMedia", cfg, "/invalid/path").Return(errors.New("launch failed"))
+				mockPlatform.On("LaunchMedia", cfg, "/invalid/path", (*platforms.Launcher)(nil)).Return(errors.New("launch failed"))
 
-				err := mockPlatform.LaunchMedia(cfg, "/invalid/path")
+				err := mockPlatform.LaunchMedia(cfg, "/invalid/path", nil)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "launch failed")
 				mockPlatform.AssertExpectations(t)

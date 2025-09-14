@@ -42,18 +42,20 @@ import (
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
-	textMap             map[string]string
-	stopTracker         func() error
+	lastScan            *tokens.Token
+	activeMedia         func() *models.ActiveMedia
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
-	lastScan            *tokens.Token
-	activeMedia         func() *models.ActiveMedia
+	textMap             map[string]string
+	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
-	kbd                 linuxinput.Keyboard
+	trackedProcess      *os.Process
 	gpd                 linuxinput.Gamepad
+	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
+	processMu           sync.RWMutex
 	platformMu          sync.Mutex
 }
 
@@ -250,6 +252,12 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
+func (p *Platform) SetTrackedProcess(proc *os.Process) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	p.trackedProcess = proc
+}
+
 func (p *Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
@@ -329,6 +337,18 @@ func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 }
 
 func (p *Platform) StopActiveLauncher() error {
+	// Kill tracked process if it exists
+	p.processMu.Lock()
+	if p.trackedProcess != nil {
+		if err := p.trackedProcess.Kill(); err != nil {
+			log.Warn().Err(err).Msg("failed to kill tracked process")
+		} else {
+			log.Debug().Msg("killed tracked process")
+		}
+		p.trackedProcess = nil
+	}
+	p.processMu.Unlock()
+
 	err := mistermain.LaunchMenu()
 	if err != nil {
 		return fmt.Errorf("failed to launch menu: %w", err)
@@ -368,13 +388,17 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return nil
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
 	log.Info().Msgf("launch media: %s", path)
 	path = checkInZip(path)
 	launchers := helpers.PathToLaunchers(cfg, p, path)
-	launcher, err := helpers.FindLauncher(cfg, p, path)
-	if err != nil {
-		return fmt.Errorf("launch media: error finding launcher: %w", err)
+
+	if launcher == nil {
+		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
+		if err != nil {
+			return fmt.Errorf("launch media: error finding launcher: %w", err)
+		}
+		launcher = &foundLauncher
 	}
 
 	log.Info().
@@ -382,12 +406,12 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
 		Str("path", path).
 		Int("available_launchers", len(launchers)).
 		Msg("launching media")
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
+	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
-	p.setLastLauncher(&launcher)
+	p.setLastLauncher(launcher)
 	return nil
 }
 
@@ -658,6 +682,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		SystemID:   systemdefs.SystemVideo,
 		Folders:    []string{"Video", "Movies", "TV"},
 		Extensions: []string{".mp4", ".mkv", ".avi"},
+		Lifecycle:  platforms.LifecycleBlocking,
 		Launch:     launchMPlayer(p),
 		Kill:       killMPlayer,
 	}
