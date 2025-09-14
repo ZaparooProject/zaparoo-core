@@ -337,9 +337,15 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 		return false
 	}
 
+	// Normalize path separators on Windows to match the regex patterns
+	normalizedPath := s
+	if runtime.GOOS == "windows" {
+		normalizedPath = strings.ReplaceAll(s, "/", "\\")
+	}
+
 	for i := range allow {
 		if allowRe[i] != nil &&
-			allowRe[i].MatchString(s) {
+			allowRe[i].MatchString(normalizedPath) {
 			return true
 		}
 	}
