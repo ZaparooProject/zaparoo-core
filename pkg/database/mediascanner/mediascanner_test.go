@@ -212,3 +212,184 @@ func TestScannerDoubleExecutionPrevention(t *testing.T) {
 	shouldRunAgain := !scannedLaunchers[launcherID]
 	assert.False(t, shouldRunAgain, "Scanner should not execute again if already marked as scanned")
 }
+
+// TestSeedKnownTags_Success tests that SeedKnownTags works correctly under normal conditions
+func TestSeedKnownTags_Success(t *testing.T) {
+	t.Parallel()
+
+	mockDB := &testhelpers.MockMediaDBI{}
+	scanState := &database.ScanState{
+		TagTypesIndex:  0,
+		TagTypeIDs:     make(map[string]int),
+		TagsIndex:      0,
+		TagIDs:         make(map[string]int),
+		MediaTagsIndex: 0,
+	}
+
+	// Mock successful database operations
+	mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+		return tagType.Type == "Unknown"
+	})).Return(database.TagType{}, nil).Once()
+
+	mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+		return tag.Tag == "unknown"
+	})).Return(database.Tag{}, nil).Once()
+
+	mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+		return tagType.Type == "Extension"
+	})).Return(database.TagType{}, nil).Once()
+
+	mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+		return tag.Tag == ".ext"
+	})).Return(database.Tag{}, nil).Once()
+
+	// Mock insertions for the predefined tag types (Version, Language, Region, etc.)
+	mockDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Call SeedKnownTags
+	err := SeedKnownTags(mockDB, scanState)
+
+	// Verify no error occurred
+	require.NoError(t, err, "SeedKnownTags should not return an error on success")
+
+	// Verify state was updated correctly
+	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
+	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
+	assert.Contains(t, scanState.TagIDs, "unknown", "TagIDs should contain 'unknown' tag")
+	assert.Contains(t, scanState.TagIDs, ".ext", "TagIDs should contain '.ext' tag")
+
+	// Verify mock expectations
+	mockDB.AssertExpectations(t)
+}
+
+// TestSeedKnownTags_DatabaseError tests error handling when database operations fail
+func TestSeedKnownTags_DatabaseError(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name          string
+		failOperation string
+		expectedError string
+	}{
+		{
+			name:          "InsertTagType Unknown fails",
+			failOperation: "InsertTagType_Unknown",
+			expectedError: "error inserting tag type Unknown",
+		},
+		{
+			name:          "InsertTag unknown fails",
+			failOperation: "InsertTag_unknown",
+			expectedError: "error inserting tag unknown",
+		},
+		{
+			name:          "InsertTagType Extension fails",
+			failOperation: "InsertTagType_Extension",
+			expectedError: "error inserting tag type Extension",
+		},
+		{
+			name:          "InsertTag .ext fails",
+			failOperation: "InsertTag_.ext",
+			expectedError: "error inserting tag .ext",
+		},
+	}
+
+	for _, tc := range testCases {
+		// capture range variable
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockDB := &testhelpers.MockMediaDBI{}
+			scanState := &database.ScanState{
+				TagTypesIndex:  0,
+				TagTypeIDs:     make(map[string]int),
+				TagsIndex:      0,
+				TagIDs:         make(map[string]int),
+				MediaTagsIndex: 0,
+			}
+
+			// Set up mocks based on which operation should fail
+			switch tc.failOperation {
+			case "InsertTagType_Unknown":
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Unknown"
+				})).Return(database.TagType{}, assert.AnError).Once()
+
+			case "InsertTag_unknown":
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Unknown"
+				})).Return(database.TagType{}, nil).Once()
+				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+					return tag.Tag == "unknown"
+				})).Return(database.Tag{}, assert.AnError).Once()
+
+			case "InsertTagType_Extension":
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Unknown"
+				})).Return(database.TagType{}, nil).Once()
+				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+					return tag.Tag == "unknown"
+				})).Return(database.Tag{}, nil).Once()
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Extension"
+				})).Return(database.TagType{}, assert.AnError).Once()
+
+			case "InsertTag_.ext":
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Unknown"
+				})).Return(database.TagType{}, nil).Once()
+				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+					return tag.Tag == "unknown"
+				})).Return(database.Tag{}, nil).Once()
+				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
+					return tagType.Type == "Extension"
+				})).Return(database.TagType{}, nil).Once()
+				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
+					return tag.Tag == ".ext"
+				})).Return(database.Tag{}, assert.AnError).Once()
+			}
+
+			// Call SeedKnownTags
+			err := SeedKnownTags(mockDB, scanState)
+
+			// Verify error occurred and contains expected message
+			require.Error(t, err, "SeedKnownTags should return an error when database operation fails")
+			assert.Contains(t, err.Error(), tc.expectedError, "Error message should contain expected text")
+
+			// Verify mock expectations
+			mockDB.AssertExpectations(t)
+		})
+	}
+}
+
+// TestSeedKnownTags_OutsideTransaction tests that SeedKnownTags can be called outside a transaction
+func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
+	t.Parallel()
+
+	// This test ensures our fix allows SeedKnownTags to be called before BeginTransaction
+	// We simulate this by ensuring the function works without any transaction context
+
+	mockDB := &testhelpers.MockMediaDBI{}
+	scanState := &database.ScanState{
+		TagTypesIndex:  0,
+		TagTypeIDs:     make(map[string]int),
+		TagsIndex:      0,
+		TagIDs:         make(map[string]int),
+		MediaTagsIndex: 0,
+	}
+
+	// Mock all database operations to succeed
+	mockDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Call SeedKnownTags - this should work without any transaction context
+	err := SeedKnownTags(mockDB, scanState)
+
+	// Verify success
+	require.NoError(t, err, "SeedKnownTags should work outside of transaction context")
+	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
+	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
+
+	// Verify mock expectations
+	mockDB.AssertExpectations(t)
+}

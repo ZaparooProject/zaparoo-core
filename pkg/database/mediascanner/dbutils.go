@@ -205,7 +205,7 @@ func getTitleFromFilename(filename string) string {
 	return strings.TrimSpace(title)
 }
 
-func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
+func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 	typeMatches := map[string][]string{
 		"Version": {
 			"rev", "v",
@@ -276,8 +276,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback on failure
-		log.Warn().Err(err).Msgf("error inserting tag type Unknown")
-		return
+		return fmt.Errorf("error inserting tag type Unknown: %w", err)
 	}
 
 	ss.TagsIndex++
@@ -288,8 +287,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	})
 	if err != nil {
 		ss.TagsIndex-- // Rollback on failure
-		log.Warn().Err(err).Msgf("error inserting tag unknown")
-		return
+		return fmt.Errorf("error inserting tag unknown: %w", err)
 	}
 	ss.TagIDs["unknown"] = ss.TagsIndex // Only update cache on success
 
@@ -300,8 +298,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback on failure
-		log.Warn().Err(err).Msgf("error inserting tag type Extension")
-		return
+		return fmt.Errorf("error inserting tag type Extension: %w", err)
 	}
 
 	ss.TagsIndex++
@@ -312,8 +309,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 	})
 	if err != nil {
 		ss.TagsIndex-- // Rollback on failure
-		log.Warn().Err(err).Msgf("error inserting tag .ext")
-		return
+		return fmt.Errorf("error inserting tag .ext: %w", err)
 	}
 	ss.TagIDs[".ext"] = ss.TagsIndex // Only update cache on success
 
@@ -325,8 +321,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback on failure
-			log.Warn().Err(err).Msgf("error inserting tag type %s", typeStr)
-			return
+			return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
 		}
 		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex // Only update cache on success
 
@@ -339,12 +334,12 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) {
 			})
 			if err != nil {
 				ss.TagsIndex-- // Rollback on failure
-				log.Warn().Err(err).Msgf("error inserting tag %s", tag)
-				return
+				return fmt.Errorf("error inserting tag %s: %w", tag, err)
 			}
 			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex // Only update cache on success
 		}
 	}
+	return nil
 }
 
 func GetPathFragments(path string) MediaPathFragments {
