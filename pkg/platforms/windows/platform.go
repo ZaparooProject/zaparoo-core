@@ -657,6 +657,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				id := strings.TrimPrefix(path, "launchbox://")
 				id = strings.SplitN(id, "/", 2)[0]
+				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
 				cmd := exec.CommandContext(context.Background(), cliLauncher, "launch_by_id", id)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				return nil, cmd.Start()
