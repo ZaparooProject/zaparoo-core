@@ -157,7 +157,8 @@ func TestZapScriptExecution(t *testing.T) {
 					// Mock media database search
 					mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), tt.commands[1]).
 						Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
-					platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path, (*platforms.Launcher)(nil)).Return(nil)
+					platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path,
+						(*platforms.Launcher)(nil)).Return(nil)
 				case "SENDKEY":
 					platform.On("KeyboardPress", tt.commands[1]).Return(nil)
 				case "SENDPAD":

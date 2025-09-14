@@ -149,7 +149,8 @@ func TestErrorHandlingWithMocks(t *testing.T) {
 				// Use minimal config to avoid disk I/O
 				cfg := &config.Instance{}
 
-				mockPlatform.On("LaunchMedia", cfg, "/invalid/path", (*platforms.Launcher)(nil)).Return(errors.New("launch failed"))
+				mockPlatform.On("LaunchMedia", cfg, "/invalid/path",
+					(*platforms.Launcher)(nil)).Return(errors.New("launch failed"))
 
 				err := mockPlatform.LaunchMedia(cfg, "/invalid/path", nil)
 				require.Error(t, err)

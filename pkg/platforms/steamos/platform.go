@@ -272,7 +272,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					"steam",
 					"steam://rungameid/"+id,
 				).Start()
-				return nil, err
+				if err != nil {
+					return nil, fmt.Errorf("failed to start steam: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Steam launches don't return a process handle
 			},
 		},
 		{
@@ -281,7 +284,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				err := exec.CommandContext(context.Background(), "bash", "-c", path).Start()
-				return nil, err
+				if err != nil {
+					return nil, fmt.Errorf("failed to start command: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Shell script launches don't return a process handle
 			},
 		},
 	}

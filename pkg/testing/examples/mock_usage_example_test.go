@@ -98,7 +98,8 @@ func TestMockPlatformUsage(t *testing.T) {
 	testMedia := fixtures.NewRetroGame()
 
 	// Mock a successful media launch
-	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path, (*platforms.Launcher)(nil)).Return(nil)
+	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path,
+		(*platforms.Launcher)(nil)).Return(nil)
 
 	// Perform the launch (we'd need a config instance in a real test)
 	err := mockPlatform.LaunchMedia(nil, testMedia.Path, nil)
@@ -183,7 +184,8 @@ func TestMockAndFixtureIntegration(t *testing.T) {
 	mockReader.On("Write", testToken.Text).Return(testToken, nil)
 
 	// Mock platform launching the media
-	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path, (*platforms.Launcher)(nil)).Return(nil)
+	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path,
+		(*platforms.Launcher)(nil)).Return(nil)
 
 	// Simulate a token-to-media workflow
 	assert.True(t, mockReader.Connected())

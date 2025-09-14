@@ -166,7 +166,8 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	var err error
 	if launcher == nil {
 		// Auto-detect launcher as before
-		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
+		var foundLauncher platforms.Launcher
+		foundLauncher, err = helpers.FindLauncher(cfg, p, path)
 		if err != nil {
 			return fmt.Errorf("launch media: error finding launcher: %w", err)
 		}
@@ -215,7 +216,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				cmd := exec.CommandContext(context.Background(), path)
 				if err := cmd.Start(); err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to start command: %w", err)
 				}
 				// Generic launcher can be tracked - return process for lifecycle management
 				return cmd.Process, nil

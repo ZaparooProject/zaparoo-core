@@ -209,7 +209,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				err := exec.CommandContext(context.Background(), path).Start()
-				return nil, err
+				if err != nil {
+					return nil, fmt.Errorf("failed to start command: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Command launches don't return a process handle
 			},
 		},
 	}

@@ -396,7 +396,8 @@ func TestStateIntegrationWithServices(t *testing.T) {
 	userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 	mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
 		helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
-	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
+	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"),
+		mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
 
 	t.Run("Token processing updates state", func(t *testing.T) {
 		t.Parallel()

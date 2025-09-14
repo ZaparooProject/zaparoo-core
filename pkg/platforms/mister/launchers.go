@@ -196,7 +196,7 @@ func launchAggGnw(cfg *config.Instance, path string) (*os.Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to set active game: %w", err)
 	}
-	return nil, nil
+	return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 }
 
 func launchAltCore(
@@ -1368,7 +1368,7 @@ var Launchers = []platforms.Launcher{
 			if err != nil {
 				return nil, fmt.Errorf("failed to set active game: %w", err)
 			}
-			return nil, nil
+			return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 		},
 	},
 }
