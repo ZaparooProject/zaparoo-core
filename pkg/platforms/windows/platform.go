@@ -165,7 +165,7 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
 	log.Info().Msgf("launch media: %s", path)
-	
+
 	if launcher == nil {
 		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
 		if err != nil {
@@ -553,7 +553,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleBlocking, // Block for executables to track completion
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				//nolint:gosec // User-configured executable, managed via lifecycle
 				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
@@ -572,11 +571,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				var cmd *exec.Cmd
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
-					//nolint:gosec // User-configured script, fire-and-forget launcher
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
-					//nolint:gosec // User-configured script, fire-and-forget launcher
 					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -660,8 +657,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				id := strings.TrimPrefix(path, "launchbox://")
 				id = strings.SplitN(id, "/", 2)[0]
-				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
-				cmd := exec.Command(cliLauncher, "launch_by_id", id)
+				cmd := exec.CommandContext(context.Background(), cliLauncher, "launch_by_id", id)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				return nil, cmd.Start()
 			},
