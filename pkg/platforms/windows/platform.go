@@ -511,6 +511,13 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Launch: func(_ *config.Instance, path string) error {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
+				
+				ext := strings.ToLower(filepath.Ext(path))
+				// Extensions not in default PATHEXT need START command for proper execution
+				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
+					return exec.CommandContext(ctx, "cmd", "/c", "start", "", path).Start()
+				}
+				// .exe, .bat, .cmd work fine with direct execution
 				return exec.CommandContext(ctx, "cmd", "/c", path).Start()
 			},
 		},
