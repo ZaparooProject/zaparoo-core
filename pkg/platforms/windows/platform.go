@@ -22,6 +22,7 @@
 package windows
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -511,13 +512,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
 				//nolint:gosec // Safe: launches Steam with game ID from internal database
-				cmd := exec.Command(
+				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
 					"steam://rungameid/"+id,
 				)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				return nil, cmd.Start()
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start steam: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Steam launches don't return a process handle
 			},
 		},
 		{
@@ -529,13 +534,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				id = strings.TrimPrefix(id, "run/")
 				id = strings.SplitN(id, "/", 2)[0]
 				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
-				cmd := exec.Command(
+				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
 					"flashpoint://run/"+id,
 				)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				return nil, cmd.Start()
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start flashpoint: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},
 		},
 		{
@@ -545,10 +554,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Lifecycle:     platforms.LifecycleBlocking, // Block for executables to track completion
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				//nolint:gosec // User-configured executable, managed via lifecycle
-				cmd := exec.Command(path)
+				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to start executable: %w", err)
 				}
 				return cmd.Process, nil
 			},
@@ -564,14 +573,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				// Extensions not in default PATHEXT need START command for proper execution
 				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
 					//nolint:gosec // User-configured script, fire-and-forget launcher
-					cmd = exec.Command("cmd", "/c", "start", "", path)
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
 				} else {
 					// .bat, .cmd work fine with direct execution
 					//nolint:gosec // User-configured script, fire-and-forget launcher
-					cmd = exec.Command("cmd", "/c", path)
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
 				}
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				return nil, cmd.Start()
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start script: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Script launches don't return a process handle
 			},
 		},
 		{
