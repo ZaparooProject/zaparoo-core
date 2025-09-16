@@ -354,6 +354,13 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 	if env.Playlist.Active != nil && env.Playlist.Active.ID == pls.ID {
 		log.Debug().Msg("opening active playlist")
 		pls.Index = env.Playlist.Active.Index
+		// Validate index bounds
+		if pls.Index >= len(pls.Items) {
+			pls.Index = len(pls.Items) - 1
+		}
+		if pls.Index < 0 {
+			pls.Index = 0
+		}
 	}
 
 	items := make([]widgetmodels.PickerItem, 0, len(pls.Items))
