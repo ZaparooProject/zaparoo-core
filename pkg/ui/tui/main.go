@@ -86,8 +86,9 @@ func setupButtonNavigation(
 			case tcell.KeyEscape:
 				app.Stop()
 				return nil
+			default:
+				return event
 			}
-			return event
 		})
 	}
 }
