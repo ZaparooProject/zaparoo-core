@@ -1,2 +1,2 @@
 *.go text eol=lf
-testdata/*.txt text eol=lf
+**/testdata/*.txt text eol=lf

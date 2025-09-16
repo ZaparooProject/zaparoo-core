@@ -1254,12 +1254,10 @@ func TestGetMd5Hash(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				if tt.name == "regular_file" {
-					// For regular file, accept either Unix or Windows line ending hashes
-					unixHash := "371514d9ec1b09c42d7c924ccb009c0d"    // MD5 of "Hello, World!\nThis is a test file."
-					windowsHash := "24a6b15dd12be03261cb4df4077e2b95" // MD5 of "Hello, World!\r\nThis is a test file."
-					assert.True(t, result == unixHash || result == windowsHash,
-						"GetMd5Hash result should match either Unix (%s) or Windows (%s) line endings, got: %s",
-						unixHash, windowsHash, result)
+					// For regular file, expect consistent LF line endings due to .gitattributes
+					// MD5 of "Hello, World!\nThis is a test file." (34 bytes, LF)
+					expectedHash := "371514d9ec1b09c42d7c924ccb009c0d"
+					assert.Equal(t, expectedHash, result, "GetMd5Hash result mismatch")
 				} else {
 					assert.Equal(t, tt.expectedHash, result, "GetMd5Hash result mismatch")
 				}
@@ -1280,7 +1278,7 @@ func TestGetFileSize(t *testing.T) {
 		{
 			name:         "regular_file",
 			path:         "testdata/test.txt",
-			expectedSize: 34, // Length of "Hello, World!\nThis is a test file."
+			expectedSize: 34, // Length of "Hello, World!\nThis is a test file." with LF due to .gitattributes
 			wantErr:      false,
 		},
 		{
