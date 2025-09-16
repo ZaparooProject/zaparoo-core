@@ -20,6 +20,10 @@
 package systemdefs
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -113,5 +117,72 @@ func TestAllSystemsFunction(t *testing.T) {
 
 	for systemID := range Systems {
 		assert.True(t, systemIDs[systemID], "AllSystems should include system %s", systemID)
+	}
+}
+
+// TestAllSystemsHaveMetadataJSON tests that every system has an associated metadata JSON file
+func TestAllSystemsHaveMetadataJSON(t *testing.T) {
+	t.Parallel()
+
+	// Define the metadata structure we expect
+	type SystemMetadata struct {
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		Category     string `json:"category"`
+		ReleaseDate  string `json:"releaseDate,omitempty"`
+		Manufacturer string `json:"manufacturer,omitempty"`
+	}
+
+	// Get the path to the systems metadata directory
+	metadataDir := filepath.Join("../../assets/systems")
+
+	// Check each system defined in the Systems map
+	for systemID, system := range Systems {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			// Build the expected JSON file path
+			jsonFilePath := filepath.Join(metadataDir, fmt.Sprintf("%s.json", system.ID))
+
+			// Check if the file exists
+			fileInfo, err := os.Stat(jsonFilePath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					assert.Fail(t, "Missing metadata JSON file", "System %s is missing metadata file at %s", systemID, jsonFilePath)
+				} else {
+					assert.NoError(t, err, "Error checking metadata file for system %s", systemID)
+				}
+				return
+			}
+
+			// Verify it's a regular file
+			assert.True(t, fileInfo.Mode().IsRegular(), "Metadata path for system %s should be a regular file", systemID)
+
+			// Read and parse the JSON file
+			data, err := os.ReadFile(jsonFilePath)
+			require.NoError(t, err, "Failed to read metadata file for system %s", systemID)
+
+			var metadata SystemMetadata
+			err = json.Unmarshal(data, &metadata)
+			require.NoError(t, err, "Failed to parse metadata JSON for system %s", systemID)
+
+			// Validate the metadata
+			assert.Equal(t, system.ID, metadata.ID, "Metadata ID should match system ID for %s", systemID)
+			assert.NotEmpty(t, metadata.Name, "Metadata should have a name for system %s", systemID)
+			assert.NotEmpty(t, metadata.Category, "Metadata should have a category for system %s", systemID)
+
+			// Validate category is one of the expected values
+			validCategories := map[string]bool{
+				"Console":  true,
+				"Computer": true,
+				"Arcade":   true,
+				"Other":    true,
+				"Media":    true,
+				"Handheld": true,
+			}
+			assert.True(t, validCategories[metadata.Category], 
+				"System %s has invalid category '%s', expected one of: Console, Computer, Arcade, Other, Media, Handheld", 
+				systemID, metadata.Category)
+		})
 	}
 }
