@@ -108,7 +108,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 func NewKodiAlbumLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiAlbum",
-		SystemID:           systemdefs.SystemMusic,
+		SystemID:           systemdefs.SystemMusicAlbum,
 		Schemes:            []string{SchemeKodiAlbum},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
@@ -130,7 +130,7 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 func NewKodiArtistLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiArtist",
-		SystemID:           systemdefs.SystemMusic,
+		SystemID:           systemdefs.SystemMusicArtist,
 		Schemes:            []string{SchemeKodiArtist},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
@@ -152,7 +152,7 @@ func NewKodiArtistLauncher() platforms.Launcher {
 func NewKodiTVShowLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiTVShow",
-		SystemID:           systemdefs.SystemTV,
+		SystemID:           systemdefs.SystemTVShow,
 		Schemes:            []string{SchemeKodiShow},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
 		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {

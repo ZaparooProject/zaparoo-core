@@ -265,41 +265,44 @@ const (
 
 // Other
 const (
-	SystemAndroid    = "Android"
-	SystemArcade     = "Arcade"
-	SystemAtomiswave = "Atomiswave"
-	SystemArduboy    = "Arduboy"
-	SystemChip8      = "Chip8"
-	SystemCPS1       = "CPS1"
-	SystemCPS2       = "CPS2"
-	SystemCPS3       = "CPS3"
-	SystemDAPHNE     = "DAPHNE"
-	SystemDICE       = "DICE"
-	SystemSinge      = "Singe"
-	SystemModel1     = "Model1"
-	SystemModel2     = "Model2"
-	SystemNamco2X6   = "Namco2X6"
-	SystemNamco22    = "Namco22"
-	SystemTriforce   = "Triforce"
-	SystemLindbergh  = "Lindbergh"
-	SystemChihiro    = "Chihiro"
-	SystemGaelco     = "Gaelco"
-	SystemHikaru     = "Hikaru"
-	SystemIOS        = "iOS"
-	SystemModel3     = "Model3"
-	SystemNAOMI      = "NAOMI"
-	SystemNAOMI2     = "NAOMI2"
-	SystemPico8      = "Pico8"
-	SystemTIC80      = "TIC80"
-	SystemVideo      = "Video"
-	SystemAudio      = "Audio"
-	SystemMovie      = "Movie"
-	SystemTV         = "TV"
-	SystemMusic      = "Music"
-	SystemImage      = "Image"
-	SystemJ2ME       = "J2ME"
-	SystemGroovy     = "Groovy"
-	SystemPlugNPlay  = "PlugNPlay"
+	SystemAndroid     = "Android"
+	SystemArcade      = "Arcade"
+	SystemAtomiswave  = "Atomiswave"
+	SystemArduboy     = "Arduboy"
+	SystemChip8       = "Chip8"
+	SystemCPS1        = "CPS1"
+	SystemCPS2        = "CPS2"
+	SystemCPS3        = "CPS3"
+	SystemDAPHNE      = "DAPHNE"
+	SystemDICE        = "DICE"
+	SystemSinge       = "Singe"
+	SystemModel1      = "Model1"
+	SystemModel2      = "Model2"
+	SystemNamco2X6    = "Namco2X6"
+	SystemNamco22     = "Namco22"
+	SystemTriforce    = "Triforce"
+	SystemLindbergh   = "Lindbergh"
+	SystemChihiro     = "Chihiro"
+	SystemGaelco      = "Gaelco"
+	SystemHikaru      = "Hikaru"
+	SystemIOS         = "iOS"
+	SystemModel3      = "Model3"
+	SystemNAOMI       = "NAOMI"
+	SystemNAOMI2      = "NAOMI2"
+	SystemPico8       = "Pico8"
+	SystemTIC80       = "TIC80"
+	SystemVideo       = "Video"
+	SystemAudio       = "Audio"
+	SystemMovie       = "Movie"
+	SystemTV          = "TV"
+	SystemTVShow      = "TVShow"
+	SystemMusic       = "Music"
+	SystemMusicArtist = "MusicArtist"
+	SystemMusicAlbum  = "MusicAlbum"
+	SystemImage       = "Image"
+	SystemJ2ME        = "J2ME"
+	SystemGroovy      = "Groovy"
+	SystemPlugNPlay   = "PlugNPlay"
 )
 
 var Systems = map[string]System{
@@ -879,8 +882,17 @@ var Systems = map[string]System{
 	SystemTV: {
 		ID: SystemTV,
 	},
+	SystemTVShow: {
+		ID: SystemTVShow,
+	},
 	SystemMusic: {
 		ID: SystemMusic,
+	},
+	SystemMusicArtist: {
+		ID: SystemMusicArtist,
+	},
+	SystemMusicAlbum: {
+		ID: SystemMusicAlbum,
 	},
 	SystemImage: {
 		ID: SystemImage,

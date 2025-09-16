@@ -109,7 +109,7 @@ func TestNewKodiAlbumLauncher(t *testing.T) {
 	launcher := NewKodiAlbumLauncher()
 
 	assert.Equal(t, "KodiAlbum", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicAlbum, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiAlbum}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
@@ -122,7 +122,7 @@ func TestNewKodiArtistLauncher(t *testing.T) {
 	launcher := NewKodiArtistLauncher()
 
 	assert.Equal(t, "KodiArtist", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicArtist, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiArtist}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
@@ -135,7 +135,7 @@ func TestNewKodiTVShowLauncher(t *testing.T) {
 	launcher := NewKodiTVShowLauncher()
 
 	assert.Equal(t, "KodiTVShow", launcher.ID)
-	assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemTVShow, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiShow}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
