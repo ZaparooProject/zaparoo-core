@@ -6,7 +6,7 @@ require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/TimDeve/valve-vdf-binary v0.0.1
-	github.com/ZaparooProject/go-pn532 v0.7.1-0.20250914003758-d494a372bb21
+	github.com/ZaparooProject/go-pn532 v0.7.1-0.20250916010621-7dba6824e93f
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -32,7 +32,7 @@ require (
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
 	github.com/spf13/afero v1.14.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.4.0
 	golang.design/x/clipboard v0.7.0

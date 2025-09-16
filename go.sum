@@ -8,10 +8,8 @@ github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaik
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/TimDeve/valve-vdf-binary v0.0.1 h1:MhypwW2vt5tQiiHwujeu8FBX+GLM/whIyLeJhAK/nhg=
 github.com/TimDeve/valve-vdf-binary v0.0.1/go.mod h1:ImuIftZqbOSs276+cjAJI8gG3EM16eChvfmGgXUI02M=
-github.com/ZaparooProject/go-pn532 v0.7.0 h1:uKxamS4taGXgDwjD3HKsRVqJHI4Kmw7l9QzbX7r06pA=
-github.com/ZaparooProject/go-pn532 v0.7.0/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
-github.com/ZaparooProject/go-pn532 v0.7.1-0.20250914003758-d494a372bb21 h1:YRv7buog0QpV9fNTOZgtYC7qGdF+3Ttb6tjfI5+YZrM=
-github.com/ZaparooProject/go-pn532 v0.7.1-0.20250914003758-d494a372bb21/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
+github.com/ZaparooProject/go-pn532 v0.7.1-0.20250916010621-7dba6824e93f h1:3Ruws/HbGyZqLmyArR6Rm+jvKrsi3g9CjDtvR9Tc+5U=
+github.com/ZaparooProject/go-pn532 v0.7.1-0.20250916010621-7dba6824e93f/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=
@@ -141,8 +139,8 @@ github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81P
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOfJA=
-github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
+github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
+github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af h1:6yITBqGTE2lEeTPG04SN9W+iWHCRyHqlVYILiSXziwk=
 github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af/go.mod h1:4F09kP5F+am0jAwlQLddpoMDM+iewkxxt6nxUQ5nq5o=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
