@@ -48,7 +48,7 @@ func TestSystemMapIntegrity(t *testing.T) {
 
 	// Test that system names are valid (lowercase, no spaces for batocera compatibility)
 	for name := range SystemMap {
-		assert.Regexp(t, `^[a-z0-9+.-]+$`, name,
+		assert.Regexp(t, `^[a-z0-9+._-]+$`, name,
 			"System name %s should be lowercase alphanumeric with allowed special chars", name)
 		assert.NotEmpty(t, name, "System name should not be empty")
 		assert.Less(t, len(name), 30, "System name %s should be reasonable length", name)

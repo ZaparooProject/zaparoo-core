@@ -486,7 +486,6 @@ func TestPlaylistStateManagement(t *testing.T) {
 	playlists := fixtures.SamplePlaylists()
 
 	t.Run("Playlist activation sequence", func(t *testing.T) {
-		t.Parallel()
 		// Initially no playlist
 		assert.Nil(t, st.GetActivePlaylist())
 
@@ -508,7 +507,6 @@ func TestPlaylistStateManagement(t *testing.T) {
 	})
 
 	t.Run("Playlist state persistence", func(t *testing.T) {
-		t.Parallel()
 		// This would test if playlist state persists across application restarts
 		// In a real implementation, this might involve config file updates
 
