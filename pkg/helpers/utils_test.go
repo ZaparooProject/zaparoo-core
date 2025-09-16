@@ -1255,8 +1255,8 @@ func TestGetMd5Hash(t *testing.T) {
 				require.NoError(t, err)
 				if tt.name == "regular_file" {
 					// For regular file, accept either Unix or Windows line ending hashes
-					unixHash := "371514d9ec1b09c42d7c924ccb009c0d"      // MD5 of "Hello, World!\nThis is a test file."
-					windowsHash := "24a6b15dd12be03261cb4df4077e2b95"  // MD5 of "Hello, World!\r\nThis is a test file."
+					unixHash := "371514d9ec1b09c42d7c924ccb009c0d"    // MD5 of "Hello, World!\nThis is a test file."
+					windowsHash := "24a6b15dd12be03261cb4df4077e2b95" // MD5 of "Hello, World!\r\nThis is a test file."
 					assert.True(t, result == unixHash || result == windowsHash,
 						"GetMd5Hash result should match either Unix (%s) or Windows (%s) line endings, got: %s",
 						unixHash, windowsHash, result)
