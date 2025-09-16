@@ -478,6 +478,8 @@ func TestStateIntegrationWithServices(t *testing.T) {
 }
 
 // TestPlaylistStateManagement demonstrates playlist-specific state testing
+//
+//nolint:tparallel // subtests share state and cannot run in parallel
 func TestPlaylistStateManagement(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()

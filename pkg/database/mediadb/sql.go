@@ -46,17 +46,17 @@ const DBConfigLastGeneratedAt = "LastGeneratedAt"
 
 var (
 	gooseInitOnce sync.Once
-	gooseInitErr  error
+	errGooseInit  error
 )
 
 func sqlMigrateUp(db *sql.DB) error {
 	gooseInitOnce.Do(func() {
 		goose.SetBaseFS(migrationFiles)
-		gooseInitErr = goose.SetDialect("sqlite")
+		errGooseInit = goose.SetDialect("sqlite")
 	})
 
-	if gooseInitErr != nil {
-		return fmt.Errorf("error setting goose dialect: %w", gooseInitErr)
+	if errGooseInit != nil {
+		return fmt.Errorf("error setting goose dialect: %w", errGooseInit)
 	}
 
 	if err := goose.Up(db, "migrations"); err != nil {

@@ -85,7 +85,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			// Give server reasonable time to start (should be very quick due to internal sync)
 			var resp *http.Response
 			var connectErr error
-			for i := 0; i < 50; i++ { // Try for up to 2.5 seconds
+			for range 50 { // Try for up to 2.5 seconds
 				req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 				require.NoError(t, reqErr)
 
