@@ -161,7 +161,7 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 				"Metadata path for system %s should be a regular file", systemID)
 
 			// Read and parse the JSON file
-			data, err := os.ReadFile(filepath.Clean(jsonFilePath)) // nolint:gosec // Test file path is controlled
+			data, err := os.ReadFile(filepath.Clean(jsonFilePath))
 			require.NoError(t, err, "Failed to read metadata file for system %s", systemID)
 
 			var metadata SystemMetadata
