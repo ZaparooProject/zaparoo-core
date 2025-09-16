@@ -1067,7 +1067,7 @@ func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
 	require.True(t, ok, "item should be a map[string]any")
 	// PlaylistID is 0, which gets omitted due to omitempty tag
 	// The item should be an empty map {} for playing playlist 0
-	assert.Len(t, item, 0, "item should be empty map for playlist 0")
+	assert.Empty(t, item, "item should be empty map for playlist 0")
 }
 
 func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
@@ -1315,7 +1315,7 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 	require.True(t, ok, "item should be a map[string]any")
 	// PlaylistID is 0, which gets omitted due to omitempty tag
 	// The item should be an empty map {} for playing playlist 0
-	assert.Len(t, item, 0, "item should be empty map for playlist 0")
+	assert.Empty(t, item, "item should be empty map for playlist 0")
 }
 
 func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {

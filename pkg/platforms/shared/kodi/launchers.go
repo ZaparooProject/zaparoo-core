@@ -36,6 +36,7 @@ func NewKodiLocalLauncher() platforms.Launcher {
 		Extensions: []string{
 			".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
 			".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
+			".m3u", ".m3u8",
 		},
 		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)

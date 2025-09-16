@@ -36,10 +36,11 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 	assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 	assert.Equal(t, []string{"videos", "tvshows"}, launcher.Folders)
 
-	// Test all required extensions from LibreELEC
+	// Test all required extensions from LibreELEC plus M3U playlist support
 	expectedExtensions := []string{
 		".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
 		".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
+		".m3u", ".m3u8",
 	}
 	assert.Equal(t, expectedExtensions, launcher.Extensions)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")

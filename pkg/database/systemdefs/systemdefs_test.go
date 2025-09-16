@@ -134,7 +134,7 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 	}
 
 	// Get the path to the systems metadata directory
-	metadataDir := filepath.Join("../../assets/systems")
+	metadataDir := filepath.Join("..", "..", "assets", "systems")
 
 	// Check each system defined in the Systems map
 	for systemID, system := range Systems {
@@ -148,7 +148,8 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 			fileInfo, err := os.Stat(jsonFilePath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					assert.Fail(t, "Missing metadata JSON file", "System %s is missing metadata file at %s", systemID, jsonFilePath)
+					assert.Fail(t, "Missing metadata JSON file",
+						"System %s is missing metadata file at %s", systemID, jsonFilePath)
 				} else {
 					assert.NoError(t, err, "Error checking metadata file for system %s", systemID)
 				}
@@ -156,10 +157,11 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 			}
 
 			// Verify it's a regular file
-			assert.True(t, fileInfo.Mode().IsRegular(), "Metadata path for system %s should be a regular file", systemID)
+			assert.True(t, fileInfo.Mode().IsRegular(),
+				"Metadata path for system %s should be a regular file", systemID)
 
 			// Read and parse the JSON file
-			data, err := os.ReadFile(jsonFilePath)
+			data, err := os.ReadFile(filepath.Clean(jsonFilePath)) // nolint:gosec // Test file path is controlled
 			require.NoError(t, err, "Failed to read metadata file for system %s", systemID)
 
 			var metadata SystemMetadata
@@ -180,9 +182,10 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 				"Media":    true,
 				"Handheld": true,
 			}
-			assert.True(t, validCategories[metadata.Category], 
-				"System %s has invalid category '%s', expected one of: Console, Computer, Arcade, Other, Media, Handheld", 
-				systemID, metadata.Category)
+			expectedCategories := "Console, Computer, Arcade, Other, Media, Handheld"
+			assert.True(t, validCategories[metadata.Category],
+				"System %s has invalid category '%s', expected one of: %s",
+				systemID, metadata.Category, expectedCategories)
 		})
 	}
 }

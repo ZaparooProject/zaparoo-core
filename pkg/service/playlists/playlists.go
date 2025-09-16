@@ -70,11 +70,12 @@ func Previous(p Playlist) *Playlist {
 
 func Goto(p Playlist, idx int) *Playlist {
 	// Handle empty playlist case
-	if len(p.Items) == 0 {
+	switch {
+	case len(p.Items) == 0:
 		idx = 0
-	} else if idx >= len(p.Items) {
+	case idx >= len(p.Items):
 		idx = len(p.Items) - 1
-	} else if idx < 0 {
+	case idx < 0:
 		idx = 0
 	}
 	p.Index = idx

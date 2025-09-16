@@ -395,10 +395,11 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return x, y, w, h
 	})
 
-	for _, item := range pickerArgs.Items {
-		item := item // Create local copy to avoid closure bug
+	for i, item := range pickerArgs.Items {
+		// Create local copy to avoid closure bug
+		currentItem := pickerArgs.Items[i]
 		list.AddItem(item.Name, "", 0, func() {
-			run(item)
+			run(currentItem)
 		})
 	}
 
