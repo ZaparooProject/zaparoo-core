@@ -162,13 +162,16 @@ func TestRetroBatSystemMappingIntegrity(t *testing.T) {
 		assert.NotEmpty(t, systemID, "System folder %s should have non-empty SystemID", systemFolder)
 		assert.NotRegexp(t, `\s`, systemID,
 			"SystemID %s should not contain whitespace for system folder %s", systemID, systemFolder)
-		assert.Greater(t, len(systemID), 1, "SystemID should be more than 1 character for system folder %s", systemFolder)
-		assert.Less(t, len(systemID), 50, "SystemID should be less than 50 characters for system folder %s", systemFolder)
+		assert.Greater(t, len(systemID), 1,
+			"SystemID should be more than 1 character for system folder %s", systemFolder)
+		assert.Less(t, len(systemID), 50,
+			"SystemID should be less than 50 characters for system folder %s", systemFolder)
 
 		// Verify the SystemID exists in systemdefs by checking if it's a known system
 		// This ensures we're not using invalid or typo'd system IDs
 		validSystemID := isValidSystemID(systemID)
-		assert.True(t, validSystemID, "SystemID %s for folder %s should be a valid system defined in systemdefs", systemID, systemFolder)
+		assert.True(t, validSystemID,
+			"SystemID %s for folder %s should be a valid system defined in systemdefs", systemID, systemFolder)
 	}
 }
 
@@ -210,7 +213,7 @@ func TestAllRetroBatSystemsHaveValidStructure(t *testing.T) {
 
 			// Test that systemFolder is a valid RetroBat system folder name
 			assert.NotEmpty(t, systemFolder, "System folder name must not be empty")
-			assert.True(t, strings.ToLower(systemFolder) == systemFolder,
+			assert.Equal(t, strings.ToLower(systemFolder), systemFolder,
 				"System folder %s should be lowercase for RetroBat compatibility", systemFolder)
 
 			// Test that systemID is a valid Zaparoo system ID
@@ -221,13 +224,20 @@ func TestAllRetroBatSystemsHaveValidStructure(t *testing.T) {
 			// Test that the launcher can be created without errors
 			launcher := createRetroBatLauncher(systemFolder, systemID, "/tmp")
 			assert.NotEmpty(t, launcher.ID, "Launcher ID should not be empty for system %s", systemFolder)
-			assert.Equal(t, systemID, launcher.SystemID, "Launcher SystemID should match mapping for folder %s", systemFolder)
-			assert.Contains(t, launcher.ID, systemID, "Launcher ID should contain SystemID for folder %s", systemFolder)
-			assert.True(t, launcher.SkipFilesystemScan, "RetroBat launchers should skip filesystem scan for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Test, "Launcher Test function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Launch, "Launcher Launch function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Kill, "Launcher Kill function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Scanner, "Launcher Scanner function should not be nil for folder %s", systemFolder)
+			assert.Equal(t, systemID, launcher.SystemID,
+				"Launcher SystemID should match mapping for folder %s", systemFolder)
+			assert.Contains(t, launcher.ID, systemID,
+				"Launcher ID should contain SystemID for folder %s", systemFolder)
+			assert.True(t, launcher.SkipFilesystemScan,
+				"RetroBat launchers should skip filesystem scan for folder %s", systemFolder)
+			assert.NotNil(t, launcher.Test,
+				"Launcher Test function should not be nil for folder %s", systemFolder)
+			assert.NotNil(t, launcher.Launch,
+				"Launcher Launch function should not be nil for folder %s", systemFolder)
+			assert.NotNil(t, launcher.Kill,
+				"Launcher Kill function should not be nil for folder %s", systemFolder)
+			assert.NotNil(t, launcher.Scanner,
+				"Launcher Scanner function should not be nil for folder %s", systemFolder)
 		})
 	}
 }
