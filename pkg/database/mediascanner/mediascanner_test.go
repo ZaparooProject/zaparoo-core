@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -33,6 +34,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
+var testLauncherCacheMutex sync.Mutex
 
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
 // both have their scanners executed. This reproduces the bug where only one scanner
@@ -114,6 +118,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return(launchers)
 
 	// Initialize cache with our test launchers via the platform mock
+	testLauncherCacheMutex.Lock()
 	originalCache := helpers.GlobalLauncherCache
 	testCache := &helpers.LauncherCache{}
 
@@ -122,6 +127,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	helpers.GlobalLauncherCache = testCache
 	defer func() {
 		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
 	}()
 
 	// Run the media indexer
@@ -157,8 +163,12 @@ func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
 	}
 
 	// Mock the global launcher cache by creating a new one with our test launchers
+	testLauncherCacheMutex.Lock()
 	originalCache := helpers.GlobalLauncherCache
-	defer func() { helpers.GlobalLauncherCache = originalCache }()
+	defer func() {
+		helpers.GlobalLauncherCache = originalCache
+		testLauncherCacheMutex.Unlock()
+	}()
 
 	// Create a mock platform that returns our test launchers
 	mockPlatform := mocks.NewMockPlatform()

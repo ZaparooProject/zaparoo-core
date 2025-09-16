@@ -59,7 +59,6 @@ func setupTempUserDB(t *testing.T) (userDB *UserDB, cleanup func()) {
 }
 
 func TestUserDB_OpenClose_Integration(t *testing.T) {
-	t.Parallel()
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 
@@ -79,7 +78,6 @@ func TestUserDB_OpenClose_Integration(t *testing.T) {
 }
 
 func TestUserDB_GetDBPath_Integration(t *testing.T) {
-	t.Parallel()
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 
@@ -97,7 +95,6 @@ func TestUserDB_GetDBPath_Integration(t *testing.T) {
 }
 
 func TestMappingCRUD_Integration(t *testing.T) {
-	t.Parallel()
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 

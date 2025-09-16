@@ -116,7 +116,7 @@ func getLinuxList() ([]string, error) {
 	path := "/dev"
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, nil
+		return []string{}, nil
 	}
 
 	f, err := os.Open(path)
