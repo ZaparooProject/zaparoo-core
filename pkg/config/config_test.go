@@ -454,3 +454,82 @@ func TestLaunchersDefaultServerURL(t *testing.T) {
 		})
 	}
 }
+
+func TestIsWindowsStylePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "empty path",
+			path:     "",
+			expected: false,
+		},
+		{
+			name:     "unix absolute path",
+			path:     "/usr/local/bin",
+			expected: false,
+		},
+		{
+			name:     "unix relative path",
+			path:     "usr/local/bin",
+			expected: false,
+		},
+		{
+			name:     "windows drive letter C:",
+			path:     "C:\\Users\\test",
+			expected: true,
+		},
+		{
+			name:     "windows drive letter with forward slash",
+			path:     "C:/Users/test",
+			expected: true,
+		},
+		{
+			name:     "windows lowercase drive letter",
+			path:     "d:\\temp",
+			expected: true,
+		},
+		{
+			name:     "UNC path with backslashes",
+			path:     "\\\\server\\share",
+			expected: true,
+		},
+		{
+			name:     "UNC path with forward slashes",
+			path:     "//server/share",
+			expected: true,
+		},
+		{
+			name:     "not a drive letter (too short)",
+			path:     "C",
+			expected: false,
+		},
+		{
+			name:     "not a drive letter (no colon)",
+			path:     "CD\\Users",
+			expected: false,
+		},
+		{
+			name:     "invalid drive letter (number)",
+			path:     "1:\\Users",
+			expected: false,
+		},
+		{
+			name:     "relative path looks like drive",
+			path:     "C:file.txt",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isWindowsStylePath(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

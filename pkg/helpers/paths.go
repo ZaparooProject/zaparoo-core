@@ -317,11 +317,91 @@ type PathInfo struct {
 func GetPathInfo(path string) PathInfo {
 	var info PathInfo
 	info.Path = path
-	info.Base = filepath.Dir(path)
-	info.Filename = filepath.Base(path)
-	info.Extension = filepath.Ext(path)
+
+	// Use custom path parsing to preserve original path format
+	// instead of filepath functions which are OS-specific
+	info.Base = getPathDir(path)
+	info.Filename = getPathBase(path)
+	info.Extension = getPathExt(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)
 	return info
+}
+
+// getPathDir returns the directory portion of a path, preserving the original separator style
+func getPathDir(path string) string {
+	if path == "" {
+		return "."
+	}
+
+	// Remove trailing separators first
+	cleanPath := path
+	for len(cleanPath) > 1 && (cleanPath[len(cleanPath)-1] == '/' || cleanPath[len(cleanPath)-1] == '\\') {
+		cleanPath = cleanPath[:len(cleanPath)-1]
+	}
+
+	// Find the last separator (either / or \)
+	lastSlash := -1
+	for i := len(cleanPath) - 1; i >= 0; i-- {
+		if cleanPath[i] == '/' || cleanPath[i] == '\\' {
+			lastSlash = i
+			break
+		}
+	}
+
+	if lastSlash == -1 {
+		return "."
+	}
+
+	if lastSlash == 0 {
+		return cleanPath[:1] // Return "/" or "\"
+	}
+
+	return cleanPath[:lastSlash]
+}
+
+// getPathBase returns the last element of a path
+func getPathBase(path string) string {
+	if path == "" {
+		return "."
+	}
+
+	// Find the last separator (either / or \)
+	lastSlash := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' || path[i] == '\\' {
+			lastSlash = i
+			break
+		}
+	}
+
+	if lastSlash == -1 {
+		return path
+	}
+
+	return path[lastSlash+1:]
+}
+
+// getPathExt returns the file extension
+func getPathExt(path string) string {
+	base := getPathBase(path)
+
+	// Special cases that should return empty extension
+	if base == "" || base == "." || base == ".." {
+		return ""
+	}
+
+	// Find the last dot
+	lastDot := strings.LastIndex(base, ".")
+	if lastDot == -1 {
+		return ""
+	}
+
+	// If the dot is at the beginning (hidden file without extension), return empty
+	if lastDot == 0 {
+		return ""
+	}
+
+	return base[lastDot:]
 }
 
 // FindLauncher takes a path and tries to find the best possible match for a

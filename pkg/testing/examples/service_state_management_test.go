@@ -377,30 +377,29 @@ func TestStateValidationAndErrorHandling(t *testing.T) {
 // TestStateIntegrationWithServices demonstrates testing state integration with other services
 func TestStateIntegrationWithServices(t *testing.T) {
 	t.Parallel()
-	// Setup complete service environment
-	platform := mocks.NewMockPlatform()
-	// Only set expectations for what this test actually uses
-
-	st, _ := state.NewState(platform)
-	t.Cleanup(func() { st.StopService() })
-
-	userDB := helpers.NewMockUserDBI()
-	mediaDB := helpers.NewMockMediaDBI()
-
-	_ = &database.Database{
-		UserDB:  userDB,
-		MediaDB: mediaDB,
-	}
-
-	// Setup database expectations
-	userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
-	mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
-		helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
-	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"),
-		mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
 
 	t.Run("Token processing updates state", func(t *testing.T) {
 		t.Parallel()
+		// Setup complete service environment with separate instances for this test
+		platform := mocks.NewMockPlatform()
+		st, _ := state.NewState(platform)
+		t.Cleanup(func() { st.StopService() })
+
+		userDB := helpers.NewMockUserDBI()
+		mediaDB := helpers.NewMockMediaDBI()
+
+		_ = &database.Database{
+			UserDB:  userDB,
+			MediaDB: mediaDB,
+		}
+
+		// Setup database expectations
+		userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
+		mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
+			helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
+		platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"),
+			mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
+
 		// Simulate token processing that updates state
 		sampleTokens := fixtures.SampleTokens()
 		token := sampleTokens[0]
@@ -451,6 +450,11 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 	t.Run("Reader disconnection clears state", func(t *testing.T) {
 		t.Parallel()
+		// Setup complete service environment with separate instances for this test
+		platform := mocks.NewMockPlatform()
+		st, _ := state.NewState(platform)
+		t.Cleanup(func() { st.StopService() })
+
 		// Start with connected reader and active token
 		mockReader := mocks.NewMockReader()
 		st.SetReader("nfc_reader", mockReader)

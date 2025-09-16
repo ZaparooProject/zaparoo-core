@@ -183,19 +183,19 @@ func TestKodiCollectionLaunchersExist(t *testing.T) {
 	// Check KodiAlbum launcher
 	kodiAlbum, exists := foundLaunchers["KodiAlbum"]
 	require.True(t, exists, "KodiAlbum launcher should exist")
-	assert.Equal(t, systemdefs.SystemMusic, kodiAlbum.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicAlbum, kodiAlbum.SystemID)
 	assert.Contains(t, kodiAlbum.Schemes, kodi.SchemeKodiAlbum)
 
 	// Check KodiArtist launcher
 	kodiArtist, exists := foundLaunchers["KodiArtist"]
 	require.True(t, exists, "KodiArtist launcher should exist")
-	assert.Equal(t, systemdefs.SystemMusic, kodiArtist.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicArtist, kodiArtist.SystemID)
 	assert.Contains(t, kodiArtist.Schemes, kodi.SchemeKodiArtist)
 
 	// Check KodiTVShow launcher
 	kodiTVShow, exists := foundLaunchers["KodiTVShow"]
 	require.True(t, exists, "KodiTVShow launcher should exist")
-	assert.Equal(t, systemdefs.SystemTV, kodiTVShow.SystemID)
+	assert.Equal(t, systemdefs.SystemTVShow, kodiTVShow.SystemID)
 	assert.Contains(t, kodiTVShow.Schemes, kodi.SchemeKodiShow)
 }
 

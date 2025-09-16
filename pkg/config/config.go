@@ -332,14 +332,36 @@ func (c *Instance) SetDebugLogging(enabled bool) {
 	}
 }
 
+// isWindowsStylePath returns true if the path looks like a Windows path
+// (starts with drive letter like "C:" or UNC path like "\\server")
+func isWindowsStylePath(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	// Check for UNC path (\\server\share)
+	if strings.HasPrefix(path, "\\\\") || strings.HasPrefix(path, "//") {
+		return true
+	}
+
+	// Check for drive letter (C:, D:, etc.)
+	if len(path) >= 2 && path[1] == ':' {
+		c := path[0]
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	}
+
+	return false
+}
+
 func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	if s == "" {
 		return false
 	}
 
 	// Normalize path separators on Windows to match the regex patterns
+	// Only normalize paths that look like Windows paths (drive letter or UNC path)
 	normalizedPath := s
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" && isWindowsStylePath(s) {
 		normalizedPath = strings.ReplaceAll(s, "/", "\\")
 	}
 
