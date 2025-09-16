@@ -69,6 +69,8 @@ linters:
       simple: true
       range-loops: true
       for-loops: true
+    exhaustive:
+      default-signifies-exhaustive: true
     revive:
       severity: warning
       rules:
@@ -197,15 +199,6 @@ linters:
 
         You should have received a copy of the GNU General Public License
         along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
-
-issues:
-  exclude-rules:
-    # Workaround for golangci-lint v2.4.0 ARM64 macOS bug where exhaustive linter
-    # fails to properly analyze switch statements, causing false nolintlint errors.
-    - goos: darwin
-      goarch: arm64
-      linters:
-        - exhaustive
 
 formatters:
   enable:

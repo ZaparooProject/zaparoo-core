@@ -90,7 +90,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		switch k { //nolint:exhaustive // only handling navigation keys
+		switch k {
 		case tcell.KeyTab, tcell.KeyDown:
 			app.SetFocus(systemDropdown)
 			return nil
@@ -114,7 +114,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 			return event
 		}
 		k := event.Key()
-		switch k { //nolint:exhaustive // only handling navigation keys
+		switch k {
 		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			app.SetFocus(searchButton)
 			return nil
@@ -127,7 +127,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 	})
 	searchButton.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		k := event.Key()
-		switch k { //nolint:exhaustive // only handling navigation keys
+		switch k {
 		case tcell.KeyTab, tcell.KeyRight, tcell.KeyDown:
 			if mediaList.GetItemCount() > 0 {
 				mediaList.SetCurrentItem(0)
