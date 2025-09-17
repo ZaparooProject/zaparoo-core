@@ -510,3 +510,242 @@ func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTa
 	}
 	return system, err
 }
+
+// Scraper metadata methods
+
+func (db *MediaDB) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	query := `INSERT OR REPLACE INTO ScrapedMetadata
+		(MediaTitleDBID, ScraperSource, Description, Genre, Players, ReleaseDate, Developer, Publisher, Rating, ScrapedAt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := db.sql.ExecContext(db.ctx, query,
+		metadata.MediaTitleDBID,
+		metadata.ScraperSource,
+		metadata.Description,
+		metadata.Genre,
+		metadata.Players,
+		metadata.ReleaseDate,
+		metadata.Developer,
+		metadata.Publisher,
+		metadata.Rating,
+		metadata.ScrapedAt.Unix(),
+	)
+	return err
+}
+
+func (db *MediaDB) GetScrapedMetadata(mediaTitleDBID int64) (*database.ScrapedMetadata, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, MediaTitleDBID, ScraperSource, Description, Genre, Players, ReleaseDate, Developer, Publisher, Rating, ScrapedAt
+		FROM ScrapedMetadata WHERE MediaTitleDBID = ?`
+
+	row := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID)
+
+	var metadata database.ScrapedMetadata
+	var scrapedAtUnix int64
+
+	err := row.Scan(
+		&metadata.DBID,
+		&metadata.MediaTitleDBID,
+		&metadata.ScraperSource,
+		&metadata.Description,
+		&metadata.Genre,
+		&metadata.Players,
+		&metadata.ReleaseDate,
+		&metadata.Developer,
+		&metadata.Publisher,
+		&metadata.Rating,
+		&scrapedAtUnix,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	metadata.ScrapedAt = time.Unix(scrapedAtUnix, 0)
+	return &metadata, nil
+}
+
+func (db *MediaDB) GetGamesWithoutMetadata(systemID string, limit int) ([]database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
+		FROM MediaTitles mt
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		LEFT JOIN ScrapedMetadata sm ON sm.MediaTitleDBID = mt.DBID
+		WHERE s.SystemID = ? AND sm.DBID IS NULL
+		LIMIT ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, systemID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var titles []database.MediaTitle
+	for rows.Next() {
+		var title database.MediaTitle
+		err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+		if err != nil {
+			return nil, err
+		}
+		titles = append(titles, title)
+	}
+
+	return titles, rows.Err()
+}
+
+func (db *MediaDB) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
+		FROM MediaTitles mt
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		WHERE s.SystemID = ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, systemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var titles []database.MediaTitle
+	for rows.Next() {
+		var title database.MediaTitle
+		err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+		if err != nil {
+			return nil, err
+		}
+		titles = append(titles, title)
+	}
+
+	return titles, rows.Err()
+}
+
+func (db *MediaDB) GetMediaByID(mediaDBID int64) (*database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, MediaTitleDBID, Path FROM Media WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, mediaDBID)
+
+	var media database.Media
+	err := row.Scan(&media.DBID, &media.MediaTitleDBID, &media.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &media, nil
+}
+
+func (db *MediaDB) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, SystemDBID, Slug, Name FROM MediaTitles WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID)
+
+	var title database.MediaTitle
+	err := row.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &title, nil
+}
+
+// Game hash methods
+
+func (db *MediaDB) SaveGameHashes(hashes *database.GameHashes) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	query := `INSERT OR REPLACE INTO GameHashes
+		(MediaDBID, CRC32, MD5, SHA1, FileSize, ComputedAt)
+		VALUES (?, ?, ?, ?, ?, ?)`
+
+	_, err := db.sql.ExecContext(db.ctx, query,
+		hashes.MediaDBID,
+		hashes.CRC32,
+		hashes.MD5,
+		hashes.SHA1,
+		hashes.FileSize,
+		hashes.ComputedAt.Unix(),
+	)
+	return err
+}
+
+func (db *MediaDB) GetGameHashes(mediaDBID int64) (*database.GameHashes, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, MediaDBID, CRC32, MD5, SHA1, FileSize, ComputedAt
+		FROM GameHashes WHERE MediaDBID = ?`
+
+	row := db.sql.QueryRowContext(db.ctx, query, mediaDBID)
+
+	var hashes database.GameHashes
+	var computedAtUnix int64
+
+	err := row.Scan(
+		&hashes.DBID,
+		&hashes.MediaDBID,
+		&hashes.CRC32,
+		&hashes.MD5,
+		&hashes.SHA1,
+		&hashes.FileSize,
+		&computedAtUnix,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	hashes.ComputedAt = time.Unix(computedAtUnix, 0)
+	return &hashes, nil
+}
+
+func (db *MediaDB) FindGameByHash(crc32, md5, sha1 string) ([]database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT m.DBID, m.MediaTitleDBID, m.Path
+		FROM Media m
+		JOIN GameHashes gh ON gh.MediaDBID = m.DBID
+		WHERE (? != '' AND gh.CRC32 = ?)
+		   OR (? != '' AND gh.MD5 = ?)
+		   OR (? != '' AND gh.SHA1 = ?)`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, crc32, crc32, md5, md5, sha1, sha1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var media []database.Media
+	for rows.Next() {
+		var m database.Media
+		err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.Path)
+		if err != nil {
+			return nil, err
+		}
+		media = append(media, m)
+	}
+
+	return media, rows.Err()
+}

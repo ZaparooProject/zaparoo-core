@@ -125,6 +125,30 @@ type ScanState struct {
 	MediaTagsIndex int
 }
 
+type ScrapedMetadata struct {
+	DBID           int64
+	MediaTitleDBID int64
+	ScraperSource  string
+	Description    string
+	Genre          string
+	Players        string
+	ReleaseDate    string
+	Developer      string
+	Publisher      string
+	Rating         float64
+	ScrapedAt      time.Time
+}
+
+type GameHashes struct {
+	DBID       int64
+	MediaDBID  int64
+	CRC32      string
+	MD5        string
+	SHA1       string
+	FileSize   int64
+	ComputedAt time.Time
+}
+
 /*
  * Interfaces for external deps
  */
@@ -197,4 +221,17 @@ type MediaDBI interface {
 	FindMediaTag(row MediaTag) (MediaTag, error)
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
+
+	// Scraper metadata methods
+	SaveScrapedMetadata(metadata *ScrapedMetadata) error
+	GetScrapedMetadata(mediaTitleDBID int64) (*ScrapedMetadata, error)
+	GetGamesWithoutMetadata(systemID string, limit int) ([]MediaTitle, error)
+	GetMediaTitlesBySystem(systemID string) ([]MediaTitle, error)
+	GetMediaByID(mediaDBID int64) (*Media, error)
+	GetMediaTitleByID(mediaTitleDBID int64) (*MediaTitle, error)
+
+	// Game hash methods
+	SaveGameHashes(hashes *GameHashes) error
+	GetGameHashes(mediaDBID int64) (*GameHashes, error)
+	FindGameByHash(crc32, md5, sha1 string) ([]Media, error)
 }

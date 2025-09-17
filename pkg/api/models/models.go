@@ -34,6 +34,11 @@ const (
 	NotificationStopped             = "media.stopped"
 	NotificationStarted             = "media.started"
 	NotificationMediaIndexing       = "media.indexing" // TODO: rename to generating
+
+	// Scraper notifications
+	NotificationScraperProgress = "scraper.progress"
+	NotificationScraperComplete = "scraper.complete"
+	NotificationScraperError    = "scraper.error"
 )
 
 const (
@@ -67,6 +72,14 @@ const (
 	MethodReadersWrite         = "readers.write"
 	MethodReadersWriteCancel   = "readers.write.cancel"
 	MethodVersion              = "version"
+
+	// Scraper methods
+	MethodScraperSearch       = "scraper.search"
+	MethodScraperScrapeGame   = "scraper.scrapeGame"
+	MethodScraperScrapeSystem = "scraper.scrapeSystem"
+	MethodScraperProgress     = "scraper.progress"
+	MethodScraperCancel       = "scraper.cancel"
+	MethodScraperConfig       = "scraper.config"
 )
 
 type Notification struct {
