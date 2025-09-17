@@ -8,8 +8,10 @@ github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d h1:2xp1BQbqcDDaik
 github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d/go.mod h1:peYoMncQljjNS6tZwI9WVyQB3qZS6u79/N3mBOcnd3I=
 github.com/TimDeve/valve-vdf-binary v0.0.1 h1:MhypwW2vt5tQiiHwujeu8FBX+GLM/whIyLeJhAK/nhg=
 github.com/TimDeve/valve-vdf-binary v0.0.1/go.mod h1:ImuIftZqbOSs276+cjAJI8gG3EM16eChvfmGgXUI02M=
-github.com/ZaparooProject/go-pn532 v0.7.1-0.20250916010621-7dba6824e93f h1:3Ruws/HbGyZqLmyArR6Rm+jvKrsi3g9CjDtvR9Tc+5U=
-github.com/ZaparooProject/go-pn532 v0.7.1-0.20250916010621-7dba6824e93f/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
+github.com/ZaparooProject/go-pn532 v0.7.1-0.20250917004052-1cb75dc9edba h1:M9hdc+gpBxpa+vEzxvqcZ2wqAfpKHp34P6AC8fHc970=
+github.com/ZaparooProject/go-pn532 v0.7.1-0.20250917004052-1cb75dc9edba/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
+github.com/ZaparooProject/go-pn532 v0.8.0 h1:HmRcY2VI0gtM6xqJ6LUHaivHO6WxwCiGbhx7UQWIENA=
+github.com/ZaparooProject/go-pn532 v0.8.0/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=
