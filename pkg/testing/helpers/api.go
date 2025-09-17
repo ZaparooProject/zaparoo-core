@@ -149,6 +149,11 @@ func NewWebSocketTestServer(t *testing.T, handler func(*melody.Session, []byte))
 	})
 
 	wsts.Server = httptest.NewServer(mux)
+
+	// Brief wait to ensure server is fully ready for WebSocket connections
+	// This prevents "bad handshake" errors in CI environments with high load
+	time.Sleep(5 * time.Millisecond)
+
 	return wsts
 }
 

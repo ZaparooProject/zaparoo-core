@@ -1537,7 +1537,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 
 	// Test 3: Bearer token authentication configured
 	t.Run("bearer auth configured", func(t *testing.T) {
-		t.Parallel()
+		// Note: No t.Parallel() here since this test modifies global auth config
 
 		// Test bearer auth integration
 
