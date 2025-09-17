@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -43,11 +44,19 @@ var migrationFiles embed.FS
 
 const DBConfigLastGeneratedAt = "LastGeneratedAt"
 
-func sqlMigrateUp(db *sql.DB) error {
-	goose.SetBaseFS(migrationFiles)
+var (
+	gooseInitOnce sync.Once
+	errGooseInit  error
+)
 
-	if err := goose.SetDialect("sqlite"); err != nil {
-		return fmt.Errorf("error setting goose dialect: %w", err)
+func sqlMigrateUp(db *sql.DB) error {
+	gooseInitOnce.Do(func() {
+		goose.SetBaseFS(migrationFiles)
+		errGooseInit = goose.SetDialect("sqlite")
+	})
+
+	if errGooseInit != nil {
+		return fmt.Errorf("error setting goose dialect: %w", errGooseInit)
 	}
 
 	if err := goose.Up(db, "migrations"); err != nil {

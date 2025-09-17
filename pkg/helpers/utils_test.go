@@ -1225,10 +1225,9 @@ func TestGetMd5Hash(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "regular_file",
-			path:         "testdata/test.txt",
-			expectedHash: "371514d9ec1b09c42d7c924ccb009c0d", // MD5 of "Hello, World!\nThis is a test file."
-			wantErr:      false,
+			name:    "regular_file",
+			path:    "testdata/test.txt",
+			wantErr: false,
 		},
 		{
 			name:         "empty_file",
@@ -1254,7 +1253,14 @@ func TestGetMd5Hash(t *testing.T) {
 				assert.Contains(t, err.Error(), "failed to open file for MD5 hash")
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, tt.expectedHash, result, "GetMd5Hash result mismatch")
+				if tt.name == "regular_file" {
+					// For regular file, expect consistent LF line endings due to .gitattributes
+					// MD5 of "Hello, World!\nThis is a test file." (34 bytes, LF)
+					expectedHash := "371514d9ec1b09c42d7c924ccb009c0d"
+					assert.Equal(t, expectedHash, result, "GetMd5Hash result mismatch")
+				} else {
+					assert.Equal(t, tt.expectedHash, result, "GetMd5Hash result mismatch")
+				}
 			}
 		})
 	}
@@ -1272,7 +1278,7 @@ func TestGetFileSize(t *testing.T) {
 		{
 			name:         "regular_file",
 			path:         "testdata/test.txt",
-			expectedSize: 34, // Length of "Hello, World!\nThis is a test file."
+			expectedSize: 34, // Length of "Hello, World!\nThis is a test file." with LF due to .gitattributes
 			wantErr:      false,
 		},
 		{
@@ -1379,7 +1385,9 @@ func TestCopyFile(t *testing.T) {
 				// Verify file exists and content matches
 				content, err := os.ReadFile(destPath) //nolint:gosec // Test file with controlled path
 				require.NoError(t, err)
-				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
+				// Normalize line endings for cross-platform compatibility
+				normalizedContent := strings.ReplaceAll(string(content), "\r\n", "\n")
+				assert.Equal(t, "Hello, World!\nThis is a test file.", normalizedContent)
 			},
 			name:       "copy_regular_file",
 			sourcePath: "testdata/test.txt",
@@ -1411,7 +1419,9 @@ func TestCopyFile(t *testing.T) {
 				// Verify new content
 				content, err := os.ReadFile(destPath) //nolint:gosec // Test file with controlled path
 				require.NoError(t, err)
-				assert.Equal(t, "Hello, World!\nThis is a test file.", string(content))
+				// Normalize line endings for cross-platform compatibility
+				normalizedContent := strings.ReplaceAll(string(content), "\r\n", "\n")
+				assert.Equal(t, "Hello, World!\nThis is a test file.", normalizedContent)
 			},
 			name:       "overwrite_existing_file",
 			sourcePath: "testdata/test.txt",

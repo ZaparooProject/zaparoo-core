@@ -20,6 +20,8 @@
 package kodi
 
 import (
+	"os"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -34,10 +36,11 @@ func NewKodiLocalLauncher() platforms.Launcher {
 		Extensions: []string{
 			".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
 			".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
+			".m3u", ".m3u8",
 		},
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchFile(path)
+			return nil, client.LaunchFile(path)
 		},
 	}
 }
@@ -49,9 +52,9 @@ func NewKodiMovieLauncher() platforms.Launcher {
 		SystemID:           systemdefs.SystemMovie,
 		Schemes:            []string{SchemeKodiMovie},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchMovie(path)
+			return nil, client.LaunchMovie(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,
@@ -71,9 +74,9 @@ func NewKodiTVLauncher() platforms.Launcher {
 		SystemID:           systemdefs.SystemTV,
 		Schemes:            []string{SchemeKodiEpisode},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchTVEpisode(path)
+			return nil, client.LaunchTVEpisode(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,
@@ -95,9 +98,9 @@ func NewKodiMusicLauncher() platforms.Launcher {
 		Extensions: []string{
 			".mp3", ".flac", ".ogg", ".m4a", ".wav", ".wma", ".aac", ".opus",
 		},
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchFile(path)
+			return nil, client.LaunchFile(path)
 		},
 	}
 }
@@ -106,12 +109,12 @@ func NewKodiMusicLauncher() platforms.Launcher {
 func NewKodiAlbumLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiAlbum",
-		SystemID:           systemdefs.SystemMusic,
+		SystemID:           systemdefs.SystemMusicAlbum,
 		Schemes:            []string{SchemeKodiAlbum},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchAlbum(path)
+			return nil, client.LaunchAlbum(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,
@@ -128,12 +131,12 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 func NewKodiArtistLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiArtist",
-		SystemID:           systemdefs.SystemMusic,
+		SystemID:           systemdefs.SystemMusicArtist,
 		Schemes:            []string{SchemeKodiArtist},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchArtist(path)
+			return nil, client.LaunchArtist(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,
@@ -150,12 +153,12 @@ func NewKodiArtistLauncher() platforms.Launcher {
 func NewKodiTVShowLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "KodiTVShow",
-		SystemID:           systemdefs.SystemTV,
+		SystemID:           systemdefs.SystemTVShow,
 		Schemes:            []string{SchemeKodiShow},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchTVShow(path)
+			return nil, client.LaunchTVShow(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,
@@ -175,9 +178,9 @@ func NewKodiSongLauncher() platforms.Launcher {
 		SystemID:           systemdefs.SystemMusic,
 		Schemes:            []string{SchemeKodiSong},
 		SkipFilesystemScan: true, // Uses Kodi API via Scanner, no filesystem scanning needed
-		Launch: func(cfg *config.Instance, path string) error {
+		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 			client := NewClient(cfg)
-			return client.LaunchSong(path)
+			return nil, client.LaunchSong(path)
 		},
 		Scanner: func(
 			cfg *config.Instance,

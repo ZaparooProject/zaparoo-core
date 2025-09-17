@@ -115,7 +115,7 @@ func TestLibreELECHasKodiAlbumLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiAlbum" {
 			kodiAlbum = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemMusicAlbum, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiAlbum)
 			break
 		}
@@ -139,7 +139,7 @@ func TestLibreELECHasKodiArtistLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiArtist" {
 			kodiArtist = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemMusicArtist, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiArtist)
 			break
 		}
@@ -163,7 +163,7 @@ func TestLibreELECHasKodiTVShowLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiTVShow" {
 			kodiTVShow = &launcher.ID
-			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemTVShow, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiShow)
 			break
 		}

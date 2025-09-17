@@ -125,6 +125,7 @@ const (
 	SystemGBA               = "GBA"
 	SystemGBA2P             = "GBA2P"
 	SystemGenesis           = "Genesis"
+	SystemGenesisMSU        = "GenesisMSU"
 	SystemIntellivision     = "Intellivision"
 	SystemJaguar            = "Jaguar"
 	SystemJaguarCD          = "JaguarCD"
@@ -158,6 +159,7 @@ const (
 	SystemSaturn            = "Saturn"
 	SystemSNES              = "SNES"
 	SystemSNESMSU1          = "SNESMSU1"
+	SystemSGBMSU1           = "SGBMSU1"
 	SystemSNESMusic         = "SNESMusic"
 	SystemSuperGrafx        = "SuperGrafx"
 	SystemSwitch            = "Switch"
@@ -174,12 +176,20 @@ const (
 	SystemXbox              = "Xbox"
 	SystemXbox360           = "Xbox360"
 	SystemXboxOne           = "XboxOne"
+	SystemMultivision       = "Multivision"
+	SystemVideopacPlus      = "VideopacPlus"
+	SystemNGage             = "NGage"
+	SystemSocrates          = "Socrates"
+	SystemSuperACan         = "SuperACan"
+	SystemSufami            = "Sufami"
+	SystemVSmile            = "VSmile"
 )
 
 // Computers
 const (
 	SystemAcornAtom      = "AcornAtom"
 	SystemAcornElectron  = "AcornElectron"
+	SystemArchimedes     = "Archimedes"
 	SystemAliceMC10      = "AliceMC10"
 	SystemAmiga          = "Amiga"
 	SystemAmiga500       = "Amiga500"
@@ -209,6 +219,7 @@ const (
 	SystemMSX            = "MSX"
 	SystemMSX1           = "MSX1"
 	SystemMSX2           = "MSX2"
+	SystemMSX2Plus       = "MSX2Plus"
 	SystemMultiComp      = "MultiComp"
 	SystemOrao           = "Orao"
 	SystemOric           = "Oric"
@@ -248,31 +259,50 @@ const (
 	SystemPC98           = "PC98"
 	SystemX1             = "X1"
 	SystemCommanderX16   = "CommanderX16"
+	SystemSpectravideo   = "Spectravideo"
+	SystemThomson        = "Thomson"
 )
 
 // Other
 const (
-	SystemAndroid    = "Android"
-	SystemArcade     = "Arcade"
-	SystemAtomiswave = "Atomiswave"
-	SystemArduboy    = "Arduboy"
-	SystemChip8      = "Chip8"
-	SystemCPS1       = "CPS1"
-	SystemCPS2       = "CPS2"
-	SystemCPS3       = "CPS3"
-	SystemDAPHNE     = "DAPHNE"
-	SystemIOS        = "iOS"
-	SystemModel3     = "Model3"
-	SystemNAOMI      = "NAOMI"
-	SystemNAOMI2     = "NAOMI2"
-	SystemPico8      = "Pico8"
-	SystemTIC80      = "TIC80"
-	SystemVideo      = "Video"
-	SystemAudio      = "Audio"
-	SystemMovie      = "Movie"
-	SystemTV         = "TV"
-	SystemMusic      = "Music"
-	SystemGroovy     = "Groovy"
+	SystemAndroid     = "Android"
+	SystemArcade      = "Arcade"
+	SystemAtomiswave  = "Atomiswave"
+	SystemArduboy     = "Arduboy"
+	SystemChip8       = "Chip8"
+	SystemCPS1        = "CPS1"
+	SystemCPS2        = "CPS2"
+	SystemCPS3        = "CPS3"
+	SystemDAPHNE      = "DAPHNE"
+	SystemDICE        = "DICE"
+	SystemSinge       = "Singe"
+	SystemModel1      = "Model1"
+	SystemModel2      = "Model2"
+	SystemNamco2X6    = "Namco2X6"
+	SystemNamco22     = "Namco22"
+	SystemTriforce    = "Triforce"
+	SystemLindbergh   = "Lindbergh"
+	SystemChihiro     = "Chihiro"
+	SystemGaelco      = "Gaelco"
+	SystemHikaru      = "Hikaru"
+	SystemIOS         = "iOS"
+	SystemModel3      = "Model3"
+	SystemNAOMI       = "NAOMI"
+	SystemNAOMI2      = "NAOMI2"
+	SystemPico8       = "Pico8"
+	SystemTIC80       = "TIC80"
+	SystemVideo       = "Video"
+	SystemAudio       = "Audio"
+	SystemMovie       = "Movie"
+	SystemTV          = "TV"
+	SystemTVShow      = "TVShow"
+	SystemMusic       = "Music"
+	SystemMusicArtist = "MusicArtist"
+	SystemMusicAlbum  = "MusicAlbum"
+	SystemImage       = "Image"
+	SystemJ2ME        = "J2ME"
+	SystemGroovy      = "Groovy"
+	SystemPlugNPlay   = "PlugNPlay"
 )
 
 var Systems = map[string]System{
@@ -379,6 +409,11 @@ var Systems = map[string]System{
 	SystemGenesis: {
 		ID:      SystemGenesis,
 		Aliases: []string{"MegaDrive"},
+	},
+	SystemGenesisMSU: {
+		ID:        SystemGenesisMSU,
+		Aliases:   []string{"MegaDriveMSU", "MSU-MD"},
+		Fallbacks: []string{SystemGenesis},
 	},
 	SystemIntellivision: {
 		ID: SystemIntellivision,
@@ -502,6 +537,10 @@ var Systems = map[string]System{
 		Aliases:   []string{"MSU1", "MSU-1"},
 		Fallbacks: []string{SystemSNES},
 	},
+	SystemSGBMSU1: {
+		ID:        SystemSGBMSU1,
+		Fallbacks: []string{SystemSuperGameboy},
+	},
 	SystemSNESMusic: {
 		ID:        SystemSNESMusic,
 		Fallbacks: []string{SystemSNES},
@@ -561,12 +600,37 @@ var Systems = map[string]System{
 	SystemXboxOne: {
 		ID: SystemXboxOne,
 	},
+	SystemMultivision: {
+		ID: SystemMultivision,
+	},
+	SystemVideopacPlus: {
+		ID: SystemVideopacPlus,
+	},
+	SystemNGage: {
+		ID:      SystemNGage,
+		Aliases: []string{"N-Gage"},
+	},
+	SystemSocrates: {
+		ID: SystemSocrates,
+	},
+	SystemSuperACan: {
+		ID: SystemSuperACan,
+	},
+	SystemSufami: {
+		ID: SystemSufami,
+	},
+	SystemVSmile: {
+		ID: SystemVSmile,
+	},
 	// Computers
 	SystemAcornAtom: {
 		ID: SystemAcornAtom,
 	},
 	SystemAcornElectron: {
 		ID: SystemAcornElectron,
+	},
+	SystemArchimedes: {
+		ID: SystemArchimedes,
 	},
 	SystemAliceMC10: {
 		ID: SystemAliceMC10,
@@ -670,6 +734,10 @@ var Systems = map[string]System{
 	SystemMSX2: {
 		ID:        SystemMSX2,
 		Fallbacks: []string{SystemMSX},
+	},
+	SystemMSX2Plus: {
+		ID:        SystemMSX2Plus,
+		Fallbacks: []string{SystemMSX2, SystemMSX},
 	},
 	SystemMultiComp: {
 		ID: SystemMultiComp,
@@ -787,6 +855,9 @@ var Systems = map[string]System{
 	SystemGroovy: {
 		ID: SystemGroovy,
 	},
+	SystemPlugNPlay: {
+		ID: SystemPlugNPlay,
+	},
 	SystemIOS: {
 		ID: SystemIOS,
 	},
@@ -811,8 +882,23 @@ var Systems = map[string]System{
 	SystemTV: {
 		ID: SystemTV,
 	},
+	SystemTVShow: {
+		ID: SystemTVShow,
+	},
 	SystemMusic: {
 		ID: SystemMusic,
+	},
+	SystemMusicArtist: {
+		ID: SystemMusicArtist,
+	},
+	SystemMusicAlbum: {
+		ID: SystemMusicAlbum,
+	},
+	SystemImage: {
+		ID: SystemImage,
+	},
+	SystemJ2ME: {
+		ID: SystemJ2ME,
 	},
 	SystemCPS1: {
 		ID: SystemCPS1,
@@ -861,5 +947,44 @@ var Systems = map[string]System{
 	},
 	SystemCommanderX16: {
 		ID: SystemCommanderX16,
+	},
+	SystemSpectravideo: {
+		ID: SystemSpectravideo,
+	},
+	SystemThomson: {
+		ID: SystemThomson,
+	},
+	SystemDICE: {
+		ID: SystemDICE,
+	},
+	SystemSinge: {
+		ID: SystemSinge,
+	},
+	SystemModel1: {
+		ID: SystemModel1,
+	},
+	SystemModel2: {
+		ID: SystemModel2,
+	},
+	SystemNamco2X6: {
+		ID: SystemNamco2X6,
+	},
+	SystemNamco22: {
+		ID: SystemNamco22,
+	},
+	SystemTriforce: {
+		ID: SystemTriforce,
+	},
+	SystemLindbergh: {
+		ID: SystemLindbergh,
+	},
+	SystemChihiro: {
+		ID: SystemChihiro,
+	},
+	SystemGaelco: {
+		ID: SystemGaelco,
+	},
+	SystemHikaru: {
+		ID: SystemHikaru,
 	},
 }

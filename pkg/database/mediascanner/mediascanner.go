@@ -341,6 +341,26 @@ func NewNamesIndex(
 	if err != nil {
 		return 0, fmt.Errorf("failed to truncate database: %w", err)
 	}
+
+	// Initialize scan state and seed known tags before transaction
+	scanState := database.ScanState{
+		SystemsIndex:   0,
+		SystemIDs:      make(map[string]int),
+		TitlesIndex:    0,
+		TitleIDs:       make(map[string]int),
+		MediaIndex:     0,
+		MediaIDs:       make(map[string]int),
+		TagTypesIndex:  0,
+		TagTypeIDs:     make(map[string]int),
+		TagsIndex:      0,
+		TagIDs:         make(map[string]int),
+		MediaTagsIndex: 0,
+	}
+	err = SeedKnownTags(db, &scanState)
+	if err != nil {
+		return 0, fmt.Errorf("failed to seed known tags: %w", err)
+	}
+
 	err = db.BeginTransaction()
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
@@ -359,21 +379,6 @@ func NewNamesIndex(
 		Total: len(systems) + 2, // estimate steps
 		Step:  1,
 	}
-
-	scanState := database.ScanState{
-		SystemsIndex:   0,
-		SystemIDs:      make(map[string]int),
-		TitlesIndex:    0,
-		TitleIDs:       make(map[string]int),
-		MediaIndex:     0,
-		MediaIDs:       make(map[string]int),
-		TagTypesIndex:  0,
-		TagTypeIDs:     make(map[string]int),
-		TagsIndex:      0,
-		TagIDs:         make(map[string]int),
-		MediaTagsIndex: 0,
-	}
-	SeedKnownTags(db, &scanState)
 
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)

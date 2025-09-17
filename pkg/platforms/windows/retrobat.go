@@ -148,11 +148,11 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 			}
 			return false
 		},
-		Launch: func(_ *config.Instance, path string) error {
+		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 			if !isRetroBatRunning() {
-				return errors.New("RetroBat/EmulationStation is not running or API not accessible")
+				return nil, errors.New("RetroBat/EmulationStation is not running or API not accessible")
 			}
-			return esapi.APILaunch(path)
+			return nil, esapi.APILaunch(path)
 		},
 		Kill: func(_ *config.Instance) error {
 			if !isRetroBatRunning() {

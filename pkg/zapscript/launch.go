@@ -243,11 +243,13 @@ func getAltLauncher(
 		log.Info().Msgf("launching with alt launcher: %s", env.Cmd.AdvArgs["launcher"])
 
 		return func(args string) error {
-			return launcher.Launch(env.Cfg, args)
+			// Pass the specific launcher - DoLaunch handles lifecycle
+			return pl.LaunchMedia(env.Cfg, args, &launcher)
 		}, nil
 	}
+	// Normal path - pass nil for auto-detection
 	return func(args string) error {
-		return pl.LaunchMedia(env.Cfg, args)
+		return pl.LaunchMedia(env.Cfg, args, nil)
 	}, nil
 }
 

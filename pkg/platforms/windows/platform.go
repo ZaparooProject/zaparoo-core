@@ -31,6 +31,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -55,6 +57,8 @@ import (
 type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	trackedProcess *os.Process
+	processMu      sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -119,7 +123,34 @@ func (*Platform) NormalizePath(_ *config.Instance, path string) string {
 	return path
 }
 
+func (p *Platform) SetTrackedProcess(proc *os.Process) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+
+	// Kill any existing tracked process before setting new one
+	if p.trackedProcess != nil {
+		if err := p.trackedProcess.Kill(); err != nil {
+			log.Warn().Err(err).Msg("failed to kill previous tracked process")
+		}
+	}
+
+	p.trackedProcess = proc
+	log.Debug().Msgf("set tracked process: %v", proc)
+}
+
 func (p *Platform) StopActiveLauncher() error {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+
+	// Kill tracked process if exists
+	if p.trackedProcess != nil {
+		if err := p.trackedProcess.Kill(); err != nil {
+			log.Warn().Err(err).Msg("failed to kill tracked process")
+		}
+		p.trackedProcess = nil
+		log.Debug().Msg("killed tracked process")
+	}
+
 	p.setActiveMedia(nil)
 	return nil
 }
@@ -132,15 +163,19 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := helpers.FindLauncher(cfg, p, path)
-	if err != nil {
-		return fmt.Errorf("launch media: error finding launcher: %w", err)
+
+	if launcher == nil {
+		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
+		if err != nil {
+			return fmt.Errorf("launch media: error finding launcher: %w", err)
+		}
+		launcher = &foundLauncher
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
+	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -472,46 +507,81 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				return results, nil
 			},
-			Launch: func(_ *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				id := strings.TrimPrefix(path, "steam://")
 				id = strings.TrimPrefix(id, "rungameid/")
 				id = strings.SplitN(id, "/", 2)[0]
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
 				//nolint:gosec // Safe: launches Steam with game ID from internal database
-				return exec.CommandContext(ctx,
+				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
 					"steam://rungameid/"+id,
-				).Start()
+				)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start steam: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Steam launches don't return a process handle
 			},
 		},
 		{
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"flashpoint"},
-			Launch: func(_ *config.Instance, path string) error {
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				id := strings.TrimPrefix(path, "flashpoint://")
 				id = strings.TrimPrefix(id, "run/")
 				id = strings.SplitN(id, "/", 2)[0]
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
 				//nolint:gosec // Safe: launches Flashpoint with game ID from internal database
-				return exec.CommandContext(ctx,
+				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
 					"flashpoint://run/"+id,
-				).Start()
+				)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start flashpoint: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Flashpoint launches don't return a process handle
 			},
 		},
 		{
-			ID:            "Generic",
-			Extensions:    []string{".exe", ".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
+			ID:            "GenericExecutable",
+			Extensions:    []string{".exe"},
 			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string) error {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				return exec.CommandContext(ctx, "cmd", "/c", path).Start()
+			Lifecycle:     platforms.LifecycleBlocking, // Block for executables to track completion
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				cmd := exec.CommandContext(context.Background(), path)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				if err := cmd.Start(); err != nil {
+					return nil, fmt.Errorf("failed to start executable: %w", err)
+				}
+				return cmd.Process, nil
+			},
+		},
+		{
+			ID:            "GenericScript",
+			Extensions:    []string{".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
+			AllowListOnly: true,
+			Lifecycle:     platforms.LifecycleFireAndForget, // Fire-and-forget for scripts
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				ext := strings.ToLower(filepath.Ext(path))
+				var cmd *exec.Cmd
+				// Extensions not in default PATHEXT need START command for proper execution
+				if ext == ".lnk" || ext == ".a3x" || ext == ".ahk" {
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", "start", "", path)
+				} else {
+					// .bat, .cmd work fine with direct execution
+					cmd = exec.CommandContext(context.Background(), "cmd", "/c", path)
+				}
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start script: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Script launches don't return a process handle
 			},
 		},
 		{
@@ -574,23 +644,23 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				return results, nil
 			},
-			Launch: func(cfg *config.Instance, path string) error {
+			Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
 				lbDir, err := findLaunchBoxDir(cfg)
 				if err != nil {
-					return err
+					return nil, err
 				}
 
 				cliLauncher := filepath.Join(lbDir, "ThirdParty", "CLI_Launcher", "CLI_Launcher.exe")
 				if _, err := os.Stat(cliLauncher); os.IsNotExist(err) {
-					return errors.New("CLI_Launcher not found")
+					return nil, errors.New("CLI_Launcher not found")
 				}
 
 				id := strings.TrimPrefix(path, "launchbox://")
 				id = strings.SplitN(id, "/", 2)[0]
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
 				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
-				return exec.CommandContext(ctx, cliLauncher, "launch_by_id", id).Start()
+				cmd := exec.CommandContext(context.Background(), cliLauncher, "launch_by_id", id)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				return nil, cmd.Start()
 			},
 		},
 	}

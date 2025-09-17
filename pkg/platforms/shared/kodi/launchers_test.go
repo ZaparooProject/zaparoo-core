@@ -36,10 +36,11 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 	assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 	assert.Equal(t, []string{"videos", "tvshows"}, launcher.Folders)
 
-	// Test all required extensions from LibreELEC
+	// Test all required extensions from LibreELEC plus M3U playlist support
 	expectedExtensions := []string{
 		".avi", ".mp4", ".mkv", ".iso", ".bdmv", ".ifo", ".mpeg", ".mpg",
 		".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
+		".m3u", ".m3u8",
 	}
 	assert.Equal(t, expectedExtensions, launcher.Extensions)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
@@ -109,7 +110,7 @@ func TestNewKodiAlbumLauncher(t *testing.T) {
 	launcher := NewKodiAlbumLauncher()
 
 	assert.Equal(t, "KodiAlbum", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicAlbum, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiAlbum}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
@@ -122,7 +123,7 @@ func TestNewKodiArtistLauncher(t *testing.T) {
 	launcher := NewKodiArtistLauncher()
 
 	assert.Equal(t, "KodiArtist", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicArtist, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiArtist}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
@@ -135,7 +136,7 @@ func TestNewKodiTVShowLauncher(t *testing.T) {
 	launcher := NewKodiTVShowLauncher()
 
 	assert.Equal(t, "KodiTVShow", launcher.ID)
-	assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemTVShow, launcher.SystemID)
 	assert.Equal(t, []string{SchemeKodiShow}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")

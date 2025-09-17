@@ -131,3 +131,335 @@ func TestGetPathInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestGetPathDir(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			path:     "",
+			expected: ".",
+		},
+		{
+			name:     "unix absolute path",
+			path:     "/home/user/file.txt",
+			expected: "/home/user",
+		},
+		{
+			name:     "unix relative path",
+			path:     "dir/file.txt",
+			expected: "dir",
+		},
+		{
+			name:     "windows absolute path with backslashes",
+			path:     "C:\\Users\\user\\file.txt",
+			expected: "C:\\Users\\user",
+		},
+		{
+			name:     "windows absolute path with forward slashes",
+			path:     "C:/Users/user/file.txt",
+			expected: "C:/Users/user",
+		},
+		{
+			name:     "mixed separators",
+			path:     "C:\\Users/user\\file.txt",
+			expected: "C:\\Users/user",
+		},
+		{
+			name:     "root directory unix",
+			path:     "/file.txt",
+			expected: "/",
+		},
+		{
+			name:     "root directory windows backslash",
+			path:     "\\file.txt",
+			expected: "\\",
+		},
+		{
+			name:     "current directory file",
+			path:     "file.txt",
+			expected: ".",
+		},
+		{
+			name:     "no extension",
+			path:     "/home/user/filename",
+			expected: "/home/user",
+		},
+		{
+			name:     "nested path",
+			path:     "/very/deep/nested/directory/structure/file.ext",
+			expected: "/very/deep/nested/directory/structure",
+		},
+		{
+			name:     "path with spaces",
+			path:     "/home/user/My Documents/file.txt",
+			expected: "/home/user/My Documents",
+		},
+		{
+			name:     "UNC path",
+			path:     "\\\\server\\share\\file.txt",
+			expected: "\\\\server\\share",
+		},
+		{
+			name:     "UNC path with forward slashes",
+			path:     "//server/share/file.txt",
+			expected: "//server/share",
+		},
+		{
+			name:     "trailing separator preserved",
+			path:     "/home/user/dir/",
+			expected: "/home/user",
+		},
+		{
+			name:     "multiple consecutive separators",
+			path:     "/home//user///file.txt",
+			expected: "/home//user//",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := getPathDir(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetPathBase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			path:     "",
+			expected: ".",
+		},
+		{
+			name:     "unix absolute path",
+			path:     "/home/user/file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "unix relative path",
+			path:     "dir/file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "windows absolute path with backslashes",
+			path:     "C:\\Users\\user\\file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "windows absolute path with forward slashes",
+			path:     "C:/Users/user/file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "mixed separators",
+			path:     "C:\\Users/user\\file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "root directory unix",
+			path:     "/file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "root directory windows backslash",
+			path:     "\\file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "current directory file",
+			path:     "file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "no extension",
+			path:     "/home/user/filename",
+			expected: "filename",
+		},
+		{
+			name:     "filename with spaces",
+			path:     "/home/user/My File.txt",
+			expected: "My File.txt",
+		},
+		{
+			name:     "filename with special characters",
+			path:     "/home/user/file[1].txt",
+			expected: "file[1].txt",
+		},
+		{
+			name:     "multiple dots in filename",
+			path:     "/home/user/file.v1.2.final.txt",
+			expected: "file.v1.2.final.txt",
+		},
+		{
+			name:     "hidden file unix",
+			path:     "/home/user/.hidden",
+			expected: ".hidden",
+		},
+		{
+			name:     "directory name only",
+			path:     "directory",
+			expected: "directory",
+		},
+		{
+			name:     "trailing separator",
+			path:     "/home/user/dir/",
+			expected: "",
+		},
+		{
+			name:     "only separators",
+			path:     "///",
+			expected: "",
+		},
+		{
+			name:     "UNC path",
+			path:     "\\\\server\\share\\file.txt",
+			expected: "file.txt",
+		},
+		{
+			name:     "path with unicode",
+			path:     "/home/user/файл.txt",
+			expected: "файл.txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := getPathBase(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestGetPathExt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "empty path",
+			path:     "",
+			expected: "",
+		},
+		{
+			name:     "simple extension",
+			path:     "/home/user/file.txt",
+			expected: ".txt",
+		},
+		{
+			name:     "no extension",
+			path:     "/home/user/filename",
+			expected: "",
+		},
+		{
+			name:     "multiple dots",
+			path:     "/home/user/file.v1.2.final.txt",
+			expected: ".txt",
+		},
+		{
+			name:     "hidden file with extension",
+			path:     "/home/user/.hidden.txt",
+			expected: ".txt",
+		},
+		{
+			name:     "hidden file without extension",
+			path:     "/home/user/.hidden",
+			expected: "",
+		},
+		{
+			name:     "extension only",
+			path:     ".txt",
+			expected: "",
+		},
+		{
+			name:     "dot at start of filename",
+			path:     "/home/user/.config",
+			expected: "",
+		},
+		{
+			name:     "dot at start with extension",
+			path:     "/home/user/.bashrc.backup",
+			expected: ".backup",
+		},
+		{
+			name:     "uppercase extension",
+			path:     "/home/user/file.TXT",
+			expected: ".TXT",
+		},
+		{
+			name:     "mixed case extension",
+			path:     "/home/user/file.HtMl",
+			expected: ".HtMl",
+		},
+		{
+			name:     "long extension",
+			path:     "/home/user/file.extension",
+			expected: ".extension",
+		},
+		{
+			name:     "numeric extension",
+			path:     "/home/user/file.123",
+			expected: ".123",
+		},
+		{
+			name:     "special chars in extension",
+			path:     "/home/user/file.txt~",
+			expected: ".txt~",
+		},
+		{
+			name:     "windows path",
+			path:     "C:\\Users\\user\\file.doc",
+			expected: ".doc",
+		},
+		{
+			name:     "current directory file",
+			path:     "file.txt",
+			expected: ".txt",
+		},
+		{
+			name:     "file ending with dot",
+			path:     "/home/user/file.",
+			expected: ".",
+		},
+		{
+			name:     "multiple consecutive dots",
+			path:     "/home/user/file..txt",
+			expected: ".txt",
+		},
+		{
+			name:     "special case: dot file (should return empty)",
+			path:     ".",
+			expected: "",
+		},
+		{
+			name:     "special case: double dot",
+			path:     "..",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := getPathExt(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

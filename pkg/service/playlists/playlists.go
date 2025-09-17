@@ -69,9 +69,13 @@ func Previous(p Playlist) *Playlist {
 }
 
 func Goto(p Playlist, idx int) *Playlist {
-	if idx >= len(p.Items) {
+	// Handle empty playlist case
+	switch {
+	case len(p.Items) == 0:
+		idx = 0
+	case idx >= len(p.Items):
 		idx = len(p.Items) - 1
-	} else if idx < 0 {
+	case idx < 0:
 		idx = 0
 	}
 	p.Index = idx
@@ -102,6 +106,18 @@ func Pause(p Playlist) *Playlist {
 }
 
 func (p *Playlist) Current() PlaylistItem {
+	// Add bounds checking to prevent panic
+	if len(p.Items) == 0 {
+		return PlaylistItem{}
+	}
+	if p.Index < 0 || p.Index >= len(p.Items) {
+		// Clamp to valid range
+		if p.Index < 0 {
+			p.Index = 0
+		} else {
+			p.Index = len(p.Items) - 1
+		}
+	}
 	return p.Items[p.Index]
 }
 

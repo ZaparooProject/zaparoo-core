@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  go: '1.24'
+  go: "1.24"
 
 linters:
   enable:
@@ -45,7 +45,6 @@ linters:
     # - dupl
     - goheader
     - grouper
-    - paralleltest
     - tparallel
     - copyloopvar
     - intrange
@@ -70,16 +69,18 @@ linters:
       simple: true
       range-loops: true
       for-loops: true
+    exhaustive:
+      default-signifies-exhaustive: true
     revive:
       severity: warning
       rules:
         # - name: argument-limit
-          # arguments: [5]
+        # arguments: [5]
         - name: atomic
         - name: bool-literal-in-expr
         # - name: call-to-gc
         # - name: cognitive-complexity
-          # arguments: [15]
+        # arguments: [15]
         - name: comment-spacings
         - name: confusing-naming
         - name: confusing-results
@@ -203,4 +204,3 @@ formatters:
   enable:
     - gofumpt
     - gci
-  

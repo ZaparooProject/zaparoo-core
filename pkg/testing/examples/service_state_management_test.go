@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
@@ -376,29 +377,29 @@ func TestStateValidationAndErrorHandling(t *testing.T) {
 // TestStateIntegrationWithServices demonstrates testing state integration with other services
 func TestStateIntegrationWithServices(t *testing.T) {
 	t.Parallel()
-	// Setup complete service environment
-	platform := mocks.NewMockPlatform()
-	// Only set expectations for what this test actually uses
-
-	st, _ := state.NewState(platform)
-	t.Cleanup(func() { st.StopService() })
-
-	userDB := helpers.NewMockUserDBI()
-	mediaDB := helpers.NewMockMediaDBI()
-
-	_ = &database.Database{
-		UserDB:  userDB,
-		MediaDB: mediaDB,
-	}
-
-	// Setup database expectations
-	userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
-	mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
-		helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
-	platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), mock.AnythingOfType("string")).Return(nil)
 
 	t.Run("Token processing updates state", func(t *testing.T) {
 		t.Parallel()
+		// Setup complete service environment with separate instances for this test
+		platform := mocks.NewMockPlatform()
+		st, _ := state.NewState(platform)
+		t.Cleanup(func() { st.StopService() })
+
+		userDB := helpers.NewMockUserDBI()
+		mediaDB := helpers.NewMockMediaDBI()
+
+		_ = &database.Database{
+			UserDB:  userDB,
+			MediaDB: mediaDB,
+		}
+
+		// Setup database expectations
+		userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
+		mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
+			helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
+		platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"),
+			mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
+
 		// Simulate token processing that updates state
 		sampleTokens := fixtures.SampleTokens()
 		token := sampleTokens[0]
@@ -426,7 +427,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Use the first search result path for launch
 		mediaPath := searchResults[0].Path
-		err = platform.LaunchMedia(cfg, mediaPath)
+		err = platform.LaunchMedia(cfg, mediaPath, nil)
 		require.NoError(t, err)
 
 		// 5. Record history
@@ -449,6 +450,11 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 	t.Run("Reader disconnection clears state", func(t *testing.T) {
 		t.Parallel()
+		// Setup complete service environment with separate instances for this test
+		platform := mocks.NewMockPlatform()
+		st, _ := state.NewState(platform)
+		t.Cleanup(func() { st.StopService() })
+
 		// Start with connected reader and active token
 		mockReader := mocks.NewMockReader()
 		st.SetReader("nfc_reader", mockReader)
@@ -476,6 +482,8 @@ func TestStateIntegrationWithServices(t *testing.T) {
 }
 
 // TestPlaylistStateManagement demonstrates playlist-specific state testing
+//
+//nolint:tparallel // subtests share state and cannot run in parallel
 func TestPlaylistStateManagement(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
@@ -484,7 +492,6 @@ func TestPlaylistStateManagement(t *testing.T) {
 	playlists := fixtures.SamplePlaylists()
 
 	t.Run("Playlist activation sequence", func(t *testing.T) {
-		t.Parallel()
 		// Initially no playlist
 		assert.Nil(t, st.GetActivePlaylist())
 
@@ -506,7 +513,6 @@ func TestPlaylistStateManagement(t *testing.T) {
 	})
 
 	t.Run("Playlist state persistence", func(t *testing.T) {
-		t.Parallel()
 		// This would test if playlist state persists across application restarts
 		// In a real implementation, this might involve config file updates
 

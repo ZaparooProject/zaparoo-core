@@ -116,7 +116,7 @@ func getLinuxList() ([]string, error) {
 	path := "/dev"
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, nil
+		return []string{}, nil
 	}
 
 	f, err := os.Open(path)
@@ -161,7 +161,7 @@ func GetSerialDeviceList() ([]string, error) {
 	case "linux":
 		return getLinuxList()
 	case "darwin":
-		var devices []string
+		devices := make([]string, 0)
 		ports, err := serial.GetPortsList()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get serial ports list on darwin: %w", err)
@@ -179,7 +179,7 @@ func GetSerialDeviceList() ([]string, error) {
 
 		return devices, nil
 	case "windows":
-		var devices []string
+		devices := make([]string, 0)
 		ports, err := serial.GetPortsList()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get serial ports list on windows: %w", err)

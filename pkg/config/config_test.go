@@ -21,6 +21,7 @@ package config
 
 import (
 	"regexp"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,6 +142,13 @@ func TestCheckAllow(t *testing.T) {
 			input:    "valid",
 			expected: true,
 		},
+		{
+			name:     "non-windows style path - no normalization needed",
+			allow:    []string{"/usr/local/.*"},
+			allowRe:  []*regexp.Regexp{regexp.MustCompile("/usr/local/.*")},
+			input:    "/usr/local/bin/app",
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -148,6 +156,72 @@ func TestCheckAllow(t *testing.T) {
 			t.Parallel()
 			result := checkAllow(tt.allow, tt.allowRe, tt.input)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCheckAllowWindowsPathNormalization(t *testing.T) {
+	t.Parallel()
+
+	// Test Windows path normalization behavior
+	tests := []struct {
+		osExpected map[string]bool
+		name       string
+		input      string
+		allow      []string
+		allowRe    []*regexp.Regexp
+		expected   bool
+	}{
+		{
+			name:    "windows forward slash should normalize to backslash on Windows",
+			allow:   []string{"C:\\\\root\\\\.*\\.lnk"},
+			allowRe: []*regexp.Regexp{regexp.MustCompile(`C:\\root\\.*\.lnk`)},
+			input:   "C:/root/notepad.lnk",
+			osExpected: map[string]bool{
+				"windows": true,  // Should match after normalization
+				"linux":   false, // No normalization on Linux
+				"darwin":  false, // No normalization on macOS
+			},
+		},
+		{
+			name:    "windows mixed separators should normalize on Windows",
+			allow:   []string{"C:\\\\Users\\\\.*\\\\Desktop\\\\.*"},
+			allowRe: []*regexp.Regexp{regexp.MustCompile(`C:\\Users\\.*\\Desktop\\.*`)},
+			input:   "C:/Users/test/Desktop/file.exe",
+			osExpected: map[string]bool{
+				"windows": true,  // Should match after normalization
+				"linux":   false, // No normalization on Linux
+				"darwin":  false, // No normalization on macOS
+			},
+		},
+		{
+			name:    "backslash input should always match backslash pattern",
+			allow:   []string{"C:\\\\root\\\\.*\\.lnk"},
+			allowRe: []*regexp.Regexp{regexp.MustCompile(`C:\\root\\.*\.lnk`)},
+			input:   "C:\\root\\notepad.lnk",
+			osExpected: map[string]bool{
+				"windows": true, // Direct match
+				"linux":   true, // Direct match (even though unusual for Linux)
+				"darwin":  true, // Direct match (even though unusual for macOS)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := checkAllow(tt.allow, tt.allowRe, tt.input)
+
+			// Get expected result for current OS
+			expectedForCurrentOS, exists := tt.osExpected[runtime.GOOS]
+			if !exists {
+				// Default to false if OS not specified
+				expectedForCurrentOS = false
+			}
+
+			assert.Equal(t, expectedForCurrentOS, result,
+				"OS: %s, Input: %s, Pattern: %s",
+				runtime.GOOS, tt.input, tt.allow[0])
 		})
 	}
 }
@@ -377,6 +451,85 @@ func TestLaunchersDefaultServerURL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.expected, tt.launcherCfg.ServerURL)
+		})
+	}
+}
+
+func TestIsWindowsStylePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{
+			name:     "empty path",
+			path:     "",
+			expected: false,
+		},
+		{
+			name:     "unix absolute path",
+			path:     "/usr/local/bin",
+			expected: false,
+		},
+		{
+			name:     "unix relative path",
+			path:     "usr/local/bin",
+			expected: false,
+		},
+		{
+			name:     "windows drive letter C:",
+			path:     "C:\\Users\\test",
+			expected: true,
+		},
+		{
+			name:     "windows drive letter with forward slash",
+			path:     "C:/Users/test",
+			expected: true,
+		},
+		{
+			name:     "windows lowercase drive letter",
+			path:     "d:\\temp",
+			expected: true,
+		},
+		{
+			name:     "UNC path with backslashes",
+			path:     "\\\\server\\share",
+			expected: true,
+		},
+		{
+			name:     "UNC path with forward slashes",
+			path:     "//server/share",
+			expected: true,
+		},
+		{
+			name:     "not a drive letter (too short)",
+			path:     "C",
+			expected: false,
+		},
+		{
+			name:     "not a drive letter (no colon)",
+			path:     "CD\\Users",
+			expected: false,
+		},
+		{
+			name:     "invalid drive letter (number)",
+			path:     "1:\\Users",
+			expected: false,
+		},
+		{
+			name:     "relative path looks like drive",
+			path:     "C:file.txt",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isWindowsStylePath(tt.path)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

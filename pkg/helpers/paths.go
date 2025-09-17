@@ -28,7 +28,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/TimDeve/valve-vdf-binary"
+	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -285,7 +285,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			continue
 		}
 
-		shortcuts, err := valve_vdf_binary.ParseShortcuts(bytes.NewReader(shortcutsData))
+		shortcuts, err := valvevdfbinary.ParseShortcuts(bytes.NewReader(shortcutsData))
 		if err != nil {
 			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
 			continue
@@ -317,11 +317,91 @@ type PathInfo struct {
 func GetPathInfo(path string) PathInfo {
 	var info PathInfo
 	info.Path = path
-	info.Base = filepath.Dir(path)
-	info.Filename = filepath.Base(path)
-	info.Extension = filepath.Ext(path)
+
+	// Use custom path parsing to preserve original path format
+	// instead of filepath functions which are OS-specific
+	info.Base = getPathDir(path)
+	info.Filename = getPathBase(path)
+	info.Extension = getPathExt(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)
 	return info
+}
+
+// getPathDir returns the directory portion of a path, preserving the original separator style
+func getPathDir(path string) string {
+	if path == "" {
+		return "."
+	}
+
+	// Remove trailing separators first
+	cleanPath := path
+	for len(cleanPath) > 1 && (cleanPath[len(cleanPath)-1] == '/' || cleanPath[len(cleanPath)-1] == '\\') {
+		cleanPath = cleanPath[:len(cleanPath)-1]
+	}
+
+	// Find the last separator (either / or \)
+	lastSlash := -1
+	for i := len(cleanPath) - 1; i >= 0; i-- {
+		if cleanPath[i] == '/' || cleanPath[i] == '\\' {
+			lastSlash = i
+			break
+		}
+	}
+
+	if lastSlash == -1 {
+		return "."
+	}
+
+	if lastSlash == 0 {
+		return cleanPath[:1] // Return "/" or "\"
+	}
+
+	return cleanPath[:lastSlash]
+}
+
+// getPathBase returns the last element of a path
+func getPathBase(path string) string {
+	if path == "" {
+		return "."
+	}
+
+	// Find the last separator (either / or \)
+	lastSlash := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' || path[i] == '\\' {
+			lastSlash = i
+			break
+		}
+	}
+
+	if lastSlash == -1 {
+		return path
+	}
+
+	return path[lastSlash+1:]
+}
+
+// getPathExt returns the file extension
+func getPathExt(path string) string {
+	base := getPathBase(path)
+
+	// Special cases that should return empty extension
+	if base == "" || base == "." || base == ".." {
+		return ""
+	}
+
+	// Find the last dot
+	lastDot := strings.LastIndex(base, ".")
+	if lastDot == -1 {
+		return ""
+	}
+
+	// If the dot is at the beginning (hidden file without extension), return empty
+	if lastDot == 0 {
+		return ""
+	}
+
+	return base[lastDot:]
 }
 
 // FindLauncher takes a path and tries to find the best possible match for a
@@ -358,9 +438,53 @@ func DoLaunch(
 ) error {
 	log.Debug().Msgf("launching with: %v", launcher)
 
-	err := launcher.Launch(cfg, path)
-	if err != nil {
-		return fmt.Errorf("failed to launch: %w", err)
+	// Handle different lifecycle modes
+	switch launcher.Lifecycle {
+	case platforms.LifecycleTracked:
+		// Launch and store process handle for future stopping
+		proc, err := launcher.Launch(cfg, path)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
+		// Store process in platform for tracking and later killing
+		if proc != nil {
+			pl.SetTrackedProcess(proc)
+		}
+		log.Debug().Msgf("launched tracked process for: %s", path)
+	case platforms.LifecycleBlocking:
+		// Launch in goroutine to avoid blocking the service
+		go func() {
+			log.Debug().Msgf("launching blocking process for: %s", path)
+			proc, err := launcher.Launch(cfg, path)
+			if err != nil {
+				log.Error().Err(err).Msgf("blocking launcher failed for: %s", path)
+				setActiveMedia(nil)
+				return
+			}
+
+			// Store process in platform for tracking (blocking processes can also be killed)
+			if proc != nil {
+				pl.SetTrackedProcess(proc)
+
+				// Wait for process to finish naturally
+				_, waitErr := proc.Wait()
+				if waitErr != nil {
+					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", path)
+				} else {
+					log.Debug().Msgf("blocking process completed for: %s", path)
+				}
+
+				// Clear active media when process ends (naturally or killed)
+				setActiveMedia(nil)
+				log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+			}
+		}()
+	case platforms.LifecycleFireAndForget:
+		// Default behavior - just launch and forget (ignore process)
+		_, err := launcher.Launch(cfg, path)
+		if err != nil {
+			return fmt.Errorf("failed to launch: %w", err)
+		}
 	}
 
 	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)
@@ -368,6 +492,7 @@ func DoLaunch(
 		log.Warn().Err(err).Msgf("no system metadata for: %s", launcher.SystemID)
 	}
 
+	// Set active media immediately (non-blocking for all lifecycle modes)
 	setActiveMedia(&models.ActiveMedia{
 		LauncherID: launcher.ID,
 		SystemID:   launcher.SystemID,

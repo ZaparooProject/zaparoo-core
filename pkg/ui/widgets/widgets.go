@@ -336,6 +336,8 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		ps, err := json.Marshal(zsrp)
 		if err != nil {
 			log.Error().Err(err).Msg("error creating run params")
+			app.Stop()
+			return
 		}
 
 		_, err = client.LocalClient(context.Background(), cfg, models.MethodRun, string(ps))
@@ -393,9 +395,11 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 		return x, y, w, h
 	})
 
-	for _, item := range pickerArgs.Items {
+	for i, item := range pickerArgs.Items {
+		// Create local copy to avoid closure bug
+		currentItem := pickerArgs.Items[i]
 		list.AddItem(item.Name, "", 0, func() {
-			run(item)
+			run(currentItem)
 		})
 	}
 
@@ -416,7 +420,9 @@ func PickerUIBuilder(cfg *config.Instance, _ platforms.Platform, argsPath string
 			app.Stop()
 		}
 		// reset the timeout timer if a key was pressed
-		timer.Stop()
+		if timer != nil {
+			timer.Stop()
+		}
 		timer, cto = handleTimeout(app, cto)
 		return event
 	})

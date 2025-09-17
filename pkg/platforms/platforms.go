@@ -21,6 +21,7 @@ package platforms
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -34,6 +35,18 @@ import (
 )
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
+
+// LauncherLifecycle determines how a launcher process is managed
+type LauncherLifecycle int
+
+const (
+	// LifecycleFireAndForget (zero value) launches without tracking
+	LifecycleFireAndForget LauncherLifecycle = iota
+	// LifecycleTracked launches and keeps process handle for stopping
+	LifecycleTracked
+	// LifecycleBlocking waits for process to exit naturally
+	LifecycleBlocking
+)
 
 const (
 	PlatformIDBatocera  = "batocera"
@@ -99,7 +112,8 @@ type Launcher struct {
 	// It's checked after all standard extension and folder checks.
 	Test func(*config.Instance, string) bool
 	// Launch function, takes a direct as possible path/ID media file.
-	Launch func(*config.Instance, string) error
+	// Returns process handle for tracked processes, nil for fire-and-forget.
+	Launch func(*config.Instance, string) (*os.Process, error)
 	// Kill function kills the current active launcher, if possible.
 	Kill func(*config.Instance) error
 	// Optional function to perform custom media scanning. Takes the list of
@@ -125,6 +139,8 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
+	// Lifecycle determines how the launcher process is managed.
+	Lifecycle LauncherLifecycle
 }
 
 // Settings defines all simple settings/configuration values available for a
@@ -182,6 +198,9 @@ type Platform interface {
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
 	StopActiveLauncher() error
+	// SetTrackedProcess stores a process handle for lifecycle management.
+	// Used by DoLaunch to track processes that can be killed later.
+	SetTrackedProcess(*os.Process)
 	// PlayAudio plays an audio file at the given path. A relative path will be
 	// resolved using the data directory assets folder as the base. This
 	// function does not block until the audio finishes.
@@ -191,8 +210,8 @@ type Platform interface {
 	// appropriate launcher for a given system, without any media loaded.
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches some media by path and sets the active media if it
-	// was successful.
-	LaunchMedia(*config.Instance, string) error
+	// was successful. Pass nil for launcher to auto-detect, or a specific Launcher.
+	LaunchMedia(*config.Instance, string, *Launcher) error
 	// KeyboardPress presses and then releases a single keyboard button on a
 	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error

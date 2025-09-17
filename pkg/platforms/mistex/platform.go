@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -39,8 +40,10 @@ type Platform struct {
 	stopTr         func() error
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
+	trackedProcess *os.Process
 	kbd            linuxinput.Keyboard
 	gpd            linuxinput.Gamepad
+	processMu      sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -162,6 +165,12 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
+func (p *Platform) SetTrackedProcess(proc *os.Process) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	p.trackedProcess = proc
+}
+
 func (*Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
@@ -220,6 +229,18 @@ func LaunchMenu() error {
 }
 
 func (p *Platform) StopActiveLauncher() error {
+	// Kill tracked process if it exists
+	p.processMu.Lock()
+	if p.trackedProcess != nil {
+		if err := p.trackedProcess.Kill(); err != nil {
+			log.Warn().Err(err).Msg("failed to kill tracked process")
+		} else {
+			log.Debug().Msg("killed tracked process")
+		}
+		p.trackedProcess = nil
+	}
+	p.processMu.Unlock()
+
 	err := LaunchMenu()
 	if err == nil {
 		p.setActiveMedia(nil)
@@ -284,15 +305,19 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return nil
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string) error {
+func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
 	log.Info().Msgf("launch media: %s", path)
-	launcher, err := helpers.FindLauncher(cfg, p, path)
-	if err != nil {
-		return fmt.Errorf("launch media: error finding launcher: %w", err)
+
+	if launcher == nil {
+		foundLauncher, err := helpers.FindLauncher(cfg, p, path)
+		if err != nil {
+			return fmt.Errorf("launch media: error finding launcher: %w", err)
+		}
+		launcher = &foundLauncher
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, &launcher, path)
+	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
