@@ -12,6 +12,8 @@ github.com/ZaparooProject/go-pn532 v0.7.1-0.20250917004052-1cb75dc9edba h1:M9hdc
 github.com/ZaparooProject/go-pn532 v0.7.1-0.20250917004052-1cb75dc9edba/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
 github.com/ZaparooProject/go-pn532 v0.8.0 h1:HmRcY2VI0gtM6xqJ6LUHaivHO6WxwCiGbhx7UQWIENA=
 github.com/ZaparooProject/go-pn532 v0.8.0/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
+github.com/ZaparooProject/go-pn532 v0.8.1 h1:Ve0QzWHNjsgnRCU7d4IX+DFHEU7mbDxc1nJSD64iuP0=
+github.com/ZaparooProject/go-pn532 v0.8.1/go.mod h1:leyLRF6grVBRfuyo5oI+zRbzsdDvZlgjiOyGE4RhYqQ=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/andygrunwald/vdf v1.1.0 h1:gmstp0R7DOepIZvWoSJY97ix7QOrsxpGPU6KusKXqvw=
