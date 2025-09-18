@@ -201,11 +201,12 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 }
 
 const (
-	insertSystemSQL     = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
-	insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
-	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
-	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
-	insertMediaTagSQL   = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
+	insertSystemSQL        = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
+	insertMediaTitleSQL    = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
+	insertMediaSQL         = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
+	insertTagSQL           = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
+	insertMediaTagSQL      = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
+	insertMediaTitleTagSQL = `INSERT INTO MediaTitleTags (DBID, MediaTitleDBID, TagDBID) VALUES (?, ?, ?)`
 )
 
 // Fast prepared statement execution functions for batch operations during scanning
@@ -945,5 +946,68 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 		return row, fmt.Errorf("failed to scan random game row: %w", err)
 	}
 	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, nil
+}
+
+func sqlFindMediaTitleTag(ctx context.Context, db *sql.DB, mediaTitleTag database.MediaTitleTag) (database.MediaTitleTag, error) {
+	var row database.MediaTitleTag
+	stmt, err := db.PrepareContext(ctx, `
+		select
+		DBID, MediaTitleDBID, TagDBID
+		from MediaTitleTags
+		where DBID = ?
+		or (
+			MediaTitleDBID = ?
+			and TagDBID = ?
+		)
+		LIMIT 1;
+	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find media title tag statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx,
+		mediaTitleTag.DBID,
+		mediaTitleTag.MediaTitleDBID,
+		mediaTitleTag.TagDBID,
+	).Scan(
+		&row.DBID,
+		&row.MediaTitleDBID,
+		&row.TagDBID,
+	)
+	if err != nil {
+		return row, fmt.Errorf("failed to scan media title tag row: %w", err)
+	}
+	return row, nil
+}
+
+func sqlInsertMediaTitleTag(ctx context.Context, db *sql.DB, row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	stmt, err := db.PrepareContext(ctx, insertMediaTitleTagSQL)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare insert media title tag statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	result, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.TagDBID)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute insert media title tag: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert id for media title tag: %w", err)
+	}
+	row.DBID = id
 	return row, nil
 }

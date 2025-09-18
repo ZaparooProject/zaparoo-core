@@ -99,6 +99,12 @@ type MediaTag struct {
 	TagDBID   int64
 }
 
+type MediaTitleTag struct {
+	DBID           int64
+	MediaTitleDBID int64
+	TagDBID        int64
+}
+
 type SearchResult struct {
 	SystemID string
 	Name     string
@@ -140,13 +146,14 @@ type ScrapedMetadata struct {
 }
 
 type GameHashes struct {
+	DBID       int64
+	SystemID   string
+	MediaPath  string
 	ComputedAt time.Time
+	FileSize   int64
 	CRC32      string
 	MD5        string
 	SHA1       string
-	DBID       int64
-	MediaDBID  int64
-	FileSize   int64
 }
 
 /*
@@ -223,6 +230,10 @@ type MediaDBI interface {
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
 
+	FindMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+	InsertMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+	FindOrInsertMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+
 	// Scraper metadata methods
 	SaveScrapedMetadata(metadata *ScrapedMetadata) error
 	GetScrapedMetadata(mediaTitleDBID int64) (*ScrapedMetadata, error)
@@ -233,6 +244,6 @@ type MediaDBI interface {
 
 	// Game hash methods
 	SaveGameHashes(hashes *GameHashes) error
-	GetGameHashes(mediaDBID int64) (*GameHashes, error)
+	GetGameHashes(systemID, mediaPath string) (*GameHashes, error)
 	FindGameByHash(crc32, md5, sha1 string) ([]Media, error)
 }

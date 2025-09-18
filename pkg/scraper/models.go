@@ -24,29 +24,31 @@ import (
 )
 
 // ScrapedMetadata represents scraped game metadata stored in database
+// This struct provides a convenient interface while internally using the Tags system
 type ScrapedMetadata struct {
-	ScrapedAt      time.Time
-	ScraperSource  string
-	Description    string
-	Genre          string
-	Players        string
-	ReleaseDate    string
-	Developer      string
-	Publisher      string
-	DBID           int64
-	MediaTitleDBID int64
-	Rating         float64
+	DBID           int64     // Not used - metadata stored as Tags
+	MediaTitleDBID int64     // References MediaTitles.DBID
+	ScraperSource  string    // Stored as scraper_source tag
+	Description    string    // Stored as description tag
+	Genre          string    // Stored as genre tag
+	Players        string    // Stored as players tag
+	ReleaseDate    string    // Stored as release_date tag
+	Developer      string    // Stored as developer tag
+	Publisher      string    // Stored as publisher tag
+	Rating         float64   // Stored as rating tag
+	ScrapedAt      time.Time // Stored as scraped_at tag
 }
 
 // GameHashes represents file hash information for scraper matching
 type GameHashes struct {
-	ComputedAt time.Time
+	DBID       int64
+	SystemID   string
+	MediaPath  string
 	CRC32      string
 	MD5        string
 	SHA1       string
-	DBID       int64
-	MediaDBID  int64
 	FileSize   int64
+	ComputedAt time.Time
 }
 
 // ScraperProgress represents the current scraping progress

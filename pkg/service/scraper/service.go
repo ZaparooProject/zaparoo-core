@@ -44,24 +44,25 @@ import (
 
 // ScraperService manages scraping operations with MediaDB integration
 type ScraperService struct {
-	mediaDB       database.MediaDBI
-	userDB        database.UserDBI
-	platform      platforms.Platform
-	ctx           context.Context
-	progress      *scraperPkg.ScraperProgress
-	config        *config.Instance
-	mediaStorage  *scraperPkg.MediaStorage
-	httpClient    *httpclient.Client
-	jobQueue      chan *scraperPkg.ScraperJob
-	scrapers      map[string]scraperPkg.Scraper
-	cancelFunc    context.CancelFunc
-	workerWG      sync.WaitGroup
-	workers       int
-	progressMu    sync.RWMutex
-	stopMu        sync.Mutex
-	isRunning     bool
-	stopped       bool
-	notifications chan<- models.Notification
+	mediaDB         database.MediaDBI
+	userDB          database.UserDBI
+	platform        platforms.Platform
+	ctx             context.Context
+	progress        *scraperPkg.ScraperProgress
+	config          *config.Instance
+	mediaStorage    *scraperPkg.MediaStorage
+	metadataStorage *scraperPkg.MetadataStorage
+	httpClient      *httpclient.Client
+	jobQueue        chan *scraperPkg.ScraperJob
+	scrapers        map[string]scraperPkg.Scraper
+	cancelFunc      context.CancelFunc
+	workerWG        sync.WaitGroup
+	workers         int
+	progressMu      sync.RWMutex
+	stopMu          sync.Mutex
+	isRunning       bool
+	stopped         bool
+	notifications   chan<- models.Notification
 }
 
 // NewScraperService creates a new scraper service
@@ -75,19 +76,20 @@ func NewScraperService(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	service := &ScraperService{
-		scrapers:      make(map[string]scraperPkg.Scraper),
-		mediaDB:       mediaDB,
-		userDB:        userDB,
-		config:        cfg,
-		mediaStorage:  scraperPkg.NewMediaStorage(pl, cfg),
-		platform:      pl,
-		httpClient:    httpclient.NewClient(),
-		jobQueue:      make(chan *scraperPkg.ScraperJob, 1000),
-		workers:       3, // Default worker count
-		ctx:           ctx,
-		cancelFunc:    cancel,
-		progress:      &scraperPkg.ScraperProgress{},
-		notifications: notifications,
+		scrapers:        make(map[string]scraperPkg.Scraper),
+		mediaDB:         mediaDB,
+		userDB:          userDB,
+		config:          cfg,
+		mediaStorage:    scraperPkg.NewMediaStorage(pl, cfg),
+		metadataStorage: scraperPkg.NewMetadataStorage(mediaDB),
+		platform:        pl,
+		httpClient:      httpclient.NewClient(),
+		jobQueue:        make(chan *scraperPkg.ScraperJob, 1000),
+		workers:         3, // Default worker count
+		ctx:             ctx,
+		cancelFunc:      cancel,
+		progress:        &scraperPkg.ScraperProgress{},
+		notifications:   notifications,
 	}
 
 	// Register available scrapers
@@ -213,7 +215,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 
 	// Check if we already have scraped metadata and don't need to re-scrape
 	if !job.Overwrite {
-		existing, err := s.mediaDB.GetScrapedMetadata(mediaTitle.DBID)
+		existing, err := s.metadataStorage.GetMetadata(s.ctx, mediaTitle.DBID, "")
 		if err == nil && existing != nil {
 			log.Debug().
 				Str("title", mediaTitle.Name).
@@ -258,7 +260,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 	}
 
 	// Try to get file hash for better matching
-	if hash, err := s.getOrComputeFileHash(media); err == nil && hash != nil {
+	if hash, err := s.getOrComputeFileHash(media, systemID); err == nil && hash != nil {
 		query.Hash = &scraperPkg.FileHash{
 			CRC32:    hash.CRC32,
 			MD5:      hash.MD5,
@@ -281,8 +283,8 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 		return nil
 	}
 
-	// Save scraped metadata to database
-	metadata := &database.ScrapedMetadata{
+	// Save scraped metadata to database using Tags system
+	metadata := &scraperPkg.ScrapedMetadata{
 		MediaTitleDBID: mediaTitle.DBID,
 		ScraperSource:  scraperUsed,
 		Description:    gameInfo.Description,
@@ -295,7 +297,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 		ScrapedAt:      time.Now(),
 	}
 
-	if err := s.mediaDB.SaveScrapedMetadata(metadata); err != nil {
+	if err := s.metadataStorage.StoreMetadata(s.ctx, metadata); err != nil {
 		log.Error().Err(err).Msg("Failed to save scraped metadata")
 		// Continue with media download even if metadata save fails
 	}
@@ -396,10 +398,20 @@ func (s *ScraperService) downloadMediaFile(gamePath, systemID string, mediaType 
 }
 
 // getOrComputeFileHash gets existing hash from database or computes it
-func (s *ScraperService) getOrComputeFileHash(media *database.Media) (*database.GameHashes, error) {
+func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID string) (*scraperPkg.GameHashes, error) {
 	// Try to get existing hash from database
-	if hash, err := s.mediaDB.GetGameHashes(media.DBID); err == nil {
-		return hash, nil
+	if hash, err := s.mediaDB.GetGameHashes(systemID, media.Path); err == nil {
+		// Convert database.GameHashes to scraperPkg.GameHashes format
+		return &scraperPkg.GameHashes{
+			DBID:       hash.DBID,
+			SystemID:   systemID,
+			MediaPath:  media.Path,
+			CRC32:      hash.CRC32,
+			MD5:        hash.MD5,
+			SHA1:       hash.SHA1,
+			FileSize:   hash.FileSize,
+			ComputedAt: hash.ComputedAt,
+		}, nil
 	}
 
 	// Compute hash if not exists
@@ -408,9 +420,10 @@ func (s *ScraperService) getOrComputeFileHash(media *database.Media) (*database.
 		return nil, fmt.Errorf("failed to compute file hash: %w", err)
 	}
 
-	// Save to database
-	dbHash := &database.GameHashes{
-		MediaDBID:  media.DBID,
+	// Save to database using database.GameHashes format
+	dbHashForDB := &database.GameHashes{
+		SystemID:   systemID,
+		MediaPath:  media.Path,
 		CRC32:      fileHash.CRC32,
 		MD5:        fileHash.MD5,
 		SHA1:       fileHash.SHA1,
@@ -418,8 +431,20 @@ func (s *ScraperService) getOrComputeFileHash(media *database.Media) (*database.
 		ComputedAt: time.Now(),
 	}
 
-	if err := s.mediaDB.SaveGameHashes(dbHash); err != nil {
+	if err := s.mediaDB.SaveGameHashes(dbHashForDB); err != nil {
 		log.Warn().Err(err).Msg("Failed to save computed hash to database")
+	}
+
+	// Return scraper format for consistency
+	dbHash := &scraperPkg.GameHashes{
+		DBID:       dbHashForDB.DBID,
+		SystemID:   systemID,
+		MediaPath:  media.Path,
+		CRC32:      fileHash.CRC32,
+		MD5:        fileHash.MD5,
+		SHA1:       fileHash.SHA1,
+		FileSize:   fileHash.FileSize,
+		ComputedAt: time.Now(),
 	}
 
 	return dbHash, nil

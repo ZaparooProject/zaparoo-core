@@ -733,6 +733,49 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 	return database.MediaTag{}, nil
 }
 
+// MediaTitleTag CRUD methods
+func (m *MockMediaDBI) FindMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	args := m.Called(row)
+	if mediaTitleTag, ok := args.Get(0).(database.MediaTitleTag); ok {
+		if err := args.Error(1); err != nil {
+			return mediaTitleTag, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return mediaTitleTag, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.MediaTitleTag{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.MediaTitleTag{}, nil
+}
+
+func (m *MockMediaDBI) InsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	args := m.Called(row)
+	if mediaTitleTag, ok := args.Get(0).(database.MediaTitleTag); ok {
+		if err := args.Error(1); err != nil {
+			return mediaTitleTag, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return mediaTitleTag, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.MediaTitleTag{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.MediaTitleTag{}, nil
+}
+
+func (m *MockMediaDBI) FindOrInsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	args := m.Called(row)
+	if mediaTitleTag, ok := args.Get(0).(database.MediaTitleTag); ok {
+		if err := args.Error(1); err != nil {
+			return mediaTitleTag, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return mediaTitleTag, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.MediaTitleTag{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.MediaTitleTag{}, nil
+}
+
 // Scraper metadata methods
 func (m *MockMediaDBI) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
 	args := m.Called(metadata)
@@ -793,8 +836,8 @@ func (m *MockMediaDBI) SaveGameHashes(hashes *database.GameHashes) error {
 	return nil
 }
 
-func (m *MockMediaDBI) GetGameHashes(mediaDBID int64) (*database.GameHashes, error) {
-	args := m.Called(mediaDBID)
+func (m *MockMediaDBI) GetGameHashes(systemID, mediaPath string) (*database.GameHashes, error) {
+	args := m.Called(systemID, mediaPath)
 	if hashes, ok := args.Get(0).(*database.GameHashes); ok {
 		if err := args.Error(1); err != nil {
 			return hashes, fmt.Errorf("mock operation failed: %w", err)

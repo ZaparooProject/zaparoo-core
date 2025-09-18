@@ -511,6 +511,22 @@ func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTa
 	return system, err
 }
 
+func (db *MediaDB) FindMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	return sqlFindMediaTitleTag(db.ctx, db.sql, row)
+}
+
+func (db *MediaDB) InsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	return sqlInsertMediaTitleTag(db.ctx, db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	result, err := db.FindMediaTitleTag(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		result, err = db.InsertMediaTitleTag(row)
+	}
+	return result, err
+}
+
 // Scraper metadata methods
 
 func (db *MediaDB) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
@@ -689,42 +705,44 @@ func (db *MediaDB) SaveGameHashes(hashes *database.GameHashes) error {
 		return ErrNullSQL
 	}
 
-	query := `INSERT OR REPLACE INTO GameHashes
-		(MediaDBID, CRC32, MD5, SHA1, FileSize, ComputedAt)
-		VALUES (?, ?, ?, ?, ?, ?)`
+	query := `INSERT OR REPLACE INTO MediaHashes
+		(SystemID, MediaPath, ComputedAt, FileSize, CRC32, MD5, SHA1)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
 
 	_, err := db.sql.ExecContext(db.ctx, query,
-		hashes.MediaDBID,
+		hashes.SystemID,
+		hashes.MediaPath,
+		hashes.ComputedAt.Unix(),
+		hashes.FileSize,
 		hashes.CRC32,
 		hashes.MD5,
 		hashes.SHA1,
-		hashes.FileSize,
-		hashes.ComputedAt.Unix(),
 	)
 	return err
 }
 
-func (db *MediaDB) GetGameHashes(mediaDBID int64) (*database.GameHashes, error) {
+func (db *MediaDB) GetGameHashes(systemID, mediaPath string) (*database.GameHashes, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
-	query := `SELECT DBID, MediaDBID, CRC32, MD5, SHA1, FileSize, ComputedAt
-		FROM GameHashes WHERE MediaDBID = ?`
+	query := `SELECT DBID, SystemID, MediaPath, ComputedAt, FileSize, CRC32, MD5, SHA1
+		FROM MediaHashes WHERE SystemID = ? AND MediaPath = ?`
 
-	row := db.sql.QueryRowContext(db.ctx, query, mediaDBID)
+	row := db.sql.QueryRowContext(db.ctx, query, systemID, mediaPath)
 
 	var hashes database.GameHashes
 	var computedAtUnix int64
 
 	err := row.Scan(
 		&hashes.DBID,
-		&hashes.MediaDBID,
+		&hashes.SystemID,
+		&hashes.MediaPath,
+		&computedAtUnix,
+		&hashes.FileSize,
 		&hashes.CRC32,
 		&hashes.MD5,
 		&hashes.SHA1,
-		&hashes.FileSize,
-		&computedAtUnix,
 	)
 	if err != nil {
 		return nil, err
@@ -741,10 +759,12 @@ func (db *MediaDB) FindGameByHash(crc32, md5, sha1 string) ([]database.Media, er
 
 	query := `SELECT m.DBID, m.MediaTitleDBID, m.Path
 		FROM Media m
-		JOIN GameHashes gh ON gh.MediaDBID = m.DBID
-		WHERE (? != '' AND gh.CRC32 = ?)
-		   OR (? != '' AND gh.MD5 = ?)
-		   OR (? != '' AND gh.SHA1 = ?)`
+		JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		JOIN MediaHashes mh ON mh.SystemID = s.SystemID AND mh.MediaPath = m.Path
+		WHERE (? != '' AND mh.CRC32 = ?)
+		   OR (? != '' AND mh.MD5 = ?)
+		   OR (? != '' AND mh.SHA1 = ?)`
 
 	rows, err := db.sql.QueryContext(db.ctx, query, crc32, crc32, md5, md5, sha1, sha1)
 	if err != nil {
