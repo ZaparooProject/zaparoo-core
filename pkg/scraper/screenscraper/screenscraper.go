@@ -29,26 +29,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/shared/httpclient"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	baseURL = "https://www.screenscraper.fr/api2"
+	baseURL   = "https://www.screenscraper.fr/api2"
 	userAgent = "Zaparoo Core/1.0"
 
 	// ScreenScraper API limits - be conservative to avoid being blocked
 	defaultRateLimit = 1000 // milliseconds between requests
-	maxRetries = 3
+	maxRetries       = 3
 )
 
 // ScreenScraper implements the Scraper interface for ScreenScraper.fr API
 type ScreenScraper struct {
-	client       *httpclient.Client
-	platformMap  *PlatformMapper
-	rateLimit    time.Duration
-	lastRequest  time.Time
+	lastRequest time.Time
+	client      *httpclient.Client
+	platformMap *PlatformMapper
+	rateLimit   time.Duration
 }
 
 // NewScreenScraper creates a new ScreenScraper instance
@@ -194,6 +195,9 @@ func (ss *ScreenScraper) GetGameInfo(ctx context.Context, gameID string) (*scrap
 }
 
 // DownloadMedia downloads media files for a game
+// Note: This method is not typically called directly. The scraper service
+// handles downloads using the URLs from GetGameInfo(). This method exists
+// for interface compliance but returns an error indicating the proper flow.
 func (ss *ScreenScraper) DownloadMedia(ctx context.Context, media scraper.MediaItem) error {
 	// Rate limit check
 	if err := ss.waitForRateLimit(); err != nil {
@@ -203,11 +207,12 @@ func (ss *ScreenScraper) DownloadMedia(ctx context.Context, media scraper.MediaI
 	log.Debug().
 		Str("url", media.URL).
 		Str("type", string(media.Type)).
-		Msg("ScreenScraper downloading media")
+		Msg("ScreenScraper DownloadMedia called")
 
-	// ScreenScraper provides direct URLs, so we can download directly
-	// This would be used by the scraper service to download to the appropriate path
-	return fmt.Errorf("media download should be handled by scraper service")
+	// ScreenScraper provides direct URLs in the GameInfo response.
+	// The scraper service handles the actual downloading using httpclient.
+	// This method exists for interface compliance but is not used in the normal flow.
+	return fmt.Errorf("media download is handled by scraper service using URLs from GetGameInfo()")
 }
 
 // waitForRateLimit ensures we don't exceed rate limits
@@ -234,13 +239,20 @@ func (ss *ScreenScraper) buildSearchURL(gameName, platformID string, hash *scrap
 
 	params := url.Values{}
 	params.Set("output", "json")
-	params.Set("devid", "zaparoo")
-	params.Set("devpassword", "zaparoo")
 	params.Set("softname", userAgent)
 	params.Set("ssid", platformID)
 
-	// Add authentication parameters (will be handled by auth transport)
-	// Username/password should be in auth.toml for screenscraper.fr
+	// Get authentication from auth.toml
+	authCfg := config.GetAuthCfg()
+	creds := config.LookupAuth(authCfg, "https://screenscraper.fr")
+	if creds != nil && creds.Username != "" {
+		params.Set("ssuser", creds.Username)
+		params.Set("sspassword", creds.Password)
+	}
+
+	// ScreenScraper dev credentials (these are public dev credentials)
+	params.Set("devid", "zaparoo")
+	params.Set("devpassword", "zaparoo")
 
 	// Prefer hash-based search if available
 	if hash != nil {
@@ -282,10 +294,20 @@ func (ss *ScreenScraper) buildGameInfoURL(gameID string) (string, error) {
 
 	params := url.Values{}
 	params.Set("output", "json")
-	params.Set("devid", "zaparoo")
-	params.Set("devpassword", "zaparoo")
 	params.Set("softname", userAgent)
 	params.Set("id", gameID)
+
+	// Get authentication from auth.toml
+	authCfg := config.GetAuthCfg()
+	creds := config.LookupAuth(authCfg, "https://screenscraper.fr")
+	if creds != nil && creds.Username != "" {
+		params.Set("ssuser", creds.Username)
+		params.Set("sspassword", creds.Password)
+	}
+
+	// ScreenScraper dev credentials (these are public dev credentials)
+	params.Set("devid", "zaparoo")
+	params.Set("devpassword", "zaparoo")
 
 	u.RawQuery = params.Encode()
 	return u.String(), nil
@@ -385,17 +407,17 @@ func (ss *ScreenScraper) convertMediaItems(medias []Media) []scraper.MediaItem {
 func (ss *ScreenScraper) mapMediaType(ssType string) string {
 	// Based on ScreenScraper API documentation and Batocera implementation
 	typeMap := map[string]string{
-		"box-2D":        string(scraper.MediaTypeCover),
-		"box-back":      string(scraper.MediaTypeBoxBack),
-		"ss":            string(scraper.MediaTypeScreenshot),
-		"sstitle":       string(scraper.MediaTypeTitleShot),
-		"fanart":        string(scraper.MediaTypeFanArt),
-		"marquee":       string(scraper.MediaTypeMarquee),
-		"wheel":         string(scraper.MediaTypeWheel),
-		"video":         string(scraper.MediaTypeVideo),
-		"manual":        string(scraper.MediaTypeManual),
-		"bezel":         string(scraper.MediaTypeBezel),
-		"map":           string(scraper.MediaTypeMap),
+		"box-2D":   string(scraper.MediaTypeCover),
+		"box-back": string(scraper.MediaTypeBoxBack),
+		"ss":       string(scraper.MediaTypeScreenshot),
+		"sstitle":  string(scraper.MediaTypeTitleShot),
+		"fanart":   string(scraper.MediaTypeFanArt),
+		"marquee":  string(scraper.MediaTypeMarquee),
+		"wheel":    string(scraper.MediaTypeWheel),
+		"video":    string(scraper.MediaTypeVideo),
+		"manual":   string(scraper.MediaTypeManual),
+		"bezel":    string(scraper.MediaTypeBezel),
+		"map":      string(scraper.MediaTypeMap),
 	}
 
 	if mapped, ok := typeMap[ssType]; ok {
