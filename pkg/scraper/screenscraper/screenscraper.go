@@ -22,6 +22,7 @@ package screenscraper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -62,7 +63,7 @@ func NewScreenScraper() *ScreenScraper {
 }
 
 // GetInfo returns scraper information
-func (ss *ScreenScraper) GetInfo() scraper.ScraperInfo {
+func (*ScreenScraper) GetInfo() scraper.ScraperInfo {
 	return scraper.ScraperInfo{
 		Name:         "ScreenScraper",
 		Version:      "1.0",
@@ -79,7 +80,7 @@ func (ss *ScreenScraper) IsSupportedPlatform(systemID string) bool {
 }
 
 // GetSupportedMediaTypes returns the media types supported by ScreenScraper
-func (ss *ScreenScraper) GetSupportedMediaTypes() []scraper.MediaType {
+func (*ScreenScraper) GetSupportedMediaTypes() []scraper.MediaType {
 	return []scraper.MediaType{
 		scraper.MediaTypeCover,
 		scraper.MediaTypeBoxBack,
@@ -119,7 +120,11 @@ func (ss *ScreenScraper) Search(ctx context.Context, query scraper.ScraperQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -140,7 +145,7 @@ func (ss *ScreenScraper) Search(ctx context.Context, query scraper.ScraperQuery)
 	// Convert to scraper results
 	var results []scraper.ScraperResult
 	if apiResp.Response.Game != nil {
-		result := ss.convertGameToResult(*apiResp.Response.Game, query.SystemID)
+		result := ss.convertGameToResult(apiResp.Response.Game, query.SystemID)
 		results = append(results, result)
 	}
 
@@ -167,7 +172,11 @@ func (ss *ScreenScraper) GetGameInfo(ctx context.Context, gameID string) (*scrap
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -186,11 +195,11 @@ func (ss *ScreenScraper) GetGameInfo(ctx context.Context, gameID string) (*scrap
 	}
 
 	if apiResp.Response.Game == nil {
-		return nil, fmt.Errorf("game not found")
+		return nil, errors.New("game not found")
 	}
 
 	// Convert to game info
-	gameInfo := ss.convertGameToInfo(*apiResp.Response.Game)
+	gameInfo := ss.convertGameToInfo(apiResp.Response.Game)
 	return gameInfo, nil
 }
 
@@ -198,7 +207,7 @@ func (ss *ScreenScraper) GetGameInfo(ctx context.Context, gameID string) (*scrap
 // Note: This method is not typically called directly. The scraper service
 // handles downloads using the URLs from GetGameInfo(). This method exists
 // for interface compliance but returns an error indicating the proper flow.
-func (ss *ScreenScraper) DownloadMedia(ctx context.Context, media scraper.MediaItem) error {
+func (ss *ScreenScraper) DownloadMedia(_ context.Context, media *scraper.MediaItem) error {
 	// Rate limit check
 	if err := ss.waitForRateLimit(); err != nil {
 		return err
@@ -212,7 +221,7 @@ func (ss *ScreenScraper) DownloadMedia(ctx context.Context, media scraper.MediaI
 	// ScreenScraper provides direct URLs in the GameInfo response.
 	// The scraper service handles the actual downloading using httpclient.
 	// This method exists for interface compliance but is not used in the normal flow.
-	return fmt.Errorf("media download is handled by scraper service using URLs from GetGameInfo()")
+	return errors.New("media download is handled by scraper service using URLs from GetGameInfo()")
 }
 
 // waitForRateLimit ensures we don't exceed rate limits
@@ -231,10 +240,12 @@ func (ss *ScreenScraper) waitForRateLimit() error {
 }
 
 // buildSearchURL constructs the search URL for ScreenScraper API
-func (ss *ScreenScraper) buildSearchURL(gameName, platformID string, hash *scraper.FileHash, region, language string) (string, error) {
+func (*ScreenScraper) buildSearchURL(gameName, platformID string, hash *scraper.FileHash,
+	region, language string,
+) (string, error) {
 	u, err := url.Parse(baseURL + "/jeuInfos.php")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse ScreenScraper search URL: %w", err)
 	}
 
 	params := url.Values{}
@@ -286,10 +297,10 @@ func (ss *ScreenScraper) buildSearchURL(gameName, platformID string, hash *scrap
 }
 
 // buildGameInfoURL constructs the game info URL
-func (ss *ScreenScraper) buildGameInfoURL(gameID string) (string, error) {
+func (*ScreenScraper) buildGameInfoURL(gameID string) (string, error) {
 	u, err := url.Parse(baseURL + "/jeuInfos.php")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse ScreenScraper game info URL: %w", err)
 	}
 
 	params := url.Values{}
@@ -314,25 +325,25 @@ func (ss *ScreenScraper) buildGameInfoURL(gameID string) (string, error) {
 }
 
 // handleHTTPError handles HTTP error responses
-func (ss *ScreenScraper) handleHTTPError(statusCode int) error {
+func (*ScreenScraper) handleHTTPError(statusCode int) error {
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("rate limited by ScreenScraper (429)")
+		return errors.New("rate limited by ScreenScraper (429)")
 	case http.StatusUnauthorized:
-		return fmt.Errorf("authentication failed - check credentials in auth.toml")
+		return errors.New("authentication failed - check credentials in auth.toml")
 	case http.StatusForbidden:
-		return fmt.Errorf("access forbidden - check API permissions")
+		return errors.New("access forbidden - check API permissions")
 	case http.StatusNotFound:
-		return fmt.Errorf("game not found")
+		return errors.New("game not found")
 	case http.StatusInternalServerError:
-		return fmt.Errorf("ScreenScraper server error")
+		return errors.New("ScreenScraper server error")
 	default:
 		return fmt.Errorf("HTTP error %d", statusCode)
 	}
 }
 
 // convertGameToResult converts ScreenScraper game data to ScraperResult
-func (ss *ScreenScraper) convertGameToResult(game Game, systemID string) scraper.ScraperResult {
+func (ss *ScreenScraper) convertGameToResult(game *Game, systemID string) scraper.ScraperResult {
 	// Calculate relevance score based on available data
 	relevance := 0.5 // Base relevance
 	if len(game.Names) > 0 {
@@ -357,7 +368,7 @@ func (ss *ScreenScraper) convertGameToResult(game Game, systemID string) scraper
 }
 
 // convertGameToInfo converts ScreenScraper game data to detailed GameInfo
-func (ss *ScreenScraper) convertGameToInfo(game Game) *scraper.GameInfo {
+func (ss *ScreenScraper) convertGameToInfo(game *Game) *scraper.GameInfo {
 	gameInfo := &scraper.GameInfo{
 		ID:          strconv.Itoa(game.ID),
 		Name:        ss.getPreferredText(game.Names, "us", "en"),
@@ -378,23 +389,23 @@ func (ss *ScreenScraper) convertGameToInfo(game Game) *scraper.GameInfo {
 
 // convertMediaItems converts ScreenScraper media to MediaItems
 func (ss *ScreenScraper) convertMediaItems(medias []Media) []scraper.MediaItem {
-	var items []scraper.MediaItem
+	items := make([]scraper.MediaItem, 0, len(medias))
 
-	for _, media := range medias {
-		mediaType := ss.mapMediaType(media.Type)
+	for i := range medias {
+		mediaType := ss.mapMediaType(medias[i].Type)
 		if mediaType == "" {
 			continue // Skip unknown media types
 		}
 
 		item := scraper.MediaItem{
 			Type:        scraper.MediaType(mediaType),
-			URL:         media.URL,
-			Width:       media.Width,
-			Height:      media.Height,
-			Size:        int64(media.Size),
-			Format:      media.Format,
-			Region:      media.Region,
-			Description: media.Type,
+			URL:         medias[i].URL,
+			Width:       medias[i].Width,
+			Height:      medias[i].Height,
+			Size:        int64(medias[i].Size),
+			Format:      medias[i].Format,
+			Region:      medias[i].Region,
+			Description: medias[i].Type,
 		}
 
 		items = append(items, item)
@@ -404,7 +415,7 @@ func (ss *ScreenScraper) convertMediaItems(medias []Media) []scraper.MediaItem {
 }
 
 // mapMediaType maps ScreenScraper media types to scraper media types
-func (ss *ScreenScraper) mapMediaType(ssType string) string {
+func (*ScreenScraper) mapMediaType(ssType string) string {
 	// Based on ScreenScraper API documentation and Batocera implementation
 	typeMap := map[string]string{
 		"box-2D":   string(scraper.MediaTypeCover),
@@ -436,7 +447,7 @@ func (ss *ScreenScraper) mapMediaType(ssType string) string {
 }
 
 // getPreferredText extracts text in preferred region/language
-func (ss *ScreenScraper) getPreferredText(texts []Text, preferredRegion, preferredLanguage string) string {
+func (*ScreenScraper) getPreferredText(texts []Text, preferredRegion, preferredLanguage string) string {
 	if len(texts) == 0 {
 		return ""
 	}
@@ -463,5 +474,8 @@ func (ss *ScreenScraper) getPreferredText(texts []Text, preferredRegion, preferr
 	}
 
 	// Last resort: first available text
-	return texts[0].Text
+	if len(texts) > 0 {
+		return texts[0].Text
+	}
+	return ""
 }

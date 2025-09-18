@@ -67,14 +67,14 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 	}
 
 	tests := []struct {
+		params  map[string]any
 		name    string
-		params  map[string]interface{}
-		wantErr bool
 		errMsg  string
+		wantErr bool
 	}{
 		{
 			name: "scraper service not initialized",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"system": "snes",
 			},
 			wantErr: true,
@@ -82,7 +82,7 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 		},
 		{
 			name:    "missing system parameter",
-			params:  map[string]interface{}{},
+			params:  map[string]any{},
 			wantErr: true,
 			errMsg:  "system parameter is required",
 		},
@@ -97,7 +97,7 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 			result, err := HandleScraperScrapeStart(env)
 
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				if tt.errMsg != "" {
 					assert.Contains(t, err.Error(), tt.errMsg)
 				}
@@ -105,7 +105,7 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 				return
 			}
 
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.NotNil(t, result)
 		})
 	}
@@ -129,7 +129,7 @@ func TestHandleScraperProgress(t *testing.T) {
 	result, err := HandleScraper(env)
 
 	// Should error because service is not initialized
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scraper service not initialized")
 	assert.Nil(t, result)
 }
@@ -152,7 +152,7 @@ func TestHandleScraperCancel(t *testing.T) {
 	result, err := HandleScraperCancel(env)
 
 	// Should error because service is not initialized
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scraper service not initialized")
 	assert.Nil(t, result)
 }

@@ -70,7 +70,7 @@ func ToHashConfig(hashTypes []HashType) HashConfig {
 
 // ToStringSlice converts HashType slice to string slice
 func ToStringSlice(hashTypes []HashType) []string {
-	var result []string
+	result := make([]string, 0, len(hashTypes))
 	for _, hashType := range hashTypes {
 		result = append(result, string(hashType))
 	}
@@ -79,12 +79,12 @@ func ToStringSlice(hashTypes []HashType) []string {
 
 // MediaHash represents hash information for a media file
 type MediaHash struct {
-	DBID       int64
 	SystemID   string
 	MediaPath  string
-	ComputedAt int64
-	FileSize   int64
 	CRC32      string
 	MD5        string
 	SHA1       string
+	DBID       int64
+	ComputedAt int64
+	FileSize   int64
 }

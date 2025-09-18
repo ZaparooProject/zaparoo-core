@@ -22,6 +22,7 @@ package httpclient
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -120,7 +121,7 @@ func (c *Client) DownloadFile(ctx context.Context, args DownloadFileArgs) error 
 		return fmt.Errorf("error getting url: %w", err)
 	}
 	if resp == nil {
-		return fmt.Errorf("received nil response")
+		return errors.New("received nil response")
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -138,7 +139,7 @@ func (c *Client) DownloadFile(ctx context.Context, args DownloadFileArgs) error 
 		outputPath = args.TempPath
 	}
 
-	file, err := os.Create(outputPath)
+	file, err := os.Create(outputPath) // #nosec G304 - outputPath is validated by caller
 	if err != nil {
 		return fmt.Errorf("error creating file: %w", err)
 	}

@@ -92,10 +92,10 @@ func TestMapMediaType(t *testing.T) {
 func TestParseRating(t *testing.T) {
 	scraper := NewTheGamesDB()
 
-	assert.Equal(t, 1.0, scraper.parseRating("E - Everyone"))
-	assert.Equal(t, 2.0, scraper.parseRating("E10+"))
-	assert.Equal(t, 3.0, scraper.parseRating("T - Teen"))
-	assert.Equal(t, 4.0, scraper.parseRating("M"))
-	assert.Equal(t, 5.0, scraper.parseRating("AO - Adults Only 18+"))
-	assert.Equal(t, 0.0, scraper.parseRating("Unknown"))
+	assert.InDelta(t, 1.0, scraper.parseRating("E - Everyone"), 0.001)
+	assert.InDelta(t, 2.0, scraper.parseRating("E10+"), 0.001)
+	assert.InDelta(t, 3.0, scraper.parseRating("T - Teen"), 0.001)
+	assert.InDelta(t, 4.0, scraper.parseRating("M"), 0.001)
+	assert.InDelta(t, 5.0, scraper.parseRating("AO - Adults Only 18+"), 0.001)
+	assert.InDelta(t, 0.0, scraper.parseRating("Unknown"), 0.001)
 }

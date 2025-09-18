@@ -32,7 +32,7 @@ type Scraper interface {
 	GetGameInfo(ctx context.Context, gameID string) (*GameInfo, error)
 
 	// Download media files for a game
-	DownloadMedia(ctx context.Context, media MediaItem) error
+	DownloadMedia(ctx context.Context, media *MediaItem) error
 
 	// Check if scraper supports the given platform
 	IsSupportedPlatform(systemID string) bool

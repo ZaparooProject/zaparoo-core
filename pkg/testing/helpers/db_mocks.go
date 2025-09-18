@@ -515,7 +515,7 @@ func (m *MockMediaDBI) GetSystemByID(systemDBID int64) (*database.System, error)
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return nil, nil
+	return nil, errors.New("system not found")
 }
 
 // MediaTitle CRUD methods
@@ -800,9 +800,15 @@ func (m *MockMediaDBI) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
 func (m *MockMediaDBI) GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error) {
 	args := m.Called(mediaTitleDBID)
 	if tags, ok := args.Get(0).(map[string]string); ok {
-		return tags, args.Error(1)
+		if err := args.Error(1); err != nil {
+			return tags, fmt.Errorf("mock error getting tags for media title: %w", err)
+		}
+		return tags, nil
 	}
-	return nil, args.Error(1)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock error getting tags for media title: %w", err)
+	}
+	return nil, errors.New("mock GetTagsForMediaTitle returned invalid type")
 }
 
 func (m *MockMediaDBI) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
@@ -839,7 +845,7 @@ func (m *MockMediaDBI) GetGameHashes(systemID, mediaPath string) (*database.Game
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return nil, nil
+	return nil, errors.New("hashes not found")
 }
 
 func (m *MockMediaDBI) FindGameByHash(crc32, md5, sha1 string) ([]database.Media, error) {
@@ -853,7 +859,7 @@ func (m *MockMediaDBI) FindGameByHash(crc32, md5, sha1 string) ([]database.Media
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return nil, nil
+	return nil, errors.New("media not found")
 }
 
 // Media access methods
@@ -868,7 +874,7 @@ func (m *MockMediaDBI) GetMediaByID(mediaDBID int64) (*database.Media, error) {
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return nil, nil
+	return nil, fmt.Errorf("media not found with ID: %d", mediaDBID)
 }
 
 func (m *MockMediaDBI) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaTitle, error) {
@@ -882,7 +888,7 @@ func (m *MockMediaDBI) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaT
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
-	return nil, nil
+	return nil, fmt.Errorf("media title not found with ID: %d", mediaTitleDBID)
 }
 
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock

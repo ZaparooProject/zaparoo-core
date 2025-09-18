@@ -31,10 +31,10 @@ func TestBasePlatformMapper_MapToScraperPlatform(t *testing.T) {
 	mapper := NewBasePlatformMapper()
 
 	tests := []struct {
-		name         string
-		systemID     string
+		name             string
+		systemID         string
 		expectedPlatform string
-		expectedExists bool
+		expectedExists   bool
 	}{
 		{"NES", "nes", "nintendo-entertainment-system", true},
 		{"Famicom", "famicom", "nintendo-entertainment-system", true},
@@ -51,6 +51,7 @@ func TestBasePlatformMapper_MapToScraperPlatform(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			platform, exists := mapper.MapToScraperPlatform(tt.systemID)
 			assert.Equal(t, tt.expectedExists, exists, "Existence check failed for %s", tt.systemID)
 			if tt.expectedExists {
@@ -71,7 +72,7 @@ func TestBasePlatformMapper_GetNormalizedPlatform(t *testing.T) {
 
 	// Test invalid system
 	platform = mapper.GetNormalizedPlatform("unknown")
-	assert.Equal(t, "", platform)
+	assert.Empty(t, platform)
 }
 
 func TestBasePlatformMapper_HasSystemID(t *testing.T) {
@@ -110,6 +111,7 @@ func TestBasePlatformMapper_MapFromScraperPlatform(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			systemID, exists := mapper.MapFromScraperPlatform(tt.scraperPlatform)
 			assert.Equal(t, tt.expectedExists, exists, "Existence check failed for %s", tt.scraperPlatform)
 			if tt.expectedExists {
@@ -184,6 +186,7 @@ func TestBasePlatformMapper_ComprehensiveSystemCoverage(t *testing.T) {
 
 	for _, system := range majorSystems {
 		t.Run(system, func(t *testing.T) {
+			t.Parallel()
 			assert.True(t, mapper.HasSystemID(system), "Major system %s should be supported", system)
 
 			platform, exists := mapper.MapToScraperPlatform(system)

@@ -27,7 +27,7 @@ type APIResponse struct {
 
 // Header contains API response metadata
 type Header struct {
-	APIVersion    string `json:"APIversion"`
+	APIVersion    string `json:"APIversion"` //nolint:tagliatelle // External API format
 	DateTime      string `json:"dateTime"`
 	CommandAsked  string `json:"commandAsked"`
 	Success       string `json:"success"`
@@ -35,7 +35,7 @@ type Header struct {
 	MaxRequests   int    `json:"maxrequests"`
 	RequestCount  int    `json:"requestcounter"`
 	MaxRequestsKO int    `json:"maxrequestsko"`
-	RequestsKO    int    `json:"requestsKO"`
+	RequestsKO    int    `json:"requestsKO"` //nolint:tagliatelle // External API format
 }
 
 // Response contains the actual game data

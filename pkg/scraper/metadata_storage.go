@@ -21,6 +21,7 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -115,7 +116,9 @@ func (ms *MetadataStorage) StoreMetadata(ctx context.Context, metadata *ScrapedM
 }
 
 // GetMetadata retrieves scraped metadata for a MediaTitle from Tags
-func (ms *MetadataStorage) GetMetadata(ctx context.Context, mediaTitleDBID int64, scraperSource string) (*ScrapedMetadata, error) {
+func (ms *MetadataStorage) GetMetadata(_ context.Context, mediaTitleDBID int64,
+	scraperSource string,
+) (*ScrapedMetadata, error) {
 	// Get all tags for the MediaTitle
 	tags, err := ms.db.GetTagsForMediaTitle(mediaTitleDBID)
 	if err != nil {
@@ -125,7 +128,7 @@ func (ms *MetadataStorage) GetMetadata(ctx context.Context, mediaTitleDBID int64
 	// If scraperSource is specified, check if the metadata is from that source
 	if scraperSource != "" {
 		if source, exists := tags[TagTypeScraperSource]; !exists || source != scraperSource {
-			return nil, nil // No metadata from the specified scraper source
+			return nil, fmt.Errorf("no metadata from scraper source: %s", scraperSource)
 		}
 	}
 
@@ -157,14 +160,14 @@ func (ms *MetadataStorage) GetMetadata(ctx context.Context, mediaTitleDBID int64
 
 	// Return nil if no scraper metadata found
 	if metadata.ScraperSource == "" {
-		return nil, nil
+		return nil, errors.New("no scraper metadata found")
 	}
 
 	return metadata, nil
 }
 
 // ensureTagType creates a TagType if it doesn't exist and returns its DBID
-func (ms *MetadataStorage) ensureTagType(ctx context.Context, tagTypeName string) (int64, error) {
+func (ms *MetadataStorage) ensureTagType(_ context.Context, tagTypeName string) (int64, error) {
 	tagType := database.TagType{
 		Type: tagTypeName,
 	}

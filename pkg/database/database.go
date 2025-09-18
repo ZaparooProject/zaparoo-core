@@ -131,16 +131,15 @@ type ScanState struct {
 	MediaTagsIndex int
 }
 
-
 type GameHashes struct {
-	DBID       int64
+	ComputedAt time.Time
 	SystemID   string
 	MediaPath  string
-	ComputedAt time.Time
-	FileSize   int64
 	CRC32      string
 	MD5        string
 	SHA1       string
+	DBID       int64
+	FileSize   int64
 }
 
 /*

@@ -22,8 +22,8 @@ package config
 import "strings"
 
 type Systems struct {
-	Default []SystemsDefault `toml:"default,omitempty"`
 	Hashes  *[]string        `toml:"hashes,omitempty"`
+	Default []SystemsDefault `toml:"default,omitempty"`
 }
 
 type SystemsDefault struct {

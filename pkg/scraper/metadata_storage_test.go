@@ -71,7 +71,7 @@ func TestMetadataStorage_GetMetadata_Success(t *testing.T) {
 	assert.Equal(t, "1991", metadata.ReleaseDate)
 	assert.Equal(t, "Nintendo", metadata.Developer)
 	assert.Equal(t, "Nintendo", metadata.Publisher)
-	assert.Equal(t, 9.5, metadata.Rating)
+	assert.InDelta(t, 9.5, metadata.Rating, 0.001)
 	assert.Equal(t, time.Unix(1640995200, 0), metadata.ScrapedAt)
 
 	mockDB.AssertExpectations(t)
@@ -181,7 +181,7 @@ func TestMetadataStorage_GetMetadata_InvalidRating(t *testing.T) {
 	// Should succeed but rating should be 0
 	require.NoError(t, err)
 	require.NotNil(t, metadata)
-	assert.Equal(t, float64(0), metadata.Rating)
+	assert.InDelta(t, float64(0), metadata.Rating, 0.001)
 
 	mockDB.AssertExpectations(t)
 }
@@ -240,17 +240,17 @@ func TestMetadataStorage_StoreMetadata_Success(t *testing.T) {
 	// Mock all the database calls that StoreMetadata will make
 	// We expect calls to FindOrInsertTagType and related methods
 	mockDB.On("FindOrInsertTagType", mock.AnythingOfType("database.TagType")).Return(
-		func(tagType interface{}) interface{} {
+		func(tagType any) any {
 			return tagType // Return the same object with a fake DBID
 		}, nil).Maybe()
 
 	mockDB.On("FindOrInsertTag", mock.AnythingOfType("database.Tag")).Return(
-		func(tag interface{}) interface{} {
+		func(tag any) any {
 			return tag // Return the same object with a fake DBID
 		}, nil).Maybe()
 
 	mockDB.On("FindOrInsertMediaTitleTag", mock.AnythingOfType("database.MediaTitleTag")).Return(
-		func(mtt interface{}) interface{} {
+		func(mtt any) any {
 			return mtt // Return the same object with a fake DBID
 		}, nil).Maybe()
 

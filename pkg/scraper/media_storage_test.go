@@ -177,6 +177,7 @@ func TestGetMediaPath_PhysicalPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			mediaPath, err := ms.GetMediaPath(tt.gamePath, tt.systemID, tt.mediaType, tt.extension)
 
 			if tt.expectError {
@@ -233,6 +234,7 @@ func TestGetMediaPath_VirtualPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			mediaPath, err := ms.GetMediaPath(tt.gamePath, tt.systemID, tt.mediaType, tt.extension)
 			require.NoError(t, err)
 
@@ -295,6 +297,7 @@ func TestIsVirtualPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			result := isVirtualPath(tt.path)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -311,11 +314,11 @@ func TestGetMediaRootDir_PhysicalPaths(t *testing.T) {
 	gamesDir := filepath.Join(tmpDir, "games")
 	snesDir := filepath.Join(gamesDir, "snes")
 	romsDir := filepath.Join(snesDir, "roms")
-	err := os.MkdirAll(romsDir, 0755)
+	err := os.MkdirAll(romsDir, 0o750)
 	require.NoError(t, err)
 
 	gameFile := filepath.Join(romsDir, "game.sfc")
-	err = os.WriteFile(gameFile, []byte("test"), 0644)
+	err = os.WriteFile(gameFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
 	mockPlatform := &mocks.MockPlatform{}
@@ -346,6 +349,7 @@ func TestGetMediaRootDir_PhysicalPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			rootDir, err := ms.getMediaRootDir(tt.gamePath, tt.systemID)
 			require.NoError(t, err)
 			assert.Contains(t, rootDir, tt.expectedSubdir)
@@ -402,7 +406,7 @@ func TestEnsureMediaDirectory_ExistingDirectory(t *testing.T) {
 
 	// Create directory first
 	existingDir := filepath.Join(tmpDir, "existing")
-	err := os.MkdirAll(existingDir, 0755)
+	err := os.MkdirAll(existingDir, 0o750)
 	require.NoError(t, err)
 
 	mediaPath := filepath.Join(existingDir, "game-box.jpg")
@@ -424,7 +428,7 @@ func TestMediaExists(t *testing.T) {
 
 	// Create a temporary game file
 	gameFile := filepath.Join(tmpDir, "game.sfc")
-	err := os.WriteFile(gameFile, []byte("test"), 0644)
+	err := os.WriteFile(gameFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
 	// Test when media doesn't exist
@@ -439,7 +443,7 @@ func TestMediaExists(t *testing.T) {
 	err = ms.EnsureMediaDirectory(mediaPath)
 	require.NoError(t, err)
 
-	err = os.WriteFile(mediaPath, []byte("image data"), 0644)
+	err = os.WriteFile(mediaPath, []byte("image data"), 0o600)
 	require.NoError(t, err)
 
 	// Test when media exists
@@ -499,6 +503,7 @@ func TestGetMediaPath_AllMediaTypes(t *testing.T) {
 
 	for _, tt := range mediaTypeTests {
 		t.Run(string(tt.mediaType), func(t *testing.T) {
+			t.Parallel()
 			mediaPath, err := ms.GetMediaPath(gamePath, "snes", tt.mediaType, extension)
 			require.NoError(t, err)
 
@@ -563,11 +568,12 @@ func TestGetMediaRootDir_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			rootDir, err := ms.getMediaRootDir(tt.gamePath, tt.systemID)
 			require.NoError(t, err)
 			assert.NotEmpty(t, rootDir)
 			// Should return some valid directory path
-			assert.True(t, len(rootDir) > 0) // Should return a valid directory path
+			assert.NotEmpty(t, rootDir) // Should return a valid directory path
 		})
 	}
 }

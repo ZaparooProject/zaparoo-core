@@ -162,7 +162,7 @@ func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
 
 	// For systems not in IGDB, check if they exist in base mapper
 	// This maintains compatibility but doesn't return an ID
-	if pm.BasePlatformMapper.HasSystemID(systemID) {
+	if pm.HasSystemID(systemID) {
 		return "", true // System exists but no IGDB ID
 	}
 

@@ -22,11 +22,13 @@ package methods
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
+	"github.com/rs/zerolog/log"
 )
 
 // Global scraper service instance
@@ -49,7 +51,7 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 	if len(env.Params) > 0 {
 		err := json.Unmarshal(env.Params, &params)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to unmarshal params: %w", err)
 		}
 	}
 
@@ -57,8 +59,7 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 	if params.Media != nil {
 		go func() {
 			if err := ScraperServiceInstance.ScrapeGameByID(env.State.GetContext(), *params.Media); err != nil {
-				// Log error but don't block
-				// In a real implementation, you'd send a notification
+				log.Error().Err(err).Int64("mediaID", *params.Media).Msg("failed to scrape game")
 			}
 		}()
 
@@ -86,8 +87,7 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 	go func() {
 		for _, system := range systems {
 			if err := ScraperServiceInstance.ScrapeSystem(env.State.GetContext(), system.ID); err != nil {
-				// Log error but don't block
-				// In a real implementation, you'd send a notification
+				log.Error().Err(err).Str("systemID", system.ID).Msg("failed to scrape system")
 			}
 		}
 	}()
@@ -124,7 +124,12 @@ func HandleScraperCancel(_ requests.RequestEnv) (any, error) {
 	}
 
 	err := ScraperServiceInstance.CancelScraping()
+	if err != nil {
+		return models.ScraperCancelResponse{
+			Cancelled: false,
+		}, fmt.Errorf("failed to cancel scraping: %w", err)
+	}
 	return models.ScraperCancelResponse{
-		Cancelled: err == nil,
-	}, err
+		Cancelled: true,
+	}, nil
 }

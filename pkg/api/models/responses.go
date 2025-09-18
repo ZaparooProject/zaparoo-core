@@ -175,9 +175,9 @@ type ReadersResponse struct {
 }
 
 type ScraperStartResponse struct {
-	Started bool     `json:"started"`
-	Systems []string `json:"systems,omitempty"`
 	MediaID *int64   `json:"mediaId,omitempty"`
+	Systems []string `json:"systems,omitempty"`
+	Started bool     `json:"started"`
 }
 
 type ScraperCancelResponse struct {

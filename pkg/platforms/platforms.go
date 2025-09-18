@@ -146,23 +146,11 @@ type Launcher struct {
 // Settings defines all simple settings/configuration values available for a
 // platform.
 type Settings struct {
-	// DataDir returns the root folder where things like databases and
-	// downloaded assets are permanently stored. WARNING: This value should be
-	// accessed using the DataDir function in the utils package.
-	DataDir string
-	// ConfigDir returns the directory where the config file is stored.
-	// WARNING: This value should be accessed using the ConfigDir function in
-	// the utils package.
-	ConfigDir string
-	// TempDir returns a temporary directory where the logs are stored and any
-	// files used for inter-process communication. Expect it to be deleted.
-	TempDir string
-	// ZipsAsDir returns true if this platform treats .zip files as if they
-	// were directories for the purpose of launching media.
-	ZipsAsDirs bool
-	// DefaultHashes specifies which hash types this platform computes by default
-	// during media database indexing. Can be overridden by user configuration.
+	DataDir       string
+	ConfigDir     string
+	TempDir       string
 	DefaultHashes []database.HashType
+	ZipsAsDirs    bool
 }
 
 // Platform is the central interface that defines how Core interacts with a

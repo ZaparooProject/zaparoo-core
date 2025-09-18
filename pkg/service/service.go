@@ -41,7 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
-	scraperService "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
+	scraperservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -220,7 +220,7 @@ func Start(
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
 	log.Info().Msg("starting scraper service")
-	scraperSvc := scraperService.NewScraperService(db.MediaDB, db.UserDB, cfg, pl, st.Notifications)
+	scraperSvc := scraperservice.NewScraperService(db.MediaDB, db.UserDB, cfg, pl, st.Notifications)
 	methods.ScraperServiceInstance = scraperSvc
 
 	log.Info().Msg("starting API service")

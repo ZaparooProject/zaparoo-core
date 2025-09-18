@@ -147,7 +147,7 @@ func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
 	}
 
 	// For systems not in TheGamesDB, check if they exist in base mapper
-	if pm.BasePlatformMapper.HasSystemID(systemID) {
+	if pm.HasSystemID(systemID) {
 		return "", true // System exists but no TheGamesDB ID
 	}
 

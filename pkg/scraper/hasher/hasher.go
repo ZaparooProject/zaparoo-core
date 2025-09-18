@@ -21,13 +21,15 @@ package hasher
 
 import (
 	"archive/zip"
-	"crypto/md5"
-	"crypto/sha1"
+	"crypto/md5"  //nolint:gosec // MD5 required for ROM identification
+	"crypto/sha1" //nolint:gosec // SHA1 required for ROM identification
 	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // FileHash contains all hash information for a file
@@ -64,19 +66,31 @@ func computeFileInZip(zipPath, fileInZip string) (*FileHash, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zip: %w", err)
 	}
-	defer r.Close()
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close zip reader")
+		}
+	}()
 
 	// Find the specific file in the ZIP
 	for _, f := range r.File {
-		if f.Name == fileInZip {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, fmt.Errorf("failed to open file in zip: %w", err)
-			}
-			defer rc.Close()
-
-			return hashReader(rc, int64(f.UncompressedSize64))
+		if f.Name != fileInZip {
+			continue
 		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file in zip: %w", err)
+		}
+
+		size := f.UncompressedSize64
+		if size > 9223372036854775807 { // max int64
+			_ = rc.Close()
+			return nil, fmt.Errorf("file too large: %d bytes", size)
+		}
+
+		result, err := hashReader(rc, int64(size))
+		_ = rc.Close()
+		return result, err
 	}
 
 	return nil, fmt.Errorf("file %s not found in archive %s", fileInZip, zipPath)
@@ -84,11 +98,15 @@ func computeFileInZip(zipPath, fileInZip string) (*FileHash, error) {
 
 // computeRegularFileHash computes hashes for a regular file
 func computeRegularFileHash(filePath string) (*FileHash, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) //nolint:gosec // filePath is validated by caller
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close file")
+		}
+	}()
 
 	// Get file size
 	stat, err := file.Stat()
@@ -102,8 +120,8 @@ func computeRegularFileHash(filePath string) (*FileHash, error) {
 // hashReader computes all hashes from an io.Reader
 func hashReader(r io.Reader, size int64) (*FileHash, error) {
 	crc32Hash := crc32.NewIEEE()
-	md5Hash := md5.New()
-	sha1Hash := sha1.New()
+	md5Hash := md5.New()   //nolint:gosec // MD5 required for ROM identification
+	sha1Hash := sha1.New() //nolint:gosec // SHA1 required for ROM identification
 
 	// Use io.MultiWriter to compute all hashes in one pass
 	w := io.MultiWriter(crc32Hash, md5Hash, sha1Hash)

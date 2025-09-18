@@ -949,7 +949,9 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 	return row, nil
 }
 
-func sqlFindMediaTitleTag(ctx context.Context, db *sql.DB, mediaTitleTag database.MediaTitleTag) (database.MediaTitleTag, error) {
+func sqlFindMediaTitleTag(
+	ctx context.Context, db *sql.DB, mediaTitleTag database.MediaTitleTag,
+) (database.MediaTitleTag, error) {
 	var row database.MediaTitleTag
 	stmt, err := db.PrepareContext(ctx, `
 		select
@@ -985,7 +987,9 @@ func sqlFindMediaTitleTag(ctx context.Context, db *sql.DB, mediaTitleTag databas
 	return row, nil
 }
 
-func sqlInsertMediaTitleTag(ctx context.Context, db *sql.DB, row database.MediaTitleTag) (database.MediaTitleTag, error) {
+func sqlInsertMediaTitleTag(
+	ctx context.Context, db *sql.DB, row database.MediaTitleTag,
+) (database.MediaTitleTag, error) {
 	var dbID any
 	if row.DBID != 0 {
 		dbID = row.DBID

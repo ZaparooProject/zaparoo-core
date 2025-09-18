@@ -154,7 +154,7 @@ func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
 	}
 
 	// For systems not specifically mapped, check if they exist in base mapper
-	if pm.BasePlatformMapper.HasSystemID(systemID) {
+	if pm.HasSystemID(systemID) {
 		return "", true // System exists but no specific ScreenScraper ID
 	}
 

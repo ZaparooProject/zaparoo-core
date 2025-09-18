@@ -22,6 +22,7 @@ package thegamesdb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -62,7 +63,7 @@ func NewTheGamesDB() *TheGamesDB {
 }
 
 // GetInfo returns scraper information
-func (tgdb *TheGamesDB) GetInfo() scraper.ScraperInfo {
+func (*TheGamesDB) GetInfo() scraper.ScraperInfo {
 	return scraper.ScraperInfo{
 		Name:         "TheGamesDB",
 		Version:      "1.0",
@@ -79,7 +80,7 @@ func (tgdb *TheGamesDB) IsSupportedPlatform(systemID string) bool {
 }
 
 // GetSupportedMediaTypes returns the media types supported by TheGamesDB
-func (tgdb *TheGamesDB) GetSupportedMediaTypes() []scraper.MediaType {
+func (*TheGamesDB) GetSupportedMediaTypes() []scraper.MediaType {
 	return []scraper.MediaType{
 		scraper.MediaTypeCover,
 		scraper.MediaTypeBoxBack,
@@ -115,7 +116,11 @@ func (tgdb *TheGamesDB) Search(ctx context.Context, query scraper.ScraperQuery) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -138,9 +143,9 @@ func (tgdb *TheGamesDB) Search(ctx context.Context, query scraper.ScraperQuery) 
 	}
 
 	// Convert to scraper results
-	var results []scraper.ScraperResult
-	for _, game := range apiResp.Data.Games {
-		result := tgdb.convertGameToResult(game, query.SystemID, apiResp.Include)
+	results := make([]scraper.ScraperResult, 0, len(apiResp.Data.Games))
+	for i := range apiResp.Data.Games {
+		result := tgdb.convertGameToResult(&apiResp.Data.Games[i], query.SystemID, apiResp.Include)
 		results = append(results, result)
 	}
 
@@ -167,7 +172,11 @@ func (tgdb *TheGamesDB) GetGameInfo(ctx context.Context, gameID string) (*scrape
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -186,17 +195,17 @@ func (tgdb *TheGamesDB) GetGameInfo(ctx context.Context, gameID string) (*scrape
 	}
 
 	if apiResp.Data == nil || len(apiResp.Data.Games) == 0 {
-		return nil, fmt.Errorf("game not found")
+		return nil, errors.New("game not found")
 	}
 
 	// Convert to game info
 	game := apiResp.Data.Games[0]
-	gameInfo := tgdb.convertGameToInfo(game, apiResp.Include)
+	gameInfo := tgdb.convertGameToInfo(&game, apiResp.Include)
 	return gameInfo, nil
 }
 
 // DownloadMedia downloads media files for a game
-func (tgdb *TheGamesDB) DownloadMedia(ctx context.Context, media scraper.MediaItem) error {
+func (tgdb *TheGamesDB) DownloadMedia(_ context.Context, media *scraper.MediaItem) error {
 	// Rate limit check
 	if err := tgdb.waitForRateLimit(); err != nil {
 		return err
@@ -209,7 +218,7 @@ func (tgdb *TheGamesDB) DownloadMedia(ctx context.Context, media scraper.MediaIt
 
 	// TheGamesDB provides direct URLs, so we can download directly
 	// This would be used by the scraper service to download to the appropriate path
-	return fmt.Errorf("media download should be handled by scraper service")
+	return errors.New("media download should be handled by scraper service")
 }
 
 // waitForRateLimit ensures we don't exceed rate limits
@@ -228,10 +237,10 @@ func (tgdb *TheGamesDB) waitForRateLimit() error {
 }
 
 // buildSearchURL constructs the search URL for TheGamesDB API
-func (tgdb *TheGamesDB) buildSearchURL(gameName, platformID string) (string, error) {
+func (*TheGamesDB) buildSearchURL(gameName, platformID string) (string, error) {
 	u, err := url.Parse(baseURL + "/Games/ByGameName")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse TheGamesDB search URL: %w", err)
 	}
 
 	params := url.Values{}
@@ -239,7 +248,8 @@ func (tgdb *TheGamesDB) buildSearchURL(gameName, platformID string) (string, err
 	params.Set("platform", platformID)
 	params.Set("include", "boxart") // Include boxart data
 	params.Set("page", "1")
-	params.Set("fields", "players,publishers,genres,overview,last_updated,rating,platform,coop,youtube,os,processor,ram,video,sound,alternates")
+	params.Set("fields", "players,publishers,genres,overview,last_updated,rating,platform,"+
+		"coop,youtube,os,processor,ram,video,sound,alternates")
 
 	// Get API key from auth.toml
 	authCfg := config.GetAuthCfg()
@@ -253,16 +263,17 @@ func (tgdb *TheGamesDB) buildSearchURL(gameName, platformID string) (string, err
 }
 
 // buildGameInfoURL constructs the game info URL
-func (tgdb *TheGamesDB) buildGameInfoURL(gameID string) (string, error) {
+func (*TheGamesDB) buildGameInfoURL(gameID string) (string, error) {
 	u, err := url.Parse(baseURL + "/Games/ByGameID")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse TheGamesDB game info URL: %w", err)
 	}
 
 	params := url.Values{}
 	params.Set("id", gameID)
 	params.Set("include", "boxart") // Include boxart data
-	params.Set("fields", "players,publishers,genres,overview,last_updated,rating,platform,coop,youtube,os,processor,ram,video,sound,alternates")
+	params.Set("fields", "players,publishers,genres,overview,last_updated,rating,platform,"+
+		"coop,youtube,os,processor,ram,video,sound,alternates")
 
 	// Get API key from auth.toml
 	authCfg := config.GetAuthCfg()
@@ -276,25 +287,25 @@ func (tgdb *TheGamesDB) buildGameInfoURL(gameID string) (string, error) {
 }
 
 // handleHTTPError handles HTTP error responses
-func (tgdb *TheGamesDB) handleHTTPError(statusCode int) error {
+func (*TheGamesDB) handleHTTPError(statusCode int) error {
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("rate limited by TheGamesDB (429)")
+		return errors.New("rate limited by TheGamesDB (429)")
 	case http.StatusUnauthorized:
-		return fmt.Errorf("authentication failed - check API key in auth.toml")
+		return errors.New("authentication failed - check API key in auth.toml")
 	case http.StatusForbidden:
-		return fmt.Errorf("access forbidden - check API permissions")
+		return errors.New("access forbidden - check API permissions")
 	case http.StatusNotFound:
-		return fmt.Errorf("game not found")
+		return errors.New("game not found")
 	case http.StatusInternalServerError:
-		return fmt.Errorf("TheGamesDB server error")
+		return errors.New("TheGamesDB server error")
 	default:
 		return fmt.Errorf("HTTP error %d", statusCode)
 	}
 }
 
 // convertGameToResult converts TheGamesDB game data to ScraperResult
-func (tgdb *TheGamesDB) convertGameToResult(game Game, systemID string, include *APIResponseInclude) scraper.ScraperResult {
+func (*TheGamesDB) convertGameToResult(game *Game, systemID string, _ *APIResponseInclude) scraper.ScraperResult {
 	// Calculate relevance score based on available data
 	relevance := 0.5 // Base relevance
 	if game.GameTitle != "" {
@@ -319,7 +330,7 @@ func (tgdb *TheGamesDB) convertGameToResult(game Game, systemID string, include 
 }
 
 // convertGameToInfo converts TheGamesDB game data to detailed GameInfo
-func (tgdb *TheGamesDB) convertGameToInfo(game Game, include *APIResponseInclude) *scraper.GameInfo {
+func (tgdb *TheGamesDB) convertGameToInfo(game *Game, include *APIResponseInclude) *scraper.GameInfo {
 	gameInfo := &scraper.GameInfo{
 		ID:          strconv.Itoa(game.ID),
 		Name:        game.GameTitle,
@@ -373,8 +384,8 @@ func (tgdb *TheGamesDB) convertGameToInfo(game Game, include *APIResponseInclude
 }
 
 // convertBoxartToMediaItems converts TheGamesDB boxart to MediaItems
-func (tgdb *TheGamesDB) convertBoxartToMediaItems(boxartMap map[string]Boxart, gameID string) []scraper.MediaItem {
-	var items []scraper.MediaItem
+func (tgdb *TheGamesDB) convertBoxartToMediaItems(boxartMap map[string]Boxart, _ string) []scraper.MediaItem {
+	items := make([]scraper.MediaItem, 0, len(boxartMap))
 
 	for _, boxart := range boxartMap {
 		mediaType := tgdb.mapMediaType(boxart.Type, boxart.Side)
@@ -399,7 +410,7 @@ func (tgdb *TheGamesDB) convertBoxartToMediaItems(boxartMap map[string]Boxart, g
 }
 
 // mapMediaType maps TheGamesDB media types to scraper media types
-func (tgdb *TheGamesDB) mapMediaType(tgdbType, side string) string {
+func (*TheGamesDB) mapMediaType(tgdbType, side string) string {
 	switch tgdbType {
 	case "boxart":
 		switch side {
@@ -420,7 +431,7 @@ func (tgdb *TheGamesDB) mapMediaType(tgdbType, side string) string {
 }
 
 // parseRating converts TheGamesDB rating to a numeric value
-func (tgdb *TheGamesDB) parseRating(rating string) float64 {
+func (*TheGamesDB) parseRating(rating string) float64 {
 	// TheGamesDB uses ratings like "E - Everyone", "T - Teen", etc.
 	// Convert to a simple numeric scale
 	switch strings.ToUpper(rating) {

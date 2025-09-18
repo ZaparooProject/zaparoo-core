@@ -178,7 +178,7 @@ func TestScreenScraperGameConversion(t *testing.T) {
 	}
 
 	// Test conversion to ScraperResult
-	result := ss.convertGameToResult(game, "nes")
+	result := ss.convertGameToResult(&game, "nes")
 	assert.Equal(t, "12345", result.ID)
 	assert.Equal(t, "Super Mario Bros.", result.Name)
 	assert.Equal(t, "Classic platformer game", result.Description)
@@ -187,7 +187,7 @@ func TestScreenScraperGameConversion(t *testing.T) {
 	assert.LessOrEqual(t, result.Relevance, 1.0)
 
 	// Test conversion to GameInfo
-	gameInfo := ss.convertGameToInfo(game)
+	gameInfo := ss.convertGameToInfo(&game)
 	assert.Equal(t, "12345", gameInfo.ID)
 	assert.Equal(t, "Super Mario Bros.", gameInfo.Name)
 	assert.Equal(t, "Classic platformer game", gameInfo.Description)

@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -38,7 +39,7 @@ import (
 
 const (
 	baseURL   = "https://api.igdb.com/v4"
-	tokenURL  = "https://id.twitch.tv/oauth2/token"
+	tokenURL  = "https://id.twitch.tv/oauth2/token" // #nosec G101 - Public OAuth endpoint URL, not a credential
 	userAgent = "Zaparoo Core/1.0"
 
 	// IGDB API limits
@@ -65,7 +66,7 @@ func NewIGDB() *IGDB {
 }
 
 // GetInfo returns scraper information
-func (igdb *IGDB) GetInfo() scraper.ScraperInfo {
+func (*IGDB) GetInfo() scraper.ScraperInfo {
 	return scraper.ScraperInfo{
 		Name:         "IGDB",
 		Version:      "1.0",
@@ -82,7 +83,7 @@ func (igdb *IGDB) IsSupportedPlatform(systemID string) bool {
 }
 
 // GetSupportedMediaTypes returns the media types supported by IGDB
-func (igdb *IGDB) GetSupportedMediaTypes() []scraper.MediaType {
+func (*IGDB) GetSupportedMediaTypes() []scraper.MediaType {
 	return []scraper.MediaType{
 		scraper.MediaTypeCover,
 		scraper.MediaTypeScreenshot,
@@ -128,7 +129,11 @@ func (igdb *IGDB) Search(ctx context.Context, query scraper.ScraperQuery) ([]scr
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -146,9 +151,9 @@ func (igdb *IGDB) Search(ctx context.Context, query scraper.ScraperQuery) ([]scr
 	}
 
 	// Convert to scraper results
-	var results []scraper.ScraperResult
-	for _, game := range games {
-		result := igdb.convertGameToResult(game, query.SystemID)
+	results := make([]scraper.ScraperResult, 0, len(games))
+	for i := range games {
+		result := igdb.convertGameToResult(&games[i], query.SystemID)
 		results = append(results, result)
 	}
 
@@ -186,7 +191,11 @@ func (igdb *IGDB) GetGameInfo(ctx context.Context, gameID string) (*scraper.Game
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	// Handle non-200 responses
 	if resp.StatusCode != http.StatusOK {
@@ -195,17 +204,17 @@ func (igdb *IGDB) GetGameInfo(ctx context.Context, gameID string) (*scraper.Game
 
 	// Parse response
 	var games []Game
-	if err := json.NewDecoder(resp.Body).Decode(&games); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&games); decodeErr != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
 
 	if len(games) == 0 {
-		return nil, fmt.Errorf("game not found")
+		return nil, errors.New("game not found")
 	}
 
 	// Convert to game info (get additional data in parallel)
 	game := games[0]
-	gameInfo, err := igdb.convertGameToInfo(ctx, game)
+	gameInfo, err := igdb.convertGameToInfo(ctx, &game)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert game info: %w", err)
 	}
@@ -214,7 +223,7 @@ func (igdb *IGDB) GetGameInfo(ctx context.Context, gameID string) (*scraper.Game
 }
 
 // DownloadMedia downloads media files for a game
-func (igdb *IGDB) DownloadMedia(ctx context.Context, media scraper.MediaItem) error {
+func (igdb *IGDB) DownloadMedia(_ context.Context, media *scraper.MediaItem) error {
 	// Rate limit check
 	if err := igdb.waitForRateLimit(); err != nil {
 		return err
@@ -227,7 +236,7 @@ func (igdb *IGDB) DownloadMedia(ctx context.Context, media scraper.MediaItem) er
 
 	// IGDB provides direct URLs, so we can download directly
 	// This would be used by the scraper service to download to the appropriate path
-	return fmt.Errorf("media download should be handled by scraper service")
+	return errors.New("media download should be handled by scraper service")
 }
 
 // ensureValidToken ensures we have a valid OAuth2 token
@@ -241,7 +250,8 @@ func (igdb *IGDB) ensureValidToken(ctx context.Context) error {
 	authCfg := config.GetAuthCfg()
 	creds := config.LookupAuth(authCfg, "https://api.igdb.com")
 	if creds == nil || creds.Username == "" || creds.Password == "" {
-		return fmt.Errorf("IGDB requires Twitch client credentials in auth.toml - set username=client_id and password=client_secret for https://api.igdb.com")
+		return errors.New("IGDB requires Twitch client credentials in auth.toml - " +
+			"set username=client_id and password=client_secret for https://api.igdb.com")
 	}
 
 	// Request new token from Twitch
@@ -261,7 +271,11 @@ func (igdb *IGDB) ensureValidToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to request token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("token request failed with status %d", resp.StatusCode)
@@ -284,7 +298,7 @@ func (igdb *IGDB) ensureValidToken(ctx context.Context) error {
 }
 
 // getClientID gets the Twitch client ID from auth config
-func (igdb *IGDB) getClientID() string {
+func (*IGDB) getClientID() string {
 	authCfg := config.GetAuthCfg()
 	creds := config.LookupAuth(authCfg, "https://api.igdb.com")
 	if creds != nil {
@@ -309,7 +323,7 @@ func (igdb *IGDB) waitForRateLimit() error {
 }
 
 // buildSearchQuery builds an IGDB query for searching games
-func (igdb *IGDB) buildSearchQuery(gameName, platformID string) string {
+func (*IGDB) buildSearchQuery(gameName, platformID string) string {
 	// IGDB uses a custom query language
 	return fmt.Sprintf(`fields id,name,summary,first_release_date,rating,platforms,genres,cover.image_id;
 		search "%s";
@@ -318,32 +332,32 @@ func (igdb *IGDB) buildSearchQuery(gameName, platformID string) string {
 }
 
 // buildGameInfoQuery builds an IGDB query for detailed game information
-func (igdb *IGDB) buildGameInfoQuery(gameID string) string {
-	return fmt.Sprintf(`fields id,name,summary,storyline,first_release_date,rating,aggregated_rating,platforms,genres,involved_companies,
-		cover.image_id,screenshots.image_id,artworks.image_id,videos.video_id,videos.name,alternative_names.name;
-		where id = %s;`, gameID)
+func (*IGDB) buildGameInfoQuery(gameID string) string {
+	return fmt.Sprintf(`fields id,name,summary,storyline,first_release_date,rating,aggregated_rating,platforms,genres,`+
+		`involved_companies,cover.image_id,screenshots.image_id,artworks.image_id,videos.video_id,videos.name,`+
+		`alternative_names.name; where id = %s;`, gameID)
 }
 
 // handleHTTPError handles HTTP error responses
-func (igdb *IGDB) handleHTTPError(statusCode int) error {
+func (*IGDB) handleHTTPError(statusCode int) error {
 	switch statusCode {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("rate limited by IGDB (429)")
+		return errors.New("rate limited by IGDB (429)")
 	case http.StatusUnauthorized:
-		return fmt.Errorf("authentication failed - check Twitch credentials in auth.toml")
+		return errors.New("authentication failed - check Twitch credentials in auth.toml")
 	case http.StatusForbidden:
-		return fmt.Errorf("access forbidden - check API permissions")
+		return errors.New("access forbidden - check API permissions")
 	case http.StatusNotFound:
-		return fmt.Errorf("game not found")
+		return errors.New("game not found")
 	case http.StatusInternalServerError:
-		return fmt.Errorf("IGDB server error")
+		return errors.New("IGDB server error")
 	default:
 		return fmt.Errorf("HTTP error %d", statusCode)
 	}
 }
 
 // convertGameToResult converts IGDB game data to ScraperResult
-func (igdb *IGDB) convertGameToResult(game Game, systemID string) scraper.ScraperResult {
+func (*IGDB) convertGameToResult(game *Game, systemID string) scraper.ScraperResult {
 	// Calculate relevance score based on available data
 	relevance := 0.6 // Base relevance (IGDB typically has good data)
 	if game.Name != "" {
@@ -368,7 +382,7 @@ func (igdb *IGDB) convertGameToResult(game Game, systemID string) scraper.Scrape
 }
 
 // convertGameToInfo converts IGDB game data to detailed GameInfo
-func (igdb *IGDB) convertGameToInfo(ctx context.Context, game Game) (*scraper.GameInfo, error) {
+func (*IGDB) convertGameToInfo(_ context.Context, game *Game) (*scraper.GameInfo, error) {
 	gameInfo := &scraper.GameInfo{
 		ID:          strconv.Itoa(game.ID),
 		Name:        game.Name,
@@ -390,7 +404,7 @@ func (igdb *IGDB) convertGameToInfo(ctx context.Context, game Game) (*scraper.Ga
 	}
 
 	// Convert cover and media
-	var mediaItems []scraper.MediaItem
+	mediaItems := make([]scraper.MediaItem, 0, 10)
 
 	// Add cover art
 	if game.Cover != nil {
@@ -406,7 +420,8 @@ func (igdb *IGDB) convertGameToInfo(ctx context.Context, game Game) (*scraper.Ga
 
 	// Add screenshots
 	for _, screenshot := range game.Screenshots {
-		screenshotURL := fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_screenshot_big/%s.jpg", screenshot.ImageID)
+		screenshotURL := fmt.Sprintf("https://images.igdb.com/igdb/image/upload/t_screenshot_big/%s.jpg",
+			screenshot.ImageID)
 		mediaItems = append(mediaItems, scraper.MediaItem{
 			Type:   scraper.MediaTypeScreenshot,
 			URL:    screenshotURL,

@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // TestAddMediaPath_SystemInsertFailure tests the scenario where system insertion fails
 // due to UNIQUE constraint violation (system already exists in database)
 // This test reproduces the TV show search issue where multiple scanners
@@ -98,7 +97,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 
 	// Create mock config and platform for hashing (disable hashing for tests)
 	mockCfg := &config.Instance{}
-	var mockPlatform platforms.Platform = nil
+	var mockPlatform platforms.Platform
 
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)
@@ -157,7 +156,7 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 
 	// Create mock config and platform for hashing (disable hashing for tests)
 	mockCfg := &config.Instance{}
-	var mockPlatform platforms.Platform = nil
+	var mockPlatform platforms.Platform
 
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)
@@ -211,7 +210,7 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// Create mock config and platform for hashing (disable hashing for tests)
 	mockCfg := &config.Instance{}
-	var mockPlatform platforms.Platform = nil
+	var mockPlatform platforms.Platform
 
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)

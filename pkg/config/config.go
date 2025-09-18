@@ -46,14 +46,14 @@ const (
 )
 
 type Values struct {
-	Launchers    Launchers `toml:"launchers,omitempty"`
-	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
+	Launchers    Launchers `toml:"launchers,omitempty"`
+	Scraper      Scraper   `toml:"scraper,omitempty"`
+	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
 	Service      Service   `toml:"service,omitempty"`
 	Groovy       Groovy    `toml:"groovy,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
-	Scraper      Scraper   `toml:"scraper,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
 	Audio        Audio     `toml:"audio,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`

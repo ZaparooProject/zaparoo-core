@@ -103,7 +103,7 @@ func TestConvertGameToResult(t *testing.T) {
 		Rating:  85.5,
 	}
 
-	result := scraper.convertGameToResult(game, "snes")
+	result := scraper.convertGameToResult(&game, "snes")
 
 	assert.Equal(t, "123", result.ID)
 	assert.Equal(t, "Test Game", result.Name)

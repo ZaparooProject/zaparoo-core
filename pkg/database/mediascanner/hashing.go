@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -79,7 +80,7 @@ func ComputeAndStoreHashes(
 	fileHashes, err := hasher.ComputeFileHashes(mediaPath)
 	if err != nil {
 		log.Warn().Err(err).Str("system", systemID).Str("path", mediaPath).Msg("failed to compute file hashes")
-		return err // Return error but don't fail the entire indexing process
+		return fmt.Errorf("failed to compute file hashes for %s: %w", mediaPath, err)
 	}
 
 	// Create GameHashes struct with only requested hash types
@@ -104,7 +105,7 @@ func ComputeAndStoreHashes(
 	// Save hashes to database
 	if err := db.SaveGameHashes(gameHashes); err != nil {
 		log.Error().Err(err).Str("system", systemID).Str("path", mediaPath).Msg("failed to save file hashes")
-		return err
+		return fmt.Errorf("failed to save game hashes for %s: %w", mediaPath, err)
 	}
 
 	log.Debug().Str("system", systemID).Str("path", mediaPath).Msg("successfully computed and stored file hashes")

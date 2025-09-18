@@ -180,7 +180,8 @@ func AddMediaPath(
 
 	// Compute and store file hashes if enabled
 	if err := ComputeAndStoreHashes(cfg, platform, db, systemID, path); err != nil {
-		log.Warn().Err(err).Str("system", systemID).Str("path", path).Msg("failed to compute/store hashes during indexing")
+		log.Warn().Err(err).Str("system", systemID).Str("path", path).
+			Msg("failed to compute/store hashes during indexing")
 		// Don't fail the entire indexing process for hash computation errors
 	}
 

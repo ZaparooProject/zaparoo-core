@@ -25,7 +25,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	scraperPkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
+	scraperpkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -98,7 +98,7 @@ func TestScraperServiceCancel(t *testing.T) {
 
 	// Test cancellation
 	err := service.CancelScraping()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Verify scraping is cancelled
 	progress := service.GetProgress()
@@ -126,7 +126,7 @@ func TestScraperServiceProgress(t *testing.T) {
 	require.NotNil(t, service)
 
 	// Update progress
-	service.updateProgress(func(p *scraperPkg.ScraperProgress) {
+	service.updateProgress(func(p *scraperpkg.ScraperProgress) {
 		p.IsRunning = true
 		p.TotalGames = 10
 		p.ProcessedGames = 3

@@ -26,10 +26,10 @@ type APIResponse struct {
 	Data              *APIResponseData    `json:"data,omitempty"`
 	Include           *APIResponseInclude `json:"include,omitempty"`
 	Status            string              `json:"status"`
-	AllowanceRefresh  string              `json:"allowance_refresh_timer"`
+	AllowanceRefresh  string              `json:"allowanceRefreshTimer"`
 	Code              int                 `json:"code"`
-	RemainingRequests int                 `json:"remaining_monthly_allowance"`
-	ExtraAllowance    int                 `json:"extra_allowance"`
+	RemainingRequests int                 `json:"remainingMonthlyAllowance"`
+	ExtraAllowance    int                 `json:"extraAllowance"`
 }
 
 // APIResponseData contains the main data from API responses
@@ -50,11 +50,11 @@ type APIResponseInclude struct {
 
 // Game represents a game from TheGamesDB
 type Game struct {
-	LastUpdated    time.Time `json:"last_updated"`
+	LastUpdated    time.Time `json:"lastUpdated"`
 	Youtube        string    `json:"youtube"`
-	ReleaseDate    string    `json:"release_date"`
+	ReleaseDate    string    `json:"releaseDate"`
 	Overview       string    `json:"overview"`
-	GameTitle      string    `json:"game_title"`
+	GameTitle      string    `json:"gameTitle"`
 	Rating         string    `json:"rating"`
 	CoopPlay       string    `json:"coop"`
 	AlternateNames []string  `json:"alternates,omitempty"`

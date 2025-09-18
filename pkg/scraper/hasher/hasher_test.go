@@ -38,7 +38,7 @@ func TestComputeFileHashes_RegularFile(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "Hello, World!"
 
-	err := os.WriteFile(testFile, []byte(testContent), 0644)
+	err := os.WriteFile(testFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	// Compute hashes
@@ -68,7 +68,7 @@ func TestComputeFileHashes_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "empty.txt")
 
-	err := os.WriteFile(testFile, []byte{}, 0644)
+	err := os.WriteFile(testFile, []byte{}, 0o600)
 	require.NoError(t, err)
 
 	// Compute hashes
@@ -87,7 +87,7 @@ func TestComputeFileHashes_NonexistentFile(t *testing.T) {
 	t.Parallel()
 
 	hash, err := ComputeFileHashes("/nonexistent/file.txt")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, hash)
 	assert.Contains(t, err.Error(), "failed to open file")
 }
@@ -101,12 +101,20 @@ func TestComputeFileHashes_ZipArchive(t *testing.T) {
 	testContent := "Game ROM content"
 
 	// Create a ZIP file with test content
-	f, err := os.Create(zipFile)
+	f, err := os.Create(zipFile) // #nosec G304 - zipFile is constructed safely from t.TempDir()
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			t.Logf("Failed to close file: %v", closeErr)
+		}
+	}()
 
 	w := zip.NewWriter(f)
-	defer w.Close()
+	defer func() {
+		if closeErr := w.Close(); closeErr != nil {
+			t.Logf("Failed to close zip writer: %v", closeErr)
+		}
+	}()
 
 	// Add a file to the ZIP
 	fw, err := w.Create("game.rom")
@@ -134,7 +142,7 @@ func TestComputeFileHashes_ZipArchive(t *testing.T) {
 
 	// Verify by comparing with direct computation of the same content
 	tmpFile := filepath.Join(tmpDir, "direct.txt")
-	err = os.WriteFile(tmpFile, []byte(testContent), 0644)
+	err = os.WriteFile(tmpFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	directHash, err := ComputeFileHashes(tmpFile)
@@ -154,9 +162,13 @@ func TestComputeFileHashes_ZipFileNotFound(t *testing.T) {
 	zipFile := filepath.Join(tmpDir, "test.zip")
 
 	// Create a ZIP file
-	f, err := os.Create(zipFile)
+	f, err := os.Create(zipFile) // #nosec G304 - zipFile is constructed safely from t.TempDir()
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			t.Logf("Failed to close file: %v", closeErr)
+		}
+	}()
 
 	w := zip.NewWriter(f)
 	fw, err := w.Create("existing.rom")
@@ -172,7 +184,7 @@ func TestComputeFileHashes_ZipFileNotFound(t *testing.T) {
 	misterPath := zipFile + "/nonexistent.rom"
 
 	hash, err := ComputeFileHashes(misterPath)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, hash)
 	assert.Contains(t, err.Error(), "not found in archive")
 }
@@ -182,7 +194,7 @@ func TestComputeFileHashes_InvalidZipPath(t *testing.T) {
 
 	// Test with .zip in path but file doesn't exist
 	hash, err := ComputeFileHashes("/nonexistent/file.zip/game.rom")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, hash)
 	assert.Contains(t, err.Error(), "failed to open file")
 }
@@ -194,14 +206,14 @@ func TestComputeFileHashes_CorruptedZip(t *testing.T) {
 	tmpDir := t.TempDir()
 	fakeZip := filepath.Join(tmpDir, "corrupted.zip")
 
-	err := os.WriteFile(fakeZip, []byte("not a zip file"), 0644)
+	err := os.WriteFile(fakeZip, []byte("not a zip file"), 0o600)
 	require.NoError(t, err)
 
 	// Test with corrupted ZIP
 	misterPath := fakeZip + "/game.rom"
 
 	hash, err := ComputeFileHashes(misterPath)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, hash)
 	assert.Contains(t, err.Error(), "failed to open zip")
 }
@@ -214,7 +226,7 @@ func TestValidateHashes_Success(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "Hello, World!"
 
-	err := os.WriteFile(testFile, []byte(testContent), 0644)
+	err := os.WriteFile(testFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	// Compute the actual hashes first
@@ -243,7 +255,7 @@ func TestValidateHashes_PartialValidation(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "Hello, World!"
 
-	err := os.WriteFile(testFile, []byte(testContent), 0644)
+	err := os.WriteFile(testFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	// Compute the actual hashes first
@@ -268,13 +280,13 @@ func TestValidateHashes_Mismatch(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "Hello, World!"
 
-	err := os.WriteFile(testFile, []byte(testContent), 0644)
+	err := os.WriteFile(testFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	// Validate hashes - should fail for each mismatch
 	tests := []struct {
-		name string
 		hash *FileHash
+		name string
 	}{
 		{
 			name: "CRC32 mismatch",
@@ -296,6 +308,7 @@ func TestValidateHashes_Mismatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			valid, err := ValidateHashes(testFile, tt.hash)
 			require.NoError(t, err)
 			assert.False(t, valid)
@@ -311,7 +324,7 @@ func TestValidateHashes_NonexistentFile(t *testing.T) {
 	}
 
 	valid, err := ValidateHashes("/nonexistent/file.txt", expectedHash)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.False(t, valid)
 	assert.Contains(t, err.Error(), "failed to open file")
 }
@@ -323,7 +336,7 @@ func TestValidateHashes_EmptyExpectedHash(t *testing.T) {
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
 
-	err := os.WriteFile(testFile, []byte("content"), 0644)
+	err := os.WriteFile(testFile, []byte("content"), 0o600)
 	require.NoError(t, err)
 
 	// Validate with empty expected hash - should always return true
@@ -340,7 +353,7 @@ func TestHashReader_ErrorHandling(t *testing.T) {
 	// Test with failing reader
 	failingReader := &failingReader{}
 	hash, err := hashReader(failingReader, 100)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, hash)
 	assert.Contains(t, err.Error(), "failed to read file for hashing")
 }
@@ -348,7 +361,7 @@ func TestHashReader_ErrorHandling(t *testing.T) {
 // failingReader is a test helper that always returns an error when reading
 type failingReader struct{}
 
-func (f *failingReader) Read(p []byte) (n int, err error) {
+func (*failingReader) Read(_ []byte) (n int, err error) {
 	return 0, errors.New("test read error")
 }
 
@@ -378,14 +391,18 @@ func TestComputeFileHashes_MultipleZipExtensions(t *testing.T) {
 
 	// Create directory with .zip in name
 	zipBackupDir := filepath.Join(tmpDir, "game.zip.backup")
-	err := os.MkdirAll(zipBackupDir, 0755)
+	err := os.MkdirAll(zipBackupDir, 0o750)
 	require.NoError(t, err)
 
 	// Create actual ZIP file in that directory
 	zipFile := filepath.Join(zipBackupDir, "archive.zip")
-	f, err := os.Create(zipFile)
+	f, err := os.Create(zipFile) // #nosec G304 - zipFile is constructed safely from t.TempDir()
 	require.NoError(t, err)
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			t.Logf("Failed to close file: %v", closeErr)
+		}
+	}()
 
 	w := zip.NewWriter(f)
 	fw, err := w.Create("file.rom")

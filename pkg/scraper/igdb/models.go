@@ -28,28 +28,28 @@ type Game struct {
 	Name               string            `json:"name"`
 	Summary            string            `json:"summary"`
 	Storyline          string            `json:"storyline"`
-	PlayerPerspectives []int             `json:"player_perspectives"`
+	PlayerPerspectives []int             `json:"playerPerspectives"`
 	Artworks           []Artwork         `json:"artworks"`
-	AlternativeNames   []AlternativeName `json:"alternative_names"`
+	AlternativeNames   []AlternativeName `json:"alternativeNames"`
 	Videos             []Video           `json:"videos"`
 	Screenshots        []Screenshot      `json:"screenshots"`
 	Themes             []int             `json:"themes"`
 	Platforms          []int             `json:"platforms"`
 	Genres             []int             `json:"genres"`
-	InvolvedCompanies  []int             `json:"involved_companies"`
-	GameModes          []int             `json:"game_modes"`
+	InvolvedCompanies  []int             `json:"involvedCompanies"`
+	GameModes          []int             `json:"gameModes"`
 	ID                 int               `json:"id"`
 	Rating             float64           `json:"rating"`
-	RatingCount        int               `json:"rating_count"`
-	AggregatedRating   float64           `json:"aggregated_rating"`
-	FirstReleaseDate   int64             `json:"first_release_date"`
+	RatingCount        int               `json:"ratingCount"`
+	AggregatedRating   float64           `json:"aggregatedRating"`
+	FirstReleaseDate   int64             `json:"firstReleaseDate"`
 	Status             int               `json:"status"`
 	Category           int               `json:"category"`
 }
 
 // Screenshot represents a screenshot from IGDB
 type Screenshot struct {
-	ImageID  string `json:"image_id"`
+	ImageID  string `json:"imageId"`
 	URL      string `json:"url"`
 	Checksum string `json:"checksum"`
 	ID       int    `json:"id"`
@@ -60,7 +60,7 @@ type Screenshot struct {
 
 // Artwork represents artwork from IGDB
 type Artwork struct {
-	ImageID  string `json:"image_id"`
+	ImageID  string `json:"imageId"`
 	URL      string `json:"url"`
 	Checksum string `json:"checksum"`
 	ID       int    `json:"id"`
@@ -71,7 +71,7 @@ type Artwork struct {
 
 // Cover represents cover art from IGDB
 type Cover struct {
-	ImageID  string `json:"image_id"`
+	ImageID  string `json:"imageId"`
 	URL      string `json:"url"`
 	Checksum string `json:"checksum"`
 	ID       int    `json:"id"`
@@ -83,7 +83,7 @@ type Cover struct {
 // Video represents a video from IGDB
 type Video struct {
 	Name     string `json:"name"`
-	VideoID  string `json:"video_id"`
+	VideoID  string `json:"videoId"`
 	Checksum string `json:"checksum"`
 	ID       int    `json:"id"`
 	Game     int    `json:"game"`
@@ -101,7 +101,7 @@ type AlternativeName struct {
 type Platform struct {
 	Name         string `json:"name"`
 	Abbreviation string `json:"abbreviation"`
-	Alternative  string `json:"alternative_name"`
+	Alternative  string `json:"alternativeName"`
 	Summary      string `json:"summary"`
 	URL          string `json:"url"`
 	Checksum     string `json:"checksum"`
@@ -172,9 +172,9 @@ type IGDBError struct {
 
 // TokenResponse represents the OAuth2 token response from Twitch
 type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken string `json:"accessToken"`
+	TokenType   string `json:"tokenType"`
+	ExpiresIn   int    `json:"expiresIn"`
 }
 
 // TokenInfo stores token information for IGDB authentication

@@ -46,7 +46,9 @@ func NewMediaStorage(pl platforms.Platform, cfg *config.Instance) *MediaStorage 
 
 // GetMediaPath returns the full path where a media file should be stored
 // Following Batocera's exact file organization structure
-func (ms *MediaStorage) GetMediaPath(gamePath string, systemID string, mediaType MediaType, extension string) (string, error) {
+func (ms *MediaStorage) GetMediaPath(gamePath string, systemID string, mediaType MediaType,
+	extension string,
+) (string, error) {
 	// Get the base filename without extension
 	baseFilename := filepath.Base(gamePath)
 	stem := strings.TrimSuffix(baseFilename, filepath.Ext(baseFilename))
@@ -116,7 +118,7 @@ func (ms *MediaStorage) GetMediaPath(gamePath string, systemID string, mediaType
 }
 
 // getMediaRootDir determines where to store media files based on the game's location
-func (ms *MediaStorage) getMediaRootDir(gamePath string, systemID string) (string, error) {
+func (ms *MediaStorage) getMediaRootDir(gamePath, systemID string) (string, error) {
 	// Check if this is a virtual path (like Steam ID)
 	if isVirtualPath(gamePath) {
 		// Use zaparoo's media directory as fallback
@@ -130,7 +132,7 @@ func (ms *MediaStorage) getMediaRootDir(gamePath string, systemID string) (strin
 	if err != nil {
 		// If we can't resolve the path, use zaparoo's media directory
 		dataDir := helpers.DataDir(ms.platform)
-		return filepath.Join(dataDir, "media", systemID), nil
+		return filepath.Join(dataDir, "media", systemID), err
 	}
 
 	// Try to find a reasonable root directory by walking up the directory tree
@@ -169,13 +171,18 @@ func isVirtualPath(path string) bool {
 }
 
 // EnsureMediaDirectory creates the necessary directory structure for storing media
-func (ms *MediaStorage) EnsureMediaDirectory(mediaPath string) error {
+func (*MediaStorage) EnsureMediaDirectory(mediaPath string) error {
 	dir := filepath.Dir(mediaPath)
-	return os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("failed to create media directory %s: %w", dir, err)
+	}
+	return nil
 }
 
 // MediaExists checks if a media file already exists
-func (ms *MediaStorage) MediaExists(gamePath string, systemID string, mediaType MediaType, extension string) (bool, error) {
+func (ms *MediaStorage) MediaExists(gamePath string, systemID string, mediaType MediaType,
+	extension string,
+) (bool, error) {
 	mediaPath, err := ms.GetMediaPath(gamePath, systemID, mediaType, extension)
 	if err != nil {
 		return false, err
@@ -186,14 +193,14 @@ func (ms *MediaStorage) MediaExists(gamePath string, systemID string, mediaType 
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to check if media exists at %s: %w", mediaPath, err)
 	}
 
 	return true, nil
 }
 
 // GetExistingMediaPaths returns all existing media files for a game
-func (ms *MediaStorage) GetExistingMediaPaths(gamePath string, systemID string) (map[MediaType]string, error) {
+func (ms *MediaStorage) GetExistingMediaPaths(gamePath, systemID string) (map[MediaType]string, error) {
 	existingMedia := make(map[MediaType]string)
 
 	// Check all common media types
@@ -226,14 +233,14 @@ func (ms *MediaStorage) GetExistingMediaPaths(gamePath string, systemID string) 
 }
 
 // CleanupEmptyDirectories removes empty media directories
-func (ms *MediaStorage) CleanupEmptyDirectories(rootDir string) error {
+func (*MediaStorage) CleanupEmptyDirectories(rootDir string) error {
 	// Remove empty images, videos, manuals directories
 	subdirs := []string{"images", "videos", "manuals"}
 
 	for _, subdir := range subdirs {
 		dirPath := filepath.Join(rootDir, subdir)
 		if entries, err := os.ReadDir(dirPath); err == nil && len(entries) == 0 {
-			os.Remove(dirPath) // Ignore errors, directory might not exist
+			_ = os.Remove(dirPath) // Ignore errors, directory might not exist
 		}
 	}
 
