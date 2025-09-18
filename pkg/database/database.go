@@ -126,8 +126,7 @@ type ScanState struct {
 }
 
 type ScrapedMetadata struct {
-	DBID           int64
-	MediaTitleDBID int64
+	ScrapedAt      time.Time
 	ScraperSource  string
 	Description    string
 	Genre          string
@@ -135,18 +134,19 @@ type ScrapedMetadata struct {
 	ReleaseDate    string
 	Developer      string
 	Publisher      string
+	DBID           int64
+	MediaTitleDBID int64
 	Rating         float64
-	ScrapedAt      time.Time
 }
 
 type GameHashes struct {
-	DBID       int64
-	MediaDBID  int64
+	ComputedAt time.Time
 	CRC32      string
 	MD5        string
 	SHA1       string
+	DBID       int64
+	MediaDBID  int64
 	FileSize   int64
-	ComputedAt time.Time
 }
 
 /*
@@ -201,6 +201,7 @@ type MediaDBI interface {
 	FindSystem(row System) (System, error)
 	InsertSystem(row System) (System, error)
 	FindOrInsertSystem(row System) (System, error)
+	GetSystemByID(systemDBID int64) (*System, error)
 
 	FindMediaTitle(row MediaTitle) (MediaTitle, error)
 	InsertMediaTitle(row MediaTitle) (MediaTitle, error)

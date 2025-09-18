@@ -51,7 +51,7 @@ func HandleScraperSearch(env requests.RequestEnv) (any, error) {
 	}
 
 	// Get scraper configuration for defaults
-	scraperConfig := scraper.GetScraperConfig(env.Config)
+	scraperConfig := scraper.GetScraperConfig(env.Platform)
 
 	// Use provided values or fall back to defaults
 	region := params.Region
@@ -69,20 +69,46 @@ func HandleScraperSearch(env requests.RequestEnv) (any, error) {
 		scraperName = scraperConfig.DefaultScraper
 	}
 
-	// This is a simplified implementation for demo purposes
-	// In a real implementation, you'd need to get the specific scraper and call its Search method
+	// Validate required parameters
+	if params.Name == "" {
+		return nil, errors.New("name parameter is required")
+	}
+	if params.System == "" {
+		return nil, errors.New("system parameter is required")
+	}
+
+	// Build scraper query
+	query := scraper.ScraperQuery{
+		Name:     params.Name,
+		SystemID: params.System,
+		Region:   region,
+		Language: language,
+	}
+
+	// Perform the search using the scraper service
+	results, err := ScraperServiceInstance.Search(env.State.GetContext(), scraperName, query)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert results to API format
+	apiResults := make([]map[string]any, len(results))
+	for i, result := range results {
+		apiResults[i] = map[string]any{
+			"id":          result.ID,
+			"name":        result.Name,
+			"description": result.Description,
+			"system":      result.SystemID,
+			"region":      result.Region,
+			"language":    result.Language,
+			"relevance":   result.Relevance,
+		}
+	}
+
 	return map[string]any{
-		"results": []map[string]any{
-			{
-				"id":          "example_id",
-				"name":        params.Name,
-				"description": "Example game description",
-				"system":      params.System,
-				"relevance":   0.95,
-			},
-		},
-		"scraper": scraperName,
-		"region":  region,
+		"results":  apiResults,
+		"scraper":  scraperName,
+		"region":   region,
 		"language": language,
 	}, nil
 }
@@ -94,9 +120,9 @@ func HandleScraperScrapeGame(env requests.RequestEnv) (any, error) {
 	}
 
 	var params struct {
-		MediaDBID   any      `json:"mediaDBID"`
-		MediaTypes  []string `json:"mediaTypes,omitempty"`
-		Overwrite   bool     `json:"overwrite,omitempty"`
+		MediaDBID  any      `json:"mediaDBID"`
+		MediaTypes []string `json:"mediaTypes,omitempty"`
+		Overwrite  bool     `json:"overwrite,omitempty"`
 	}
 
 	if err := json.Unmarshal(env.Params, &params); err != nil {
@@ -215,9 +241,9 @@ func HandleScraperScrapeSystem(env requests.RequestEnv) (any, error) {
 	}()
 
 	return map[string]any{
-		"started":     true,
-		"system":      params.System,
-		"totalGames":  len(games),
+		"started":       true,
+		"system":        params.System,
+		"totalGames":    len(games),
 		"unscrapedOnly": params.UnscrapedOnly,
 	}, nil
 }
@@ -245,8 +271,8 @@ func HandleScraperCancel(env requests.RequestEnv) (any, error) {
 // HandleScraperConfig gets or updates scraper configuration
 func HandleScraperConfig(env requests.RequestEnv) (any, error) {
 	var params struct {
-		Action string                 `json:"action"`
 		Config map[string]interface{} `json:"config,omitempty"`
+		Action string                 `json:"action"`
 	}
 
 	if err := json.Unmarshal(env.Params, &params); err != nil {
@@ -256,7 +282,7 @@ func HandleScraperConfig(env requests.RequestEnv) (any, error) {
 	switch params.Action {
 	case "get", "":
 		// Get current configuration
-		config := scraper.GetScraperConfig(env.Config)
+		config := scraper.GetScraperConfig(env.Platform)
 		return config, nil
 
 	case "update":

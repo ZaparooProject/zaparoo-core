@@ -75,8 +75,8 @@ const (
 
 	// Scraper methods
 	MethodScraperSearch       = "scraper.search"
-	MethodScraperScrapeGame   = "scraper.scrapeGame"
-	MethodScraperScrapeSystem = "scraper.scrapeSystem"
+	MethodScraperScrapeGame   = "scraper.scrapegame"
+	MethodScraperScrapeSystem = "scraper.scrapesystem"
 	MethodScraperProgress     = "scraper.progress"
 	MethodScraperCancel       = "scraper.cancel"
 	MethodScraperConfig       = "scraper.config"

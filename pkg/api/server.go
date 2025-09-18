@@ -45,7 +45,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	scraperService "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	chi "github.com/go-chi/chi/v5"
@@ -699,15 +698,6 @@ func Start(
 	}
 
 	methodMap := NewMethodMap()
-
-	// Initialize scraper service
-	log.Info().Msg("initializing scraper service")
-	methods.ScraperServiceInstance = scraperService.NewScraperService(
-		db.MediaDB,
-		db.UserDB,
-		cfg,
-		platform,
-	)
 
 	session := melody.New()
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {

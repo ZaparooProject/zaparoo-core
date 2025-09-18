@@ -504,6 +504,20 @@ func (m *MockMediaDBI) FindOrInsertSystem(row database.System) (database.System,
 	return database.System{}, nil
 }
 
+func (m *MockMediaDBI) GetSystemByID(systemDBID int64) (*database.System, error) {
+	args := m.Called(systemDBID)
+	if system, ok := args.Get(0).(*database.System); ok {
+		if err := args.Error(1); err != nil {
+			return system, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return system, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
 // MediaTitle CRUD methods
 func (m *MockMediaDBI) FindMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
 	args := m.Called(row)
@@ -717,6 +731,123 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 		return database.MediaTag{}, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return database.MediaTag{}, nil
+}
+
+// Scraper metadata methods
+func (m *MockMediaDBI) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
+	args := m.Called(metadata)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetScrapedMetadata(mediaTitleDBID int64) (*database.ScrapedMetadata, error) {
+	args := m.Called(mediaTitleDBID)
+	if metadata, ok := args.Get(0).(*database.ScrapedMetadata); ok {
+		if err := args.Error(1); err != nil {
+			return metadata, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return metadata, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) GetGamesWithoutMetadata(systemID string, limit int) ([]database.MediaTitle, error) {
+	args := m.Called(systemID, limit)
+	if titles, ok := args.Get(0).([]database.MediaTitle); ok {
+		if err := args.Error(1); err != nil {
+			return titles, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return titles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
+	args := m.Called(systemID)
+	if titles, ok := args.Get(0).([]database.MediaTitle); ok {
+		if err := args.Error(1); err != nil {
+			return titles, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return titles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+// Game hash methods
+func (m *MockMediaDBI) SaveGameHashes(hashes *database.GameHashes) error {
+	args := m.Called(hashes)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetGameHashes(mediaDBID int64) (*database.GameHashes, error) {
+	args := m.Called(mediaDBID)
+	if hashes, ok := args.Get(0).(*database.GameHashes); ok {
+		if err := args.Error(1); err != nil {
+			return hashes, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return hashes, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) FindGameByHash(crc32, md5, sha1 string) ([]database.Media, error) {
+	args := m.Called(crc32, md5, sha1)
+	if media, ok := args.Get(0).([]database.Media); ok {
+		if err := args.Error(1); err != nil {
+			return media, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return media, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+// Media access methods
+func (m *MockMediaDBI) GetMediaByID(mediaDBID int64) (*database.Media, error) {
+	args := m.Called(mediaDBID)
+	if media, ok := args.Get(0).(*database.Media); ok {
+		if err := args.Error(1); err != nil {
+			return media, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return media, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaTitle, error) {
+	args := m.Called(mediaTitleDBID)
+	if title, ok := args.Get(0).(*database.MediaTitle); ok {
+		if err := args.Error(1); err != nil {
+			return title, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return title, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
 }
 
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock

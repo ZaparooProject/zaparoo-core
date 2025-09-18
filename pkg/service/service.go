@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -40,6 +41,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	scraperService "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -217,6 +219,10 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	log.Info().Msg("starting scraper service")
+	scraperSvc := scraperService.NewScraperService(db.MediaDB, db.UserDB, cfg, pl, st.Notifications)
+	methods.ScraperServiceInstance = scraperSvc
+
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 
@@ -243,6 +249,10 @@ func Start(
 		err = pl.Stop()
 		if err != nil {
 			log.Warn().Msgf("error stopping platform: %s", err)
+		}
+		if scraperSvc != nil {
+			log.Info().Msg("stopping scraper service")
+			scraperSvc.Stop()
 		}
 		st.StopService()
 		close(plq)

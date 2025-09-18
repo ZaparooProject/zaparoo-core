@@ -92,30 +92,30 @@ type GameInfo struct {
 	ReleaseDate string
 	Developer   string
 	Publisher   string
-	Rating      float64
 	Region      string
 	Language    string
 	Media       []MediaItem
+	Rating      float64
 }
 
 // MediaItem represents a downloadable media file
 type MediaItem struct {
 	Type        MediaType
 	URL         string
-	Width       int
-	Height      int
-	Size        int64
 	Format      string
 	Region      string
 	Description string
+	Width       int
+	Height      int
+	Size        int64
 }
 
 // ScraperInfo contains scraper metadata
 type ScraperInfo struct {
-	Name        string
-	Version     string
-	Description string
-	Website     string
+	Name         string
+	Version      string
+	Description  string
+	Website      string
 	RequiresAuth bool
 }
 

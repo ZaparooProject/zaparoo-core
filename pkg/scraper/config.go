@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
@@ -61,7 +60,7 @@ func LoadConfig(pl platforms.Platform) (*ScraperConfig, error) {
 // SaveConfig saves scraper configuration to the config directory
 func SaveConfig(pl platforms.Platform, cfg *ScraperConfig) error {
 	configDir := helpers.ConfigDir(pl)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -80,9 +79,14 @@ func SaveConfig(pl platforms.Platform, cfg *ScraperConfig) error {
 	return nil
 }
 
-// GetScraperConfig gets the scraper configuration from the main config instance
-func GetScraperConfig(cfg *config.Instance) *ScraperConfig {
-	// For now, return defaults. This can be extended later to read from main config
+// GetScraperConfig gets the scraper configuration using the platform
+func GetScraperConfig(pl platforms.Platform) *ScraperConfig {
+	// Try to load scraper config from the separate scraper.toml file
+	if scraperCfg, err := LoadConfig(pl); err == nil {
+		return scraperCfg
+	}
+
+	// Fall back to defaults if loading fails
 	scraperCfg := DefaultScraperConfig()
 	scraperCfg.UpdateDefaultMediaTypes()
 	return scraperCfg

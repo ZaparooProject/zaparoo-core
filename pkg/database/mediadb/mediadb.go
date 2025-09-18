@@ -563,7 +563,6 @@ func (db *MediaDB) GetScrapedMetadata(mediaTitleDBID int64) (*database.ScrapedMe
 		&metadata.Rating,
 		&scrapedAtUnix,
 	)
-
 	if err != nil {
 		return nil, err
 	}
@@ -666,6 +665,23 @@ func (db *MediaDB) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaTitle
 	return &title, nil
 }
 
+func (db *MediaDB) GetSystemByID(systemDBID int64) (*database.System, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, SystemID, Name FROM Systems WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, systemDBID)
+
+	var system database.System
+	err := row.Scan(&system.DBID, &system.SystemID, &system.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &system, nil
+}
+
 // Game hash methods
 
 func (db *MediaDB) SaveGameHashes(hashes *database.GameHashes) error {
@@ -710,7 +726,6 @@ func (db *MediaDB) GetGameHashes(mediaDBID int64) (*database.GameHashes, error) 
 		&hashes.FileSize,
 		&computedAtUnix,
 	)
-
 	if err != nil {
 		return nil, err
 	}

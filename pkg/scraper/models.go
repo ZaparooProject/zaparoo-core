@@ -25,8 +25,7 @@ import (
 
 // ScrapedMetadata represents scraped game metadata stored in database
 type ScrapedMetadata struct {
-	DBID           int64
-	MediaTitleDBID int64
+	ScrapedAt      time.Time
 	ScraperSource  string
 	Description    string
 	Genre          string
@@ -34,62 +33,67 @@ type ScrapedMetadata struct {
 	ReleaseDate    string
 	Developer      string
 	Publisher      string
+	DBID           int64
+	MediaTitleDBID int64
 	Rating         float64
-	ScrapedAt      time.Time
 }
 
 // GameHashes represents file hash information for scraper matching
 type GameHashes struct {
-	DBID       int64
-	MediaDBID  int64
+	ComputedAt time.Time
 	CRC32      string
 	MD5        string
 	SHA1       string
+	DBID       int64
+	MediaDBID  int64
 	FileSize   int64
-	ComputedAt time.Time
 }
 
 // ScraperProgress represents the current scraping progress
 type ScraperProgress struct {
-	IsRunning       bool   `json:"isRunning"`
-	CurrentGame     string `json:"currentGame"`
-	ProcessedGames  int    `json:"processedGames"`
-	TotalGames      int    `json:"totalGames"`
-	DownloadedFiles int    `json:"downloadedFiles"`
-	SkippedFiles    int    `json:"skippedFiles"`
-	ErrorCount      int    `json:"errorCount"`
 	StartTime       *time.Time `json:"startTime"`
 	EstimatedEnd    *time.Time `json:"estimatedEnd"`
+	CurrentGame     string     `json:"currentGame"`
+	ProcessedGames  int        `json:"processedGames"`
+	TotalGames      int        `json:"totalGames"`
+	DownloadedFiles int        `json:"downloadedFiles"`
+	SkippedFiles    int        `json:"skippedFiles"`
+	ErrorCount      int        `json:"errorCount"`
+	IsRunning       bool       `json:"isRunning"`
 }
 
 // ScraperJob represents a scraping job in the queue
 type ScraperJob struct {
-	MediaDBID   int64
-	MediaTitle  string
-	SystemID    string
-	GamePath    string
-	MediaTypes  []MediaType
-	Overwrite   bool
-	Priority    int
+	MediaTitle string
+	SystemID   string
+	GamePath   string
+	MediaTypes []MediaType
+	MediaDBID  int64
+	Priority   int
+	Overwrite  bool
 }
 
 // ScraperConfig represents scraper configuration
 type ScraperConfig struct {
-	DefaultScraper     string      `toml:"default"`
-	Region             string      `toml:"region"`
-	Language           string      `toml:"language"`
-	DownloadCovers     bool        `toml:"download_covers"`
-	DownloadScreenshots bool       `toml:"download_screenshots"`
-	DownloadVideos     bool        `toml:"download_videos"`
-	MaxConcurrent      int         `toml:"max_concurrent"`
-	RateLimit          int         `toml:"rate_limit"`
-	DefaultMediaTypes  []MediaType `toml:"-"`
+	DefaultScraper      string      `toml:"default"`
+	Region              string      `toml:"region"`
+	Language            string      `toml:"language"`
+	FallbackScrapers    []string    `toml:"fallback_scrapers"`
+	DefaultMediaTypes   []MediaType `toml:"-"`
+	MaxConcurrent       int         `toml:"max_concurrent"`
+	RateLimit           int         `toml:"rate_limit"`
+	EnableFallback      bool        `toml:"enable_fallback"`
+	DownloadCovers      bool        `toml:"download_covers"`
+	DownloadScreenshots bool        `toml:"download_screenshots"`
+	DownloadVideos      bool        `toml:"download_videos"`
 }
 
 // DefaultScraperConfig returns the default configuration
 func DefaultScraperConfig() *ScraperConfig {
 	return &ScraperConfig{
 		DefaultScraper:      "screenscraper",
+		FallbackScrapers:    []string{"thegamesdb", "igdb"},
+		EnableFallback:      true,
 		Region:              "us",
 		Language:            "en",
 		DownloadCovers:      true,

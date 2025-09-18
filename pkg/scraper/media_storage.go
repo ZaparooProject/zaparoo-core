@@ -61,8 +61,8 @@ func (ms *MediaStorage) GetMediaPath(gamePath string, systemID string, mediaType
 	var mediaFolder string
 	switch mediaType {
 	case MediaTypeCover, MediaTypeBoxBack, MediaTypeScreenshot, MediaTypeTitleShot,
-		 MediaTypeFanArt, MediaTypeMarquee, MediaTypeWheel, MediaTypeCartridge,
-		 MediaTypeBezel, MediaTypeMap:
+		MediaTypeFanArt, MediaTypeMarquee, MediaTypeWheel, MediaTypeCartridge,
+		MediaTypeBezel, MediaTypeMap:
 		mediaFolder = "images"
 	case MediaTypeVideo:
 		mediaFolder = "videos"
@@ -136,7 +136,7 @@ func (ms *MediaStorage) getMediaRootDir(gamePath string, systemID string) (strin
 	// Try to find a reasonable root directory by walking up the directory tree
 	// Look for common patterns in game paths
 	currentDir := filepath.Dir(absGamePath)
-	for i := 0; i < 5; i++ { // Limit to 5 levels up to avoid going too high
+	for range 5 { // Limit to 5 levels up to avoid going too high
 		parent := filepath.Dir(currentDir)
 
 		// If we've reached the root or can't go higher, use current directory
@@ -148,7 +148,7 @@ func (ms *MediaStorage) getMediaRootDir(gamePath string, systemID string) (strin
 		// (contains the system name or is a reasonable stopping point)
 		dirName := strings.ToLower(filepath.Base(currentDir))
 		if strings.Contains(dirName, systemID) ||
-		   dirName == "roms" || dirName == "games" || dirName == "media" {
+			dirName == "roms" || dirName == "games" || dirName == "media" {
 			return currentDir, nil
 		}
 
@@ -164,14 +164,14 @@ func isVirtualPath(path string) bool {
 	// Steam IDs are typically numeric
 	// Other virtual paths might have special prefixes
 	return strings.HasPrefix(path, "steam://") ||
-		   strings.HasPrefix(path, "launcher://") ||
-		   (!strings.Contains(path, "/") && !strings.Contains(path, "\\"))
+		strings.HasPrefix(path, "launcher://") ||
+		(!strings.Contains(path, "/") && !strings.Contains(path, "\\"))
 }
 
 // EnsureMediaDirectory creates the necessary directory structure for storing media
 func (ms *MediaStorage) EnsureMediaDirectory(mediaPath string) error {
 	dir := filepath.Dir(mediaPath)
-	return os.MkdirAll(dir, 0755)
+	return os.MkdirAll(dir, 0o755)
 }
 
 // MediaExists checks if a media file already exists

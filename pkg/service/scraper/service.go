@@ -28,37 +28,40 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	scraperPkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/hasher"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/igdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/screenscraper"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/thegamesdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/shared/httpclient"
 	"github.com/rs/zerolog/log"
 )
 
 // ScraperService manages scraping operations with MediaDB integration
 type ScraperService struct {
-	scrapers      map[string]scraperPkg.Scraper
 	mediaDB       database.MediaDBI
 	userDB        database.UserDBI
+	platform      platforms.Platform
+	ctx           context.Context
+	progress      *scraperPkg.ScraperProgress
 	config        *config.Instance
 	mediaStorage  *scraperPkg.MediaStorage
-	platform      platforms.Platform
 	httpClient    *httpclient.Client
-
-	// Job management
 	jobQueue      chan *scraperPkg.ScraperJob
-	workers       int
-	workerWG      sync.WaitGroup
-	ctx           context.Context
+	scrapers      map[string]scraperPkg.Scraper
 	cancelFunc    context.CancelFunc
-
-	// Progress tracking
+	workerWG      sync.WaitGroup
+	workers       int
 	progressMu    sync.RWMutex
-	progress      *scraperPkg.ScraperProgress
+	stopMu        sync.Mutex
 	isRunning     bool
+	stopped       bool
+	notifications chan<- models.Notification
 }
 
 // NewScraperService creates a new scraper service
@@ -67,22 +70,24 @@ func NewScraperService(
 	userDB database.UserDBI,
 	cfg *config.Instance,
 	pl platforms.Platform,
+	notifications chan<- models.Notification,
 ) *ScraperService {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	service := &ScraperService{
-		scrapers:     make(map[string]scraperPkg.Scraper),
-		mediaDB:      mediaDB,
-		userDB:       userDB,
-		config:       cfg,
-		mediaStorage: scraperPkg.NewMediaStorage(pl, cfg),
-		platform:     pl,
-		httpClient:   httpclient.NewClient(),
-		jobQueue:     make(chan *scraperPkg.ScraperJob, 1000),
-		workers:      3, // Default worker count
-		ctx:          ctx,
-		cancelFunc:   cancel,
-		progress:     &scraperPkg.ScraperProgress{},
+		scrapers:      make(map[string]scraperPkg.Scraper),
+		mediaDB:       mediaDB,
+		userDB:        userDB,
+		config:        cfg,
+		mediaStorage:  scraperPkg.NewMediaStorage(pl, cfg),
+		platform:      pl,
+		httpClient:    httpclient.NewClient(),
+		jobQueue:      make(chan *scraperPkg.ScraperJob, 1000),
+		workers:       3, // Default worker count
+		ctx:           ctx,
+		cancelFunc:    cancel,
+		progress:      &scraperPkg.ScraperProgress{},
+		notifications: notifications,
 	}
 
 	// Register available scrapers
@@ -100,12 +105,20 @@ func (s *ScraperService) registerScrapers() {
 	screenScraper := screenscraper.NewScreenScraper()
 	s.scrapers["screenscraper"] = screenScraper
 
+	// Register TheGamesDB
+	theGamesDB := thegamesdb.NewTheGamesDB()
+	s.scrapers["thegamesdb"] = theGamesDB
+
+	// Register IGDB
+	igdbScraper := igdb.NewIGDB()
+	s.scrapers["igdb"] = igdbScraper
+
 	log.Info().Int("count", len(s.scrapers)).Msg("Registered scrapers")
 }
 
 // startWorkers starts the worker pool for processing scraper jobs
 func (s *ScraperService) startWorkers() {
-	for i := 0; i < s.workers; i++ {
+	for i := range s.workers {
 		s.workerWG.Add(1)
 		go s.worker(i)
 	}
@@ -146,6 +159,16 @@ func (s *ScraperService) worker(id int) {
 				s.updateProgress(func(p *scraperPkg.ScraperProgress) {
 					p.ErrorCount++
 				})
+
+				// Send error notification
+				if s.notifications != nil {
+					errorPayload := map[string]any{
+						"mediaDBID": job.MediaDBID,
+						"title":     job.MediaTitle,
+						"error":     err.Error(),
+					}
+					notifications.ScraperError(s.notifications, errorPayload)
+				}
 			}
 
 			s.updateProgress(func(p *scraperPkg.ScraperProgress) {
@@ -164,14 +187,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 	})
 
 	// Get scraper configuration
-	scraperConfig := scraperPkg.GetScraperConfig(s.config)
-	scraperName := scraperConfig.DefaultScraper
-
-	// Get the scraper
-	scraperImpl, exists := s.scrapers[scraperName]
-	if !exists {
-		return fmt.Errorf("scraper not found: %s", scraperName)
-	}
+	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
 
 	// Get media and media title from database
 	media, err := s.mediaDB.GetMediaByID(job.MediaDBID)
@@ -185,8 +201,15 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 	}
 
 	// Get system information
-	// For now, we'll extract it from the job or infer it
 	systemID := job.SystemID
+	if systemID == "" || systemID == "unknown" {
+		// Fallback: resolve system ID from database
+		system, err := s.mediaDB.GetSystemByID(mediaTitle.SystemDBID)
+		if err != nil {
+			return fmt.Errorf("failed to get system for fallback: %w", err)
+		}
+		systemID = system.SystemID
+	}
 
 	// Check if we already have scraped metadata and don't need to re-scrape
 	if !job.Overwrite {
@@ -244,31 +267,24 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 		}
 	}
 
-	// Search for the game
-	results, err := scraperImpl.Search(s.ctx, query)
+	// Try scraping with fallback chain
+	gameInfo, scraperUsed, err := s.tryScrapingWithFallback(query, scraperConfig)
 	if err != nil {
-		return fmt.Errorf("failed to search for game: %w", err)
+		return fmt.Errorf("failed to scrape game: %w", err)
 	}
 
-	if len(results) == 0 {
+	if gameInfo == nil {
 		log.Warn().
 			Str("title", mediaTitle.Name).
 			Str("system", systemID).
-			Msg("No search results found for game")
+			Msg("No search results found for game with any scraper")
 		return nil
-	}
-
-	// Get detailed info for the best match (first result)
-	bestMatch := results[0]
-	gameInfo, err := scraperImpl.GetGameInfo(s.ctx, bestMatch.ID)
-	if err != nil {
-		return fmt.Errorf("failed to get game info: %w", err)
 	}
 
 	// Save scraped metadata to database
 	metadata := &database.ScrapedMetadata{
 		MediaTitleDBID: mediaTitle.DBID,
-		ScraperSource:  scraperName,
+		ScraperSource:  scraperUsed,
 		Description:    gameInfo.Description,
 		Genre:          gameInfo.Genre,
 		Players:        gameInfo.Players,
@@ -414,6 +430,13 @@ func (s *ScraperService) updateProgress(updateFunc func(*scraperPkg.ScraperProgr
 	s.progressMu.Lock()
 	defer s.progressMu.Unlock()
 	updateFunc(s.progress)
+
+	// Send progress notification if notifications channel is available
+	if s.notifications != nil {
+		// Create a copy of progress for notification
+		progressCopy := *s.progress
+		notifications.ScraperProgress(s.notifications, progressCopy)
+	}
 }
 
 // ScrapeGameByID scrapes a specific game by its Media DBID
@@ -429,12 +452,18 @@ func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) er
 		return fmt.Errorf("failed to get media title: %w", err)
 	}
 
+	// Get system information
+	system, err := s.mediaDB.GetSystemByID(mediaTitle.SystemDBID)
+	if err != nil {
+		return fmt.Errorf("failed to get system: %w", err)
+	}
+
 	// Create scraper job
-	scraperConfig := scraperPkg.GetScraperConfig(s.config)
+	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
 	job := &scraperPkg.ScraperJob{
 		MediaDBID:  mediaDBID,
 		MediaTitle: mediaTitle.Name,
-		SystemID:   "unknown", // TODO: Get from database
+		SystemID:   system.SystemID,
 		GamePath:   media.Path,
 		MediaTypes: scraperConfig.DefaultMediaTypes,
 		Overwrite:  false,
@@ -446,9 +475,9 @@ func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) er
 	if !s.isRunning {
 		s.isRunning = true
 		s.progress = &scraperPkg.ScraperProgress{
-			IsRunning:    true,
-			TotalGames:   1,
-			StartTime:    &time.Time{},
+			IsRunning:  true,
+			TotalGames: 1,
+			StartTime:  &time.Time{},
 		}
 		*s.progress.StartTime = time.Now()
 	}
@@ -487,37 +516,47 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 	s.progressMu.Unlock()
 
 	// Get scraper config
-	scraperConfig := scraperPkg.GetScraperConfig(s.config)
+	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
 
 	// Queue jobs for all games
 	for _, title := range titles {
-		// Get first media entry for this title
-		// TODO: This should be improved to handle multiple media entries per title
-		media, err := s.getFirstMediaForTitle(title.DBID)
+		// Get all media entries for this title to handle multiple versions/regions
+		mediaEntries, err := s.getAllMediaForTitle(title.DBID)
 		if err != nil {
 			log.Error().
 				Err(err).
 				Int64("titleID", title.DBID).
 				Str("title", title.Name).
-				Msg("Failed to get media for title")
+				Msg("Failed to get media entries for title")
 			continue
 		}
 
-		job := &scraperPkg.ScraperJob{
-			MediaDBID:  media.DBID,
-			MediaTitle: title.Name,
-			SystemID:   systemID,
-			GamePath:   media.Path,
-			MediaTypes: scraperConfig.DefaultMediaTypes,
-			Overwrite:  false,
-			Priority:   1,
+		if len(mediaEntries) == 0 {
+			log.Debug().
+				Int64("titleID", title.DBID).
+				Str("title", title.Name).
+				Msg("No media entries found for title")
+			continue
 		}
 
-		select {
-		case s.jobQueue <- job:
-			// Job queued successfully
-		case <-ctx.Done():
-			return ctx.Err()
+		// Create a job for each media entry
+		for _, media := range mediaEntries {
+			job := &scraperPkg.ScraperJob{
+				MediaDBID:  media.DBID,
+				MediaTitle: title.Name,
+				SystemID:   systemID,
+				GamePath:   media.Path,
+				MediaTypes: scraperConfig.DefaultMediaTypes,
+				Overwrite:  false,
+				Priority:   1,
+			}
+
+			select {
+			case s.jobQueue <- job:
+				// Job queued successfully
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 
@@ -545,6 +584,34 @@ func (s *ScraperService) getFirstMediaForTitle(mediaTitleDBID int64) (*database.
 	return &media, nil
 }
 
+// getAllMediaForTitle gets all media entries for a media title
+func (s *ScraperService) getAllMediaForTitle(mediaTitleDBID int64) ([]*database.Media, error) {
+	query := `SELECT DBID, MediaTitleDBID, Path FROM Media WHERE MediaTitleDBID = ? ORDER BY DBID`
+
+	db := s.mediaDB.UnsafeGetSQLDb()
+	rows, err := db.Query(query, mediaTitleDBID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var mediaEntries []*database.Media
+	for rows.Next() {
+		var media database.Media
+		err := rows.Scan(&media.DBID, &media.MediaTitleDBID, &media.Path)
+		if err != nil {
+			return nil, err
+		}
+		mediaEntries = append(mediaEntries, &media)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return mediaEntries, nil
+}
+
 // GetProgress returns the current scraping progress
 func (s *ScraperService) GetProgress() *scraperPkg.ScraperProgress {
 	s.progressMu.RLock()
@@ -570,6 +637,14 @@ func (s *ScraperService) CancelScraping() error {
 
 // Stop stops the scraper service
 func (s *ScraperService) Stop() {
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
+
+	if s.stopped {
+		return // Already stopped
+	}
+	s.stopped = true
+
 	log.Info().Msg("Stopping scraper service")
 
 	s.cancelFunc()
@@ -577,4 +652,108 @@ func (s *ScraperService) Stop() {
 	close(s.jobQueue)
 
 	log.Info().Msg("Scraper service stopped")
+}
+
+// tryScrapingWithFallback attempts to scrape game info using fallback chain
+func (s *ScraperService) tryScrapingWithFallback(query scraperPkg.ScraperQuery, config *scraperPkg.ScraperConfig) (*scraperPkg.GameInfo, string, error) {
+	// Build list of scrapers to try
+	scrapersToTry := []string{config.DefaultScraper}
+
+	// Add fallback scrapers if enabled
+	if config.EnableFallback {
+		scrapersToTry = append(scrapersToTry, config.FallbackScrapers...)
+	}
+
+	var lastErr error
+	for _, scraperName := range scrapersToTry {
+		// Check if scraper exists and supports the platform
+		scraperImpl, exists := s.scrapers[scraperName]
+		if !exists {
+			log.Debug().Str("scraper", scraperName).Msg("Scraper not found, skipping")
+			continue
+		}
+
+		if !scraperImpl.IsSupportedPlatform(query.SystemID) {
+			log.Debug().
+				Str("scraper", scraperName).
+				Str("platform", query.SystemID).
+				Msg("Platform not supported by scraper, skipping")
+			continue
+		}
+
+		log.Debug().
+			Str("scraper", scraperName).
+			Str("game", query.Name).
+			Str("platform", query.SystemID).
+			Msg("Trying scraper")
+
+		// Try to search for the game
+		results, err := scraperImpl.Search(s.ctx, query)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("scraper", scraperName).
+				Str("game", query.Name).
+				Msg("Search failed, trying next scraper")
+			lastErr = err
+			continue
+		}
+
+		if len(results) == 0 {
+			log.Debug().
+				Str("scraper", scraperName).
+				Str("game", query.Name).
+				Msg("No results found, trying next scraper")
+			continue
+		}
+
+		// Get detailed info for the best match
+		bestMatch := results[0]
+		gameInfo, err := scraperImpl.GetGameInfo(s.ctx, bestMatch.ID)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("scraper", scraperName).
+				Str("game", query.Name).
+				Msg("Failed to get game info, trying next scraper")
+			lastErr = err
+			continue
+		}
+
+		// Success! Return the game info and which scraper was used
+		log.Info().
+			Str("scraper", scraperName).
+			Str("game", query.Name).
+			Str("platform", query.SystemID).
+			Msg("Successfully scraped game")
+		return gameInfo, scraperName, nil
+	}
+
+	// If we get here, all scrapers failed
+	if lastErr != nil {
+		return nil, "", lastErr
+	}
+	return nil, "", nil // No error, just no results found
+}
+
+// Search performs a search using the specified scraper
+func (s *ScraperService) Search(ctx context.Context, scraperName string, query scraperPkg.ScraperQuery) ([]scraperPkg.ScraperResult, error) {
+	// Get the specified scraper
+	scraperImpl, exists := s.scrapers[scraperName]
+	if !exists {
+		return nil, fmt.Errorf("scraper not found: %s", scraperName)
+	}
+
+	// Check if the scraper supports the platform
+	if !scraperImpl.IsSupportedPlatform(query.SystemID) {
+		return nil, fmt.Errorf("platform %s not supported by scraper %s", query.SystemID, scraperName)
+	}
+
+	// Perform the search
+	results, err := scraperImpl.Search(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("search failed for scraper %s: %w", scraperName, err)
+	}
+
+	return results, nil
 }
