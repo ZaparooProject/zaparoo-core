@@ -34,7 +34,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	scraperPkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/hasher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/igdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/screenscraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/thegamesdb"
@@ -282,7 +281,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 	}
 
 	// Try to get file hash for better matching
-	if hash, err := s.getOrComputeFileHash(media, systemID); err == nil && hash != nil {
+	if hash, err := s.getFileHashFromDB(media, systemID); err == nil && hash != nil {
 		query.Hash = &scraperPkg.FileHash{
 			CRC32:    hash.CRC32,
 			MD5:      hash.MD5,
@@ -419,35 +418,17 @@ func (s *ScraperService) downloadMediaFile(gamePath, systemID string, mediaType 
 	return nil
 }
 
-// getOrComputeFileHash gets existing hash from database or computes it
-func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID string) (*database.GameHashes, error) {
-	// Try to get existing hash from database
-	if hash, err := s.mediaDB.GetGameHashes(systemID, media.Path); err == nil {
-		return hash, nil
-	}
-
-	// Compute hash if not exists
-	fileHash, err := hasher.ComputeFileHashes(media.Path)
+// getFileHashFromDB gets existing hash from database only (no computation fallback)
+func (s *ScraperService) getFileHashFromDB(media *database.Media, systemID string) (*database.GameHashes, error) {
+	// Get existing hash from database
+	hash, err := s.mediaDB.GetGameHashes(systemID, media.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compute file hash: %w", err)
+		// Hash not found or database error - this is fine as hashing may be disabled
+		// or the file hasn't been indexed yet with hashing enabled
+		log.Debug().Str("system", systemID).Str("path", media.Path).Msg("no hash found in database")
+		return nil, err
 	}
-
-	// Save to database
-	dbHash := &database.GameHashes{
-		SystemID:   systemID,
-		MediaPath:  media.Path,
-		CRC32:      fileHash.CRC32,
-		MD5:        fileHash.MD5,
-		SHA1:       fileHash.SHA1,
-		FileSize:   fileHash.FileSize,
-		ComputedAt: time.Now(),
-	}
-
-	if err := s.mediaDB.SaveGameHashes(dbHash); err != nil {
-		log.Warn().Err(err).Msg("Failed to save computed hash to database")
-	}
-
-	return dbHash, nil
+	return hash, nil
 }
 
 // updateProgress safely updates the progress information

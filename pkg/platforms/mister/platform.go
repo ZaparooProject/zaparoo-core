@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
@@ -293,10 +294,11 @@ func (*Platform) RootDirs(cfg *config.Instance) []string {
 
 func (*Platform) Settings() platforms.Settings {
 	return platforms.Settings{
-		DataDir:    misterconfig.DataDir,
-		ConfigDir:  misterconfig.DataDir,
-		TempDir:    misterconfig.TempDir,
-		ZipsAsDirs: true,
+		DataDir:       misterconfig.DataDir,
+		ConfigDir:     misterconfig.DataDir,
+		TempDir:       misterconfig.TempDir,
+		ZipsAsDirs:    true,
+		DefaultHashes: []database.HashType{}, // No hashing by default for performance
 	}
 }
 

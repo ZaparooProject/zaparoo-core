@@ -160,6 +160,9 @@ type Settings struct {
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool
+	// DefaultHashes specifies which hash types this platform computes by default
+	// during media database indexing. Can be overridden by user configuration.
+	DefaultHashes []database.HashType
 }
 
 // Platform is the central interface that defines how Core interacts with a

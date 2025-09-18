@@ -25,8 +25,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -50,6 +52,8 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
+	cfg *config.Instance,
+	platform platforms.Platform,
 ) (titleIndex, mediaIndex int) {
 	pf := GetPathFragments(path)
 
@@ -173,6 +177,13 @@ func AddMediaPath(
 			log.Error().Err(err).Msgf("error inserting media tag relationship: %s", tagStr)
 		}
 	}
+
+	// Compute and store file hashes if enabled
+	if err := ComputeAndStoreHashes(cfg, platform, db, systemID, path); err != nil {
+		log.Warn().Err(err).Str("system", systemID).Str("path", path).Msg("failed to compute/store hashes during indexing")
+		// Don't fail the entire indexing process for hash computation errors
+	}
+
 	return titleIndex, mediaIndex
 }
 

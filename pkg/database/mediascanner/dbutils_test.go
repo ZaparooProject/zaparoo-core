@@ -22,12 +22,15 @@ package mediascanner
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
 
 // TestAddMediaPath_SystemInsertFailure tests the scenario where system insertion fails
 // due to UNIQUE constraint violation (system already exists in database)
@@ -93,8 +96,12 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 		MediaTitleDBID: int64(1),
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
+	// Create mock config and platform for hashing (disable hashing for tests)
+	mockCfg := &config.Instance{}
+	var mockPlatform platforms.Platform = nil
+
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)
 
 	// Verify that the function succeeded and returned valid indices
 	// With the bug, this would return (0, 0) because systemIndex would be 0
@@ -148,8 +155,12 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 		SystemID: "TV",
 	}).Return(database.System{}, assert.AnError).Once()
 
+	// Create mock config and platform for hashing (disable hashing for tests)
+	mockCfg := &config.Instance{}
+	var mockPlatform platforms.Platform = nil
+
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)
 
 	// Function should return early with (0, 0) to prevent invalid data
 	assert.Equal(t, 0, titleIndex, "titleIndex should be 0 when system cannot be resolved")
@@ -198,8 +209,12 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	// FindSystem should NOT be called for non-UNIQUE errors
 	// This is the key difference - we should fail fast, not try recovery
 
+	// Create mock config and platform for hashing (disable hashing for tests)
+	mockCfg := &config.Instance{}
+	var mockPlatform platforms.Platform = nil
+
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", mockCfg, mockPlatform)
 
 	// Function should return early with (0, 0) for non-recoverable errors
 	assert.Equal(t, 0, titleIndex, "titleIndex should be 0 for non-recoverable database errors")

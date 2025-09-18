@@ -23,6 +23,7 @@ import "strings"
 
 type Systems struct {
 	Default []SystemsDefault `toml:"default,omitempty"`
+	Hashes  *[]string        `toml:"hashes,omitempty"`
 }
 
 type SystemsDefault struct {
@@ -46,4 +47,10 @@ func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) 
 		}
 	}
 	return SystemsDefault{}, false
+}
+
+func (c *Instance) SystemHashes() *[]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Systems.Hashes
 }
