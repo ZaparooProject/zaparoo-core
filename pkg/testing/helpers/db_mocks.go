@@ -777,27 +777,6 @@ func (m *MockMediaDBI) FindOrInsertMediaTitleTag(row database.MediaTitleTag) (da
 }
 
 // Scraper metadata methods
-func (m *MockMediaDBI) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
-	args := m.Called(metadata)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
-
-func (m *MockMediaDBI) GetScrapedMetadata(mediaTitleDBID int64) (*database.ScrapedMetadata, error) {
-	args := m.Called(mediaTitleDBID)
-	if metadata, ok := args.Get(0).(*database.ScrapedMetadata); ok {
-		if err := args.Error(1); err != nil {
-			return metadata, fmt.Errorf("mock operation failed: %w", err)
-		}
-		return metadata, nil
-	}
-	if err := args.Error(1); err != nil {
-		return nil, fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil, nil
-}
 
 func (m *MockMediaDBI) GetGamesWithoutMetadata(systemID string, limit int) ([]database.MediaTitle, error) {
 	args := m.Called(systemID, limit)
@@ -811,6 +790,11 @@ func (m *MockMediaDBI) GetGamesWithoutMetadata(systemID string, limit int) ([]da
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil, nil
+}
+
+func (m *MockMediaDBI) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
+	args := m.Called(mediaTitleDBID)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *MockMediaDBI) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {

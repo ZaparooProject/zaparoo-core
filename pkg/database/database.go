@@ -131,19 +131,6 @@ type ScanState struct {
 	MediaTagsIndex int
 }
 
-type ScrapedMetadata struct {
-	ScrapedAt      time.Time
-	ScraperSource  string
-	Description    string
-	Genre          string
-	Players        string
-	ReleaseDate    string
-	Developer      string
-	Publisher      string
-	DBID           int64
-	MediaTitleDBID int64
-	Rating         float64
-}
 
 type GameHashes struct {
 	DBID       int64
@@ -235,12 +222,11 @@ type MediaDBI interface {
 	FindOrInsertMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
 
 	// Scraper metadata methods
-	SaveScrapedMetadata(metadata *ScrapedMetadata) error
-	GetScrapedMetadata(mediaTitleDBID int64) (*ScrapedMetadata, error)
 	GetGamesWithoutMetadata(systemID string, limit int) ([]MediaTitle, error)
 	GetMediaTitlesBySystem(systemID string) ([]MediaTitle, error)
 	GetMediaByID(mediaDBID int64) (*Media, error)
 	GetMediaTitleByID(mediaTitleDBID int64) (*MediaTitle, error)
+	HasScraperMetadata(mediaTitleDBID int64) (bool, error)
 
 	// Game hash methods
 	SaveGameHashes(hashes *GameHashes) error

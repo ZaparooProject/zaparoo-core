@@ -215,11 +215,10 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 
 	// Check if we already have scraped metadata and don't need to re-scrape
 	if !job.Overwrite {
-		existing, err := s.metadataStorage.GetMetadata(s.ctx, mediaTitle.DBID, "")
-		if err == nil && existing != nil {
+		hasMetadata, err := s.mediaDB.HasScraperMetadata(mediaTitle.DBID)
+		if err == nil && hasMetadata {
 			log.Debug().
 				Str("title", mediaTitle.Name).
-				Str("source", existing.ScraperSource).
 				Msg("Game already has scraped metadata, skipping")
 			return nil
 		}

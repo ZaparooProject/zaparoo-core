@@ -529,74 +529,25 @@ func (db *MediaDB) FindOrInsertMediaTitleTag(row database.MediaTitleTag) (databa
 
 // Scraper metadata methods
 
-func (db *MediaDB) SaveScrapedMetadata(metadata *database.ScrapedMetadata) error {
-	if db.sql == nil {
-		return ErrNullSQL
-	}
 
-	query := `INSERT OR REPLACE INTO ScrapedMetadata
-		(MediaTitleDBID, ScraperSource, Description, Genre, Players, ReleaseDate, Developer, Publisher, Rating, ScrapedAt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-
-	_, err := db.sql.ExecContext(db.ctx, query,
-		metadata.MediaTitleDBID,
-		metadata.ScraperSource,
-		metadata.Description,
-		metadata.Genre,
-		metadata.Players,
-		metadata.ReleaseDate,
-		metadata.Developer,
-		metadata.Publisher,
-		metadata.Rating,
-		metadata.ScrapedAt.Unix(),
-	)
-	return err
-}
-
-func (db *MediaDB) GetScrapedMetadata(mediaTitleDBID int64) (*database.ScrapedMetadata, error) {
-	if db.sql == nil {
-		return nil, ErrNullSQL
-	}
-
-	query := `SELECT DBID, MediaTitleDBID, ScraperSource, Description, Genre, Players, ReleaseDate, Developer, Publisher, Rating, ScrapedAt
-		FROM ScrapedMetadata WHERE MediaTitleDBID = ?`
-
-	row := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID)
-
-	var metadata database.ScrapedMetadata
-	var scrapedAtUnix int64
-
-	err := row.Scan(
-		&metadata.DBID,
-		&metadata.MediaTitleDBID,
-		&metadata.ScraperSource,
-		&metadata.Description,
-		&metadata.Genre,
-		&metadata.Players,
-		&metadata.ReleaseDate,
-		&metadata.Developer,
-		&metadata.Publisher,
-		&metadata.Rating,
-		&scrapedAtUnix,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	metadata.ScrapedAt = time.Unix(scrapedAtUnix, 0)
-	return &metadata, nil
-}
 
 func (db *MediaDB) GetGamesWithoutMetadata(systemID string, limit int) ([]database.MediaTitle, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL
 	}
 
+	// Find games that don't have a 'scraper_source' tag, which indicates they haven't been scraped
 	query := `SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
 		FROM MediaTitles mt
 		JOIN Systems s ON s.DBID = mt.SystemDBID
-		LEFT JOIN ScrapedMetadata sm ON sm.MediaTitleDBID = mt.DBID
-		WHERE s.SystemID = ? AND sm.DBID IS NULL
+		LEFT JOIN (
+			SELECT DISTINCT mtt.MediaTitleDBID
+			FROM MediaTitleTags mtt
+			JOIN Tags t ON t.DBID = mtt.TagDBID
+			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+			WHERE tt.Type = 'scraper_source'
+		) scraped_titles ON scraped_titles.MediaTitleDBID = mt.DBID
+		WHERE s.SystemID = ? AND scraped_titles.MediaTitleDBID IS NULL
 		LIMIT ?`
 
 	rows, err := db.sql.QueryContext(db.ctx, query, systemID, limit)
@@ -616,6 +567,27 @@ func (db *MediaDB) GetGamesWithoutMetadata(systemID string, limit int) ([]databa
 	}
 
 	return titles, rows.Err()
+}
+
+func (db *MediaDB) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
+	if db.sql == nil {
+		return false, ErrNullSQL
+	}
+
+	query := `SELECT EXISTS(
+		SELECT 1 FROM MediaTitleTags mtt
+		JOIN Tags t ON t.DBID = mtt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mtt.MediaTitleDBID = ? AND tt.Type = 'scraper_source'
+	)`
+
+	var exists bool
+	err := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
 }
 
 func (db *MediaDB) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
