@@ -81,10 +81,10 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 			errMsg:  "scraper service not initialized",
 		},
 		{
-			name:    "missing system parameter",
+			name:    "missing system parameter defaults to all systems",
 			params:  map[string]any{},
 			wantErr: true,
-			errMsg:  "system parameter is required",
+			errMsg:  "scraper service not initialized",
 		},
 	}
 
