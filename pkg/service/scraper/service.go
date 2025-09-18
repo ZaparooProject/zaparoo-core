@@ -101,6 +101,25 @@ func NewScraperService(
 	return service
 }
 
+// getScraperConfig converts the main config scraper settings to ScraperConfig
+func (s *ScraperService) getScraperConfig() *scraperPkg.ScraperConfig {
+	cfg := s.config.Scraper()
+
+	scraperConfig := &scraperPkg.ScraperConfig{
+		DefaultScraper:      cfg.DefaultScraper,
+		Region:              cfg.Region,
+		Language:            cfg.Language,
+		DownloadCovers:      cfg.DownloadCovers,
+		DownloadScreenshots: cfg.DownloadScreenshots,
+		DownloadVideos:      cfg.DownloadVideos,
+	}
+
+	// Update the DefaultMediaTypes based on boolean flags
+	scraperConfig.UpdateDefaultMediaTypes()
+
+	return scraperConfig
+}
+
 // registerScrapers registers all available scraper implementations
 func (s *ScraperService) registerScrapers() {
 	// Register ScreenScraper
@@ -189,7 +208,7 @@ func (s *ScraperService) processJob(job *scraperPkg.ScraperJob) error {
 	})
 
 	// Get scraper configuration
-	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
+	scraperConfig := s.getScraperConfig()
 
 	// Get media and media title from database
 	media, err := s.mediaDB.GetMediaByID(job.MediaDBID)
@@ -483,7 +502,7 @@ func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) er
 	}
 
 	// Create scraper job
-	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
+	scraperConfig := s.getScraperConfig()
 	job := &scraperPkg.ScraperJob{
 		MediaDBID:  mediaDBID,
 		MediaTitle: mediaTitle.Name,
@@ -540,7 +559,7 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 	s.progressMu.Unlock()
 
 	// Get scraper config
-	scraperConfig := scraperPkg.GetScraperConfig(s.platform)
+	scraperConfig := s.getScraperConfig()
 
 	// Queue jobs for all games
 	for _, title := range titles {
@@ -680,12 +699,15 @@ func (s *ScraperService) Stop() {
 
 // tryScrapingWithFallback attempts to scrape game info using fallback chain
 func (s *ScraperService) tryScrapingWithFallback(query scraperPkg.ScraperQuery, config *scraperPkg.ScraperConfig) (*scraperPkg.GameInfo, string, error) {
-	// Build list of scrapers to try
+	// Build list of scrapers to try: primary scraper + others as fallbacks
+	allScrapers := []string{"screenscraper", "thegamesdb", "igdb"}
 	scrapersToTry := []string{config.DefaultScraper}
 
-	// Add fallback scrapers if enabled
-	if config.EnableFallback {
-		scrapersToTry = append(scrapersToTry, config.FallbackScrapers...)
+	// Add remaining scrapers as fallbacks (excluding the default)
+	for _, scraper := range allScrapers {
+		if scraper != config.DefaultScraper {
+			scrapersToTry = append(scrapersToTry, scraper)
+		}
 	}
 
 	var lastErr error

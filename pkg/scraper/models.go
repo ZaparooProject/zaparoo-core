@@ -80,32 +80,12 @@ type ScraperConfig struct {
 	DefaultScraper      string      `toml:"default"`
 	Region              string      `toml:"region"`
 	Language            string      `toml:"language"`
-	FallbackScrapers    []string    `toml:"fallback_scrapers"`
 	DefaultMediaTypes   []MediaType `toml:"-"`
-	MaxConcurrent       int         `toml:"max_concurrent"`
-	RateLimit           int         `toml:"rate_limit"`
-	EnableFallback      bool        `toml:"enable_fallback"`
 	DownloadCovers      bool        `toml:"download_covers"`
 	DownloadScreenshots bool        `toml:"download_screenshots"`
 	DownloadVideos      bool        `toml:"download_videos"`
 }
 
-// DefaultScraperConfig returns the default configuration
-func DefaultScraperConfig() *ScraperConfig {
-	return &ScraperConfig{
-		DefaultScraper:      "screenscraper",
-		FallbackScrapers:    []string{"thegamesdb", "igdb"},
-		EnableFallback:      true,
-		Region:              "us",
-		Language:            "en",
-		DownloadCovers:      true,
-		DownloadScreenshots: true,
-		DownloadVideos:      false,
-		MaxConcurrent:       3,
-		RateLimit:           1000, // milliseconds between requests
-		DefaultMediaTypes:   []MediaType{MediaTypeCover, MediaTypeScreenshot},
-	}
-}
 
 // UpdateDefaultMediaTypes updates the DefaultMediaTypes slice based on boolean flags
 func (c *ScraperConfig) UpdateDefaultMediaTypes() {

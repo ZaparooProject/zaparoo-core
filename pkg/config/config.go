@@ -53,6 +53,7 @@ type Values struct {
 	Service      Service   `toml:"service,omitempty"`
 	Groovy       Groovy    `toml:"groovy,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
+	Scraper      Scraper   `toml:"scraper,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
 	Audio        Audio     `toml:"audio,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`
@@ -79,6 +80,15 @@ type Auth struct {
 	Creds map[string]CredentialEntry `toml:"creds,omitempty"`
 }
 
+type Scraper struct {
+	DefaultScraper      string `toml:"default"`
+	Region              string `toml:"region"`
+	Language            string `toml:"language"`
+	DownloadCovers      bool   `toml:"download_covers"`
+	DownloadScreenshots bool   `toml:"download_screenshots"`
+	DownloadVideos      bool   `toml:"download_videos"`
+}
+
 type CredentialEntry struct {
 	Username string `toml:"username"`
 	Password string `toml:"password"`
@@ -103,6 +113,14 @@ var BaseDefaults = Values{
 		GmcProxyEnabled:        false,
 		GmcProxyPort:           32106,
 		GmcProxyBeaconInterval: "2s",
+	},
+	Scraper: Scraper{
+		DefaultScraper:      "screenscraper",
+		Region:              "us",
+		Language:            "en",
+		DownloadCovers:      true,
+		DownloadScreenshots: true,
+		DownloadVideos:      false,
 	},
 }
 
@@ -397,6 +415,12 @@ func (c *Instance) IsRunAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
+}
+
+func (c *Instance) Scraper() Scraper {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Scraper
 }
 
 func LookupAuth(authCfg Auth, reqURL string) *CredentialEntry {
