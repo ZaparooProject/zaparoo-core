@@ -101,23 +101,27 @@ func NewScraperService(
 	return service
 }
 
-// getScraperConfig converts the main config scraper settings to ScraperConfig
-func (s *ScraperService) getScraperConfig() *scraperPkg.ScraperConfig {
-	cfg := s.config.Scraper()
+// getScraperConfig gets the scraper configuration
+func (s *ScraperService) getScraperConfig() config.Scraper {
+	return s.config.Scraper()
+}
 
-	scraperConfig := &scraperPkg.ScraperConfig{
-		DefaultScraper:      cfg.DefaultScraper,
-		Region:              cfg.Region,
-		Language:            cfg.Language,
-		DownloadCovers:      cfg.DownloadCovers,
-		DownloadScreenshots: cfg.DownloadScreenshots,
-		DownloadVideos:      cfg.DownloadVideos,
+// getDefaultMediaTypes builds the default media types from config flags
+func (s *ScraperService) getDefaultMediaTypes() []scraperPkg.MediaType {
+	cfg := s.config.Scraper()
+	var mediaTypes []scraperPkg.MediaType
+
+	if cfg.DownloadCovers {
+		mediaTypes = append(mediaTypes, scraperPkg.MediaTypeCover)
+	}
+	if cfg.DownloadScreenshots {
+		mediaTypes = append(mediaTypes, scraperPkg.MediaTypeScreenshot)
+	}
+	if cfg.DownloadVideos {
+		mediaTypes = append(mediaTypes, scraperPkg.MediaTypeVideo)
 	}
 
-	// Update the DefaultMediaTypes based on boolean flags
-	scraperConfig.UpdateDefaultMediaTypes()
-
-	return scraperConfig
+	return mediaTypes
 }
 
 // registerScrapers registers all available scraper implementations
@@ -416,20 +420,10 @@ func (s *ScraperService) downloadMediaFile(gamePath, systemID string, mediaType 
 }
 
 // getOrComputeFileHash gets existing hash from database or computes it
-func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID string) (*scraperPkg.GameHashes, error) {
+func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID string) (*database.GameHashes, error) {
 	// Try to get existing hash from database
 	if hash, err := s.mediaDB.GetGameHashes(systemID, media.Path); err == nil {
-		// Convert database.GameHashes to scraperPkg.GameHashes format
-		return &scraperPkg.GameHashes{
-			DBID:       hash.DBID,
-			SystemID:   systemID,
-			MediaPath:  media.Path,
-			CRC32:      hash.CRC32,
-			MD5:        hash.MD5,
-			SHA1:       hash.SHA1,
-			FileSize:   hash.FileSize,
-			ComputedAt: hash.ComputedAt,
-		}, nil
+		return hash, nil
 	}
 
 	// Compute hash if not exists
@@ -438,8 +432,8 @@ func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID st
 		return nil, fmt.Errorf("failed to compute file hash: %w", err)
 	}
 
-	// Save to database using database.GameHashes format
-	dbHashForDB := &database.GameHashes{
+	// Save to database
+	dbHash := &database.GameHashes{
 		SystemID:   systemID,
 		MediaPath:  media.Path,
 		CRC32:      fileHash.CRC32,
@@ -449,20 +443,8 @@ func (s *ScraperService) getOrComputeFileHash(media *database.Media, systemID st
 		ComputedAt: time.Now(),
 	}
 
-	if err := s.mediaDB.SaveGameHashes(dbHashForDB); err != nil {
+	if err := s.mediaDB.SaveGameHashes(dbHash); err != nil {
 		log.Warn().Err(err).Msg("Failed to save computed hash to database")
-	}
-
-	// Return scraper format for consistency
-	dbHash := &scraperPkg.GameHashes{
-		DBID:       dbHashForDB.DBID,
-		SystemID:   systemID,
-		MediaPath:  media.Path,
-		CRC32:      fileHash.CRC32,
-		MD5:        fileHash.MD5,
-		SHA1:       fileHash.SHA1,
-		FileSize:   fileHash.FileSize,
-		ComputedAt: time.Now(),
 	}
 
 	return dbHash, nil
@@ -502,13 +484,12 @@ func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) er
 	}
 
 	// Create scraper job
-	scraperConfig := s.getScraperConfig()
 	job := &scraperPkg.ScraperJob{
 		MediaDBID:  mediaDBID,
 		MediaTitle: mediaTitle.Name,
 		SystemID:   system.SystemID,
 		GamePath:   media.Path,
-		MediaTypes: scraperConfig.DefaultMediaTypes,
+		MediaTypes: s.getDefaultMediaTypes(),
 		Overwrite:  false,
 		Priority:   1,
 	}
@@ -558,9 +539,6 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 	}
 	s.progressMu.Unlock()
 
-	// Get scraper config
-	scraperConfig := s.getScraperConfig()
-
 	// Queue jobs for all games
 	for _, title := range titles {
 		// Get all media entries for this title to handle multiple versions/regions
@@ -589,7 +567,7 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 				MediaTitle: title.Name,
 				SystemID:   systemID,
 				GamePath:   media.Path,
-				MediaTypes: scraperConfig.DefaultMediaTypes,
+				MediaTypes: s.getDefaultMediaTypes(),
 				Overwrite:  false,
 				Priority:   1,
 			}
@@ -698,7 +676,7 @@ func (s *ScraperService) Stop() {
 }
 
 // tryScrapingWithFallback attempts to scrape game info using fallback chain
-func (s *ScraperService) tryScrapingWithFallback(query scraperPkg.ScraperQuery, config *scraperPkg.ScraperConfig) (*scraperPkg.GameInfo, string, error) {
+func (s *ScraperService) tryScrapingWithFallback(query scraperPkg.ScraperQuery, config config.Scraper) (*scraperPkg.GameInfo, string, error) {
 	// Build list of scrapers to try: primary scraper + others as fallbacks
 	allScrapers := []string{"screenscraper", "thegamesdb", "igdb"}
 	scrapersToTry := []string{config.DefaultScraper}

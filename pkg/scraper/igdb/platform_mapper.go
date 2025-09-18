@@ -19,19 +19,24 @@
 
 package igdb
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
+)
 
 // PlatformMapper maps zaparoo system IDs to IGDB platform IDs
 // Based on Batocera EmulationStation's IGDB platform mappings
 type PlatformMapper struct {
-	platformMap map[string]int
+	*scraper.BasePlatformMapper
+	igdbPlatformMap map[string]int
 }
 
 // NewPlatformMapper creates a new platform mapper with IGDB mappings
 func NewPlatformMapper() *PlatformMapper {
-	// Platform mappings based on Batocera's implementation
-	// Reference: batocera-emulationstation/es-app/src/scrapers/IGDBScraper.cpp
-	platformMap := map[string]int{
+	// Only map the systems that are actually different from the base
+	// or need specific IGDB platform IDs
+	igdbPlatformMap := map[string]int{
 		// Nintendo Consoles
 		"nes":          18,  // Nintendo Entertainment System
 		"famicom":      18,  // Famicom (same as NES)
@@ -143,23 +148,36 @@ func NewPlatformMapper() *PlatformMapper {
 	}
 
 	return &PlatformMapper{
-		platformMap: platformMap,
+		BasePlatformMapper: scraper.NewBasePlatformMapper(),
+		igdbPlatformMap:    igdbPlatformMap,
 	}
 }
 
 // MapToScraperPlatform maps a zaparoo system ID to IGDB platform ID
 func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
-	if platformID, exists := pm.platformMap[systemID]; exists {
+	// Check IGDB-specific mappings first
+	if platformID, exists := pm.igdbPlatformMap[systemID]; exists {
 		return strconv.Itoa(platformID), true
 	}
+
+	// For systems not in IGDB, check if they exist in base mapper
+	// This maintains compatibility but doesn't return an ID
+	if pm.BasePlatformMapper.HasSystemID(systemID) {
+		return "", true // System exists but no IGDB ID
+	}
+
 	return "", false
 }
 
 // GetSupportedSystems returns a list of all supported system IDs
 func (pm *PlatformMapper) GetSupportedSystems() []string {
-	systems := make([]string, 0, len(pm.platformMap))
-	for systemID := range pm.platformMap {
-		systems = append(systems, systemID)
-	}
-	return systems
+	// Return all systems from base mapper since IGDB can potentially scrape
+	// any system (even if we don't have a specific platform ID for it)
+	return pm.BasePlatformMapper.GetSupportedSystems()
+}
+
+// GetIGDBPlatformID returns the specific IGDB platform ID for a system
+func (pm *PlatformMapper) GetIGDBPlatformID(systemID string) (int, bool) {
+	platformID, exists := pm.igdbPlatformMap[systemID]
+	return platformID, exists
 }

@@ -590,6 +590,40 @@ func (db *MediaDB) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
 	return exists, nil
 }
 
+// GetTagsForMediaTitle retrieves all tags for a MediaTitle as a map of tagType -> tagValue
+func (db *MediaDB) GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT tt.Type, t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON t.DBID = mtt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mtt.MediaTitleDBID = ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, mediaTitleDBID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tags := make(map[string]string)
+	for rows.Next() {
+		var tagType, tagValue string
+		if err := rows.Scan(&tagType, &tagValue); err != nil {
+			return nil, err
+		}
+		tags[tagType] = tagValue
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tags, nil
+}
+
 func (db *MediaDB) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
 	if db.sql == nil {
 		return nil, ErrNullSQL

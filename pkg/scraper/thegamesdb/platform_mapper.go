@@ -19,19 +19,23 @@
 
 package thegamesdb
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
+)
 
 // PlatformMapper maps zaparoo system IDs to TheGamesDB platform IDs
 // Based on Batocera EmulationStation's TheGamesDB platform mappings
 type PlatformMapper struct {
-	platformMap map[string]int
+	*scraper.BasePlatformMapper
+	theGamesDBPlatformMap map[string]int
 }
 
 // NewPlatformMapper creates a new platform mapper with TheGamesDB mappings
 func NewPlatformMapper() *PlatformMapper {
-	// Platform mappings based on Batocera's implementation
-	// Reference: batocera-emulationstation/es-app/src/scrapers/GamesDBJSONScraper.cpp
-	platformMap := map[string]int{
+	// TheGamesDB-specific platform ID mappings
+	theGamesDBPlatformMap := map[string]int{
 		// Nintendo Consoles
 		"nes":        7,    // Nintendo Entertainment System
 		"snes":       6,    // Super Nintendo Entertainment System
@@ -130,23 +134,35 @@ func NewPlatformMapper() *PlatformMapper {
 	}
 
 	return &PlatformMapper{
-		platformMap: platformMap,
+		BasePlatformMapper:    scraper.NewBasePlatformMapper(),
+		theGamesDBPlatformMap: theGamesDBPlatformMap,
 	}
 }
 
 // MapToScraperPlatform maps a zaparoo system ID to TheGamesDB platform ID
 func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
-	if platformID, exists := pm.platformMap[systemID]; exists {
+	// Check TheGamesDB-specific mappings first
+	if platformID, exists := pm.theGamesDBPlatformMap[systemID]; exists {
 		return strconv.Itoa(platformID), true
 	}
+
+	// For systems not in TheGamesDB, check if they exist in base mapper
+	if pm.BasePlatformMapper.HasSystemID(systemID) {
+		return "", true // System exists but no TheGamesDB ID
+	}
+
 	return "", false
 }
 
 // GetSupportedSystems returns a list of all supported system IDs
 func (pm *PlatformMapper) GetSupportedSystems() []string {
-	systems := make([]string, 0, len(pm.platformMap))
-	for systemID := range pm.platformMap {
-		systems = append(systems, systemID)
-	}
-	return systems
+	// Return all systems from base mapper since TheGamesDB can potentially scrape
+	// any system (even if we don't have a specific platform ID for it)
+	return pm.BasePlatformMapper.GetSupportedSystems()
+}
+
+// GetTheGamesDBPlatformID returns the specific TheGamesDB platform ID for a system
+func (pm *PlatformMapper) GetTheGamesDBPlatformID(systemID string) (int, bool) {
+	platformID, exists := pm.theGamesDBPlatformMap[systemID]
+	return platformID, exists
 }

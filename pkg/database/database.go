@@ -227,6 +227,7 @@ type MediaDBI interface {
 	GetMediaByID(mediaDBID int64) (*Media, error)
 	GetMediaTitleByID(mediaTitleDBID int64) (*MediaTitle, error)
 	HasScraperMetadata(mediaTitleDBID int64) (bool, error)
+	GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error)
 
 	// Game hash methods
 	SaveGameHashes(hashes *GameHashes) error

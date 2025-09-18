@@ -797,6 +797,14 @@ func (m *MockMediaDBI) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error) {
+	args := m.Called(mediaTitleDBID)
+	if tags, ok := args.Get(0).(map[string]string); ok {
+		return tags, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func (m *MockMediaDBI) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
 	args := m.Called(systemID)
 	if titles, ok := args.Get(0).([]database.MediaTitle); ok {

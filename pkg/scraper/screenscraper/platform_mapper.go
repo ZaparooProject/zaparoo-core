@@ -27,7 +27,7 @@ import (
 // Based on Batocera EmulationStation's screenscraper_platformid_map
 type PlatformMapper struct {
 	*scraper.BasePlatformMapper
-	// ScreenScraper-specific mappings
+	// ScreenScraper-specific platform ID mappings
 	screenScraperMappings map[string]string
 }
 
@@ -148,14 +148,17 @@ func NewPlatformMapper() *PlatformMapper {
 
 // MapToScraperPlatform maps a zaparoo system ID to a ScreenScraper platform ID
 func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
-	// Check ScreenScraper-specific mappings first
+	// Check ScreenScraper-specific mappings
 	if platformID, exists := pm.screenScraperMappings[systemID]; exists {
 		return platformID, true
 	}
 
-	// Fall back to base mappings (though ScreenScraper uses numeric IDs)
-	_, exists := pm.BasePlatformMapper.MapToScraperPlatform(systemID)
-	return "", exists // Return empty string since base mapper doesn't have ScreenScraper IDs
+	// For systems not specifically mapped, check if they exist in base mapper
+	if pm.BasePlatformMapper.HasSystemID(systemID) {
+		return "", true // System exists but no specific ScreenScraper ID
+	}
+
+	return "", false
 }
 
 // MapFromScraperPlatform maps a ScreenScraper platform ID back to zaparoo system ID
@@ -170,11 +173,9 @@ func (pm *PlatformMapper) MapFromScraperPlatform(scraperPlatformID string) (stri
 
 // GetSupportedSystems returns all zaparoo system IDs supported by ScreenScraper
 func (pm *PlatformMapper) GetSupportedSystems() []string {
-	systems := make([]string, 0, len(pm.screenScraperMappings))
-	for systemID := range pm.screenScraperMappings {
-		systems = append(systems, systemID)
-	}
-	return systems
+	// Return all systems from base mapper since ScreenScraper can potentially scrape
+	// any system (even if we don't have a specific platform ID for it)
+	return pm.BasePlatformMapper.GetSupportedSystems()
 }
 
 // GetScreenScraperPlatformID returns the numeric platform ID for ScreenScraper

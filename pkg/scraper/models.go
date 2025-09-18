@@ -39,17 +39,6 @@ type ScrapedMetadata struct {
 	ScrapedAt      time.Time // Stored as scraped_at tag
 }
 
-// GameHashes represents file hash information for scraper matching
-type GameHashes struct {
-	DBID       int64
-	SystemID   string
-	MediaPath  string
-	CRC32      string
-	MD5        string
-	SHA1       string
-	FileSize   int64
-	ComputedAt time.Time
-}
 
 // ScraperProgress represents the current scraping progress
 type ScraperProgress struct {
@@ -75,28 +64,3 @@ type ScraperJob struct {
 	Overwrite  bool
 }
 
-// ScraperConfig represents scraper configuration
-type ScraperConfig struct {
-	DefaultScraper      string      `toml:"default"`
-	Region              string      `toml:"region"`
-	Language            string      `toml:"language"`
-	DefaultMediaTypes   []MediaType `toml:"-"`
-	DownloadCovers      bool        `toml:"download_covers"`
-	DownloadScreenshots bool        `toml:"download_screenshots"`
-	DownloadVideos      bool        `toml:"download_videos"`
-}
-
-
-// UpdateDefaultMediaTypes updates the DefaultMediaTypes slice based on boolean flags
-func (c *ScraperConfig) UpdateDefaultMediaTypes() {
-	c.DefaultMediaTypes = []MediaType{}
-	if c.DownloadCovers {
-		c.DefaultMediaTypes = append(c.DefaultMediaTypes, MediaTypeCover)
-	}
-	if c.DownloadScreenshots {
-		c.DefaultMediaTypes = append(c.DefaultMediaTypes, MediaTypeScreenshot)
-	}
-	if c.DownloadVideos {
-		c.DefaultMediaTypes = append(c.DefaultMediaTypes, MediaTypeVideo)
-	}
-}

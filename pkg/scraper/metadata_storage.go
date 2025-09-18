@@ -116,9 +116,51 @@ func (ms *MetadataStorage) StoreMetadata(ctx context.Context, metadata *ScrapedM
 
 // GetMetadata retrieves scraped metadata for a MediaTitle from Tags
 func (ms *MetadataStorage) GetMetadata(ctx context.Context, mediaTitleDBID int64, scraperSource string) (*ScrapedMetadata, error) {
-	// For now, return nil as this is a complex query that would require
-	// additional interface methods. This can be implemented later if needed.
-	return nil, nil
+	// Get all tags for the MediaTitle
+	tags, err := ms.db.GetTagsForMediaTitle(mediaTitleDBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tags for media title: %w", err)
+	}
+
+	// If scraperSource is specified, check if the metadata is from that source
+	if scraperSource != "" {
+		if source, exists := tags[TagTypeScraperSource]; !exists || source != scraperSource {
+			return nil, nil // No metadata from the specified scraper source
+		}
+	}
+
+	// Convert tags back to ScrapedMetadata struct
+	metadata := &ScrapedMetadata{
+		MediaTitleDBID: mediaTitleDBID,
+		ScraperSource:  tags[TagTypeScraperSource],
+		Description:    tags[TagTypeDescription],
+		Genre:          tags[TagTypeGenre],
+		Players:        tags[TagTypePlayers],
+		ReleaseDate:    tags[TagTypeReleaseDate],
+		Developer:      tags[TagTypeDeveloper],
+		Publisher:      tags[TagTypePublisher],
+	}
+
+	// Parse rating if present
+	if ratingStr, exists := tags[TagTypeRating]; exists && ratingStr != "" {
+		if rating, err := strconv.ParseFloat(ratingStr, 64); err == nil {
+			metadata.Rating = rating
+		}
+	}
+
+	// Parse scraped date if present
+	if scrapedAtStr, exists := tags[TagTypeScrapedAt]; exists && scrapedAtStr != "" {
+		if timestamp, err := strconv.ParseInt(scrapedAtStr, 10, 64); err == nil {
+			metadata.ScrapedAt = time.Unix(timestamp, 0)
+		}
+	}
+
+	// Return nil if no scraper metadata found
+	if metadata.ScraperSource == "" {
+		return nil, nil
+	}
+
+	return metadata, nil
 }
 
 // ensureTagType creates a TagType if it doesn't exist and returns its DBID
