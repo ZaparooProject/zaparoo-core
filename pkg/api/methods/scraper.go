@@ -27,18 +27,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/rs/zerolog/log"
 )
-
-// Global scraper service instance
-var ScraperServiceInstance *scraper.ScraperService
 
 // HandleScraperScrapeStart scrapes systems or specific media from MediaDB
 //
 //nolint:gocritic // single-use parameter in API handler
 func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
-	if ScraperServiceInstance == nil {
+	if env.ScraperService == nil {
 		return nil, errors.New("scraper service not initialized")
 	}
 
@@ -58,7 +54,7 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 	// If media ID is specified, scrape that specific media item
 	if params.Media != nil {
 		go func() {
-			if err := ScraperServiceInstance.ScrapeGameByID(env.State.GetContext(), *params.Media); err != nil {
+			if err := env.ScraperService.ScrapeGameByID(env.State.GetContext(), *params.Media); err != nil {
 				log.Error().Err(err).Int64("mediaID", *params.Media).Msg("failed to scrape game")
 			}
 		}()
@@ -86,7 +82,7 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 	// Start scraping in background for each system
 	go func() {
 		for _, system := range systems {
-			if err := ScraperServiceInstance.ScrapeSystem(env.State.GetContext(), system.ID); err != nil {
+			if err := env.ScraperService.ScrapeSystem(env.State.GetContext(), system.ID); err != nil {
 				log.Error().Err(err).Str("systemID", system.ID).Msg("failed to scrape system")
 			}
 		}
@@ -106,24 +102,24 @@ func HandleScraperScrapeStart(env requests.RequestEnv) (any, error) {
 // HandleScraper returns current status of scraper job
 //
 //nolint:gocritic // single-use parameter in API handler
-func HandleScraper(_ requests.RequestEnv) (any, error) {
-	if ScraperServiceInstance == nil {
+func HandleScraper(env requests.RequestEnv) (any, error) {
+	if env.ScraperService == nil {
 		return nil, errors.New("scraper service not initialized")
 	}
 
-	progress := ScraperServiceInstance.GetProgress()
+	progress := env.ScraperService.GetProgress()
 	return progress, nil
 }
 
 // HandleScraperCancel cancels active scraper job
 //
 //nolint:gocritic // single-use parameter in API handler
-func HandleScraperCancel(_ requests.RequestEnv) (any, error) {
-	if ScraperServiceInstance == nil {
+func HandleScraperCancel(env requests.RequestEnv) (any, error) {
+	if env.ScraperService == nil {
 		return nil, errors.New("scraper service not initialized")
 	}
 
-	err := ScraperServiceInstance.CancelScraping()
+	err := env.ScraperService.CancelScraping()
 	if err != nil {
 		return models.ScraperCancelResponse{
 			Cancelled: false,

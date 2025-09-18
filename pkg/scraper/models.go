@@ -50,6 +50,8 @@ type ScraperProgress struct {
 	SkippedFiles    int        `json:"skippedFiles"`
 	ErrorCount      int        `json:"errorCount"`
 	IsRunning       bool       `json:"isRunning"`
+	Status          string     `json:"status"`          // "idle", "running", "completed", "failed", "cancelled"
+	LastError       string     `json:"lastError"`       // Last critical error message
 }
 
 // ScraperJob represents a scraping job in the queue

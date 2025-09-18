@@ -34,103 +34,57 @@ type PlatformMapper struct {
 
 // NewPlatformMapper creates a new platform mapper with TheGamesDB mappings
 func NewPlatformMapper() *PlatformMapper {
-	// TheGamesDB-specific platform ID mappings
-	theGamesDBPlatformMap := map[string]int{
-		// Nintendo Consoles
-		"nes":        7,    // Nintendo Entertainment System
-		"snes":       6,    // Super Nintendo Entertainment System
-		"n64":        3,    // Nintendo 64
-		"gb":         4,    // Game Boy
-		"gbc":        5,    // Game Boy Color
-		"gba":        12,   // Game Boy Advance
-		"nds":        20,   // Nintendo DS
-		"3ds":        4912, // Nintendo 3DS
-		"gamecube":   2,    // GameCube
-		"wii":        9,    // Nintendo Wii
-		"wiiu":       38,   // Nintendo Wii U
-		"switch":     4971, // Nintendo Switch
-		"virtualboy": 28,   // Virtual Boy
-		"pokemini":   4957, // Pokémon Mini
+	// Build TheGamesDB platform map from central definitions
+	theGamesDBPlatformMap := make(map[string]int)
+	for zaparooID, platformIDs := range scraper.PlatformDefinitions {
+		if platformIDs.TheGamesDB != 0 {
+			theGamesDBPlatformMap[zaparooID] = platformIDs.TheGamesDB
+		}
+	}
 
-		// Sega Consoles
-		"mastersystem": 35, // Sega Master System
-		"megadrive":    18, // Sega Mega Drive/Genesis
-		"genesis":      18, // Sega Genesis (same as megadrive)
-		"segacd":       21, // Sega CD
-		"sega32x":      33, // Sega 32X
-		"saturn":       17, // Sega Saturn
-		"dreamcast":    16, // Sega Dreamcast
-		"gamegear":     25, // Sega Game Gear
-
-		// Sony Consoles
-		"psx":    10,   // Sony PlayStation
-		"ps2":    11,   // Sony PlayStation 2
-		"ps3":    12,   // Sony PlayStation 3
-		"ps4":    4919, // Sony PlayStation 4
-		"ps5":    4976, // Sony PlayStation 5
-		"psp":    13,   // PlayStation Portable
-		"psvita": 39,   // PlayStation Vita
-
-		// Microsoft Consoles
-		"xbox":       14,   // Microsoft Xbox
-		"xbox360":    15,   // Microsoft Xbox 360
-		"xboxone":    4920, // Microsoft Xbox One
-		"xboxseries": 4977, // Microsoft Xbox Series X/S
-
-		// Atari Systems
-		"atari2600":   22,   // Atari 2600
-		"atari5200":   26,   // Atari 5200
-		"atari7800":   27,   // Atari 7800
-		"atarist":     4943, // Atari ST
-		"atarilynx":   24,   // Atari Lynx
-		"atarijaguar": 29,   // Atari Jaguar
-
-		// NEC Systems
-		"pcengine":   34,   // PC Engine/TurboGrafx-16
-		"pcenginecd": 4955, // PC Engine CD/TurboGrafx-CD
-		"supergrafx": 4955, // SuperGrafx (use same as PC Engine CD)
-
-		// SNK Systems
-		"neogeo":   24,   // Neo Geo
-		"neogeocd": 4956, // Neo Geo CD
-		"ngp":      4922, // Neo Geo Pocket
-		"ngpc":     4923, // Neo Geo Pocket Color
-
-		// Other Consoles
+	// Add TheGamesDB-specific mappings not in central definitions
+	theGamesDBSpecificMappings := map[string]int{
+		"virtualboy":    28,   // Virtual Boy
+		"pokemini":      4957, // Pokémon Mini
+		"mastersystem":  35,   // Sega Master System (alias for sms)
+		"segacd":        21,   // Sega CD
+		"sega32x":       33,   // Sega 32X
+		"gamegear":      25,   // Sega Game Gear (alias for gg)
+		"psvita":        39,   // PlayStation Vita (alias for vita)
+		"xboxseries":    4977, // Microsoft Xbox Series X/S
+		"atari5200":     26,   // Atari 5200
+		"atarist":       4943, // Atari ST
+		"atarilynx":     24,   // Atari Lynx (alias for lynx)
+		"atarijaguar":   29,   // Atari Jaguar (alias for jaguar)
+		"pcengine":      34,   // PC Engine/TurboGrafx-16
+		"pcenginecd":    4955, // PC Engine CD/TurboGrafx-CD
+		"supergrafx":    4955, // SuperGrafx (use same as PC Engine CD)
+		"neogeocd":      4956, // Neo Geo CD
+		"ngp":           4922, // Neo Geo Pocket
+		"ngpc":          4923, // Neo Geo Pocket Color
 		"colecovision":  31,   // ColecoVision
 		"intellivision": 32,   // Intellivision
 		"vectrex":       4945, // Vectrex
 		"channelf":      4928, // Fairchild Channel F
 		"odyssey2":      4927, // Magnavox Odyssey²
 		"sg1000":        4949, // Sega SG-1000
+		"fbneo":         23,   // FBNeo (use arcade)
+		"amstradcpc":    4946, // Amstrad CPC
+		"zxspectrum":    4913, // ZX Spectrum
+		"msx":           4929, // MSX
+		"msx2":          4929, // MSX2 (use same as MSX)
+		"apple2":        4942, // Apple II
+		"windows":       1,    // Windows PC (alias for pc)
+		"gp32":          4936, // GamePark GP32
+		"gp2x":          4937, // GamePark GP2X
+		"wiz":           4938, // GamePark Wiz
+		"caanoo":        4939, // GamePark Caanoo
+		"dingux":        4940, // Dingux devices
+	}
 
-		// Arcade
-		"arcade": 23, // Arcade
-		"mame":   23, // MAME (use arcade)
-		"fbneo":  23, // FBNeo (use arcade)
-
-		// Computer Systems
-		"amiga":      4911, // Commodore Amiga
-		"c64":        40,   // Commodore 64
-		"amstradcpc": 4946, // Amstrad CPC
-		"zxspectrum": 4913, // ZX Spectrum
-		"msx":        4929, // MSX
-		"msx2":       4929, // MSX2 (use same as MSX)
-		"apple2":     4942, // Apple II
-		"dos":        1,    // PC (DOS)
-		"pc":         1,    // PC
-		"windows":    1,    // Windows PC
-
-		// Modern Handhelds
-		"gp32":   4936, // GamePark GP32
-		"gp2x":   4937, // GamePark GP2X
-		"wiz":    4938, // GamePark Wiz
-		"caanoo": 4939, // GamePark Caanoo
-		"dingux": 4940, // Dingux devices
-
-		// Mobile
-		"android": 4916, // Android
-		"ios":     4915, // iOS
+	// Merge TheGamesDB-specific mappings
+	for systemID, platformID := range theGamesDBSpecificMappings {
+		theGamesDBPlatformMap[systemID] = platformID
 	}
 
 	return &PlatformMapper{

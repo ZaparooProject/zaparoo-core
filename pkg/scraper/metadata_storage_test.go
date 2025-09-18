@@ -97,9 +97,10 @@ func TestMetadataStorage_GetMetadata_NoScraperSource(t *testing.T) {
 	ctx := context.Background()
 	metadata, err := storage.GetMetadata(ctx, mediaTitleDBID, "")
 
-	// Should return nil when no scraper metadata found
-	require.NoError(t, err)
+	// Should return error when no scraper metadata found
+	require.Error(t, err)
 	assert.Nil(t, metadata)
+	assert.Equal(t, "no scraper metadata found", err.Error())
 
 	mockDB.AssertExpectations(t)
 }
@@ -125,9 +126,10 @@ func TestMetadataStorage_GetMetadata_WrongScraperSource(t *testing.T) {
 	ctx := context.Background()
 	metadata, err := storage.GetMetadata(ctx, mediaTitleDBID, "igdb")
 
-	// Should return nil when wrong scraper source
-	require.NoError(t, err)
+	// Should return error when wrong scraper source
+	require.Error(t, err)
 	assert.Nil(t, metadata)
+	assert.Equal(t, "no metadata from scraper source: igdb", err.Error())
 
 	mockDB.AssertExpectations(t)
 }

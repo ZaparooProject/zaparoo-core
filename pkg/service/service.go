@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -221,10 +220,9 @@ func Start(
 
 	log.Info().Msg("starting scraper service")
 	scraperSvc := scraperservice.NewScraperService(db.MediaDB, db.UserDB, cfg, pl, st.Notifications)
-	methods.ScraperServiceInstance = scraperSvc
 
 	log.Info().Msg("starting API service")
-	go api.Start(pl, cfg, st, itq, db, ns)
+	go api.Start(pl, cfg, st, itq, db, ns, scraperSvc)
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")

@@ -49,21 +49,18 @@ func TestHandleScraperScrapeSystem(t *testing.T) {
 		{DBID: 1, Name: "Super Mario World"},
 	}, nil)
 
-	// Mock scraper service - will be nil
-	originalService := ScraperServiceInstance
-	defer func() { ScraperServiceInstance = originalService }()
-
 	// Setup database
 	db := &database.Database{
 		MediaDB: mockMediaDB,
 		UserDB:  mockUserDB,
 	}
 
-	// Setup request environment
+	// Setup request environment with nil scraper service
 	env := requests.RequestEnv{
-		Platform: mockPlatform,
-		Config:   mockConfig,
-		Database: db,
+		Platform:       mockPlatform,
+		Config:         mockConfig,
+		Database:       db,
+		ScraperService: nil, // Test with nil service
 	}
 
 	tests := []struct {
@@ -116,14 +113,11 @@ func TestHandleScraperProgress(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockConfig := &config.Instance{}
 
-	// Mock scraper service - will be nil
-	originalService := ScraperServiceInstance
-	defer func() { ScraperServiceInstance = originalService }()
-
-	// Setup request environment
+	// Setup request environment with nil scraper service
 	env := requests.RequestEnv{
-		Platform: mockPlatform,
-		Config:   mockConfig,
+		Platform:       mockPlatform,
+		Config:         mockConfig,
+		ScraperService: nil, // Test with nil service
 	}
 
 	result, err := HandleScraper(env)
@@ -139,14 +133,11 @@ func TestHandleScraperCancel(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockConfig := &config.Instance{}
 
-	// Mock scraper service - will be nil
-	originalService := ScraperServiceInstance
-	defer func() { ScraperServiceInstance = originalService }()
-
-	// Setup request environment
+	// Setup request environment with nil scraper service
 	env := requests.RequestEnv{
-		Platform: mockPlatform,
-		Config:   mockConfig,
+		Platform:       mockPlatform,
+		Config:         mockConfig,
+		ScraperService: nil, // Test with nil service
 	}
 
 	result, err := HandleScraperCancel(env)

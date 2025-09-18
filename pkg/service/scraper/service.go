@@ -85,7 +85,7 @@ func NewScraperService(
 		workers:         3, // Default worker count
 		ctx:             ctx,
 		cancelFunc:      cancel,
-		progress:        &scraperpkg.ScraperProgress{},
+		progress:        &scraperpkg.ScraperProgress{Status: "idle"},
 		notifications:   notificationsChan,
 	}
 
@@ -180,6 +180,9 @@ func (s *ScraperService) worker(id int) {
 
 				s.updateProgress(func(p *scraperpkg.ScraperProgress) {
 					p.ErrorCount++
+					p.LastError = err.Error()
+					// Don't change status to "failed" for individual job errors
+					// Only set to "failed" for critical system errors
 				})
 
 				// Send error notification
@@ -196,6 +199,13 @@ func (s *ScraperService) worker(id int) {
 			s.updateProgress(func(p *scraperpkg.ScraperProgress) {
 				p.ProcessedGames++
 				p.CurrentGame = ""
+
+				// Check if scraping is completed
+				if p.IsRunning && p.ProcessedGames >= p.TotalGames {
+					p.IsRunning = false
+					p.Status = "completed"
+					s.isRunning = false
+				}
 			})
 		}
 	}
@@ -518,6 +528,7 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 		IsRunning:  true,
 		TotalGames: len(titles),
 		StartTime:  &now,
+		Status:     "running",
 	}
 	s.progressMu.Unlock()
 
@@ -614,6 +625,7 @@ func (s *ScraperService) CancelScraping() error {
 	s.progressMu.Lock()
 	s.isRunning = false
 	s.progress.IsRunning = false
+	s.progress.Status = "cancelled"
 	s.progressMu.Unlock()
 
 	// Note: We don't cancel the context here as it would stop all workers
