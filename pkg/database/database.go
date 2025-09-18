@@ -69,6 +69,18 @@ type System struct {
 	DBID     int64
 }
 
+type Client struct {
+	CreatedAt     time.Time `json:"createdAt"`
+	LastSeen      time.Time `json:"lastSeen"`
+	ClientID      string    `json:"clientId"`
+	ClientName    string    `json:"clientName"`
+	AuthTokenHash string    `json:"-"`
+	SharedSecret  []byte    `json:"-"`
+	SeqWindow     []byte    `json:"-"`
+	NonceCache    []string  `json:"-"`
+	CurrentSeq    uint64    `json:"currentSeq"`
+}
+
 type MediaTitle struct {
 	Slug       string
 	Name       string
@@ -154,6 +166,12 @@ type UserDBI interface {
 	GetZapLinkHost(host string) (bool, bool, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
+	CreateClient(clientName, authToken string, sharedSecret []byte) (*Client, error)
+	GetClientByAuthToken(authToken string) (*Client, error)
+	GetClientByID(clientID string) (*Client, error)
+	UpdateClientSequence(clientID string, newSeq uint64, seqWindow []byte, nonceCache []string) error
+	GetAllClients() ([]Client, error)
+	DeleteClient(clientID string) error
 }
 
 type MediaDBI interface {
