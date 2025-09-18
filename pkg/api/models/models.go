@@ -72,14 +72,9 @@ const (
 	MethodReadersWrite         = "readers.write"
 	MethodReadersWriteCancel   = "readers.write.cancel"
 	MethodVersion              = "version"
-
-	// Scraper methods
-	MethodScraperSearch       = "scraper.search"
-	MethodScraperScrapeGame   = "scraper.scrapegame"
-	MethodScraperScrapeSystem = "scraper.scrapesystem"
-	MethodScraperProgress     = "scraper.progress"
-	MethodScraperCancel       = "scraper.cancel"
-	MethodScraperConfig       = "scraper.config"
+	MethodScraper              = "scraper"
+	MethodScraperStart         = "scraper.start"
+	MethodScraperCancel        = "scraper.cancel"
 )
 
 type Notification struct {

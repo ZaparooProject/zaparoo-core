@@ -173,3 +173,13 @@ type ReaderInfo struct {
 type ReadersResponse struct {
 	Readers []ReaderInfo `json:"readers"`
 }
+
+type ScraperStartResponse struct {
+	Started bool     `json:"started"`
+	Systems []string `json:"systems,omitempty"`
+	MediaID *int64   `json:"mediaId,omitempty"`
+}
+
+type ScraperCancelResponse struct {
+	Cancelled bool `json:"cancelled"`
+}

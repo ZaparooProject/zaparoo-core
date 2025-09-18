@@ -4,6 +4,7 @@ go 1.24.5
 
 require (
 	fyne.io/systray v1.11.0
+	github.com/BurntSushi/toml v1.5.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/TimDeve/valve-vdf-binary v0.0.1
 	github.com/ZaparooProject/go-pn532 v0.8.0
@@ -45,7 +46,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/TheTitanrain/w32 v0.0.0-20200114052255-2654d97dbd3d // indirect
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/creack/goselect v0.1.3 // indirect

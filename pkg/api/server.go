@@ -193,12 +193,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodReadersWrite:       methods.HandleReaderWrite,
 		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// scraper
-		models.MethodScraperSearch:       methods.HandleScraperSearch,
-		models.MethodScraperScrapeGame:   methods.HandleScraperScrapeGame,
-		models.MethodScraperScrapeSystem: methods.HandleScraperScrapeSystem,
-		models.MethodScraperProgress:     methods.HandleScraperProgress,
-		models.MethodScraperCancel:       methods.HandleScraperCancel,
-		models.MethodScraperConfig:       methods.HandleScraperConfig,
+		models.MethodScraperStart:  methods.HandleScraperScrapeStart,
+		models.MethodScraper:       methods.HandleScraper,
+		models.MethodScraperCancel: methods.HandleScraperCancel,
 		// utils
 		models.MethodVersion: methods.HandleVersion,
 	}
