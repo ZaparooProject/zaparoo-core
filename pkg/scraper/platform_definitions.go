@@ -21,8 +21,8 @@ package scraper
 
 // PlatformIDs holds the platform IDs for each scraper service
 type PlatformIDs struct {
-	IGDB          int
 	ScreenScraper string
+	IGDB          int
 	TheGamesDB    int
 }
 
@@ -47,13 +47,13 @@ var PlatformDefinitions = map[string]PlatformIDs{
 	"switch":       {IGDB: 130, ScreenScraper: "225", TheGamesDB: 4971},
 
 	// Sony Consoles
-	"psx":     {IGDB: 7, ScreenScraper: "57", TheGamesDB: 10},
-	"ps2":     {IGDB: 8, ScreenScraper: "58", TheGamesDB: 11},
-	"ps3":     {IGDB: 9, ScreenScraper: "59", TheGamesDB: 12},
-	"ps4":     {IGDB: 48, ScreenScraper: "68", TheGamesDB: 4919},
-	"ps5":     {IGDB: 167, ScreenScraper: "68", TheGamesDB: 4920}, // ScreenScraper may not have PS5 yet
-	"psp":     {IGDB: 38, ScreenScraper: "61", TheGamesDB: 13},
-	"vita":    {IGDB: 46, ScreenScraper: "62", TheGamesDB: 39},
+	"psx":  {IGDB: 7, ScreenScraper: "57", TheGamesDB: 10},
+	"ps2":  {IGDB: 8, ScreenScraper: "58", TheGamesDB: 11},
+	"ps3":  {IGDB: 9, ScreenScraper: "59", TheGamesDB: 12},
+	"ps4":  {IGDB: 48, ScreenScraper: "68", TheGamesDB: 4919},
+	"ps5":  {IGDB: 167, ScreenScraper: "68", TheGamesDB: 4920}, // ScreenScraper may not have PS5 yet
+	"psp":  {IGDB: 38, ScreenScraper: "61", TheGamesDB: 13},
+	"vita": {IGDB: 46, ScreenScraper: "62", TheGamesDB: 39},
 
 	// Microsoft Consoles
 	"xbox":    {IGDB: 11, ScreenScraper: "32", TheGamesDB: 14},
@@ -80,10 +80,10 @@ var PlatformDefinitions = map[string]PlatformIDs{
 	"neogeo": {IGDB: 80, ScreenScraper: "142", TheGamesDB: 24},
 
 	// Computers
-	"dos":    {IGDB: 13, ScreenScraper: "135", TheGamesDB: 1},
-	"pc":     {IGDB: 6, ScreenScraper: "135", TheGamesDB: 1},
-	"amiga":  {IGDB: 16, ScreenScraper: "64", TheGamesDB: 4911},
-	"c64":    {IGDB: 15, ScreenScraper: "66", TheGamesDB: 40},
+	"dos":   {IGDB: 13, ScreenScraper: "135", TheGamesDB: 1},
+	"pc":    {IGDB: 6, ScreenScraper: "135", TheGamesDB: 1},
+	"amiga": {IGDB: 16, ScreenScraper: "64", TheGamesDB: 4911},
+	"c64":   {IGDB: 15, ScreenScraper: "66", TheGamesDB: 40},
 
 	// Mobile
 	"android": {IGDB: 34, ScreenScraper: "224", TheGamesDB: 4916},

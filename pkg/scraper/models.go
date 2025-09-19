@@ -44,14 +44,14 @@ type ScraperProgress struct {
 	StartTime       *time.Time `json:"startTime"`
 	EstimatedEnd    *time.Time `json:"estimatedEnd"`
 	CurrentGame     string     `json:"currentGame"`
+	Status          string     `json:"status"`
+	LastError       string     `json:"lastError"`
 	ProcessedGames  int        `json:"processedGames"`
 	TotalGames      int        `json:"totalGames"`
 	DownloadedFiles int        `json:"downloadedFiles"`
 	SkippedFiles    int        `json:"skippedFiles"`
 	ErrorCount      int        `json:"errorCount"`
 	IsRunning       bool       `json:"isRunning"`
-	Status          string     `json:"status"`          // "idle", "running", "completed", "failed", "cancelled"
-	LastError       string     `json:"lastError"`       // Last critical error message
 }
 
 // ScraperJob represents a scraping job in the queue
