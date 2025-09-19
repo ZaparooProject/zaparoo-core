@@ -131,9 +131,9 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 
 	tests := []struct {
 		name         string
+		wantErr      bool
 		sourceFunc   func() string
 		destFunc     func() string
-		wantErr      bool
 		validateFunc func(t *testing.T, destPath string)
 	}{
 		{
@@ -146,7 +146,7 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 			},
 			wantErr: false,
 			validateFunc: func(t *testing.T, destPath string) {
-				content, err := os.ReadFile(destPath)
+				content, err := os.ReadFile(destPath) // #nosec G304 -- Test file reading
 				require.NoError(t, err)
 				assert.Equal(t, testContent, string(content))
 			},
@@ -163,7 +163,7 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 			},
 			wantErr: false,
 			validateFunc: func(t *testing.T, destPath string) {
-				content, err := os.ReadFile(destPath)
+				content, err := os.ReadFile(destPath) // #nosec G304 -- Test file reading
 				require.NoError(t, err)
 				assert.Equal(t, testContent, string(content))
 			},
@@ -175,13 +175,13 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 			},
 			destFunc: func() string {
 				nestedDir := filepath.Join(tempDir, "nested", "deep", "folder")
-				err := os.MkdirAll(nestedDir, 0o755)
+				err := os.MkdirAll(nestedDir, 0o750)
 				require.NoError(t, err)
 				return filepath.Join(nestedDir, "nested_file.txt")
 			},
 			wantErr: false,
 			validateFunc: func(t *testing.T, destPath string) {
-				content, err := os.ReadFile(destPath)
+				content, err := os.ReadFile(destPath) // #nosec G304 -- Test file reading
 				require.NoError(t, err)
 				assert.Equal(t, testContent, string(content))
 			},
@@ -197,7 +197,7 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 			},
 			wantErr: false,
 			validateFunc: func(t *testing.T, destPath string) {
-				content, err := os.ReadFile(destPath)
+				content, err := os.ReadFile(destPath) // #nosec G304 -- Test file reading
 				require.NoError(t, err)
 				assert.Equal(t, testContent, string(content))
 			},
@@ -226,7 +226,7 @@ func TestCopyFile_WindowsPaths(t *testing.T) {
 				return `Z:\invalid\destination.txt`
 			},
 			wantErr: true,
-			validateFunc: func(t *testing.T, destPath string) {
+			validateFunc: func(_ *testing.T, _ string) {
 				// No validation needed for invalid destination
 			},
 		},
