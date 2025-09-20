@@ -25,7 +25,6 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
-	"crypto/md5" //nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -59,18 +58,6 @@ func TokensEqual(a, b *tokens.Token) bool {
 	return a.UID == b.UID && a.Text == b.Text
 }
 
-func GetMd5Hash(filePath string) (string, error) {
-	//nolint:gosec // Safe: opens files for MD5 hashing, used for game file identification
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open file for MD5 hash: %w", err)
-	}
-	//nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
-	hash := md5.New()
-	_, _ = io.Copy(hash, file)
-	_ = file.Close()
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
-}
 
 func GetFileSize(filePath string) (int64, error) {
 	//nolint:gosec // Safe: opens files to get file size, used for game file analysis

@@ -25,18 +25,20 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/google/uuid"
 )
 
 type RequestEnv struct {
-	Platform   platforms.Platform
-	Config     *config.Instance
-	State      *state.State
-	Database   *database.Database
-	TokenQueue chan<- tokens.Token
-	Params     json.RawMessage
-	ID         uuid.UUID
-	IsLocal    bool
+	Platform       platforms.Platform
+	Config         *config.Instance
+	State          *state.State
+	Database       *database.Database
+	TokenQueue     chan<- tokens.Token
+	ScraperService *scraper.ScraperService
+	Params         json.RawMessage
+	ID             uuid.UUID
+	IsLocal        bool
 }

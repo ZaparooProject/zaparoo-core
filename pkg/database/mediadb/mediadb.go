@@ -510,3 +510,297 @@ func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTa
 	}
 	return system, err
 }
+
+func (db *MediaDB) FindMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	return sqlFindMediaTitleTag(db.ctx, db.sql, row)
+}
+
+func (db *MediaDB) InsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	return sqlInsertMediaTitleTag(db.ctx, db.sql, row)
+}
+
+func (db *MediaDB) FindOrInsertMediaTitleTag(row database.MediaTitleTag) (database.MediaTitleTag, error) {
+	result, err := db.FindMediaTitleTag(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		result, err = db.InsertMediaTitleTag(row)
+	}
+	return result, err
+}
+
+// Scraper metadata methods
+
+func (db *MediaDB) GetGamesWithoutMetadata(systemID string, limit int) ([]database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	// Find games that don't have a 'scraper_source' tag, which indicates they haven't been scraped
+	query := `SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
+		FROM MediaTitles mt
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		LEFT JOIN (
+			SELECT DISTINCT mtt.MediaTitleDBID
+			FROM MediaTitleTags mtt
+			JOIN Tags t ON t.DBID = mtt.TagDBID
+			JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+			WHERE tt.Type = 'scraper_source'
+		) scraped_titles ON scraped_titles.MediaTitleDBID = mt.DBID
+		WHERE s.SystemID = ? AND scraped_titles.MediaTitleDBID IS NULL
+		LIMIT ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, systemID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
+
+	titles := make([]database.MediaTitle, 0, limit)
+	for rows.Next() {
+		var title database.MediaTitle
+		err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan media title row: %w", err)
+		}
+		titles = append(titles, title)
+	}
+
+	return titles, rows.Err()
+}
+
+func (db *MediaDB) HasScraperMetadata(mediaTitleDBID int64) (bool, error) {
+	if db.sql == nil {
+		return false, ErrNullSQL
+	}
+
+	query := `SELECT EXISTS(
+		SELECT 1 FROM MediaTitleTags mtt
+		JOIN Tags t ON t.DBID = mtt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mtt.MediaTitleDBID = ? AND tt.Type = 'scraper_source'
+	)`
+
+	var exists bool
+	err := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check scraper metadata existence: %w", err)
+	}
+
+	return exists, nil
+}
+
+// GetTagsForMediaTitle retrieves all tags for a MediaTitle as a map of tagType -> tagValue
+func (db *MediaDB) GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT tt.Type, t.Tag
+		FROM MediaTitleTags mtt
+		JOIN Tags t ON t.DBID = mtt.TagDBID
+		JOIN TagTypes tt ON tt.DBID = t.TypeDBID
+		WHERE mtt.MediaTitleDBID = ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, mediaTitleDBID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tags for media title: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
+
+	tags := make(map[string]string)
+	for rows.Next() {
+		var tagType, tagValue string
+		if err := rows.Scan(&tagType, &tagValue); err != nil {
+			return nil, fmt.Errorf("failed to scan tag row: %w", err)
+		}
+		tags[tagType] = tagValue
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tags, nil
+}
+
+func (db *MediaDB) GetMediaTitlesBySystem(systemID string) ([]database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT mt.DBID, mt.SystemDBID, mt.Slug, mt.Name
+		FROM MediaTitles mt
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		WHERE s.SystemID = ?`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media titles by system: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
+
+	titles := make([]database.MediaTitle, 0, 100)
+	for rows.Next() {
+		var title database.MediaTitle
+		err := rows.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan media title row in GetMediaTitlesBySystem: %w", err)
+		}
+		titles = append(titles, title)
+	}
+
+	return titles, rows.Err()
+}
+
+func (db *MediaDB) GetMediaByID(mediaDBID int64) (*database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, MediaTitleDBID, Path FROM Media WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, mediaDBID)
+
+	var media database.Media
+	err := row.Scan(&media.DBID, &media.MediaTitleDBID, &media.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan media row: %w", err)
+	}
+
+	return &media, nil
+}
+
+func (db *MediaDB) GetMediaTitleByID(mediaTitleDBID int64) (*database.MediaTitle, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, SystemDBID, Slug, Name FROM MediaTitles WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, mediaTitleDBID)
+
+	var title database.MediaTitle
+	err := row.Scan(&title.DBID, &title.SystemDBID, &title.Slug, &title.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan media title by ID: %w", err)
+	}
+
+	return &title, nil
+}
+
+func (db *MediaDB) GetSystemByID(systemDBID int64) (*database.System, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, SystemID, Name FROM Systems WHERE DBID = ?`
+	row := db.sql.QueryRowContext(db.ctx, query, systemDBID)
+
+	var system database.System
+	err := row.Scan(&system.DBID, &system.SystemID, &system.Name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan system row: %w", err)
+	}
+
+	return &system, nil
+}
+
+// Game hash methods
+
+func (db *MediaDB) SaveGameHashes(hashes *database.GameHashes) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	query := `INSERT OR REPLACE INTO MediaHashes
+		(SystemID, MediaPath, ComputedAt, FileSize, CRC32, MD5, SHA1)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := db.sql.ExecContext(db.ctx, query,
+		hashes.SystemID,
+		hashes.MediaPath,
+		hashes.ComputedAt.Unix(),
+		hashes.FileSize,
+		hashes.CRC32,
+		hashes.MD5,
+		hashes.SHA1,
+	)
+	return fmt.Errorf("failed to save game hashes: %w", err)
+}
+
+func (db *MediaDB) GetGameHashes(systemID, mediaPath string) (*database.GameHashes, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT DBID, SystemID, MediaPath, ComputedAt, FileSize, CRC32, MD5, SHA1
+		FROM MediaHashes WHERE SystemID = ? AND MediaPath = ?`
+
+	row := db.sql.QueryRowContext(db.ctx, query, systemID, mediaPath)
+
+	var hashes database.GameHashes
+	var computedAtUnix int64
+
+	err := row.Scan(
+		&hashes.DBID,
+		&hashes.SystemID,
+		&hashes.MediaPath,
+		&computedAtUnix,
+		&hashes.FileSize,
+		&hashes.CRC32,
+		&hashes.MD5,
+		&hashes.SHA1,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan game hashes row: %w", err)
+	}
+
+	hashes.ComputedAt = time.Unix(computedAtUnix, 0)
+	return &hashes, nil
+}
+
+func (db *MediaDB) FindGameByHash(crc32, md5, sha1 string) ([]database.Media, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `SELECT m.DBID, m.MediaTitleDBID, m.Path
+		FROM Media m
+		JOIN MediaTitles mt ON mt.DBID = m.MediaTitleDBID
+		JOIN Systems s ON s.DBID = mt.SystemDBID
+		JOIN MediaHashes mh ON mh.SystemID = s.SystemID AND mh.MediaPath = m.Path
+		WHERE (? != '' AND mh.CRC32 = ?)
+		   OR (? != '' AND mh.MD5 = ?)
+		   OR (? != '' AND mh.SHA1 = ?)`
+
+	rows, err := db.sql.QueryContext(db.ctx, query, crc32, crc32, md5, md5, sha1, sha1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query games by hash: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
+
+	media := make([]database.Media, 0, 10)
+	for rows.Next() {
+		var m database.Media
+		err := rows.Scan(&m.DBID, &m.MediaTitleDBID, &m.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan media row in FindGameByHash: %w", err)
+		}
+		media = append(media, m)
+	}
+
+	return media, rows.Err()
+}

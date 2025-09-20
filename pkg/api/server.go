@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	chi "github.com/go-chi/chi/v5"
@@ -192,6 +193,10 @@ func NewMethodMap() *MethodMap {
 		models.MethodReaders:            methods.HandleReaders,
 		models.MethodReadersWrite:       methods.HandleReaderWrite,
 		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
+		// scraper
+		models.MethodScraperStart:  methods.HandleScraperScrapeStart,
+		models.MethodScraper:       methods.HandleScraper,
+		models.MethodScraperCancel: methods.HandleScraperCancel,
 		// utils
 		models.MethodVersion: methods.HandleVersion,
 	}
@@ -524,6 +529,7 @@ func handleWSMessage(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	scraperService *scraper.ScraperService,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -548,12 +554,13 @@ func handleWSMessage(
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
+			Platform:       platform,
+			Config:         cfg,
+			State:          st,
+			Database:       db,
+			TokenQueue:     inTokenQueue,
+			ScraperService: scraperService,
+			IsLocal:        clientIP.IsLoopback(),
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -578,6 +585,7 @@ func handlePostRequest(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	scraperService *scraper.ScraperService,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -595,12 +603,13 @@ func handlePostRequest(
 		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
+			Platform:       platform,
+			Config:         cfg,
+			State:          st,
+			Database:       db,
+			TokenQueue:     inTokenQueue,
+			ScraperService: scraperService,
+			IsLocal:        clientIP.IsLoopback(),
 		}
 
 		var respBody []byte
@@ -648,6 +657,7 @@ func Start(
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
 	notifications <-chan models.Notification,
+	scraperService *scraper.ScraperService,
 ) {
 	port := cfg.APIPort()
 	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
@@ -706,7 +716,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: latest")
 		}
 	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, scraperService))
 
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -714,7 +724,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, scraperService))
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -722,11 +732,11 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, scraperService))
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, scraperService),
 	))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED

@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	scraperservice "github.com/ZaparooProject/zaparoo-core/v2/pkg/service/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -217,8 +218,11 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	log.Info().Msg("starting scraper service")
+	scraperSvc := scraperservice.NewScraperService(db.MediaDB, db.UserDB, cfg, pl, st.Notifications)
+
 	log.Info().Msg("starting API service")
-	go api.Start(pl, cfg, st, itq, db, ns)
+	go api.Start(pl, cfg, st, itq, db, ns, scraperSvc)
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
@@ -243,6 +247,10 @@ func Start(
 		err = pl.Stop()
 		if err != nil {
 			log.Warn().Msgf("error stopping platform: %s", err)
+		}
+		if scraperSvc != nil {
+			log.Info().Msg("stopping scraper service")
+			scraperSvc.Stop()
 		}
 		st.StopService()
 		close(plq)

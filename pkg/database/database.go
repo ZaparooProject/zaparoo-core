@@ -99,6 +99,12 @@ type MediaTag struct {
 	TagDBID   int64
 }
 
+type MediaTitleTag struct {
+	DBID           int64
+	MediaTitleDBID int64
+	TagDBID        int64
+}
+
 type SearchResult struct {
 	SystemID string
 	Name     string
@@ -123,6 +129,17 @@ type ScanState struct {
 	TagTypesIndex  int
 	TagsIndex      int
 	MediaTagsIndex int
+}
+
+type GameHashes struct {
+	ComputedAt time.Time
+	SystemID   string
+	MediaPath  string
+	CRC32      string
+	MD5        string
+	SHA1       string
+	DBID       int64
+	FileSize   int64
 }
 
 /*
@@ -177,6 +194,7 @@ type MediaDBI interface {
 	FindSystem(row System) (System, error)
 	InsertSystem(row System) (System, error)
 	FindOrInsertSystem(row System) (System, error)
+	GetSystemByID(systemDBID int64) (*System, error)
 
 	FindMediaTitle(row MediaTitle) (MediaTitle, error)
 	InsertMediaTitle(row MediaTitle) (MediaTitle, error)
@@ -197,4 +215,21 @@ type MediaDBI interface {
 	FindMediaTag(row MediaTag) (MediaTag, error)
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
+
+	FindMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+	InsertMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+	FindOrInsertMediaTitleTag(row MediaTitleTag) (MediaTitleTag, error)
+
+	// Scraper metadata methods
+	GetGamesWithoutMetadata(systemID string, limit int) ([]MediaTitle, error)
+	GetMediaTitlesBySystem(systemID string) ([]MediaTitle, error)
+	GetMediaByID(mediaDBID int64) (*Media, error)
+	GetMediaTitleByID(mediaTitleDBID int64) (*MediaTitle, error)
+	HasScraperMetadata(mediaTitleDBID int64) (bool, error)
+	GetTagsForMediaTitle(mediaTitleDBID int64) (map[string]string, error)
+
+	// Game hash methods
+	SaveGameHashes(hashes *GameHashes) error
+	GetGameHashes(systemID, mediaPath string) (*GameHashes, error)
+	FindGameByHash(crc32, md5, sha1 string) ([]Media, error)
 }

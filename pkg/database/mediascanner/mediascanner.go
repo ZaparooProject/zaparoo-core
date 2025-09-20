@@ -446,7 +446,7 @@ func NewNamesIndex(
 		scannedSystems[systemID] = true
 
 		for _, p := range files {
-			AddMediaPath(db, &scanState, systemID, p.Path)
+			AddMediaPath(db, &scanState, systemID, p.Path, cfg, platform)
 		}
 
 		// Commit in batches to reduce lock time and allow API operations
@@ -484,7 +484,7 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemID, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path, cfg, platform)
 				}
 
 				// Commit in batches to reduce lock time and allow API operations
@@ -526,7 +526,7 @@ func NewNamesIndex(
 				systemID := s.ID
 
 				for _, p := range results {
-					AddMediaPath(db, &scanState, systemID, p.Path)
+					AddMediaPath(db, &scanState, systemID, p.Path, cfg, platform)
 				}
 
 				// Commit in batches to reduce lock time and allow API operations

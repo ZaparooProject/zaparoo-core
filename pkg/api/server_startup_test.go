@@ -73,7 +73,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 
 			// Start server in a separate goroutine
 			go func() {
-				Start(platform, cfg, st, tokenQueue, db, notifications)
+				Start(platform, cfg, st, tokenQueue, db, notifications, nil)
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -136,7 +136,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 
 	// Start both server and connection attempt simultaneously
 	go func() {
-		Start(platform, cfg, st, tokenQueue, db, notifications)
+		Start(platform, cfg, st, tokenQueue, db, notifications, nil)
 	}()
 
 	// Immediately try to connect (no delay)
@@ -205,7 +205,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, db, notifications)
+		Start(platform, cfg, st, tokenQueue, db, notifications, nil)
 	}()
 
 	// Wait for completion or timeout

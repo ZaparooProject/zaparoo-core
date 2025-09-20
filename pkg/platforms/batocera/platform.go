@@ -16,6 +16,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -194,6 +195,10 @@ func (*Platform) Settings() platforms.Settings {
 		ConfigDir:  ConfigDir,
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
 		ZipsAsDirs: false,
+		DefaultHashes: []database.HashType{
+			database.HashTypeCRC32,
+			database.HashTypeMD5,
+		},
 	}
 }
 

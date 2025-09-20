@@ -1215,56 +1215,6 @@ func TestRandomElem(t *testing.T) {
 	})
 }
 
-func TestGetMd5Hash(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		path         string
-		expectedHash string
-		wantErr      bool
-	}{
-		{
-			name:    "regular_file",
-			path:    "testdata/test.txt",
-			wantErr: false,
-		},
-		{
-			name:         "empty_file",
-			path:         "testdata/empty.txt",
-			expectedHash: "d41d8cd98f00b204e9800998ecf8427e", // MD5 of empty file
-			wantErr:      false,
-		},
-		{
-			name:         "non_existent_file",
-			path:         "testdata/nonexistent.txt",
-			expectedHash: "",
-			wantErr:      true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result, err := GetMd5Hash(tt.path)
-
-			if tt.wantErr {
-				require.Error(t, err, "GetMd5Hash should return error for non-existent file")
-				assert.Contains(t, err.Error(), "failed to open file for MD5 hash")
-			} else {
-				require.NoError(t, err)
-				if tt.name == "regular_file" {
-					// For regular file, expect consistent LF line endings due to .gitattributes
-					// MD5 of "Hello, World!\nThis is a test file." (34 bytes, LF)
-					expectedHash := "371514d9ec1b09c42d7c924ccb009c0d"
-					assert.Equal(t, expectedHash, result, "GetMd5Hash result mismatch")
-				} else {
-					assert.Equal(t, tt.expectedHash, result, "GetMd5Hash result mismatch")
-				}
-			}
-		})
-	}
-}
 
 func TestGetFileSize(t *testing.T) {
 	t.Parallel()

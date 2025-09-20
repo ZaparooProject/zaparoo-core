@@ -103,3 +103,8 @@ type UpdateActiveMediaParams struct {
 	MediaPath string `json:"mediaPath"`
 	MediaName string `json:"mediaName"`
 }
+
+type ScraperStartParams struct {
+	Systems *[]string `json:"systems"`
+	Media   *int64    `json:"media"`
+}

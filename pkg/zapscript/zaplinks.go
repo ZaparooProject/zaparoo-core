@@ -37,7 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/shared/httpclient"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
@@ -66,7 +66,7 @@ var zapFetchTransport = &http.Transport{
 }
 
 var zapFetchClient = &http.Client{
-	Transport: &installer.AuthTransport{
+	Transport: &httpclient.AuthTransport{
 		Base: zapFetchTransport,
 	},
 	Timeout: 2 * time.Second,

@@ -73,3 +73,15 @@ func ReadersAdded(ns chan<- models.Notification, payload models.ReaderResponse) 
 func ReadersRemoved(ns chan<- models.Notification, payload models.ReaderResponse) {
 	sendNotification(ns, models.NotificationReadersDisconnected, payload)
 }
+
+func ScraperProgress(ns chan<- models.Notification, payload any) {
+	sendNotification(ns, models.NotificationScraperProgress, payload)
+}
+
+func ScraperComplete(ns chan<- models.Notification, payload any) {
+	sendNotification(ns, models.NotificationScraperComplete, payload)
+}
+
+func ScraperError(ns chan<- models.Notification, payload any) {
+	sendNotification(ns, models.NotificationScraperError, payload)
+}
