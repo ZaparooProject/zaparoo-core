@@ -25,7 +25,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	scraperpkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -50,17 +49,17 @@ func TestNewScraperService(t *testing.T) {
 	require.NotNil(t, service)
 
 	// Verify service is properly initialized
-	assert.NotNil(t, service.scrapers)
+	assert.NotNil(t, service.scraperRegistry)
 	assert.NotNil(t, service.mediaDB)
 	assert.NotNil(t, service.userDB)
 	assert.NotNil(t, service.config)
 	assert.NotNil(t, service.mediaStorage)
 	assert.NotNil(t, service.httpClient)
 	assert.NotNil(t, service.jobQueue)
-	assert.NotNil(t, service.progress)
+	assert.NotNil(t, service.progressTracker)
 
 	// Verify ScreenScraper is registered
-	assert.Contains(t, service.scrapers, "screenscraper")
+	assert.True(t, service.scraperRegistry.HasScraper("screenscraper"))
 
 	// Test progress tracking
 	progress := service.GetProgress()
@@ -91,10 +90,8 @@ func TestScraperServiceCancel(t *testing.T) {
 	require.NotNil(t, service)
 
 	// Start a mock scraping operation
-	service.progressMu.Lock()
-	service.isRunning = true
-	service.progress.IsRunning = true
-	service.progressMu.Unlock()
+	service.progressTracker.SetStatus("running")
+	service.progressTracker.SetProgress(0, 10)
 
 	// Test cancellation
 	err := service.CancelScraping()
@@ -102,7 +99,7 @@ func TestScraperServiceCancel(t *testing.T) {
 
 	// Verify scraping is cancelled
 	progress := service.GetProgress()
-	assert.False(t, progress.IsRunning)
+	assert.Equal(t, "cancelled", progress.Status)
 
 	// Clean up
 	service.Stop()
@@ -125,25 +122,17 @@ func TestScraperServiceProgress(t *testing.T) {
 	service := NewScraperService(mockMediaDB, mockUserDB, mockConfig, mockPlatform, notifChan)
 	require.NotNil(t, service)
 
-	// Update progress
-	service.updateProgress(func(p *scraperpkg.ScraperProgress) {
-		p.IsRunning = true
-		p.TotalGames = 10
-		p.ProcessedGames = 3
-		p.CurrentGame = "Test Game"
-		p.DownloadedFiles = 5
-		now := time.Now()
-		p.StartTime = &now
-	})
+	// Update progress using individual methods
+	service.progressTracker.SetStatus("running")
+	service.progressTracker.SetProgress(3, 10)
+	service.progressTracker.SetCurrentGame("Test Game", 1)
 
 	// Verify progress
 	progress := service.GetProgress()
-	assert.True(t, progress.IsRunning)
+	assert.Equal(t, "running", progress.Status)
 	assert.Equal(t, 10, progress.TotalGames)
 	assert.Equal(t, 3, progress.ProcessedGames)
 	assert.Equal(t, "Test Game", progress.CurrentGame)
-	assert.Equal(t, 5, progress.DownloadedFiles)
-	assert.NotNil(t, progress.StartTime)
 
 	// Clean up
 	service.Stop()

@@ -27,15 +27,11 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	scraperpkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/igdb"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/screenscraper"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper/thegamesdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/shared/httpclient"
+	scraperpkg "github.com/ZaparooProject/zaparoo-core/v2/pkg/scraper"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,27 +40,27 @@ const (
 	DefaultWorkerCount = 3
 )
 
-// ScraperService manages scraping operations with MediaDB integration
+// ScraperService orchestrates scraping operations with MediaDB integration
 type ScraperService struct {
 	mediaDB         database.MediaDBI
 	userDB          database.UserDBI
+	config          *config.Instance
 	platform        platforms.Platform
 	ctx             context.Context
-	httpClient      *httpclient.Client
 	cancelFunc      context.CancelFunc
+
+	// Components
+	scraperRegistry *ScraperRegistry
+	progressTracker *ProgressTracker
+	jobQueue        *JobQueue
+	workerPool      *WorkerPool
 	mediaStorage    *scraperpkg.MediaStorage
 	metadataStorage *scraperpkg.MetadataStorage
-	progress        *scraperpkg.ScraperProgress
-	jobQueue        chan *scraperpkg.ScraperJob
-	scrapers        map[string]scraperpkg.Scraper
-	config          *config.Instance
-	notifications   chan<- models.Notification
-	workerWG        sync.WaitGroup
-	workers         int
-	progressMu      sync.RWMutex
-	stopMu          sync.Mutex
-	isRunning       bool
-	stopped         bool
+
+	// State management
+	stopMu     sync.Mutex
+	stopped    bool
+	httpClient *httpclient.Client
 }
 
 // NewScraperService creates a new scraper service
@@ -77,28 +73,38 @@ func NewScraperService(
 ) *ScraperService {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Create components
+	scraperRegistry := NewScraperRegistry()
+	progressTracker := NewProgressTracker(notificationsChan)
+	mediaStorage := scraperpkg.NewMediaStorage(pl, cfg)
+	metadataStorage := scraperpkg.NewMetadataStorage(mediaDB)
+	jobQueue := NewJobQueue(ctx, DefaultQueueSize)
+
+	// Create worker pool (using service as job processor)
+	var workerPool *WorkerPool
+
 	service := &ScraperService{
-		scrapers:        make(map[string]scraperpkg.Scraper),
 		mediaDB:         mediaDB,
 		userDB:          userDB,
 		config:          cfg,
-		mediaStorage:    scraperpkg.NewMediaStorage(pl, cfg),
-		metadataStorage: scraperpkg.NewMetadataStorage(mediaDB),
 		platform:        pl,
-		httpClient:      httpclient.NewClient(),
-		jobQueue:        make(chan *scraperpkg.ScraperJob, 1000),
-		workers:         DefaultWorkerCount,
 		ctx:             ctx,
 		cancelFunc:      cancel,
-		progress:        &scraperpkg.ScraperProgress{Status: "idle"},
-		notifications:   notificationsChan,
+		scraperRegistry: scraperRegistry,
+		progressTracker: progressTracker,
+		jobQueue:        jobQueue,
+		workerPool:      workerPool,
+		mediaStorage:    mediaStorage,
+		metadataStorage: metadataStorage,
+		httpClient:      httpclient.NewClientWithTimeout(30 * time.Second),
 	}
 
-	// Register available scrapers
-	service.registerScrapers()
+	// Create worker pool with service as job processor
+	workerPool = NewWorkerPool(ctx, DefaultWorkerCount, jobQueue.Channel(), service)
+	service.workerPool = workerPool
 
 	// Start worker pool
-	service.startWorkers()
+	workerPool.Start()
 
 	return service
 }
@@ -126,102 +132,18 @@ func (s *ScraperService) getDefaultMediaTypes() []scraperpkg.MediaType {
 	return mediaTypes
 }
 
-// registerScrapers registers all available scraper implementations
-func (s *ScraperService) registerScrapers() {
-	// Register ScreenScraper
-	screenScraper := screenscraper.NewScreenScraper()
-	s.scrapers["screenscraper"] = screenScraper
 
-	// Register TheGamesDB
-	theGamesDB := thegamesdb.NewTheGamesDB()
-	s.scrapers["thegamesdb"] = theGamesDB
-
-	// Register IGDB
-	igdbScraper := igdb.NewIGDB()
-	s.scrapers["igdb"] = igdbScraper
-
-	log.Info().Int("count", len(s.scrapers)).Msg("Registered scrapers")
-}
-
-// startWorkers starts the worker pool for processing scraper jobs
-func (s *ScraperService) startWorkers() {
-	for i := range s.workers {
-		s.workerWG.Add(1)
-		go s.worker(i)
+// ProcessJob implements the JobProcessor interface
+func (s *ScraperService) ProcessJob(job *scraperpkg.ScraperJob) error {
+	// Check if context is cancelled before processing
+	select {
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	default:
 	}
 
-	log.Info().Int("workers", s.workers).Msg("Started scraper workers")
-}
-
-// worker processes scraper jobs from the queue
-func (s *ScraperService) worker(id int) {
-	defer s.workerWG.Done()
-
-	log.Debug().Int("worker", id).Msg("Scraper worker started")
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			log.Debug().Int("worker", id).Msg("Scraper worker stopping")
-			return
-
-		case job := <-s.jobQueue:
-			if job == nil {
-				continue
-			}
-
-			log.Debug().
-				Int("worker", id).
-				Int64("mediaDBID", job.MediaDBID).
-				Str("title", job.MediaTitle).
-				Msg("Processing scraper job")
-
-			if err := s.processJob(job); err != nil {
-				log.Error().
-					Err(err).
-					Int64("mediaDBID", job.MediaDBID).
-					Str("title", job.MediaTitle).
-					Msg("Failed to process scraper job")
-
-				s.updateProgress(func(p *scraperpkg.ScraperProgress) {
-					p.ErrorCount++
-					p.LastError = err.Error()
-					// Don't change status to "failed" for individual job errors
-					// Only set to "failed" for critical system errors
-				})
-
-				// Send error notification
-				if s.notifications != nil {
-					errorPayload := map[string]any{
-						"mediaDBID": job.MediaDBID,
-						"title":     job.MediaTitle,
-						"error":     err.Error(),
-					}
-					notifications.ScraperError(s.notifications, errorPayload)
-				}
-			}
-
-			s.updateProgress(func(p *scraperpkg.ScraperProgress) {
-				p.ProcessedGames++
-				p.CurrentGame = ""
-
-				// Check if scraping is completed
-				if p.IsRunning && p.ProcessedGames >= p.TotalGames {
-					p.IsRunning = false
-					p.Status = "completed"
-					s.isRunning = false
-				}
-			})
-		}
-	}
-}
-
-// processJob processes a single scraper job
-func (s *ScraperService) processJob(job *scraperpkg.ScraperJob) error {
 	// Update current game in progress
-	s.updateProgress(func(p *scraperpkg.ScraperProgress) {
-		p.CurrentGame = job.MediaTitle
-	})
+	s.progressTracker.SetCurrentGame(job.MediaTitle, job.MediaDBID)
 
 	// Get scraper configuration
 	scraperConfig := s.getScraperConfig()
@@ -278,9 +200,6 @@ func (s *ScraperService) processJob(job *scraperpkg.ScraperJob) error {
 			log.Debug().
 				Str("title", mediaTitle.Name).
 				Msg("All media files already exist, skipping")
-			s.updateProgress(func(p *scraperpkg.ScraperProgress) {
-				p.SkippedFiles += len(job.MediaTypes)
-			})
 			return nil
 		}
 	}
@@ -339,6 +258,12 @@ func (s *ScraperService) processJob(job *scraperpkg.ScraperJob) error {
 	// Download media files
 	downloadedCount := 0
 	for _, mediaType := range job.MediaTypes {
+		// Check for cancellation before each download
+		select {
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		default:
+		}
 		// Find matching media item
 		var mediaItem *scraperpkg.MediaItem
 		for _, item := range gameInfo.Media {
@@ -369,15 +294,14 @@ func (s *ScraperService) processJob(job *scraperpkg.ScraperJob) error {
 		downloadedCount++
 	}
 
-	s.updateProgress(func(p *scraperpkg.ScraperProgress) {
-		p.DownloadedFiles += downloadedCount
-	})
-
 	log.Info().
 		Str("title", mediaTitle.Name).
 		Str("system", systemID).
 		Int("downloaded", downloadedCount).
 		Msg("Successfully scraped game")
+
+	// Increment progress
+	s.progressTracker.IncrementProgress()
 
 	return nil
 }
@@ -447,19 +371,6 @@ func (s *ScraperService) getFileHashFromDB(media *database.Media, systemID strin
 	return hash, nil
 }
 
-// updateProgress safely updates the progress information
-func (s *ScraperService) updateProgress(updateFunc func(*scraperpkg.ScraperProgress)) {
-	s.progressMu.Lock()
-	defer s.progressMu.Unlock()
-	updateFunc(s.progress)
-
-	// Send progress notification if notificationsChan channel is available
-	if s.notifications != nil {
-		// Create a copy of progress for notification
-		progressCopy := *s.progress
-		notifications.ScraperProgress(s.notifications, progressCopy)
-	}
-}
 
 // ScrapeGameByID scrapes a specific game by its Media DBID
 func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) error {
@@ -491,26 +402,12 @@ func (s *ScraperService) ScrapeGameByID(ctx context.Context, mediaDBID int64) er
 		Priority:   1,
 	}
 
-	// Start scraping if not already running
-	s.progressMu.Lock()
-	if !s.isRunning {
-		s.isRunning = true
-		s.progress = &scraperpkg.ScraperProgress{
-			IsRunning:  true,
-			TotalGames: 1,
-			StartTime:  &time.Time{},
-		}
-		*s.progress.StartTime = time.Now()
-	}
-	s.progressMu.Unlock()
+	// Update progress
+	s.progressTracker.SetStatus("running")
+	s.progressTracker.SetProgress(0, 1)
 
 	// Queue the job
-	select {
-	case s.jobQueue <- job:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return s.jobQueue.Enqueue(job)
 }
 
 // ScrapeSystem scrapes all games in a system
@@ -526,16 +423,8 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 	}
 
 	// Start scraping
-	s.progressMu.Lock()
-	s.isRunning = true
-	now := time.Now()
-	s.progress = &scraperpkg.ScraperProgress{
-		IsRunning:  true,
-		TotalGames: len(titles),
-		StartTime:  &now,
-		Status:     "running",
-	}
-	s.progressMu.Unlock()
+	s.progressTracker.SetStatus("running")
+	s.progressTracker.SetProgress(0, len(titles))
 
 	// Queue jobs for all games
 	for _, title := range titles {
@@ -570,11 +459,12 @@ func (s *ScraperService) ScrapeSystem(ctx context.Context, systemID string) erro
 				Priority:   1,
 			}
 
-			select {
-			case s.jobQueue <- job:
-				// Job queued successfully
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := s.jobQueue.Enqueue(job); err != nil {
+				log.Error().
+					Err(err).
+					Str("title", title.Name).
+					Msg("Failed to enqueue job")
+				continue
 			}
 		}
 	}
@@ -617,24 +507,16 @@ func (s *ScraperService) getAllMediaForTitle(mediaTitleDBID int64) ([]*database.
 
 // GetProgress returns the current scraping progress
 func (s *ScraperService) GetProgress() *scraperpkg.ScraperProgress {
-	s.progressMu.RLock()
-	defer s.progressMu.RUnlock()
-
-	// Create a copy to avoid race conditions
-	progress := *s.progress
-	return &progress
+	return s.progressTracker.Get()
 }
 
 // CancelScraping cancels the current scraping operation
 func (s *ScraperService) CancelScraping() error {
-	s.progressMu.Lock()
-	s.isRunning = false
-	s.progress.IsRunning = false
-	s.progress.Status = "cancelled"
-	s.progressMu.Unlock()
+	// Cancel the progress tracker
+	s.progressTracker.Cancel()
 
 	// Note: We don't cancel the context here as it would stop all workers
-	// Instead, we just mark as not running and let current jobs finish
+	// Instead, we just mark as cancelled and let current jobs finish
 	log.Info().Msg("Scraping cancelled")
 	return nil
 }
@@ -651,9 +533,14 @@ func (s *ScraperService) Stop() {
 
 	log.Info().Msg("Stopping scraper service")
 
+	// Cancel context to stop workers
 	s.cancelFunc()
-	s.workerWG.Wait()
-	close(s.jobQueue)
+
+	// Stop worker pool
+	s.workerPool.Stop()
+
+	// Close job queue
+	s.jobQueue.Close()
 
 	log.Info().Msg("Scraper service stopped")
 }
@@ -676,8 +563,8 @@ func (s *ScraperService) tryScrapingWithFallback(query scraperpkg.ScraperQuery,
 	var lastErr error
 	for _, scraperName := range scrapersToTry {
 		// Check if scraper exists and supports the platform
-		scraperImpl, exists := s.scrapers[scraperName]
-		if !exists {
+		scraperImpl, err := s.scraperRegistry.Get(scraperName)
+		if err != nil {
 			log.Debug().Str("scraper", scraperName).Msg("Scraper not found, skipping")
 			continue
 		}
@@ -750,8 +637,8 @@ func (s *ScraperService) Search(ctx context.Context, scraperName string,
 	query scraperpkg.ScraperQuery,
 ) ([]scraperpkg.ScraperResult, error) {
 	// Get the specified scraper
-	scraperImpl, exists := s.scrapers[scraperName]
-	if !exists {
+	scraperImpl, err := s.scraperRegistry.Get(scraperName)
+	if err != nil {
 		return nil, fmt.Errorf("scraper not found: %s", scraperName)
 	}
 
