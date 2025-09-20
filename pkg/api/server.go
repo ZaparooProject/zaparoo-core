@@ -94,6 +94,28 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 	}
 }
 
+// logSafeRequest logs a request but avoids logging sensitive or large content
+func logSafeRequest(req models.RequestObject) {
+	if req.Method == models.MethodSettingsLogsDownload {
+		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
+	} else {
+		log.Debug().Interface("request", req).Msg("received request")
+	}
+}
+
+// logSafeResponse logs a response but truncates large content to prevent recursive logging issues
+func logSafeResponse(result any) {
+	if logResp, ok := result.(models.LogDownloadResponse); ok {
+		truncated := logResp
+		if len(truncated.Content) > 100 {
+			truncated.Content = truncated.Content[:100] + "... [truncated " + strconv.Itoa(len(logResp.Content)-100) + " more chars]"
+		}
+		log.Debug().Interface("result", truncated).Msg("sending response")
+	} else {
+		log.Debug().Interface("result", result).Msg("sending response")
+	}
+}
+
 type MethodMap struct {
 	sync.Map
 }
@@ -215,7 +237,7 @@ func handleRequest(
 	env requests.RequestEnv,
 	req models.RequestObject,
 ) (any, *models.ErrorObject) {
-	log.Debug().Interface("request", req).Msg("received request")
+	logSafeRequest(req)
 
 	fn, ok := methodMap.GetMethod(req.Method)
 	if !ok {
@@ -243,7 +265,7 @@ func handleRequest(
 
 // sendWSResponse marshals a method result and sends it to the client.
 func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
-	log.Debug().Interface("result", result).Msg("sending response")
+	logSafeResponse(result)
 
 	resp := models.ResponseObject{
 		JSONRPC: "2.0",
