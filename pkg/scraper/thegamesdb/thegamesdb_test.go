@@ -46,9 +46,9 @@ func TestIsSupportedPlatform(t *testing.T) {
 	scraper := NewTheGamesDB()
 
 	// Test supported platforms
-	assert.True(t, scraper.IsSupportedPlatform("snes"))
-	assert.True(t, scraper.IsSupportedPlatform("nes"))
-	assert.True(t, scraper.IsSupportedPlatform("psx"))
+	assert.True(t, scraper.IsSupportedPlatform("SNES"))
+	assert.True(t, scraper.IsSupportedPlatform("NES"))
+	assert.True(t, scraper.IsSupportedPlatform("PSX"))
 
 	// Test unsupported platform
 	assert.False(t, scraper.IsSupportedPlatform("unknown"))

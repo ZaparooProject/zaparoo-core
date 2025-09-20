@@ -39,6 +39,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// DefaultWorkerCount is the default number of scraper workers
+	DefaultWorkerCount = 3
+)
+
 // ScraperService manages scraping operations with MediaDB integration
 type ScraperService struct {
 	mediaDB         database.MediaDBI
@@ -82,7 +87,7 @@ func NewScraperService(
 		platform:        pl,
 		httpClient:      httpclient.NewClient(),
 		jobQueue:        make(chan *scraperpkg.ScraperJob, 1000),
-		workers:         3, // Default worker count
+		workers:         DefaultWorkerCount,
 		ctx:             ctx,
 		cancelFunc:      cancel,
 		progress:        &scraperpkg.ScraperProgress{Status: "idle"},

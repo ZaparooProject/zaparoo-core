@@ -77,7 +77,7 @@ func TestScreenScraperPlatformSupport(t *testing.T) {
 
 	// Test supported platforms
 	supportedPlatforms := []string{
-		"nes", "snes", "genesis", "psx", "ps2", "n64", "gba", "arcade",
+		"NES", "SNES", "Genesis", "PSX", "PS2", "Nintendo64", "GBA", "Arcade",
 	}
 
 	for _, platform := range supportedPlatforms {
@@ -243,11 +243,11 @@ func TestPlatformMapper(t *testing.T) {
 		platformID string
 		supported  bool
 	}{
-		{"nes", "1", true},
-		{"snes", "2", true},
-		{"genesis", "1", true},
-		{"psx", "57", true},
-		{"arcade", "75", true},
+		{"NES", "1", true},
+		{"SNES", "2", true},
+		{"Genesis", "1", true},
+		{"PSX", "57", true},
+		{"Arcade", "75", true},
 		{"unknown", "", false},
 	}
 
@@ -270,6 +270,6 @@ func TestPlatformMapper(t *testing.T) {
 	// Test supported systems list
 	systems := mapper.GetSupportedSystems()
 	assert.NotEmpty(t, systems)
-	assert.Contains(t, systems, "nes")
-	assert.Contains(t, systems, "snes")
+	assert.Contains(t, systems, "NES")
+	assert.Contains(t, systems, "SNES")
 }

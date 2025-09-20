@@ -21,6 +21,8 @@ package scraper
 
 import (
 	"context"
+	"fmt"
+	"strings"
 )
 
 // Scraper is the main interface for all scraper implementations
@@ -125,4 +127,42 @@ type FileHash struct {
 	MD5      string
 	SHA1     string
 	FileSize int64
+}
+
+// FormatHashForScraper formats hash according to scraper requirements
+func FormatHashForScraper(hash *FileHash, scraperName string) map[string]string {
+	result := make(map[string]string)
+
+	switch strings.ToLower(scraperName) {
+	case "screenscraper":
+		// ScreenScraper accepts CRC32, MD5, and SHA1
+		if hash.CRC32 != "" {
+			result["crc"] = strings.ToUpper(hash.CRC32)
+		}
+		if hash.MD5 != "" {
+			result["md5"] = strings.ToUpper(hash.MD5)
+		}
+		if hash.SHA1 != "" {
+			result["sha1"] = strings.ToUpper(hash.SHA1)
+		}
+		result["romsize"] = fmt.Sprintf("%d", hash.FileSize)
+
+	case "thegamesdb":
+		// TheGamesDB typically doesn't use hashes, but we can provide them
+		result["md5"] = strings.ToLower(hash.MD5)
+
+	case "igdb":
+		// IGDB doesn't typically use file hashes
+		// But we can provide them if the API supports it
+		result["md5"] = strings.ToLower(hash.MD5)
+
+	default:
+		// Generic format - provide all hashes in lowercase
+		result["crc32"] = strings.ToLower(hash.CRC32)
+		result["md5"] = strings.ToLower(hash.MD5)
+		result["sha1"] = strings.ToLower(hash.SHA1)
+		result["size"] = fmt.Sprintf("%d", hash.FileSize)
+	}
+
+	return result
 }

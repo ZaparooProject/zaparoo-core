@@ -28,7 +28,6 @@ import (
 // PlatformMapper maps zaparoo system IDs to TheGamesDB platform IDs
 // Based on Batocera EmulationStation's TheGamesDB platform mappings
 type PlatformMapper struct {
-	*scraper.BasePlatformMapper
 	theGamesDBPlatformMap map[string]int
 }
 
@@ -88,31 +87,25 @@ func NewPlatformMapper() *PlatformMapper {
 	}
 
 	return &PlatformMapper{
-		BasePlatformMapper:    scraper.NewBasePlatformMapper(),
 		theGamesDBPlatformMap: theGamesDBPlatformMap,
 	}
 }
 
 // MapToScraperPlatform maps a zaparoo system ID to TheGamesDB platform ID
 func (pm *PlatformMapper) MapToScraperPlatform(systemID string) (string, bool) {
-	// Check TheGamesDB-specific mappings first
 	if platformID, exists := pm.theGamesDBPlatformMap[systemID]; exists {
 		return strconv.Itoa(platformID), true
 	}
-
-	// For systems not in TheGamesDB, check if they exist in base mapper
-	if pm.HasSystemID(systemID) {
-		return "", true // System exists but no TheGamesDB ID
-	}
-
 	return "", false
 }
 
 // GetSupportedSystems returns a list of all supported system IDs
 func (pm *PlatformMapper) GetSupportedSystems() []string {
-	// Return all systems from base mapper since TheGamesDB can potentially scrape
-	// any system (even if we don't have a specific platform ID for it)
-	return pm.BasePlatformMapper.GetSupportedSystems()
+	systems := make([]string, 0, len(pm.theGamesDBPlatformMap))
+	for systemID := range pm.theGamesDBPlatformMap {
+		systems = append(systems, systemID)
+	}
+	return systems
 }
 
 // GetTheGamesDBPlatformID returns the specific TheGamesDB platform ID for a system

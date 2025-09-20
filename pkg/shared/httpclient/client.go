@@ -34,6 +34,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// DefaultTimeoutSeconds is the default timeout for HTTP requests
+	DefaultTimeoutSeconds = 30
+)
+
 // AuthTransport provides automatic authentication for HTTP requests based on auth.toml
 type AuthTransport struct {
 	Base http.RoundTripper
@@ -64,7 +69,7 @@ func (t *AuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// DefaultTransport provides a configured transport with reasonable timeouts
+// DefaultTransport provides a configured transport with connection pooling and reasonable timeouts
 var DefaultTransport = &http.Transport{
 	DialContext: (&net.Dialer{
 		Timeout:   30 * time.Second,
@@ -72,6 +77,10 @@ var DefaultTransport = &http.Transport{
 	}).DialContext,
 	ResponseHeaderTimeout: 30 * time.Second,
 	TLSHandshakeTimeout:   10 * time.Second,
+	// Connection pooling settings
+	MaxIdleConns:        100,
+	MaxIdleConnsPerHost: 10,
+	IdleConnTimeout:     90 * time.Second,
 }
 
 // Client provides an HTTP client with authentication and sensible defaults
@@ -100,6 +109,12 @@ func NewClientWithTimeout(timeout time.Duration) *Client {
 			Timeout: timeout,
 		},
 	}
+}
+
+// NewClientFromConfig creates a new HTTP client using default timeout
+func NewClientFromConfig(cfg *config.Instance) *Client {
+	timeout := DefaultTimeoutSeconds * time.Second
+	return NewClientWithTimeout(timeout)
 }
 
 // DownloadFileArgs contains arguments for file download operations
