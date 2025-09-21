@@ -219,7 +219,6 @@ Returns the current media database status and active media.
 The database status includes both indexing and optimization information:
 - **Indexing** takes priority over optimization in the response (if both are running, only indexing status is shown)
 - **Optimization** status and progress are shown when no indexing is in progress
-- **Optimization Status** includes: "pending", "running", "completed", "failed"
 
 #### Parameters
 
@@ -239,7 +238,6 @@ None.
 | exists             | boolean| Yes      | True if the database exists.                     |
 | indexing           | boolean| Yes      | True if indexing is currently in progress.       |
 | optimizing         | boolean| Yes      | True if database optimization is currently in progress. |
-| optimizationStatus | string | No       | Current optimization status ("pending", "running", "completed", "failed"). |
 | totalSteps         | number | No       | Total number of indexing steps.                 |
 | currentStep        | number | No       | Current indexing step.                          |
 | currentStepDisplay | string | No       | Display name of the current indexing step or optimization step. |
@@ -280,7 +278,6 @@ None.
       "exists": true,
       "indexing": false,
       "optimizing": false,
-      "optimizationStatus": "completed",
       "totalMedia": 1337
     },
     "active": []
@@ -299,7 +296,6 @@ None.
       "exists": true,
       "indexing": false,
       "optimizing": true,
-      "optimizationStatus": "running",
       "currentStepDisplay": "vacuum",
       "totalMedia": 1337
     },

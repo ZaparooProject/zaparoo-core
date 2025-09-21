@@ -403,7 +403,6 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		log.Warn().Err(err).Msg("failed to get optimization status for media response")
 		optimizationStatus = ""
 	}
-	resp.Database.OptimizationStatus = optimizationStatus
 
 	switch {
 	case resp.Database.Indexing:

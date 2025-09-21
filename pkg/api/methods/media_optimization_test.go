@@ -147,7 +147,6 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 
 			assert.Equal(t, tt.expectedOptimizing, response.Database.Optimizing)
 			assert.Equal(t, tt.expectedExists, response.Database.Exists)
-			assert.Equal(t, tt.optimizationStatus, response.Database.OptimizationStatus)
 
 			if tt.expectedStepDisplay != nil {
 				require.NotNil(t, response.Database.CurrentStepDisplay)
@@ -220,7 +219,6 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			expectedResponse: func(response models.MediaResponse) {
 				assert.False(t, response.Database.Optimizing)
 				assert.True(t, response.Database.Exists)
-				assert.Equal(t, "pending", response.Database.OptimizationStatus)
 			},
 		},
 		{
@@ -229,7 +227,6 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			expectedResponse: func(response models.MediaResponse) {
 				assert.False(t, response.Database.Optimizing)
 				assert.True(t, response.Database.Exists)
-				assert.Equal(t, "failed", response.Database.OptimizationStatus)
 			},
 		},
 		{
@@ -238,7 +235,6 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			expectedResponse: func(response models.MediaResponse) {
 				assert.False(t, response.Database.Optimizing)
 				assert.True(t, response.Database.Exists)
-				assert.Equal(t, "unknown", response.Database.OptimizationStatus)
 			},
 		},
 	}
