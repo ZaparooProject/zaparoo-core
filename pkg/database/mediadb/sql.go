@@ -1311,3 +1311,12 @@ func sqlGetMaxID(ctx context.Context, db *sql.DB, tableName, columnName string) 
 	}
 	return maxID, nil
 }
+
+func sqlGetTotalMediaCount(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get total media count: %w", err)
+	}
+	return count, nil
+}

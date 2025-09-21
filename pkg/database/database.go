@@ -186,6 +186,7 @@ type MediaDBI interface {
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
+	GetTotalMediaCount() (int, error)
 
 	FindSystem(row System) (System, error)
 	InsertSystem(row System) (System, error)

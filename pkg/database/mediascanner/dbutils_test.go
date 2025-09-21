@@ -94,6 +94,9 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 		MediaTitleDBID: int64(1),
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
+	// Mock additional methods that might be called
+	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
 
@@ -150,6 +153,9 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 		DBID:     -1,
 	}).Return(database.System{}, assert.AnError).Once()
 
+	// Mock additional methods that might be called
+	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
 
@@ -199,6 +205,9 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// FindSystem should NOT be called for non-UNIQUE errors
 	// This is the key difference - we should fail fast, not try recovery
+
+	// Mock additional methods that might be called
+	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
 	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")

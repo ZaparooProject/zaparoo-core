@@ -509,6 +509,14 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 	return sqlRandomGame(db.ctx, db.sql, system)
 }
 
+// GetTotalMediaCount returns the total number of media entries in the database.
+func (db *MediaDB) GetTotalMediaCount() (int, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlGetTotalMediaCount(db.ctx, db.sql)
+}
+
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
 	return sqlFindSystem(db.ctx, db.sql, row)
 }

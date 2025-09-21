@@ -244,6 +244,7 @@ None.
 | currentStep        | number | No       | Current indexing step.                          |
 | currentStepDisplay | string | No       | Display name of the current indexing step or optimization step. |
 | totalFiles         | number | No       | Total number of files to index.                 |
+| totalMedia         | number | No       | Total number of media entries in the database. Only included when database exists and is not indexing. |
 
 ##### Active media object
 
@@ -279,7 +280,8 @@ None.
       "exists": true,
       "indexing": false,
       "optimizing": false,
-      "optimizationStatus": "completed"
+      "optimizationStatus": "completed",
+      "totalMedia": 1337
     },
     "active": []
   }
@@ -298,7 +300,8 @@ None.
       "indexing": false,
       "optimizing": true,
       "optimizationStatus": "running",
-      "currentStepDisplay": "vacuum"
+      "currentStepDisplay": "vacuum",
+      "totalMedia": 1337
     },
     "active": []
   }

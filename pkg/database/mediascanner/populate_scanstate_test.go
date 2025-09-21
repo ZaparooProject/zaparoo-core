@@ -194,6 +194,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
 		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
 		mockDB.On("GetMaxMediaTagID").Return(int64(10), nil)
+		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 		scanState := &database.ScanState{
 			SystemIDs:      make(map[string]int),
@@ -234,6 +235,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
 		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
 		mockDB.On("GetMaxMediaTagID").Return(int64(25), nil)
+		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 		scanState := &database.ScanState{
 			SystemIDs:      make(map[string]int),

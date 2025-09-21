@@ -890,6 +890,20 @@ func (m *MockMediaDBI) GetMaxMediaTagID() (int64, error) {
 	return 0, nil
 }
 
+func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
+	args := m.Called()
+	if count, ok := args.Get(0).(int); ok {
+		if err := args.Error(1); err != nil {
+			return count, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return count, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
 // These functions have been moved to avoid import cycles.
 // Use github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock instead.

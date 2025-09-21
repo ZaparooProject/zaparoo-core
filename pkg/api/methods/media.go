@@ -440,6 +440,16 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		}
 	}
 
+	// Get total media count if database exists and is not indexing
+	if resp.Database.Exists && !resp.Database.Indexing {
+		totalCount, err := env.Database.MediaDB.GetTotalMediaCount()
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to get total media count")
+		} else {
+			resp.Database.TotalMedia = &totalCount
+		}
+	}
+
 	return resp, nil
 }
 

@@ -579,6 +579,31 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("SetLastIndexedSystem", mock.Anything).Return(nil).Maybe()
 
+			// Mock GetMax*ID methods for media indexing
+			mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
+
+			// Mock Find/Insert methods for media indexing
+			mockMediaDB.On("FindOrInsertSystem", mock.Anything).Return(database.System{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMediaTitle", mock.Anything).Return(database.MediaTitle{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMedia", mock.Anything).Return(database.Media{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMediaTag", mock.Anything).Return(database.MediaTag{DBID: 1}, nil).Maybe()
+
+			// Mock transaction methods
+			mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+			mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
+
+			// Mock total media count
+			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+
 			db := &database.Database{
 				UserDB:  mockUserDB,
 				MediaDB: mockMediaDB,

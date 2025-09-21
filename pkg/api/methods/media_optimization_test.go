@@ -123,6 +123,11 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			if !tt.indexing && (tt.optimizationStatus != "running" || tt.optimizationStatusErr != nil) {
 				// Mock GetLastGenerated for normal operation
 				mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+				// Mock GetTotalMediaCount for database that exists and is not indexing
+				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
+			} else if !tt.indexing && tt.optimizationStatus == "running" && tt.optimizationStatusErr == nil {
+				// Mock GetTotalMediaCount for database that exists but is optimizing
+				mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 			}
 
 			db := &database.Database{
@@ -251,6 +256,7 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			// Mock normal operation
 			statusInstance.indexing = false
 			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
+			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 
 			db := &database.Database{
 				MediaDB: mockMediaDB,

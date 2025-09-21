@@ -78,6 +78,17 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	mockMediaDB.On("GetLastIndexedSystem").Return("", nil).Maybe()
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
 
+	// Mock GetMax*ID methods for media indexing
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
+
+	// Mock GetTotalMediaCount
+	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+
 	// Create database wrapper with mocks
 	db := &database.Database{
 		UserDB:  mockUserDB,
