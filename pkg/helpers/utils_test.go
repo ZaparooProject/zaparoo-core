@@ -1569,3 +1569,71 @@ func TestFilenameFromPath_VirtualPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestEqualStringSlices(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		a        []string
+		b        []string
+		expected bool
+	}{
+		{
+			name:     "equal_slices",
+			a:        []string{"apple", "banana", "cherry"},
+			b:        []string{"apple", "banana", "cherry"},
+			expected: true,
+		},
+		{
+			name:     "equal_slices_different_order",
+			a:        []string{"apple", "banana", "cherry"},
+			b:        []string{"cherry", "apple", "banana"},
+			expected: true,
+		},
+		{
+			name:     "different_length",
+			a:        []string{"apple", "banana"},
+			b:        []string{"apple", "banana", "cherry"},
+			expected: false,
+		},
+		{
+			name:     "different_content",
+			a:        []string{"apple", "banana"},
+			b:        []string{"apple", "orange"},
+			expected: false,
+		},
+		{
+			name:     "empty_slices",
+			a:        []string{},
+			b:        []string{},
+			expected: true,
+		},
+		{
+			name:     "one_empty_one_not",
+			a:        []string{"apple"},
+			b:        []string{},
+			expected: false,
+		},
+		{
+			name:     "nil_slices",
+			a:        nil,
+			b:        nil,
+			expected: true,
+		},
+		{
+			name:     "one_nil_one_empty",
+			a:        nil,
+			b:        []string{},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := EqualStringSlices(tt.a, tt.b)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

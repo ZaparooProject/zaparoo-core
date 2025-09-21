@@ -734,3 +734,297 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	// Verify mock expectations - this ensures cleanup methods were called
 	mockMediaDB.AssertExpectations(t)
 }
+
+// TestSmartTruncationLogic_PartialSystems tests that indexing a subset of systems uses TruncateSystems()
+func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - expect selective TruncateSystems()
+	// Will use TruncateSystems since not all systems
+	mockMediaDB.On("TruncateSystems", mock.AnythingOfType("[]string")).Return(nil).Once()
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for fresh start
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("SetIndexingSystems", mock.AnythingOfType("[]string")).Return(nil).Once()
+
+	// Mock GetMax*ID methods for scan state population
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Once()
+
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with subset of systems - 3 systems when systemdefs.AllSystems() returns 197 systems
+	// This should trigger selective indexing (TruncateSystems) since we're not indexing all systems
+	systems := []systemdefs.System{
+		{ID: "nes"},
+		{ID: "snes"},
+		{ID: "genesis"},
+	}
+
+	// Run the indexer - should use TruncateSystems() since not indexing all defined systems
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestSmartTruncationLogic_SelectiveIndexing tests that selective system indexing uses TruncateSystems()
+func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - expect selective TruncateSystems()
+	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Once() // Should use selective truncate
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for fresh start
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once()
+
+	// Mock GetMax*ID methods for scan state population
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Once()
+
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with subset of available systems - should trigger selective indexing
+	systems := []systemdefs.System{
+		{ID: "nes"}, // Only one system, while database has more
+	}
+
+	// Run the indexer - should use TruncateSystems() since only indexing subset
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations - specifically that TruncateSystems() was called, not Truncate()
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestSelectiveIndexing_ResumeWithDifferentSystems tests resume behavior when systems change
+func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - should fall back to fresh start when systems differ
+	// Uses selective truncate since not indexing all systems
+	mockMediaDB.On("TruncateSystems", []string{"nes", "snes"}).Return(nil).Once()
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock resume scenario but with different systems
+	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
+	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once() // Was indexing genesis
+	// Previous systems differ from current
+	mockMediaDB.On("GetIndexingSystems").Return([]string{"genesis", "snes"}, nil).Once()
+
+	// Mock GetMax*ID methods for PopulateScanStateFromDB
+	mockMediaDB.On("GetMaxSystemID").Return(int64(5), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(10), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(15), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(3), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(25), nil).Once()
+
+	// After checking state, should clear it and start fresh since systems changed
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(3) // Clear failed resume + fresh start + completion
+	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()      // Clear status when systems change
+
+	// Mock GetMax*ID methods for fresh start scan state population
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Once()
+
+	mockMediaDB.On("SetIndexingSystems", []string{"nes", "snes"}).Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with different systems than what was being indexed (genesis)
+	systems := []systemdefs.System{
+		{ID: "nes"}, // Different from "genesis" that was being indexed
+		{ID: "snes"},
+	}
+
+	// Run the indexer - should detect system change and start fresh
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestSelectiveIndexing_EmptySystemsList tests handling of empty systems list
+func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - should use TruncateSystems() for empty list
+	mockMediaDB.On("TruncateSystems", []string(nil)).Return(nil).Once()
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock indexing state methods for fresh start
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Empty systems list
+
+	// Mock GetMax*ID methods for scan state population
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Once()
+
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with empty systems list
+	systems := []systemdefs.System{}
+
+	// Run the indexer - should use TruncateSystems() even for empty list since 0 != 197 systems
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}

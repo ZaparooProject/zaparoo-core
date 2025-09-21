@@ -185,6 +185,20 @@ func (db *MediaDB) GetLastIndexedSystem() (string, error) {
 	return sqlGetLastIndexedSystem(db.ctx, db.sql)
 }
 
+func (db *MediaDB) SetIndexingSystems(systemIDs []string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexingSystems(db.ctx, db.sql, systemIDs)
+}
+
+func (db *MediaDB) GetIndexingSystems() ([]string, error) {
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+	return sqlGetIndexingSystems(db.ctx, db.sql)
+}
+
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
 	return db.sql
 }
@@ -194,6 +208,13 @@ func (db *MediaDB) Truncate() error {
 		return ErrNullSQL
 	}
 	return sqlTruncate(db.ctx, db.sql)
+}
+
+func (db *MediaDB) TruncateSystems(systemIDs []string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlTruncateSystems(db.ctx, db.sql, systemIDs)
 }
 
 func (db *MediaDB) Allocate() error {

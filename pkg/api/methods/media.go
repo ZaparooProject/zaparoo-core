@@ -210,6 +210,8 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received generate media request")
 
 	var systems []systemdefs.System
+	var isSelectiveIndexing bool
+
 	if len(env.Params) > 0 {
 		var params models.MediaIndexParams
 		err := json.Unmarshal(env.Params, &params)
@@ -219,18 +221,58 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 
 		if params.Systems == nil || len(*params.Systems) == 0 {
 			systems = systemdefs.AllSystems()
-		}
-
-		for _, s := range *params.Systems {
-			system, err := systemdefs.GetSystem(s)
-			if err != nil {
-				return nil, errors.New("error getting system: " + err.Error())
+		} else {
+			isSelectiveIndexing = true
+			// Validate all provided system IDs
+			for _, s := range *params.Systems {
+				system, err := systemdefs.GetSystem(s)
+				if err != nil {
+					return nil, errors.New("invalid system ID: " + s + " - " + err.Error())
+				}
+				systems = append(systems, *system)
 			}
 
-			systems = append(systems, *system)
+			// Check if we're actually doing selective indexing (not all systems)
+			allSystems := systemdefs.AllSystems()
+			if len(systems) == len(allSystems) {
+				// Double-check by comparing system IDs
+				systemIDsMap := make(map[string]bool)
+				for _, sys := range systems {
+					systemIDsMap[sys.ID] = true
+				}
+				for _, sys := range allSystems {
+					if !systemIDsMap[sys.ID] {
+						break
+					}
+				}
+				if len(systemIDsMap) == len(allSystems) {
+					isSelectiveIndexing = false
+				}
+			}
+
+			if isSelectiveIndexing {
+				log.Info().Msgf("Starting selective media indexing for systems: %v", *params.Systems)
+			}
 		}
 	} else {
 		systems = systemdefs.AllSystems()
+	}
+
+	// Additional validation for selective indexing
+	if isSelectiveIndexing {
+		// Check if optimization is running - this would conflict with selective indexing
+		optimizationStatus, err := env.Database.MediaDB.GetOptimizationStatus()
+		if err != nil {
+			return nil, fmt.Errorf("unable to verify optimization status for selective indexing: %w", err)
+		}
+		if optimizationStatus == "running" {
+			return nil, errors.New("selective indexing cannot be performed while database optimization is running")
+		}
+
+		// Ensure at least one system is specified for selective indexing
+		if len(systems) == 0 {
+			return nil, errors.New("at least one system must be specified for selective indexing")
+		}
 	}
 
 	err := GenerateMediaDB(

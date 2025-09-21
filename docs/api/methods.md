@@ -216,6 +216,11 @@ None.
 
 Returns the current media database status and active media.
 
+The database status includes both indexing and optimization information:
+- **Indexing** takes priority over optimization in the response (if both are running, only indexing status is shown)
+- **Optimization** status and progress are shown when no indexing is in progress
+- **Optimization Status** includes: "pending", "running", "completed", "failed"
+
 #### Parameters
 
 None.
@@ -233,9 +238,11 @@ None.
 | :----------------- | :----- | :------- | :----------------------------------------------- |
 | exists             | boolean| Yes      | True if the database exists.                     |
 | indexing           | boolean| Yes      | True if indexing is currently in progress.       |
+| optimizing         | boolean| Yes      | True if database optimization is currently in progress. |
+| optimizationStatus | string | No       | Current optimization status ("pending", "running", "completed", "failed"). |
 | totalSteps         | number | No       | Total number of indexing steps.                 |
 | currentStep        | number | No       | Current indexing step.                          |
-| currentStepDisplay | string | No       | Display name of the current indexing step.      |
+| currentStepDisplay | string | No       | Display name of the current indexing step or optimization step. |
 | totalFiles         | number | No       | Total number of files to index.                 |
 
 ##### Active media object
@@ -261,7 +268,7 @@ None.
 }
 ```
 
-##### Response
+##### Response (Database Ready)
 
 ```json
 {
@@ -270,7 +277,28 @@ None.
   "result": {
     "database": {
       "exists": true,
-      "indexing": false
+      "indexing": false,
+      "optimizing": false,
+      "optimizationStatus": "completed"
+    },
+    "active": []
+  }
+}
+```
+
+##### Response (Optimization in Progress)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "database": {
+      "exists": true,
+      "indexing": false,
+      "optimizing": true,
+      "optimizationStatus": "running",
+      "currentStepDisplay": "vacuum"
     },
     "active": []
   }
@@ -368,13 +396,20 @@ Optionally, an object:
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
+**Selective Indexing Behavior:**
+- When `systems` is provided with specific system IDs, only those systems will be reindexed
+- The server will validate all provided system IDs and return an error if any are invalid
+- If all systems are specified (equivalent to no restriction), a full database rebuild will be performed for optimal performance
+- Selective indexing cannot be performed while database optimization is running
+- Resume functionality will validate that the system configuration hasn't changed between indexing sessions
+
 #### Result
 
 Returns `null` on success once indexing is complete.
 
-#### Example
+#### Examples
 
-##### Request
+##### Full Index Request
 
 ```json
 {
@@ -390,6 +425,29 @@ Returns `null` on success once indexing is complete.
 {
   "jsonrpc": "2.0",
   "id": "6f20e07c-7a5e-11ef-84bb-020304050607",
+  "result": null
+}
+```
+
+##### Selective Index Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7f30e17d-7a5e-11ef-85cc-020304050607",
+  "method": "media.generate",
+  "params": {
+    "systems": ["NES", "SNES", "Genesis"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7f30e17d-7a5e-11ef-85cc-020304050607",
   "result": null
 }
 ```

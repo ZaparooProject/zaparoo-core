@@ -101,6 +101,29 @@ func Contains[T comparable](xs []T, x T) bool {
 	return false
 }
 
+// EqualStringSlices compares two string slices for equality
+func EqualStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// Sort both slices for comparison
+	aCopy := make([]string, len(a))
+	copy(aCopy, a)
+	sort.Strings(aCopy)
+
+	bCopy := make([]string, len(b))
+	copy(bCopy, b)
+	sort.Strings(bCopy)
+
+	for i, v := range aCopy {
+		if v != bCopy[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // MapKeys returns a list of all keys in a map.
 func MapKeys[K comparable, V any](m map[K]V) []K {
 	keys := make([]K, len(m))

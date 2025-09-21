@@ -775,6 +775,36 @@ func (m *MockMediaDBI) GetLastIndexedSystem() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockMediaDBI) SetIndexingSystems(systemIDs []string) error {
+	args := m.Called(systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetIndexingSystems() ([]string, error) {
+	args := m.Called()
+	if systems, ok := args.Get(0).([]string); ok {
+		if err := args.Error(1); err != nil {
+			return systems, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return systems, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
+	args := m.Called(systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // GetMax*ID methods for resume functionality
 func (m *MockMediaDBI) GetMaxSystemID() (int64, error) {
 	args := m.Called()

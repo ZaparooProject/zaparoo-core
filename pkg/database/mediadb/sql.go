@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -48,6 +49,7 @@ const (
 	DBConfigOptimizationStep   = "OptimizationStep"
 	DBConfigIndexingStatus     = "IndexingStatus"
 	DBConfigLastIndexedSystem  = "LastIndexedSystem"
+	DBConfigIndexingSystems    = "IndexingSystems"
 )
 
 var (
@@ -216,6 +218,42 @@ func sqlGetLastIndexedSystem(ctx context.Context, db *sql.DB) (string, error) {
 	return systemID, nil
 }
 
+func sqlSetIndexingSystems(ctx context.Context, db *sql.DB, systemIDs []string) error {
+	systemsJSON, err := json.Marshal(systemIDs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal systems to JSON: %w", err)
+	}
+	_, err = db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexingSystems,
+		string(systemsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set indexing systems: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
+	var systemsJSON string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexingSystems,
+	).Scan(&systemsJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to get indexing systems: %w", err)
+	}
+
+	var systemIDs []string
+	err = json.Unmarshal([]byte(systemsJSON), &systemIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal indexing systems: %w", err)
+	}
+	return systemIDs, nil
+}
+
 const indexTablesSQL = `
 create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
 create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
@@ -289,6 +327,133 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to truncate database: %w", err)
 	}
+	return nil
+}
+
+func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) error {
+	if len(systemIDs) == 0 {
+		return nil
+	}
+
+	// Create placeholders for IN clause
+	placeholders := prepareVariadic("?", ",", len(systemIDs))
+
+	// Convert systemIDs to interface slice for query parameters
+	args := make([]any, len(systemIDs))
+	for i, id := range systemIDs {
+		args[i] = id
+	}
+
+	// Start transaction for atomic operations
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Delete MediaTags for the specified systems (before deleting Media)
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteMediaTagsStmt := fmt.Sprintf(`
+		DELETE FROM MediaTags
+		WHERE MediaDBID IN (
+			SELECT m.DBID FROM Media m
+			JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
+			JOIN Systems s ON mt.SystemDBID = s.DBID
+			WHERE s.SystemID IN (%s)
+		)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteMediaTagsStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete media tags: %w", err)
+	}
+
+	// Delete Media records for the specified systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteMediaStmt := fmt.Sprintf(`
+		DELETE FROM Media
+		WHERE MediaTitleDBID IN (
+			SELECT mt.DBID FROM MediaTitles mt
+			JOIN Systems s ON mt.SystemDBID = s.DBID
+			WHERE s.SystemID IN (%s)
+		)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteMediaStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete media records: %w", err)
+	}
+
+	// Delete MediaTitleTags for the specified systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteMediaTitleTagsStmt := fmt.Sprintf(`
+		DELETE FROM MediaTitleTags
+		WHERE MediaTitleDBID IN (
+			SELECT mt.DBID FROM MediaTitles mt
+			JOIN Systems s ON mt.SystemDBID = s.DBID
+			WHERE s.SystemID IN (%s)
+		)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteMediaTitleTagsStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete media title tags: %w", err)
+	}
+
+	// Delete SupportingMedia for the specified systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteSupportingMediaStmt := fmt.Sprintf(`
+		DELETE FROM SupportingMedia
+		WHERE MediaTitleDBID IN (
+			SELECT mt.DBID FROM MediaTitles mt
+			JOIN Systems s ON mt.SystemDBID = s.DBID
+			WHERE s.SystemID IN (%s)
+		)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteSupportingMediaStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete supporting media: %w", err)
+	}
+
+	// Delete MediaTitles for the specified systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteMediaTitlesStmt := fmt.Sprintf(`
+		DELETE FROM MediaTitles
+		WHERE SystemDBID IN (
+			SELECT DBID FROM Systems WHERE SystemID IN (%s)
+		)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteMediaTitlesStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete media titles: %w", err)
+	}
+
+	// Delete Systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteSystemsStmt := fmt.Sprintf(`DELETE FROM Systems WHERE SystemID IN (%s)`, placeholders)
+	_, err = tx.ExecContext(ctx, deleteSystemsStmt, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete systems: %w", err)
+	}
+
+	// Clean up orphaned tags and tag types
+	cleanupStmt := `
+		DELETE FROM Tags WHERE DBID NOT IN (
+			SELECT DISTINCT TagDBID FROM MediaTags
+			UNION
+			SELECT DISTINCT TagDBID FROM MediaTitleTags
+		);
+		DELETE FROM TagTypes WHERE DBID NOT IN (
+			SELECT DISTINCT TypeDBID FROM Tags
+		);
+	`
+	_, err = tx.ExecContext(ctx, cleanupStmt)
+	if err != nil {
+		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
+	}
+
+	// Commit transaction
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
 	return nil
 }
 

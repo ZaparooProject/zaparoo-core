@@ -23,8 +23,16 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -502,6 +510,109 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "Expected no error for test case: %s", tt.name)
 			}
+		})
+	}
+}
+
+func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
+	tests := []struct {
+		name          string
+		params        string
+		errorContains string
+		wantError     bool
+	}{
+		{
+			name:      "no parameters - all systems",
+			params:    "",
+			wantError: false,
+		},
+		{
+			name:      "null systems parameter - all systems",
+			params:    `{"systems": null}`,
+			wantError: false,
+		},
+		{
+			name:      "empty systems array - all systems",
+			params:    `{"systems": []}`,
+			wantError: false,
+		},
+		{
+			name:      "single valid system",
+			params:    `{"systems": ["NES"]}`,
+			wantError: false,
+		},
+		{
+			name:      "multiple valid systems",
+			params:    `{"systems": ["NES", "SNES", "Genesis"]}`,
+			wantError: false,
+		},
+		{
+			name:          "invalid system ID",
+			params:        `{"systems": ["invalid_system"]}`,
+			wantError:     true,
+			errorContains: "invalid system ID: invalid_system",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset indexing status to prevent race conditions between parallel tests
+			statusInstance.clear()
+
+			// Create mock environment
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+			mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/path"}).Maybe()
+
+			mockUserDB := &helpers.MockUserDBI{}
+			mockMediaDB := &helpers.MockMediaDBI{}
+
+			// Mock optimization status check
+			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+
+			// Mock additional methods that might be called
+			mockMediaDB.On("GetIndexingStatus").Return("", nil).Maybe()
+			mockMediaDB.On("SetIndexingStatus", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("GetIndexingSystems").Return([]string{}, nil).Maybe()
+			mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("SetLastIndexedSystem", mock.Anything).Return(nil).Maybe()
+
+			db := &database.Database{
+				UserDB:  mockUserDB,
+				MediaDB: mockMediaDB,
+			}
+
+			cfg := &config.Instance{}
+			appState, _ := state.NewState(mockPlatform)
+
+			env := requests.RequestEnv{
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Database: db,
+				Params:   []byte(tt.params),
+			}
+
+			// Call the handler
+			result, err := HandleGenerateMedia(env)
+
+			// Verify error expectations
+			if tt.wantError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Nil(t, result)
+
+			// Verify mock expectations were met
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
 		})
 	}
 }

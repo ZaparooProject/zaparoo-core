@@ -176,6 +176,9 @@ type MediaDBI interface {
 	GetIndexingStatus() (string, error)
 	SetLastIndexedSystem(systemID string) error
 	GetLastIndexedSystem() (string, error)
+	SetIndexingSystems(systemIDs []string) error
+	GetIndexingSystems() ([]string, error)
+	TruncateSystems(systemIDs []string) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)

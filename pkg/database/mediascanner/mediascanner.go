@@ -338,6 +338,12 @@ func NewNamesIndex(
 ) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 
+	// Create list of system IDs for storage
+	currentSystemIDs := make([]string, 0, len(systems))
+	for _, sys := range systems {
+		currentSystemIDs = append(currentSystemIDs, sys.ID)
+	}
+
 	// 1. Determine resume state
 	indexingStatus, getStatusErr := db.GetIndexingStatus()
 	if getStatusErr != nil {
@@ -356,8 +362,20 @@ func NewNamesIndex(
 			log.Warn().Err(getSystemErr).Msg("failed to get last indexed system, assuming fresh start")
 			// Fall through to fresh index
 		} else if lastIndexedSystemID != "" {
-			log.Info().Msgf("Previous indexing interrupted. Attempting to resume from system: %s", lastIndexedSystemID)
-			shouldResume = true
+			// Validate that we can resume with the current configuration
+			// Always check if we're indexing the same systems
+			storedSystems, getStoredErr := db.GetIndexingSystems()
+
+			switch {
+			case getStoredErr != nil:
+				log.Warn().Err(getStoredErr).Msg("failed to get stored indexing configuration, assuming fresh start")
+			case !helpers.EqualStringSlices(storedSystems, currentSystemIDs):
+				log.Warn().Msg("System list changed from previous indexing, reverting to fresh index")
+			default:
+				log.Info().Msgf("Previous indexing interrupted. Attempting to resume from system: %s",
+					lastIndexedSystemID)
+				shouldResume = true
+			}
 		}
 	case mediadb.IndexingStatusFailed:
 		log.Info().Msg("Previous indexing run failed, starting fresh index.")
@@ -416,12 +434,37 @@ func NewNamesIndex(
 		MediaTagsIndex: 0,
 	}
 
-	// 2. Conditional Truncate and Initial Status Set
+	// 2. Truncate and Initial Status Set
 	if !shouldResume {
-		err = db.Truncate()
-		if err != nil {
-			return 0, fmt.Errorf("failed to truncate database: %w", err)
+		// Set indexing systems before truncating
+		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to set indexing systems")
 		}
+
+		// Clear data for the specified systems (smart truncation)
+		log.Info().Msgf("Starting indexing for systems: %v", currentSystemIDs)
+
+		// Use smart truncation - if indexing all systems, use full truncate for performance
+		allSystems := systemdefs.AllSystems()
+		allSystemIDs := make([]string, len(allSystems))
+		for i, sys := range allSystems {
+			allSystemIDs[i] = sys.ID
+		}
+
+		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
+			// Full indexing - use fast truncate
+			err = db.Truncate()
+			if err != nil {
+				return 0, fmt.Errorf("failed to truncate database: %w", err)
+			}
+		} else {
+			// Selective indexing - use system-specific truncation
+			err = db.TruncateSystems(currentSystemIDs)
+			if err != nil {
+				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
+			}
+		}
+
 		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
 			log.Error().Err(setErr).Msg("failed to set indexing status to running on fresh start")
 		}
@@ -430,9 +473,13 @@ func NewNamesIndex(
 		}
 
 		// Seed known tags only on fresh start (after truncate)
-		err = SeedKnownTags(db, &scanState)
-		if err != nil {
-			return 0, fmt.Errorf("failed to seed known tags: %w", err)
+		// Check if we need to seed tags (they might exist from other systems)
+		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
+		if getMaxErr != nil || maxTagTypeID == 0 {
+			err = SeedKnownTags(db, &scanState)
+			if err != nil {
+				return 0, fmt.Errorf("failed to seed known tags: %w", err)
+			}
 		}
 	} else {
 		// If resuming, ensure status is "running" and populate existing scan state indexes
@@ -686,12 +733,15 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
-	// Mark indexing as completed and clear last indexed system
+	// Mark indexing as completed and clear indexing metadata
 	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to set indexing status to completed")
 	}
 	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
 		log.Error().Err(setErr).Msg("failed to clear last indexed system on completion")
+	}
+	if setErr := db.SetIndexingSystems(nil); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to clear indexing systems on completion")
 	}
 
 	// Mark optimization as pending
