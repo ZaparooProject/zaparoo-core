@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -40,20 +41,28 @@ import (
 
 var ErrNullSQL = errors.New("MediaDB is not connected")
 
+// Indexing status constants
+const (
+	IndexingStatusRunning   = "running"
+	IndexingStatusPending   = "pending"
+	IndexingStatusCompleted = "completed"
+	IndexingStatusFailed    = "failed"
+)
+
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-	"&_cache_size=-64000&_temp_store=MEMORY"
+	"&_cache_size=-64000&_temp_store=MEMORY&_mmap_size=30000000"
 
 type MediaDB struct {
-	sql *sql.DB
-	pl  platforms.Platform
-	ctx context.Context
-	// Prepared statements for batch operations during scanning
+	pl                   platforms.Platform
+	ctx                  context.Context
+	sql                  *sql.DB
 	tx                   *sql.Tx
 	stmtInsertSystem     *sql.Stmt
 	stmtInsertMediaTitle *sql.Stmt
 	stmtInsertMedia      *sql.Stmt
 	stmtInsertTag        *sql.Stmt
 	stmtInsertMediaTag   *sql.Stmt
+	isOptimizing         atomic.Bool
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -78,9 +87,23 @@ func (db *MediaDB) Open() error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 	db.sql = sqlInstance
+
 	if !exists {
-		return db.Allocate()
+		err = db.Allocate()
+		if err != nil {
+			return err
+		}
 	}
+
+	// Run PRAGMA optimize after database is opened and potentially allocated
+	_, err = db.sql.ExecContext(db.ctx, "PRAGMA optimize;")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
+	}
+
+	// Check for incomplete optimization and resume if needed
+	db.checkAndResumeOptimization()
+
 	return nil
 }
 
@@ -104,6 +127,62 @@ func (db *MediaDB) GetLastGenerated() (time.Time, error) {
 		return time.Time{}, ErrNullSQL
 	}
 	return sqlGetLastGenerated(db.ctx, db.sql)
+}
+
+func (db *MediaDB) SetOptimizationStatus(status string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetOptimizationStatus(db.ctx, db.sql, status)
+}
+
+func (db *MediaDB) GetOptimizationStatus() (string, error) {
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetOptimizationStatus(db.ctx, db.sql)
+}
+
+func (db *MediaDB) SetOptimizationStep(step string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetOptimizationStep(db.ctx, db.sql, step)
+}
+
+func (db *MediaDB) GetOptimizationStep() (string, error) {
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetOptimizationStep(db.ctx, db.sql)
+}
+
+func (db *MediaDB) SetIndexingStatus(status string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetIndexingStatus(db.ctx, db.sql, status)
+}
+
+func (db *MediaDB) GetIndexingStatus() (string, error) {
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetIndexingStatus(db.ctx, db.sql)
+}
+
+func (db *MediaDB) SetLastIndexedSystem(systemID string) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlSetLastIndexedSystem(db.ctx, db.sql, systemID)
+}
+
+func (db *MediaDB) GetLastIndexedSystem() (string, error) {
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+	return sqlGetLastIndexedSystem(db.ctx, db.sql)
 }
 
 func (db *MediaDB) UnsafeGetSQLDb() *sql.DB {
@@ -317,6 +396,20 @@ func (db *MediaDB) ReindexTables() error {
 	return sqlIndexTables(db.ctx, db.sql)
 }
 
+func (db *MediaDB) CreateIndexes() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlCreateIndexesOnly(db.ctx, db.sql)
+}
+
+func (db *MediaDB) Analyze() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlAnalyze(db.ctx, db.sql)
+}
+
 // SearchMediaPathExact returns indexed names matching an exact query (case-insensitive).
 func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	if db.sql == nil {
@@ -509,4 +602,143 @@ func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTa
 		system, err = db.InsertMediaTag(row)
 	}
 	return system, err
+}
+
+// GetMax*ID methods for resume functionality
+func (db *MediaDB) GetMaxSystemID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "Systems", "DBID")
+}
+
+func (db *MediaDB) GetMaxTitleID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "MediaTitles", "DBID")
+}
+
+func (db *MediaDB) GetMaxMediaID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "Media", "DBID")
+}
+
+func (db *MediaDB) GetMaxTagTypeID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "TagTypes", "DBID")
+}
+
+func (db *MediaDB) GetMaxTagID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "Tags", "DBID")
+}
+
+func (db *MediaDB) GetMaxMediaTagID() (int64, error) {
+	return sqlGetMaxID(db.ctx, db.sql, "MediaTags", "DBID")
+}
+
+// RunBackgroundOptimization performs database optimization operations in the background.
+// This includes creating indexes, running ANALYZE, and vacuuming the database.
+// It can be safely interrupted and resumed later.
+func (db *MediaDB) RunBackgroundOptimization() {
+	if !db.isOptimizing.CompareAndSwap(false, true) {
+		log.Info().Msg("background optimization is already running, skipping")
+		return
+	}
+	defer db.isOptimizing.Store(false)
+
+	if db.sql == nil {
+		log.Error().Msg("cannot run background optimization: database not connected")
+		return
+	}
+
+	log.Info().Msg("starting background database optimization")
+
+	// Set status to running
+	if err := db.SetOptimizationStatus("running"); err != nil {
+		log.Error().Err(err).Msg("failed to set optimization status to running")
+		return
+	}
+
+	// Define optimization steps
+	type optimizationStep struct {
+		fn         func() error
+		name       string
+		maxRetries int
+		retryDelay time.Duration
+	}
+
+	steps := []optimizationStep{
+		{name: "indexes", fn: db.CreateIndexes, maxRetries: 2, retryDelay: 10 * time.Second},
+		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: 10 * time.Second},
+		{name: "vacuum", fn: db.Vacuum, maxRetries: 3, retryDelay: 30 * time.Second},
+	}
+
+	// Execute each step with retry logic
+	for _, step := range steps {
+		log.Info().Msgf("running optimization step: %s", step.name)
+
+		if err := db.SetOptimizationStep(step.name); err != nil {
+			log.Error().Err(err).Msgf("failed to set optimization step to %s", step.name)
+		}
+
+		// Execute step with retry and exponential backoff
+		var stepErr error
+		for attempt := 0; attempt <= step.maxRetries; attempt++ {
+			stepErr = step.fn()
+			if stepErr == nil {
+				break // Success
+			}
+
+			if attempt < step.maxRetries {
+				delay := step.retryDelay * time.Duration(1<<attempt) // Exponential backoff
+				log.Warn().Err(stepErr).Msgf("optimization step %s failed (attempt %d/%d), retrying in %v",
+					step.name, attempt+1, step.maxRetries+1, delay)
+				time.Sleep(delay)
+			}
+		}
+
+		// Final check after all retries
+		if stepErr != nil {
+			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
+			if setErr := db.SetOptimizationStatus("failed"); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
+			}
+			// Clear optimization step on failure
+			if setErr := db.SetOptimizationStep(""); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to clear optimization step on failure")
+			}
+			return
+		}
+
+		log.Info().Msgf("optimization step %s completed", step.name)
+	}
+
+	// Mark as completed
+	if err := db.SetOptimizationStatus("completed"); err != nil {
+		log.Error().Err(err).Msg("failed to set optimization status to completed")
+		return
+	}
+	// Clear optimization step on completion
+	if err := db.SetOptimizationStep(""); err != nil {
+		log.Error().Err(err).Msg("failed to clear optimization step on completion")
+	}
+
+	log.Info().Msg("background database optimization completed successfully")
+}
+
+// checkAndResumeOptimization checks if there's an incomplete optimization and resumes it.
+func (db *MediaDB) checkAndResumeOptimization() {
+	status, err := db.GetOptimizationStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get optimization status during startup check")
+		return
+	}
+
+	switch status {
+	case "pending", "running":
+		log.Info().Msgf("resuming incomplete optimization (status: %s)", status)
+		go db.RunBackgroundOptimization()
+	case "failed":
+		log.Info().Msg("retrying failed optimization")
+		go db.RunBackgroundOptimization()
+	case "completed":
+		// Nothing to do
+	case "":
+		// No optimization status set, this is normal for older databases
+	default:
+		log.Warn().Msgf("unknown optimization status: %s", status)
+	}
 }

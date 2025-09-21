@@ -35,8 +35,8 @@ func TestLogSafeResponse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
 		result         any
+		name           string
 		expectTruncate bool
 	}{
 		{
@@ -106,10 +106,10 @@ func TestLogSafeRequest(t *testing.T) {
 	testID := uuid.New()
 
 	tests := []struct {
-		name               string
-		request            models.RequestObject
-		expectMethodOnly   bool
-		expectFullRequest  bool
+		name              string
+		request           models.RequestObject
+		expectMethodOnly  bool
+		expectFullRequest bool
 	}{
 		{
 			name: "logs download request should log method only",

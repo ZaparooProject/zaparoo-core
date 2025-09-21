@@ -74,7 +74,9 @@ func AddMediaPath(
 			}
 
 			// Try to get existing system ID from database when constraint violated
+			// Set DBID to -1 to ensure we only search by SystemID, not DBID=0
 			existingSystem, getErr := db.FindSystem(database.System{
+				DBID:     -1, // Use -1 to avoid matching DBID=0
 				SystemID: systemID,
 			})
 			if getErr != nil || existingSystem.DBID == 0 {
@@ -275,8 +277,22 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		Type: "Unknown",
 	})
 	if err != nil {
-		ss.TagTypesIndex-- // Rollback on failure
-		return fmt.Errorf("error inserting tag type Unknown: %w", err)
+		ss.TagTypesIndex-- // Rollback index increment on failure
+
+		// Handle UNIQUE constraint violations gracefully - data may already exist
+		var sqliteErr sqlite3.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+			return fmt.Errorf("error inserting tag type Unknown: %w", err)
+		}
+		log.Debug().Msg("Tag type 'Unknown' already exists, continuing")
+		// Try to get the existing tag type to update our index
+		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Unknown"})
+		if getErr == nil && existingTagType.DBID > 0 {
+			ss.TagTypesIndex = int(existingTagType.DBID)
+			ss.TagTypeIDs["Unknown"] = ss.TagTypesIndex
+		}
+	} else {
+		ss.TagTypeIDs["Unknown"] = ss.TagTypesIndex
 	}
 
 	ss.TagsIndex++
@@ -286,10 +302,23 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
 	if err != nil {
-		ss.TagsIndex-- // Rollback on failure
-		return fmt.Errorf("error inserting tag unknown: %w", err)
+		ss.TagsIndex-- // Rollback index increment on failure
+
+		// Handle UNIQUE constraint violations gracefully
+		var sqliteErr sqlite3.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+			return fmt.Errorf("error inserting tag unknown: %w", err)
+		}
+		log.Debug().Msg("Tag 'unknown' already exists, continuing")
+		// Try to get the existing tag to update our index
+		existingTag, getErr := db.FindTag(database.Tag{Tag: "unknown"})
+		if getErr == nil && existingTag.DBID > 0 {
+			ss.TagsIndex = int(existingTag.DBID)
+			ss.TagIDs["unknown"] = ss.TagsIndex
+		}
+	} else {
+		ss.TagIDs["unknown"] = ss.TagsIndex
 	}
-	ss.TagIDs["unknown"] = ss.TagsIndex // Only update cache on success
 
 	ss.TagTypesIndex++
 	_, err = db.InsertTagType(database.TagType{
@@ -297,8 +326,22 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		Type: "Extension",
 	})
 	if err != nil {
-		ss.TagTypesIndex-- // Rollback on failure
-		return fmt.Errorf("error inserting tag type Extension: %w", err)
+		ss.TagTypesIndex-- // Rollback index increment on failure
+
+		// Handle UNIQUE constraint violations gracefully
+		var sqliteErr sqlite3.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+			return fmt.Errorf("error inserting tag type Extension: %w", err)
+		}
+		log.Debug().Msg("Tag type 'Extension' already exists, continuing")
+		// Try to get the existing tag type to update our index
+		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Extension"})
+		if getErr == nil && existingTagType.DBID > 0 {
+			ss.TagTypesIndex = int(existingTagType.DBID)
+			ss.TagTypeIDs["Extension"] = ss.TagTypesIndex
+		}
+	} else {
+		ss.TagTypeIDs["Extension"] = ss.TagTypesIndex
 	}
 
 	ss.TagsIndex++
@@ -308,10 +351,23 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		TypeDBID: int64(ss.TagTypesIndex),
 	})
 	if err != nil {
-		ss.TagsIndex-- // Rollback on failure
-		return fmt.Errorf("error inserting tag .ext: %w", err)
+		ss.TagsIndex-- // Rollback index increment on failure
+
+		// Handle UNIQUE constraint violations gracefully
+		var sqliteErr sqlite3.Error
+		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+			return fmt.Errorf("error inserting tag .ext: %w", err)
+		}
+		log.Debug().Msg("Tag '.ext' already exists, continuing")
+		// Try to get the existing tag to update our index
+		existingTag, getErr := db.FindTag(database.Tag{Tag: ".ext"})
+		if getErr == nil && existingTag.DBID > 0 {
+			ss.TagsIndex = int(existingTag.DBID)
+			ss.TagIDs[".ext"] = ss.TagsIndex
+		}
+	} else {
+		ss.TagIDs[".ext"] = ss.TagsIndex
 	}
-	ss.TagIDs[".ext"] = ss.TagsIndex // Only update cache on success
 
 	for typeStr, tags := range typeMatches {
 		ss.TagTypesIndex++
@@ -320,10 +376,23 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 			Type: typeStr,
 		})
 		if err != nil {
-			ss.TagTypesIndex-- // Rollback on failure
-			return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
+			ss.TagTypesIndex-- // Rollback index increment on failure
+
+			// Handle UNIQUE constraint violations gracefully
+			var sqliteErr sqlite3.Error
+			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+				return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
+			}
+			log.Debug().Msgf("Tag type '%s' already exists, continuing", typeStr)
+			// Try to get the existing tag type to update our index
+			existingTagType, getErr := db.FindTagType(database.TagType{Type: typeStr})
+			if getErr == nil && existingTagType.DBID > 0 {
+				ss.TagTypesIndex = int(existingTagType.DBID)
+				ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
+			}
+		} else {
+			ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
 		}
-		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex // Only update cache on success
 
 		for _, tag := range tags {
 			ss.TagsIndex++
@@ -333,12 +402,78 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 				TypeDBID: int64(ss.TagTypesIndex),
 			})
 			if err != nil {
-				ss.TagsIndex-- // Rollback on failure
-				return fmt.Errorf("error inserting tag %s: %w", tag, err)
+				ss.TagsIndex-- // Rollback index increment on failure
+
+				// Handle UNIQUE constraint violations gracefully
+				var sqliteErr sqlite3.Error
+				if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+					return fmt.Errorf("error inserting tag %s: %w", tag, err)
+				}
+				log.Debug().Msgf("Tag '%s' already exists, continuing", tag)
+				// Try to get the existing tag to update our index
+				existingTag, getErr := db.FindTag(database.Tag{Tag: strings.ToLower(tag)})
+				if getErr == nil && existingTag.DBID > 0 {
+					ss.TagsIndex = int(existingTag.DBID)
+					ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
+				}
+			} else {
+				ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
 			}
-			ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex // Only update cache on success
 		}
 	}
+	return nil
+}
+
+// PopulateScanStateFromDB initializes the scan state with existing database IDs
+// when resuming an interrupted indexing operation
+func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error {
+	// Get max IDs from existing data to continue indexing from the right point
+	maxSystemID, err := db.GetMaxSystemID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max system ID, starting from 0")
+		maxSystemID = 0
+	}
+	ss.SystemsIndex = int(maxSystemID)
+
+	maxTitleID, err := db.GetMaxTitleID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max title ID, starting from 0")
+		maxTitleID = 0
+	}
+	ss.TitlesIndex = int(maxTitleID)
+
+	maxMediaID, err := db.GetMaxMediaID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max media ID, starting from 0")
+		maxMediaID = 0
+	}
+	ss.MediaIndex = int(maxMediaID)
+
+	maxTagTypeID, err := db.GetMaxTagTypeID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max tag type ID, starting from 0")
+		maxTagTypeID = 0
+	}
+	ss.TagTypesIndex = int(maxTagTypeID)
+
+	maxTagID, err := db.GetMaxTagID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max tag ID, starting from 0")
+		maxTagID = 0
+	}
+	ss.TagsIndex = int(maxTagID)
+
+	maxMediaTagID, err := db.GetMaxMediaTagID()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get max media tag ID, starting from 0")
+		maxMediaTagID = 0
+	}
+	ss.MediaTagsIndex = int(maxMediaTagID)
+
+	log.Debug().Msgf("Populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d, MediaTags=%d",
+		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
+		ss.TagTypesIndex, ss.TagsIndex, ss.MediaTagsIndex)
+
 	return nil
 }
 

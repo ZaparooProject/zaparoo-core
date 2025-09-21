@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -337,12 +338,70 @@ func NewNamesIndex(
 ) (indexedFiles int, err error) {
 	db := fdb.MediaDB
 
-	err = db.Truncate()
-	if err != nil {
-		return 0, fmt.Errorf("failed to truncate database: %w", err)
+	// 1. Determine resume state
+	indexingStatus, getStatusErr := db.GetIndexingStatus()
+	if getStatusErr != nil {
+		log.Warn().Err(getStatusErr).Msg("failed to get indexing status, assuming fresh start")
+		indexingStatus = "" // Treat as fresh start if status cannot be retrieved
 	}
 
-	// Initialize scan state and seed known tags before transaction
+	lastIndexedSystemID := ""
+	shouldResume := false
+
+	switch indexingStatus {
+	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
+		var getSystemErr error
+		lastIndexedSystemID, getSystemErr = db.GetLastIndexedSystem()
+		if getSystemErr != nil {
+			log.Warn().Err(getSystemErr).Msg("failed to get last indexed system, assuming fresh start")
+			// Fall through to fresh index
+		} else if lastIndexedSystemID != "" {
+			log.Info().Msgf("Previous indexing interrupted. Attempting to resume from system: %s", lastIndexedSystemID)
+			shouldResume = true
+		}
+	case mediadb.IndexingStatusFailed:
+		log.Info().Msg("Previous indexing run failed, starting fresh index.")
+		// Explicitly clear status for a fresh start after a failure
+		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to clear last indexed system after failed run")
+		}
+		if setErr := db.SetIndexingStatus(""); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to clear indexing status after failed run")
+		}
+	}
+
+	// Get the ordered list of systems for this run (deterministic by ID)
+	systemPaths := make(map[string][]string)
+	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
+		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
+	}
+	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
+
+	// Validate resume point against current system list
+	if shouldResume && lastIndexedSystemID != "" {
+		foundLastIndexed := false
+		// Check against the provided systems list, not just sysPathIDs (which depends on paths)
+		for _, system := range systems {
+			if system.ID == lastIndexedSystemID {
+				foundLastIndexed = true
+				break
+			}
+		}
+		if !foundLastIndexed {
+			log.Warn().Msgf("Last indexed system '%s' not found in current system list. Reverting to full re-index.",
+				lastIndexedSystemID)
+			shouldResume = false // Cannot resume reliably, force full re-index
+			// Clear state for a fresh start
+			if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to clear last indexed system after unresumable state")
+			}
+			if setErr := db.SetIndexingStatus(""); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to clear indexing status after unresumable state")
+			}
+		}
+	}
+
+	// Initialize scan state
 	scanState := database.ScanState{
 		SystemsIndex:   0,
 		SystemIDs:      make(map[string]int),
@@ -356,9 +415,37 @@ func NewNamesIndex(
 		TagIDs:         make(map[string]int),
 		MediaTagsIndex: 0,
 	}
-	err = SeedKnownTags(db, &scanState)
-	if err != nil {
-		return 0, fmt.Errorf("failed to seed known tags: %w", err)
+
+	// 2. Conditional Truncate and Initial Status Set
+	if !shouldResume {
+		err = db.Truncate()
+		if err != nil {
+			return 0, fmt.Errorf("failed to truncate database: %w", err)
+		}
+		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to set indexing status to running on fresh start")
+		}
+		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to clear last indexed system on fresh start")
+		}
+
+		// Seed known tags only on fresh start (after truncate)
+		err = SeedKnownTags(db, &scanState)
+		if err != nil {
+			return 0, fmt.Errorf("failed to seed known tags: %w", err)
+		}
+	} else {
+		// If resuming, ensure status is "running" and populate existing scan state indexes
+		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to set indexing status to running during resume")
+		}
+
+		// When resuming, we need to populate the scan state with existing data
+		// to avoid ID conflicts and continue from where we left off
+		err = PopulateScanStateFromDB(db, &scanState)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to populate scan state from database, continuing with fresh state")
+		}
 	}
 
 	err = db.BeginTransaction()
@@ -366,40 +453,59 @@ func NewNamesIndex(
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// Ensure transaction rollback on any error
+	// Ensure transaction rollback and status update on any error
 	defer func() {
 		if err != nil {
 			if rbErr := db.RollbackTransaction(); rbErr != nil {
 				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
 			}
+			// Mark indexing as failed on error
+			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
+				log.Error().Err(setErr).Msg("failed to set indexing status to failed after error")
+			}
 		}
 	}()
 
 	status := IndexStatus{
-		Total: len(systems) + 2, // estimate steps
+		Total: len(sysPathIDs) + 2, // Adjusted total steps for the current list
 		Step:  1,
 	}
 
 	// Track which launchers have already been scanned to prevent double-execution
 	scannedLaunchers := make(map[string]bool)
+	// This map tracks systems that have been fully processed and committed
+	completedSystems := make(map[string]bool)
+
+	// Populate completedSystems if resuming
+	if shouldResume {
+		for _, k := range sysPathIDs {
+			if k == lastIndexedSystemID {
+				// DO NOT mark the last indexed system as completed - we need to resume from it
+				// Only mark systems BEFORE the last indexed system as completed
+				break
+			}
+			completedSystems[k] = true // Mark all systems before the resume point as completed
+		}
+	}
 
 	update(status)
-	systemPaths := make(map[string][]string)
-	for _, v := range GetSystemPaths(cfg, platform, platform.RootDirs(cfg), systems) {
-		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
-	}
 
 	scannedSystems := make(map[string]bool)
 	for _, s := range systemdefs.AllSystems() {
 		scannedSystems[s.ID] = false
 	}
 
-	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
-	// update steps with true count
-	status.Total = len(sysPathIDs) + 2
-
+	// Main loop for systems
 	for _, k := range sysPathIDs {
 		systemID := k
+
+		if completedSystems[systemID] {
+			log.Debug().Msgf("Skipping already indexed system: %s", systemID)
+			status.Step++
+			update(status)
+			continue // Skip this system if it was already completed in a previous run
+		}
+
 		files := make([]platforms.ScanResult, 0)
 
 		status.SystemID = systemID
@@ -438,11 +544,11 @@ func NewNamesIndex(
 
 		if len(files) == 0 {
 			log.Debug().Msgf("no files found for system: %s", systemID)
-			continue
+		} else {
+			status.Files += len(files)
+			log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
 		}
 
-		status.Files += len(files)
-		log.Debug().Msgf("scanned %d files for system: %s", len(files), systemID)
 		scannedSystems[systemID] = true
 
 		for _, p := range files {
@@ -451,11 +557,22 @@ func NewNamesIndex(
 
 		// Commit in batches to reduce lock time and allow API operations
 		if commitErr := db.CommitTransaction(); commitErr != nil {
-			return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+			// If commit fails, the defer will handle rollback and status=failed
+			err = fmt.Errorf("failed to commit batch transaction for system %s: %w", systemID, commitErr)
+			return // Exit early
 		}
+
+		// Mark system as completed and update last indexed system after successful commit
+		completedSystems[systemID] = true
+		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
+			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s", systemID)
+			// This is a non-fatal error for indexing, but important to log.
+		}
+
 		FlushScanStateMaps(&scanState)
 		if beginErr := db.BeginTransaction(); beginErr != nil {
-			return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+			err = fmt.Errorf("failed to begin new transaction after system %s commit: %w", systemID, beginErr)
+			return // Exit early
 		}
 	}
 
@@ -468,7 +585,7 @@ func NewNamesIndex(
 		systemID := l.SystemID
 		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
-		if !scannedLaunchers[l.ID] && l.Scanner != nil {
+		if !scannedLaunchers[l.ID] && l.Scanner != nil && systemID != "" {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
@@ -478,24 +595,26 @@ func NewNamesIndex(
 
 			log.Debug().Msgf("scanned %d files for system: %s", len(results), systemID)
 
-			status.Files += len(results)
-			scannedSystems[systemID] = true
-			scannedLaunchers[l.ID] = true
-
 			if len(results) > 0 {
+				status.Files += len(results)
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
-
 				// Commit in batches to reduce lock time and allow API operations
 				if commitErr := db.CommitTransaction(); commitErr != nil {
-					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+					err = fmt.Errorf("failed to commit batch transaction for custom scanner for system %s: %w",
+						systemID, commitErr)
+					return
 				}
 				FlushScanStateMaps(&scanState)
 				if beginErr := db.BeginTransaction(); beginErr != nil {
-					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+					err = fmt.Errorf("failed to begin new transaction after custom scanner commit for system %s: %w",
+						systemID, beginErr)
+					return
 				}
 			}
+			scannedSystems[systemID] = true
+			scannedLaunchers[l.ID] = true // Mark this specific launcher as run
 		}
 	}
 
@@ -511,10 +630,16 @@ func NewNamesIndex(
 	for i := range anyScanners {
 		l := &anyScanners[i]
 		for _, s := range systems {
-			log.Debug().Msgf("running %s scanner for system: %s", l.ID, s.ID)
+			systemID := s.ID
+			if completedSystems[systemID] {
+				log.Debug().Msgf("Skipping 'any' scanner for already completed system: %s", systemID)
+				continue // Skip if system already fully processed
+			}
+
+			log.Debug().Msgf("running %s 'any' scanner for system: %s", l.ID, s.ID)
 			results, scanErr := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
 			if scanErr != nil {
-				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, s.ID)
+				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s", l.ID, s.ID)
 				continue
 			}
 
@@ -522,22 +647,24 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				scannedSystems[s.ID] = true
-				systemID := s.ID
-
 				for _, p := range results {
 					AddMediaPath(db, &scanState, systemID, p.Path)
 				}
 
 				// Commit in batches to reduce lock time and allow API operations
 				if commitErr := db.CommitTransaction(); commitErr != nil {
-					return 0, fmt.Errorf("failed to commit batch transaction: %w", commitErr)
+					err = fmt.Errorf("failed to commit batch transaction for 'any' scanner for system %s: %w",
+						systemID, commitErr)
+					return
 				}
 				FlushScanStateMaps(&scanState)
 				if beginErr := db.BeginTransaction(); beginErr != nil {
-					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
+					err = fmt.Errorf("failed to begin new transaction after 'any' scanner commit for system %s: %w",
+						systemID, beginErr)
+					return
 				}
 			}
+			scannedSystems[systemID] = true
 		}
 	}
 
@@ -546,26 +673,39 @@ func NewNamesIndex(
 	update(status)
 
 	scanState.TagIDs = make(map[string]int)
-	err = db.ReindexTables()
-	if err != nil {
-		return 0, fmt.Errorf("failed to reindex tables: %w", err)
-	}
+
+	// Phase 1: Complete data operations (foreground) - commit all data
 	err = db.CommitTransaction()
 	if err != nil {
 		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	err = db.Vacuum()
-	if err != nil {
-		return 0, fmt.Errorf("failed to vacuum database: %w", err)
-	}
+
+	// Mark database as complete and ready for use
 	err = db.UpdateLastGenerated()
 	if err != nil {
 		return 0, fmt.Errorf("failed to update last generated timestamp: %w", err)
 	}
 
+	// Mark indexing as completed and clear last indexed system
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCompleted); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to set indexing status to completed")
+	}
+	if setErr := db.SetLastIndexedSystem(""); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to clear last indexed system on completion")
+	}
+
+	// Mark optimization as pending
+	err = db.SetOptimizationStatus("pending")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to set optimization status to pending")
+	}
+
+	// Phase 2: Start background optimization (indexes, analyze, vacuum)
+	go db.RunBackgroundOptimization()
+
 	indexedSystems := make([]string, 0)
-	log.Debug().Msgf("scanned systems: %v", scannedSystems)
-	for k, v := range scannedSystems {
+	log.Debug().Msgf("processed systems: %v", completedSystems)
+	for k, v := range completedSystems {
 		if v {
 			indexedSystems = append(indexedSystems, k)
 		}

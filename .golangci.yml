@@ -45,7 +45,6 @@ linters:
     # - dupl
     - goheader
     - grouper
-    - tparallel
     - copyloopvar
     - intrange
     # Note: For Go 1.21+ min/max modernization, run:

@@ -108,7 +108,8 @@ func logSafeResponse(result any) {
 	if logResp, ok := result.(models.LogDownloadResponse); ok {
 		truncated := logResp
 		if len(truncated.Content) > 100 {
-			truncated.Content = truncated.Content[:100] + "... [truncated " + strconv.Itoa(len(logResp.Content)-100) + " more chars]"
+			truncated.Content = truncated.Content[:100] + "... [truncated " +
+				strconv.Itoa(len(logResp.Content)-100) + " more chars]"
 		}
 		log.Debug().Interface("result", truncated).Msg("sending response")
 	} else {

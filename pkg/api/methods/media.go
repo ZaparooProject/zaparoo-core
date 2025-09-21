@@ -105,7 +105,7 @@ func newIndexingStatus() *indexingStatus {
 
 var statusInstance = newIndexingStatus()
 
-func generateMediaDB(
+func GenerateMediaDB(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
@@ -114,6 +114,16 @@ func generateMediaDB(
 ) error {
 	if statusInstance.get().indexing {
 		return errors.New("indexing already in progress")
+	}
+
+	// Also prevent indexing if optimization is running
+	optimizationStatus, err := db.MediaDB.GetOptimizationStatus()
+	if err != nil {
+		// If we can't read the status, assume it might be in an unknown state
+		// and prevent indexing to avoid potential conflicts
+		return fmt.Errorf("failed to get optimization status during indexing check: %w", err)
+	} else if optimizationStatus == "running" {
+		return errors.New("database optimization in progress")
 	}
 
 	statusInstance.start()
@@ -223,7 +233,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		systems = systemdefs.AllSystems()
 	}
 
-	err := generateMediaDB(
+	err := GenerateMediaDB(
 		env.Platform,
 		env.Config,
 		env.State.Notifications,
@@ -345,13 +355,38 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 	status := statusInstance.get()
 	resp.Database.Indexing = status.indexing
 
-	if resp.Database.Indexing {
+	// Get optimization status
+	optimizationStatus, err := env.Database.MediaDB.GetOptimizationStatus()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get optimization status for media response")
+		optimizationStatus = ""
+	}
+	resp.Database.OptimizationStatus = optimizationStatus
+
+	switch {
+	case resp.Database.Indexing:
+		// During indexing, don't show optimizing even if optimization is running
+		resp.Database.Optimizing = false
 		resp.Database.Exists = false
 		resp.Database.TotalSteps = &status.totalSteps
 		resp.Database.CurrentStep = &status.currentStep
 		resp.Database.CurrentStepDisplay = &status.currentDesc
 		resp.Database.TotalFiles = &status.totalFiles
-	} else {
+	case optimizationStatus == "running":
+		resp.Database.Optimizing = true
+		// If optimizing, show the current optimization step
+		optimizationStep, stepErr := env.Database.MediaDB.GetOptimizationStep()
+		if stepErr != nil {
+			log.Warn().Err(stepErr).Msg("failed to get optimization step")
+		} else if optimizationStep != "" {
+			resp.Database.CurrentStepDisplay = &optimizationStep
+		}
+
+		// Database exists but is being optimized
+		resp.Database.Exists = true
+	default:
+		// Not indexing and not optimizing
+		resp.Database.Optimizing = false
 		// Try to get last generated time, but don't fail if database is locked
 		lastGenerated, err := env.Database.MediaDB.GetLastGenerated()
 		if err != nil {

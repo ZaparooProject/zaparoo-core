@@ -29,11 +29,13 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
@@ -217,6 +219,9 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	log.Info().Msg("checking for interrupted media indexing")
+	go checkAndResumeIndexing(pl, cfg, db, st)
+
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 
@@ -250,4 +255,40 @@ func Start(
 		close(itq)
 		return nil
 	}, nil
+}
+
+// checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it
+func checkAndResumeIndexing(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+) {
+	// Check if indexing was interrupted
+	indexingStatus, err := db.MediaDB.GetIndexingStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get indexing status during startup check")
+		return
+	}
+
+	// Only resume if indexing was interrupted (running or pending states)
+	if indexingStatus != mediadb.IndexingStatusRunning && indexingStatus != mediadb.IndexingStatusPending {
+		log.Debug().Msgf("indexing status is '%s', no auto-resume needed", indexingStatus)
+		return
+	}
+
+	log.Info().Msg("detected interrupted media indexing, automatically resuming")
+
+	// Get all systems for the resume operation
+	systems := systemdefs.AllSystems()
+
+	// Resume using the proper function with full notification support
+	go func() {
+		err := methods.GenerateMediaDB(pl, cfg, st.Notifications, systems, db)
+		if err != nil {
+			log.Error().Err(err).Msg("error during auto-resume of media indexing")
+		} else {
+			log.Info().Msg("auto-resume completed successfully")
+		}
+	}()
 }

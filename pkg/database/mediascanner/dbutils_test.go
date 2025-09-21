@@ -77,6 +77,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 	}
 	mockDB.On("FindSystem", database.System{
 		SystemID: "TV",
+		DBID:     -1,
 	}).Return(existingSystem, nil).Once()
 
 	// Mock successful media title and media insertion using the correct system ID
@@ -146,6 +147,7 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 	// Mock FindSystem to also fail - this simulates a more serious database issue
 	mockDB.On("FindSystem", database.System{
 		SystemID: "TV",
+		DBID:     -1,
 	}).Return(database.System{}, assert.AnError).Once()
 
 	// Call AddMediaPath with a TV show path

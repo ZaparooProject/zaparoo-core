@@ -219,6 +219,18 @@ func RandomElem[T any](xs []T) (T, error) {
 	return item, nil
 }
 
+// RandomInt returns a random integer between 0 and maxVal-1 (inclusive).
+func RandomInt(maxVal int) (int, error) {
+	if maxVal <= 0 {
+		return 0, errors.New("maxVal must be positive")
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(maxVal)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate random number: %w", err)
+	}
+	return int(n.Int64()), nil
+}
+
 func CopyFile(sourcePath, destPath string) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
@@ -373,12 +385,7 @@ func SlugifyPath(filePath string) string {
 }
 
 func HasSpace(s string) bool {
-	for i := range len(s) {
-		if s[i] == ' ' {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, " ")
 }
 
 func IsServiceRunning(cfg *config.Instance) bool {

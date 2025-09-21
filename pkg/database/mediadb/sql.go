@@ -42,7 +42,13 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-const DBConfigLastGeneratedAt = "LastGeneratedAt"
+const (
+	DBConfigLastGeneratedAt    = "LastGeneratedAt"
+	DBConfigOptimizationStatus = "OptimizationStatus"
+	DBConfigOptimizationStep   = "OptimizationStep"
+	DBConfigIndexingStatus     = "IndexingStatus"
+	DBConfigLastIndexedSystem  = "LastIndexedSystem"
+)
 
 var (
 	gooseInitOnce sync.Once
@@ -106,6 +112,110 @@ func sqlGetLastGenerated(ctx context.Context, db *sql.DB) (time.Time, error) {
 	return time.Unix(int64(timestamp), 0), nil
 }
 
+func sqlSetOptimizationStatus(ctx context.Context, db *sql.DB, status string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigOptimizationStatus,
+		status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set optimization status: %w", err)
+	}
+	return nil
+}
+
+func sqlGetOptimizationStatus(ctx context.Context, db *sql.DB) (string, error) {
+	var status string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigOptimizationStatus,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get optimization status: %w", err)
+	}
+	return status, nil
+}
+
+func sqlSetOptimizationStep(ctx context.Context, db *sql.DB, step string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigOptimizationStep,
+		step,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set optimization step: %w", err)
+	}
+	return nil
+}
+
+func sqlGetOptimizationStep(ctx context.Context, db *sql.DB) (string, error) {
+	var step string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigOptimizationStep,
+	).Scan(&step)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get optimization step: %w", err)
+	}
+	return step, nil
+}
+
+func sqlSetIndexingStatus(ctx context.Context, db *sql.DB, status string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigIndexingStatus,
+		status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set indexing status: %w", err)
+	}
+	return nil
+}
+
+func sqlGetIndexingStatus(ctx context.Context, db *sql.DB) (string, error) {
+	var status string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigIndexingStatus,
+	).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get indexing status: %w", err)
+	}
+	return status, nil
+}
+
+func sqlSetLastIndexedSystem(ctx context.Context, db *sql.DB, systemID string) error {
+	_, err := db.ExecContext(ctx,
+		"INSERT OR REPLACE INTO DBConfig (Name, Value) VALUES (?, ?)",
+		DBConfigLastIndexedSystem,
+		systemID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to set last indexed system: %w", err)
+	}
+	return nil
+}
+
+func sqlGetLastIndexedSystem(ctx context.Context, db *sql.DB) (string, error) {
+	var systemID string
+	err := db.QueryRowContext(ctx,
+		"SELECT Value FROM DBConfig WHERE Name = ?",
+		DBConfigLastIndexedSystem,
+	).Scan(&systemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("failed to get last indexed system: %w", err)
+	}
+	return systemID, nil
+}
+
 const indexTablesSQL = `
 create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
 create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
@@ -117,14 +227,35 @@ create index if not exists mediatags_tag_idx on MediaTags (TagDBID);
 create index if not exists mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
 create index if not exists mediatitletags_tag_idx on MediaTitleTags (TagDBID);
 create index if not exists supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
-create index if not exists supportingmedia_media_idx on SupportingMedia (MediaTitleDBID);
 create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
 `
 
 func sqlIndexTables(ctx context.Context, db *sql.DB) error {
+	// Create indexes
+	err := sqlCreateIndexesOnly(ctx, db)
+	if err != nil {
+		return err
+	}
+	// Run analyze
+	err = sqlAnalyze(ctx, db)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func sqlCreateIndexesOnly(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, indexTablesSQL)
 	if err != nil {
 		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+	return nil
+}
+
+func sqlAnalyze(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "ANALYZE;")
+	if err != nil {
+		return fmt.Errorf("failed to analyze database: %w", err)
 	}
 	return nil
 }
@@ -133,6 +264,10 @@ func sqlIndexTablesWithTransaction(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, indexTablesSQL)
 	if err != nil {
 		return fmt.Errorf("failed to create database indexes: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, "ANALYZE;")
+	if err != nil {
+		return fmt.Errorf("failed to analyze database: %w", err)
 	}
 	return nil
 }
@@ -807,7 +942,7 @@ func sqlSearchMediaPathParts(
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	stmt, err := db.PrepareContext(ctx, `
-		select 
+		select
 			Systems.SystemID,
 			Media.Path
 		from Systems
@@ -819,7 +954,7 @@ func sqlSearchMediaPathParts(
 		prepareVariadic("?", ",", len(systems))+
 		`)
 		and `+
-		prepareVariadic(" Media.Path like ? ", " and ", len(parts))+
+		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts))+
 		` LIMIT 250
 	`)
 	if err != nil {
@@ -920,24 +1055,59 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 
 func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
-	q, err := db.PrepareContext(ctx, `
-		select
-		Systems.SystemID, Media.Path
-		from Media
-		INNER JOIN MediaTitles on MediaTitles.DBID = Media.MediaTitleDBID
-		INNER JOIN Systems on Systems.DBID = MediaTitles.SystemDBID
-		where Systems.SystemID = ?
-		ORDER BY RANDOM() LIMIT 1;
+
+	// Step 1: Get count of games for this system
+	countStmt, err := db.PrepareContext(ctx, `
+		SELECT COUNT(*)
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE Systems.SystemID = ?
 	`)
 	if err != nil {
-		return row, fmt.Errorf("failed to prepare random game query: %w", err)
+		return row, fmt.Errorf("failed to prepare count query: %w", err)
 	}
 	defer func() {
-		if closeErr := q.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		if closeErr := countStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close count statement")
 		}
 	}()
-	err = q.QueryRowContext(ctx, system.ID).Scan(
+
+	var count int
+	err = countStmt.QueryRowContext(ctx, system.ID).Scan(&count)
+	if err != nil {
+		return row, fmt.Errorf("failed to get game count: %w", err)
+	}
+
+	if count == 0 {
+		return row, sql.ErrNoRows
+	}
+
+	// Step 2: Generate random offset
+	offset, err := helpers.RandomInt(count)
+	if err != nil {
+		return row, fmt.Errorf("failed to generate random offset: %w", err)
+	}
+
+	// Step 3: Get game at random offset
+	selectStmt, err := db.PrepareContext(ctx, `
+		SELECT Systems.SystemID, Media.Path
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		WHERE Systems.SystemID = ?
+		LIMIT 1 OFFSET ?
+	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare select query: %w", err)
+	}
+	defer func() {
+		if closeErr := selectStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close select statement")
+		}
+	}()
+
+	err = selectStmt.QueryRowContext(ctx, system.ID, offset).Scan(
 		&row.SystemID,
 		&row.Path,
 	)
@@ -946,4 +1116,33 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 	}
 	row.Name = helpers.FilenameFromPath(row.Path)
 	return row, nil
+}
+
+// sqlGetMaxID returns the maximum ID from the specified table and column
+// This function uses hardcoded table/column names that are validated by callers
+func sqlGetMaxID(ctx context.Context, db *sql.DB, tableName, columnName string) (int64, error) {
+	var query string
+	switch tableName {
+	case "Systems":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM Systems"
+	case "MediaTitles":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM MediaTitles"
+	case "Media":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM Media"
+	case "TagTypes":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM TagTypes"
+	case "Tags":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM Tags"
+	case "MediaTags":
+		query = "SELECT COALESCE(MAX(DBID), 0) FROM MediaTags"
+	default:
+		return 0, fmt.Errorf("invalid table name: %s", tableName)
+	}
+
+	var maxID int64
+	err := db.QueryRowContext(ctx, query).Scan(&maxID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get max ID from %s.%s: %w", tableName, columnName, err)
+	}
+	return maxID, nil
 }

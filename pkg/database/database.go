@@ -166,6 +166,16 @@ type MediaDBI interface {
 	GetLastGenerated() (time.Time, error)
 
 	ReindexTables() error
+	SetOptimizationStatus(status string) error
+	GetOptimizationStatus() (string, error)
+	SetOptimizationStep(step string) error
+	GetOptimizationStep() (string, error)
+	RunBackgroundOptimization()
+
+	SetIndexingStatus(status string) error
+	GetIndexingStatus() (string, error)
+	SetLastIndexedSystem(systemID string) error
+	GetLastIndexedSystem() (string, error)
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
@@ -197,4 +207,12 @@ type MediaDBI interface {
 	FindMediaTag(row MediaTag) (MediaTag, error)
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
+
+	// GetMax*ID methods for resume functionality
+	GetMaxSystemID() (int64, error)
+	GetMaxTitleID() (int64, error)
+	GetMaxMediaID() (int64, error)
+	GetMaxTagTypeID() (int64, error)
+	GetMaxTagID() (int64, error)
+	GetMaxMediaTagID() (int64, error)
 }

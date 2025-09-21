@@ -97,8 +97,10 @@ type IndexingStatusResponse struct {
 	CurrentStep        *int    `json:"currentStep,omitempty"`
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
+	OptimizationStatus string  `json:"optimizationStatus,omitempty"`
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
+	Optimizing         bool    `json:"optimizing"`
 }
 
 type ReaderResponse struct {

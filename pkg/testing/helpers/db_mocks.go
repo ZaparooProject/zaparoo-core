@@ -719,6 +719,147 @@ func (m *MockMediaDBI) FindOrInsertMediaTag(row database.MediaTag) (database.Med
 	return database.MediaTag{}, nil
 }
 
+func (m *MockMediaDBI) SetOptimizationStatus(status string) error {
+	args := m.Called(status)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetOptimizationStatus() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetOptimizationStep(step string) error {
+	args := m.Called(step)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) RunBackgroundOptimization() {
+	m.Called()
+}
+
+func (m *MockMediaDBI) SetIndexingStatus(status string) error {
+	args := m.Called(status)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetIndexingStatus() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockMediaDBI) SetLastIndexedSystem(systemID string) error {
+	args := m.Called(systemID)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetLastIndexedSystem() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+// GetMax*ID methods for resume functionality
+func (m *MockMediaDBI) GetMaxSystemID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetMaxTitleID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetMaxMediaID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetMaxTagTypeID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetMaxTagID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
+func (m *MockMediaDBI) GetMaxMediaTagID() (int64, error) {
+	args := m.Called()
+	if id, ok := args.Get(0).(int64); ok {
+		if err := args.Error(1); err != nil {
+			return id, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return id, nil
+	}
+	if err := args.Error(1); err != nil {
+		return 0, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return 0, nil
+}
+
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
 // These functions have been moved to avoid import cycles.
 // Use github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock instead.

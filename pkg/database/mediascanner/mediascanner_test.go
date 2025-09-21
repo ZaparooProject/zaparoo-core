@@ -56,8 +56,6 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	mockMediaDB.On("Truncate").Return(nil)
 	mockMediaDB.On("BeginTransaction").Return(nil)
 	mockMediaDB.On("CommitTransaction").Return(nil)
-	mockMediaDB.On("ReindexTables").Return(nil)
-	mockMediaDB.On("Vacuum").Return(nil)
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 
 	// Mock SeedKnownTags operations - these are called during initialization
@@ -69,6 +67,16 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 		Return(database.MediaTitle{}, nil).Maybe()
 	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
 	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock optimization methods
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe().Maybe()
+
+	// Mock indexing state methods
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Maybe()
+	mockMediaDB.On("SetIndexingStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockMediaDB.On("GetLastIndexedSystem").Return("", nil).Maybe()
+	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
 
 	// Create database wrapper with mocks
 	db := &database.Database{
@@ -402,4 +410,327 @@ func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
 
 	// Verify mock expectations
 	mockDB.AssertExpectations(t)
+}
+
+// TestNewNamesIndex_SuccessfulResume tests resuming indexing from an interrupted state
+func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - no Truncate() for successful resume
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for resume scenario
+	// First call: simulate interrupted indexing state
+	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
+	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once() // Simulate interrupted at 'genesis'
+	// Mock GetMax*ID methods for PopulateScanStateFromDB during resume
+	mockMediaDB.On("GetMaxSystemID").Return(int64(5), nil).Once()
+	mockMediaDB.On("GetMaxTitleID").Return(int64(10), nil).Once()
+	mockMediaDB.On("GetMaxMediaID").Return(int64(15), nil).Once()
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(3), nil).Once()
+	mockMediaDB.On("GetMaxTagID").Return(int64(20), nil).Once()
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(25), nil).Once()
+	// Subsequent calls: normal operation (no truncate because resuming successfully)
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()   // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()         // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with multiple systems, where 'genesis' was already completed
+	systems := []systemdefs.System{
+		{ID: "genesis"}, // This should be skipped (already completed)
+		{ID: "nes"},     // This should be processed
+		{ID: "snes"},    // This should be processed
+	}
+
+	// Track progress updates
+	var statusUpdates []IndexStatus
+	updateFunc := func(status IndexStatus) {
+		statusUpdates = append(statusUpdates, status)
+	}
+
+	// Run the indexer - should resume from 'nes'
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, updateFunc)
+	require.NoError(t, err)
+
+	// Verify that resume logic was called
+	assert.NotEmpty(t, statusUpdates, "Should have received status updates")
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestNewNamesIndex_ResumeSystemNotFound tests handling when last indexed system is no longer available
+func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - no special fallback in this scenario
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for invalid resume scenario (system not found triggers fallback)
+	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
+	mockMediaDB.On("GetLastIndexedSystem").Return("removed_system", nil).Once() // System no longer exists
+	// When system not found, we clear state and then do fresh start
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()       // Clear after detecting missing system
+	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()          // Clear after detecting missing system
+	mockMediaDB.On("Truncate").Return(nil).Once()                       // Fresh start after missing system
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()   // Set running for fresh start
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()       // Clear for fresh start
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once() // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()       // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	// Test with systems that don't include the "removed_system"
+	systems := []systemdefs.System{
+		{ID: "nes"}, // Only system available
+	}
+
+	// Run the indexer - should fall back to full reindex
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestNewNamesIndex_FailedIndexingRecovery tests handling previous failed indexing
+func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - fallback to fresh start
+	mockMediaDB.On("Truncate").Return(nil)
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for failed previous indexing
+	mockMediaDB.On("GetIndexingStatus").Return("failed", nil).Once()
+	// Should clear failed state and start fresh
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(3) // Clear failed state + fresh start + final clear
+	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()      // Clear failed status
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Run the indexer - should start fresh after failed status
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestNewNamesIndex_DatabaseErrorDuringResume tests error handling during resume checks
+func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - fallback to fresh start due to error
+	mockMediaDB.On("Truncate").Return(nil)
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods with database error
+	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once() // Simulate DB error
+	// Should fall back to fresh start
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once() // Clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Run the indexer - should handle error gracefully and start fresh
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations
+	mockMediaDB.AssertExpectations(t)
+}
+
+// TestNewNamesIndex_StateCleanupOnCompletion tests that indexing state is properly cleared on completion
+func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
+	t.Parallel()
+
+	// Setup test environment
+	cfg := &config.Instance{}
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
+	mockPlatform.On("Settings").Return(platforms.Settings{})
+	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
+	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
+
+	// Setup database mocks
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	// Mock basic database operations - fresh start
+	mockMediaDB.On("Truncate").Return(nil)
+	mockMediaDB.On("BeginTransaction").Return(nil)
+	mockMediaDB.On("CommitTransaction").Return(nil)
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
+	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+
+	// Mock tag seeding operations
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
+	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
+
+	// Mock system and media insertion operations
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTitle",
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+
+	// Mock indexing state methods for fresh start and completion
+	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once() // Fresh start
+	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once() // Clear on fresh start
+	// Verify completion cleanup
+	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once() // Should clear on completion
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Run the indexer
+	_, err := NewNamesIndex(mockPlatform, cfg, systems, db, func(IndexStatus) {})
+	require.NoError(t, err)
+
+	// Verify mock expectations - this ensures cleanup methods were called
+	mockMediaDB.AssertExpectations(t)
 }

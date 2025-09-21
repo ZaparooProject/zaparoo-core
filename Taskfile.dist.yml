@@ -70,6 +70,8 @@ tasks:
     desc: Run all tests
     vars:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
+    env:
+      GOEXPERIMENT: synctest
     cmds:
       - |
         if command -v tdd-guard-go >/dev/null 2>&1; then
@@ -80,11 +82,15 @@ tasks:
 
   lint:
     desc: Run golangci-lint
+    env:
+      GOEXPERIMENT: synctest
     cmds:
       - golangci-lint run ./...
 
   lint-fix:
     desc: Run golangci-lint with auto-fixes
+    env:
+      GOEXPERIMENT: synctest
     cmds:
       - golangci-lint run --fix ./...
 
