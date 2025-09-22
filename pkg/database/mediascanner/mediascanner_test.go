@@ -43,63 +43,14 @@ var testLauncherCacheMutex sync.Mutex
 // both have their scanners executed. This reproduces the bug where only one scanner
 // per system ID gets run.
 func TestMultipleScannersForSameSystemID(t *testing.T) {
-	// Create test config and mock database
+	// Create test config
 	fs := testhelpers.NewMemoryFS()
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
 
-	mockUserDB := &testhelpers.MockUserDBI{}
-	mockMediaDB := &testhelpers.MockMediaDBI{}
-
-	// Set up basic mock expectations for database operations
-	mockMediaDB.On("Truncate").Return(nil).Maybe()
-	mockMediaDB.On("TruncateSystems", []string{"TV"}).Return(nil).Maybe()
-	mockMediaDB.On("BeginTransaction").Return(nil)
-	mockMediaDB.On("CommitTransaction").Return(nil)
-	mockMediaDB.On("UpdateLastGenerated").Return(nil)
-
-	// Mock SeedKnownTags operations - these are called during initialization
-	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
-	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTitle", mock.AnythingOfType("database.MediaTitle")).
-		Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
-
-	// Mock optimization methods
-	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe().Maybe()
-
-	// Mock indexing state methods
-	mockMediaDB.On("GetIndexingStatus").Return("", nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string{"TV"}).Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
-	mockMediaDB.On("GetLastIndexedSystem").Return("", nil).Maybe()
-	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
-	// Mock GetAll* methods for PopulateScanStateFromDB
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetAllMediaTitles").Return([]database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("GetAllMedia").Return([]database.Media{}, nil).Maybe()
-
-	// Mock GetMax*ID methods for media indexing
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
-
-	// Mock GetTotalMediaCount
-	mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
-
-	// Create database wrapper with mocks
-	db := &database.Database{
-		UserDB:  mockUserDB,
-		MediaDB: mockMediaDB,
-	}
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
 
 	// Track which scanners were called
 	scanner1Called := false
@@ -163,9 +114,6 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	// Both scanners should have been called
 	assert.True(t, scanner1Called, "Scanner 1 should have been called")
 	assert.True(t, scanner2Called, "Scanner 2 should have been called") // This will fail with the current bug
-
-	// Verify mock expectations
-	mockMediaDB.AssertExpectations(t)
 }
 
 func TestGetSystemPathsRespectsSkipFilesystemScan(t *testing.T) {
@@ -251,7 +199,10 @@ func TestScannerDoubleExecutionPrevention(t *testing.T) {
 func TestSeedKnownTags_Success(t *testing.T) {
 	t.Parallel()
 
-	mockDB := &testhelpers.MockMediaDBI{}
+	// Use real database
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
 	scanState := &database.ScanState{
 		TagTypesIndex:  0,
 		TagTypeIDs:     make(map[string]int),
@@ -260,29 +211,8 @@ func TestSeedKnownTags_Success(t *testing.T) {
 		MediaTagsIndex: 0,
 	}
 
-	// Mock successful database operations
-	mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-		return tagType.Type == "Unknown"
-	})).Return(database.TagType{}, nil).Once()
-
-	mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-		return tag.Tag == "unknown"
-	})).Return(database.Tag{}, nil).Once()
-
-	mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-		return tagType.Type == "Extension"
-	})).Return(database.TagType{}, nil).Once()
-
-	mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-		return tag.Tag == ".ext"
-	})).Return(database.Tag{}, nil).Once()
-
-	// Mock insertions for the predefined tag types (Version, Language, Region, etc.)
-	mockDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
-	mockDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
-
-	// Call SeedKnownTags
-	err := SeedKnownTags(mockDB, scanState)
+	// Call SeedKnownTags with real database
+	err := SeedKnownTags(mediaDB, scanState)
 
 	// Verify no error occurred
 	require.NoError(t, err, "SeedKnownTags should not return an error on success")
@@ -293,8 +223,24 @@ func TestSeedKnownTags_Success(t *testing.T) {
 	assert.Contains(t, scanState.TagIDs, "unknown", "TagIDs should contain 'unknown' tag")
 	assert.Contains(t, scanState.TagIDs, ".ext", "TagIDs should contain '.ext' tag")
 
-	// Verify mock expectations
-	mockDB.AssertExpectations(t)
+	// Verify that specific tag types were processed and exist in scan state
+	// This tests the actual business logic without needing to query all tag types
+	unknownTagID, exists := scanState.TagTypeIDs["Unknown"]
+	assert.True(t, exists, "Unknown tag type should be in scan state")
+	assert.Positive(t, unknownTagID, "Unknown tag type should have positive ID")
+
+	extensionTagID, exists := scanState.TagTypeIDs["Extension"]
+	assert.True(t, exists, "Extension tag type should be in scan state")
+	assert.Positive(t, extensionTagID, "Extension tag type should have positive ID")
+
+	// Verify that we can find the tag types in the database (tests actual insertion)
+	unknownType, err := mediaDB.FindTagType(database.TagType{Type: "Unknown"})
+	require.NoError(t, err)
+	assert.Equal(t, "Unknown", unknownType.Type)
+
+	extensionType, err := mediaDB.FindTagType(database.TagType{Type: "Extension"})
+	require.NoError(t, err)
+	assert.Equal(t, "Extension", extensionType.Type)
 }
 
 // TestSeedKnownTags_DatabaseError tests error handling when database operations fail
@@ -403,7 +349,9 @@ func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
 	// This test ensures our fix allows SeedKnownTags to be called before BeginTransaction
 	// We simulate this by ensuring the function works without any transaction context
 
-	mockDB := &testhelpers.MockMediaDBI{}
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
 	scanState := &database.ScanState{
 		TagTypesIndex:  0,
 		TagTypeIDs:     make(map[string]int),
@@ -412,20 +360,13 @@ func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
 		MediaTagsIndex: 0,
 	}
 
-	// Mock all database operations to succeed
-	mockDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
-	mockDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
-
 	// Call SeedKnownTags - this should work without any transaction context
-	err := SeedKnownTags(mockDB, scanState)
+	err := SeedKnownTags(mediaDB, scanState)
 
 	// Verify success
 	require.NoError(t, err, "SeedKnownTags should work outside of transaction context")
 	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
 	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
-
-	// Verify mock expectations
-	mockDB.AssertExpectations(t)
 }
 
 // TestNewNamesIndex_SuccessfulResume tests resuming indexing from an interrupted state
@@ -756,56 +697,9 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	mockPlatform.On("Launchers").Return([]platforms.Launcher{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{})
 
-	// Setup database mocks
-	mockUserDB := &testhelpers.MockUserDBI{}
-	mockMediaDB := &testhelpers.MockMediaDBI{}
-
-	// Mock basic database operations - fresh start
-	mockMediaDB.On("Truncate").Return(nil).Maybe()
-	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
-	mockMediaDB.On("BeginTransaction").Return(nil)
-	mockMediaDB.On("CommitTransaction").Return(nil)
-	mockMediaDB.On("UpdateLastGenerated").Return(nil)
-	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
-
-	// Mock tag seeding operations
-	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
-	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
-
-	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
-
-	// Mock indexing state methods for fresh start and completion
-	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once() // Fresh start
-	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once() // Clear on fresh start
-	// Mock GetAll* methods for PopulateScanStateFromDB
-	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
-	mockMediaDB.On("GetAllMediaTitles").Return([]database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("GetAllMedia").Return([]database.Media{}, nil).Maybe()
-	// Mock GetMax*ID methods for PopulateScanStateFromDB
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
-	// Verify completion cleanup
-	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()           // Should clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear systems on completion
-
-	db := &database.Database{
-		UserDB:  mockUserDB,
-		MediaDB: mockMediaDB,
-	}
+	// Use real database
+	db, cleanup := testhelpers.NewTestDatabase(t)
+	defer cleanup()
 
 	systems := []systemdefs.System{{ID: "nes"}}
 
@@ -813,8 +707,18 @@ func TestNewNamesIndex_StateCleanupOnCompletion(t *testing.T) {
 	_, err := NewNamesIndex(context.Background(), mockPlatform, cfg, systems, db, func(IndexStatus) {})
 	require.NoError(t, err)
 
-	// Verify mock expectations - this ensures cleanup methods were called
-	mockMediaDB.AssertExpectations(t)
+	// Verify completion state cleanup by checking the actual database state
+	indexingStatus, err := db.MediaDB.GetIndexingStatus()
+	require.NoError(t, err)
+	assert.Equal(t, "completed", indexingStatus, "Indexing status should be set to completed")
+
+	lastIndexedSystem, err := db.MediaDB.GetLastIndexedSystem()
+	require.NoError(t, err)
+	assert.Empty(t, lastIndexedSystem, "Last indexed system should be cleared on completion")
+
+	indexingSystems, err := db.MediaDB.GetIndexingSystems()
+	require.NoError(t, err)
+	assert.Empty(t, indexingSystems, "Indexing systems should be cleared on completion")
 }
 
 // TestSmartTruncationLogic_PartialSystems tests that indexing a subset of systems uses TruncateSystems()

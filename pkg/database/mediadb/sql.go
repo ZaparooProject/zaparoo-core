@@ -28,13 +28,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/pressly/goose/v3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -52,25 +50,10 @@ const (
 	DBConfigIndexingSystems    = "IndexingSystems"
 )
 
-var (
-	gooseInitOnce sync.Once
-	errGooseInit  error
-)
-
 func sqlMigrateUp(db *sql.DB) error {
-	gooseInitOnce.Do(func() {
-		goose.SetBaseFS(migrationFiles)
-		errGooseInit = goose.SetDialect("sqlite")
-	})
-
-	if errGooseInit != nil {
-		return fmt.Errorf("error setting goose dialect: %w", errGooseInit)
+	if err := database.MigrateUp(db, migrationFiles, "migrations"); err != nil {
+		return fmt.Errorf("failed to run media database migrations: %w", err)
 	}
-
-	if err := goose.Up(db, "migrations"); err != nil {
-		return fmt.Errorf("error running migrations up: %w", err)
-	}
-
 	return nil
 }
 

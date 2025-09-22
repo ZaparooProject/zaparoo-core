@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -85,6 +86,27 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		if err := db.Close(); err != nil {
 			t.Errorf("Failed to close MediaDB: %v", err)
 		}
+	}
+
+	return
+}
+
+// NewTestDatabase creates both MediaDB and UserDB for comprehensive testing.
+// Returns a Database wrapper and cleanup function that should be deferred.
+func NewTestDatabase(t *testing.T) (db *database.Database, cleanup func()) {
+	t.Helper()
+
+	mediaDB, mediaCleanup := NewInMemoryMediaDB(t)
+	userDB, userCleanup := NewInMemoryUserDB(t)
+
+	db = &database.Database{
+		MediaDB: mediaDB,
+		UserDB:  userDB,
+	}
+
+	cleanup = func() {
+		mediaCleanup()
+		userCleanup()
 	}
 
 	return

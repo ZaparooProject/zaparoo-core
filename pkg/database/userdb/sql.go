@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	goose "github.com/pressly/goose/v3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -38,16 +37,9 @@ import (
 var migrationFiles embed.FS
 
 func sqlMigrateUp(db *sql.DB) error {
-	goose.SetBaseFS(migrationFiles)
-
-	if err := goose.SetDialect("sqlite"); err != nil {
-		return fmt.Errorf("error setting goose dialect: %w", err)
+	if err := database.MigrateUp(db, migrationFiles, "migrations"); err != nil {
+		return fmt.Errorf("failed to run user database migrations: %w", err)
 	}
-
-	if err := goose.Up(db, "migrations"); err != nil {
-		return fmt.Errorf("error running migrations up: %w", err)
-	}
-
 	return nil
 }
 

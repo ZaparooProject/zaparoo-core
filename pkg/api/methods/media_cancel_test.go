@@ -303,46 +303,15 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	// Reset status
 	statusInstance.clear()
 
-	// Create mock environment
+	// Create mock platform (still needed for non-database interactions)
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 	mockPlatform.On("Settings").Return(platforms.Settings{})
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/roms"})
 
-	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
-
-	// Mock the database methods for media generation
-	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
-	mockMediaDB.On("SetOptimizationStatus", "pending").Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return()
-	mockMediaDB.On("GetIndexingStatus").Return("", nil)
-	mockMediaDB.On("SetIndexingStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("GetLastIndexedSystem").Return("", nil)
-	mockMediaDB.On("GetIndexingSystems").Return([]string{}, nil)
-	mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil)
-	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("BeginTransaction").Return(nil)
-	mockMediaDB.On("CommitTransaction").Return(nil)
-	mockMediaDB.On("UpdateLastGenerated").Return(nil)
-	mockMediaDB.On("PopulateScanStateFromDB", mock.Anything).Return(nil)
-	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil)
-	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil)
-	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil)
-	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil)
-	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil)
-	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil)
-	mockMediaDB.On("InsertTagType", mock.Anything).Return(int64(1), nil)
-	mockMediaDB.On("FindTagType", mock.Anything).Return(database.TagType{}, nil)
-	mockMediaDB.On("InsertTag", mock.Anything).Return(int64(1), nil)
-	mockMediaDB.On("FindTag", mock.Anything).Return(database.Tag{}, nil)
-	mockMediaDB.On("Truncate").Return(nil)
-	mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil)
-
-	db := &database.Database{
-		UserDB:  mockUserDB,
-		MediaDB: mockMediaDB,
-	}
+	// Use real database
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
 
 	cfg := &config.Instance{}
 	appState, notifications := state.NewState(mockPlatform)
