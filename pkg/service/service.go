@@ -284,7 +284,7 @@ func checkAndResumeIndexing(
 
 	// Resume using the proper function with full notification support
 	go func() {
-		err := methods.GenerateMediaDB(pl, cfg, st.Notifications, systems, db)
+		err := methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
 		if err != nil {
 			log.Error().Err(err).Msg("error during auto-resume of media indexing")
 		} else {

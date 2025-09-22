@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,7 @@ type indexingStatusVals struct {
 }
 
 type indexingStatus struct {
+	cancelFunc  context.CancelFunc
 	currentDesc string
 	totalSteps  int
 	currentStep int
@@ -87,6 +89,12 @@ func (s *indexingStatus) clear() {
 	s.currentStep = 0
 	s.currentDesc = ""
 	s.totalFiles = 0
+	s.cancelFunc = nil
+}
+
+// ClearIndexingStatus clears the global indexing status - used for testing
+func ClearIndexingStatus() {
+	statusInstance.clear()
 }
 
 func (s *indexingStatus) set(vals indexingStatusVals) {
@@ -99,6 +107,41 @@ func (s *indexingStatus) set(vals indexingStatusVals) {
 	s.totalFiles = vals.totalFiles
 }
 
+func (s *indexingStatus) setCancelFunc(cancelFunc context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelFunc = cancelFunc
+}
+
+func (s *indexingStatus) cancel() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancelFunc != nil && s.indexing {
+		s.cancelFunc()
+		s.indexing = false // Set indexing to false after canceling
+		return true
+	}
+	return false
+}
+
+func (s *indexingStatus) isRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.indexing
+}
+
+func (s *indexingStatus) setRunning(running bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexing = running
+}
+
+func (s *indexingStatus) getCancelFunc() context.CancelFunc {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cancelFunc
+}
+
 func newIndexingStatus() *indexingStatus {
 	return &indexingStatus{}
 }
@@ -106,6 +149,7 @@ func newIndexingStatus() *indexingStatus {
 var statusInstance = newIndexingStatus()
 
 func GenerateMediaDB(
+	ctx context.Context,
 	pl platforms.Platform,
 	cfg *config.Instance,
 	ns chan<- models.Notification,
@@ -129,6 +173,10 @@ func GenerateMediaDB(
 	statusInstance.start()
 	startTime := time.Now()
 
+	// Create cancellable context for indexing
+	indexCtx, cancelFunc := context.WithCancel(ctx)
+	statusInstance.setCancelFunc(cancelFunc)
+
 	log.Info().Msg("generating media db")
 	notifications.MediaIndexing(ns, models.IndexingStatusResponse{
 		Exists:   false,
@@ -136,7 +184,7 @@ func GenerateMediaDB(
 	})
 
 	go func() {
-		total, err := mediascanner.NewNamesIndex(pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
+		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch status.Step {
 			case 1:
@@ -182,13 +230,22 @@ func GenerateMediaDB(
 			})
 		})
 		if err != nil {
-			log.Error().Err(err).Msg("error generating media db")
-			// TODO: error notification to client
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:     false,
-				Indexing:   false,
-				TotalFiles: &total,
-			})
+			if errors.Is(err, context.Canceled) {
+				log.Info().Msg("media indexing was cancelled")
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:     false,
+					Indexing:   false,
+					TotalFiles: &total,
+				})
+			} else {
+				log.Error().Err(err).Msg("error generating media db")
+				// TODO: error notification to client
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:     false,
+					Indexing:   false,
+					TotalFiles: &total,
+				})
+			}
 			statusInstance.clear()
 			return
 		}
@@ -276,6 +333,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	err := GenerateMediaDB(
+		env.State.GetContext(),
 		env.Platform,
 		env.Config,
 		env.State.Notifications,
@@ -502,5 +560,29 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		SystemName: media.SystemName,
 		Name:       media.Name,
 		Path:       media.Path,
+	}, nil
+}
+
+//nolint:gocritic,revive // single-use parameter in API handler
+func HandleMediaGenerateCancel(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received media generate cancel request")
+
+	if !statusInstance.get().indexing {
+		return map[string]interface{}{
+			"message": "No media indexing operation is currently running",
+		}, nil
+	}
+
+	cancelled := statusInstance.cancel()
+	if !cancelled {
+		return map[string]interface{}{
+			"message": "Media indexing not active or already cancelled",
+		}, nil
+	}
+
+	log.Info().Msg("media indexing cancellation requested")
+
+	return map[string]interface{}{
+		"message": "Media indexing cancelled successfully",
 	}, nil
 }

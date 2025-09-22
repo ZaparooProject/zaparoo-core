@@ -32,8 +32,6 @@ import (
 )
 
 func TestLogSafeResponse(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		result         any
 		name           string
@@ -68,8 +66,6 @@ func TestLogSafeResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			// Capture log output
 			var buf bytes.Buffer
 			originalLogger := log.Logger
@@ -101,8 +97,6 @@ func TestLogSafeResponse(t *testing.T) {
 }
 
 func TestLogSafeRequest(t *testing.T) {
-	t.Parallel()
-
 	testID := uuid.New()
 
 	tests := []struct {
@@ -135,8 +129,6 @@ func TestLogSafeRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			// Capture log output
 			var buf bytes.Buffer
 			originalLogger := log.Logger

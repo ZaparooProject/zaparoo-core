@@ -479,6 +479,7 @@ func TestConcurrentOptimization(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	var firstStarted, secondSkipped bool
+	var mu sync.Mutex
 
 	synctest.Run(func() {
 		var wg sync.WaitGroup
@@ -488,7 +489,9 @@ func TestConcurrentOptimization(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			mediaDB.RunBackgroundOptimization()
+			mu.Lock()
 			firstStarted = true
+			mu.Unlock()
 		}()
 
 		// Give first optimization time to start and set the atomic flag
@@ -499,14 +502,21 @@ func TestConcurrentOptimization(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			mediaDB.RunBackgroundOptimization()
+			mu.Lock()
 			secondSkipped = true
+			mu.Unlock()
 		}()
 
 		wg.Wait()
 	})
 
-	assert.True(t, firstStarted)
-	assert.True(t, secondSkipped)                // Second call completed immediately
+	mu.Lock()
+	finalFirstStarted := firstStarted
+	finalSecondSkipped := secondSkipped
+	mu.Unlock()
+
+	assert.True(t, finalFirstStarted)
+	assert.True(t, finalSecondSkipped)           // Second call completed immediately
 	assert.False(t, mediaDB.isOptimizing.Load()) // Should be false after completion
 
 	assert.NoError(t, mock.ExpectationsWereMet())

@@ -551,6 +551,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(systemdefs.SystemAmiga),
 		Scanner: func(
+			_ context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
@@ -616,6 +617,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(systemdefs.SystemNeoGeo),
 		Scanner: func(
+			_ context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,

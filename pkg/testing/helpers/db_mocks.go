@@ -890,6 +890,49 @@ func (m *MockMediaDBI) GetMaxMediaTagID() (int64, error) {
 	return 0, nil
 }
 
+// GetAll* methods for populating scan state maps
+func (m *MockMediaDBI) GetAllSystems() ([]database.System, error) {
+	args := m.Called()
+	if systems, ok := args.Get(0).([]database.System); ok {
+		if err := args.Error(1); err != nil {
+			return systems, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return systems, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.System{}, nil
+}
+
+func (m *MockMediaDBI) GetAllMediaTitles() ([]database.MediaTitle, error) {
+	args := m.Called()
+	if titles, ok := args.Get(0).([]database.MediaTitle); ok {
+		if err := args.Error(1); err != nil {
+			return titles, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return titles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.MediaTitle{}, nil
+}
+
+func (m *MockMediaDBI) GetAllMedia() ([]database.Media, error) {
+	args := m.Called()
+	if media, ok := args.Get(0).([]database.Media); ok {
+		if err := args.Error(1); err != nil {
+			return media, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return media, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.Media{}, nil
+}
+
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {

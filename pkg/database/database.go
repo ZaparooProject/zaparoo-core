@@ -219,4 +219,9 @@ type MediaDBI interface {
 	GetMaxTagTypeID() (int64, error)
 	GetMaxTagID() (int64, error)
 	GetMaxMediaTagID() (int64, error)
+
+	// GetAll* methods for populating scan state maps
+	GetAllSystems() ([]System, error)
+	GetAllMediaTitles() ([]MediaTitle, error)
+	GetAllMedia() ([]Media, error)
 }

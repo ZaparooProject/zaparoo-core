@@ -20,6 +20,7 @@
 package kodi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -68,8 +69,8 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
-func (m *MockKodiClient) GetActivePlayers() ([]Player, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]Player, error) {
+	args := m.Called(ctx)
 	if players, ok := args.Get(0).([]Player); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
@@ -82,8 +83,8 @@ func (m *MockKodiClient) GetActivePlayers() ([]Player, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetMovies() ([]Movie, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetMovies(ctx context.Context) ([]Movie, error) {
+	args := m.Called(ctx)
 	if movies, ok := args.Get(0).([]Movie); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetMovies error: %w", err)
@@ -96,8 +97,8 @@ func (m *MockKodiClient) GetMovies() ([]Movie, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetTVShows() ([]TVShow, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]TVShow, error) {
+	args := m.Called(ctx)
 	if shows, ok := args.Get(0).([]TVShow); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetTVShows error: %w", err)
@@ -110,8 +111,8 @@ func (m *MockKodiClient) GetTVShows() ([]TVShow, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]Episode, error) {
-	args := m.Called(tvShowID)
+func (m *MockKodiClient) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error) {
+	args := m.Called(ctx, tvShowID)
 	if episodes, ok := args.Get(0).([]Episode); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
@@ -133,8 +134,8 @@ func (m *MockKodiClient) SetURL(url string) {
 	m.Called(url)
 }
 
-func (m *MockKodiClient) APIRequest(method APIMethod, params any) (json.RawMessage, error) {
-	args := m.Called(method, params)
+func (m *MockKodiClient) APIRequest(ctx context.Context, method APIMethod, params any) (json.RawMessage, error) {
+	args := m.Called(ctx, method, params)
 	if result, ok := args.Get(0).(json.RawMessage); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock APIRequest error: %w", err)
@@ -176,24 +177,24 @@ func (m *MockKodiClient) LaunchTVShow(path string) error {
 	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
-func (m *MockKodiClient) GetSongs() ([]Song, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetSongs(ctx context.Context) ([]Song, error) {
+	args := m.Called(ctx)
 	if songs, ok := args.Get(0).([]Song); ok {
 		return songs, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
-func (m *MockKodiClient) GetAlbums() ([]Album, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetAlbums(ctx context.Context) ([]Album, error) {
+	args := m.Called(ctx)
 	if albums, ok := args.Get(0).([]Album); ok {
 		return albums, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
 	return nil, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
-func (m *MockKodiClient) GetArtists() ([]Artist, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetArtists(ctx context.Context) ([]Artist, error) {
+	args := m.Called(ctx)
 	if artists, ok := args.Get(0).([]Artist); ok {
 		return artists, args.Error(1) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 	}
@@ -212,11 +213,11 @@ func TestScanMovies(t *testing.T) {
 	}
 
 	// Set up mock expectation
-	mockClient.On("GetMovies").Return(expectedMovies, nil)
+	mockClient.On("GetMovies", mock.Anything).Return(expectedMovies, nil)
 
 	// Execute function
 	cfg := &config.Instance{}
-	results, err := ScanMovies(mockClient, cfg, "", []platforms.ScanResult{})
+	results, err := ScanMovies(context.Background(), mockClient, cfg, "", []platforms.ScanResult{})
 
 	// Assert results
 	require.NoError(t, err)
@@ -255,13 +256,13 @@ func TestScanTV(t *testing.T) {
 	}
 
 	// Set up mock expectations
-	mockClient.On("GetTVShows").Return(expectedTVShows, nil)
-	mockClient.On("GetEpisodes", 1).Return(expectedEpisodesBB, nil)
-	mockClient.On("GetEpisodes", 2).Return(expectedEpisodesWire, nil)
+	mockClient.On("GetTVShows", mock.Anything).Return(expectedTVShows, nil)
+	mockClient.On("GetEpisodes", mock.Anything, 1).Return(expectedEpisodesBB, nil)
+	mockClient.On("GetEpisodes", mock.Anything, 2).Return(expectedEpisodesWire, nil)
 
 	// Execute function
 	cfg := &config.Instance{}
-	results, err := ScanTV(mockClient, cfg, "", []platforms.ScanResult{})
+	results, err := ScanTV(context.Background(), mockClient, cfg, "", []platforms.ScanResult{})
 
 	// Assert results
 	require.NoError(t, err)
@@ -294,11 +295,11 @@ func TestScanSongs(t *testing.T) {
 	}
 
 	// Set up mock expectation
-	mockClient.On("GetSongs").Return(expectedSongs, nil)
+	mockClient.On("GetSongs", mock.Anything).Return(expectedSongs, nil)
 
 	// Execute function
 	cfg := &config.Instance{}
-	results, err := ScanSongs(mockClient, cfg, "", []platforms.ScanResult{})
+	results, err := ScanSongs(context.Background(), mockClient, cfg, "", []platforms.ScanResult{})
 
 	// Assert results
 	require.NoError(t, err)
@@ -329,11 +330,11 @@ func TestScanArtists(t *testing.T) {
 	}
 
 	// Set up mock expectation
-	mockClient.On("GetArtists").Return(expectedArtists, nil)
+	mockClient.On("GetArtists", mock.Anything).Return(expectedArtists, nil)
 
 	// Execute function
 	cfg := &config.Instance{}
-	results, err := ScanArtists(mockClient, cfg, "", []platforms.ScanResult{})
+	results, err := ScanArtists(context.Background(), mockClient, cfg, "", []platforms.ScanResult{})
 
 	// Assert results - should exclude "Various Artists" and "Various"
 	require.NoError(t, err)
@@ -365,11 +366,11 @@ func TestScanTVShows(t *testing.T) {
 	}
 
 	// Set up mock expectation
-	mockClient.On("GetTVShows").Return(expectedTVShows, nil)
+	mockClient.On("GetTVShows", mock.Anything).Return(expectedTVShows, nil)
 
 	// Execute function
 	cfg := &config.Instance{}
-	results, err := ScanTVShows(mockClient, cfg, "", []platforms.ScanResult{})
+	results, err := ScanTVShows(context.Background(), mockClient, cfg, "", []platforms.ScanResult{})
 
 	// Assert results
 	require.NoError(t, err)

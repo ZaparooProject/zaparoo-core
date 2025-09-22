@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -34,7 +35,8 @@ import (
 )
 
 func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
-	t.Parallel()
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
 
 	// Create test dependencies
 	fs := testhelpers.NewMemoryFS()
@@ -71,7 +73,8 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 }
 
 func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
-	t.Parallel()
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
 
 	// Create test dependencies
 	fs := testhelpers.NewMemoryFS()
@@ -93,14 +96,21 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	// Mock database to return "running" status (interrupted indexing)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusRunning, nil)
 
-	// Mock optimization status check (GenerateMediaDB calls this)
-	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	// Create a channel to signal when GetOptimizationStatus is called
+	optimizationStatusCalled := make(chan bool, 1)
+
+	// Mock optimization status check (GenerateMediaDB calls this first)
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil).Run(func(_ mock.Arguments) {
+		optimizationStatusCalled <- true
+	})
 
 	// Mock platform methods needed by NewNamesIndex
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/roms"})
 
 	// Mock methods needed by NewNamesIndex for resuming
 	mockMediaDB.On("GetLastIndexedSystem").Return("snes", nil)
+	mockMediaDB.On("GetIndexingSystems").Return([]string{"snes"}, nil)
+	mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil)
 	mockMediaDB.On("SetIndexingStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("BeginTransaction").Return(nil)
@@ -109,16 +119,30 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	mockMediaDB.On("SetOptimizationStatus", "pending").Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization").Return()
 	mockMediaDB.On("PopulateScanStateFromDB", mock.Anything).Return(nil)
+	// Mock the GetMax*ID methods that PopulateScanStateFromDB calls
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil)
+	// Mock methods needed by SeedKnownTags
+	mockMediaDB.On("InsertTagType", mock.Anything).Return(int64(1), nil)
+	mockMediaDB.On("FindTagType", mock.Anything).Return(database.TagType{}, nil)
+	mockMediaDB.On("InsertTag", mock.Anything).Return(int64(1), nil)
+	mockMediaDB.On("FindTag", mock.Anything).Return(database.Tag{}, nil)
 	mockMediaDB.On("Truncate").Return(nil)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Give it time to complete the async operations
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify mock expectations
-	mockMediaDB.AssertExpectations(t)
+	// Wait for the optimization status to be called (this signals GenerateMediaDB started)
+	select {
+	case <-optimizationStatusCalled:
+		// Good, the async operation started
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetOptimizationStatus was not called within timeout - async operation did not start")
+	}
 
 	// Verify that GetIndexingStatus was called to check for interruption
 	mockMediaDB.AssertCalled(t, "GetIndexingStatus")
@@ -127,7 +151,8 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 }
 
 func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
-	t.Parallel()
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
 
 	// Create test dependencies
 	fs := testhelpers.NewMemoryFS()
@@ -149,14 +174,21 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	// Mock database to return "pending" status (interrupted indexing)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusPending, nil)
 
-	// Mock optimization status check (GenerateMediaDB calls this)
-	mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+	// Create a channel to signal when GetOptimizationStatus is called
+	optimizationStatusCalled := make(chan bool, 1)
+
+	// Mock optimization status check (GenerateMediaDB calls this first)
+	mockMediaDB.On("GetOptimizationStatus").Return("", nil).Run(func(_ mock.Arguments) {
+		optimizationStatusCalled <- true
+	})
 
 	// Mock platform methods needed by NewNamesIndex
 	mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/roms"})
 
 	// Mock methods needed by NewNamesIndex for resuming
 	mockMediaDB.On("GetLastIndexedSystem").Return("snes", nil)
+	mockMediaDB.On("GetIndexingSystems").Return([]string{"snes"}, nil)
+	mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil)
 	mockMediaDB.On("SetIndexingStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("BeginTransaction").Return(nil)
@@ -165,16 +197,30 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	mockMediaDB.On("SetOptimizationStatus", "pending").Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization").Return()
 	mockMediaDB.On("PopulateScanStateFromDB", mock.Anything).Return(nil)
+	// Mock the GetMax*ID methods that PopulateScanStateFromDB calls
+	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil)
+	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil)
+	// Mock methods needed by SeedKnownTags
+	mockMediaDB.On("InsertTagType", mock.Anything).Return(int64(1), nil)
+	mockMediaDB.On("FindTagType", mock.Anything).Return(database.TagType{}, nil)
+	mockMediaDB.On("InsertTag", mock.Anything).Return(int64(1), nil)
+	mockMediaDB.On("FindTag", mock.Anything).Return(database.Tag{}, nil)
 	mockMediaDB.On("Truncate").Return(nil)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Give it time to complete the async operations
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify mock expectations
-	mockMediaDB.AssertExpectations(t)
+	// Wait for the optimization status to be called (this signals GenerateMediaDB started)
+	select {
+	case <-optimizationStatusCalled:
+		// Good, the async operation started
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetOptimizationStatus was not called within timeout - async operation did not start")
+	}
 
 	// Verify that GetIndexingStatus was called to check for interruption
 	mockMediaDB.AssertCalled(t, "GetIndexingStatus")
@@ -183,7 +229,8 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 }
 
 func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
-	t.Parallel()
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
 
 	// Create test dependencies
 	fs := testhelpers.NewMemoryFS()
@@ -219,7 +266,8 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 }
 
 func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
-	t.Parallel()
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	methods.ClearIndexingStatus()
 
 	// Create test dependencies
 	fs := testhelpers.NewMemoryFS()

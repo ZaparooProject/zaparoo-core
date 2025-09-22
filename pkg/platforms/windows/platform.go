@@ -483,6 +483,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
+				ctx context.Context,
 				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
@@ -588,6 +589,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:      "LaunchBox",
 			Schemes: []string{"launchbox"},
 			Scanner: func(
+				ctx context.Context,
 				cfg *config.Instance,
 				systemId string,
 				results []platforms.ScanResult,

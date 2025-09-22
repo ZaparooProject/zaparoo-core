@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,7 @@ const (
 	IndexingStatusPending   = "pending"
 	IndexingStatusCompleted = "completed"
 	IndexingStatusFailed    = "failed"
+	IndexingStatusCancelled = "cancelled"
 )
 
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
@@ -63,6 +65,7 @@ type MediaDB struct {
 	stmtInsertTag        *sql.Stmt
 	stmtInsertMediaTag   *sql.Stmt
 	isOptimizing         atomic.Bool
+	backgroundOps        sync.WaitGroup
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -658,6 +661,18 @@ func (db *MediaDB) GetMaxMediaTagID() (int64, error) {
 	return sqlGetMaxID(db.ctx, db.sql, "MediaTags", "DBID")
 }
 
+func (db *MediaDB) GetAllSystems() ([]database.System, error) {
+	return sqlGetAllSystems(db.ctx, db.sql)
+}
+
+func (db *MediaDB) GetAllMediaTitles() ([]database.MediaTitle, error) {
+	return sqlGetAllMediaTitles(db.ctx, db.sql)
+}
+
+func (db *MediaDB) GetAllMedia() ([]database.Media, error) {
+	return sqlGetAllMedia(db.ctx, db.sql)
+}
+
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.
@@ -666,7 +681,11 @@ func (db *MediaDB) RunBackgroundOptimization() {
 		log.Info().Msg("background optimization is already running, skipping")
 		return
 	}
-	defer db.isOptimizing.Store(false)
+	db.backgroundOps.Add(1)
+	defer func() {
+		db.isOptimizing.Store(false)
+		db.backgroundOps.Done()
+	}()
 
 	if db.sql == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
@@ -770,4 +789,10 @@ func (db *MediaDB) checkAndResumeOptimization() {
 	default:
 		log.Warn().Msgf("unknown optimization status: %s", status)
 	}
+}
+
+// WaitForBackgroundOperations waits for all background operations to complete.
+// This should be called before closing the database to ensure clean shutdown.
+func (db *MediaDB) WaitForBackgroundOperations() {
+	db.backgroundOps.Wait()
 }

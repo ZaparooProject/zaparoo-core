@@ -570,6 +570,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 
 			// Mock optimization status check
 			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
 
 			// Mock additional methods that might be called
 			mockMediaDB.On("GetIndexingStatus").Return("", nil).Maybe()
@@ -594,12 +595,16 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("FindOrInsertTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil).Maybe()
 			mockMediaDB.On("FindOrInsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
 			mockMediaDB.On("FindOrInsertMediaTag", mock.Anything).Return(database.MediaTag{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("InsertTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("InsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
 
 			// Mock transaction methods
 			mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 			mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
+			mockMediaDB.On("Truncate").Return(nil).Maybe()
+			mockMediaDB.On("RunBackgroundOptimization").Return(nil).Maybe()
 
 			// Mock total media count
 			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()

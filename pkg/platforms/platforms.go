@@ -20,6 +20,7 @@
 package platforms
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -118,7 +119,7 @@ type Launcher struct {
 	Kill func(*config.Instance) error
 	// Optional function to perform custom media scanning. Takes the list of
 	// results from the standard scan, if any, and returns the final list.
-	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Scanner func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// Unique ID of the launcher, visible to user.
 	ID string
 	// System associated with this launcher.

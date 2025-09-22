@@ -101,7 +101,10 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	})
 
 	// All goroutines should complete, but only one should actually run optimization
-	assert.Equal(t, numGoroutines, completedCount)
+	mu.Lock()
+	finalCompletedCount := completedCount
+	mu.Unlock()
+	assert.Equal(t, numGoroutines, finalCompletedCount)
 	assert.False(t, mediaDB.isOptimizing.Load())
 
 	assert.NoError(t, mock.ExpectationsWereMet())

@@ -470,6 +470,56 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 	}
 	ss.MediaTagsIndex = int(maxMediaTagID)
 
+	// Populate maps with existing data to prevent duplicate insertion attempts
+	// This is crucial for resuming indexing operations
+	systems, err := db.GetAllSystems()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get existing systems, maps may be incomplete")
+	} else {
+		for _, system := range systems {
+			ss.SystemIDs[system.SystemID] = int(system.DBID)
+		}
+	}
+
+	titles, err := db.GetAllMediaTitles()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get existing titles, maps may be incomplete")
+	} else {
+		for _, title := range titles {
+			// Reconstruct the title key format: "systemID:slug"
+			// We need to find the system for this title
+			for systemID, systemDBID := range ss.SystemIDs {
+				if int64(systemDBID) == title.SystemDBID {
+					titleKey := fmt.Sprintf("%s:%s", systemID, title.Slug)
+					ss.TitleIDs[titleKey] = int(title.DBID)
+					break
+				}
+			}
+		}
+	}
+
+	media, err := db.GetAllMedia()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get existing media, maps may be incomplete")
+	} else {
+		for _, m := range media {
+			// Reconstruct the media key format: "systemID:path"
+			// We need to find the system for this media through its title
+			for titleKey, titleDBID := range ss.TitleIDs {
+				if int64(titleDBID) == m.MediaTitleDBID {
+					// Extract systemID from titleKey (format: "systemID:slug")
+					parts := strings.Split(titleKey, ":")
+					if len(parts) >= 2 {
+						systemID := parts[0]
+						mediaKey := fmt.Sprintf("%s:%s", systemID, m.Path)
+						ss.MediaIDs[mediaKey] = int(m.DBID)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	log.Debug().Msgf("Populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d, MediaTags=%d",
 		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
 		ss.TagTypesIndex, ss.TagsIndex, ss.MediaTagsIndex)

@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -164,6 +165,7 @@ func (r *resultsStack) get() (*[]string, error) {
 // files. This function deep searches .zip files and handles symlinks at all
 // levels.
 func GetFiles(
+	ctx context.Context,
 	cfg *config.Instance,
 	platform platforms.Platform,
 	systemID string,
@@ -180,6 +182,13 @@ func GetFiles(
 
 	var scanner func(path string, file fs.DirEntry, err error) error
 	scanner = func(path string, file fs.DirEntry, _ error) error {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		// avoid recursive symlinks
 		if file.IsDir() {
 			key := path
@@ -313,6 +322,27 @@ func GetFiles(
 	return allResults, nil
 }
 
+// handleCancellation performs cleanup when media indexing is cancelled
+func handleCancellation(ctx context.Context, db database.MediaDBI, message string) (int, error) {
+	log.Info().Msg(message)
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+	}
+	return 0, ctx.Err()
+}
+
+// handleCancellationWithRollback performs cleanup when media indexing is cancelled after transaction begins
+func handleCancellationWithRollback(ctx context.Context, db database.MediaDBI, message string) (int, error) {
+	log.Info().Msg(message)
+	if rbErr := db.RollbackTransaction(); rbErr != nil {
+		log.Error().Err(rbErr).Msg("failed to rollback transaction after cancellation")
+	}
+	if setErr := db.SetIndexingStatus(mediadb.IndexingStatusCancelled); setErr != nil {
+		log.Error().Err(setErr).Msg("failed to set indexing status to cancelled")
+	}
+	return 0, ctx.Err()
+}
+
 type IndexStatus struct {
 	SystemID string
 	Total    int
@@ -330,6 +360,7 @@ type IndexStatus struct {
 //
 // Returns the total number of files indexed.
 func NewNamesIndex(
+	ctx context.Context,
 	platform platforms.Platform,
 	cfg *config.Instance,
 	systems []systemdefs.System,
@@ -394,6 +425,13 @@ func NewNamesIndex(
 		systemPaths[v.System.ID] = append(systemPaths[v.System.ID], v.Path)
 	}
 	sysPathIDs := helpers.AlphaMapKeys(systemPaths)
+
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return handleCancellation(ctx, db, "Media indexing cancelled during initialization")
+	default:
+	}
 
 	// Validate resume point against current system list
 	if shouldResume && lastIndexedSystemID != "" {
@@ -544,6 +582,13 @@ func NewNamesIndex(
 
 	// Main loop for systems
 	for _, k := range sysPathIDs {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			return handleCancellationWithRollback(ctx, db, "Media indexing cancelled")
+		default:
+		}
+
 		systemID := k
 
 		if completedSystems[systemID] {
@@ -560,9 +605,13 @@ func NewNamesIndex(
 		update(status)
 
 		// scan using standard folder and extensions
-		for _, path := range systemPaths[k] {
-			pathFiles, pathErr := GetFiles(cfg, platform, k, path)
+		for _, systemPath := range systemPaths[k] {
+			pathFiles, pathErr := GetFiles(ctx, cfg, platform, k, systemPath)
 			if pathErr != nil {
+				// Check if this is a cancellation error
+				if errors.Is(pathErr, context.Canceled) {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file scanning")
+				}
 				log.Error().Err(pathErr).Msgf("error getting files for system: %s", systemID)
 				continue
 			}
@@ -579,8 +628,12 @@ func NewNamesIndex(
 			if l.Scanner != nil {
 				log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 				var scanErr error
-				files, scanErr = l.Scanner(cfg, systemID, files)
+				files, scanErr = l.Scanner(ctx, cfg, systemID, files)
 				if scanErr != nil {
+					// Check if this is a cancellation error
+					if errors.Is(scanErr, context.Canceled) {
+						return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during custom scanner")
+					}
 					log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 					continue
 				}
@@ -598,8 +651,14 @@ func NewNamesIndex(
 
 		scannedSystems[systemID] = true
 
-		for _, p := range files {
-			AddMediaPath(db, &scanState, systemID, p.Path)
+		for _, file := range files {
+			// Check for cancellation between file processing
+			select {
+			case <-ctx.Done():
+				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file processing")
+			default:
+			}
+			AddMediaPath(db, &scanState, systemID, file.Path)
 		}
 
 		// Commit in batches to reduce lock time and allow API operations
@@ -623,6 +682,13 @@ func NewNamesIndex(
 		}
 	}
 
+	// Check for cancellation before custom scanners
+	select {
+	case <-ctx.Done():
+		return handleCancellationWithRollback(ctx, db, "Media indexing cancelled before custom scanners")
+	default:
+	}
+
 	// run each custom scanner at least once, even if there are no paths
 	// defined or results from a regular index
 	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
@@ -634,8 +700,13 @@ func NewNamesIndex(
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
 		if !scannedLaunchers[l.ID] && l.Scanner != nil && systemID != "" {
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
-			results, scanErr := l.Scanner(cfg, systemID, []platforms.ScanResult{})
+			results, scanErr := l.Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
+				// Check if this is a cancellation error
+				if errors.Is(scanErr, context.Canceled) {
+					return handleCancellationWithRollback(ctx, db,
+						"Media indexing cancelled during second round custom scanner")
+				}
 				log.Error().Err(scanErr).Msgf("error running %s scanner for system: %s", l.ID, systemID)
 				continue
 			}
@@ -644,8 +715,15 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				for _, p := range results {
-					AddMediaPath(db, &scanState, systemID, p.Path)
+				for _, result := range results {
+					// Check for cancellation between file processing
+					select {
+					case <-ctx.Done():
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled during custom scanner file processing")
+					default:
+					}
+					AddMediaPath(db, &scanState, systemID, result.Path)
 				}
 				// Commit in batches to reduce lock time and allow API operations
 				if commitErr := db.CommitTransaction(); commitErr != nil {
@@ -684,8 +762,12 @@ func NewNamesIndex(
 			}
 
 			log.Debug().Msgf("running %s 'any' scanner for system: %s", l.ID, s.ID)
-			results, scanErr := l.Scanner(cfg, s.ID, []platforms.ScanResult{})
+			results, scanErr := l.Scanner(ctx, cfg, s.ID, []platforms.ScanResult{})
 			if scanErr != nil {
+				// Check if this is a cancellation error
+				if errors.Is(scanErr, context.Canceled) {
+					return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during 'any' scanner")
+				}
 				log.Error().Err(scanErr).Msgf("error running %s 'any' scanner for system: %s", l.ID, s.ID)
 				continue
 			}
@@ -694,8 +776,15 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
-				for _, p := range results {
-					AddMediaPath(db, &scanState, systemID, p.Path)
+				for _, scanResult := range results {
+					// Check for cancellation between file processing
+					select {
+					case <-ctx.Done():
+						return handleCancellationWithRollback(ctx, db,
+							"Media indexing cancelled during 'any' scanner file processing")
+					default:
+					}
+					AddMediaPath(db, &scanState, systemID, scanResult.Path)
 				}
 
 				// Commit in batches to reduce lock time and allow API operations

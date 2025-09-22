@@ -20,6 +20,7 @@
 package kodi
 
 import (
+	"context"
 	"os"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -57,12 +58,13 @@ func NewKodiMovieLauncher() platforms.Launcher {
 			return nil, client.LaunchMovie(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanMovies(client, cfg, path, results)
+			return ScanMovies(ctx, client, cfg, path, results)
 		},
 	}
 }
@@ -79,12 +81,13 @@ func NewKodiTVLauncher() platforms.Launcher {
 			return nil, client.LaunchTVEpisode(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanTV(client, cfg, path, results)
+			return ScanTV(ctx, client, cfg, path, results)
 		},
 	}
 }
@@ -117,12 +120,13 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 			return nil, client.LaunchAlbum(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanAlbums(client, cfg, path, results)
+			return ScanAlbums(ctx, client, cfg, path, results)
 		},
 	}
 }
@@ -139,12 +143,13 @@ func NewKodiArtistLauncher() platforms.Launcher {
 			return nil, client.LaunchArtist(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanArtists(client, cfg, path, results)
+			return ScanArtists(ctx, client, cfg, path, results)
 		},
 	}
 }
@@ -161,12 +166,13 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 			return nil, client.LaunchTVShow(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanTVShows(client, cfg, path, results)
+			return ScanTVShows(ctx, client, cfg, path, results)
 		},
 	}
 }
@@ -183,12 +189,13 @@ func NewKodiSongLauncher() platforms.Launcher {
 			return nil, client.LaunchSong(path)
 		},
 		Scanner: func(
+			ctx context.Context,
 			cfg *config.Instance,
 			path string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
 			client := NewClient(cfg)
-			return ScanSongs(client, cfg, path, results)
+			return ScanSongs(ctx, client, cfg, path, results)
 		},
 	}
 }

@@ -409,6 +409,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // API launches don't return a process handle
 			},
 			Scanner: func(
+				ctx context.Context,
 				cfg *config.Instance,
 				systemID string,
 				_ []platforms.ScanResult,
@@ -421,7 +422,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				for _, batSysName := range batSysNames {
+					// Check for cancellation before processing each system
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					default:
+					}
+
 					for _, rootDir := range p.RootDirs(cfg) {
+						// Check for cancellation before processing each root directory
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						default:
+						}
+
 						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
 						gameList, err := esapi.ReadGameListXML(gameListPath)
 						if err != nil {

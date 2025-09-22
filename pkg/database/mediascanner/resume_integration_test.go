@@ -53,6 +53,18 @@ func TestResumeScenarios(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(15), mediaID)
 
+	tagTypeID, err := mockMediaDB.GetMaxTagTypeID()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), tagTypeID)
+
+	tagID, err := mockMediaDB.GetMaxTagID()
+	require.NoError(t, err)
+	assert.Equal(t, int64(8), tagID)
+
+	mediaTagID, err := mockMediaDB.GetMaxMediaTagID()
+	require.NoError(t, err)
+	assert.Equal(t, int64(20), mediaTagID)
+
 	mockMediaDB.AssertExpectations(t)
 }
 

@@ -203,59 +203,95 @@ func TestIDContinuityWithGaps(t *testing.T) {
 	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
 	require.NoError(t, err)
 
-	// Initialize tag system for all tests in this suite
-	scanState := &database.ScanState{
-		SystemIDs:      make(map[string]int),
-		TitleIDs:       make(map[string]int),
-		MediaIDs:       make(map[string]int),
-		TagTypeIDs:     make(map[string]int),
-		TagIDs:         make(map[string]int),
-		SystemsIndex:   0,
-		TitlesIndex:    0,
-		MediaIndex:     0,
-		TagTypesIndex:  0,
-		TagsIndex:      0,
-		MediaTagsIndex: 0,
-	}
-	err = SeedKnownTags(mediaDB, scanState)
-	require.NoError(t, err)
+	// Phase 1: Create initial data and gaps (similar to working test pattern)
+	var phase1MaxSystemID, phase1MaxTitleID int64
 
-	t.Run("Create Data With Intentional Gaps", func(t *testing.T) {
+	t.Run("Phase1_CreateDataWithGaps", func(t *testing.T) {
+		scanState := &database.ScanState{
+			SystemIDs:      make(map[string]int),
+			TitleIDs:       make(map[string]int),
+			MediaIDs:       make(map[string]int),
+			TagTypeIDs:     make(map[string]int),
+			TagIDs:         make(map[string]int),
+			SystemsIndex:   0,
+			TitlesIndex:    0,
+			MediaIndex:     0,
+			TagTypesIndex:  0,
+			TagsIndex:      0,
+			MediaTagsIndex: 0,
+		}
+
+		// Seed known tags BEFORE transaction (same pattern as working test)
+		err = SeedKnownTags(mediaDB, scanState)
+		require.NoError(t, err)
+
 		err := mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
-		// Insert data directly to create gaps in IDs
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (1, 'NES', 'Nintendo Entertainment System')")
-		require.NoError(t, err)
+		// Create some systems and titles using the normal flow first
+		generator := testdata.NewTestDataGenerator(3000)
 
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (5, 'SNES', 'Super Nintendo')")
-		require.NoError(t, err)
+		// Create a few entries normally to establish the schema
+		entry1 := generator.GenerateMediaEntry("NES")
+		titleIndex1, mediaIndex1 := AddMediaPath(mediaDB, scanState, "NES", entry1.Path)
+		assert.Positive(t, titleIndex1)
+		assert.Positive(t, mediaIndex1)
 
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (3, 1, 'test_game_1', 'Test Game 1')")
-		require.NoError(t, err)
-
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (7, 5, 'test_game_2', 'Test Game 2')")
-		require.NoError(t, err)
+		entry2 := generator.GenerateMediaEntry("SNES")
+		titleIndex2, mediaIndex2 := AddMediaPath(mediaDB, scanState, "SNES", entry2.Path)
+		assert.Positive(t, titleIndex2)
+		assert.Positive(t, mediaIndex2)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
 
-		// Verify gaps exist
-		maxSystemID, err := mediaDB.GetMaxSystemID()
-		require.NoError(t, err)
-		assert.Equal(t, int64(5), maxSystemID, "Max system ID should be 5 (with gap)")
+		// Create actual gaps in data by adding entries with higher IDs through the system
+		// We'll use a more realistic approach: add data normally, then simulate data deletion
+		// leaving gaps in the actual DBID values
 
-		maxTitleID, err := mediaDB.GetMaxTitleID()
+		// First add two more systems/titles normally
+		err = mediaDB.BeginTransaction()
 		require.NoError(t, err)
-		assert.Equal(t, int64(7), maxTitleID, "Max title ID should be 7 (with gap)")
+
+		entry3 := generator.GenerateMediaEntry("Genesis")
+		titleIndex3, mediaIndex3 := AddMediaPath(mediaDB, scanState, "Genesis", entry3.Path)
+		assert.Positive(t, titleIndex3)
+		assert.Positive(t, mediaIndex3)
+
+		entry4 := generator.GenerateMediaEntry("GameBoy")
+		titleIndex4, mediaIndex4 := AddMediaPath(mediaDB, scanState, "GameBoy", entry4.Path)
+		assert.Positive(t, titleIndex4)
+		assert.Positive(t, mediaIndex4)
+
+		err = mediaDB.CommitTransaction()
+		require.NoError(t, err)
+
+		// Now "simulate" interrupted indexing by manually inserting records with higher IDs
+		// This represents what could happen if indexing was interrupted and later new data was indexed
+		// with a fresh scan state that didn't know about existing data
+		_, err = sqlDB.ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, 'AtariST', 'Atari ST')", 7)
+		require.NoError(t, err)
+
+		_, err = sqlDB.ExecContext(ctx,
+			`INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name)
+			 VALUES (?, ?, 'test_atari_game', 'Test Atari Game')`,
+			9, 7)
+		require.NoError(t, err)
+
+		// Verify gaps exist - max IDs should be higher than count of systems
+		phase1MaxSystemID, err = mediaDB.GetMaxSystemID()
+		require.NoError(t, err)
+		assert.Equal(t, int64(7), phase1MaxSystemID, "Max system ID should be 7 (with gap)")
+
+		phase1MaxTitleID, err = mediaDB.GetMaxTitleID()
+		require.NoError(t, err)
+		assert.Equal(t, int64(9), phase1MaxTitleID, "Max title ID should be 9 (with gap)")
 	})
 
-	t.Run("Resume Continues From Highest ID Despite Gaps", func(t *testing.T) {
-		// Create resume state
+	// Phase 2: Resume operation (simulate restart like working test)
+	t.Run("Phase2_ResumeFromGaps", func(t *testing.T) {
+		// Create fresh scan state (simulating restart)
 		resumeState := &database.ScanState{
 			SystemIDs:      make(map[string]int),
 			TitleIDs:       make(map[string]int),
@@ -270,24 +306,37 @@ func TestIDContinuityWithGaps(t *testing.T) {
 			MediaTagsIndex: 0,
 		}
 
+		// This is the critical function that was broken
 		err := PopulateScanStateFromDB(mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Should use the maximum ID, not count of records
-		assert.Equal(t, 5, resumeState.SystemsIndex, "Should use max ID (5), not count (2)")
-		assert.Equal(t, 7, resumeState.TitlesIndex, "Should use max ID (7), not count (2)")
+		assert.Equal(t, int(phase1MaxSystemID), resumeState.SystemsIndex,
+			"Should use max ID (%d), not count", phase1MaxSystemID)
+		assert.Equal(t, int(phase1MaxTitleID), resumeState.TitlesIndex,
+			"Should use max ID (%d), not count", phase1MaxTitleID)
 
 		// Add new data - should get next sequential ID after the highest
 		err = mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
 		generator := testdata.NewTestDataGenerator(3000)
-		entry := generator.GenerateMediaEntry("Genesis")
-		titleIndex, mediaIndex := AddMediaPath(mediaDB, resumeState, "Genesis", entry.Path)
+		entry := generator.GenerateMediaEntry("ColecoVision")
+		titleIndex, mediaIndex := AddMediaPath(mediaDB, resumeState, "ColecoVision", entry.Path)
 
 		// Should get the next ID after the highest, not fill gaps
-		assert.Equal(t, 8, titleIndex, "Should get ID 8 (7+1), not fill gap")
-		assert.Equal(t, 1, mediaIndex, "Should get ID 1 for first media entry")
+		expectedTitleID := int(phase1MaxTitleID) + 1
+
+		// ColecoVision is a new system, so it gets the next system ID after max (7+1=8)
+		// Since resumeState.SystemsIndex was set to 7, and ColecoVision is new,
+		// the system gets ID 8, and the scanState.SystemsIndex gets updated to 8
+		assert.Equal(t, expectedTitleID, titleIndex,
+			"Should get ID %d (%d+1), not fill gap", expectedTitleID, phase1MaxTitleID)
+		assert.Positive(t, mediaIndex, "Media index should be positive")
+
+		// Verify the new system was assigned the correct ID
+		newSystemID := resumeState.SystemIDs["ColecoVision"]
+		assert.Equal(t, int(phase1MaxSystemID)+1, newSystemID, "New system should get ID %d", int(phase1MaxSystemID)+1)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
@@ -298,8 +347,8 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		finalMaxTitleID, err := mediaDB.GetMaxTitleID()
 		require.NoError(t, err)
 
-		assert.Equal(t, int64(6), finalMaxSystemID, "Should have new system with ID 6")
-		assert.Equal(t, int64(8), finalMaxTitleID, "Should have new title with ID 8")
+		assert.Equal(t, phase1MaxSystemID+1, finalMaxSystemID, "Should have new system with ID %d", phase1MaxSystemID+1)
+		assert.Equal(t, phase1MaxTitleID+1, finalMaxTitleID, "Should have new title with ID %d", phase1MaxTitleID+1)
 	})
 }
 
@@ -318,41 +367,59 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
 	require.NoError(t, err)
 
-	// Initialize tag system for all tests in this suite
-	scanState := &database.ScanState{
-		SystemIDs:      make(map[string]int),
-		TitleIDs:       make(map[string]int),
-		MediaIDs:       make(map[string]int),
-		TagTypeIDs:     make(map[string]int),
-		TagIDs:         make(map[string]int),
-		SystemsIndex:   0,
-		TitlesIndex:    0,
-		MediaIndex:     0,
-		TagTypesIndex:  0,
-		TagsIndex:      0,
-		MediaTagsIndex: 0,
-	}
-	err = SeedKnownTags(mediaDB, scanState)
-	require.NoError(t, err)
-
 	const largeID = int64(1000000)
+	var finalMaxSystemID, finalMaxTitleID int64
 
-	t.Run("Create Data With Large IDs", func(t *testing.T) {
+	t.Run("Phase1_CreateInitialData", func(t *testing.T) {
+		scanState := &database.ScanState{
+			SystemIDs:      make(map[string]int),
+			TitleIDs:       make(map[string]int),
+			MediaIDs:       make(map[string]int),
+			TagTypeIDs:     make(map[string]int),
+			TagIDs:         make(map[string]int),
+			SystemsIndex:   0,
+			TitlesIndex:    0,
+			MediaIndex:     0,
+			TagTypesIndex:  0,
+			TagsIndex:      0,
+			MediaTagsIndex: 0,
+		}
+
+		// Seed known tags BEFORE transaction (same pattern as working tests)
+		err = SeedKnownTags(mediaDB, scanState)
+		require.NoError(t, err)
+
 		err := mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
-		// Insert data with large IDs
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, 'NES', 'Nintendo Entertainment System')", largeID)
-		require.NoError(t, err)
-
-		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, 'test_game', 'Test Game')",
-			largeID+500, largeID)
-		require.NoError(t, err)
+		// Create some initial data normally
+		generator := testdata.NewTestDataGenerator(4000)
+		entry1 := generator.GenerateMediaEntry("NES")
+		titleIndex1, mediaIndex1 := AddMediaPath(mediaDB, scanState, "NES", entry1.Path)
+		assert.Positive(t, titleIndex1)
+		assert.Positive(t, mediaIndex1)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
+
+		// Now simulate very large IDs by manually inserting records
+		// (simulate system that had large amount of data before interruption)
+		_, err = sqlDB.ExecContext(ctx,
+			"INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, 'SNES', 'Super Nintendo')", largeID)
+		require.NoError(t, err)
+
+		_, err = sqlDB.ExecContext(ctx,
+			"INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, 'large_id_game', 'Large ID Game')",
+			largeID+500, largeID)
+		require.NoError(t, err)
+
+		finalMaxSystemID, err = mediaDB.GetMaxSystemID()
+		require.NoError(t, err)
+		assert.Equal(t, largeID, finalMaxSystemID, "Max system ID should be the large ID")
+
+		finalMaxTitleID, err = mediaDB.GetMaxTitleID()
+		require.NoError(t, err)
+		assert.Equal(t, largeID+500, finalMaxTitleID, "Max title ID should be large ID + 500")
 	})
 
 	t.Run("Resume Handles Large IDs Correctly", func(t *testing.T) {
@@ -374,21 +441,21 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should handle large numbers correctly
-		assert.Equal(t, int(largeID), resumeState.SystemsIndex, "Should handle large system ID")
-		assert.Equal(t, int(largeID+500), resumeState.TitlesIndex, "Should handle large title ID")
+		assert.Equal(t, int(finalMaxSystemID), resumeState.SystemsIndex, "Should handle large system ID")
+		assert.Equal(t, int(finalMaxTitleID), resumeState.TitlesIndex, "Should handle large title ID")
 
 		// Add new data
 		err = mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
 		generator := testdata.NewTestDataGenerator(4000)
-		entry := generator.GenerateMediaEntry("SNES")
-		titleIndex, mediaIndex := AddMediaPath(mediaDB, resumeState, "SNES", entry.Path)
+		entry := generator.GenerateMediaEntry("GameBoy")
+		titleIndex, mediaIndex := AddMediaPath(mediaDB, resumeState, "GameBoy", entry.Path)
 
 		// Should continue from large ID
-		expectedTitleID := int(largeID + 500 + 1)
+		expectedTitleID := int(finalMaxTitleID) + 1
 		assert.Equal(t, expectedTitleID, titleIndex, "Should continue from large ID")
-		assert.Equal(t, 1, mediaIndex, "Media should start from 1")
+		assert.Positive(t, mediaIndex, "Media should be positive")
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)

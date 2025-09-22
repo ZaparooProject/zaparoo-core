@@ -44,6 +44,7 @@ const (
 	MethodTokens               = "tokens"
 	MethodMedia                = "media"
 	MethodMediaGenerate        = "media.generate"
+	MethodMediaGenerateCancel  = "media.generate.cancel"
 	MethodMediaIndex           = "media.index" // DEPRECATED
 	MethodMediaSearch          = "media.search"
 	MethodMediaActive          = "media.active"

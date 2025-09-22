@@ -1312,6 +1312,72 @@ func sqlGetMaxID(ctx context.Context, db *sql.DB, tableName, columnName string) 
 	return maxID, nil
 }
 
+func sqlGetAllSystems(ctx context.Context, db *sql.DB) ([]database.System, error) {
+	rows, err := db.QueryContext(ctx, "SELECT DBID, SystemID, Name FROM Systems ORDER BY DBID")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query systems: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	systems := make([]database.System, 0)
+	for rows.Next() {
+		var system database.System
+		if err := rows.Scan(&system.DBID, &system.SystemID, &system.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan system: %w", err)
+		}
+		systems = append(systems, system)
+	}
+	return systems, rows.Err()
+}
+
+func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitle, error) {
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Slug, Name, SystemDBID FROM MediaTitles ORDER BY DBID")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media titles: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	titles := make([]database.MediaTitle, 0)
+	for rows.Next() {
+		var title database.MediaTitle
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID); err != nil {
+			return nil, fmt.Errorf("failed to scan media title: %w", err)
+		}
+		titles = append(titles, title)
+	}
+	return titles, rows.Err()
+}
+
+func sqlGetAllMedia(ctx context.Context, db *sql.DB) ([]database.Media, error) {
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Path, MediaTitleDBID FROM Media ORDER BY DBID")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.Media, 0)
+	for rows.Next() {
+		var m database.Media
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID); err != nil {
+			return nil, fmt.Errorf("failed to scan media: %w", err)
+		}
+		media = append(media, m)
+	}
+	return media, rows.Err()
+}
+
 func sqlGetTotalMediaCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM Media").Scan(&count)

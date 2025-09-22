@@ -20,6 +20,7 @@
 package kodi
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -29,12 +30,13 @@ import (
 
 // ScanMovies scans movies from Kodi library using the provided client
 func ScanMovies(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	movies, err := client.GetMovies()
+	movies, err := client.GetMovies(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get movies: %w", err)
 	}
@@ -51,18 +53,19 @@ func ScanMovies(
 
 // ScanTV scans TV shows and episodes from Kodi library using the provided client
 func ScanTV(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	tvShows, err := client.GetTVShows()
+	tvShows, err := client.GetTVShows(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TV shows: %w", err)
 	}
 
 	for _, show := range tvShows {
-		episodes, err := client.GetEpisodes(show.ID)
+		episodes, err := client.GetEpisodes(ctx, show.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get episodes for show %d: %w", show.ID, err)
 		}
@@ -81,12 +84,13 @@ func ScanTV(
 
 // ScanSongs scans songs from Kodi library using the provided client
 func ScanSongs(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	songs, err := client.GetSongs()
+	songs, err := client.GetSongs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get songs: %w", err)
 	}
@@ -104,12 +108,13 @@ func ScanSongs(
 
 // ScanAlbums scans albums from Kodi library using the provided client
 func ScanAlbums(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	albums, err := client.GetAlbums()
+	albums, err := client.GetAlbums(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get albums: %w", err)
 	}
@@ -130,12 +135,13 @@ func ScanAlbums(
 
 // ScanArtists scans artists from Kodi library using the provided client
 func ScanArtists(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	artists, err := client.GetArtists()
+	artists, err := client.GetArtists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get artists: %w", err)
 	}
@@ -157,12 +163,13 @@ func ScanArtists(
 
 // ScanTVShows scans TV shows from Kodi library using the provided client
 func ScanTVShows(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	shows, err := client.GetTVShows()
+	shows, err := client.GetTVShows(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TV shows: %w", err)
 	}

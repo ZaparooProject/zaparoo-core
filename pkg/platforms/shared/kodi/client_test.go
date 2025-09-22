@@ -20,6 +20,7 @@
 package kodi_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -448,7 +449,7 @@ func TestClient_GetActivePlayers_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	players, err := client.GetActivePlayers()
+	players, err := client.GetActivePlayers(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -503,7 +504,7 @@ func TestClient_GetMovies_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	movies, err := client.GetMovies()
+	movies, err := client.GetMovies(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -558,7 +559,7 @@ func TestClient_GetTVShows_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Execute
-	tvShows, err := client.GetTVShows()
+	tvShows, err := client.GetTVShows(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -620,7 +621,7 @@ func TestClient_GetEpisodes_MakesCorrectAPICall(t *testing.T) {
 
 	// Execute with tvShowID
 	tvShowID := 1
-	episodes, err := client.GetEpisodes(tvShowID)
+	episodes, err := client.GetEpisodes(context.Background(), tvShowID)
 
 	// Verify
 	require.NoError(t, err)
@@ -943,7 +944,7 @@ func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Test getting songs
-	songs, err := client.GetSongs()
+	songs, err := client.GetSongs(context.Background())
 	require.NoError(t, err)
 
 	// Verify the correct API call was made
@@ -1116,7 +1117,7 @@ func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Test getting albums
-	albums, err := client.GetAlbums()
+	albums, err := client.GetAlbums(context.Background())
 	require.NoError(t, err)
 
 	// Verify the correct API call was made
@@ -1178,7 +1179,7 @@ func TestClient_GetArtists_MakesCorrectAPICall(t *testing.T) {
 	client.SetURL(server.URL)
 
 	// Test getting artists
-	artists, err := client.GetArtists()
+	artists, err := client.GetArtists(context.Background())
 	require.NoError(t, err)
 
 	// Verify the correct API call was made
@@ -1468,7 +1469,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		client.SetURL(server.URL)
 
 		// Make an API call - this should trigger authentication lookup
-		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		_, err := client.APIRequest(context.Background(), "Player.GetActivePlayers", nil)
 		require.NoError(t, err)
 
 		// No auth headers should be present since no auth is configured
@@ -1521,7 +1522,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		client.SetURL(server.URL)
 
 		// Make an API call - this should add basic auth headers
-		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		_, err := client.APIRequest(context.Background(), "Player.GetActivePlayers", nil)
 		require.NoError(t, err)
 
 		// Should have basic auth header
@@ -1577,7 +1578,7 @@ func TestClient_APIRequest_UsesAuthenticationWhenConfigured(t *testing.T) {
 		client.SetURL(server.URL)
 
 		// Make an API call - this should add bearer auth headers
-		_, err := client.APIRequest("Player.GetActivePlayers", nil)
+		_, err := client.APIRequest(context.Background(), "Player.GetActivePlayers", nil)
 		require.NoError(t, err)
 
 		// Should have bearer auth header
