@@ -1143,6 +1143,100 @@ func sqlSearchMediaPathParts(
 	return results, nil
 }
 
+func sqlSearchMediaPathPartsWithCursor(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+	parts []string,
+	cursor *int64,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
+	results := make([]database.SearchResultWithCursor, 0, limit)
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+
+	// Search for anything in systems on blank query
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+
+	args := make([]any, 0)
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+	for _, p := range parts {
+		args = append(args, "%"+p+"%")
+	}
+
+	// Add cursor condition if provided
+	cursorCondition := ""
+	if cursor != nil {
+		cursorCondition = " AND Media.DBID > ? "
+		args = append(args, *cursor)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `
+		select
+			Systems.SystemID,
+			Media.Path,
+			Media.DBID
+		from Systems
+		inner join MediaTitles
+			on Systems.DBID = MediaTitles.SystemDBID
+		inner join Media
+			on MediaTitles.DBID = Media.MediaTitleDBID
+		where Systems.SystemID IN (` +
+		prepareVariadic("?", ",", len(systems)) +
+		`)
+		and ` +
+		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
+		cursorCondition +
+		` ORDER BY Media.DBID ASC
+		LIMIT ?`
+
+	args = append(args, limit)
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return results, fmt.Errorf("failed to prepare cursor-based media search statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return results, fmt.Errorf("failed to execute cursor-based media search query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		result := database.SearchResultWithCursor{}
+		if scanErr := rows.Scan(
+			&result.SystemID,
+			&result.Path,
+			&result.MediaID,
+		); scanErr != nil {
+			return results, fmt.Errorf("failed to scan cursor-based search result: %w", scanErr)
+		}
+		result.Name = helpers.FilenameFromPath(result.Path)
+		results = append(results, result)
+	}
+	err = rows.Err()
+	if err != nil {
+		return results, err
+	}
+	return results, nil
+}
+
 func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {
 	systemID := ""
 	q, err := db.PrepareContext(ctx, `

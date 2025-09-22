@@ -105,6 +105,13 @@ type SearchResult struct {
 	Path     string
 }
 
+type SearchResultWithCursor struct {
+	SystemID string
+	Name     string
+	Path     string
+	MediaID  int64
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
@@ -182,6 +189,9 @@ type MediaDBI interface {
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaPathWordsWithCursor(
+		systems []systemdefs.System, query string, cursor *int64, limit int,
+	) ([]SearchResultWithCursor, error)
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool

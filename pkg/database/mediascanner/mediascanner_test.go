@@ -407,7 +407,8 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	// Mock indexing state methods for resume scenario
 	// First call: simulate interrupted indexing state
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
-	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once()                        // Simulate interrupted at 'genesis'
+	// Simulate interrupted at 'genesis'
+	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once()
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes", "snes", "genesis"}, nil).Once() // Match current systems
 	// Mock GetMax*ID methods for PopulateScanStateFromDB during resume
 	mockMediaDB.On("GetMaxSystemID").Return(int64(5), nil).Once()

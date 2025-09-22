@@ -31,9 +31,16 @@ type SearchResultMedia struct {
 	Path   string `json:"path"`
 }
 
+type PaginationInfo struct {
+	NextCursor  *string `json:"nextCursor,omitempty"`
+	HasNextPage bool    `json:"hasNextPage"`
+	PageSize    int     `json:"pageSize"`
+}
+
 type SearchResults struct {
-	Results []SearchResultMedia `json:"results"`
-	Total   int                 `json:"total"`
+	Pagination *PaginationInfo     `json:"pagination,omitempty"`
+	Results    []SearchResultMedia `json:"results"`
+	Total      int                 `json:"total"`
 }
 
 type SettingsResponse struct {

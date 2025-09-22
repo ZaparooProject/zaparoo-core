@@ -21,6 +21,7 @@ package methods
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,7 +40,39 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const defaultMaxResults = 250
+const defaultMaxResults = 100
+
+type cursorData struct {
+	LastID int64 `json:"lastId"`
+}
+
+func encodeCursor(lastID int64) (string, error) {
+	data := cursorData{LastID: lastID}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal cursor data: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(bytes), nil
+}
+
+func decodeCursor(cursor string) (*int64, error) {
+	if cursor == "" {
+		return nil, nil //nolint:nilnil // empty cursor is valid and should return nil
+	}
+
+	bytes, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor format: %w", err)
+	}
+
+	var data cursorData
+	err = json.Unmarshal(bytes, &data)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor data: %w", err)
+	}
+
+	return &data.LastID, nil
+}
 
 type indexingStatusVals struct {
 	currentDesc string
@@ -366,15 +399,28 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, errors.New("query or system is required")
 	}
 
-	results := make([]models.SearchResultMedia, 0)
-	var search []database.SearchResult
+	// Handle cursor-based pagination
+	var cursorStr string
+	if params.Cursor != nil {
+		cursorStr = *params.Cursor
+	}
+	cursor, err := decodeCursor(cursorStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor: %w", err)
+	}
+
 	system := params.Systems
 	query := params.Query
 
+	// Add 1 to limit to check if there are more results
+	limit := maxResults + 1
+	var searchResults []database.SearchResultWithCursor
+
 	if system == nil || len(*system) == 0 {
-		search, err = env.Database.MediaDB.SearchMediaPathWords(systemdefs.AllSystems(), query)
+		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(
+			systemdefs.AllSystems(), query, cursor, limit)
 		if err != nil {
-			return nil, errors.New("error searching all media: " + err.Error())
+			return nil, errors.New("error searching all media with cursor: " + err.Error())
 		}
 	} else {
 		systems := make([]systemdefs.System, 0)
@@ -383,17 +429,24 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			if systemErr != nil {
 				return nil, errors.New("error getting system: " + systemErr.Error())
 			}
-
 			systems = append(systems, *sys)
 		}
 
-		search, err = env.Database.MediaDB.SearchMediaPathWords(systems, query)
+		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(systems, query, cursor, limit)
 		if err != nil {
-			return nil, errors.New("error searching media: " + err.Error())
+			return nil, errors.New("error searching media with cursor: " + err.Error())
 		}
 	}
 
-	for _, result := range search {
+	// Check if there are more results
+	hasNextPage := len(searchResults) > maxResults
+	if hasNextPage {
+		searchResults = searchResults[:maxResults]
+	}
+
+	// Convert to API models
+	results := make([]models.SearchResultMedia, 0, len(searchResults))
+	for _, result := range searchResults {
 		system, err := systemdefs.GetSystem(result.SystemID)
 		if err != nil {
 			continue
@@ -418,15 +471,31 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		})
 	}
 
-	total := len(results)
+	// Build pagination info
+	var pagination *models.PaginationInfo
+	if len(results) > 0 {
+		var nextCursor *string
+		if hasNextPage {
+			lastResult := searchResults[len(searchResults)-1]
+			cursorStr, err := encodeCursor(lastResult.MediaID)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to encode next cursor")
+				return nil, fmt.Errorf("failed to generate next page cursor: %w", err)
+			}
+			nextCursor = &cursorStr
+		}
 
-	if len(results) > maxResults {
-		results = results[:maxResults]
+		pagination = &models.PaginationInfo{
+			NextCursor:  nextCursor,
+			HasNextPage: hasNextPage,
+			PageSize:    maxResults,
+		}
 	}
 
 	return models.SearchResults{
-		Results: results,
-		Total:   total,
+		Results:    results,
+		Total:      -1, // Cannot determine total with cursor pagination efficiently
+		Pagination: pagination,
 	}, nil
 }
 

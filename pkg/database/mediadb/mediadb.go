@@ -451,6 +451,16 @@ func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query strin
 	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, qWords)
 }
 
+func (db *MediaDB) SearchMediaPathWordsWithCursor(
+	systems []systemdefs.System, query string, cursor *int64, limit int,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	qWords := strings.Fields(strings.ToLower(query))
+	return sqlSearchMediaPathPartsWithCursor(db.ctx, db.sql, systems, qWords, cursor, limit)
+}
+
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	// TODO: glob pattern matching unclear on some patterns
 	// query == path like with possible *

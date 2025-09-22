@@ -308,6 +308,8 @@ None.
 
 Query the media database and return all matching indexed media.
 
+**Note:** This API now uses cursor-based pagination for all requests. The `total` field is deprecated and always returns -1. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value in the `cursor` parameter of your next request.
+
 #### Parameters
 
 An object:
@@ -316,14 +318,16 @@ An object:
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
 | query      | string   | Yes      | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
-| maxResults | number   | No       | Max number of results to return. Default is 250.                                                                               |
+| maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
+| cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
 
 #### Result
 
-| Key     | Type    | Required | Description                                        |
-| :------ | :------ | :------- | :------------------------------------------------- |
-| results | Media[] | Yes      | A list of all search results from the given query. |
-| total   | number  | Yes      | Total number of search results.                    |
+| Key        | Type                               | Required | Description                                                                     |
+| :--------- | :--------------------------------- | :------- | :------------------------------------------------------------------------------ |
+| results    | Media[]                            | Yes      | A list of all search results from the given query.                              |
+| total      | number                             | Yes      | **Deprecated:** Always returns -1. Use pagination info instead.                 |
+| pagination | [Pagination](#pagination-object)   | Yes      | Pagination information for cursor-based navigation.                             |
 
 ##### Media object
 
@@ -340,6 +344,14 @@ An object:
 | id       | string | Yes      | Internal system ID for this system.                   |
 | name     | string | Yes      | Display name of the system.                           |
 | category | string | Yes      | Category of system. This field is not yet formalised. |
+
+##### Pagination object
+
+| Key         | Type    | Required | Description                                                                 |
+| :---------- | :------ | :------- | :-------------------------------------------------------------------------- |
+| nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
+| hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
+| pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
 
 #### Example
 
@@ -374,7 +386,12 @@ An object:
         }
       }
     ],
-    "total": 1
+    "total": -1,
+    "pagination": {
+      "nextCursor": null,
+      "hasNextPage": false,
+      "pageSize": 100
+    }
   }
 }
 ```
