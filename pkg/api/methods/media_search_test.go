@@ -127,6 +127,7 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	}
 
 	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+		mock.Anything, // context
 		mock.Anything, // Any systems slice
 		"mario",
 		(*int64)(nil), // nil cursor for initial request
@@ -155,6 +156,7 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		Platform: mockPlatform,
 		State:    appState,
 		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
 	}
 
 	// Execute
@@ -208,6 +210,7 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	limit := 3 // maxResults + 1
 
 	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+		mock.Anything, // context
 		mock.MatchedBy(func(systems []systemdefs.System) bool {
 			return len(systems) > 0 // Match any systems slice
 		}),
@@ -243,6 +246,7 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 		Platform: mockPlatform,
 		State:    appState,
 		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
 	}
 
 	// Execute
@@ -278,8 +282,14 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
 
+	// Create a minimal state for the test
+	mockPlatform := mocks.NewMockPlatform()
+	appState, _ := state.NewState(mockPlatform)
+
 	env := requests.RequestEnv{
-		Params: paramsJSON,
+		Params:   paramsJSON,
+		ClientID: "127.0.0.1:12345",
+		State:    appState,
 	}
 
 	// Execute

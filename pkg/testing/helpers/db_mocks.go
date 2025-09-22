@@ -45,6 +45,7 @@
 package helpers
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -415,9 +416,9 @@ func (m *MockMediaDBI) SearchMediaPathWords(
 }
 
 func (m *MockMediaDBI) SearchMediaPathWordsWithCursor(
-	systems []systemdefs.System, query string, cursor *int64, limit int,
+	ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 ) ([]database.SearchResultWithCursor, error) {
-	args := m.Called(systems, query, cursor, limit)
+	args := m.Called(ctx, systems, query, cursor, limit)
 	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)

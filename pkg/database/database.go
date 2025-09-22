@@ -20,6 +20,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -190,7 +191,7 @@ type MediaDBI interface {
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWordsWithCursor(
-		systems []systemdefs.System, query string, cursor *int64, limit int,
+		ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)

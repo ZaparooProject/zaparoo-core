@@ -36,6 +36,7 @@ type RequestEnv struct {
 	State      *state.State
 	Database   *database.Database
 	TokenQueue chan<- tokens.Token
+	ClientID   string
 	Params     json.RawMessage
 	ID         uuid.UUID
 	IsLocal    bool

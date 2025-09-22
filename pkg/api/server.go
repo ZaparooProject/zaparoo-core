@@ -578,6 +578,7 @@ func handleWSMessage(
 			Database:   db,
 			TokenQueue: inTokenQueue,
 			IsLocal:    clientIP.IsLoopback(),
+			ClientID:   session.Request.RemoteAddr,
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -625,6 +626,7 @@ func handlePostRequest(
 			Database:   db,
 			TokenQueue: inTokenQueue,
 			IsLocal:    clientIP.IsLoopback(),
+			ClientID:   r.RemoteAddr,
 		}
 
 		var respBody []byte

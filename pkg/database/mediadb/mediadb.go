@@ -452,13 +452,13 @@ func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query strin
 }
 
 func (db *MediaDB) SearchMediaPathWordsWithCursor(
-	systems []systemdefs.System, query string, cursor *int64, limit int,
+	ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 ) ([]database.SearchResultWithCursor, error) {
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	qWords := strings.Fields(strings.ToLower(query))
-	return sqlSearchMediaPathPartsWithCursor(db.ctx, db.sql, systems, qWords, cursor, limit)
+	return sqlSearchMediaPathPartsWithCursor(ctx, db.sql, systems, qWords, cursor, limit)
 }
 
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {

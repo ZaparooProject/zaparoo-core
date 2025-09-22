@@ -42,6 +42,12 @@ import (
 
 const defaultMaxResults = 100
 
+// Search cancellation tracking for rapid search queries
+var (
+	activeSearchCancels = make(map[string]context.CancelFunc)
+	searchCancelsMu     sync.RWMutex
+)
+
 type cursorData struct {
 	LastID int64 `json:"lastId"`
 }
@@ -180,6 +186,35 @@ func newIndexingStatus() *indexingStatus {
 }
 
 var statusInstance = newIndexingStatus()
+
+// cancelPreviousSearch cancels any in-flight search for the given client and stores the new cancel function
+func cancelPreviousSearch(clientID string, newCancel context.CancelFunc) {
+	if clientID == "" {
+		return
+	}
+
+	searchCancelsMu.Lock()
+	defer searchCancelsMu.Unlock()
+
+	if prevCancel, exists := activeSearchCancels[clientID]; exists {
+		prevCancel()
+		log.Debug().Str("client", clientID).Msg("cancelled previous search for client")
+	}
+	activeSearchCancels[clientID] = newCancel
+}
+
+// cleanupSearchCancel removes the search cancel function for a client
+func cleanupSearchCancel(clientID string) {
+	if clientID == "" {
+		return
+	}
+
+	searchCancelsMu.Lock()
+	defer searchCancelsMu.Unlock()
+
+	// Remove the client's cancel function (if any)
+	delete(activeSearchCancels, clientID)
+}
 
 func GenerateMediaDB(
 	ctx context.Context,
@@ -399,6 +434,14 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, errors.New("query or system is required")
 	}
 
+	// Create a cancellable context for this search request
+	ctx, cancel := context.WithCancel(env.State.GetContext())
+	defer cancel() // Always call cancel to release resources
+
+	// Cancel any previous search for this client and register this one
+	cancelPreviousSearch(env.ClientID, cancel)
+	defer cleanupSearchCancel(env.ClientID)
+
 	// Handle cursor-based pagination
 	var cursorStr string
 	if params.Cursor != nil {
@@ -418,9 +461,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	if system == nil || len(*system) == 0 {
 		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(
-			systemdefs.AllSystems(), query, cursor, limit)
+			ctx, systemdefs.AllSystems(), query, cursor, limit)
 		if err != nil {
-			return nil, errors.New("error searching all media with cursor: " + err.Error())
+			if errors.Is(err, context.Canceled) {
+				log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+				return nil, errors.New("search cancelled by newer request")
+			}
+			return nil, fmt.Errorf("error searching all media with cursor: %w", err)
 		}
 	} else {
 		systems := make([]systemdefs.System, 0)
@@ -432,9 +479,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			systems = append(systems, *sys)
 		}
 
-		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(systems, query, cursor, limit)
+		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(ctx, systems, query, cursor, limit)
 		if err != nil {
-			return nil, errors.New("error searching media with cursor: " + err.Error())
+			if errors.Is(err, context.Canceled) {
+				log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+				return nil, errors.New("search cancelled by newer request")
+			}
+			return nil, fmt.Errorf("error searching media with cursor: %w", err)
 		}
 	}
 
