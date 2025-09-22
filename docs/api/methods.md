@@ -468,6 +468,56 @@ Returns `null` on success once indexing is complete.
 }
 ```
 
+### media.generate.cancel
+
+Cancel any currently running media database indexing operation.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                           |
+| :------ | :----- | :------- | :------------------------------------ |
+| message | string | Yes      | Status message about the cancellation. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "method": "media.generate.cancel"
+}
+```
+
+##### Response (Indexing was running)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "result": {
+    "message": "Media indexing cancelled successfully"
+  }
+}
+```
+
+##### Response (No indexing running)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "result": {
+    "message": "No media indexing operation is currently running"
+  }
+}
+```
+
 ### media.active
 
 Returns the currently active media.
@@ -735,6 +785,48 @@ Returns `null` on success.
 }
 ```
 
+### settings.logs.download
+
+Download the current log file as base64-encoded content.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type   | Required | Description                                      |
+| :------- | :----- | :------- | :----------------------------------------------- |
+| filename | string | Yes      | Name of the log file.                            |
+| size     | number | Yes      | Size of the log file in bytes.                   |
+| content  | string | Yes      | Base64-encoded content of the log file.          |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f50e39f-7a5e-11ef-87ee-020304050607",
+  "method": "settings.logs.download"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f50e39f-7a5e-11ef-87ee-020304050607",
+  "result": {
+    "filename": "zaparoo.log",
+    "size": 1024,
+    "content": "MjAyNC0wOS0yNFQxNzowMDowMC4wMDBaIElORk8gU3RhcnRpbmcgWmFwYXJvby4uLg=="
+  }
+}
+```
+
 ## Mappings
 
 Mappings are used to modify the contents of tokens before they're launched, based on different types of matching parameters. Stored mappings are queried before every launch and applied to the token if there's a match. This allows, for example, adding ZapScript to a read-only NFC tag based on its UID.
@@ -985,6 +1077,60 @@ Returns `null` on success.
 
 ## Readers
 
+### readers
+
+List all currently connected readers and their capabilities.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type                       | Required | Description                         |
+| :------ | :------------------------- | :------- | :---------------------------------- |
+| readers | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+
+##### Reader info object
+
+| Key          | Type     | Required | Description                                   |
+| :----------- | :------- | :------- | :-------------------------------------------- |
+| id           | string   | Yes      | Unique identifier for the reader.             |
+| info         | string   | Yes      | Human-readable information about the reader.  |
+| connected    | boolean  | Yes      | Whether the reader is currently connected.    |
+| capabilities | string[] | Yes      | List of capabilities supported by the reader. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "readers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": {
+    "readers": [
+      {
+        "id": "pn532_1",
+        "info": "PN532 NFC Reader",
+        "connected": true,
+        "capabilities": ["read", "write"]
+      }
+    ]
+  }
+}
+```
+
 ### readers.write
 
 Attempt to write given text to the first available write-capable reader, if possible.
@@ -1056,6 +1202,42 @@ Returns `null` on success.
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": null
+}
+```
+
+## Launchers
+
+### launchers.refresh
+
+Refresh the internal launcher cache, forcing a reload of launcher configurations.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "af60e4a0-7a5e-11ef-88ff-020304050607",
+  "method": "launchers.refresh"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "af60e4a0-7a5e-11ef-88ff-020304050607",
   "result": null
 }
 ```
