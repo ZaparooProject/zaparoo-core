@@ -326,7 +326,7 @@ An object:
 | Key        | Type                               | Required | Description                                                                     |
 | :--------- | :--------------------------------- | :------- | :------------------------------------------------------------------------------ |
 | results    | Media[]                            | Yes      | A list of all search results from the given query.                              |
-| total      | number                             | Yes      | **Deprecated:** Always returns -1. Use pagination info instead.                 |
+| total      | number                             | Yes      | **Deprecated:** Returns the count of results in the current response page. Use pagination info for navigation. |
 | pagination | [Pagination](#pagination-object)   | Yes      | Pagination information for cursor-based navigation.                             |
 
 ##### Media object
@@ -386,7 +386,7 @@ An object:
         }
       }
     ],
-    "total": -1,
+    "total": 1,
     "pagination": {
       "nextCursor": null,
       "hasNextPage": false,

@@ -545,7 +545,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	return models.SearchResults{
 		Results:    results,
-		Total:      -1, // Cannot determine total with cursor pagination efficiently
+		Total:      len(results), // Deprecated: returns count of results in response
 		Pagination: pagination,
 	}, nil
 }

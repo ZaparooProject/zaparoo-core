@@ -175,7 +175,7 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	t.Logf("Total: %d", searchResults.Total)
 
 	assert.Len(t, searchResults.Results, 2, "Should return 2 results")
-	assert.Equal(t, -1, searchResults.Total, "Total should be -1 (deprecated field)")
+	assert.Equal(t, len(searchResults.Results), searchResults.Total, "Total should equal result count (deprecated field)")
 	assert.NotNil(t, searchResults.Pagination, "Pagination should be present")
 	assert.False(t, searchResults.Pagination.HasNextPage, "Should not have next page with only 2 results")
 	assert.Nil(t, searchResults.Pagination.NextCursor, "NextCursor should be nil when no more pages")
@@ -258,7 +258,7 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	require.True(t, ok, "Should return SearchResults")
 
 	assert.Len(t, searchResults.Results, 2, "Should return 2 results (maxResults)")
-	assert.Equal(t, -1, searchResults.Total, "Total should be -1 for cursor pagination")
+	assert.Equal(t, len(searchResults.Results), searchResults.Total, "Total should equal result count (deprecated field)")
 	assert.NotNil(t, searchResults.Pagination, "Pagination should not be nil for cursor requests")
 
 	// Verify pagination info
