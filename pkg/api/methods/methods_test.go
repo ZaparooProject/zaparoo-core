@@ -609,6 +609,11 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			// Mock total media count
 			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
+			// Mock optimized JOIN methods for PopulateScanStateFromDB
+			mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
+			mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
+			mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
+
 			db := &database.Database{
 				UserDB:  mockUserDB,
 				MediaDB: mockMediaDB,

@@ -239,54 +239,14 @@ func TestSqlTruncateSystems_Success(t *testing.T) {
 
 	systemIDs := []string{"NES", "SNES", "Genesis"}
 
-	// Expect transaction begin
-	mock.ExpectBegin()
-
-	// Expect MediaTags deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTags\s+WHERE MediaDBID IN \(\s*`+
-		`SELECT m\.DBID FROM Media m\s+JOIN MediaTitles mt ON m\.MediaTitleDBID = mt\.DBID\s+`+
-		`JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+WHERE s\.SystemID IN \(\?,\?,\?\)\s*\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Expect Media deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM Media\s+WHERE MediaTitleDBID IN \(\s*`+
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+`+
-		`WHERE s\.SystemID IN \(\?,\?,\?\)\s*\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 10))
-
-	// Expect MediaTitleTags deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTitleTags\s+WHERE MediaTitleDBID IN \(\s*`+
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+`+
-		`WHERE s\.SystemID IN \(\?,\?,\?\)\s*\)`).
+	// Expect Systems deletion (CASCADE handles all related records)
+	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?,\?,\?\)`).
 		WithArgs("NES", "SNES", "Genesis").
 		WillReturnResult(sqlmock.NewResult(0, 3))
 
-	// Expect SupportingMedia deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM SupportingMedia\s+WHERE MediaTitleDBID IN \(\s*`+
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+`+
-		`WHERE s\.SystemID IN \(\?,\?,\?\)\s*\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 2))
-
-	// Expect MediaTitles deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTitles\s+WHERE SystemDBID IN \(\s*`+
-		`SELECT DBID FROM Systems WHERE SystemID IN \(\?,\?,\?\)\s*\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 8))
-
-	// Expect Systems deletion (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM Systems\s+WHERE SystemID IN \(\?,\?,\?\)`).
-		WithArgs("NES", "SNES", "Genesis").
-		WillReturnResult(sqlmock.NewResult(0, 3))
-
-	// Expect cleanup of orphaned tags
+	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
 	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Expect commit
-	mock.ExpectCommit()
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
 	assert.NoError(t, err)
@@ -313,61 +273,21 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 
 	systemIDs := []string{"NES"}
 
-	// Expect transaction begin
-	mock.ExpectBegin()
-
-	// Expect MediaTags deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTags\s+WHERE MediaDBID IN \(\s*` +
-		`SELECT m\.DBID FROM Media m\s+JOIN MediaTitles mt ON m\.MediaTitleDBID = mt\.DBID\s+` +
-		`JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+WHERE s\.SystemID IN \(\?\)\s*\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 2))
-
-	// Expect Media deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM Media\s+WHERE MediaTitleDBID IN \(\s*` +
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+` +
-		`WHERE s\.SystemID IN \(\?\)\s*\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 5))
-
-	// Expect MediaTitleTags deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTitleTags\s+WHERE MediaTitleDBID IN \(\s*` +
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+` +
-		`WHERE s\.SystemID IN \(\?\)\s*\)`).
+	// Expect Systems deletion (CASCADE handles all related records)
+	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
 		WithArgs("NES").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Expect SupportingMedia deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM SupportingMedia\s+WHERE MediaTitleDBID IN \(\s*` +
-		`SELECT mt\.DBID FROM MediaTitles mt\s+JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+` +
-		`WHERE s\.SystemID IN \(\?\)\s*\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Expect MediaTitles deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTitles\s+WHERE SystemDBID IN \(\s*` +
-		`SELECT DBID FROM Systems WHERE SystemID IN \(\?\)\s*\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 3))
-
-	// Expect Systems deletion with single placeholder (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM Systems\s+WHERE SystemID IN \(\?\)`).
-		WithArgs("NES").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Expect cleanup of orphaned tags
+	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
 	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Expect commit
-	mock.ExpectCommit()
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlTruncateSystems_TransactionFailure(t *testing.T) {
+func TestSqlTruncateSystems_SystemsDeletionFailure(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
@@ -375,39 +295,37 @@ func TestSqlTruncateSystems_TransactionFailure(t *testing.T) {
 
 	systemIDs := []string{"NES"}
 
-	// Expect transaction begin to fail
-	mock.ExpectBegin().WillReturnError(sql.ErrConnDone)
-
-	err = sqlTruncateSystems(context.Background(), db, systemIDs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to begin transaction")
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestSqlTruncateSystems_MediaTagsDeletionFailure(t *testing.T) {
-	t.Parallel()
-	db, mock, err := testsqlmock.NewSQLMock()
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-
-	systemIDs := []string{"NES"}
-
-	// Expect transaction begin
-	mock.ExpectBegin()
-
-	// Expect MediaTags deletion to fail (allow flexible whitespace)
-	mock.ExpectExec(`(?s)DELETE FROM MediaTags\s+WHERE MediaDBID IN \(\s*` +
-		`SELECT m\.DBID FROM Media m\s+JOIN MediaTitles mt ON m\.MediaTitleDBID = mt\.DBID\s+` +
-		`JOIN Systems s ON mt\.SystemDBID = s\.DBID\s+WHERE s\.SystemID IN \(\?\)\s*\)`).
+	// Expect Systems deletion to fail
+	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
 		WithArgs("NES").
 		WillReturnError(sql.ErrConnDone)
 
-	// Expect rollback
-	mock.ExpectRollback()
+	err = sqlTruncateSystems(context.Background(), db, systemIDs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to delete systems")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlTruncateSystems_CleanupFailure(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemIDs := []string{"NES"}
+
+	// Expect Systems deletion to succeed
+	mock.ExpectExec(`DELETE FROM Systems WHERE SystemID IN \(\?\)`).
+		WithArgs("NES").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Expect cleanup to fail
+	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
+		WillReturnError(sql.ErrConnDone)
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to delete media tags")
+	assert.Contains(t, err.Error(), "failed to clean up orphaned tags")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

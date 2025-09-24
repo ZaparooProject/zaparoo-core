@@ -42,17 +42,16 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 	// Create fresh scan state - this simulates the state after FlushScanStateMaps
 	// which clears the SystemIDs cache between scanner batches
 	scanState := &database.ScanState{
-		SystemIDs:      make(map[string]int),
-		TitleIDs:       make(map[string]int),
-		MediaIDs:       make(map[string]int),
-		TagIDs:         make(map[string]int),
-		TagTypeIDs:     make(map[string]int),
-		SystemsIndex:   0,
-		TitlesIndex:    0,
-		MediaIndex:     0,
-		TagsIndex:      0,
-		TagTypesIndex:  0,
-		MediaTagsIndex: 0,
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagIDs:        make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagsIndex:     0,
+		TagTypesIndex: 0,
 	}
 
 	// Mock the system insertion to fail (simulating UNIQUE constraint violation)
@@ -122,17 +121,16 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 
 	// Create fresh scan state
 	scanState := &database.ScanState{
-		SystemIDs:      make(map[string]int),
-		TitleIDs:       make(map[string]int),
-		MediaIDs:       make(map[string]int),
-		TagIDs:         make(map[string]int),
-		TagTypeIDs:     make(map[string]int),
-		SystemsIndex:   0,
-		TitlesIndex:    0,
-		MediaIndex:     0,
-		TagsIndex:      0,
-		TagTypesIndex:  0,
-		MediaTagsIndex: 0,
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagIDs:        make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagsIndex:     0,
+		TagTypesIndex: 0,
 	}
 
 	// Mock the system insertion to fail with a UNIQUE constraint error
@@ -180,17 +178,16 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 
 	// Create fresh scan state
 	scanState := &database.ScanState{
-		SystemIDs:      make(map[string]int),
-		TitleIDs:       make(map[string]int),
-		MediaIDs:       make(map[string]int),
-		TagIDs:         make(map[string]int),
-		TagTypeIDs:     make(map[string]int),
-		SystemsIndex:   0,
-		TitlesIndex:    0,
-		MediaIndex:     0,
-		TagsIndex:      0,
-		TagTypesIndex:  0,
-		MediaTagsIndex: 0,
+		SystemIDs:     make(map[string]int),
+		TitleIDs:      make(map[string]int),
+		MediaIDs:      make(map[string]int),
+		TagIDs:        make(map[string]int),
+		TagTypeIDs:    make(map[string]int),
+		SystemsIndex:  0,
+		TitlesIndex:   0,
+		MediaIndex:    0,
+		TagsIndex:     0,
+		TagTypesIndex: 0,
 	}
 
 	// Create a non-UNIQUE database error (like connection error)

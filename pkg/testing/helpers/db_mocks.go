@@ -950,6 +950,36 @@ func (m *MockMediaDBI) GetAllMedia() ([]database.Media, error) {
 	return []database.Media{}, nil
 }
 
+// GetTitlesWithSystems mock method for optimized JOIN query
+func (m *MockMediaDBI) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
+	args := m.Called()
+	if titles, ok := args.Get(0).([]database.TitleWithSystem); ok {
+		if err := args.Error(1); err != nil {
+			return titles, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return titles, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.TitleWithSystem{}, nil
+}
+
+// GetMediaWithFullPath mock method for optimized JOIN query
+func (m *MockMediaDBI) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) {
+	args := m.Called()
+	if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
+		if err := args.Error(1); err != nil {
+			return media, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return media, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.MediaWithFullPath{}, nil
+}
+
 func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	args := m.Called()
 	if count, ok := args.Get(0).(int); ok {

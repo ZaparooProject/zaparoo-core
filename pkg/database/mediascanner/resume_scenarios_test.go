@@ -58,17 +58,16 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 	t.Run("Fresh Index Creates Correct Data", func(t *testing.T) {
 		// Test fresh indexing first
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		// Seed known tags BEFORE transaction
@@ -108,17 +107,16 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 	t.Run("PopulateScanStateFromDB Works Correctly", func(t *testing.T) {
 		// Create fresh scan state
 		resumeState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		// This is the critical function that was broken
@@ -149,17 +147,16 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 	t.Run("Resume Continues From Correct IDs", func(t *testing.T) {
 		// Create scan state populated from database
 		resumeState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err := PopulateScanStateFromDB(mediaDB, resumeState)

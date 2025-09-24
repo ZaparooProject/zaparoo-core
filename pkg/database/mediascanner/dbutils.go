@@ -164,15 +164,12 @@ func AddMediaPath(
 			continue
 		}
 
-		ss.MediaTagsIndex++
 		_, err := db.InsertMediaTag(database.MediaTag{
-			DBID:      int64(ss.MediaTagsIndex),
 			TagDBID:   int64(tagIndex),
 			MediaDBID: int64(mediaIndex),
 		})
 		if err != nil {
-			ss.MediaTagsIndex-- // Rollback index increment on failure
-			log.Error().Err(err).Msgf("error inserting media tag relationship: %s", tagStr)
+			log.Debug().Err(err).Msgf("media tag relationship already exists: %s", tagStr)
 		}
 	}
 	return titleIndex, mediaIndex
@@ -463,15 +460,10 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 	}
 	ss.TagsIndex = int(maxTagID)
 
-	maxMediaTagID, err := db.GetMaxMediaTagID()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max media tag ID, starting from 0")
-		maxMediaTagID = 0
-	}
-	ss.MediaTagsIndex = int(maxMediaTagID)
-
 	// Populate maps with existing data to prevent duplicate insertion attempts
 	// This is crucial for resuming indexing operations
+
+	// First populate systems map
 	systems, err := db.GetAllSystems()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get existing systems, maps may be incomplete")
@@ -481,48 +473,31 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 		}
 	}
 
-	titles, err := db.GetAllMediaTitles()
+	titlesWithSystems, err := db.GetTitlesWithSystems()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing titles, maps may be incomplete")
+		log.Warn().Err(err).Msg("failed to get existing titles with systems, maps may be incomplete")
 	} else {
-		for _, title := range titles {
-			// Reconstruct the title key format: "systemID:slug"
-			// We need to find the system for this title
-			for systemID, systemDBID := range ss.SystemIDs {
-				if int64(systemDBID) == title.SystemDBID {
-					titleKey := fmt.Sprintf("%s:%s", systemID, title.Slug)
-					ss.TitleIDs[titleKey] = int(title.DBID)
-					break
-				}
-			}
+		for _, title := range titlesWithSystems {
+			// Direct construction - SystemID is already available from the JOIN
+			titleKey := fmt.Sprintf("%s:%s", title.SystemID, title.Slug)
+			ss.TitleIDs[titleKey] = int(title.DBID)
 		}
 	}
 
-	media, err := db.GetAllMedia()
+	mediaWithFullPath, err := db.GetMediaWithFullPath()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing media, maps may be incomplete")
+		log.Warn().Err(err).Msg("failed to get existing media with full path, maps may be incomplete")
 	} else {
-		for _, m := range media {
-			// Reconstruct the media key format: "systemID:path"
-			// We need to find the system for this media through its title
-			for titleKey, titleDBID := range ss.TitleIDs {
-				if int64(titleDBID) == m.MediaTitleDBID {
-					// Extract systemID from titleKey (format: "systemID:slug")
-					parts := strings.Split(titleKey, ":")
-					if len(parts) >= 2 {
-						systemID := parts[0]
-						mediaKey := fmt.Sprintf("%s:%s", systemID, m.Path)
-						ss.MediaIDs[mediaKey] = int(m.DBID)
-						break
-					}
-				}
-			}
+		for _, m := range mediaWithFullPath {
+			// Direct construction - SystemID is already available from the JOIN
+			mediaKey := fmt.Sprintf("%s:%s", m.SystemID, m.Path)
+			ss.MediaIDs[mediaKey] = int(m.DBID)
 		}
 	}
 
-	log.Debug().Msgf("Populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d, MediaTags=%d",
+	log.Debug().Msgf("Populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d",
 		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
-		ss.TagTypesIndex, ss.TagsIndex, ss.MediaTagsIndex)
+		ss.TagTypesIndex, ss.TagsIndex)
 
 	return nil
 }

@@ -113,6 +113,24 @@ type SearchResultWithCursor struct {
 	MediaID  int64
 }
 
+// TitleWithSystem represents a MediaTitle with its associated System information
+type TitleWithSystem struct {
+	Slug       string
+	Name       string
+	SystemID   string
+	DBID       int64
+	SystemDBID int64
+}
+
+// MediaWithFullPath represents a Media item with its associated title and system information
+type MediaWithFullPath struct {
+	Path           string
+	TitleSlug      string
+	SystemID       string
+	DBID           int64
+	MediaTitleDBID int64
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
@@ -120,17 +138,16 @@ type FileInfo struct {
 }
 
 type ScanState struct {
-	SystemIDs      map[string]int
-	TitleIDs       map[string]int
-	MediaIDs       map[string]int
-	TagTypeIDs     map[string]int
-	TagIDs         map[string]int
-	SystemsIndex   int
-	TitlesIndex    int
-	MediaIndex     int
-	TagTypesIndex  int
-	TagsIndex      int
-	MediaTagsIndex int
+	SystemIDs     map[string]int
+	TitleIDs      map[string]int
+	MediaIDs      map[string]int
+	TagTypeIDs    map[string]int
+	TagIDs        map[string]int
+	SystemsIndex  int
+	TitlesIndex   int
+	MediaIndex    int
+	TagTypesIndex int
+	TagsIndex     int
 }
 
 /*
@@ -235,4 +252,8 @@ type MediaDBI interface {
 	GetAllSystems() ([]System, error)
 	GetAllMediaTitles() ([]MediaTitle, error)
 	GetAllMedia() ([]Media, error)
+
+	// Optimized JOIN query methods for populating scan state
+	GetTitlesWithSystems() ([]TitleWithSystem, error)
+	GetMediaWithFullPath() ([]MediaWithFullPath, error)
 }

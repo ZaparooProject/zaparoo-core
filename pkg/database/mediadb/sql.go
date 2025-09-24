@@ -327,114 +327,34 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		args[i] = id
 	}
 
-	// Start transaction for atomic operations
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	// Delete MediaTags for the specified systems (before deleting Media)
+	// With proper foreign keys, just delete Systems
+	// CASCADE handles: MediaTitles → Media → MediaTags
+	//                  MediaTitles → SupportingMedia
+	//                  MediaTitles → MediaTitleTags
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteMediaTagsStmt := fmt.Sprintf(`
-		DELETE FROM MediaTags
-		WHERE MediaDBID IN (
-			SELECT m.DBID FROM Media m
-			JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
-			JOIN Systems s ON mt.SystemDBID = s.DBID
-			WHERE s.SystemID IN (%s)
-		)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteMediaTagsStmt, args...)
-	if err != nil {
-		return fmt.Errorf("failed to delete media tags: %w", err)
-	}
-
-	// Delete Media records for the specified systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteMediaStmt := fmt.Sprintf(`
-		DELETE FROM Media
-		WHERE MediaTitleDBID IN (
-			SELECT mt.DBID FROM MediaTitles mt
-			JOIN Systems s ON mt.SystemDBID = s.DBID
-			WHERE s.SystemID IN (%s)
-		)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteMediaStmt, args...)
-	if err != nil {
-		return fmt.Errorf("failed to delete media records: %w", err)
-	}
-
-	// Delete MediaTitleTags for the specified systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteMediaTitleTagsStmt := fmt.Sprintf(`
-		DELETE FROM MediaTitleTags
-		WHERE MediaTitleDBID IN (
-			SELECT mt.DBID FROM MediaTitles mt
-			JOIN Systems s ON mt.SystemDBID = s.DBID
-			WHERE s.SystemID IN (%s)
-		)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteMediaTitleTagsStmt, args...)
-	if err != nil {
-		return fmt.Errorf("failed to delete media title tags: %w", err)
-	}
-
-	// Delete SupportingMedia for the specified systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteSupportingMediaStmt := fmt.Sprintf(`
-		DELETE FROM SupportingMedia
-		WHERE MediaTitleDBID IN (
-			SELECT mt.DBID FROM MediaTitles mt
-			JOIN Systems s ON mt.SystemDBID = s.DBID
-			WHERE s.SystemID IN (%s)
-		)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteSupportingMediaStmt, args...)
-	if err != nil {
-		return fmt.Errorf("failed to delete supporting media: %w", err)
-	}
-
-	// Delete MediaTitles for the specified systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteMediaTitlesStmt := fmt.Sprintf(`
-		DELETE FROM MediaTitles
-		WHERE SystemDBID IN (
-			SELECT DBID FROM Systems WHERE SystemID IN (%s)
-		)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteMediaTitlesStmt, args...)
-	if err != nil {
-		return fmt.Errorf("failed to delete media titles: %w", err)
-	}
-
-	// Delete Systems
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	deleteSystemsStmt := fmt.Sprintf(`DELETE FROM Systems WHERE SystemID IN (%s)`, placeholders)
-	_, err = tx.ExecContext(ctx, deleteSystemsStmt, args...)
+	deleteStmt := fmt.Sprintf("DELETE FROM Systems WHERE SystemID IN (%s)", placeholders)
+	_, err := db.ExecContext(ctx, deleteStmt, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete systems: %w", err)
 	}
 
-	// Clean up orphaned tags and tag types
+	// Clean up orphaned tags (RESTRICT prevents cascade, so we handle these separately)
+	// Only deletes truly orphaned tags that aren't referenced anywhere
 	cleanupStmt := `
 		DELETE FROM Tags WHERE DBID NOT IN (
-			SELECT DISTINCT TagDBID FROM MediaTags
+			SELECT TagDBID FROM MediaTags WHERE TagDBID IS NOT NULL
 			UNION
-			SELECT DISTINCT TagDBID FROM MediaTitleTags
+			SELECT TagDBID FROM MediaTitleTags WHERE TagDBID IS NOT NULL
+			UNION
+			SELECT TypeTagDBID FROM SupportingMedia WHERE TypeTagDBID IS NOT NULL
 		);
 		DELETE FROM TagTypes WHERE DBID NOT IN (
-			SELECT DISTINCT TypeDBID FROM Tags
+			SELECT TypeDBID FROM Tags WHERE TypeDBID IS NOT NULL
 		);
 	`
-	_, err = tx.ExecContext(ctx, cleanupStmt)
+	_, err = db.ExecContext(ctx, cleanupStmt)
 	if err != nil {
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
-	}
-
-	// Commit transaction
-	err = tx.Commit()
-	if err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -488,7 +408,7 @@ const (
 	insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
 	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
 	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
-	insertMediaTagSQL   = `INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (?, ?, ?)`
+	insertMediaTagSQL   = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
 )
 
 // Fast prepared statement execution functions for batch operations during scanning
@@ -579,12 +499,7 @@ func sqlInsertTagWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row datab
 func sqlInsertMediaTagWithPreparedStmt(
 	ctx context.Context, stmt *sql.Stmt, row database.MediaTag,
 ) (database.MediaTag, error) {
-	var dbID any
-	if row.DBID != 0 {
-		dbID = row.DBID
-	}
-
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaDBID, row.TagDBID)
+	res, err := stmt.ExecContext(ctx, row.MediaDBID, row.TagDBID)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert media tag statement: %w", err)
 	}
@@ -922,11 +837,6 @@ func sqlFindMediaTag(ctx context.Context, db *sql.DB, mediaTag database.MediaTag
 }
 
 func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (database.MediaTag, error) {
-	var dbID any
-	if row.DBID != 0 {
-		dbID = row.DBID
-	}
-
 	stmt, err := db.PrepareContext(ctx, insertMediaTagSQL)
 	if err != nil {
 		return row, fmt.Errorf("failed to prepare insert media tag statement: %w", err)
@@ -937,7 +847,7 @@ func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaDBID, row.TagDBID)
+	res, err := stmt.ExecContext(ctx, row.MediaDBID, row.TagDBID)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media tag statement: %w", err)
 	}
@@ -1462,4 +1372,63 @@ func sqlGetTotalMediaCount(ctx context.Context, db *sql.DB) (int, error) {
 		return 0, fmt.Errorf("failed to get total media count: %w", err)
 	}
 	return count, nil
+}
+
+// sqlGetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
+func sqlGetTitlesWithSystems(ctx context.Context, db *sql.DB) ([]database.TitleWithSystem, error) {
+	query := `
+		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
+		FROM MediaTitles t
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		ORDER BY t.DBID
+	`
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query titles with systems: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	titles := make([]database.TitleWithSystem, 0)
+	for rows.Next() {
+		var title database.TitleWithSystem
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan title with system: %w", err)
+		}
+		titles = append(titles, title)
+	}
+	return titles, rows.Err()
+}
+
+// sqlGetMediaWithFullPath retrieves all media with their associated title and system information using JOIN queries.
+func sqlGetMediaWithFullPath(ctx context.Context, db *sql.DB) ([]database.MediaWithFullPath, error) {
+	query := `
+		SELECT m.DBID, m.Path, m.MediaTitleDBID, t.Slug, s.SystemID
+		FROM Media m
+		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		ORDER BY m.DBID
+	`
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media with full path: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.MediaWithFullPath, 0)
+	for rows.Next() {
+		var m database.MediaWithFullPath
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &m.TitleSlug, &m.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
+		}
+		media = append(media, m)
+	}
+	return media, rows.Err()
 }

@@ -683,6 +683,18 @@ func (db *MediaDB) GetAllMedia() ([]database.Media, error) {
 	return sqlGetAllMedia(db.ctx, db.sql)
 }
 
+// GetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
+// This is more efficient than fetching titles and systems separately and matching them in application code.
+func (db *MediaDB) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
+	return sqlGetTitlesWithSystems(db.ctx, db.sql)
+}
+
+// GetMediaWithFullPath retrieves all media with their associated title and system information using JOIN queries.
+// This eliminates the need for nested loops to match media with titles and systems.
+func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) {
+	return sqlGetMediaWithFullPath(db.ctx, db.sql)
+}
+
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.

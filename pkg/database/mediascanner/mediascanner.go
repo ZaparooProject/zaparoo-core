@@ -459,17 +459,16 @@ func NewNamesIndex(
 
 	// Initialize scan state
 	scanState := database.ScanState{
-		SystemsIndex:   0,
-		SystemIDs:      make(map[string]int),
-		TitlesIndex:    0,
-		TitleIDs:       make(map[string]int),
-		MediaIndex:     0,
-		MediaIDs:       make(map[string]int),
-		TagTypesIndex:  0,
-		TagTypeIDs:     make(map[string]int),
-		TagsIndex:      0,
-		TagIDs:         make(map[string]int),
-		MediaTagsIndex: 0,
+		SystemsIndex:  0,
+		SystemIDs:     make(map[string]int),
+		TitlesIndex:   0,
+		TitleIDs:      make(map[string]int),
+		MediaIndex:    0,
+		MediaIDs:      make(map[string]int),
+		TagTypesIndex: 0,
+		TagTypeIDs:    make(map[string]int),
+		TagsIndex:     0,
+		TagIDs:        make(map[string]int),
 	}
 
 	// 2. Truncate and Initial Status Set
@@ -500,6 +499,14 @@ func NewNamesIndex(
 			err = db.TruncateSystems(currentSystemIDs)
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
+			}
+
+			// After selective truncation, populate scan state to avoid ID conflicts
+			// with remaining systems that weren't truncated
+			err = PopulateScanStateFromDB(db, &scanState)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to populate scan state after truncation, continuing anyway")
+				// Continue anyway - the error recovery logic in AddMediaPath will handle conflicts
 			}
 		}
 

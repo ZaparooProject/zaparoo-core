@@ -55,17 +55,16 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   999, // Set to non-zero to verify it gets reset
-			TitlesIndex:    999,
-			MediaIndex:     999,
-			TagTypesIndex:  999,
-			TagsIndex:      999,
-			MediaTagsIndex: 999,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  999, // Set to non-zero to verify it gets reset
+			TitlesIndex:   999,
+			MediaIndex:    999,
+			TagTypesIndex: 999,
+			TagsIndex:     999,
 		}
 
 		err = PopulateScanStateFromDB(mediaDB, scanState)
@@ -77,7 +76,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 0, scanState.MediaIndex, "Empty DB should have MediaIndex = 0")
 		assert.Equal(t, 0, scanState.TagTypesIndex, "Empty DB should have TagTypesIndex = 0")
 		assert.Equal(t, 0, scanState.TagsIndex, "Empty DB should have TagsIndex = 0")
-		assert.Equal(t, 0, scanState.MediaTagsIndex, "Empty DB should have MediaTagsIndex = 0")
 	})
 
 	t.Run("Database With Only Systems", func(t *testing.T) {
@@ -105,17 +103,16 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err = PopulateScanStateFromDB(mediaDB, scanState)
@@ -126,7 +123,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 0, scanState.MediaIndex, "Should have MediaIndex = 0 (no media)")
 		assert.Equal(t, 0, scanState.TagTypesIndex, "Should have TagTypesIndex = 0 (no tag types)")
 		assert.Equal(t, 0, scanState.TagsIndex, "Should have TagsIndex = 0 (no tags)")
-		assert.Equal(t, 0, scanState.MediaTagsIndex, "Should have MediaTagsIndex = 0 (no media tags)")
 	})
 
 	t.Run("Database With Sparse Data", func(t *testing.T) {
@@ -158,17 +154,16 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err = PopulateScanStateFromDB(mediaDB, scanState)
@@ -180,7 +175,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 0, scanState.MediaIndex, "Should be 0 (no media)")
 		assert.Equal(t, 5, scanState.TagTypesIndex, "Should use max DBID (5), not count (1)")
 		assert.Equal(t, 0, scanState.TagsIndex, "Should be 0 (no tags)")
-		assert.Equal(t, 0, scanState.MediaTagsIndex, "Should be 0 (no media tags)")
 	})
 
 	t.Run("Error Handling With Mock Database", func(t *testing.T) {
@@ -193,24 +187,22 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetMaxMediaID").Return(int64(0), assert.AnError)
 		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
 		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxMediaTagID").Return(int64(10), nil)
 		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
-		mockDB.On("GetAllMediaTitles").Return([]database.MediaTitle{}, assert.AnError)
-		mockDB.On("GetAllMedia").Return([]database.Media{}, assert.AnError)
+		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
+		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err := PopulateScanStateFromDB(mockDB, scanState)
@@ -222,7 +214,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 0, scanState.MediaIndex, "Should fall back to 0 on error")
 		assert.Equal(t, 3, scanState.TagTypesIndex, "Should use successful return value")
 		assert.Equal(t, 0, scanState.TagsIndex, "Should fall back to 0 on error")
-		assert.Equal(t, 10, scanState.MediaTagsIndex, "Should use successful return value")
 
 		mockDB.AssertExpectations(t)
 	})
@@ -237,24 +228,22 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetMaxMediaID").Return(int64(0), assert.AnError)
 		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
 		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxMediaTagID").Return(int64(25), nil)
 		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
-		mockDB.On("GetAllMediaTitles").Return([]database.MediaTitle{}, assert.AnError)
-		mockDB.On("GetAllMedia").Return([]database.Media{}, assert.AnError)
+		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
+		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err := PopulateScanStateFromDB(mockDB, scanState)
@@ -266,7 +255,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 0, scanState.MediaIndex, "MediaIndex should fall back to 0 on error")
 		assert.Equal(t, 3, scanState.TagTypesIndex, "TagTypesIndex should use successful return value")
 		assert.Equal(t, 0, scanState.TagsIndex, "TagsIndex should fall back to 0 on error")
-		assert.Equal(t, 25, scanState.MediaTagsIndex, "MediaTagsIndex should use successful return value")
 
 		mockDB.AssertExpectations(t)
 	})
@@ -324,17 +312,16 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err = PopulateScanStateFromDB(mediaDB, scanState)
@@ -346,7 +333,6 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		assert.Equal(t, 2, scanState.MediaIndex, "Should have max media ID")
 		assert.Equal(t, 1, scanState.TagTypesIndex, "Should have max tag type ID")
 		assert.Equal(t, 2, scanState.TagsIndex, "Should have max tag ID")
-		assert.Equal(t, 1, scanState.MediaTagsIndex, "Should have max media tag ID")
 	})
 
 	t.Run("Large ID Values", func(t *testing.T) {
@@ -371,17 +357,16 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{
-			SystemIDs:      make(map[string]int),
-			TitleIDs:       make(map[string]int),
-			MediaIDs:       make(map[string]int),
-			TagTypeIDs:     make(map[string]int),
-			TagIDs:         make(map[string]int),
-			SystemsIndex:   0,
-			TitlesIndex:    0,
-			MediaIndex:     0,
-			TagTypesIndex:  0,
-			TagsIndex:      0,
-			MediaTagsIndex: 0,
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
 		}
 
 		err = PopulateScanStateFromDB(mediaDB, scanState)
