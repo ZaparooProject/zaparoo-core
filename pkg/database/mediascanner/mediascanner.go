@@ -677,7 +677,7 @@ func NewNamesIndex(
 			if !batchStarted {
 				if beginErr := db.BeginTransaction(); beginErr != nil {
 					err = fmt.Errorf("failed to begin new transaction: %w", beginErr)
-					return
+					return 0, err
 				}
 				batchStarted = true
 			}

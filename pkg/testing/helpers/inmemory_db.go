@@ -60,7 +60,7 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 		}
 	}
 
-	return
+	return db, cleanup
 }
 
 func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
@@ -90,7 +90,7 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		}
 	}
 
-	return
+	return db, cleanup
 }
 
 // NewTestDatabase creates both MediaDB and UserDB for comprehensive testing.
@@ -111,5 +111,5 @@ func NewTestDatabase(t *testing.T) (db *database.Database, cleanup func()) {
 		userCleanup()
 	}
 
-	return
+	return db, cleanup
 }
