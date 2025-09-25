@@ -22,6 +22,7 @@
 package windows
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -161,6 +162,7 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 			return esapi.APIEmuKill()
 		},
 		Scanner: func(
+			_ context.Context,
 			cfg *config.Instance,
 			_ string,
 			_ []platforms.ScanResult,
