@@ -1,10 +1,5 @@
 -- +goose NO TRANSACTION
 -- +goose Up
-PRAGMA
-journal_mode = OFF;
-PRAGMA
-synchronous = OFF;
-
 create table DBConfig
 (
     Name  text PRIMARY KEY,
