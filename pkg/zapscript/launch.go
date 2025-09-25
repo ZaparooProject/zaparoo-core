@@ -23,10 +23,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -83,7 +83,15 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	gamesdb := env.Database.MediaDB
 
 	if strings.EqualFold(query, "all") {
-		game, gameErr := gamesdb.RandomGame(systemdefs.AllSystems())
+		allSystems := systemdefs.AllSystems()
+		systemIDs := make([]string, len(allSystems))
+		for i, sys := range allSystems {
+			systemIDs[i] = sys.ID
+		}
+		mediaQuery := database.MediaQuery{
+			Systems: systemIDs,
+		}
+		game, gameErr := gamesdb.RandomGameWithQuery(mediaQuery)
 		if gameErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
@@ -98,32 +106,21 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, nil
 	}
 
-	// absolute path, try read dir and pick random file
-	// TODO: won't work for zips, switch to using gamesdb when it indexes paths
-	// TODO: doesn't filter on extensions
+	// absolute path, use database query to find random media with this path prefix
+	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
-		if _, statErr := os.Stat(query); statErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to stat path '%s': %w", query, statErr)
+		mediaQuery := database.MediaQuery{
+			PathPrefix: query,
+		}
+		searchResult, searchErr := gamesdb.RandomGameWithQuery(mediaQuery)
+		if searchErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
-		files, globErr := filepath.Glob(filepath.Join(query, "*"))
-		if globErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to glob files in '%s': %w", query, globErr)
-		}
-
-		if len(files) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", query)
-		}
-
-		file, randomErr := helpers.RandomElem(files)
-		if randomErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
-		}
-
-		if launchErr := launch(file); launchErr != nil {
+		if launchErr := launch(searchResult.Path); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
+			}, fmt.Errorf("failed to launch file '%s': %w", searchResult.Path, launchErr)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -150,9 +147,16 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			systems = []systemdefs.System{*system}
 		}
 
-		// Handle the special case of /* pattern - use RandomGame directly
+		// Handle the special case of /* pattern - use RandomGameWithQuery
 		if query == "*" {
-			game, randomErr := gamesdb.RandomGame(systems)
+			systemIDs := make([]string, len(systems))
+			for i, sys := range systems {
+				systemIDs[i] = sys.ID
+			}
+			mediaQuery := database.MediaQuery{
+				Systems: systemIDs,
+			}
+			game, randomErr := gamesdb.RandomGameWithQuery(mediaQuery)
 			if randomErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
@@ -167,20 +171,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			}, nil
 		}
 
-		query = strings.ToLower(query)
-
-		res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
-		if searchErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to search for games matching '%s': %w", query, searchErr)
+		systemIDs := make([]string, len(systems))
+		for i, sys := range systems {
+			systemIDs[i] = sys.ID
 		}
-
-		if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
+		mediaQuery := database.MediaQuery{
+			Systems:  systemIDs,
+			PathGlob: query,
 		}
-
-		game, randomErr := helpers.RandomElem(res)
+		game, randomErr := gamesdb.RandomGameWithQuery(mediaQuery)
 		if randomErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to select random game: %w", randomErr)
+			return platforms.CmdResult{}, fmt.Errorf("failed to get random game matching '%s': %w", query, randomErr)
 		}
 
 		if launchErr := launch(game.Path); launchErr != nil {
@@ -206,7 +207,14 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	game, err := gamesdb.RandomGame(systems)
+	systemIDs := make([]string, len(systems))
+	for i, sys := range systems {
+		systemIDs[i] = sys.ID
+	}
+	mediaQuery := database.MediaQuery{
+		Systems: systemIDs,
+	}
+	game, err := gamesdb.RandomGameWithQuery(mediaQuery)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}

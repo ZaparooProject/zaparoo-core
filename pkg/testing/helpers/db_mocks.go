@@ -1028,6 +1028,28 @@ func (m *MockMediaDBI) GetTotalMediaCount() (int, error) {
 	return 0, nil
 }
 
+func (m *MockMediaDBI) InvalidateCountCache() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) RandomGameWithQuery(query database.MediaQuery) (database.SearchResult, error) {
+	args := m.Called(query)
+	if result, ok := args.Get(0).(database.SearchResult); ok {
+		if err := args.Error(1); err != nil {
+			return result, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.SearchResult{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.SearchResult{}, nil
+}
+
 // Helper functions for sqlmock setup - MOVED TO pkg/testing/sqlmock
 // These functions have been moved to avoid import cycles.
 // Use github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock instead.

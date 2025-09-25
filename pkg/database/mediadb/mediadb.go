@@ -21,11 +21,14 @@ package mediadb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -64,8 +67,9 @@ type MediaDB struct {
 	stmtInsertMedia      *sql.Stmt
 	stmtInsertTag        *sql.Stmt
 	stmtInsertMediaTag   *sql.Stmt
-	isOptimizing         atomic.Bool
 	backgroundOps        sync.WaitGroup
+	isOptimizing         atomic.Bool
+	inTransaction        bool
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
@@ -122,7 +126,17 @@ func (db *MediaDB) UpdateLastGenerated() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlUpdateLastGenerated(db.ctx, db.sql)
+
+	err := sqlUpdateLastGenerated(db.ctx, db.sql)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after update last generated")
+		}
+	}
+
+	return err
 }
 
 func (db *MediaDB) GetLastGenerated() (time.Time, error) {
@@ -320,6 +334,7 @@ func (db *MediaDB) RollbackTransaction() error {
 	// Rollback the transaction
 	err := db.tx.Rollback()
 	db.tx = nil
+	db.inTransaction = false // Clear transaction flag (no cache invalidation needed on rollback)
 	if err != nil {
 		return fmt.Errorf("failed to rollback transaction: %w", err)
 	}
@@ -372,6 +387,9 @@ func (db *MediaDB) BeginTransaction() error {
 		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
 	}
 
+	// Set transaction flag to prevent excessive cache invalidations during batch operations
+	db.inTransaction = true
+
 	return nil
 }
 
@@ -389,13 +407,23 @@ func (db *MediaDB) CommitTransaction() error {
 		// Try to rollback and combine errors if both fail
 		if rbErr := db.tx.Rollback(); rbErr != nil {
 			db.tx = nil
+			db.inTransaction = false
 			return fmt.Errorf("commit failed: %w; rollback also failed: %w", err, rbErr)
 		}
 		db.tx = nil
+		db.inTransaction = false
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	// Transaction committed successfully - invalidate cache once and clear transaction flag
 	db.tx = nil
+	db.inTransaction = false
+
+	// Invalidate cache after successful transaction commit (best effort - don't fail on cache errors)
+	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after transaction commit")
+	}
+
 	return nil
 }
 
@@ -465,10 +493,14 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 	if db.sql == nil {
 		return nullResults, ErrNullSQL
 	}
+	// Search terms are slugified to match the database's Slug field.
+	// This provides fuzzy matching: spaces/punctuation are ignored,
+	// making searches more forgiving (e.g., "mega man" finds "Megaman")
 	var parts []string
 	for _, part := range strings.Split(query, "*") {
 		if part != "" {
-			parts = append(parts, part)
+			// Slugify search parts to match how titles are stored
+			parts = append(parts, helpers.SlugifyString(part))
 		}
 	}
 	if len(parts) == 0 {
@@ -519,12 +551,198 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 	return sqlRandomGame(db.ctx, db.sql, system)
 }
 
+// RandomGameWithQuery returns a random game matching the specified MediaQuery.
+func (db *MediaDB) RandomGameWithQuery(query database.MediaQuery) (database.SearchResult, error) {
+	var result database.SearchResult
+	if db.sql == nil {
+		return result, ErrNullSQL
+	}
+
+	// Check cache first
+	if stats, found := db.GetCachedStats(db.ctx, query); found {
+		if stats.Count == 0 {
+			return result, sql.ErrNoRows
+		}
+		// Use cached stats to generate random selection
+		return db.randomGameWithStats(query, stats)
+	}
+
+	// Cache miss - use the full SQL implementation and cache the stats
+	result, stats, err := sqlRandomGameWithQueryAndStats(db.ctx, db.sql, query)
+	if err != nil {
+		return result, err
+	}
+
+	// Cache the stats for future use (best effort - don't fail if caching fails)
+	if cacheErr := db.SetCachedStats(db.ctx, query, stats); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to cache media query stats")
+	}
+
+	return result, nil
+}
+
 // GetTotalMediaCount returns the total number of media entries in the database.
 func (db *MediaDB) GetTotalMediaCount() (int, error) {
 	if db.sql == nil {
 		return 0, ErrNullSQL
 	}
 	return sqlGetTotalMediaCount(db.ctx, db.sql)
+}
+
+// MediaStats represents cached statistics for a media query
+type MediaStats struct {
+	Count   int
+	MinDBID int64
+	MaxDBID int64
+}
+
+// GetCachedStats returns cached statistics for the given media query, if available.
+// Returns the stats and true if found, or empty stats and false if not cached.
+func (db *MediaDB) GetCachedStats(ctx context.Context, query database.MediaQuery) (MediaStats, bool) {
+	if db.sql == nil {
+		return MediaStats{}, false
+	}
+
+	queryHash, err := db.generateQueryHash(query)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to generate query hash for cache lookup")
+		return MediaStats{}, false
+	}
+
+	var stats MediaStats
+	err = db.sql.QueryRowContext(ctx,
+		"SELECT Count, MinDBID, MaxDBID FROM MediaCountCache WHERE QueryHash = ?",
+		queryHash).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MediaStats{}, false
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("queryHash", queryHash).Msg("failed to get cached stats")
+		return MediaStats{}, false
+	}
+
+	return stats, true
+}
+
+// randomGameWithStats generates a random game selection using cached statistics.
+func (db *MediaDB) randomGameWithStats(query database.MediaQuery, stats MediaStats) (database.SearchResult, error) {
+	var row database.SearchResult
+
+	// Generate random DBID within the range
+	randomOffset, err := helpers.RandomInt(int(stats.MaxDBID - stats.MinDBID + 1))
+	if err != nil {
+		return row, fmt.Errorf("failed to generate random DBID offset: %w", err)
+	}
+	targetDBID := stats.MinDBID + int64(randomOffset)
+
+	// Use shared helper to build WHERE clause and arguments
+	whereClause, args := buildMediaQueryWhereClause(query)
+
+	// Get the first media item with DBID >= targetDBID
+	//nolint:gosec // whereClause is built from safe conditions, no user input
+	selectQuery := fmt.Sprintf(`
+		SELECT Systems.SystemID, Media.Path
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		%s AND Media.DBID >= ?
+		ORDER BY Media.DBID ASC
+		LIMIT 1
+	`, whereClause)
+
+	args = append(args, targetDBID)
+	err = db.sql.QueryRowContext(db.ctx, selectQuery, args...).Scan(
+		&row.SystemID,
+		&row.Path,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
+		selectQuery = fmt.Sprintf(`
+			SELECT Systems.SystemID, Media.Path
+			FROM Media
+			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+			%s AND Media.DBID < ?
+			ORDER BY Media.DBID DESC
+			LIMIT 1
+		`, whereClause)
+		args[len(args)-1] = targetDBID // Replace the last argument
+		err = db.sql.QueryRowContext(db.ctx, selectQuery, args...).Scan(
+			&row.SystemID,
+			&row.Path,
+		)
+	}
+	if err != nil {
+		return row, fmt.Errorf("failed to scan random game row using cached stats: %w", err)
+	}
+	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, nil
+}
+
+// SetCachedStats stores statistics for the given media query in the cache.
+func (db *MediaDB) SetCachedStats(ctx context.Context, query database.MediaQuery, stats MediaStats) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	queryHash, err := db.generateQueryHash(query)
+	if err != nil {
+		return fmt.Errorf("failed to generate query hash: %w", err)
+	}
+
+	queryParams, err := json.Marshal(query)
+	if err != nil {
+		return fmt.Errorf("failed to marshal query params: %w", err)
+	}
+
+	_, err = db.sql.ExecContext(ctx, `
+		INSERT OR REPLACE INTO MediaCountCache (QueryHash, QueryParams, Count, MinDBID, MaxDBID, LastUpdated)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, queryHash, string(queryParams), stats.Count, stats.MinDBID, stats.MaxDBID, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("failed to cache stats: %w", err)
+	}
+
+	return nil
+}
+
+// InvalidateCountCache clears all cached media counts.
+// This should be called after any operation that changes the media database content.
+func (db *MediaDB) InvalidateCountCache() error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	log.Info().Msg("invalidating media count cache")
+	_, err := db.sql.ExecContext(db.ctx, "DELETE FROM MediaCountCache")
+	if err != nil {
+		return fmt.Errorf("failed to invalidate count cache: %w", err)
+	}
+	return nil
+}
+
+// generateQueryHash creates a consistent hash for a MediaQuery for cache key purposes.
+func (*MediaDB) generateQueryHash(query database.MediaQuery) (string, error) {
+	// Normalize the query to ensure consistent hashing
+	normalized := database.MediaQuery{
+		Systems:    make([]string, len(query.Systems)),
+		PathGlob:   strings.ToLower(strings.TrimSpace(query.PathGlob)),
+		PathPrefix: strings.ToLower(strings.TrimSpace(query.PathPrefix)),
+	}
+
+	// Sort systems for consistent ordering
+	copy(normalized.Systems, query.Systems)
+	sort.Strings(normalized.Systems)
+
+	// Marshal to JSON with consistent ordering
+	queryBytes, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal normalized query: %w", err)
+	}
+
+	// Generate SHA256 hash
+	hash := sha256.Sum256(queryBytes)
+	return fmt.Sprintf("%x", hash), nil
 }
 
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
@@ -537,10 +755,22 @@ func (db *MediaDB) FindSystemBySystemID(systemID string) (database.System, error
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
 	// Use prepared statement if in transaction, otherwise fall back to original method
+	var result database.System
+	var err error
 	if db.stmtInsertSystem != nil {
-		return db.insertSystemWithPreparedStmt(row)
+		result, err = db.insertSystemWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertSystem(db.ctx, db.sql, row)
 	}
-	return sqlInsertSystem(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after system insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, error) {
@@ -557,10 +787,22 @@ func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle,
 
 func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
 	// Use prepared statement if in transaction, otherwise fall back to original method
+	var result database.MediaTitle
+	var err error
 	if db.stmtInsertMediaTitle != nil {
-		return db.insertMediaTitleWithPreparedStmt(row)
+		result, err = db.insertMediaTitleWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertMediaTitle(db.ctx, db.sql, row)
 	}
-	return sqlInsertMediaTitle(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media title insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
@@ -577,10 +819,22 @@ func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 	// Use prepared statement if in transaction, otherwise fall back to original method
+	var result database.Media
+	var err error
 	if db.stmtInsertMedia != nil {
-		return db.insertMediaWithPreparedStmt(row)
+		result, err = db.insertMediaWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertMedia(db.ctx, db.sql, row)
 	}
-	return sqlInsertMedia(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertMedia(row database.Media) (database.Media, error) {
@@ -596,7 +850,16 @@ func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
 }
 
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
-	return sqlInsertTagType(db.ctx, db.sql, row)
+	result, err := sqlInsertTagType(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after tag type insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertTagType(row database.TagType) (database.TagType, error) {
@@ -613,10 +876,22 @@ func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 	// Use prepared statement if in transaction, otherwise fall back to original method
+	var result database.Tag
+	var err error
 	if db.stmtInsertTag != nil {
-		return db.insertTagWithPreparedStmt(row)
+		result, err = db.insertTagWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertTag(db.ctx, db.sql, row)
 	}
-	return sqlInsertTag(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after tag insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertTag(row database.Tag) (database.Tag, error) {
@@ -633,10 +908,22 @@ func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
 	// Use prepared statement if in transaction, otherwise fall back to original method
+	var result database.MediaTag
+	var err error
 	if db.stmtInsertMediaTag != nil {
-		return db.insertMediaTagWithPreparedStmt(row)
+		result, err = db.insertMediaTagWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertMediaTag(db.ctx, db.sql, row)
 	}
-	return sqlInsertMediaTag(db.ctx, db.sql, row)
+
+	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
+	if err == nil && !db.inTransaction {
+		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media tag insert")
+		}
+	}
+
+	return result, err
 }
 
 func (db *MediaDB) FindOrInsertMediaTag(row database.MediaTag) (database.MediaTag, error) {

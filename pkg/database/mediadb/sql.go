@@ -309,6 +309,13 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		return fmt.Errorf("failed to clean up orphaned tags: %w", err)
 	}
 
+	// Invalidate media count cache since system data was modified
+	_, err = db.ExecContext(ctx, "DELETE FROM MediaCountCache")
+	if err != nil {
+		// Log warning but don't fail the operation - cache invalidation is not critical
+		log.Warn().Err(err).Msg("failed to invalidate media count cache during system truncation")
+	}
+
 	return nil
 }
 
@@ -489,7 +496,15 @@ func sqlInsertMediaTagWithPreparedStmt(
 		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
 	}
 
-	row.DBID = lastID
+	if lastID == 0 {
+		// INSERT OR IGNORE occurred - row already existed, no new ID generated
+		log.Debug().Int64("MediaDBID", row.MediaDBID).Int64("TagDBID", row.TagDBID).
+			Msg("MediaTag already exists, INSERT OR IGNORE executed")
+		// Note: row.DBID remains as originally provided (usually 0)
+	} else {
+		row.DBID = lastID
+	}
+
 	return row, nil
 }
 
@@ -837,7 +852,15 @@ func sqlInsertMediaTag(ctx context.Context, db *sql.DB, row database.MediaTag) (
 		return row, fmt.Errorf("failed to get last insert ID for media tag: %w", err)
 	}
 
-	row.DBID = lastID
+	if lastID == 0 {
+		// INSERT OR IGNORE occurred - row already existed, no new ID generated
+		log.Debug().Int64("MediaDBID", row.MediaDBID).Int64("TagDBID", row.TagDBID).
+			Msg("MediaTag already exists, INSERT OR IGNORE executed")
+		// Note: row.DBID remains as originally provided (usually 0)
+	} else {
+		row.DBID = lastID
+	}
+
 	return row, nil
 }
 
@@ -1188,66 +1211,192 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
 
-	// Step 1: Get count of games for this system
-	countStmt, err := db.PrepareContext(ctx, `
-		SELECT COUNT(*)
+	// Step 1: Get count, min DBID, and max DBID for this system
+	statsQuery := `
+		SELECT COUNT(*), COALESCE(MIN(Media.DBID), 0), COALESCE(MAX(Media.DBID), 0)
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
 		WHERE Systems.SystemID = ?
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare count query: %w", err)
-	}
-	defer func() {
-		if closeErr := countStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close count statement")
-		}
-	}()
-
+	`
 	var count int
-	err = countStmt.QueryRowContext(ctx, system.ID).Scan(&count)
+	var minDBID, maxDBID int64
+	err := db.QueryRowContext(ctx, statsQuery, system.ID).Scan(&count, &minDBID, &maxDBID)
 	if err != nil {
-		return row, fmt.Errorf("failed to get game count: %w", err)
+		return row, fmt.Errorf("failed to get media stats for system: %w", err)
 	}
 
 	if count == 0 {
 		return row, sql.ErrNoRows
 	}
 
-	// Step 2: Generate random offset
-	offset, err := helpers.RandomInt(count)
+	// Step 2: Generate random DBID within the range
+	// This approach is O(log n) instead of O(n) for OFFSET
+	randomOffset, err := helpers.RandomInt(int(maxDBID - minDBID + 1))
 	if err != nil {
-		return row, fmt.Errorf("failed to generate random offset: %w", err)
+		return row, fmt.Errorf("failed to generate random DBID offset: %w", err)
 	}
+	targetDBID := minDBID + int64(randomOffset)
 
-	// Step 3: Get game at random offset
-	selectStmt, err := db.PrepareContext(ctx, `
+	// Step 3: Get the first media item with DBID >= targetDBID
+	selectQuery := `
 		SELECT Systems.SystemID, Media.Path
 		FROM Media
 		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
 		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
-		WHERE Systems.SystemID = ?
-		LIMIT 1 OFFSET ?
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare select query: %w", err)
-	}
-	defer func() {
-		if closeErr := selectStmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close select statement")
-		}
-	}()
-
-	err = selectStmt.QueryRowContext(ctx, system.ID, offset).Scan(
+		WHERE Systems.SystemID = ? AND Media.DBID >= ?
+		ORDER BY Media.DBID ASC
+		LIMIT 1
+	`
+	err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
 		&row.SystemID,
 		&row.Path,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
+		selectQuery = `
+			SELECT Systems.SystemID, Media.Path
+			FROM Media
+			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+			WHERE Systems.SystemID = ? AND Media.DBID < ?
+			ORDER BY Media.DBID DESC
+			LIMIT 1
+		`
+		err = db.QueryRowContext(ctx, selectQuery, system.ID, targetDBID).Scan(
+			&row.SystemID,
+			&row.Path,
+		)
+	}
 	if err != nil {
-		return row, fmt.Errorf("failed to scan random game row: %w", err)
+		return row, fmt.Errorf("failed to scan random game row using DBID approach: %w", err)
 	}
 	row.Name = helpers.FilenameFromPath(row.Path)
 	return row, nil
+}
+
+// buildMediaQueryWhereClause creates WHERE clause and arguments for a MediaQuery.
+// Centralizes the logic to avoid duplication between different query functions.
+func buildMediaQueryWhereClause(query database.MediaQuery) (whereClause string, args []any) {
+	var whereConditions []string
+
+	// System filtering
+	if len(query.Systems) > 0 {
+		placeholders := make([]string, len(query.Systems))
+		for i, system := range query.Systems {
+			placeholders[i] = "?"
+			args = append(args, system)
+		}
+		whereConditions = append(whereConditions,
+			fmt.Sprintf("Systems.SystemID IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// Path prefix filtering (for absolute paths)
+	if query.PathPrefix != "" {
+		whereConditions = append(whereConditions, "Media.Path LIKE ?")
+		args = append(args, query.PathPrefix+"%")
+	}
+
+	// PathGlob - match against slugified titles for fuzzy search
+	if query.PathGlob != "" {
+		// Search terms are slugified to match the database's Slug field.
+		// This provides fuzzy matching: spaces/punctuation are ignored,
+		// making searches more forgiving (e.g., "mega man" finds "Megaman")
+		var parts []string
+		for _, part := range strings.Split(query.PathGlob, "*") {
+			if part != "" {
+				// Slugify search parts to match how titles are stored
+				parts = append(parts, helpers.SlugifyString(part))
+			}
+		}
+		for _, part := range parts {
+			whereConditions = append(whereConditions, "MediaTitles.Slug LIKE ?")
+			args = append(args, "%"+part+"%")
+		}
+	}
+
+	if len(whereConditions) > 0 {
+		whereClause = "WHERE " + strings.Join(whereConditions, " AND ")
+	}
+
+	return whereClause, args
+}
+
+// sqlRandomGameWithQueryAndStats returns a random game matching the query along with the computed statistics.
+func sqlRandomGameWithQueryAndStats(
+	ctx context.Context, db *sql.DB, query database.MediaQuery,
+) (database.SearchResult, MediaStats, error) {
+	var row database.SearchResult
+	var stats MediaStats
+
+	// Use shared helper to build WHERE clause and arguments
+	whereClause, args := buildMediaQueryWhereClause(query)
+
+	// Step 1: Get count, min DBID, and max DBID for this query
+	//nolint:gosec // whereClause is built from safe conditions, no user input
+	statsQuery := fmt.Sprintf(`
+		SELECT COUNT(*), COALESCE(MIN(Media.DBID), 0), COALESCE(MAX(Media.DBID), 0)
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		%s
+	`, whereClause)
+
+	err := db.QueryRowContext(ctx, statsQuery, args...).Scan(&stats.Count, &stats.MinDBID, &stats.MaxDBID)
+	if err != nil {
+		return row, stats, fmt.Errorf("failed to get media stats for query: %w", err)
+	}
+
+	if stats.Count == 0 {
+		return row, stats, sql.ErrNoRows
+	}
+
+	// Step 2: Generate random DBID within the range
+	randomOffset, err := helpers.RandomInt(int(stats.MaxDBID - stats.MinDBID + 1))
+	if err != nil {
+		return row, stats, fmt.Errorf("failed to generate random DBID offset: %w", err)
+	}
+	targetDBID := stats.MinDBID + int64(randomOffset)
+
+	// Step 3: Get the first media item with DBID >= targetDBID
+	//nolint:gosec // whereClause is built from safe conditions, no user input
+	selectQuery := fmt.Sprintf(`
+		SELECT Systems.SystemID, Media.Path
+		FROM Media
+		INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+		INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+		%s AND Media.DBID >= ?
+		ORDER BY Media.DBID ASC
+		LIMIT 1
+	`, whereClause)
+
+	args = append(args, targetDBID)
+	err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
+		&row.SystemID,
+		&row.Path,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		// If no row found >= targetDBID (gap in DBID sequence), try wrapping to beginning
+		selectQuery = fmt.Sprintf(`
+			SELECT Systems.SystemID, Media.Path
+			FROM Media
+			INNER JOIN MediaTitles ON MediaTitles.DBID = Media.MediaTitleDBID
+			INNER JOIN Systems ON Systems.DBID = MediaTitles.SystemDBID
+			%s AND Media.DBID < ?
+			ORDER BY Media.DBID DESC
+			LIMIT 1
+		`, whereClause)
+		args[len(args)-1] = targetDBID
+		err = db.QueryRowContext(ctx, selectQuery, args...).Scan(
+			&row.SystemID,
+			&row.Path,
+		)
+	}
+	if err != nil {
+		return row, stats, fmt.Errorf("failed to scan random game row with query: %w", err)
+	}
+	row.Name = helpers.FilenameFromPath(row.Path)
+	return row, stats, nil
 }
 
 // sqlGetMaxID returns the maximum ID from the specified table and column

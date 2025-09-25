@@ -577,6 +577,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("SetIndexingStatus", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("GetIndexingSystems").Return([]string{}, nil).Maybe()
+			mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
 			mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("SetLastIndexedSystem", mock.Anything).Return(nil).Maybe()
 

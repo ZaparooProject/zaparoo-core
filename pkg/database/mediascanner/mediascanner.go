@@ -974,6 +974,11 @@ func NewNamesIndex(
 		log.Error().Err(setErr).Msg("failed to clear indexing systems on completion")
 	}
 
+	// Invalidate media count cache after successful indexing
+	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to invalidate media count cache after indexing")
+	}
+
 	// Mark optimization as pending
 	err = db.SetOptimizationStatus("pending")
 	if err != nil {
