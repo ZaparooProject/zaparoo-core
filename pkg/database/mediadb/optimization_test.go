@@ -222,15 +222,6 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 		WithArgs(DBConfigOptimizationStatus, "running").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock setting step to indexes
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock CreateIndexes
-	mock.ExpectExec("create index if not exists").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	// Mock setting step to analyze
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
@@ -286,17 +277,17 @@ func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
 
 		// Mock setting step to indexes
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "indexes").
+			WithArgs(DBConfigOptimizationStep, "analyze").
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		// Mock CreateIndexes failure with retries
-		indexError := errors.New("index creation failed")
-		mock.ExpectExec("create index if not exists").
-			WillReturnError(indexError)
-		mock.ExpectExec("create index if not exists").
-			WillReturnError(indexError)
-		mock.ExpectExec("create index if not exists").
-			WillReturnError(indexError) // Final failure after all retries
+		// Mock Analyze failure with retries
+		analyzeError := errors.New("analyze failed")
+		mock.ExpectExec("(?i)analyze;?").
+			WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)analyze;?").
+			WillReturnError(analyzeError)
+		mock.ExpectExec("(?i)analyze;?").
+			WillReturnError(analyzeError) // Final failure after all retries
 
 		// Mock setting status to failed
 		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -390,13 +381,6 @@ func TestCheckAndResumeOptimization(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
 				mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-					WithArgs(DBConfigOptimizationStep, "indexes").
-					WillReturnResult(sqlmock.NewResult(1, 1))
-
-				mock.ExpectExec("create index if not exists").
-					WillReturnResult(sqlmock.NewResult(1, 1))
-
-				mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 					WithArgs(DBConfigOptimizationStep, "analyze").
 					WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -447,13 +431,6 @@ func TestConcurrentOptimization(t *testing.T) {
 	// Mock successful optimization for the first call
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("create index if not exists").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").

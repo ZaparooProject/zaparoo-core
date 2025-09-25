@@ -374,13 +374,6 @@ func (m *MockMediaDBI) GetLastGenerated() (time.Time, error) {
 	return time.Time{}, nil
 }
 
-func (m *MockMediaDBI) ReindexTables() error {
-	args := m.Called()
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock operation failed: %w", err)
-	}
-	return nil
-}
 
 // Search methods
 func (m *MockMediaDBI) SearchMediaPathExact(

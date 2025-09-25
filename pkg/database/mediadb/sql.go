@@ -237,41 +237,7 @@ func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	return systemIDs, nil
 }
 
-const indexTablesSQL = `
-create index if not exists mediatitles_slug_idx on MediaTitles (Slug);
-create index if not exists mediatitles_system_idx on MediaTitles (SystemDBID);
-create index if not exists media_mediatitle_idx on Media (MediaTitleDBID);
-create index if not exists tags_tag_idx on Tags (Tag);
-create index if not exists tags_tagtype_idx on Tags (TypeDBID);
-create index if not exists mediatags_media_idx on MediaTags (MediaDBID);
-create index if not exists mediatags_tag_idx on MediaTags (TagDBID);
-create index if not exists mediatitletags_mediatitle_idx on MediaTitleTags (MediaTitleDBID);
-create index if not exists mediatitletags_tag_idx on MediaTitleTags (TagDBID);
-create index if not exists supportingmedia_mediatitle_idx on SupportingMedia (MediaTitleDBID);
-create index if not exists supportingmedia_typetag_idx on SupportingMedia (TypeTagDBID);
-`
 
-func sqlIndexTables(ctx context.Context, db *sql.DB) error {
-	// Create indexes
-	err := sqlCreateIndexesOnly(ctx, db)
-	if err != nil {
-		return err
-	}
-	// Run analyze
-	err = sqlAnalyze(ctx, db)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func sqlCreateIndexesOnly(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, indexTablesSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create database indexes: %w", err)
-	}
-	return nil
-}
 
 func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, "ANALYZE;")
@@ -281,17 +247,6 @@ func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func sqlIndexTablesWithTransaction(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, indexTablesSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create database indexes: %w", err)
-	}
-	_, err = tx.ExecContext(ctx, "ANALYZE;")
-	if err != nil {
-		return fmt.Errorf("failed to analyze database: %w", err)
-	}
-	return nil
-}
 
 //goland:noinspection SqlWithoutWhere
 func sqlTruncate(ctx context.Context, db *sql.DB) error {

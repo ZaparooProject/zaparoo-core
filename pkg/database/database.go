@@ -190,7 +190,6 @@ type MediaDBI interface {
 	UpdateLastGenerated() error
 	GetLastGenerated() (time.Time, error)
 
-	ReindexTables() error
 	SetOptimizationStatus(status string) error
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error

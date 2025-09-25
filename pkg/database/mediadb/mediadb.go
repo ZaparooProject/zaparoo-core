@@ -52,7 +52,7 @@ const (
 )
 
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-	"&_cache_size=-64000&_temp_store=MEMORY&_mmap_size=30000000"
+	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192"
 
 type MediaDB struct {
 	pl                   platforms.Platform
@@ -388,9 +388,6 @@ func (db *MediaDB) CommitTransaction() error {
 	return nil
 }
 
-func (db *MediaDB) reindexTablesWithTransaction() error {
-	return sqlIndexTablesWithTransaction(db.ctx, db.tx)
-}
 
 func (db *MediaDB) insertSystemWithPreparedStmt(row database.System) (database.System, error) {
 	return sqlInsertSystemWithPreparedStmt(db.ctx, db.stmtInsertSystem, row)
@@ -412,19 +409,10 @@ func (db *MediaDB) insertMediaTagWithPreparedStmt(row database.MediaTag) (databa
 	return sqlInsertMediaTagWithPreparedStmt(db.ctx, db.stmtInsertMediaTag, row)
 }
 
-func (db *MediaDB) ReindexTables() error {
-	// Use transaction if active, otherwise use direct database connection
-	if db.tx != nil {
-		return db.reindexTablesWithTransaction()
-	}
-	return sqlIndexTables(db.ctx, db.sql)
-}
 
 func (db *MediaDB) CreateIndexes() error {
-	if db.sql == nil {
-		return ErrNullSQL
-	}
-	return sqlCreateIndexesOnly(db.ctx, db.sql)
+	// Indexes are now created by migrations, this is a no-op
+	return nil
 }
 
 func (db *MediaDB) Analyze() error {
@@ -731,7 +719,6 @@ func (db *MediaDB) RunBackgroundOptimization() {
 	}
 
 	steps := []optimizationStep{
-		{name: "indexes", fn: db.CreateIndexes, maxRetries: 2, retryDelay: 10 * time.Second},
 		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: 10 * time.Second},
 		{name: "vacuum", fn: db.Vacuum, maxRetries: 3, retryDelay: 30 * time.Second},
 	}

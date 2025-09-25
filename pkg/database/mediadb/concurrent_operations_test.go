@@ -50,13 +50,6 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("create index if not exists").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -286,13 +279,6 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("create index if not exists").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStep, "analyze").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -356,14 +342,6 @@ func TestOptimizationInterruption(t *testing.T) {
 	// Mock optimization that fails partway through
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// First step succeeds
-	mock.ExpectExec("create index if not exists").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -456,13 +434,6 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	// Mock optimization workflow
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
 		WithArgs(DBConfigOptimizationStatus, "running").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-		WithArgs(DBConfigOptimizationStep, "indexes").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	mock.ExpectExec("create index if not exists").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
