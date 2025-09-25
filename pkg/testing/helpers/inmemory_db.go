@@ -36,6 +36,7 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 
 	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
 
 	// Open in-memory SQLite database
 	sqlDB, err := sql.Open("sqlite3", ":memory:")
@@ -74,6 +75,7 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	db = &mediadb.MediaDB{}
 	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
 	err = db.SetSQLForTesting(ctx, sqlDB, mockPlatform)
 	if err != nil {
 		if closeErr := sqlDB.Close(); closeErr != nil {

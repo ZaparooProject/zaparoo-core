@@ -243,6 +243,18 @@ func (m *MockUserDBI) GetZapLinkCache(url string) (string, error) {
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock
+
+	// Transaction tracking for tests
+	TransactionCount     int  // Total number of transactions begun
+	ActiveTransaction    bool // Whether a transaction is currently active
+	OperationsOutsideTxn int  // Count of operations performed outside transactions
+}
+
+// trackDatabaseOperation tracks whether operations happen inside or outside transactions
+func (m *MockMediaDBI) trackDatabaseOperation() {
+	if !m.ActiveTransaction {
+		m.OperationsOutsideTxn++
+	}
 }
 
 // GenericDBI methods
@@ -328,6 +340,9 @@ func (m *MockMediaDBI) BeginTransaction() error {
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
+	// Track transaction state for tests
+	m.TransactionCount++
+	m.ActiveTransaction = true
 	return nil
 }
 
@@ -336,6 +351,8 @@ func (m *MockMediaDBI) CommitTransaction() error {
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
+	// Track transaction state for tests
+	m.ActiveTransaction = false
 	return nil
 }
 
@@ -344,6 +361,8 @@ func (m *MockMediaDBI) RollbackTransaction() error {
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
+	// Track transaction state for tests
+	m.ActiveTransaction = false
 	return nil
 }
 
@@ -373,7 +392,6 @@ func (m *MockMediaDBI) GetLastGenerated() (time.Time, error) {
 	}
 	return time.Time{}, nil
 }
-
 
 // Search methods
 func (m *MockMediaDBI) SearchMediaPathExact(
@@ -486,7 +504,22 @@ func (m *MockMediaDBI) FindSystem(row database.System) (database.System, error) 
 	return database.System{}, nil
 }
 
+func (m *MockMediaDBI) FindSystemBySystemID(systemID string) (database.System, error) {
+	args := m.Called(systemID)
+	if system, ok := args.Get(0).(database.System); ok {
+		if err := args.Error(1); err != nil {
+			return system, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return system, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.System{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.System{}, nil
+}
+
 func (m *MockMediaDBI) InsertSystem(row database.System) (database.System, error) {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if system, ok := args.Get(0).(database.System); ok {
 		if err := args.Error(1); err != nil {
@@ -530,6 +563,7 @@ func (m *MockMediaDBI) FindMediaTitle(row database.MediaTitle) (database.MediaTi
 }
 
 func (m *MockMediaDBI) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if mediaTitle, ok := args.Get(0).(database.MediaTitle); ok {
 		if err := args.Error(1); err != nil {
@@ -573,6 +607,7 @@ func (m *MockMediaDBI) FindMedia(row database.Media) (database.Media, error) {
 }
 
 func (m *MockMediaDBI) InsertMedia(row database.Media) (database.Media, error) {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if media, ok := args.Get(0).(database.Media); ok {
 		if err := args.Error(1); err != nil {
@@ -659,6 +694,7 @@ func (m *MockMediaDBI) FindTag(row database.Tag) (database.Tag, error) {
 }
 
 func (m *MockMediaDBI) InsertTag(row database.Tag) (database.Tag, error) {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if tag, ok := args.Get(0).(database.Tag); ok {
 		if err := args.Error(1); err != nil {
@@ -702,6 +738,7 @@ func (m *MockMediaDBI) FindMediaTag(row database.MediaTag) (database.MediaTag, e
 }
 
 func (m *MockMediaDBI) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
+	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if mediaTag, ok := args.Get(0).(database.MediaTag); ok {
 		if err := args.Error(1); err != nil {
@@ -756,6 +793,10 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 }
 
 func (m *MockMediaDBI) RunBackgroundOptimization() {
+	m.Called()
+}
+
+func (m *MockMediaDBI) WaitForBackgroundOperations() {
 	m.Called()
 }
 

@@ -237,8 +237,6 @@ func sqlGetIndexingSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	return systemIDs, nil
 }
 
-
-
 func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, "ANALYZE;")
 	if err != nil {
@@ -246,7 +244,6 @@ func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
-
 
 //goland:noinspection SqlWithoutWhere
 func sqlTruncate(ctx context.Context, db *sql.DB) error {
@@ -348,6 +345,34 @@ func sqlFindSystem(ctx context.Context, db *sql.DB, system database.System) (dat
 		system.DBID,
 		system.SystemID,
 	).Scan(
+		&row.DBID,
+		&row.SystemID,
+		&row.Name,
+	)
+	if err != nil {
+		return row, fmt.Errorf("failed to scan system row: %w", err)
+	}
+	return row, nil
+}
+
+func sqlFindSystemBySystemID(ctx context.Context, db *sql.DB, systemID string) (database.System, error) {
+	var row database.System
+	stmt, err := db.PrepareContext(ctx, `
+		select
+		DBID, SystemID, Name
+		from Systems
+		where SystemID = ?
+		limit 1;
+	`)
+	if err != nil {
+		return row, fmt.Errorf("failed to prepare find system by system ID statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+	err = stmt.QueryRowContext(ctx, systemID).Scan(
 		&row.DBID,
 		&row.SystemID,
 		&row.Name,

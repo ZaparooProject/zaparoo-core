@@ -37,6 +37,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Batch configuration for transaction optimization
+const (
+	maxFilesPerTransaction   = 10000
+	maxSystemsPerTransaction = 10
+)
+
 type PathResult struct {
 	Path   string
 	System systemdefs.System
@@ -540,14 +546,10 @@ func NewNamesIndex(
 		}
 	}
 
-	err = db.BeginTransaction()
-	if err != nil {
-		return 0, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	// Ensure transaction rollback and status update on any error
+	// Ensure transaction cleanup and status update on any error
 	defer func() {
 		if err != nil {
+			// Rollback any open transaction on error
 			if rbErr := db.RollbackTransaction(); rbErr != nil {
 				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
 			}
@@ -586,6 +588,11 @@ func NewNamesIndex(
 	for _, s := range systemdefs.AllSystems() {
 		scannedSystems[s.ID] = false
 	}
+
+	// Batch tracking variables for adaptive transaction management
+	filesInBatch := 0
+	systemsInBatch := 0
+	batchStarted := false
 
 	// Main loop for systems
 	for _, k := range sysPathIDs {
@@ -665,28 +672,81 @@ func NewNamesIndex(
 				return handleCancellationWithRollback(ctx, db, "Media indexing cancelled during file processing")
 			default:
 			}
+
+			// Start transaction if needed (at start of system OR after mid-system commit)
+			if !batchStarted {
+				if beginErr := db.BeginTransaction(); beginErr != nil {
+					err = fmt.Errorf("failed to begin new transaction: %w", beginErr)
+					return
+				}
+				batchStarted = true
+			}
+
 			AddMediaPath(db, &scanState, systemID, file.Path)
+			filesInBatch++
+
+			// Commit if we hit file limit (memory safety - even mid-system)
+			if filesInBatch >= maxFilesPerTransaction {
+				if commitErr := db.CommitTransaction(); commitErr != nil {
+					err = fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
+					return
+				}
+				// Update progress after successful commit
+				if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
+					log.Error().Err(setErr).Msgf(
+						"failed to set last indexed system to %s after file limit commit", systemID)
+				}
+				FlushScanStateMaps(&scanState)
+				filesInBatch = 0
+				systemsInBatch = 0
+				batchStarted = false
+			}
 		}
 
-		// Commit in batches to reduce lock time and allow API operations
-		if commitErr := db.CommitTransaction(); commitErr != nil {
-			// If commit fails, the defer will handle rollback and status=failed
-			err = fmt.Errorf("failed to commit batch transaction for system %s: %w", systemID, commitErr)
-			return // Exit early
+		// Only count system in batch if we have pending uncommitted work
+		if batchStarted {
+			systemsInBatch++
 		}
 
-		// Mark system as completed and update last indexed system after successful commit
+		// Mark system as processed (even if split across multiple commits)
 		completedSystems[systemID] = true
-		if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
-			log.Error().Err(setErr).Msgf("failed to set last indexed system to %s", systemID)
-			// This is a non-fatal error for indexing, but important to log.
-		}
 
-		FlushScanStateMaps(&scanState)
-		if beginErr := db.BeginTransaction(); beginErr != nil {
-			err = fmt.Errorf("failed to begin new transaction after system %s commit: %w", systemID, beginErr)
-			return // Exit early
+		// Commit after N small systems OR when file limit forces it
+		if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
+			if commitErr := db.CommitTransaction(); commitErr != nil {
+				err = fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
+				return
+			}
+			// Update progress after successful commit
+			if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
+				log.Error().Err(setErr).Msgf(
+					"failed to set last indexed system to %s after system limit commit", systemID)
+			}
+			FlushScanStateMaps(&scanState)
+			filesInBatch = 0
+			systemsInBatch = 0
+			batchStarted = false
 		}
+	}
+
+	// Commit any remaining uncommitted data from main loop
+	if batchStarted && filesInBatch > 0 {
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			err = fmt.Errorf("failed to commit final batch transaction: %w", commitErr)
+			return
+		}
+		// Update progress with last processed system
+		lastSystem := ""
+		if len(sysPathIDs) > 0 {
+			lastSystem = sysPathIDs[len(sysPathIDs)-1]
+		}
+		if setErr := db.SetLastIndexedSystem(lastSystem); setErr != nil {
+			log.Error().Err(setErr).Msg("failed to set last indexed system after final commit")
+		}
+		FlushScanStateMaps(&scanState)
+		batchStarted = false
+		filesInBatch = 0
+		systemsInBatch = 0
 	}
 
 	// Check for cancellation before custom scanners
@@ -722,6 +782,7 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
+
 				for _, result := range results {
 					// Check for cancellation between file processing
 					select {
@@ -730,19 +791,49 @@ func NewNamesIndex(
 							"Media indexing cancelled during custom scanner file processing")
 					default:
 					}
+
+					// Start transaction if needed (at start OR after mid-system commit)
+					if !batchStarted {
+						if beginErr := db.BeginTransaction(); beginErr != nil {
+							err = fmt.Errorf("failed to begin new transaction for custom scanner: %w", beginErr)
+							return
+						}
+						batchStarted = true
+					}
+
 					AddMediaPath(db, &scanState, systemID, result.Path)
+					filesInBatch++
+
+					// Commit if we hit file limit (memory safety)
+					if filesInBatch >= maxFilesPerTransaction {
+						if commitErr := db.CommitTransaction(); commitErr != nil {
+							err = fmt.Errorf(
+								"failed to commit batch transaction for custom scanner (file limit): %w", commitErr)
+							return
+						}
+						FlushScanStateMaps(&scanState)
+						filesInBatch = 0
+						systemsInBatch = 0
+						batchStarted = false
+					}
 				}
-				// Commit in batches to reduce lock time and allow API operations
-				if commitErr := db.CommitTransaction(); commitErr != nil {
-					err = fmt.Errorf("failed to commit batch transaction for custom scanner for system %s: %w",
-						systemID, commitErr)
-					return
+
+				// Update system count if we have uncommitted work
+				if batchStarted {
+					systemsInBatch++
 				}
-				FlushScanStateMaps(&scanState)
-				if beginErr := db.BeginTransaction(); beginErr != nil {
-					err = fmt.Errorf("failed to begin new transaction after custom scanner commit for system %s: %w",
-						systemID, beginErr)
-					return
+
+				// Commit after N systems OR when file limit forces it
+				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
+					if commitErr := db.CommitTransaction(); commitErr != nil {
+						err = fmt.Errorf(
+							"failed to commit batch transaction for custom scanner (system limit): %w", commitErr)
+						return
+					}
+					FlushScanStateMaps(&scanState)
+					filesInBatch = 0
+					systemsInBatch = 0
+					batchStarted = false
 				}
 			}
 			scannedSystems[systemID] = true
@@ -783,6 +874,7 @@ func NewNamesIndex(
 
 			if len(results) > 0 {
 				status.Files += len(results)
+
 				for _, scanResult := range results {
 					// Check for cancellation between file processing
 					select {
@@ -791,24 +883,63 @@ func NewNamesIndex(
 							"Media indexing cancelled during 'any' scanner file processing")
 					default:
 					}
+
+					// Start transaction if needed (at start OR after mid-system commit)
+					if !batchStarted {
+						if beginErr := db.BeginTransaction(); beginErr != nil {
+							err = fmt.Errorf("failed to begin new transaction for 'any' scanner: %w", beginErr)
+							return
+						}
+						batchStarted = true
+					}
+
 					AddMediaPath(db, &scanState, systemID, scanResult.Path)
+					filesInBatch++
+
+					// Commit if we hit file limit (memory safety)
+					if filesInBatch >= maxFilesPerTransaction {
+						if commitErr := db.CommitTransaction(); commitErr != nil {
+							err = fmt.Errorf(
+								"failed to commit batch transaction for 'any' scanner (file limit): %w", commitErr)
+							return
+						}
+						FlushScanStateMaps(&scanState)
+						filesInBatch = 0
+						systemsInBatch = 0
+						batchStarted = false
+					}
 				}
 
-				// Commit in batches to reduce lock time and allow API operations
-				if commitErr := db.CommitTransaction(); commitErr != nil {
-					err = fmt.Errorf("failed to commit batch transaction for 'any' scanner for system %s: %w",
-						systemID, commitErr)
-					return
+				// Update system count if we have uncommitted work
+				if batchStarted {
+					systemsInBatch++
 				}
-				FlushScanStateMaps(&scanState)
-				if beginErr := db.BeginTransaction(); beginErr != nil {
-					err = fmt.Errorf("failed to begin new transaction after 'any' scanner commit for system %s: %w",
-						systemID, beginErr)
-					return
+
+				// Commit after N systems OR when file limit forces it
+				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
+					if commitErr := db.CommitTransaction(); commitErr != nil {
+						err = fmt.Errorf(
+							"failed to commit batch transaction for 'any' scanner (system limit): %w", commitErr)
+						return
+					}
+					FlushScanStateMaps(&scanState)
+					filesInBatch = 0
+					systemsInBatch = 0
+					batchStarted = false
 				}
 			}
 			scannedSystems[systemID] = true
 		}
+	}
+
+	// Commit any remaining uncommitted data from all scanner phases
+	if batchStarted && filesInBatch > 0 {
+		if commitErr := db.CommitTransaction(); commitErr != nil {
+			err = fmt.Errorf("failed to commit final scanner batch transaction: %w", commitErr)
+			return
+		}
+		FlushScanStateMaps(&scanState)
+		batchStarted = false
 	}
 
 	status.Step++
@@ -818,9 +949,12 @@ func NewNamesIndex(
 	scanState.TagIDs = make(map[string]int)
 
 	// Phase 1: Complete data operations (foreground) - commit all data
-	err = db.CommitTransaction()
-	if err != nil {
-		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	// Note: We may not have an active transaction here due to batching
+	if batchStarted {
+		err = db.CommitTransaction()
+		if err != nil {
+			return 0, fmt.Errorf("failed to commit final transaction: %w", err)
+		}
 	}
 
 	// Mark database as complete and ready for use
@@ -846,7 +980,7 @@ func NewNamesIndex(
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
 	}
 
-	// Phase 2: Start background optimization (indexes, analyze, vacuum)
+	// Phase 2: Start background optimization (analyze, vacuum)
 	go db.RunBackgroundOptimization()
 
 	indexedSystems := make([]string, 0)

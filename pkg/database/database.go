@@ -195,6 +195,7 @@ type MediaDBI interface {
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
 	RunBackgroundOptimization()
+	WaitForBackgroundOperations()
 
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
@@ -216,6 +217,7 @@ type MediaDBI interface {
 	GetTotalMediaCount() (int, error)
 
 	FindSystem(row System) (System, error)
+	FindSystemBySystemID(systemID string) (System, error)
 	InsertSystem(row System) (System, error)
 	FindOrInsertSystem(row System) (System, error)
 

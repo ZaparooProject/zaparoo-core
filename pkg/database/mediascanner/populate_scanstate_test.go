@@ -308,7 +308,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO MediaTags (DBID, MediaDBID, TagDBID) VALUES (1, 1, 1)")
+			"INSERT INTO MediaTags (MediaDBID, TagDBID) VALUES (1, 1)")
 		require.NoError(t, err)
 
 		scanState := &database.ScanState{

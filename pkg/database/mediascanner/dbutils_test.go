@@ -67,17 +67,14 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 		Name:     "TV",
 	}).Return(database.System{}, uniqueConstraintErr).Once()
 
-	// Mock FindSystem to return the existing system when insert fails
+	// Mock FindSystemBySystemID to return the existing system when insert fails
 	// This is what should happen - we should query the existing system
 	existingSystem := database.System{
 		DBID:     int64(42), // Existing system has different DBID
 		SystemID: "TV",
 		Name:     "TV",
 	}
-	mockDB.On("FindSystem", database.System{
-		SystemID: "TV",
-		DBID:     -1,
-	}).Return(existingSystem, nil).Once()
+	mockDB.On("FindSystemBySystemID", "TV").Return(existingSystem, nil).Once()
 
 	// Mock successful media title and media insertion using the correct system ID
 	mockDB.On("InsertMediaTitle", database.MediaTitle{
@@ -145,11 +142,8 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 		Name:     "TV",
 	}).Return(database.System{}, constraintErr).Once()
 
-	// Mock FindSystem to also fail - this simulates a more serious database issue
-	mockDB.On("FindSystem", database.System{
-		SystemID: "TV",
-		DBID:     -1,
-	}).Return(database.System{}, assert.AnError).Once()
+	// Mock FindSystemBySystemID to also fail - this simulates a more serious database issue
+	mockDB.On("FindSystemBySystemID", "TV").Return(database.System{}, assert.AnError).Once()
 
 	// Mock additional methods that might be called
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()

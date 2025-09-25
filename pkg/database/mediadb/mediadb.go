@@ -260,7 +260,18 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	db.pl = platform
 
 	// Initialize the database schema
-	return db.Allocate()
+	if err := db.Allocate(); err != nil {
+		return err
+	}
+
+	// Initialize background operations state properly for tests
+	// Reset atomic state to ensure clean start
+	db.isOptimizing.Store(false)
+
+	// Note: We don't call checkAndResumeOptimization() for test databases
+	// as they are in-memory and don't need background optimization
+
+	return nil
 }
 
 // closeAllPreparedStatements closes all prepared statements and sets them to nil
@@ -388,7 +399,6 @@ func (db *MediaDB) CommitTransaction() error {
 	return nil
 }
 
-
 func (db *MediaDB) insertSystemWithPreparedStmt(row database.System) (database.System, error) {
 	return sqlInsertSystemWithPreparedStmt(db.ctx, db.stmtInsertSystem, row)
 }
@@ -409,8 +419,7 @@ func (db *MediaDB) insertMediaTagWithPreparedStmt(row database.MediaTag) (databa
 	return sqlInsertMediaTagWithPreparedStmt(db.ctx, db.stmtInsertMediaTag, row)
 }
 
-
-func (db *MediaDB) CreateIndexes() error {
+func (*MediaDB) CreateIndexes() error {
 	// Indexes are now created by migrations, this is a no-op
 	return nil
 }
@@ -520,6 +529,10 @@ func (db *MediaDB) GetTotalMediaCount() (int, error) {
 
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {
 	return sqlFindSystem(db.ctx, db.sql, row)
+}
+
+func (db *MediaDB) FindSystemBySystemID(systemID string) (database.System, error) {
+	return sqlFindSystemBySystemID(db.ctx, db.sql, systemID)
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {

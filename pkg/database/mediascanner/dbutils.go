@@ -64,21 +64,19 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.SystemsIndex-- // Rollback index increment on failure
-			log.Error().Err(err).Msgf("error inserting system: %s", systemID)
 
 			// Only attempt recovery for UNIQUE constraint violations
 			// Other errors (connection issues, etc.) should fail fast
 			var sqliteErr sqlite3.Error
 			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+				log.Error().Err(err).Msgf("error inserting system: %s", systemID)
 				return 0, 0
 			}
 
+			log.Debug().Err(err).Msgf("system already exists: %s", systemID)
+
 			// Try to get existing system ID from database when constraint violated
-			// Set DBID to -1 to ensure we only search by SystemID, not DBID=0
-			existingSystem, getErr := db.FindSystem(database.System{
-				DBID:     -1, // Use -1 to avoid matching DBID=0
-				SystemID: systemID,
-			})
+			existingSystem, getErr := db.FindSystemBySystemID(systemID)
 			if getErr != nil || existingSystem.DBID == 0 {
 				// If we can't get the system, we must fail properly
 				log.Error().Err(getErr).Msgf("Failed to get existing system %s after insert failed", systemID)
@@ -106,7 +104,14 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.TitlesIndex-- // Rollback index increment on failure
-			log.Error().Err(err).Msgf("error inserting media title: %s", pf.Title)
+
+			// Handle UNIQUE constraint violations gracefully - data may already exist from previous batches
+			var sqliteErr sqlite3.Error
+			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				log.Debug().Err(err).Msgf("media title already exists: %s", pf.Title)
+			} else {
+				log.Error().Err(err).Msgf("error inserting media title: %s", pf.Title)
+			}
 		} else {
 			ss.TitleIDs[titleKey] = titleIndex // Only update cache on success
 		}
@@ -125,7 +130,14 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.MediaIndex-- // Rollback index increment on failure
-			log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
+
+			// Handle UNIQUE constraint violations gracefully - data may already exist from previous batches
+			var sqliteErr sqlite3.Error
+			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+				log.Debug().Err(err).Msgf("media already exists: %s", pf.Path)
+			} else {
+				log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
+			}
 		} else {
 			ss.MediaIDs[mediaKey] = mediaIndex // Only update cache on success
 		}
@@ -144,7 +156,14 @@ func AddMediaPath(
 			})
 			if err != nil {
 				ss.TagsIndex-- // Rollback index increment on failure
-				log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
+
+				// Handle UNIQUE constraint violations gracefully - data may already exist from previous batches
+				var sqliteErr sqlite3.Error
+				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+					log.Debug().Err(err).Msgf("tag Extension already exists: %s", pf.Ext)
+				} else {
+					log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
+				}
 			} else {
 				ss.TagIDs[pf.Ext] = tagIndex // Only update cache on success
 			}
