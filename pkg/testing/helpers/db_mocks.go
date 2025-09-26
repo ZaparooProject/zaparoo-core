@@ -442,6 +442,40 @@ func (m *MockMediaDBI) SearchMediaPathWordsWithCursor(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SearchMediaWithFilters(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	args := m.Called(ctx, filters)
+	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) GetTagFacets(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.TagTypeFacet, error) {
+	args := m.Called(ctx, filters)
+	if results, ok := args.Get(0).([]database.TagTypeFacet); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	args := m.Called(systems, query)
 	if results, ok := args.Get(0).([]database.SearchResult); ok {

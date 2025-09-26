@@ -320,6 +320,7 @@ An object:
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
+| tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. |
 
 #### Result
 
@@ -336,6 +337,7 @@ An object:
 | system | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name   | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path   | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| tags   | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
 ##### System object
 
@@ -352,6 +354,13 @@ An object:
 | nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
 | hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
 | pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
+
+##### TagInfo object
+
+| Key  | Type   | Required | Description                                           |
+| :--- | :----- | :------- | :---------------------------------------------------- |
+| tag  | string | Yes      | The tag name.                                         |
+| type | string | Yes      | The type/category of the tag (e.g., "genre", "year"). |
 
 #### Example
 
@@ -383,7 +392,17 @@ An object:
           "category": "Handheld",
           "id": "Gameboy",
           "name": "Gameboy"
-        }
+        },
+        "tags": [
+          {
+            "tag": "test",
+            "type": "category"
+          },
+          {
+            "tag": "homebrew",
+            "type": "category"
+          }
+        ]
       }
     ],
     "total": 1,
@@ -392,6 +411,156 @@ An object:
       "hasNextPage": false,
       "pageSize": 100
     }
+  }
+}
+```
+
+##### Example with tag filtering
+
+###### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "method": "media.search",
+  "params": {
+    "query": "mario",
+    "tags": ["platformer", "nintendo"],
+    "maxResults": 10
+  }
+}
+```
+
+###### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "results": [
+      {
+        "name": "Super Mario Bros.",
+        "path": "NES/Super Mario Bros.nes",
+        "system": {
+          "category": "Console",
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [
+          {
+            "tag": "platformer",
+            "type": "genre"
+          },
+          {
+            "tag": "nintendo",
+            "type": "publisher"
+          },
+          {
+            "tag": "1985",
+            "type": "year"
+          }
+        ]
+      }
+    ],
+    "total": 1,
+    "pagination": {
+      "nextCursor": null,
+      "hasNextPage": false,
+      "pageSize": 10
+    }
+  }
+}
+```
+
+### media.facets
+
+Query the media database and return tag facets (counts) for filtering.
+
+This method returns aggregated counts of available tags based on the current search criteria. Use this to build dynamic filter UIs showing available tag options and their frequencies.
+
+#### Parameters
+
+An object with the same structure as `media.search`:
+
+| Key        | Type     | Required | Description                                                                                                                    |
+| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
+| query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. |
+| systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
+| tags       | string[] | No       | Filter facets by existing tags. Tags are case-sensitive and results will show facets for items matching all provided tags. |
+
+#### Result
+
+| Key    | Type                       | Required | Description                              |
+| :----- | :------------------------- | :------- | :--------------------------------------- |
+| facets | [Facet](#facet-object)[]   | Yes      | Array of facets with their tag counts.  |
+
+##### Facet object
+
+| Key    | Type                             | Required | Description                           |
+| :----- | :------------------------------- | :------- | :------------------------------------ |
+| type   | string                           | Yes      | The facet type (e.g., "genre", "year"). |
+| values | [FacetValue](#facetvalue-object)[] | Yes      | Array of tag values and their counts.  |
+
+##### FacetValue object
+
+| Key   | Type   | Required | Description                    |
+| :---- | :----- | :------- | :----------------------------- |
+| tag   | string | Yes      | The tag name.                  |
+| count | number | Yes      | Number of items with this tag. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.facets",
+  "params": {
+    "query": "mario",
+    "systems": ["NES", "SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "facets": [
+      {
+        "type": "genre",
+        "values": [
+          {
+            "tag": "platformer",
+            "count": 15
+          },
+          {
+            "tag": "action",
+            "count": 8
+          }
+        ]
+      },
+      {
+        "type": "series",
+        "values": [
+          {
+            "tag": "Super Mario",
+            "count": 12
+          },
+          {
+            "tag": "Mario Bros",
+            "count": 3
+          }
+        ]
+      }
+    ]
   }
 }
 ```

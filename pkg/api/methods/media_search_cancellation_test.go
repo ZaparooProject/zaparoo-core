@@ -71,6 +71,44 @@ func (m *MockMediaDBWithDelay) SearchMediaPathWordsWithCursor(
 	}
 }
 
+func (m *MockMediaDBWithDelay) SearchMediaWithFilters(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	// Simulate slow query with controllable delay
+	select {
+	case <-time.After(m.delay):
+		// Delegate to embedded MockMediaDBI
+		result, err := m.MockMediaDBI.SearchMediaWithFilters(ctx, filters)
+		if err != nil {
+			return nil, fmt.Errorf("mock SearchMediaWithFilters failed: %w", err)
+		}
+		return result, nil
+	case <-ctx.Done():
+		// Context was cancelled during delay
+		return nil, ctx.Err()
+	}
+}
+
+func (m *MockMediaDBWithDelay) GetTagFacets(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.TagTypeFacet, error) {
+	// Simulate slow query with controllable delay
+	select {
+	case <-time.After(m.delay):
+		// Delegate to embedded MockMediaDBI
+		result, err := m.MockMediaDBI.GetTagFacets(ctx, filters)
+		if err != nil {
+			return nil, fmt.Errorf("mock GetTagFacets failed: %w", err)
+		}
+		return result, nil
+	case <-ctx.Done():
+		// Context was cancelled during delay
+		return nil, ctx.Err()
+	}
+}
+
 func TestMediaSearchCancellation_RapidSearches(t *testing.T) {
 	// Setup mocks with delay to simulate slow queries
 	mockUserDB := &helpers.MockUserDBI{}

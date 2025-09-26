@@ -497,6 +497,25 @@ func (db *MediaDB) SearchMediaPathWordsWithCursor(
 	return sqlSearchMediaPathPartsWithCursor(ctx, db.sql, systems, qWords, cursor, limit)
 }
 
+func (db *MediaDB) SearchMediaWithFilters(
+	ctx context.Context,
+	filters *database.SearchFilters,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	qWords := strings.Fields(strings.ToLower(filters.Query))
+	return sqlSearchMediaWithFilters(ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Cursor, filters.Limit)
+}
+
+func (db *MediaDB) GetTagFacets(ctx context.Context, filters *database.SearchFilters) ([]database.TagTypeFacet, error) {
+	if db.sql == nil {
+		return make([]database.TagTypeFacet, 0), ErrNullSQL
+	}
+	qWords := strings.Fields(strings.ToLower(filters.Query))
+	return sqlGetTagFacets(ctx, db.sql, filters.Systems, qWords, filters.Tags)
+}
+
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	// TODO: glob pattern matching unclear on some patterns
 	// query == path like with possible *

@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -383,4 +384,159 @@ func TestPrepareVariadic_Success(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestJSONTagsParsing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []database.TagInfo
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: []database.TagInfo{},
+		},
+		{
+			name:     "null string",
+			input:    "null",
+			expected: []database.TagInfo{},
+		},
+		{
+			name:  "single tag",
+			input: `[{"tag":"Action","type":"genre"}]`,
+			expected: []database.TagInfo{
+				{Tag: "Action", Type: "genre"},
+			},
+		},
+		{
+			name: "multiple tags",
+			input: `[{"tag":"Action","type":"genre"},{"tag":"2023","type":"year"},` +
+				`{"tag":"Nintendo","type":"developer"}]`,
+			expected: []database.TagInfo{
+				{Tag: "Action", Type: "genre"},
+				{Tag: "2023", Type: "year"},
+				{Tag: "Nintendo", Type: "developer"},
+			},
+		},
+		{
+			name:     "empty array",
+			input:    "[]",
+			expected: []database.TagInfo{},
+		},
+		{
+			name:  "tags with special characters",
+			input: `[{"tag":"Action/Adventure","type":"genre"},{"tag":"Puzzle & Dragons","type":"series"}]`,
+			expected: []database.TagInfo{
+				{Tag: "Action/Adventure", Type: "genre"},
+				{Tag: "Puzzle & Dragons", Type: "series"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var result []database.TagInfo
+
+			// Simulate the logic from sqlSearchMediaPathPartsWithCursor
+			if tt.input != "" && tt.input != "null" {
+				err := json.Unmarshal([]byte(tt.input), &result)
+				if err != nil {
+					result = []database.TagInfo{}
+				}
+			} else {
+				result = []database.TagInfo{}
+			}
+
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "NES"},
+	}
+	parts := []string{"mario"}
+	tags := []string{"Action"}
+
+	mock.ExpectPrepare("select.*json_group_array.*").
+		ExpectQuery().
+		WithArgs("NES", "%mario%", "Action", 10).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID", "tags"}).
+			AddRow("NES", "/games/mario.nes", 1, `[{"tag":"Action","type":"genre"}]`))
+
+	results, err := sqlSearchMediaWithFilters(context.Background(), db, systems, parts, tags, nil, 10)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "NES", results[0].SystemID)
+	assert.Equal(t, "/games/mario.nes", results[0].Path)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetTagFacets(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "NES"},
+		{ID: "SNES"},
+	}
+	parts := []string{"mario"}
+	tags := []string{"Action"}
+
+	// Mock the expected query and result
+	mock.ExpectPrepare("SELECT.*TagTypes.Type.*Tags.Tag.*COUNT\\(DISTINCT Media.DBID\\)"+
+		".*FROM TagTypes.*JOIN.*GROUP BY.*ORDER BY").
+		ExpectQuery().
+		WithArgs("NES", "SNES", "%mario%", "Action").
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag", "count"}).
+			AddRow("genre", "Action", 5).
+			AddRow("genre", "Adventure", 3).
+			AddRow("year", "1990", 2))
+
+	results, err := sqlGetTagFacets(context.Background(), db, systems, parts, tags)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 2) // Should have 2 tag types: genre and year
+
+	// Find facets by type (order may vary due to map iteration)
+	var genreFacet, yearFacet *database.TagTypeFacet
+	for i := range results {
+		switch results[i].Type {
+		case "genre":
+			genreFacet = &results[i]
+		case "year":
+			yearFacet = &results[i]
+		}
+	}
+
+	// Check genre facet
+	require.NotNil(t, genreFacet, "genre facet should be found")
+	assert.Equal(t, "genre", genreFacet.Type)
+	assert.Len(t, genreFacet.Values, 2)
+	// Check that both Action and Adventure tags are present
+	tagNames := []string{genreFacet.Values[0].Tag, genreFacet.Values[1].Tag}
+	assert.Contains(t, tagNames, "Action")
+	assert.Contains(t, tagNames, "Adventure")
+
+	// Check year facet
+	require.NotNil(t, yearFacet, "year facet should be found")
+	assert.Equal(t, "year", yearFacet.Type)
+	assert.Len(t, yearFacet.Values, 1)
+	assert.Equal(t, "1990", yearFacet.Values[0].Tag)
+	assert.Equal(t, 2, yearFacet.Values[0].Count)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

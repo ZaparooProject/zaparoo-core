@@ -1094,19 +1094,32 @@ func sqlSearchMediaPathPartsWithCursor(
 		select
 			Systems.SystemID,
 			Media.Path,
-			Media.DBID
+			Media.DBID,
+			json_group_array(
+				json_object(
+					'tag', Tags.Tag,
+					'type', TagTypes.Type
+				)
+			) FILTER (WHERE Tags.Tag IS NOT NULL) as tags
 		from Systems
 		inner join MediaTitles
 			on Systems.DBID = MediaTitles.SystemDBID
 		inner join Media
 			on MediaTitles.DBID = Media.MediaTitleDBID
+		left join MediaTags
+			on Media.DBID = MediaTags.MediaDBID
+		left join Tags
+			on MediaTags.TagDBID = Tags.DBID
+		left join TagTypes
+			on Tags.TypeDBID = TagTypes.DBID
 		where Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
 		and ` +
 		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
 		cursorCondition +
-		` ORDER BY Media.DBID ASC
+		` GROUP BY Media.DBID, Systems.SystemID, Media.Path
+		ORDER BY Media.DBID ASC
 		LIMIT ?`
 
 	args = append(args, limit)
@@ -1133,14 +1146,29 @@ func sqlSearchMediaPathPartsWithCursor(
 
 	for rows.Next() {
 		result := database.SearchResultWithCursor{}
+		var tagsJSON sql.NullString
 		if scanErr := rows.Scan(
 			&result.SystemID,
 			&result.Path,
 			&result.MediaID,
+			&tagsJSON,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan cursor-based search result: %w", scanErr)
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
+
+		// Parse tags from JSON
+		if tagsJSON.Valid && tagsJSON.String != "" && tagsJSON.String != "null" {
+			if unmarshalErr := json.Unmarshal([]byte(tagsJSON.String), &result.Tags); unmarshalErr != nil {
+				log.Error().Err(unmarshalErr).Str("tags_json", tagsJSON.String).
+					Int64("media_id", result.MediaID).
+					Msg("failed to unmarshal tags JSON from database")
+				result.Tags = []database.TagInfo{}
+			}
+		} else {
+			result.Tags = []database.TagInfo{}
+		}
+
 		results = append(results, result)
 	}
 	err = rows.Err()
@@ -1148,6 +1176,258 @@ func sqlSearchMediaPathPartsWithCursor(
 		return results, err
 	}
 	return results, nil
+}
+
+func sqlSearchMediaWithFilters(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+	parts []string,
+	tags []string,
+	cursor *int64,
+	limit int,
+) ([]database.SearchResultWithCursor, error) {
+	results := make([]database.SearchResultWithCursor, 0, limit)
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for media search")
+	}
+
+	// Search for anything in systems on blank query
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+
+	args := make([]any, 0)
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+	for _, p := range parts {
+		args = append(args, "%"+p+"%")
+	}
+
+	// Add cursor condition if provided
+	cursorCondition := ""
+	if cursor != nil {
+		cursorCondition = " AND Media.DBID > ? "
+		args = append(args, *cursor)
+	}
+
+	// Add tag filtering condition
+	tagFilterCondition := ""
+	if len(tags) > 0 {
+		tagFilterCondition = `
+			AND Media.DBID IN (
+				SELECT MediaDBID FROM MediaTags
+				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+				WHERE Tags.Tag IN (` + prepareVariadic("?", ",", len(tags)) + `)
+			)`
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `
+		select
+			Systems.SystemID,
+			Media.Path,
+			Media.DBID,
+			json_group_array(
+				json_object(
+					'tag', Tags.Tag,
+					'type', TagTypes.Type
+				)
+			) FILTER (WHERE Tags.Tag IS NOT NULL) as tags
+		from Systems
+		inner join MediaTitles
+			on Systems.DBID = MediaTitles.SystemDBID
+		inner join Media
+			on MediaTitles.DBID = Media.MediaTitleDBID
+		left join MediaTags
+			on Media.DBID = MediaTags.MediaDBID
+		left join Tags
+			on MediaTags.TagDBID = Tags.DBID
+		left join TagTypes
+			on Tags.TypeDBID = TagTypes.DBID
+		where Systems.SystemID IN (` +
+		prepareVariadic("?", ",", len(systems)) +
+		`)
+		and ` +
+		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
+		cursorCondition +
+		tagFilterCondition +
+		` GROUP BY Media.DBID, Systems.SystemID, Media.Path
+		ORDER BY Media.DBID ASC
+		LIMIT ?`
+
+	args = append(args, limit)
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return results, fmt.Errorf("failed to prepare filtered media search statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return results, fmt.Errorf("failed to execute filtered media search query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		result := database.SearchResultWithCursor{}
+		var tagsJSON sql.NullString
+		if scanErr := rows.Scan(
+			&result.SystemID,
+			&result.Path,
+			&result.MediaID,
+			&tagsJSON,
+		); scanErr != nil {
+			return results, fmt.Errorf("failed to scan filtered search result: %w", scanErr)
+		}
+		result.Name = helpers.FilenameFromPath(result.Path)
+
+		// Parse tags from JSON
+		if tagsJSON.Valid && tagsJSON.String != "" && tagsJSON.String != "null" {
+			if unmarshalErr := json.Unmarshal([]byte(tagsJSON.String), &result.Tags); unmarshalErr != nil {
+				log.Error().Err(unmarshalErr).Str("tags_json", tagsJSON.String).
+					Int64("media_id", result.MediaID).
+					Msg("failed to unmarshal tags JSON from database")
+				result.Tags = []database.TagInfo{}
+			}
+		} else {
+			result.Tags = []database.TagInfo{}
+		}
+
+		results = append(results, result)
+	}
+	err = rows.Err()
+	if err != nil {
+		return results, err
+	}
+	return results, nil
+}
+
+func sqlGetTagFacets(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+	parts []string,
+	tags []string,
+) ([]database.TagTypeFacet, error) {
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for facet search")
+	}
+
+	// Search for anything in systems on blank query
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+
+	args := make([]any, 0)
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+	for _, p := range parts {
+		args = append(args, "%"+p+"%")
+	}
+
+	// Add tag filtering condition
+	tagFilterCondition := ""
+	if len(tags) > 0 {
+		tagFilterCondition = `
+			AND EXISTS (
+				SELECT 1 FROM MediaTags mt2
+				JOIN Tags t2 ON mt2.TagDBID = t2.DBID
+				WHERE mt2.MediaDBID = Media.DBID
+				AND t2.Tag IN (` + prepareVariadic("?", ",", len(tags)) + `)
+			)`
+		for _, tag := range tags {
+			args = append(args, tag)
+		}
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `
+		SELECT
+			TagTypes.Type,
+			Tags.Tag,
+			COUNT(DISTINCT Media.DBID) as count
+		FROM TagTypes
+		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
+		JOIN MediaTags ON Tags.DBID = MediaTags.TagDBID
+		JOIN Media ON MediaTags.MediaDBID = Media.DBID
+		JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
+		JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+		WHERE Systems.SystemID IN (` +
+		prepareVariadic("?", ",", len(systems)) +
+		`)
+		AND ` +
+		prepareVariadic(" MediaTitles.Slug like ? ", " AND ", len(parts)) +
+		tagFilterCondition +
+		` GROUP BY TagTypes.Type, Tags.Tag
+		ORDER BY TagTypes.Type, count DESC, Tags.Tag`
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare tag facets statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute tag facets query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	// Group facets by type
+	facetMap := make(map[string][]database.TagFacet)
+	for rows.Next() {
+		var tagType, tag string
+		var count int
+		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan tag facet result: %w", scanErr)
+		}
+
+		if facetMap[tagType] == nil {
+			facetMap[tagType] = make([]database.TagFacet, 0)
+		}
+		facetMap[tagType] = append(facetMap[tagType], database.TagFacet{
+			Tag:   tag,
+			Count: count,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Convert map to slice
+	result := make([]database.TagTypeFacet, 0, len(facetMap))
+	for tagType, values := range facetMap {
+		result = append(result, database.TagTypeFacet{
+			Type:   tagType,
+			Values: values,
+		})
+	}
+
+	return result, nil
 }
 
 func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {

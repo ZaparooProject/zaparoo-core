@@ -25,6 +25,7 @@ type SearchParams struct {
 	Systems    *[]string `json:"systems"`
 	MaxResults *int      `json:"maxResults"`
 	Cursor     *string   `json:"cursor,omitempty"`
+	Tags       *[]string `json:"tags,omitempty"`
 	Query      string    `json:"query"`
 }
 

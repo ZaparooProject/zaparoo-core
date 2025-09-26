@@ -22,13 +22,15 @@ package models
 import (
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/google/uuid"
 )
 
 type SearchResultMedia struct {
-	System System `json:"system"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
+	System System             `json:"system"`
+	Name   string             `json:"name"`
+	Path   string             `json:"path"`
+	Tags   []database.TagInfo `json:"tags"`
 }
 
 type PaginationInfo struct {
@@ -41,6 +43,20 @@ type SearchResults struct {
 	Pagination *PaginationInfo     `json:"pagination,omitempty"`
 	Results    []SearchResultMedia `json:"results"`
 	Total      int                 `json:"total"`
+}
+
+type FacetValue struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+type Facet struct {
+	Type   string       `json:"type"`
+	Values []FacetValue `json:"values"`
+}
+
+type FacetsResponse struct {
+	Facets []Facet `json:"facets"`
 }
 
 type SettingsResponse struct {

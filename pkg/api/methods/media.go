@@ -25,7 +25,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -43,9 +45,15 @@ import (
 const defaultMaxResults = 100
 
 // Search cancellation tracking for rapid search queries
+type searchCancelEntry struct {
+	cancel context.CancelFunc
+	id     uint64
+}
+
 var (
-	activeSearchCancels = make(map[string]context.CancelFunc)
+	activeSearchCancels = make(map[string]searchCancelEntry)
 	searchCancelsMu     sync.RWMutex
+	searchCancelSeq     uint64
 )
 
 type cursorData struct {
@@ -78,6 +86,46 @@ func decodeCursor(cursor string) (*int64, error) {
 	}
 
 	return &data.LastID, nil
+}
+
+const (
+	maxTagsCount = 50
+	maxTagLength = 128
+)
+
+// validateAndNormalizeTags validates and normalizes a slice of tags
+// Returns error if validation fails, or normalized tags slice
+func validateAndNormalizeTags(tags []string) ([]string, error) {
+	if len(tags) > maxTagsCount {
+		return nil, fmt.Errorf("exceeded maximum number of tags for search: %d (max: %d)", len(tags), maxTagsCount)
+	}
+
+	// Use a map to deduplicate and normalize
+	seen := make(map[string]bool)
+	normalized := make([]string, 0, len(tags))
+
+	for _, tag := range tags {
+		// Trim whitespace
+		tag = strings.TrimSpace(tag)
+
+		// Skip empty tags
+		if tag == "" {
+			continue
+		}
+
+		// Check length
+		if len(tag) > maxTagLength {
+			return nil, fmt.Errorf("tag too long: %q (max: %d characters)", tag, maxTagLength)
+		}
+
+		// Deduplicate (case-sensitive)
+		if !seen[tag] {
+			seen[tag] = true
+			normalized = append(normalized, tag)
+		}
+	}
+
+	return normalized, nil
 }
 
 type indexingStatusVals struct {
@@ -188,32 +236,43 @@ func newIndexingStatus() *indexingStatus {
 var statusInstance = newIndexingStatus()
 
 // cancelPreviousSearch cancels any in-flight search for the given client and stores the new cancel function
-func cancelPreviousSearch(clientID string, newCancel context.CancelFunc) {
+// Returns a unique ID that should be used for cleanup to avoid race conditions
+func cancelPreviousSearch(clientID string, newCancel context.CancelFunc) uint64 {
 	if clientID == "" {
-		return
+		return 0
 	}
 
 	searchCancelsMu.Lock()
 	defer searchCancelsMu.Unlock()
 
-	if prevCancel, exists := activeSearchCancels[clientID]; exists {
-		prevCancel()
+	if prevEntry, exists := activeSearchCancels[clientID]; exists {
+		prevEntry.cancel()
 		log.Debug().Str("client", clientID).Msg("cancelled previous search for client")
 	}
-	activeSearchCancels[clientID] = newCancel
+
+	// Generate unique ID for this search request
+	id := atomic.AddUint64(&searchCancelSeq, 1)
+	activeSearchCancels[clientID] = searchCancelEntry{
+		id:     id,
+		cancel: newCancel,
+	}
+	return id
 }
 
-// cleanupSearchCancel removes the search cancel function for a client
-func cleanupSearchCancel(clientID string) {
-	if clientID == "" {
+// cleanupSearchCancel removes the search cancel function for a client only if the ID matches
+// This prevents race conditions where an older request cleans up a newer request's cancel function
+func cleanupSearchCancel(clientID string, id uint64) {
+	if clientID == "" || id == 0 {
 		return
 	}
 
 	searchCancelsMu.Lock()
 	defer searchCancelsMu.Unlock()
 
-	// Remove the client's cancel function (if any)
-	delete(activeSearchCancels, clientID)
+	// Only remove if this is the same request that registered the cancel function
+	if entry, exists := activeSearchCancels[clientID]; exists && entry.id == id {
+		delete(activeSearchCancels, clientID)
+	}
 }
 
 func GenerateMediaDB(
@@ -352,7 +411,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 			for _, s := range *params.Systems {
 				system, err := systemdefs.GetSystem(s)
 				if err != nil {
-					return nil, errors.New("invalid system ID: " + s + " - " + err.Error())
+					return nil, fmt.Errorf("invalid system ID %s: %w", s, err)
 				}
 				systems = append(systems, *system)
 			}
@@ -439,8 +498,8 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	defer cancel() // Always call cancel to release resources
 
 	// Cancel any previous search for this client and register this one
-	cancelPreviousSearch(env.ClientID, cancel)
-	defer cleanupSearchCancel(env.ClientID)
+	searchID := cancelPreviousSearch(env.ClientID, cancel)
+	defer cleanupSearchCancel(env.ClientID, searchID)
 
 	// Handle cursor-based pagination
 	var cursorStr string
@@ -454,38 +513,86 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	system := params.Systems
 	query := params.Query
+	tags := params.Tags
+
+	// Validate and normalize tags parameter
+	var normalizedTags []string
+	if tags != nil && len(*tags) > 0 {
+		var validationErr error
+		normalizedTags, validationErr = validateAndNormalizeTags(*tags)
+		if validationErr != nil {
+			return nil, validationErr
+		}
+	}
 
 	// Add 1 to limit to check if there are more results
 	limit := maxResults + 1
 	var searchResults []database.SearchResultWithCursor
 
-	if system == nil || len(*system) == 0 {
-		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(
-			ctx, systemdefs.AllSystems(), query, cursor, limit)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
-				return nil, errors.New("search cancelled by newer request")
+	// Use filtered search if tags are provided, otherwise use existing method for backward compatibility
+	if len(normalizedTags) > 0 {
+		// Prepare systems for filtered search
+		var systems []systemdefs.System
+		if system == nil || len(*system) == 0 {
+			systems = systemdefs.AllSystems()
+		} else {
+			systems = make([]systemdefs.System, 0, len(*system))
+			for _, s := range *system {
+				sys, systemErr := systemdefs.GetSystem(s)
+				if systemErr != nil {
+					return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
+				}
+				systems = append(systems, *sys)
 			}
-			return nil, fmt.Errorf("error searching all media with cursor: %w", err)
-		}
-	} else {
-		systems := make([]systemdefs.System, 0)
-		for _, s := range *system {
-			sys, systemErr := systemdefs.GetSystem(s)
-			if systemErr != nil {
-				return nil, errors.New("error getting system: " + systemErr.Error())
-			}
-			systems = append(systems, *sys)
 		}
 
-		searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(ctx, systems, query, cursor, limit)
+		// Use the new filtered search method
+		filters := database.SearchFilters{
+			Systems: systems,
+			Query:   query,
+			Tags:    normalizedTags,
+			Cursor:  cursor,
+			Limit:   limit,
+		}
+
+		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &filters)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+				log.Info().Str("client", env.ClientID).Msg("filtered search request cancelled by newer request")
 				return nil, errors.New("search cancelled by newer request")
 			}
-			return nil, fmt.Errorf("error searching media with cursor: %w", err)
+			return nil, fmt.Errorf("error searching media with filters: %w", err)
+		}
+	} else {
+		// Use existing search method for backward compatibility
+		if system == nil || len(*system) == 0 {
+			searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(
+				ctx, systemdefs.AllSystems(), query, cursor, limit)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+					return nil, errors.New("search cancelled by newer request")
+				}
+				return nil, fmt.Errorf("error searching all media with cursor: %w", err)
+			}
+		} else {
+			systems := make([]systemdefs.System, 0)
+			for _, s := range *system {
+				sys, systemErr := systemdefs.GetSystem(s)
+				if systemErr != nil {
+					return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
+				}
+				systems = append(systems, *sys)
+			}
+
+			searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(ctx, systems, query, cursor, limit)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+					return nil, errors.New("search cancelled by newer request")
+				}
+				return nil, fmt.Errorf("error searching media with cursor: %w", err)
+			}
 		}
 	}
 
@@ -519,6 +626,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			System: resultSystem,
 			Name:   result.Name,
 			Path:   env.Platform.NormalizePath(env.Config, result.Path),
+			Tags:   result.Tags,
 		})
 	}
 
@@ -547,6 +655,95 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Results:    results,
 		Total:      len(results), // Deprecated: returns count of results in response
 		Pagination: pagination,
+	}, nil
+}
+
+func HandleMediaFacets(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received media facets request")
+
+	if len(env.Params) == 0 {
+		return nil, ErrMissingParams
+	}
+
+	var params models.SearchParams
+	err := json.Unmarshal(env.Params, &params)
+	if err != nil {
+		return nil, ErrInvalidParams
+	}
+
+	// Create a cancellable context for this facet request
+	ctx, cancel := context.WithCancel(env.State.GetContext())
+	defer cancel() // Always call cancel to release resources
+
+	// Cancel any previous search for this client and register this one
+	searchID := cancelPreviousSearch(env.ClientID, cancel)
+	defer cleanupSearchCancel(env.ClientID, searchID)
+
+	system := params.Systems
+	query := params.Query
+	tags := params.Tags
+
+	// Validate and normalize tags parameter
+	var normalizedTags []string
+	if tags != nil && len(*tags) > 0 {
+		var validationErr error
+		normalizedTags, validationErr = validateAndNormalizeTags(*tags)
+		if validationErr != nil {
+			return nil, validationErr
+		}
+	}
+
+	// Prepare systems for facet search
+	var systems []systemdefs.System
+	if system == nil || len(*system) == 0 {
+		systems = systemdefs.AllSystems()
+	} else {
+		systems = make([]systemdefs.System, 0, len(*system))
+		for _, s := range *system {
+			sys, systemErr := systemdefs.GetSystem(s)
+			if systemErr != nil {
+				return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
+			}
+			systems = append(systems, *sys)
+		}
+	}
+
+	// Prepare filters for facet search
+	filters := database.SearchFilters{
+		Systems: systems,
+		Query:   query,
+		Tags:    normalizedTags,
+	}
+
+	// Get facets from database
+	facets, err := env.Database.MediaDB.GetTagFacets(ctx, &filters)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Info().Str("client", env.ClientID).Msg("facet request cancelled")
+			return nil, errors.New("facet request cancelled")
+		}
+		return nil, fmt.Errorf("error getting tag facets: %w", err)
+	}
+
+	// Convert to API models
+	responseFacets := make([]models.Facet, 0, len(facets))
+	for _, facet := range facets {
+		values := make([]models.FacetValue, 0, len(facet.Values))
+		for _, value := range facet.Values {
+			values = append(values, models.FacetValue{
+				Tag:   value.Tag,
+				Count: value.Count,
+			})
+		}
+
+		responseFacets = append(responseFacets, models.Facet{
+			Type:   facet.Type,
+			Values: values,
+		})
+	}
+
+	return models.FacetsResponse{
+		Facets: responseFacets,
 	}, nil
 }
 

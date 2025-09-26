@@ -106,10 +106,16 @@ type SearchResult struct {
 	Path     string
 }
 
+type TagInfo struct {
+	Tag  string `json:"tag"`
+	Type string `json:"type"`
+}
+
 type SearchResultWithCursor struct {
 	SystemID string
 	Name     string
 	Path     string
+	Tags     []TagInfo
 	MediaID  int64
 }
 
@@ -142,6 +148,27 @@ type MediaQuery struct {
 	PathGlob   string   `json:"pathGlob,omitempty"`
 	PathPrefix string   `json:"pathPrefix,omitempty"`
 	Systems    []string `json:"systems,omitempty"`
+}
+
+// SearchFilters represents parameters for filtered media search
+type SearchFilters struct {
+	Cursor  *int64              `json:"cursor,omitempty"`
+	Query   string              `json:"query"`
+	Systems []systemdefs.System `json:"systems,omitempty"`
+	Tags    []string            `json:"tags,omitempty"`
+	Limit   int                 `json:"limit"`
+}
+
+// TagFacet represents a tag with its count
+type TagFacet struct {
+	Tag   string `json:"tag"`
+	Count int    `json:"count"`
+}
+
+// TagTypeFacet represents a tag type with its available tags
+type TagTypeFacet struct {
+	Type   string     `json:"type"`
+	Values []TagFacet `json:"values"`
 }
 
 type ScanState struct {
@@ -219,6 +246,8 @@ type MediaDBI interface {
 	SearchMediaPathWordsWithCursor(
 		ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 	) ([]SearchResultWithCursor, error)
+	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
+	GetTagFacets(ctx context.Context, filters *SearchFilters) ([]TagTypeFacet, error)
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool
