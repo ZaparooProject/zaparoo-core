@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/jonboulle/clockwork"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -58,22 +59,32 @@ const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5
 	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192"
 
 type MediaDB struct {
-	pl                   platforms.Platform
+	clock                clockwork.Clock
 	ctx                  context.Context
-	sql                  *sql.DB
+	pl                   platforms.Platform
+	stmtInsertMedia      *sql.Stmt
 	tx                   *sql.Tx
 	stmtInsertSystem     *sql.Stmt
 	stmtInsertMediaTitle *sql.Stmt
-	stmtInsertMedia      *sql.Stmt
+	sql                  *sql.DB
 	stmtInsertTag        *sql.Stmt
 	stmtInsertMediaTag   *sql.Stmt
 	backgroundOps        sync.WaitGroup
+	analyzeRetryDelay    time.Duration
+	vacuumRetryDelay     time.Duration
 	isOptimizing         atomic.Bool
 	inTransaction        bool
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
-	db := &MediaDB{sql: nil, pl: pl, ctx: ctx}
+	db := &MediaDB{
+		sql:               nil,
+		pl:                pl,
+		ctx:               ctx,
+		clock:             clockwork.NewRealClock(),
+		analyzeRetryDelay: 10 * time.Second,
+		vacuumRetryDelay:  30 * time.Second,
+	}
 	err := db.Open()
 	return db, err
 }
@@ -1019,8 +1030,8 @@ func (db *MediaDB) RunBackgroundOptimization() {
 	}
 
 	steps := []optimizationStep{
-		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: 10 * time.Second},
-		{name: "vacuum", fn: db.Vacuum, maxRetries: 3, retryDelay: 30 * time.Second},
+		{name: "analyze", fn: db.Analyze, maxRetries: 2, retryDelay: db.analyzeRetryDelay},
+		{name: "vacuum", fn: db.Vacuum, maxRetries: 3, retryDelay: db.vacuumRetryDelay},
 	}
 
 	// Execute each step with retry logic
@@ -1043,7 +1054,7 @@ func (db *MediaDB) RunBackgroundOptimization() {
 				delay := step.retryDelay * time.Duration(1<<attempt) // Exponential backoff
 				log.Warn().Err(stepErr).Msgf("optimization step %s failed (attempt %d/%d), retrying in %v",
 					step.name, attempt+1, step.maxRetries+1, delay)
-				time.Sleep(delay)
+				db.clock.Sleep(delay)
 			}
 		}
 

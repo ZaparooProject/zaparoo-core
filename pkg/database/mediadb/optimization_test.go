@@ -25,10 +25,10 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,8 +65,11 @@ func TestSetGetOptimizationStatus(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql: db,
-				ctx: ctx,
+				sql:               db,
+				ctx:               ctx,
+				clock:             clockwork.NewFakeClock(),
+				analyzeRetryDelay: 1 * time.Millisecond,
+				vacuumRetryDelay:  1 * time.Millisecond,
 			}
 
 			// Mock set operation
@@ -98,8 +101,11 @@ func TestGetOptimizationStatus_NoStatus(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock no rows found
@@ -145,8 +151,11 @@ func TestSetGetOptimizationStep(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql: db,
-				ctx: ctx,
+				sql:               db,
+				ctx:               ctx,
+				clock:             clockwork.NewFakeClock(),
+				analyzeRetryDelay: 1 * time.Millisecond,
+				vacuumRetryDelay:  1 * time.Millisecond,
 			}
 
 			// Mock set operation
@@ -178,8 +187,11 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Set optimization as already running
@@ -195,8 +207,9 @@ func TestRunBackgroundOptimization_AlreadyRunning(t *testing.T) {
 func TestRunBackgroundOptimization_NilDatabase(t *testing.T) {
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: nil,
-		ctx: ctx,
+		sql:   nil,
+		ctx:   ctx,
+		clock: clockwork.NewFakeClock(),
 	}
 
 	// This should return immediately without panicking
@@ -213,8 +226,11 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock setting status to running
@@ -259,53 +275,55 @@ func TestRunBackgroundOptimization_Success(t *testing.T) {
 }
 
 func TestRunBackgroundOptimization_FailureHandling(t *testing.T) {
-	synctest.Run(func() {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		defer func() { _ = db.Close() }()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
 
-		ctx := context.Background()
-		mediaDB := &MediaDB{
-			sql: db,
-			ctx: ctx,
-		}
+	ctx := context.Background()
+	mediaDB := &MediaDB{
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewRealClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
+	}
 
-		// Mock setting status to running
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStatus, "running").
-			WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock setting status to running
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "running").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-		// Mock setting step to indexes
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "analyze").
-			WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock setting step to indexes
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "analyze").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-		// Mock Analyze failure with retries
-		analyzeError := errors.New("analyze failed")
-		mock.ExpectExec("(?i)analyze;?").
-			WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").
-			WillReturnError(analyzeError)
-		mock.ExpectExec("(?i)analyze;?").
-			WillReturnError(analyzeError) // Final failure after all retries
+	// Mock Analyze failure with retries
+	analyzeError := errors.New("analyze failed")
+	mock.ExpectExec("(?i)analyze;?").
+		WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)analyze;?").
+		WillReturnError(analyzeError)
+	mock.ExpectExec("(?i)analyze;?").
+		WillReturnError(analyzeError) // Final failure after all retries
 
-		// Mock setting status to failed
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStatus, "failed").
-			WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock setting status to failed
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStatus, "failed").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-		// Mock clearing step on failure
-		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-			WithArgs(DBConfigOptimizationStep, "").
-			WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock clearing step on failure
+	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+		WithArgs(DBConfigOptimizationStep, "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-		mediaDB.RunBackgroundOptimization()
+	// Run optimization - should complete quickly with 1ms delays
+	mediaDB.RunBackgroundOptimization()
 
-		// Verify optimization is no longer running
-		assert.False(t, mediaDB.isOptimizing.Load())
+	// Verify optimization is no longer running
+	assert.False(t, mediaDB.isOptimizing.Load())
 
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCheckAndResumeOptimization(t *testing.T) {
@@ -355,8 +373,11 @@ func TestCheckAndResumeOptimization(t *testing.T) {
 
 			ctx := context.Background()
 			mediaDB := &MediaDB{
-				sql: db,
-				ctx: ctx,
+				sql:               db,
+				ctx:               ctx,
+				clock:             clockwork.NewFakeClock(),
+				analyzeRetryDelay: 1 * time.Millisecond,
+				vacuumRetryDelay:  1 * time.Millisecond,
 			}
 
 			switch {
@@ -403,14 +424,12 @@ func TestCheckAndResumeOptimization(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(1, 1))
 			}
 
-			synctest.Run(func() {
-				mediaDB.checkAndResumeOptimization()
+			mediaDB.checkAndResumeOptimization()
 
-				// Give some time for goroutine to complete if it was started
-				if tt.shouldResume {
-					time.Sleep(100 * time.Millisecond)
-				}
-			})
+			// Give some time for goroutine to complete if it was started
+			if tt.shouldResume {
+				time.Sleep(100 * time.Millisecond)
+			}
 
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
@@ -424,8 +443,11 @@ func TestConcurrentOptimization(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock successful optimization for the first call
@@ -458,34 +480,32 @@ func TestConcurrentOptimization(t *testing.T) {
 	var firstStarted, secondSkipped bool
 	var mu sync.Mutex
 
-	synctest.Run(func() {
-		var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-		// Start first optimization
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			mediaDB.RunBackgroundOptimization()
-			mu.Lock()
-			firstStarted = true
-			mu.Unlock()
-		}()
+	// Start first optimization
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mediaDB.RunBackgroundOptimization()
+		mu.Lock()
+		firstStarted = true
+		mu.Unlock()
+	}()
 
-		// Give first optimization time to start and set the atomic flag
-		time.Sleep(10 * time.Millisecond)
+	// Give first optimization time to start and set the atomic flag
+	time.Sleep(10 * time.Millisecond)
 
-		// Start second optimization (should be skipped)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			mediaDB.RunBackgroundOptimization()
-			mu.Lock()
-			secondSkipped = true
-			mu.Unlock()
-		}()
+	// Start second optimization (should be skipped)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mediaDB.RunBackgroundOptimization()
+		mu.Lock()
+		secondSkipped = true
+		mu.Unlock()
+	}()
 
-		wg.Wait()
-	})
+	wg.Wait()
 
 	mu.Lock()
 	finalFirstStarted := firstStarted
@@ -506,8 +526,11 @@ func TestOptimizationDatabaseError(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock failure to set initial status

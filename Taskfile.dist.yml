@@ -70,22 +70,16 @@ tasks:
     desc: Run all tests
     vars:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
-    env:
-      GOEXPERIMENT: synctest
     cmds:
       - go test -race {{.TEST_ARGS}}
 
   lint:
     desc: Run golangci-lint
-    env:
-      GOEXPERIMENT: synctest
     cmds:
       - golangci-lint run ./...
 
   lint-fix:
     desc: Run golangci-lint with auto-fixes
-    env:
-      GOEXPERIMENT: synctest
     cmds:
       - golangci-lint run --fix ./...
 

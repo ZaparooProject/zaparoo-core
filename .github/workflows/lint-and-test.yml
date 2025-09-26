@@ -47,8 +47,6 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
-        env:
-          GOEXPERIMENT: synctest
 
   test:
     name: Test
@@ -93,14 +91,10 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: bash
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-        env:
-          GOEXPERIMENT: synctest
 
       - name: Run tests (Unix)
         if: matrix.os != 'windows-latest'
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-        env:
-          GOEXPERIMENT: synctest
 
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' # Only upload coverage once

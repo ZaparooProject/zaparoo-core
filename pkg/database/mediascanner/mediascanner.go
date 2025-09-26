@@ -676,8 +676,7 @@ func NewNamesIndex(
 			// Start transaction if needed (at start of system OR after mid-system commit)
 			if !batchStarted {
 				if beginErr := db.BeginTransaction(); beginErr != nil {
-					err = fmt.Errorf("failed to begin new transaction: %w", beginErr)
-					return 0, err
+					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 				batchStarted = true
 			}
@@ -688,8 +687,7 @@ func NewNamesIndex(
 			// Commit if we hit file limit (memory safety - even mid-system)
 			if filesInBatch >= maxFilesPerTransaction {
 				if commitErr := db.CommitTransaction(); commitErr != nil {
-					err = fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
-					return
+					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
 				}
 				// Update progress after successful commit
 				if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
@@ -714,8 +712,7 @@ func NewNamesIndex(
 		// Commit after N small systems OR when file limit forces it
 		if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
 			if commitErr := db.CommitTransaction(); commitErr != nil {
-				err = fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
-				return
+				return 0, fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
 			}
 			// Update progress after successful commit
 			if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
@@ -732,8 +729,7 @@ func NewNamesIndex(
 	// Commit any remaining uncommitted data from main loop
 	if batchStarted && filesInBatch > 0 {
 		if commitErr := db.CommitTransaction(); commitErr != nil {
-			err = fmt.Errorf("failed to commit final batch transaction: %w", commitErr)
-			return
+			return 0, fmt.Errorf("failed to commit final batch transaction: %w", commitErr)
 		}
 		// Update progress with last processed system
 		lastSystem := ""
@@ -795,8 +791,7 @@ func NewNamesIndex(
 					// Start transaction if needed (at start OR after mid-system commit)
 					if !batchStarted {
 						if beginErr := db.BeginTransaction(); beginErr != nil {
-							err = fmt.Errorf("failed to begin new transaction for custom scanner: %w", beginErr)
-							return
+							return 0, fmt.Errorf("failed to begin new transaction for custom scanner: %w", beginErr)
 						}
 						batchStarted = true
 					}
@@ -807,9 +802,8 @@ func NewNamesIndex(
 					// Commit if we hit file limit (memory safety)
 					if filesInBatch >= maxFilesPerTransaction {
 						if commitErr := db.CommitTransaction(); commitErr != nil {
-							err = fmt.Errorf(
+							return 0, fmt.Errorf(
 								"failed to commit batch transaction for custom scanner (file limit): %w", commitErr)
-							return
 						}
 						FlushScanStateMaps(&scanState)
 						filesInBatch = 0
@@ -826,9 +820,8 @@ func NewNamesIndex(
 				// Commit after N systems OR when file limit forces it
 				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
 					if commitErr := db.CommitTransaction(); commitErr != nil {
-						err = fmt.Errorf(
+						return 0, fmt.Errorf(
 							"failed to commit batch transaction for custom scanner (system limit): %w", commitErr)
-						return
 					}
 					FlushScanStateMaps(&scanState)
 					filesInBatch = 0
@@ -887,8 +880,7 @@ func NewNamesIndex(
 					// Start transaction if needed (at start OR after mid-system commit)
 					if !batchStarted {
 						if beginErr := db.BeginTransaction(); beginErr != nil {
-							err = fmt.Errorf("failed to begin new transaction for 'any' scanner: %w", beginErr)
-							return
+							return 0, fmt.Errorf("failed to begin new transaction for 'any' scanner: %w", beginErr)
 						}
 						batchStarted = true
 					}
@@ -899,9 +891,8 @@ func NewNamesIndex(
 					// Commit if we hit file limit (memory safety)
 					if filesInBatch >= maxFilesPerTransaction {
 						if commitErr := db.CommitTransaction(); commitErr != nil {
-							err = fmt.Errorf(
+							return 0, fmt.Errorf(
 								"failed to commit batch transaction for 'any' scanner (file limit): %w", commitErr)
-							return
 						}
 						FlushScanStateMaps(&scanState)
 						filesInBatch = 0
@@ -918,9 +909,8 @@ func NewNamesIndex(
 				// Commit after N systems OR when file limit forces it
 				if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
 					if commitErr := db.CommitTransaction(); commitErr != nil {
-						err = fmt.Errorf(
+						return 0, fmt.Errorf(
 							"failed to commit batch transaction for 'any' scanner (system limit): %w", commitErr)
-						return
 					}
 					FlushScanStateMaps(&scanState)
 					filesInBatch = 0
@@ -935,8 +925,7 @@ func NewNamesIndex(
 	// Commit any remaining uncommitted data from all scanner phases
 	if batchStarted && filesInBatch > 0 {
 		if commitErr := db.CommitTransaction(); commitErr != nil {
-			err = fmt.Errorf("failed to commit final scanner batch transaction: %w", commitErr)
-			return
+			return 0, fmt.Errorf("failed to commit final scanner batch transaction: %w", commitErr)
 		}
 		FlushScanStateMaps(&scanState)
 		batchStarted = false

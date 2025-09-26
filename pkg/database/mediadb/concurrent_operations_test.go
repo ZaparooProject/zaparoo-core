@@ -25,10 +25,10 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,9 +39,13 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
+	fakeClock := clockwork.NewFakeClock()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             fakeClock,
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock successful optimization for the first call only
@@ -74,24 +78,21 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	const numGoroutines = 5
 	completedCount := 0
 	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	synctest.Run(func() {
-		var wg sync.WaitGroup
+	// Start multiple optimization attempts concurrently
+	wg.Add(numGoroutines)
+	for range numGoroutines {
+		go func() {
+			defer wg.Done()
+			mediaDB.RunBackgroundOptimization()
+			mu.Lock()
+			completedCount++
+			mu.Unlock()
+		}()
+	}
 
-		// Start multiple optimization attempts concurrently
-		for range numGoroutines {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				mediaDB.RunBackgroundOptimization()
-				mu.Lock()
-				completedCount++
-				mu.Unlock()
-			}()
-		}
-
-		wg.Wait()
-	})
+	wg.Wait()
 
 	// All goroutines should complete, but only one should actually run optimization
 	mu.Lock()
@@ -110,8 +111,11 @@ func TestOptimizationAndIndexingStatusConflict(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	tests := []struct {
@@ -190,8 +194,11 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	const numGoroutines = 10
@@ -229,31 +236,32 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 }
 
 func TestConcurrentOptimizationStepUpdates(t *testing.T) {
-	synctest.Run(func() {
-		db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	mediaDB := &MediaDB{
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
+	}
+
+	// Test sequential step updates to avoid mock order issues
+	steps := []string{"indexes", "analyze", "vacuum"}
+
+	for _, step := range steps {
+		mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
+			WithArgs(DBConfigOptimizationStep, step).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		err := mediaDB.SetOptimizationStep(step)
 		require.NoError(t, err)
-		defer func() { _ = db.Close() }()
+	}
 
-		ctx := context.Background()
-		mediaDB := &MediaDB{
-			sql: db,
-			ctx: ctx,
-		}
-
-		// Test sequential step updates to avoid mock order issues
-		steps := []string{"indexes", "analyze", "vacuum"}
-
-		for _, step := range steps {
-			mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
-				WithArgs(DBConfigOptimizationStep, step).
-				WillReturnResult(sqlmock.NewResult(1, 1))
-
-			err := mediaDB.SetOptimizationStep(step)
-			require.NoError(t, err)
-		}
-
-		assert.NoError(t, mock.ExpectationsWereMet())
-	})
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAtomicOptimizationFlag(t *testing.T) {
@@ -263,8 +271,11 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Test that the atomic flag properly prevents concurrent optimization
@@ -335,8 +346,11 @@ func TestOptimizationInterruption(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewRealClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock optimization that fails partway through
@@ -363,10 +377,8 @@ func TestOptimizationInterruption(t *testing.T) {
 		WithArgs(DBConfigOptimizationStep, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	synctest.Run(func() {
-		// Run optimization (should fail)
-		mediaDB.RunBackgroundOptimization()
-	})
+	// Run optimization - should complete quickly with 1ms delays
+	mediaDB.RunBackgroundOptimization()
 
 	// Verify that optimization is no longer running after failure
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -380,8 +392,11 @@ func TestConcurrentIndexingAndOptimizationStatusChecks(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	const numReaders = 50
@@ -427,8 +442,11 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 
 	ctx := context.Background()
 	mediaDB := &MediaDB{
-		sql: db,
-		ctx: ctx,
+		sql:               db,
+		ctx:               ctx,
+		clock:             clockwork.NewFakeClock(),
+		analyzeRetryDelay: 1 * time.Millisecond,
+		vacuumRetryDelay:  1 * time.Millisecond,
 	}
 
 	// Mock optimization workflow
@@ -469,34 +487,30 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	var statusErrors []error
 	var mu sync.Mutex
 
-	synctest.Run(func() {
-		var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-		// Start optimization
+	// Start optimization
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mediaDB.RunBackgroundOptimization()
+	}()
+
+	// Concurrently check status many times
+	for range numStatusChecks {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			mediaDB.RunBackgroundOptimization()
+			_, err := mediaDB.GetOptimizationStatus()
+			if err != nil {
+				mu.Lock()
+				statusErrors = append(statusErrors, err)
+				mu.Unlock()
+			}
 		}()
+	}
 
-		// Concurrently check status many times
-		for range numStatusChecks {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				// Small delay to let optimization start
-				time.Sleep(time.Millisecond)
-				_, err := mediaDB.GetOptimizationStatus()
-				if err != nil {
-					mu.Lock()
-					statusErrors = append(statusErrors, err)
-					mu.Unlock()
-				}
-			}()
-		}
-
-		wg.Wait()
-	})
+	wg.Wait()
 
 	// No errors should occur during concurrent access
 	assert.Empty(t, statusErrors)
