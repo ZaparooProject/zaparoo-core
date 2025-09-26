@@ -978,9 +978,6 @@ func NewNamesIndex(
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
 	}
 
-	// Phase 2: Start background optimization (analyze, vacuum)
-	go db.RunBackgroundOptimization()
-
 	indexedSystems := make([]string, 0)
 	log.Debug().Msgf("processed systems: %v", completedSystems)
 	for k, v := range completedSystems {

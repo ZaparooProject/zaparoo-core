@@ -119,9 +119,6 @@ func (db *MediaDB) Open() error {
 		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
 	}
 
-	// Check for incomplete optimization and resume if needed
-	db.checkAndResumeOptimization()
-
 	return nil
 }
 
@@ -295,9 +292,6 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	// Initialize background operations state properly for tests
 	// Reset atomic state to ensure clean start
 	db.isOptimizing.Store(false)
-
-	// Note: We don't call checkAndResumeOptimization() for test databases
-	// as they are in-memory and don't need background optimization
 
 	return nil
 }
@@ -746,7 +740,7 @@ func (db *MediaDB) InvalidateCountCache() error {
 		return ErrNullSQL
 	}
 
-	log.Info().Msg("invalidating media count cache")
+	log.Debug().Msg("invalidating media count cache")
 	_, err := db.sql.ExecContext(db.ctx, "DELETE FROM MediaCountCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate count cache: %w", err)
@@ -1019,7 +1013,7 @@ func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) 
 // RunBackgroundOptimization performs database optimization operations in the background.
 // This includes creating indexes, running ANALYZE, and vacuuming the database.
 // It can be safely interrupted and resumed later.
-func (db *MediaDB) RunBackgroundOptimization() {
+func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool)) {
 	if !db.isOptimizing.CompareAndSwap(false, true) {
 		log.Info().Msg("background optimization is already running, skipping")
 		return
@@ -1032,15 +1026,28 @@ func (db *MediaDB) RunBackgroundOptimization() {
 
 	if db.sql == nil {
 		log.Error().Msg("cannot run background optimization: database not connected")
+		// Notify that optimization has failed
+		if statusCallback != nil {
+			statusCallback(false)
+		}
 		return
 	}
 
 	log.Info().Msg("starting background database optimization")
 
 	// Set status to running
-	if err := db.SetOptimizationStatus("running"); err != nil {
+	if err := db.SetOptimizationStatus(IndexingStatusRunning); err != nil {
 		log.Error().Err(err).Msg("failed to set optimization status to running")
+		// Notify that optimization has failed to start
+		if statusCallback != nil {
+			statusCallback(false)
+		}
 		return
+	}
+
+	// Notify that optimization has started
+	if statusCallback != nil {
+		statusCallback(true)
 	}
 
 	// Define optimization steps
@@ -1083,13 +1090,20 @@ func (db *MediaDB) RunBackgroundOptimization() {
 		// Final check after all retries
 		if stepErr != nil {
 			log.Error().Err(stepErr).Msgf("optimization step %s failed after %d attempts", step.name, step.maxRetries+1)
-			if setErr := db.SetOptimizationStatus("failed"); setErr != nil {
+			if setErr := db.SetOptimizationStatus(IndexingStatusFailed); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to set optimization status to failed")
 			}
 			// Clear optimization step on failure
 			if setErr := db.SetOptimizationStep(""); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to clear optimization step on failure")
 			}
+
+			// Notify that optimization has failed
+			if statusCallback != nil {
+				statusCallback(false)
+			}
+			// Reset optimization flag
+			db.isOptimizing.Store(false)
 			return
 		}
 
@@ -1097,7 +1111,7 @@ func (db *MediaDB) RunBackgroundOptimization() {
 	}
 
 	// Mark as completed
-	if err := db.SetOptimizationStatus("completed"); err != nil {
+	if err := db.SetOptimizationStatus(IndexingStatusCompleted); err != nil {
 		log.Error().Err(err).Msg("failed to set optimization status to completed")
 		return
 	}
@@ -1106,31 +1120,15 @@ func (db *MediaDB) RunBackgroundOptimization() {
 		log.Error().Err(err).Msg("failed to clear optimization step on completion")
 	}
 
-	log.Info().Msg("background database optimization completed successfully")
-}
-
-// checkAndResumeOptimization checks if there's an incomplete optimization and resumes it.
-func (db *MediaDB) checkAndResumeOptimization() {
-	status, err := db.GetOptimizationStatus()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to get optimization status during startup check")
-		return
+	// Notify that optimization has completed
+	if statusCallback != nil {
+		statusCallback(false)
 	}
 
-	switch status {
-	case "pending", "running":
-		log.Info().Msgf("resuming incomplete optimization (status: %s)", status)
-		go db.RunBackgroundOptimization()
-	case "failed":
-		log.Info().Msg("retrying failed optimization")
-		go db.RunBackgroundOptimization()
-	case "completed":
-		// Nothing to do
-	case "":
-		// No optimization status set, this is normal for older databases
-	default:
-		log.Warn().Msgf("unknown optimization status: %s", status)
-	}
+	// Reset optimization flag
+	db.isOptimizing.Store(false)
+
+	log.Info().Msg("background database optimization completed")
 }
 
 // WaitForBackgroundOperations waits for all background operations to complete.

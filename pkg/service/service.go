@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -222,6 +223,9 @@ func Start(
 	log.Info().Msg("checking for interrupted media indexing")
 	go checkAndResumeIndexing(pl, cfg, db, st)
 
+	log.Info().Msg("checking for interrupted media optimization")
+	go checkAndResumeOptimization(db, st.Notifications)
+
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 
@@ -291,4 +295,29 @@ func checkAndResumeIndexing(
 			log.Info().Msg("auto-resume completed successfully")
 		}
 	}()
+}
+
+// checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
+func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification) {
+	status, err := db.MediaDB.GetOptimizationStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get optimization status during startup check")
+		return
+	}
+
+	// Resume if optimization was interrupted or failed
+	if status == mediadb.IndexingStatusPending ||
+		status == mediadb.IndexingStatusRunning ||
+		status == mediadb.IndexingStatusFailed {
+		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
+		go db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: optimizing,
+			})
+		})
+	} else {
+		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
+	}
 }

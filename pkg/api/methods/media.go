@@ -382,6 +382,16 @@ func GenerateMediaDB(
 			Indexing:   false,
 			TotalFiles: &total,
 		})
+
+		// Start background optimization with notification callback
+		go db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: optimizing,
+			})
+		})
+
 		statusInstance.clear()
 		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))
 	}()

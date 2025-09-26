@@ -85,7 +85,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 	for range numGoroutines {
 		go func() {
 			defer wg.Done()
-			mediaDB.RunBackgroundOptimization()
+			mediaDB.RunBackgroundOptimization(nil)
 			mu.Lock()
 			completedCount++
 			mu.Unlock()
@@ -126,12 +126,12 @@ func TestOptimizationAndIndexingStatusConflict(t *testing.T) {
 	}{
 		{
 			name:                  "optimization running blocks indexing",
-			optimizationStatus:    "running",
+			optimizationStatus:    IndexingStatusRunning,
 			expectIndexingBlocked: true,
 		},
 		{
 			name:               "optimization completed allows indexing",
-			optimizationStatus: "completed",
+			optimizationStatus: IndexingStatusCompleted,
 		},
 		{
 			name:               "no optimization status allows indexing",
@@ -176,9 +176,9 @@ func TestOptimizationAndIndexingStatusConflict(t *testing.T) {
 				if err != nil {
 					// Error case - indexing should be blocked
 					assert.Error(t, err)
-				} else if status == "running" {
+				} else if status == IndexingStatusRunning {
 					// Running case - indexing should be blocked
-					assert.Equal(t, "running", status)
+					assert.Equal(t, IndexingStatusRunning, status)
 				}
 			}
 		})
@@ -319,7 +319,7 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 
 			// Track if this goroutine actually performed optimization
 			initialFlag := mediaDB.isOptimizing.Load()
-			mediaDB.RunBackgroundOptimization()
+			mediaDB.RunBackgroundOptimization(nil)
 
 			// If the flag was false initially and is now false again,
 			// this goroutine might have done the optimization
@@ -378,7 +378,7 @@ func TestOptimizationInterruption(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Run optimization - should complete quickly with 1ms delays
-	mediaDB.RunBackgroundOptimization()
+	mediaDB.RunBackgroundOptimization(nil)
 
 	// Verify that optimization is no longer running after failure
 	assert.False(t, mediaDB.isOptimizing.Load())
@@ -498,7 +498,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		mediaDB.RunBackgroundOptimization()
+		mediaDB.RunBackgroundOptimization(nil)
 	}()
 
 	// Concurrently check status many times

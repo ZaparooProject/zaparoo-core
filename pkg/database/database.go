@@ -228,7 +228,7 @@ type MediaDBI interface {
 	GetOptimizationStatus() (string, error)
 	SetOptimizationStep(step string) error
 	GetOptimizationStep() (string, error)
-	RunBackgroundOptimization()
+	RunBackgroundOptimization(statusCallback func(optimizing bool))
 	WaitForBackgroundOperations()
 
 	InvalidateCountCache() error

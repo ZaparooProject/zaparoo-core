@@ -605,7 +605,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
 			mockMediaDB.On("Truncate").Return(nil).Maybe()
-			mockMediaDB.On("RunBackgroundOptimization").Return(nil).Maybe()
+			mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return(nil).Maybe()
 
 			// Mock total media count
 			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()

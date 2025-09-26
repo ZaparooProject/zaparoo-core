@@ -388,19 +388,19 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods for resume scenario
 	// First call: simulate interrupted indexing state
@@ -477,19 +477,19 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods for invalid resume scenario (system not found triggers fallback)
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
@@ -559,19 +559,19 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods for failed previous indexing
 	mockMediaDB.On("GetIndexingStatus").Return("failed", nil).Once()
@@ -638,19 +638,19 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods with database error
 	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError).Once() // Simulate DB error
@@ -750,19 +750,19 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
@@ -831,19 +831,19 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()
@@ -910,19 +910,19 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
-	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
+	mockMediaDB.On("InsertTitle", mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle",
-		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		mock.AnythingOfType("database.MediaTitle")).Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
 
 	// Mock resume scenario but with different systems
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Once()
@@ -1004,7 +1004,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
@@ -1069,18 +1069,19 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
-	mockMediaDB.On("RunBackgroundOptimization").Return().Maybe()
+	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
 	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 	mockMediaDB.On("InsertTag", mock.AnythingOfType("database.Tag")).Return(database.Tag{}, nil).Maybe()
 
 	// Mock system and media insertion operations
-	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}, nil).Maybe()
+	mockMediaDB.On("InsertSystem", mock.AnythingOfType("database.System")).Return(database.System{}).Maybe()
 	mockMediaDB.On("InsertMediaTitle", mock.AnythingOfType("database.MediaTitle")).
-		Return(database.MediaTitle{}, nil).Maybe()
-	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}, nil).Maybe()
-	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}, nil).Maybe()
+		Return(database.MediaTitle{}).Maybe()
+	mockMediaDB.On("InsertMedia", mock.AnythingOfType("database.Media")).Return(database.Media{}).Maybe()
+	mockMediaDB.On("InsertMediaTag", mock.AnythingOfType("database.MediaTag")).Return(database.MediaTag{}).Maybe()
+	mockMediaDB.On("InsertTagType", mock.AnythingOfType("database.TagType")).Return(database.TagType{}, nil).Maybe()
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Once()

@@ -826,8 +826,8 @@ func (m *MockMediaDBI) GetOptimizationStep() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockMediaDBI) RunBackgroundOptimization() {
-	m.Called()
+func (m *MockMediaDBI) RunBackgroundOptimization(statusCallback func(optimizing bool)) {
+	m.Called(statusCallback)
 }
 
 func (m *MockMediaDBI) WaitForBackgroundOperations() {
