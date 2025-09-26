@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupTempMediaDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
+func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-mediadb-*")
 	require.NoError(t, err)
@@ -44,17 +44,17 @@ func setupTempMediaDB(t *testing.T) (mediaDB *MediaDB, cleanup func()) {
 
 	// Use OpenMediaDB with context and the mock platform
 	ctx := context.Background()
-	mediaDB, err = OpenMediaDB(ctx, mockPlatform)
+	db, err = OpenMediaDB(ctx, mockPlatform)
 	require.NoError(t, err)
 
 	cleanup = func() {
-		if mediaDB != nil {
-			_ = mediaDB.Close()
+		if db != nil {
+			_ = db.Close()
 		}
 		_ = os.RemoveAll(tempDir)
 	}
 
-	return mediaDB, cleanup
+	return db, cleanup
 }
 
 func TestMediaDB_OpenClose_Integration(t *testing.T) {

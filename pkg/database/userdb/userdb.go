@@ -145,7 +145,7 @@ func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
 	return sqlUpdateZapLinkHost(db.ctx, db.sql, host, zapscript)
 }
 
-func (db *UserDB) GetZapLinkHost(host string) (exists, allowed bool, err error) {
+func (db *UserDB) GetZapLinkHost(host string) (found, zapScript bool, err error) {
 	return sqlGetZapLinkHost(db.ctx, db.sql, host)
 }
 

@@ -125,7 +125,7 @@ func (m *MethodMap) Store(key, value any) {
 	m.Map.Store(key, value)
 }
 
-func (m *MethodMap) Load(key any) (value any, ok bool) {
+func (m *MethodMap) Load(key any) (any, bool) {
 	return m.Map.Load(key)
 }
 

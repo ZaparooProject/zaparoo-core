@@ -50,9 +50,10 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
-) (titleIndex, mediaIndex int) {
+) (indexedFiles, duplicateFiles int) {
 	pf := GetPathFragments(path)
 
+	var titleIndex, mediaIndex int
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
 		ss.SystemsIndex++

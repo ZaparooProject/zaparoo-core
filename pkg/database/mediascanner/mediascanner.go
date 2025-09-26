@@ -372,8 +372,11 @@ func NewNamesIndex(
 	systems []systemdefs.System,
 	fdb *database.Database,
 	update func(IndexStatus),
-) (indexedFiles int, err error) {
+) (int, error) {
 	db := fdb.MediaDB
+
+	var indexedFiles int
+	var err error
 
 	// Create list of system IDs for storage
 	currentSystemIDs := make([]string, 0, len(systems))
@@ -971,6 +974,7 @@ func NewNamesIndex(
 	// Mark optimization as pending
 	err = db.SetOptimizationStatus("pending")
 	if err != nil {
+		err = fmt.Errorf("failed to set optimization status to pending: %w", err)
 		log.Error().Err(err).Msg("failed to set optimization status to pending")
 	}
 
@@ -987,5 +991,5 @@ func NewNamesIndex(
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
 	indexedFiles = status.Files
-	return
+	return indexedFiles, err
 }

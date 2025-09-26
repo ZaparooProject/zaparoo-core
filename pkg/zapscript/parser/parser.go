@@ -450,7 +450,7 @@ func (sr *ScriptReader) parseInputMacroArg() (args []string, advArgs map[string]
 	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainder string, err error) {
+func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainingStr string, err error) {
 	advArgs = make(map[string]string)
 	inValue := false
 	currentArg := ""

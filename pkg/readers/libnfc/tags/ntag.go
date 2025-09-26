@@ -201,7 +201,9 @@ func getNtagCapacity(pnd nfc.Device) (int, error) {
 	}
 }
 
-func chunkBy[T any](items []T, chunkSize int) (chunks [][]T) {
+func chunkBy[T any](items []T, chunkSize int) [][]T {
+	expectedCap := (len(items) + chunkSize - 1) / chunkSize
+	chunks := make([][]T, 0, expectedCap)
 	for chunkSize < len(items) {
 		items, chunks = items[chunkSize:], append(chunks, items[0:chunkSize:chunkSize])
 	}

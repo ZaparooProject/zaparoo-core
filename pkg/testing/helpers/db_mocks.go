@@ -222,7 +222,7 @@ func (m *MockUserDBI) UpdateZapLinkHost(host string, zapscript int) error {
 	return nil
 }
 
-func (m *MockUserDBI) GetZapLinkHost(host string) (exists, zapscript bool, err error) {
+func (m *MockUserDBI) GetZapLinkHost(host string) (found, zapScript bool, err error) {
 	args := m.Called(host)
 	return args.Bool(0), args.Bool(1), args.Error(2)
 }

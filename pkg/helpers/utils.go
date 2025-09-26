@@ -347,7 +347,8 @@ type VirtualPathResult struct {
 }
 
 // ParseVirtualPathStr parses a virtual path and returns its components with string ID
-func ParseVirtualPathStr(virtualPath string) (result VirtualPathResult, err error) {
+func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
+	var result VirtualPathResult
 	if !strings.Contains(virtualPath, "://") {
 		return result, errors.New("not a virtual path")
 	}
