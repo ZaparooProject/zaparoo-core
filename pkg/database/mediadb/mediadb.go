@@ -283,6 +283,9 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	db.sql = sqlDB
 	db.ctx = ctx
 	db.pl = platform
+	db.clock = clockwork.NewRealClock()
+	db.analyzeRetryDelay = 10 * time.Second
+	db.vacuumRetryDelay = 30 * time.Second
 
 	// Initialize the database schema
 	if err := db.Allocate(); err != nil {
