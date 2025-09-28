@@ -474,41 +474,30 @@ An object:
 }
 ```
 
-### media.facets
+### media.tags
 
-Query the media database and return tag facets (counts) for filtering.
+Query the media database and return available tags for filtering.
 
-This method returns aggregated counts of available tags based on the current search criteria. Use this to build dynamic filter UIs showing available tag options and their frequencies.
+This method returns all available tags (with their types) for the specified systems. Use this to build dynamic filter UIs showing available tag options.
 
 #### Parameters
 
-An object with the same structure as `media.search`:
-
-| Key        | Type     | Required | Description                                                                                                                    |
-| :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. |
-| systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
-| tags       | string[] | No       | Filter facets by existing tags. Tags are case-sensitive and results will show facets for items matching all provided tags. |
+| Key     | Type     | Required | Description                                                                                         |
+| :------ | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| systems | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
 
 #### Result
 
-| Key    | Type                       | Required | Description                              |
-| :----- | :------------------------- | :------- | :--------------------------------------- |
-| facets | [Facet](#facet-object)[]   | Yes      | Array of facets with their tag counts.  |
+| Key  | Type                     | Required | Description                    |
+| :--- | :----------------------- | :------- | :----------------------------- |
+| tags | [TagInfo](#taginfo-object)[] | Yes      | Array of available tags.       |
 
-##### Facet object
+##### TagInfo object
 
-| Key    | Type                             | Required | Description                           |
-| :----- | :------------------------------- | :------- | :------------------------------------ |
-| type   | string                           | Yes      | The facet type (e.g., "genre", "year"). |
-| values | [FacetValue](#facetvalue-object)[] | Yes      | Array of tag values and their counts.  |
-
-##### FacetValue object
-
-| Key   | Type   | Required | Description                    |
-| :---- | :----- | :------- | :----------------------------- |
-| tag   | string | Yes      | The tag name.                  |
-| count | number | Yes      | Number of items with this tag. |
+| Key  | Type   | Required | Description                           |
+| :--- | :----- | :------- | :------------------------------------ |
+| tag  | string | Yes      | The tag value.                        |
+| type | string | Yes      | The tag type (e.g., "genre", "year"). |
 
 #### Example
 
@@ -518,9 +507,8 @@ An object with the same structure as `media.search`:
 {
   "jsonrpc": "2.0",
   "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
-  "method": "media.facets",
+  "method": "media.tags",
   "params": {
-    "query": "mario",
     "systems": ["NES", "SNES"]
   }
 }
@@ -533,32 +521,22 @@ An object with the same structure as `media.search`:
   "jsonrpc": "2.0",
   "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
   "result": {
-    "facets": [
+    "tags": [
       {
         "type": "genre",
-        "values": [
-          {
-            "tag": "platformer",
-            "count": 15
-          },
-          {
-            "tag": "action",
-            "count": 8
-          }
-        ]
+        "tag": "action"
+      },
+      {
+        "type": "genre",
+        "tag": "platformer"
       },
       {
         "type": "series",
-        "values": [
-          {
-            "tag": "Super Mario",
-            "count": 12
-          },
-          {
-            "tag": "Mario Bros",
-            "count": 3
-          }
-        ]
+        "tag": "Mario Bros"
+      },
+      {
+        "type": "series",
+        "tag": "Super Mario"
       }
     ]
   }

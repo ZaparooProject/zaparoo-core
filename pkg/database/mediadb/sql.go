@@ -1396,51 +1396,23 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
-func sqlGetTagFacets(
+func sqlGetTags(
 	ctx context.Context,
 	db *sql.DB,
 	systems []systemdefs.System,
-	parts []string,
-	tags []string,
-) ([]database.TagTypeFacet, error) {
+) ([]database.TagInfo, error) {
 	if len(systems) == 0 {
-		return nil, errors.New("no systems provided for facet search")
-	}
-
-	// Search for anything in systems on blank query
-	if len(parts) == 0 {
-		parts = []string{""}
+		return nil, errors.New("no systems provided for tag search")
 	}
 
 	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
-	for _, p := range parts {
-		args = append(args, "%"+p+"%")
-	}
-
-	// Add tag filtering condition
-	tagFilterCondition := ""
-	if len(tags) > 0 {
-		tagFilterCondition = `
-			AND EXISTS (
-				SELECT 1 FROM MediaTags mt2
-				JOIN Tags t2 ON mt2.TagDBID = t2.DBID
-				WHERE mt2.MediaDBID = Media.DBID
-				AND t2.Tag IN (` + prepareVariadic("?", ",", len(tags)) + `)
-			)`
-		for _, tag := range tags {
-			args = append(args, tag)
-		}
-	}
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	sqlQuery := `
-		SELECT
-			TagTypes.Type,
-			Tags.Tag,
-			COUNT(DISTINCT Media.DBID) as count
+		SELECT DISTINCT TagTypes.Type, Tags.Tag
 		FROM TagTypes
 		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
 		JOIN MediaTags ON Tags.DBID = MediaTags.TagDBID
@@ -1450,15 +1422,11 @@ func sqlGetTagFacets(
 		WHERE Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
-		AND ` +
-		prepareVariadic(" MediaTitles.Slug like ? ", " AND ", len(parts)) +
-		tagFilterCondition +
-		` GROUP BY TagTypes.Type, Tags.Tag
-		ORDER BY TagTypes.Type, count DESC, Tags.Tag`
+		ORDER BY TagTypes.Type, Tags.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare tag facets statement: %w", err)
+		return nil, fmt.Errorf("failed to prepare tags statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -1468,7 +1436,7 @@ func sqlGetTagFacets(
 
 	rows, err := stmt.QueryContext(ctx, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute tag facets query: %w", err)
+		return nil, fmt.Errorf("failed to execute tags query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -1476,21 +1444,15 @@ func sqlGetTagFacets(
 		}
 	}()
 
-	// Group facets by type
-	facetMap := make(map[string][]database.TagFacet)
+	tags := make([]database.TagInfo, 0, 100)
 	for rows.Next() {
 		var tagType, tag string
-		var count int
-		if scanErr := rows.Scan(&tagType, &tag, &count); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan tag facet result: %w", scanErr)
+		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan tag result: %w", scanErr)
 		}
-
-		if facetMap[tagType] == nil {
-			facetMap[tagType] = make([]database.TagFacet, 0)
-		}
-		facetMap[tagType] = append(facetMap[tagType], database.TagFacet{
-			Tag:   tag,
-			Count: count,
+		tags = append(tags, database.TagInfo{
+			Type: tagType,
+			Tag:  tag,
 		})
 	}
 
@@ -1498,16 +1460,7 @@ func sqlGetTagFacets(
 		return nil, err
 	}
 
-	// Convert map to slice
-	result := make([]database.TagTypeFacet, 0, len(facetMap))
-	for tagType, values := range facetMap {
-		result = append(result, database.TagTypeFacet{
-			Type:   tagType,
-			Values: values,
-		})
-	}
-
-	return result, nil
+	return tags, nil
 }
 
 func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {

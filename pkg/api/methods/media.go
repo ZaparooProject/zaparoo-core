@@ -633,20 +633,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}, nil
 }
 
-func HandleMediaFacets(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
-	log.Info().Msg("received media facets request")
-
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
+func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received media tags request")
 
 	var params models.SearchParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if len(env.Params) > 0 {
+		err := json.Unmarshal(env.Params, &params)
+		if err != nil {
+			return nil, ErrInvalidParams
+		}
 	}
 
-	// Create a cancellable context for this facet request
+	// Create a cancellable context for this tags request
 	ctx, cancel := context.WithCancel(env.State.GetContext())
 	defer cancel() // Always call cancel to release resources
 
@@ -655,20 +653,8 @@ func HandleMediaFacets(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	defer cleanupSearchCancel(env.ClientID, searchID)
 
 	system := params.Systems
-	query := params.Query
-	tags := params.Tags
 
-	// Validate and normalize tags parameter
-	var normalizedTags []string
-	if tags != nil && len(*tags) > 0 {
-		var validationErr error
-		normalizedTags, validationErr = validateAndNormalizeTags(*tags)
-		if validationErr != nil {
-			return nil, validationErr
-		}
-	}
-
-	// Prepare systems for facet search
+	// Prepare systems for tags search
 	var systems []systemdefs.System
 	if system == nil || len(*system) == 0 {
 		systems = systemdefs.AllSystems()
@@ -683,42 +669,18 @@ func HandleMediaFacets(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
-	// Prepare filters for facet search
-	filters := database.SearchFilters{
-		Systems: systems,
-		Query:   query,
-		Tags:    normalizedTags,
-	}
-
-	// Get facets from database
-	facets, err := env.Database.MediaDB.GetTagFacets(ctx, &filters)
+	// Get tags from database
+	tags, err := env.Database.MediaDB.GetTags(ctx, systems)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			log.Info().Str("client", env.ClientID).Msg("facet request cancelled")
-			return nil, errors.New("facet request cancelled")
+			log.Info().Str("client", env.ClientID).Msg("tags request cancelled")
+			return nil, errors.New("tags request cancelled")
 		}
-		return nil, fmt.Errorf("error getting tag facets: %w", err)
+		return nil, fmt.Errorf("error getting tags: %w", err)
 	}
 
-	// Convert to API models
-	responseFacets := make([]models.Facet, 0, len(facets))
-	for _, facet := range facets {
-		values := make([]models.FacetValue, 0, len(facet.Values))
-		for _, value := range facet.Values {
-			values = append(values, models.FacetValue{
-				Tag:   value.Tag,
-				Count: value.Count,
-			})
-		}
-
-		responseFacets = append(responseFacets, models.Facet{
-			Type:   facet.Type,
-			Values: values,
-		})
-	}
-
-	return models.FacetsResponse{
-		Facets: responseFacets,
+	return models.TagsResponse{
+		Tags: tags,
 	}, nil
 }
 

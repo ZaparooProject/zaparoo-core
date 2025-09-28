@@ -459,12 +459,12 @@ func (m *MockMediaDBI) SearchMediaWithFilters(
 	return nil, nil
 }
 
-func (m *MockMediaDBI) GetTagFacets(
+func (m *MockMediaDBI) GetTags(
 	ctx context.Context,
-	filters *database.SearchFilters,
-) ([]database.TagTypeFacet, error) {
-	args := m.Called(ctx, filters)
-	if results, ok := args.Get(0).([]database.TagTypeFacet); ok {
+	systems []systemdefs.System,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, systems)
+	if results, ok := args.Get(0).([]database.TagInfo); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
 		}

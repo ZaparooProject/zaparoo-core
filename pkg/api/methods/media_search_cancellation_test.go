@@ -90,17 +90,17 @@ func (m *MockMediaDBWithDelay) SearchMediaWithFilters(
 	}
 }
 
-func (m *MockMediaDBWithDelay) GetTagFacets(
+func (m *MockMediaDBWithDelay) GetTags(
 	ctx context.Context,
-	filters *database.SearchFilters,
-) ([]database.TagTypeFacet, error) {
+	systems []systemdefs.System,
+) ([]database.TagInfo, error) {
 	// Simulate slow query with controllable delay
 	select {
 	case <-time.After(m.delay):
 		// Delegate to embedded MockMediaDBI
-		result, err := m.MockMediaDBI.GetTagFacets(ctx, filters)
+		result, err := m.MockMediaDBI.GetTags(ctx, systems)
 		if err != nil {
-			return nil, fmt.Errorf("mock GetTagFacets failed: %w", err)
+			return nil, fmt.Errorf("mock GetTags failed: %w", err)
 		}
 		return result, nil
 	case <-ctx.Done():

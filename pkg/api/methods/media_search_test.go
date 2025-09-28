@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -305,48 +306,32 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid cursor", "Error should mention invalid cursor")
 }
 
-func TestHandleMediaFacets_Success(t *testing.T) {
+func TestHandleMediaTags_Success(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
 	mockMediaDB := &helpers.MockMediaDBI{}
 	mockPlatform := mocks.NewMockPlatform()
 
-	// Setup expected facet results
-	expectedFacets := []database.TagTypeFacet{
-		{
-			Type: "genre",
-			Values: []database.TagFacet{
-				{Tag: "Action", Count: 15},
-				{Tag: "Adventure", Count: 12},
-				{Tag: "RPG", Count: 8},
-			},
-		},
-		{
-			Type: "year",
-			Values: []database.TagFacet{
-				{Tag: "1990", Count: 5},
-				{Tag: "1991", Count: 3},
-			},
-		},
+	// Setup expected tag results
+	expectedTags := []database.TagInfo{
+		{Type: "genre", Tag: "Action"},
+		{Type: "genre", Tag: "Adventure"},
+		{Type: "genre", Tag: "RPG"},
+		{Type: "year", Tag: "1990"},
+		{Type: "year", Tag: "1991"},
 	}
 
-	mockMediaDB.On("GetTagFacets",
+	mockMediaDB.On("GetTags",
 		mock.Anything, // context
-		mock.MatchedBy(func(filters *database.SearchFilters) bool {
-			// Verify the filters are set correctly
-			return filters.Query == "mario" &&
-				len(filters.Systems) > 0 &&
-				len(filters.Tags) == 2 &&
-				filters.Tags[0] == "action" &&
-				filters.Tags[1] == "platformer"
+		mock.MatchedBy(func(systems []systemdefs.System) bool {
+			// Verify systems are set correctly
+			return len(systems) > 0
 		}),
-	).Return(expectedFacets, nil)
+	).Return(expectedTags, nil)
 
-	// Create request with systems, query, and tags
+	// Create request with systems
 	params := models.SearchParams{
-		Query:   "mario",
 		Systems: &[]string{"NES", "SNES"},
-		Tags:    &[]string{"action", "platformer"},
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -367,127 +352,65 @@ func TestHandleMediaFacets_Success(t *testing.T) {
 	}
 
 	// Execute
-	result, err := HandleMediaFacets(env)
+	result, err := HandleMediaTags(env)
 	require.NoError(t, err)
 
 	// Verify response format
-	facetsResponse, ok := result.(models.FacetsResponse)
-	require.True(t, ok, "Should return FacetsResponse")
+	tagsResponse, ok := result.(models.TagsResponse)
+	require.True(t, ok, "Should return TagsResponse")
 
-	// Verify facets structure
-	assert.Len(t, facetsResponse.Facets, 2, "Should return 2 facet types")
-
-	// Find genre facet
-	var genreFacet *models.Facet
-	for _, facet := range facetsResponse.Facets {
-		if facet.Type == "genre" {
-			genreFacet = &facet
-			break
-		}
-	}
-	require.NotNil(t, genreFacet, "Should have genre facet")
-	assert.Len(t, genreFacet.Values, 3, "Genre facet should have 3 values")
-	assert.Equal(t, "Action", genreFacet.Values[0].Tag)
-	assert.Equal(t, 15, genreFacet.Values[0].Count)
-
-	// Find year facet
-	var yearFacet *models.Facet
-	for _, facet := range facetsResponse.Facets {
-		if facet.Type == "year" {
-			yearFacet = &facet
-			break
-		}
-	}
-	require.NotNil(t, yearFacet, "Should have year facet")
-	assert.Len(t, yearFacet.Values, 2, "Year facet should have 2 values")
+	// Verify tags structure
+	assert.Len(t, tagsResponse.Tags, 5, "Should return 5 tags")
+	assert.Equal(t, expectedTags, tagsResponse.Tags, "Should return expected tags")
 
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)
 }
 
-func TestHandleMediaFacets_TagValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		errorMsg    string
-		tags        []string
-		expectError bool
-	}{
-		{
-			name:        "valid tags",
-			tags:        []string{"action", "adventure"},
-			expectError: false,
-		},
-		{
-			name:        "too many tags",
-			tags:        make([]string, 51), // maxTagsCount is 50
-			expectError: true,
-			errorMsg:    "exceeded maximum number of tags",
-		},
-		{
-			name:        "tag too long",
-			tags:        []string{string(make([]byte, 129))}, // maxTagLength is 128
-			expectError: true,
-			errorMsg:    "tag too long",
-		},
-		{
-			name:        "empty tags filtered out",
-			tags:        []string{"action", "", "  ", "adventure"},
-			expectError: false,
-		},
+func TestHandleMediaTags_NoParams(t *testing.T) {
+	// Setup mocks
+	mockUserDB := &helpers.MockUserDBI{}
+	mockMediaDB := &helpers.MockMediaDBI{}
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Setup expected tag results for all systems
+	expectedTags := []database.TagInfo{
+		{Type: "genre", Tag: "Action"},
+		{Type: "genre", Tag: "RPG"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Setup mocks
-			mockUserDB := &helpers.MockUserDBI{}
-			mockMediaDB := &helpers.MockMediaDBI{}
-			mockPlatform := mocks.NewMockPlatform()
+	mockMediaDB.On("GetTags",
+		mock.Anything, // context
+		mock.MatchedBy(func(systems []systemdefs.System) bool {
+			// When no systems are specified, should get all systems
+			return len(systems) > 0
+		}),
+	).Return(expectedTags, nil)
 
-			if !tt.expectError {
-				// Only mock database call for successful cases
-				mockMediaDB.On("GetTagFacets", mock.Anything, mock.Anything).
-					Return([]database.TagTypeFacet{}, nil)
-			}
+	// Create state
+	appState, _ := state.NewState(mockPlatform)
 
-			// Create request
-			params := models.SearchParams{
-				Query: "test",
-				Tags:  &tt.tags,
-			}
-			paramsJSON, err := json.Marshal(params)
-			require.NoError(t, err)
-
-			// Create state
-			appState, _ := state.NewState(mockPlatform)
-
-			env := requests.RequestEnv{
-				Params: paramsJSON,
-				Database: &database.Database{
-					UserDB:  mockUserDB,
-					MediaDB: mockMediaDB,
-				},
-				Platform: mockPlatform,
-				State:    appState,
-				Config:   &config.Instance{},
-				ClientID: "127.0.0.1:12345",
-			}
-
-			// Execute
-			result, err := HandleMediaFacets(env)
-
-			if tt.expectError {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorMsg)
-				assert.Nil(t, result)
-			} else {
-				require.NoError(t, err)
-				assert.NotNil(t, result)
-			}
-
-			// Verify expectations (only if mocked)
-			if !tt.expectError {
-				mockMediaDB.AssertExpectations(t)
-			}
-		})
+	env := requests.RequestEnv{
+		Params: []byte("{}"), // Empty params should still work
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
 	}
+
+	// Execute
+	result, err := HandleMediaTags(env)
+	require.NoError(t, err)
+
+	// Verify response format
+	tagsResponse, ok := result.(models.TagsResponse)
+	require.True(t, ok, "Should return TagsResponse")
+	assert.Equal(t, expectedTags, tagsResponse.Tags)
+
+	// Verify mock was called
+	mockMediaDB.AssertExpectations(t)
 }

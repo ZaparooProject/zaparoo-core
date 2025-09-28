@@ -45,18 +45,8 @@ type SearchResults struct {
 	Total      int                 `json:"total"`
 }
 
-type FacetValue struct {
-	Tag   string `json:"tag"`
-	Count int    `json:"count"`
-}
-
-type Facet struct {
-	Type   string       `json:"type"`
-	Values []FacetValue `json:"values"`
-}
-
-type FacetsResponse struct {
-	Facets []Facet `json:"facets"`
+type TagsResponse struct {
+	Tags []database.TagInfo `json:"tags"`
 }
 
 type SettingsResponse struct {

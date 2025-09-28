@@ -491,7 +491,7 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSqlGetTagFacets(t *testing.T) {
+func TestSqlGetTags(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
 	require.NoError(t, err)
@@ -501,50 +501,29 @@ func TestSqlGetTagFacets(t *testing.T) {
 		{ID: "NES"},
 		{ID: "SNES"},
 	}
-	parts := []string{"mario"}
-	tags := []string{"Action"}
 
 	// Mock the expected query and result
-	mock.ExpectPrepare("SELECT.*TagTypes.Type.*Tags.Tag.*COUNT\\(DISTINCT Media.DBID\\)"+
-		".*FROM TagTypes.*JOIN.*GROUP BY.*ORDER BY").
+	mock.ExpectPrepare("SELECT DISTINCT TagTypes.Type, Tags.Tag.*FROM TagTypes.*JOIN.*ORDER BY").
 		ExpectQuery().
-		WithArgs("NES", "SNES", "%mario%", "Action").
-		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag", "count"}).
-			AddRow("genre", "Action", 5).
-			AddRow("genre", "Adventure", 3).
-			AddRow("year", "1990", 2))
+		WithArgs("NES", "SNES").
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Tag"}).
+			AddRow("genre", "Action").
+			AddRow("genre", "Adventure").
+			AddRow("year", "1990"))
 
-	results, err := sqlGetTagFacets(context.Background(), db, systems, parts, tags)
+	results, err := sqlGetTags(context.Background(), db, systems)
 
 	require.NoError(t, err)
-	assert.Len(t, results, 2) // Should have 2 tag types: genre and year
+	assert.Len(t, results, 3) // Should have 3 tags
 
-	// Find facets by type (order may vary due to map iteration)
-	var genreFacet, yearFacet *database.TagTypeFacet
-	for i := range results {
-		switch results[i].Type {
-		case "genre":
-			genreFacet = &results[i]
-		case "year":
-			yearFacet = &results[i]
-		}
+	// Check the tags are returned correctly
+	expectedTags := []database.TagInfo{
+		{Type: "genre", Tag: "Action"},
+		{Type: "genre", Tag: "Adventure"},
+		{Type: "year", Tag: "1990"},
 	}
 
-	// Check genre facet
-	require.NotNil(t, genreFacet, "genre facet should be found")
-	assert.Equal(t, "genre", genreFacet.Type)
-	assert.Len(t, genreFacet.Values, 2)
-	// Check that both Action and Adventure tags are present
-	tagNames := []string{genreFacet.Values[0].Tag, genreFacet.Values[1].Tag}
-	assert.Contains(t, tagNames, "Action")
-	assert.Contains(t, tagNames, "Adventure")
-
-	// Check year facet
-	require.NotNil(t, yearFacet, "year facet should be found")
-	assert.Equal(t, "year", yearFacet.Type)
-	assert.Len(t, yearFacet.Values, 1)
-	assert.Equal(t, "1990", yearFacet.Values[0].Tag)
-	assert.Equal(t, 2, yearFacet.Values[0].Count)
+	assert.Equal(t, expectedTags, results)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

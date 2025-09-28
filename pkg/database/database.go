@@ -159,18 +159,6 @@ type SearchFilters struct {
 	Limit   int                 `json:"limit"`
 }
 
-// TagFacet represents a tag with its count
-type TagFacet struct {
-	Tag   string `json:"tag"`
-	Count int    `json:"count"`
-}
-
-// TagTypeFacet represents a tag type with its available tags
-type TagTypeFacet struct {
-	Type   string     `json:"type"`
-	Values []TagFacet `json:"values"`
-}
-
 type ScanState struct {
 	SystemIDs     map[string]int
 	TitleIDs      map[string]int
@@ -247,7 +235,7 @@ type MediaDBI interface {
 		ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
-	GetTagFacets(ctx context.Context, filters *SearchFilters) ([]TagTypeFacet, error)
+	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool

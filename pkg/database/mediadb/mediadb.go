@@ -506,12 +506,11 @@ func (db *MediaDB) SearchMediaWithFilters(
 		ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Cursor, filters.Limit)
 }
 
-func (db *MediaDB) GetTagFacets(ctx context.Context, filters *database.SearchFilters) ([]database.TagTypeFacet, error) {
+func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
 	if db.sql == nil {
-		return make([]database.TagTypeFacet, 0), ErrNullSQL
+		return make([]database.TagInfo, 0), ErrNullSQL
 	}
-	qWords := strings.Fields(strings.ToLower(filters.Query))
-	return sqlGetTagFacets(ctx, db.sql, filters.Systems, qWords, filters.Tags)
+	return sqlGetTags(ctx, db.sql, systems)
 }
 
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
