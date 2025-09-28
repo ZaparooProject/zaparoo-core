@@ -410,3 +410,45 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)
 }
+
+func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
+	// Setup mocks
+	mockUserDB := &helpers.MockUserDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+	appState, _ := state.NewState(mockPlatform)
+
+	// Test valid letter parameter
+	letter := "M"
+	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
+		return filters.Letter != nil && *filters.Letter == letter
+	})).Return([]database.SearchResultWithCursor{}, nil).Once()
+
+	// Create test parameters
+	params := models.SearchParams{
+		Query:  "test",
+		Letter: &letter,
+	}
+	paramBytes, _ := json.Marshal(params)
+
+	// Create request environment
+	env := requests.RequestEnv{
+		Params: paramBytes,
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	// Execute
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify mock was called
+	mockMediaDB.AssertExpectations(t)
+}

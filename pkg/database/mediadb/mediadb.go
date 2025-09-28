@@ -508,7 +508,7 @@ func (db *MediaDB) SearchMediaWithFilters(
 	}
 	qWords := strings.Fields(strings.ToLower(filters.Query))
 	return sqlSearchMediaWithFilters(
-		ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Cursor, filters.Limit)
+		ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Letter, filters.Cursor, filters.Limit)
 }
 
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {

@@ -524,6 +524,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	system := params.Systems
 	query := params.Query
 	tags := params.Tags
+	letter := params.Letter
 
 	// Validate and normalize tags parameter
 	var normalizedTags []string
@@ -532,6 +533,17 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		normalizedTags, validationErr = validateAndNormalizeTags(*tags)
 		if validationErr != nil {
 			return nil, validationErr
+		}
+	}
+
+	// Validate letter parameter
+	var validatedLetter *string
+	if letter != nil && *letter != "" {
+		letterValue := strings.ToUpper(strings.TrimSpace(*letter))
+		if letterValue == "0-9" || letterValue == "#" || (len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z") {
+			validatedLetter = &letterValue
+		} else {
+			return nil, fmt.Errorf("invalid letter parameter: %q (must be A-Z, 0-9, or #)", *letter)
 		}
 	}
 
@@ -558,6 +570,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Systems: systems,
 		Query:   query,
 		Tags:    normalizedTags, // Will be empty if no tags provided
+		Letter:  validatedLetter,
 		Cursor:  cursor,
 		Limit:   limit,
 	}

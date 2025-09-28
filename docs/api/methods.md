@@ -321,6 +321,7 @@ An object:
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
 | tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. |
+| letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
 
 #### Result
 

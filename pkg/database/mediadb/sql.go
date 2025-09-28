@@ -1231,6 +1231,7 @@ func sqlSearchMediaWithFilters(
 	systems []systemdefs.System,
 	parts []string,
 	tags []string,
+	letter *string,
 	cursor *int64,
 	limit int,
 ) ([]database.SearchResultWithCursor, error) {
@@ -1273,6 +1274,23 @@ func sqlSearchMediaWithFilters(
 		}
 	}
 
+	// Add letter filtering condition
+	letterFilterCondition := ""
+	if letter != nil && *letter != "" {
+		letterValue := strings.ToUpper(*letter)
+		if letterValue == "0-9" {
+			// Filter for games starting with numbers
+			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) BETWEEN '0' AND '9' "
+		} else if letterValue == "#" {
+			// Filter for games starting with symbols (not letters or numbers)
+			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z' AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9' "
+		} else if len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z" {
+			// Filter for games starting with specific letter
+			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ? "
+			args = append(args, letterValue)
+		}
+	}
+
 	// Two-query approach to avoid expensive GROUP BY temporary B-trees
 	// Query 1: Get media items without tags (fast, no GROUP BY)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
@@ -1291,6 +1309,7 @@ func sqlSearchMediaWithFilters(
 		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
 		cursorCondition +
 		tagFilterCondition +
+		letterFilterCondition +
 		` LIMIT ?`
 
 	mediaArgs := append([]any(nil), args...) // Copy args

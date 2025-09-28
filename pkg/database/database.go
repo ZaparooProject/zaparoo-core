@@ -156,6 +156,7 @@ type SearchFilters struct {
 	Query   string              `json:"query"`
 	Systems []systemdefs.System `json:"systems,omitempty"`
 	Tags    []string            `json:"tags,omitempty"`
+	Letter  *string             `json:"letter,omitempty"`
 	Limit   int                 `json:"limit"`
 }
 
