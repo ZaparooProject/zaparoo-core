@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -124,4 +125,35 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 	// Verify the relationships are correct
 	assert.Equal(t, insertedSystem.DBID, insertedTitle.SystemDBID, "MediaTitle should reference System")
 	assert.Equal(t, insertedTitle.DBID, insertedMedia.MediaTitleDBID, "Media should reference MediaTitle")
+}
+
+func TestMediaDB_SystemTagsCache_Integration(t *testing.T) {
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test cache population with empty database - should succeed without error
+	err := mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	// Test cached tag retrieval with non-existent system - should return empty results
+	systemdefsSystems := []systemdefs.System{{ID: "nes"}}
+	cachedTags, err := mediaDB.GetSystemTagsCached(ctx, systemdefsSystems)
+	require.NoError(t, err)
+	assert.Empty(t, cachedTags) // Should be empty for non-existent system
+
+	// Test cache invalidation with non-existent system - should succeed
+	err = mediaDB.InvalidateSystemTagsCache(ctx, systemdefsSystems)
+	require.NoError(t, err)
+
+	// Test fallback to optimized query when cache is empty
+	tagsAfterInvalidation, err := mediaDB.GetSystemTagsCached(ctx, systemdefsSystems)
+	require.NoError(t, err)
+	assert.Empty(t, tagsAfterInvalidation) // Should still be empty
+
+	// Test with empty systems list
+	emptyTags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{})
+	require.Error(t, err) // Should return error for empty systems
+	assert.Nil(t, emptyTags)
 }

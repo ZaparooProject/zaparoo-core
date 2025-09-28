@@ -971,6 +971,14 @@ func NewNamesIndex(
 		log.Error().Err(cacheErr).Msg("failed to invalidate media count cache after indexing")
 	}
 
+	// Populate system tags cache for fast tag lookups
+	log.Info().Msg("populating system tags cache after indexing completion")
+	if cacheErr := db.PopulateSystemTagsCache(ctx); cacheErr != nil {
+		log.Error().Err(cacheErr).Msg("failed to populate system tags cache after indexing")
+	} else {
+		log.Info().Msg("successfully populated system tags cache")
+	}
+
 	// Mark optimization as pending
 	err = db.SetOptimizationStatus("pending")
 	if err != nil {

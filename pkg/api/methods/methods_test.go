@@ -566,7 +566,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/path"}).Maybe()
 
 			mockUserDB := &helpers.MockUserDBI{}
-			mockMediaDB := &helpers.MockMediaDBI{}
+			mockMediaDB := helpers.NewMockMediaDBI()
 
 			// Mock optimization status check
 			mockMediaDB.On("GetOptimizationStatus").Return("", nil)

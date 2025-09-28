@@ -431,6 +431,11 @@ func (db *MediaDB) CommitTransaction() error {
 	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 		log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after transaction commit")
 	}
+	// Clear all system tags cache after transaction commit
+	_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+	if tagCacheErr != nil {
+		log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after transaction commit")
+	}
 
 	return nil
 }
@@ -511,6 +516,76 @@ func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]
 		return make([]database.TagInfo, 0), ErrNullSQL
 	}
 	return sqlGetTags(ctx, db.sql, systems)
+}
+
+// GetAllUsedTags returns all tags that are actually in use (have media associated)
+// This is optimized for the "all systems" case and avoids expensive system filtering
+func (db *MediaDB) GetAllUsedTags(ctx context.Context) ([]database.TagInfo, error) {
+	if db.sql == nil {
+		return make([]database.TagInfo, 0), ErrNullSQL
+	}
+	return sqlGetAllUsedTags(ctx, db.sql)
+}
+
+// PopulateSystemTagsCache rebuilds the cache table for fast tag lookups by system
+// This should be called after media indexing completes
+func (db *MediaDB) PopulateSystemTagsCache(ctx context.Context) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+	return sqlPopulateSystemTagsCache(ctx, db.sql)
+}
+
+// GetSystemTagsCached retrieves tags for specific systems using the cache table
+// Falls back to the optimized subquery approach if cache is empty
+func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
+	if db.sql == nil {
+		return make([]database.TagInfo, 0), ErrNullSQL
+	}
+
+	// Try cached approach first
+	tags, err := sqlGetSystemTagsCached(ctx, db.sql, systems)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get cached tags, falling back to optimized query")
+		// Fallback to optimized subquery approach
+		return sqlGetTags(ctx, db.sql, systems)
+	}
+
+	// If cache is empty (no results), check if it's because cache is not populated
+	if len(tags) == 0 {
+		// Check if cache has any data at all
+		var cacheCount int
+		countStmt, countErr := db.sql.PrepareContext(ctx, "SELECT COUNT(*) FROM SystemTagsCache")
+		if countErr == nil {
+			defer func() {
+				if closeErr := countStmt.Close(); closeErr != nil {
+					log.Warn().Err(closeErr).Msg("failed to close count statement")
+				}
+			}()
+			countErr = countStmt.QueryRowContext(ctx).Scan(&cacheCount)
+			if countErr == nil && cacheCount == 0 {
+				log.Info().Msg("system tags cache is empty, falling back to optimized query")
+				return sqlGetTags(ctx, db.sql, systems)
+			}
+		}
+	}
+
+	return tags, nil
+}
+
+// InvalidateSystemTagsCache removes cache entries for specific systems
+// Useful for incremental cache updates when only certain systems change
+// If no systems are provided, this is a no-op and returns success.
+func (db *MediaDB) InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error {
+	if db.sql == nil {
+		return ErrNullSQL
+	}
+
+	if len(systems) == 0 {
+		return nil // No-op for empty systems list
+	}
+
+	return sqlInvalidateSystemTagsCache(ctx, db.sql, systems)
 }
 
 func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
@@ -795,6 +870,16 @@ func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after system insert")
 		}
+		// Invalidate system tags cache for the inserted system
+		if result.SystemID != "" {
+			system, sysErr := systemdefs.GetSystem(result.SystemID)
+			if sysErr == nil {
+				tagCacheErr := db.InvalidateSystemTagsCache(db.ctx, []systemdefs.System{*system})
+				if tagCacheErr != nil {
+					log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after system insert")
+				}
+			}
+		}
 	}
 
 	return result, err
@@ -826,6 +911,11 @@ func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitl
 	if err == nil && !db.inTransaction {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media title insert")
+		}
+		// Clear all system tags cache since we don't have system info readily available
+		_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+		if tagCacheErr != nil {
+			log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after media title insert")
 		}
 	}
 
@@ -859,6 +949,11 @@ func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media insert")
 		}
+		// Clear all system tags cache since we don't have system info readily available
+		_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+		if tagCacheErr != nil {
+			log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after media insert")
+		}
 	}
 
 	return result, err
@@ -883,6 +978,11 @@ func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error)
 	if err == nil && !db.inTransaction {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after tag type insert")
+		}
+		// Clear all system tags cache since we don't have system info readily available
+		_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+		if tagCacheErr != nil {
+			log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after tag type insert")
 		}
 	}
 
@@ -916,6 +1016,11 @@ func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after tag insert")
 		}
+		// Clear all system tags cache since we don't have system info readily available
+		_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+		if tagCacheErr != nil {
+			log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after tag insert")
+		}
 	}
 
 	return result, err
@@ -947,6 +1052,11 @@ func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, err
 	if err == nil && !db.inTransaction {
 		if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to invalidate media count cache after media tag insert")
+		}
+		// Clear all system tags cache since we don't have system info readily available
+		_, tagCacheErr := db.sql.ExecContext(db.ctx, "DELETE FROM SystemTagsCache")
+		if tagCacheErr != nil {
+			log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after media tag insert")
 		}
 	}
 

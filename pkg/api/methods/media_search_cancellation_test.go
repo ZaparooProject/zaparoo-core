@@ -109,11 +109,27 @@ func (m *MockMediaDBWithDelay) GetTags(
 	}
 }
 
+func (m *MockMediaDBWithDelay) GetAllUsedTags(ctx context.Context) ([]database.TagInfo, error) {
+	// Simulate slow query with controllable delay
+	select {
+	case <-time.After(m.delay):
+		// Delegate to embedded MockMediaDBI
+		result, err := m.MockMediaDBI.GetAllUsedTags(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("mock GetAllUsedTags failed: %w", err)
+		}
+		return result, nil
+	case <-ctx.Done():
+		// Context was cancelled during delay
+		return nil, ctx.Err()
+	}
+}
+
 func TestMediaSearchCancellation_RapidSearches(t *testing.T) {
 	// Setup mocks with delay to simulate slow queries
 	mockUserDB := &helpers.MockUserDBI{}
 	mockMediaDB := &MockMediaDBWithDelay{
-		MockMediaDBI: &helpers.MockMediaDBI{},
+		MockMediaDBI: helpers.NewMockMediaDBI(),
 		delay:        100 * time.Millisecond, // 100ms delay to simulate slow query
 	}
 	mockPlatform := mocks.NewMockPlatform()
@@ -218,7 +234,7 @@ func TestMediaSearchCancellation_DifferentClients(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
 	mockMediaDB := &MockMediaDBWithDelay{
-		MockMediaDBI: &helpers.MockMediaDBI{},
+		MockMediaDBI: helpers.NewMockMediaDBI(),
 		delay:        50 * time.Millisecond,
 	}
 	mockPlatform := mocks.NewMockPlatform()
@@ -340,7 +356,7 @@ func TestMediaSearchCancellation_DifferentClients(t *testing.T) {
 func TestMediaSearchCancellation_EmptyClientID(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	expectedResults := []database.SearchResultWithCursor{
@@ -396,7 +412,7 @@ func TestMediaSearchCancellation_EmptyClientID(t *testing.T) {
 func TestMediaSearchCancellation_CleanupOnCompletion(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	expectedResults := []database.SearchResultWithCursor{
@@ -463,7 +479,7 @@ func TestMediaSearchCancellation_MultipleRapidSearchesSameClient(t *testing.T) {
 
 	mockUserDB := &helpers.MockUserDBI{}
 	mockMediaDB := &MockMediaDBWithDelay{
-		MockMediaDBI: &helpers.MockMediaDBI{},
+		MockMediaDBI: helpers.NewMockMediaDBI(),
 		delay:        200 * time.Millisecond, // Longer delay to ensure cancellation
 	}
 	mockPlatform := mocks.NewMockPlatform()

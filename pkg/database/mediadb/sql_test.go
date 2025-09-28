@@ -527,3 +527,134 @@ func TestSqlGetTags(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestSqlPopulateSystemTagsCache_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Expect DELETE statement to clear cache
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
+		ExpectExec().
+		WillReturnResult(sqlmock.NewResult(0, 5)) // Deleted 5 rows
+
+	// Expect INSERT statement to populate cache
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*`).
+		ExpectExec().
+		WillReturnResult(sqlmock.NewResult(1, 10)) // Inserted 10 rows
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPopulateSystemTagsCache_ClearError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Expect DELETE statement to fail
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache").
+		ExpectExec().
+		WillReturnError(sql.ErrConnDone)
+
+	err = sqlPopulateSystemTagsCache(context.Background(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear system tags cache")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetSystemTagsCached_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "nes"},
+		{ID: "snes"},
+	}
+
+	// Mock system lookups - single prepared statement, multiple queries
+	systemStmt := mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?")
+	systemStmt.ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	systemStmt.ExpectQuery().WithArgs("snes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(2))
+
+	// Mock main query
+	mock.ExpectPrepare(`SELECT DISTINCT TagType, Tag FROM SystemTagsCache WHERE SystemDBID IN.*`).
+		ExpectQuery().WithArgs(1, 2).
+		WillReturnRows(sqlmock.NewRows([]string{"TagType", "Tag"}).
+			AddRow("genre", "Action").
+			AddRow("genre", "Adventure").
+			AddRow("year", "1990"))
+
+	results, err := sqlGetSystemTagsCached(context.Background(), db, systems)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 3)
+
+	expectedTags := []database.TagInfo{
+		{Type: "genre", Tag: "Action"},
+		{Type: "genre", Tag: "Adventure"},
+		{Type: "year", Tag: "1990"},
+	}
+
+	assert.Equal(t, expectedTags, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetSystemTagsCached_EmptySystems(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{}
+
+	_, err = sqlGetSystemTagsCached(context.Background(), db, systems)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no systems provided")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlInvalidateSystemTagsCache_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "nes"},
+	}
+
+	// Mock system lookup
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	// Mock delete query
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5)) // Deleted 5 rows
+
+	err = sqlInvalidateSystemTagsCache(context.Background(), db, systems)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlInvalidateSystemTagsCache_EmptySystems(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{}
+
+	err = sqlInvalidateSystemTagsCache(context.Background(), db, systems)
+	assert.NoError(t, err) // Should succeed with no-op
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

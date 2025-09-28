@@ -654,12 +654,17 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 	system := params.Systems
 
-	// Prepare systems for tags search
-	var systems []systemdefs.System
-	if system == nil || len(*system) == 0 {
-		systems = systemdefs.AllSystems()
-	} else {
-		systems = make([]systemdefs.System, 0, len(*system))
+	var tags []database.TagInfo
+	var err error
+
+	// Optimize for "all systems" case using ultra-fast query
+	switch {
+	case system == nil || len(*system) == 0:
+		// Use ultra-fast query for all tags
+		tags, err = env.Database.MediaDB.GetAllUsedTags(ctx)
+	default:
+		// Specific systems - use cached approach with fallback
+		systems := make([]systemdefs.System, 0, len(*system))
 		for _, s := range *system {
 			sys, systemErr := systemdefs.GetSystem(s)
 			if systemErr != nil {
@@ -667,10 +672,8 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			}
 			systems = append(systems, *sys)
 		}
+		tags, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
 	}
-
-	// Get tags from database
-	tags, err := env.Database.MediaDB.GetTags(ctx, systems)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Info().Str("client", env.ClientID).Msg("tags request cancelled")

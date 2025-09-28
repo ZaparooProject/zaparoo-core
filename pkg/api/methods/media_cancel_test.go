@@ -77,7 +77,7 @@ func TestHandleMediaGenerateCancel(t *testing.T) {
 			// Create mock environment
 			mockPlatform := mocks.NewMockPlatform()
 			mockUserDB := &helpers.MockUserDBI{}
-			mockMediaDB := &helpers.MockMediaDBI{}
+			mockMediaDB := helpers.NewMockMediaDBI()
 
 			// Setup mock for InvalidateCountCache that might be called during cleanup
 			mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
@@ -148,7 +148,7 @@ func TestMediaGenerateCancel_ConcurrentAccess(t *testing.T) {
 	// Create mock environment
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 
 	// Setup mock for InvalidateCountCache that might be called during cleanup
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
@@ -244,7 +244,7 @@ func TestMediaGenerateCancel_StatusManagement(t *testing.T) {
 	// Create mock environment
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 
 	// Setup mock for InvalidateCountCache that might be called during cleanup
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()

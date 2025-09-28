@@ -316,6 +316,13 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 		log.Warn().Err(err).Msg("failed to invalidate media count cache during system truncation")
 	}
 
+	// Invalidate system tags cache since system data was modified
+	_, err = db.ExecContext(ctx, "DELETE FROM SystemTagsCache")
+	if err != nil {
+		// Log warning but don't fail the operation - cache invalidation is not critical
+		log.Warn().Err(err).Msg("failed to invalidate system tags cache during system truncation")
+	}
+
 	return nil
 }
 
@@ -1396,37 +1403,19 @@ func sqlSearchMediaWithFilters(
 	return results, nil
 }
 
-func sqlGetTags(
-	ctx context.Context,
-	db *sql.DB,
-	systems []systemdefs.System,
-) ([]database.TagInfo, error) {
-	if len(systems) == 0 {
-		return nil, errors.New("no systems provided for tag search")
-	}
-
-	args := make([]any, 0)
-	for _, sys := range systems {
-		args = append(args, sys.ID)
-	}
-
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+// sqlGetAllUsedTags - Ultra-fast query for all tags that are actually in use
+// This avoids the expensive system filtering by directly querying MediaTags
+func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, error) {
 	sqlQuery := `
 		SELECT DISTINCT TagTypes.Type, Tags.Tag
 		FROM TagTypes
 		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
-		JOIN MediaTags ON Tags.DBID = MediaTags.TagDBID
-		JOIN Media ON MediaTags.MediaDBID = Media.DBID
-		JOIN MediaTitles ON Media.MediaTitleDBID = MediaTitles.DBID
-		JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		WHERE Systems.SystemID IN (` +
-		prepareVariadic("?", ",", len(systems)) +
-		`)
+		WHERE Tags.DBID IN (SELECT DISTINCT TagDBID FROM MediaTags)
 		ORDER BY TagTypes.Type, Tags.Tag`
 
 	stmt, err := db.PrepareContext(ctx, sqlQuery)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare tags statement: %w", err)
+		return nil, fmt.Errorf("failed to prepare all used tags statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -1434,9 +1423,9 @@ func sqlGetTags(
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx, args...)
+	rows, err := stmt.QueryContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute tags query: %w", err)
+		return nil, fmt.Errorf("failed to execute all used tags query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
@@ -1448,7 +1437,79 @@ func sqlGetTags(
 	for rows.Next() {
 		var tagType, tag string
 		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan tag result: %w", scanErr)
+			return nil, fmt.Errorf("failed to scan all used tag result: %w", scanErr)
+		}
+		tags = append(tags, database.TagInfo{
+			Type: tagType,
+			Tag:  tag,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tags, nil
+}
+
+// sqlGetTags - Optimized query using subquery approach
+// This performs significantly better than the original 6-table join by filtering early
+func sqlGetTags(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+) ([]database.TagInfo, error) {
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for tag search")
+	}
+
+	args := make([]any, 0, len(systems))
+	for _, sys := range systems {
+		args = append(args, sys.ID)
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `
+		SELECT DISTINCT TagTypes.Type, Tags.Tag
+		FROM TagTypes
+		JOIN Tags ON TagTypes.DBID = Tags.TypeDBID
+		WHERE Tags.DBID IN (
+			SELECT DISTINCT mt.TagDBID
+			FROM MediaTags mt
+			JOIN Media m ON mt.MediaDBID = m.DBID
+			JOIN MediaTitles mtl ON m.MediaTitleDBID = mtl.DBID
+			JOIN Systems s ON mtl.SystemDBID = s.DBID
+			WHERE s.SystemID IN (` +
+		prepareVariadic("?", ",", len(systems)) +
+		`)
+		)
+		ORDER BY TagTypes.Type, Tags.Tag`
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare optimized tags statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute optimized tags query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	tags := make([]database.TagInfo, 0, 100)
+	for rows.Next() {
+		var tagType, tag string
+		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan optimized tag result: %w", scanErr)
 		}
 		tags = append(tags, database.TagInfo{
 			Type: tagType,
@@ -1484,6 +1545,200 @@ func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System)
 		return false
 	}
 	return systemID == system.ID
+}
+
+// sqlPopulateSystemTagsCache - Populates the SystemTagsCache table for fast tag lookups
+// This should be called after media indexing to ensure cache is up to date
+func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
+	// Clear existing cache
+	clearStmt, err := db.PrepareContext(ctx, "DELETE FROM SystemTagsCache")
+	if err != nil {
+		return fmt.Errorf("failed to prepare clear cache statement: %w", err)
+	}
+	defer func() {
+		if closeErr := clearStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close clear cache statement")
+		}
+	}()
+
+	if _, execErr := clearStmt.ExecContext(ctx); execErr != nil {
+		return fmt.Errorf("failed to clear system tags cache: %w", execErr)
+	}
+
+	// Populate cache with all system-tag combinations
+	populateSQL := `
+		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
+		SELECT DISTINCT
+			s.DBID as SystemDBID,
+			t.DBID as TagDBID,
+			tt.Type as TagType,
+			t.Tag as Tag
+		FROM Systems s
+		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
+		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		ORDER BY s.DBID, tt.Type, t.Tag`
+
+	populateStmt, err := db.PrepareContext(ctx, populateSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare populate cache statement: %w", err)
+	}
+	defer func() {
+		if closeErr := populateStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close populate cache statement")
+		}
+	}()
+
+	if _, err := populateStmt.ExecContext(ctx); err != nil {
+		return fmt.Errorf("failed to populate system tags cache: %w", err)
+	}
+
+	return nil
+}
+
+// sqlGetSystemTagsCached - Fast retrieval of tags for a specific system using cache
+func sqlGetSystemTagsCached(
+	ctx context.Context,
+	db *sql.DB,
+	systems []systemdefs.System,
+) ([]database.TagInfo, error) {
+	if len(systems) == 0 {
+		return nil, errors.New("no systems provided for cached tag search")
+	}
+
+	// Prepare statement once for all system lookups
+	systemLookupStmt, err := db.PrepareContext(ctx, "SELECT DBID FROM Systems WHERE SystemID = ?")
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare system lookup: %w", err)
+	}
+	defer func() {
+		if closeErr := systemLookupStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close system lookup statement")
+		}
+	}()
+
+	args := make([]any, 0, len(systems))
+	for _, sys := range systems {
+		// We need to get the DBID for each system
+		var systemDBID int
+		err = systemLookupStmt.QueryRowContext(ctx, sys.ID).Scan(&systemDBID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // Skip systems that don't exist
+			}
+			return nil, fmt.Errorf("failed to lookup system %s: %w", sys.ID, err)
+		}
+		args = append(args, systemDBID)
+	}
+
+	if len(args) == 0 {
+		return make([]database.TagInfo, 0), nil
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `
+		SELECT DISTINCT TagType, Tag
+		FROM SystemTagsCache
+		WHERE SystemDBID IN (` +
+		prepareVariadic("?", ",", len(args)) +
+		`)
+		ORDER BY TagType, Tag`
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare cached tags statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute cached tags query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	tags := make([]database.TagInfo, 0, 100)
+	for rows.Next() {
+		var tagType, tag string
+		if scanErr := rows.Scan(&tagType, &tag); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan cached tag result: %w", scanErr)
+		}
+		tags = append(tags, database.TagInfo{
+			Type: tagType,
+			Tag:  tag,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tags, nil
+}
+
+// sqlInvalidateSystemTagsCache - Invalidates cache for specific systems
+func sqlInvalidateSystemTagsCache(ctx context.Context, db *sql.DB, systems []systemdefs.System) error {
+	if len(systems) == 0 {
+		return nil
+	}
+
+	// Prepare statement once for all system lookups
+	systemLookupStmt, err := db.PrepareContext(ctx, "SELECT DBID FROM Systems WHERE SystemID = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare system lookup: %w", err)
+	}
+	defer func() {
+		if closeErr := systemLookupStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close system lookup statement")
+		}
+	}()
+
+	args := make([]any, 0, len(systems))
+	for _, sys := range systems {
+		// Get system DBID
+		var systemDBID int
+		err = systemLookupStmt.QueryRowContext(ctx, sys.ID).Scan(&systemDBID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // Skip systems that don't exist
+			}
+			return fmt.Errorf("failed to lookup system %s: %w", sys.ID, err)
+		}
+		args = append(args, systemDBID)
+	}
+
+	if len(args) == 0 {
+		return nil
+	}
+
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	sqlQuery := `DELETE FROM SystemTagsCache WHERE SystemDBID IN (` +
+		prepareVariadic("?", ",", len(args)) + `)`
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	if err != nil {
+		return fmt.Errorf("failed to prepare cache invalidation statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	if _, err := stmt.ExecContext(ctx, args...); err != nil {
+		return fmt.Errorf("failed to invalidate system tags cache: %w", err)
+	}
+
+	return nil
 }
 
 func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {

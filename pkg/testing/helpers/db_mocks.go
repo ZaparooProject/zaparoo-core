@@ -476,6 +476,56 @@ func (m *MockMediaDBI) GetTags(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) GetAllUsedTags(ctx context.Context) ([]database.TagInfo, error) {
+	args := m.Called(ctx)
+	if results, ok := args.Get(0).([]database.TagInfo); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) PopulateSystemTagsCache(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetSystemTagsCached(
+	ctx context.Context,
+	systems []systemdefs.System,
+) ([]database.TagInfo, error) {
+	args := m.Called(ctx, systems)
+	if results, ok := args.Get(0).([]database.TagInfo); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockMediaDBI) InvalidateSystemTagsCache(
+	ctx context.Context,
+	systems []systemdefs.System,
+) error {
+	args := m.Called(ctx, systems)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 func (m *MockMediaDBI) SearchMediaPathGlob(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
 	args := m.Called(systems, query)
 	if results, ok := args.Get(0).([]database.SearchResult); ok {
@@ -1181,7 +1231,14 @@ func NewMockUserDBI() *MockUserDBI {
 //		mediaDB.AssertExpectations(t)
 //	}
 func NewMockMediaDBI() *MockMediaDBI {
-	return &MockMediaDBI{}
+	mockMediaDB := &MockMediaDBI{}
+	// Set default expectation for PopulateSystemTagsCache to return success
+	// This is called during media indexing completion and should succeed by default
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Maybe()
+	// Set default expectation for InvalidateSystemTagsCache to return success
+	// This is called during media inserts and should succeed by default
+	mockMediaDB.On("InvalidateSystemTagsCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	return mockMediaDB
 }
 
 // NewSQLMock creates a new sqlmock database and mock for raw SQL testing.

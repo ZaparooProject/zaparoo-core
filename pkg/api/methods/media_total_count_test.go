@@ -78,7 +78,7 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockMediaDB := &helpers.MockMediaDBI{}
+			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
 			testState, _ := state.NewState(mockPlatform)

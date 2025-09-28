@@ -117,7 +117,7 @@ func TestDecodeCursor_InvalidInputs(t *testing.T) {
 func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	// Setup search results with cursor data
@@ -199,7 +199,7 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	// Setup cursor-based search results
@@ -309,7 +309,7 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 func TestHandleMediaTags_Success(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	// Setup expected tag results
@@ -321,7 +321,7 @@ func TestHandleMediaTags_Success(t *testing.T) {
 		{Type: "year", Tag: "1991"},
 	}
 
-	mockMediaDB.On("GetTags",
+	mockMediaDB.On("GetSystemTagsCached",
 		mock.Anything, // context
 		mock.MatchedBy(func(systems []systemdefs.System) bool {
 			// Verify systems are set correctly
@@ -370,7 +370,7 @@ func TestHandleMediaTags_Success(t *testing.T) {
 func TestHandleMediaTags_NoParams(t *testing.T) {
 	// Setup mocks
 	mockUserDB := &helpers.MockUserDBI{}
-	mockMediaDB := &helpers.MockMediaDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 
 	// Setup expected tag results for all systems
@@ -379,12 +379,8 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 		{Type: "genre", Tag: "RPG"},
 	}
 
-	mockMediaDB.On("GetTags",
+	mockMediaDB.On("GetAllUsedTags",
 		mock.Anything, // context
-		mock.MatchedBy(func(systems []systemdefs.System) bool {
-			// When no systems are specified, should get all systems
-			return len(systems) > 0
-		}),
 	).Return(expectedTags, nil)
 
 	// Create state

@@ -236,6 +236,10 @@ type MediaDBI interface {
 	) ([]SearchResultWithCursor, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
+	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
+	PopulateSystemTagsCache(ctx context.Context) error
+	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
+	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool
