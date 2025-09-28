@@ -125,12 +125,14 @@ func TestMediaSearchCancellation_RapidSearches(t *testing.T) {
 
 	// The first search should be cancelled, so we don't expect it to complete
 	// Only the last search should complete successfully
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context (will be cancelled for first search)
-		mock.Anything, // systems
-		"apple",       // final query
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "apple" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults, nil).Once()
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/apple.nes").Return("/games/apple.nes")
@@ -230,20 +232,24 @@ func TestMediaSearchCancellation_DifferentClients(t *testing.T) {
 	}
 
 	// Both searches should complete (different clients)
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // systems
-		"mario",       // query
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "mario" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults1, nil).Once()
 
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // systems
-		"zelda",       // query
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "zelda" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults2, nil).Once()
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario.nes").Return("/games/mario.nes")
@@ -341,12 +347,14 @@ func TestMediaSearchCancellation_EmptyClientID(t *testing.T) {
 		{SystemID: "NES", Name: "Test Game", Path: "/games/test.nes", MediaID: 1},
 	}
 
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // systems
-		"test",        // query
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "test" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults, nil)
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/test.nes").Return("/games/test.nes")
@@ -395,12 +403,14 @@ func TestMediaSearchCancellation_CleanupOnCompletion(t *testing.T) {
 		{SystemID: "NES", Name: "Cleanup Test", Path: "/games/cleanup.nes", MediaID: 1},
 	}
 
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // systems
-		"cleanup",     // query
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			return filters.Query == "cleanup" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults, nil)
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/cleanup.nes").Return("/games/cleanup.nes")
@@ -463,12 +473,14 @@ func TestMediaSearchCancellation_MultipleRapidSearchesSameClient(t *testing.T) {
 	}
 
 	// Any search that does complete should return results
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // systems
-		mock.Anything, // any query (a, ap, app, apple)
-		(*int64)(nil), // cursor
-		101,           // limit
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			// Accept any query in this test since multiple rapid searches can complete
+			return filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0
+		}),
 	).Return(expectedResults, nil).Maybe()
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/apple-pie.nes").Return("/games/apple-pie.nes").Maybe()

@@ -502,7 +502,8 @@ func (db *MediaDB) SearchMediaWithFilters(
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	qWords := strings.Fields(strings.ToLower(filters.Query))
-	return sqlSearchMediaWithFilters(ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Cursor, filters.Limit)
+	return sqlSearchMediaWithFilters(
+		ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Cursor, filters.Limit)
 }
 
 func (db *MediaDB) GetTagFacets(ctx context.Context, filters *database.SearchFilters) ([]database.TagTypeFacet, error) {

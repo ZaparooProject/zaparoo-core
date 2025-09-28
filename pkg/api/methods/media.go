@@ -539,71 +539,36 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	limit := maxResults + 1
 	var searchResults []database.SearchResultWithCursor
 
-	// Use filtered search if tags are provided, otherwise use existing method for backward compatibility
-	if len(normalizedTags) > 0 {
-		// Prepare systems for filtered search
-		var systems []systemdefs.System
-		if system == nil || len(*system) == 0 {
-			systems = systemdefs.AllSystems()
-		} else {
-			systems = make([]systemdefs.System, 0, len(*system))
-			for _, s := range *system {
-				sys, systemErr := systemdefs.GetSystem(s)
-				if systemErr != nil {
-					return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
-				}
-				systems = append(systems, *sys)
-			}
-		}
-
-		// Use the new filtered search method
-		filters := database.SearchFilters{
-			Systems: systems,
-			Query:   query,
-			Tags:    normalizedTags,
-			Cursor:  cursor,
-			Limit:   limit,
-		}
-
-		searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &filters)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				log.Info().Str("client", env.ClientID).Msg("filtered search request cancelled by newer request")
-				return nil, errors.New("search cancelled by newer request")
-			}
-			return nil, fmt.Errorf("error searching media with filters: %w", err)
-		}
+	// Prepare systems for search
+	var systems []systemdefs.System
+	if system == nil || len(*system) == 0 {
+		systems = systemdefs.AllSystems()
 	} else {
-		// Use existing search method for backward compatibility
-		if system == nil || len(*system) == 0 {
-			searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(
-				ctx, systemdefs.AllSystems(), query, cursor, limit)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
-					return nil, errors.New("search cancelled by newer request")
-				}
-				return nil, fmt.Errorf("error searching all media with cursor: %w", err)
+		systems = make([]systemdefs.System, 0, len(*system))
+		for _, s := range *system {
+			sys, systemErr := systemdefs.GetSystem(s)
+			if systemErr != nil {
+				return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
 			}
-		} else {
-			systems := make([]systemdefs.System, 0)
-			for _, s := range *system {
-				sys, systemErr := systemdefs.GetSystem(s)
-				if systemErr != nil {
-					return nil, fmt.Errorf("error getting system %s: %w", s, systemErr)
-				}
-				systems = append(systems, *sys)
-			}
-
-			searchResults, err = env.Database.MediaDB.SearchMediaPathWordsWithCursor(ctx, systems, query, cursor, limit)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
-					return nil, errors.New("search cancelled by newer request")
-				}
-				return nil, fmt.Errorf("error searching media with cursor: %w", err)
-			}
+			systems = append(systems, *sys)
 		}
+	}
+
+	filters := database.SearchFilters{
+		Systems: systems,
+		Query:   query,
+		Tags:    normalizedTags, // Will be empty if no tags provided
+		Cursor:  cursor,
+		Limit:   limit,
+	}
+
+	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &filters)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
+			return nil, errors.New("search cancelled by newer request")
+		}
+		return nil, fmt.Errorf("error searching media with filters: %w", err)
 	}
 
 	// Check if there are more results

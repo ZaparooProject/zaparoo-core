@@ -468,11 +468,19 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	parts := []string{"mario"}
 	tags := []string{"Action"}
 
-	mock.ExpectPrepare("select.*json_group_array.*").
+	// Mock first query: get media items
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("NES", "%mario%", "Action", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID", "tags"}).
-			AddRow("NES", "/games/mario.nes", 1, `[{"tag":"Action","type":"genre"}]`))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
+			AddRow("NES", "/games/mario.nes", 1))
+
+	// Mock second query: get tags for the media items
+	mock.ExpectPrepare("SELECT.*MediaTags\\.MediaDBID.*Tags\\.Tag.*").
+		ExpectQuery().
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
+			AddRow(1, "Action", "genre"))
 
 	results, err := sqlSearchMediaWithFilters(context.Background(), db, systems, parts, tags, nil, 10)
 

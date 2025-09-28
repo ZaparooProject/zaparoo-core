@@ -1089,92 +1089,132 @@ func sqlSearchMediaPathPartsWithCursor(
 		args = append(args, *cursor)
 	}
 
+	// Two-query approach to avoid expensive GROUP BY temporary B-trees
+	// Query 1: Get media items without tags
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	sqlQuery := `
-		select
+	mediaQuery := `
+		SELECT
 			Systems.SystemID,
 			Media.Path,
-			Media.DBID,
-			json_group_array(
-				json_object(
-					'tag', Tags.Tag,
-					'type', TagTypes.Type
-				)
-			) FILTER (WHERE Tags.Tag IS NOT NULL) as tags
-		from Systems
-		inner join MediaTitles
-			on Systems.DBID = MediaTitles.SystemDBID
-		inner join Media
-			on MediaTitles.DBID = Media.MediaTitleDBID
-		left join MediaTags
-			on Media.DBID = MediaTags.MediaDBID
-		left join Tags
-			on MediaTags.TagDBID = Tags.DBID
-		left join TagTypes
-			on Tags.TypeDBID = TagTypes.DBID
-		where Systems.SystemID IN (` +
+			Media.DBID
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
-		and ` +
+		AND ` +
 		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
 		cursorCondition +
-		` GROUP BY Media.DBID, Systems.SystemID, Media.Path
-		ORDER BY Media.DBID ASC
-		LIMIT ?`
+		` LIMIT ?`
 
-	args = append(args, limit)
+	mediaArgs := append([]any(nil), args...) // Copy args
+	mediaArgs = append(mediaArgs, limit)
 
-	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
 	if err != nil {
-		return results, fmt.Errorf("failed to prepare cursor-based media search statement: %w", err)
+		return results, fmt.Errorf("failed to prepare media query: %w", err)
 	}
 	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		if closeErr := mediaStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close media statement")
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx, args...)
+	mediaRows, err := mediaStmt.QueryContext(ctx, mediaArgs...)
 	if err != nil {
-		return results, fmt.Errorf("failed to execute cursor-based media search query: %w", err)
+		return results, fmt.Errorf("failed to execute media query: %w", err)
 	}
 	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		if closeErr := mediaRows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close media rows")
 		}
 	}()
 
-	for rows.Next() {
+	// Collect media items and their IDs
+	mediaIDs := make([]int64, 0, limit)
+	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		var tagsJSON sql.NullString
-		if scanErr := rows.Scan(
-			&result.SystemID,
-			&result.Path,
-			&result.MediaID,
-			&tagsJSON,
-		); scanErr != nil {
-			return results, fmt.Errorf("failed to scan cursor-based search result: %w", scanErr)
+		if scanErr := mediaRows.Scan(&result.SystemID, &result.Path, &result.MediaID); scanErr != nil {
+			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
+		result.Tags = []database.TagInfo{} // Initialize empty tags
+		results = append(results, result)
+		mediaIDs = append(mediaIDs, result.MediaID)
+	}
+	if err = mediaRows.Err(); err != nil {
+		return results, fmt.Errorf("media rows iteration error: %w", err)
+	}
 
-		// Parse tags from JSON
-		if tagsJSON.Valid && tagsJSON.String != "" && tagsJSON.String != "null" {
-			if unmarshalErr := json.Unmarshal([]byte(tagsJSON.String), &result.Tags); unmarshalErr != nil {
-				log.Error().Err(unmarshalErr).Str("tags_json", tagsJSON.String).
-					Int64("media_id", result.MediaID).
-					Msg("failed to unmarshal tags JSON from database")
-				result.Tags = []database.TagInfo{}
-			}
-		} else {
-			result.Tags = []database.TagInfo{}
+	// Query 2: Get tags for the specific media IDs
+	if len(mediaIDs) > 0 {
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+		tagsQuery := `
+			SELECT
+				MediaTags.MediaDBID,
+				Tags.Tag,
+				COALESCE(TagTypes.Type, '') as Type
+			FROM MediaTags
+			INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+			LEFT JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE MediaTags.MediaDBID IN (` +
+			prepareVariadic("?", ",", len(mediaIDs)) +
+			`) ORDER BY MediaTags.MediaDBID`
+
+		tagsArgs := make([]any, len(mediaIDs))
+		for i, id := range mediaIDs {
+			tagsArgs[i] = id
 		}
 
-		results = append(results, result)
+		tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
+		if err != nil {
+			return results, fmt.Errorf("failed to prepare tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsStmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags statement")
+			}
+		}()
+
+		tagsRows, err := tagsStmt.QueryContext(ctx, tagsArgs...)
+		if err != nil {
+			return results, fmt.Errorf("failed to execute tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsRows.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags rows")
+			}
+		}()
+
+		// Create a map of MediaID -> Tags for fast lookup
+		tagsMap := make(map[int64][]database.TagInfo)
+		for tagsRows.Next() {
+			var mediaID int64
+			var tag, tagType string
+			if scanErr := tagsRows.Scan(&mediaID, &tag, &tagType); scanErr != nil {
+				return results, fmt.Errorf("failed to scan tags result: %w", scanErr)
+			}
+
+			// Append tag to the slice for this media ID
+			tagInfo := database.TagInfo{
+				Tag:  tag,
+				Type: tagType,
+			}
+			tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
+		}
+		if err = tagsRows.Err(); err != nil {
+			return results, fmt.Errorf("tags rows iteration error: %w", err)
+		}
+
+		// Merge tags into results
+		for i := range results {
+			if tags, exists := tagsMap[results[i].MediaID]; exists {
+				results[i].Tags = tags
+			}
+		}
 	}
-	err = rows.Err()
-	if err != nil {
-		return results, err
-	}
+
 	return results, nil
 }
 
@@ -1226,93 +1266,133 @@ func sqlSearchMediaWithFilters(
 		}
 	}
 
+	// Two-query approach to avoid expensive GROUP BY temporary B-trees
+	// Query 1: Get media items without tags (fast, no GROUP BY)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
-	sqlQuery := `
-		select
+	mediaQuery := `
+		SELECT
 			Systems.SystemID,
 			Media.Path,
-			Media.DBID,
-			json_group_array(
-				json_object(
-					'tag', Tags.Tag,
-					'type', TagTypes.Type
-				)
-			) FILTER (WHERE Tags.Tag IS NOT NULL) as tags
-		from Systems
-		inner join MediaTitles
-			on Systems.DBID = MediaTitles.SystemDBID
-		inner join Media
-			on MediaTitles.DBID = Media.MediaTitleDBID
-		left join MediaTags
-			on Media.DBID = MediaTags.MediaDBID
-		left join Tags
-			on MediaTags.TagDBID = Tags.DBID
-		left join TagTypes
-			on Tags.TypeDBID = TagTypes.DBID
-		where Systems.SystemID IN (` +
+			Media.DBID
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
 		`)
-		and ` +
+		AND ` +
 		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
 		cursorCondition +
 		tagFilterCondition +
-		` GROUP BY Media.DBID, Systems.SystemID, Media.Path
-		ORDER BY Media.DBID ASC
-		LIMIT ?`
+		` LIMIT ?`
 
-	args = append(args, limit)
+	mediaArgs := append([]any(nil), args...) // Copy args
+	mediaArgs = append(mediaArgs, limit)
 
-	stmt, err := db.PrepareContext(ctx, sqlQuery)
+	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
 	if err != nil {
-		return results, fmt.Errorf("failed to prepare filtered media search statement: %w", err)
+		return results, fmt.Errorf("failed to prepare media query: %w", err)
 	}
 	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		if closeErr := mediaStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close media statement")
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx, args...)
+	mediaRows, err := mediaStmt.QueryContext(ctx, mediaArgs...)
 	if err != nil {
-		return results, fmt.Errorf("failed to execute filtered media search query: %w", err)
+		return results, fmt.Errorf("failed to execute media query: %w", err)
 	}
 	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		if closeErr := mediaRows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close media rows")
 		}
 	}()
 
-	for rows.Next() {
+	// Collect media items and their IDs
+	mediaIDs := make([]int64, 0, limit)
+	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		var tagsJSON sql.NullString
-		if scanErr := rows.Scan(
-			&result.SystemID,
-			&result.Path,
-			&result.MediaID,
-			&tagsJSON,
-		); scanErr != nil {
-			return results, fmt.Errorf("failed to scan filtered search result: %w", scanErr)
+		if scanErr := mediaRows.Scan(&result.SystemID, &result.Path, &result.MediaID); scanErr != nil {
+			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
 		result.Name = helpers.FilenameFromPath(result.Path)
+		result.Tags = []database.TagInfo{} // Initialize empty tags
+		results = append(results, result)
+		mediaIDs = append(mediaIDs, result.MediaID)
+	}
+	if err = mediaRows.Err(); err != nil {
+		return results, fmt.Errorf("media rows iteration error: %w", err)
+	}
 
-		// Parse tags from JSON
-		if tagsJSON.Valid && tagsJSON.String != "" && tagsJSON.String != "null" {
-			if unmarshalErr := json.Unmarshal([]byte(tagsJSON.String), &result.Tags); unmarshalErr != nil {
-				log.Error().Err(unmarshalErr).Str("tags_json", tagsJSON.String).
-					Int64("media_id", result.MediaID).
-					Msg("failed to unmarshal tags JSON from database")
-				result.Tags = []database.TagInfo{}
-			}
-		} else {
-			result.Tags = []database.TagInfo{}
+	// Query 2: Get tags for the specific media IDs
+	if len(mediaIDs) > 0 {
+		//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
+		tagsQuery := `
+			SELECT
+				MediaTags.MediaDBID,
+				Tags.Tag,
+				COALESCE(TagTypes.Type, '') as Type
+			FROM MediaTags
+			INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+			LEFT JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE MediaTags.MediaDBID IN (` +
+			prepareVariadic("?", ",", len(mediaIDs)) +
+			`) ORDER BY MediaTags.MediaDBID`
+
+		tagsArgs := make([]any, len(mediaIDs))
+		for i, id := range mediaIDs {
+			tagsArgs[i] = id
 		}
 
-		results = append(results, result)
+		tagsStmt, err := db.PrepareContext(ctx, tagsQuery)
+		if err != nil {
+			return results, fmt.Errorf("failed to prepare tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsStmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags statement")
+			}
+		}()
+
+		tagsRows, err := tagsStmt.QueryContext(ctx, tagsArgs...)
+		if err != nil {
+			return results, fmt.Errorf("failed to execute tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsRows.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags rows")
+			}
+		}()
+
+		// Create a map of MediaID -> Tags for fast lookup
+		tagsMap := make(map[int64][]database.TagInfo)
+		for tagsRows.Next() {
+			var mediaID int64
+			var tag, tagType string
+			if scanErr := tagsRows.Scan(&mediaID, &tag, &tagType); scanErr != nil {
+				return results, fmt.Errorf("failed to scan tags result: %w", scanErr)
+			}
+
+			// Append tag to the slice for this media ID
+			tagInfo := database.TagInfo{
+				Tag:  tag,
+				Type: tagType,
+			}
+			tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
+		}
+		if err = tagsRows.Err(); err != nil {
+			return results, fmt.Errorf("tags rows iteration error: %w", err)
+		}
+
+		// Merge tags into results
+		for i := range results {
+			if tags, exists := tagsMap[results[i].MediaID]; exists {
+				results[i].Tags = tags
+			}
+		}
 	}
-	err = rows.Err()
-	if err != nil {
-		return results, err
-	}
+
 	return results, nil
 }
 

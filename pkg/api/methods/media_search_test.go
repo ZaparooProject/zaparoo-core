@@ -27,7 +27,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -126,12 +125,15 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		{SystemID: "SNES", Name: "Super Mario", Path: "/games/super-mario.sfc", MediaID: 2},
 	}
 
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.Anything, // Any systems slice
-		"mario",
-		(*int64)(nil), // nil cursor for initial request
-		101,           // maxResults + 1
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			// Check the filter parameters match what we expect
+			return filters.Query == "mario" &&
+				filters.Cursor == nil &&
+				filters.Limit == 101 &&
+				len(filters.Tags) == 0 // No tags for this test
+		}),
 	).Return(expectedResults, nil)
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario.nes").Return("/games/mario.nes")
@@ -210,14 +212,16 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	cursor := int64(50)
 	limit := 3 // maxResults + 1
 
-	mockMediaDB.On("SearchMediaPathWordsWithCursor",
+	mockMediaDB.On("SearchMediaWithFilters",
 		mock.Anything, // context
-		mock.MatchedBy(func(systems []systemdefs.System) bool {
-			return len(systems) > 0 // Match any systems slice
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			// Check the filter parameters match what we expect
+			return filters.Query == "mario" &&
+				filters.Cursor != nil && *filters.Cursor == cursor &&
+				filters.Limit == limit &&
+				len(filters.Tags) == 0 && // No tags for this test
+				len(filters.Systems) > 0 // Should have systems
 		}),
-		"mario",
-		&cursor,
-		limit,
 	).Return(expectedResults, nil)
 
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario.nes").Return("/games/mario.nes")

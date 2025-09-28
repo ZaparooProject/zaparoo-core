@@ -42,20 +42,22 @@ import (
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
-	lastScan            *tokens.Token
-	activeMedia         func() *models.ActiveMedia
+	textMap             map[string]string
+	trackedProcess      *os.Process
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
-	textMap             map[string]string
+	lastScan            *tokens.Token
 	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
-	trackedProcess      *os.Process
-	gpd                 linuxinput.Gamepad
+	activeMedia         func() *models.ActiveMedia
+	pathPrefixCache     map[string]string
 	kbd                 linuxinput.Keyboard
+	gpd                 linuxinput.Gamepad
 	lastLauncher        platforms.Launcher
 	processMu           sync.RWMutex
+	pathPrefixMu        sync.RWMutex
 	platformMu          sync.Mutex
 }
 
@@ -301,6 +303,14 @@ func (*Platform) Settings() platforms.Settings {
 }
 
 func NormalizePath(cfg *config.Instance, pl platforms.Platform, path string) string {
+	// Fast path: use prefix cache if this is a MiSTer platform
+	if misterPlatform, ok := pl.(*Platform); ok {
+		if normalized := misterPlatform.fastNormalizePath(path); normalized != path {
+			return normalized
+		}
+	}
+
+	// Fallback to original logic for edge cases
 	launchers := helpers.PathToLaunchers(cfg, pl, path)
 	if len(launchers) == 0 {
 		return path
@@ -334,6 +344,80 @@ func NormalizePath(cfg *config.Instance, pl platforms.Platform, path string) str
 
 func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
 	return NormalizePath(cfg, p, path)
+}
+
+// fastNormalizePath uses the prefix cache for O(1) path normalization
+// Returns the original path if no normalization is possible
+func (p *Platform) fastNormalizePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	p.pathPrefixMu.RLock()
+	defer p.pathPrefixMu.RUnlock()
+
+	// If cache isn't built yet, return original path to trigger fallback
+	if p.pathPrefixCache == nil {
+		return path
+	}
+
+	lowerPath := strings.ToLower(path)
+
+	// Check each cached prefix to see if this path matches
+	for prefix, systemID := range p.pathPrefixCache {
+		if strings.HasPrefix(lowerPath, prefix) {
+			// Extract the remaining path after the prefix
+			remaining := path[len(prefix):]
+
+			// Ensure we have at least a filename
+			remaining = strings.Trim(remaining, "/")
+			if remaining == "" {
+				return path // Return original if nothing after folder
+			}
+
+			// Return normalized path: systemID/filename
+			return systemID + "/" + remaining
+		}
+	}
+
+	// No prefix matched, return original path to trigger fallback
+	return path
+}
+
+// BuildPathPrefixCache builds a fast lookup map for path normalization
+// Maps lowercase(root + "/" + folder) -> systemID for O(1) lookups
+func (p *Platform) BuildPathPrefixCache(cfg *config.Instance) {
+	p.pathPrefixMu.Lock()
+	defer p.pathPrefixMu.Unlock()
+
+	p.pathPrefixCache = make(map[string]string)
+
+	// Get all launchers from the cache
+	launchers := helpers.GlobalLauncherCache.GetAllLaunchers()
+	rootDirs := p.RootDirs(cfg)
+
+	// Build prefix map: root+folder -> systemID
+	for i := range launchers {
+		launcher := &launchers[i]
+		if launcher.SystemID == "" {
+			continue
+		}
+
+		for _, rootDir := range rootDirs {
+			for _, folder := range launcher.Folders {
+				// Build the full prefix path
+				prefix := strings.ToLower(filepath.Join(rootDir, folder))
+
+				// Add with trailing slash for exact folder matching
+				if !strings.HasSuffix(prefix, "/") {
+					prefix += "/"
+				}
+
+				// Map this prefix to the system ID
+				p.pathPrefixCache[prefix] = launcher.SystemID
+			}
+		}
+	}
 }
 
 func (p *Platform) StopActiveLauncher() error {
