@@ -26,8 +26,8 @@ type SearchParams struct {
 	MaxResults *int      `json:"maxResults"`
 	Cursor     *string   `json:"cursor,omitempty"`
 	Tags       *[]string `json:"tags,omitempty"`
-	Query      string    `json:"query"`
 	Letter     *string   `json:"letter,omitempty"`
+	Query      string    `json:"query"`
 }
 
 type MediaIndexParams struct {

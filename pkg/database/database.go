@@ -153,10 +153,10 @@ type MediaQuery struct {
 // SearchFilters represents parameters for filtered media search
 type SearchFilters struct {
 	Cursor  *int64              `json:"cursor,omitempty"`
+	Letter  *string             `json:"letter,omitempty"`
 	Query   string              `json:"query"`
 	Systems []systemdefs.System `json:"systems,omitempty"`
 	Tags    []string            `json:"tags,omitempty"`
-	Letter  *string             `json:"letter,omitempty"`
 	Limit   int                 `json:"limit"`
 }
 

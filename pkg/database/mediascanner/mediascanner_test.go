@@ -422,9 +422,10 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetLastIndexedSystem", "genesis").Return(nil).Maybe() // Update progress during processing
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()             // Finally complete
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()                  // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()               // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -514,9 +515,10 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()             // Finally complete
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()          // Clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()                  // Finally complete
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()               // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -584,7 +586,8 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 
 	// Mock SetIndexingSystems calls
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()     // Clear on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	// Mock GetMax*ID methods for scan state population
 	mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
@@ -671,8 +674,9 @@ func TestNewNamesIndex_DatabaseErrorDuringResume(t *testing.T) {
 	mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()           // Clear on completion
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear systems on completion
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Once()               // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()     // Clear systems on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -785,7 +789,8 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -866,7 +871,8 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -959,7 +965,8 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -1031,7 +1038,8 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(2) // Clear on start + completion
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
 	mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Clear on completion
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()     // Clear on completion
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,
@@ -1104,9 +1112,10 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 
 	mockMediaDB.On("SetLastIndexedSystem", mock.AnythingOfType("string")).Return(nil).Maybe()
 	mockMediaDB.On("SetIndexingStatus", "completed").Return(nil).Once()
-	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe()         // Allow any number of empty string calls
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once() // Clear systems on completion
-	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()              // Cache invalidation after indexing
+	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Maybe()              // Allow any number of empty string calls
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Once()      // Clear systems on completion
+	mockMediaDB.On("InvalidateCountCache").Return(nil).Once()                   // Cache invalidation after indexing
+	mockMediaDB.On("PopulateSystemTagsCache", mock.Anything).Return(nil).Once() // System tags cache population
 
 	db := &database.Database{
 		UserDB:  mockUserDB,

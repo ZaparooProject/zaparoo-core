@@ -27,7 +27,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -43,18 +42,6 @@ import (
 )
 
 const defaultMaxResults = 100
-
-// Search cancellation tracking for rapid search queries
-type searchCancelEntry struct {
-	cancel context.CancelFunc
-	id     uint64
-}
-
-var (
-	activeSearchCancels = make(map[string]searchCancelEntry)
-	searchCancelsMu     sync.RWMutex
-	searchCancelSeq     uint64
-)
 
 type cursorData struct {
 	LastID int64 `json:"lastId"`
@@ -234,46 +221,6 @@ func newIndexingStatus() *indexingStatus {
 }
 
 var statusInstance = newIndexingStatus()
-
-// cancelPreviousSearch cancels any in-flight search for the given client and stores the new cancel function
-// Returns a unique ID that should be used for cleanup to avoid race conditions
-func cancelPreviousSearch(clientID string, newCancel context.CancelFunc) uint64 {
-	if clientID == "" {
-		return 0
-	}
-
-	searchCancelsMu.Lock()
-	defer searchCancelsMu.Unlock()
-
-	if prevEntry, exists := activeSearchCancels[clientID]; exists {
-		prevEntry.cancel()
-		log.Debug().Str("client", clientID).Msg("cancelled previous search for client")
-	}
-
-	// Generate unique ID for this search request
-	id := atomic.AddUint64(&searchCancelSeq, 1)
-	activeSearchCancels[clientID] = searchCancelEntry{
-		id:     id,
-		cancel: newCancel,
-	}
-	return id
-}
-
-// cleanupSearchCancel removes the search cancel function for a client only if the ID matches
-// This prevents race conditions where an older request cleans up a newer request's cancel function
-func cleanupSearchCancel(clientID string, id uint64) {
-	if clientID == "" || id == 0 {
-		return
-	}
-
-	searchCancelsMu.Lock()
-	defer searchCancelsMu.Unlock()
-
-	// Only remove if this is the same request that registered the cancel function
-	if entry, exists := activeSearchCancels[clientID]; exists && entry.id == id {
-		delete(activeSearchCancels, clientID)
-	}
-}
 
 func GenerateMediaDB(
 	ctx context.Context,
@@ -503,13 +450,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, errors.New("query or system is required")
 	}
 
-	// Create a cancellable context for this search request
-	ctx, cancel := context.WithCancel(env.State.GetContext())
-	defer cancel() // Always call cancel to release resources
-
-	// Cancel any previous search for this client and register this one
-	searchID := cancelPreviousSearch(env.ClientID, cancel)
-	defer cleanupSearchCancel(env.ClientID, searchID)
+	ctx := env.State.GetContext()
 
 	// Handle cursor-based pagination
 	var cursorStr string
@@ -540,11 +481,11 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var validatedLetter *string
 	if letter != nil && *letter != "" {
 		letterValue := strings.ToUpper(strings.TrimSpace(*letter))
-		if letterValue == "0-9" || letterValue == "#" || (len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z") {
-			validatedLetter = &letterValue
-		} else {
+		if !(letterValue == "0-9" || letterValue == "#" ||
+			(len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z")) {
 			return nil, fmt.Errorf("invalid letter parameter: %q (must be A-Z, 0-9, or #)", *letter)
 		}
+		validatedLetter = &letterValue
 	}
 
 	// Add 1 to limit to check if there are more results
@@ -577,10 +518,6 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &filters)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Info().Str("client", env.ClientID).Msg("search request cancelled by newer request")
-			return nil, errors.New("search cancelled by newer request")
-		}
 		return nil, fmt.Errorf("error searching media with filters: %w", err)
 	}
 
@@ -657,13 +594,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		}
 	}
 
-	// Create a cancellable context for this tags request
-	ctx, cancel := context.WithCancel(env.State.GetContext())
-	defer cancel() // Always call cancel to release resources
-
-	// Cancel any previous search for this client and register this one
-	searchID := cancelPreviousSearch(env.ClientID, cancel)
-	defer cleanupSearchCancel(env.ClientID, searchID)
+	ctx := env.State.GetContext()
 
 	system := params.Systems
 
@@ -688,10 +619,6 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 		tags, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
 	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Info().Str("client", env.ClientID).Msg("tags request cancelled")
-			return nil, errors.New("tags request cancelled")
-		}
 		return nil, fmt.Errorf("error getting tags: %w", err)
 	}
 

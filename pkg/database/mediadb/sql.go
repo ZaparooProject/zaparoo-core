@@ -1278,13 +1278,15 @@ func sqlSearchMediaWithFilters(
 	letterFilterCondition := ""
 	if letter != nil && *letter != "" {
 		letterValue := strings.ToUpper(*letter)
-		if letterValue == "0-9" {
+		switch {
+		case letterValue == "0-9":
 			// Filter for games starting with numbers
 			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) BETWEEN '0' AND '9' "
-		} else if letterValue == "#" {
+		case letterValue == "#":
 			// Filter for games starting with symbols (not letters or numbers)
-			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z' AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9' "
-		} else if len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z" {
+			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN 'A' AND 'Z' " +
+				"AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) NOT BETWEEN '0' AND '9' "
+		case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
 			// Filter for games starting with specific letter
 			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ? "
 			args = append(args, letterValue)
