@@ -26,9 +26,22 @@ import (
 	"sync"
 
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 )
 
 var migrationMutex sync.Mutex
+
+// gooseZerologAdapter implements goose.Logger interface to redirect
+// goose output to zerolog instead of stdout
+type gooseZerologAdapter struct{}
+
+func (*gooseZerologAdapter) Printf(format string, v ...any) {
+	log.Info().Msgf(format, v...)
+}
+
+func (*gooseZerologAdapter) Fatalf(format string, v ...any) {
+	log.Fatal().Msgf(format, v...)
+}
 
 // MigrateUp provides thread-safe database migration using goose.
 // It locks access to goose's global state to prevent race conditions
@@ -36,6 +49,9 @@ var migrationMutex sync.Mutex
 func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
 	migrationMutex.Lock()
 	defer migrationMutex.Unlock()
+
+	// Set custom logger to redirect goose output to zerolog
+	goose.SetLogger(&gooseZerologAdapter{})
 
 	goose.SetBaseFS(migrationFiles)
 
