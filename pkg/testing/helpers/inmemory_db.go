@@ -22,7 +22,10 @@ package helpers
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -31,6 +34,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// generateUniqueDBName creates a unique database name for each test to avoid conflicts
+func generateUniqueDBName(prefix string) string {
+	//nolint:gosec // Using math/rand is fine for test database names
+	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Int63())
+}
+
 func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	t.Helper()
 
@@ -38,8 +47,10 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 
-	// Open in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	// Open unique in-memory SQLite database for UserDB
+	// Use a unique name to avoid conflicts with other tests
+	dbName := generateUniqueDBName("userdb_test_memory")
+	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s:?mode=memory&cache=shared", dbName))
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
 	}
@@ -66,8 +77,10 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	t.Helper()
 
-	// Create in-memory SQLite database to fix the nil pointer
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	// Create unique in-memory SQLite database for MediaDB
+	// Use a unique name to avoid conflicts with other tests
+	dbName := generateUniqueDBName("mediadb_test_memory")
+	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s:?mode=memory&cache=shared", dbName))
 	if err != nil {
 		t.Fatalf("Failed to open in-memory database: %v", err)
 	}

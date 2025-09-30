@@ -191,6 +191,8 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
 		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
 		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
+		mockDB.On("GetAllTags").Return([]database.Tag{}, assert.AnError)
+		mockDB.On("GetAllTagTypes").Return([]database.TagType{}, assert.AnError)
 
 		scanState := &database.ScanState{
 			SystemIDs:     make(map[string]int),
@@ -232,6 +234,8 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
 		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
 		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
+		mockDB.On("GetAllTags").Return([]database.Tag{}, assert.AnError)
+		mockDB.On("GetAllTagTypes").Return([]database.TagType{}, assert.AnError)
 
 		scanState := &database.ScanState{
 			SystemIDs:     make(map[string]int),

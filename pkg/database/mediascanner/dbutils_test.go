@@ -94,7 +94,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex, _ := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
 
 	// Verify that the function succeeded and returned valid indices
 	// With the bug, this would return (0, 0) because systemIndex would be 0
@@ -149,9 +149,11 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
 
-	// Function should return early with (0, 0) to prevent invalid data
+	// Function should return error and (0, 0) to prevent invalid data
+	require.Error(t, err, "should return error when system cannot be resolved")
+	assert.Contains(t, err.Error(), "failed to get existing system", "error should indicate system resolution failure")
 	assert.Equal(t, 0, titleIndex, "titleIndex should be 0 when system cannot be resolved")
 	assert.Equal(t, 0, mediaIndex, "mediaIndex should be 0 when system cannot be resolved")
 
@@ -201,9 +203,11 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki")
 
-	// Function should return early with (0, 0) for non-recoverable errors
+	// Function should return error and (0, 0) for non-recoverable errors
+	require.Error(t, err, "should return error for non-recoverable database errors")
+	assert.Contains(t, err.Error(), "error inserting system", "error should indicate insert failure")
 	assert.Equal(t, 0, titleIndex, "titleIndex should be 0 for non-recoverable database errors")
 	assert.Equal(t, 0, mediaIndex, "mediaIndex should be 0 for non-recoverable database errors")
 

@@ -481,8 +481,8 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	var validatedLetter *string
 	if letter != nil && *letter != "" {
 		letterValue := strings.ToUpper(strings.TrimSpace(*letter))
-		if !(letterValue == "0-9" || letterValue == "#" ||
-			(len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z")) {
+		if letterValue != "0-9" && letterValue != "#" &&
+			(len(letterValue) != 1 || letterValue < "A" || letterValue > "Z") {
 			return nil, fmt.Errorf("invalid letter parameter: %q (must be A-Z, 0-9, or #)", *letter)
 		}
 		validatedLetter = &letterValue
@@ -764,22 +764,14 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 func HandleMediaGenerateCancel(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received media generate cancel request")
 
-	if !statusInstance.get().indexing {
+	if statusInstance.cancel() {
+		log.Info().Msg("media indexing cancellation requested")
 		return map[string]interface{}{
-			"message": "No media indexing operation is currently running",
+			"message": "Media indexing cancelled successfully",
 		}, nil
 	}
-
-	cancelled := statusInstance.cancel()
-	if !cancelled {
-		return map[string]interface{}{
-			"message": "Media indexing not active or already cancelled",
-		}, nil
-	}
-
-	log.Info().Msg("media indexing cancellation requested")
 
 	return map[string]interface{}{
-		"message": "Media indexing cancelled successfully",
+		"message": "No media indexing operation is currently running or it has already been cancelled",
 	}, nil
 }

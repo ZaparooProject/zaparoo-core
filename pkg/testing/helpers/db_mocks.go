@@ -1068,6 +1068,34 @@ func (m *MockMediaDBI) GetAllMedia() ([]database.Media, error) {
 	return []database.Media{}, nil
 }
 
+func (m *MockMediaDBI) GetAllTags() ([]database.Tag, error) {
+	args := m.Called()
+	if tags, ok := args.Get(0).([]database.Tag); ok {
+		if err := args.Error(1); err != nil {
+			return tags, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return tags, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.Tag{}, nil
+}
+
+func (m *MockMediaDBI) GetAllTagTypes() ([]database.TagType, error) {
+	args := m.Called()
+	if tagTypes, ok := args.Get(0).([]database.TagType); ok {
+		if err := args.Error(1); err != nil {
+			return tagTypes, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return tagTypes, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return []database.TagType{}, nil
+}
+
 // GetTitlesWithSystems mock method for optimized JOIN query
 func (m *MockMediaDBI) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
 	args := m.Called()
@@ -1095,6 +1123,78 @@ func (m *MockMediaDBI) GetMediaWithFullPath() ([]database.MediaWithFullPath, err
 	if err := args.Error(1); err != nil {
 		return nil, fmt.Errorf("mock operation failed: %w", err)
 	}
+	return []database.MediaWithFullPath{}, nil
+}
+
+// GetSystemsExcluding mock method for optimized selective indexing
+func (m *MockMediaDBI) GetSystemsExcluding(excludeSystemIDs []string) ([]database.System, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetSystemsExcluding" {
+				args := m.Called(excludeSystemIDs)
+				if systems, ok := args.Get(0).([]database.System); ok {
+					if err := args.Error(1); err != nil {
+						return systems, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return systems, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.System{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
+	return []database.System{}, nil
+}
+
+// GetTitlesWithSystemsExcluding mock method for optimized selective indexing
+func (m *MockMediaDBI) GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]database.TitleWithSystem, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetTitlesWithSystemsExcluding" {
+				args := m.Called(excludeSystemIDs)
+				if titles, ok := args.Get(0).([]database.TitleWithSystem); ok {
+					if err := args.Error(1); err != nil {
+						return titles, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return titles, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.TitleWithSystem{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
+	return []database.TitleWithSystem{}, nil
+}
+
+// GetMediaWithFullPathExcluding mock method for optimized selective indexing
+func (m *MockMediaDBI) GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]database.MediaWithFullPath, error) {
+	// Try to get mock expectations, but don't fail if none are set
+	if len(m.ExpectedCalls) > 0 {
+		for _, call := range m.ExpectedCalls {
+			if call.Method == "GetMediaWithFullPathExcluding" {
+				args := m.Called(excludeSystemIDs)
+				if media, ok := args.Get(0).([]database.MediaWithFullPath); ok {
+					if err := args.Error(1); err != nil {
+						return media, fmt.Errorf("mock operation failed: %w", err)
+					}
+					return media, nil
+				}
+				if err := args.Error(1); err != nil {
+					return nil, fmt.Errorf("mock operation failed: %w", err)
+				}
+				return []database.MediaWithFullPath{}, nil
+			}
+		}
+	}
+	// Default behavior when no expectations are set - return empty slice
 	return []database.MediaWithFullPath{}, nil
 }
 

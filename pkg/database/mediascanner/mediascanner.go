@@ -26,6 +26,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -84,6 +85,7 @@ func GetSystemPaths(
 	var matches []PathResult
 
 	for _, system := range systems {
+		// GlobalLauncherCache is assumed to be read-only after initialization
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 
 		var folders []string
@@ -497,6 +499,9 @@ func NewNamesIndex(
 			allSystemIDs[i] = sys.ID
 		}
 
+		// Sort currentSystemIDs to ensure order-insensitive comparison
+		sort.Strings(currentSystemIDs)
+
 		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
 			// Full indexing - use fast truncate
 			err = db.Truncate()
@@ -510,12 +515,11 @@ func NewNamesIndex(
 				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
 			}
 
-			// After selective truncation, populate scan state to avoid ID conflicts
-			// with remaining systems that weren't truncated
-			err = PopulateScanStateFromDB(db, &scanState)
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to populate scan state after truncation, continuing anyway")
-				// Continue anyway - the error recovery logic in AddMediaPath will handle conflicts
+			// For selective indexing, populate scan state with max IDs, global data, and
+			// maps for systems NOT being reindexed to avoid conflicts with existing data
+			if err = PopulateScanStateForSelectiveIndexing(db, &scanState, currentSystemIDs); err != nil {
+				log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
+				return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
 			}
 		}
 
@@ -684,7 +688,9 @@ func NewNamesIndex(
 				batchStarted = true
 			}
 
-			AddMediaPath(db, &scanState, systemID, file.Path)
+			if _, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path); addErr != nil {
+				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
+			}
 			filesInBatch++
 
 			// Commit if we hit file limit (memory safety - even mid-system)
@@ -799,7 +805,13 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					AddMediaPath(db, &scanState, systemID, result.Path)
+					if _, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path); addErr != nil {
+						return 0, fmt.Errorf(
+							"unrecoverable error adding custom scanner path %q: %w",
+							result.Path,
+							addErr,
+						)
+					}
 					filesInBatch++
 
 					// Commit if we hit file limit (memory safety)
@@ -888,7 +900,13 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					AddMediaPath(db, &scanState, systemID, scanResult.Path)
+					if _, _, addErr := AddMediaPath(db, &scanState, systemID, scanResult.Path); addErr != nil {
+						return 0, fmt.Errorf(
+							"unrecoverable error adding 'any' scanner path %q: %w",
+							scanResult.Path,
+							addErr,
+						)
+					}
 					filesInBatch++
 
 					// Commit if we hit file limit (memory safety)

@@ -56,7 +56,7 @@ func TestHandleMediaGenerateCancel(t *testing.T) {
 			name:            "cancel when no indexing active",
 			indexingActive:  false,
 			setupIndexing:   false,
-			expectedMessage: "No media indexing operation is currently running",
+			expectedMessage: "No media indexing operation is currently running or it has already been cancelled",
 			expectError:     false,
 		},
 		{
@@ -274,7 +274,9 @@ func TestMediaGenerateCancel_StatusManagement(t *testing.T) {
 
 	response, ok := result.(map[string]any)
 	require.True(t, ok, "Result should be a map")
-	assert.Equal(t, "No media indexing operation is currently running", response["message"])
+	assert.Equal(t,
+		"No media indexing operation is currently running or it has already been cancelled",
+		response["message"])
 
 	// Setup indexing
 	_, cancelFunc := context.WithCancel(context.Background())
@@ -305,7 +307,9 @@ func TestMediaGenerateCancel_StatusManagement(t *testing.T) {
 
 	response, ok = result.(map[string]any)
 	require.True(t, ok, "Result should be a map")
-	assert.Equal(t, "No media indexing operation is currently running", response["message"])
+	assert.Equal(t,
+		"No media indexing operation is currently running or it has already been cancelled",
+		response["message"])
 }
 
 func TestMediaIndexingCancellation_Integration(t *testing.T) {
@@ -408,5 +412,7 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 
 	response, ok := result.(map[string]any)
 	require.True(t, ok, "Result should be a map")
-	assert.Equal(t, "No media indexing operation is currently running", response["message"])
+	assert.Equal(t,
+		"No media indexing operation is currently running or it has already been cancelled",
+		response["message"])
 }

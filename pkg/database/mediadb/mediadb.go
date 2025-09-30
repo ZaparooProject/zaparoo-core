@@ -232,14 +232,32 @@ func (db *MediaDB) Truncate() error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlTruncate(db.ctx, db.sql)
+	err := sqlTruncate(db.ctx, db.sql)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate cache after full truncation to ensure accurate counts
+	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to invalidate cache after full truncation")
+	}
+	return nil
 }
 
 func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
-	return sqlTruncateSystems(db.ctx, db.sql, systemIDs)
+	err := sqlTruncateSystems(db.ctx, db.sql, systemIDs)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate cache after truncating systems to ensure accurate counts
+	if cacheErr := db.InvalidateCountCache(); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to invalidate cache after truncating systems")
+	}
+	return nil
 }
 
 func (db *MediaDB) Allocate() error {
@@ -815,7 +833,6 @@ func (db *MediaDB) InvalidateCountCache() error {
 		return ErrNullSQL
 	}
 
-	log.Debug().Msg("invalidating media count cache")
 	_, err := db.sql.ExecContext(db.ctx, "DELETE FROM MediaCountCache")
 	if err != nil {
 		return fmt.Errorf("failed to invalidate count cache: %w", err)
@@ -1108,6 +1125,14 @@ func (db *MediaDB) GetAllMedia() ([]database.Media, error) {
 	return sqlGetAllMedia(db.ctx, db.sql)
 }
 
+func (db *MediaDB) GetAllTags() ([]database.Tag, error) {
+	return sqlGetAllTags(db.ctx, db.sql)
+}
+
+func (db *MediaDB) GetAllTagTypes() ([]database.TagType, error) {
+	return sqlGetAllTagTypes(db.ctx, db.sql)
+}
+
 // GetTitlesWithSystems retrieves all media titles with their associated system IDs using a JOIN query.
 // This is more efficient than fetching titles and systems separately and matching them in application code.
 func (db *MediaDB) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
@@ -1118,6 +1143,26 @@ func (db *MediaDB) GetTitlesWithSystems() ([]database.TitleWithSystem, error) {
 // This eliminates the need for nested loops to match media with titles and systems.
 func (db *MediaDB) GetMediaWithFullPath() ([]database.MediaWithFullPath, error) {
 	return sqlGetMediaWithFullPath(db.ctx, db.sql)
+}
+
+// GetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list.
+// This is optimized for selective indexing to avoid loading data for systems being reindexed.
+func (db *MediaDB) GetSystemsExcluding(excludeSystemIDs []string) ([]database.System, error) {
+	return sqlGetSystemsExcluding(db.ctx, db.sql, excludeSystemIDs)
+}
+
+// GetTitlesWithSystemsExcluding retrieves all media titles with their associated system IDs,
+// excluding those belonging to systems in the excludeSystemIDs list.
+// This is optimized for selective indexing to avoid loading data for systems being reindexed.
+func (db *MediaDB) GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]database.TitleWithSystem, error) {
+	return sqlGetTitlesWithSystemsExcluding(db.ctx, db.sql, excludeSystemIDs)
+}
+
+// GetMediaWithFullPathExcluding retrieves all media with their associated title and system information,
+// excluding those belonging to systems in the excludeSystemIDs list.
+// This is optimized for selective indexing to avoid loading data for systems being reindexed.
+func (db *MediaDB) GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]database.MediaWithFullPath, error) {
+	return sqlGetMediaWithFullPathExcluding(db.ctx, db.sql, excludeSystemIDs)
 }
 
 // RunBackgroundOptimization performs database optimization operations in the background.

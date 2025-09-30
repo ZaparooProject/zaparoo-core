@@ -2150,3 +2150,189 @@ func sqlGetMediaWithFullPath(ctx context.Context, db *sql.DB) ([]database.MediaW
 	}
 	return media, rows.Err()
 }
+
+func sqlGetAllTags(ctx context.Context, db *sql.DB) ([]database.Tag, error) {
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Tag, TypeDBID FROM Tags ORDER BY DBID")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tags: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	tags := make([]database.Tag, 0)
+	for rows.Next() {
+		var tag database.Tag
+		if err := rows.Scan(&tag.DBID, &tag.Tag, &tag.TypeDBID); err != nil {
+			return nil, fmt.Errorf("failed to scan tag: %w", err)
+		}
+		tags = append(tags, tag)
+	}
+	return tags, rows.Err()
+}
+
+func sqlGetAllTagTypes(ctx context.Context, db *sql.DB) ([]database.TagType, error) {
+	rows, err := db.QueryContext(ctx, "SELECT DBID, Type FROM TagTypes ORDER BY DBID")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tag types: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	tagTypes := make([]database.TagType, 0)
+	for rows.Next() {
+		var tagType database.TagType
+		if err := rows.Scan(&tagType.DBID, &tagType.Type); err != nil {
+			return nil, fmt.Errorf("failed to scan tag type: %w", err)
+		}
+		tagTypes = append(tagTypes, tagType)
+	}
+	return tagTypes, rows.Err()
+}
+
+// sqlGetSystemsExcluding retrieves all systems except those in the excludeSystemIDs list
+func sqlGetSystemsExcluding(ctx context.Context, db *sql.DB, excludeSystemIDs []string) ([]database.System, error) {
+	if len(excludeSystemIDs) == 0 {
+		return sqlGetAllSystems(ctx, db)
+	}
+
+	// Build placeholders for the IN clause
+	placeholders := make([]string, len(excludeSystemIDs))
+	args := make([]any, len(excludeSystemIDs))
+	for i, systemID := range excludeSystemIDs {
+		placeholders[i] = "?"
+		args[i] = systemID
+	}
+
+	//nolint:gosec // using parameterized placeholders, not user input
+	query := fmt.Sprintf(
+		"SELECT DBID, SystemID, Name FROM Systems WHERE SystemID NOT IN (%s) ORDER BY DBID",
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query systems excluding %v: %w", excludeSystemIDs, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	systems := make([]database.System, 0)
+	for rows.Next() {
+		var system database.System
+		if err := rows.Scan(&system.DBID, &system.SystemID, &system.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan system: %w", err)
+		}
+		systems = append(systems, system)
+	}
+	return systems, rows.Err()
+}
+
+// sqlGetTitlesWithSystemsExcluding retrieves all media titles with their
+// associated system IDs, excluding those belonging to systems in the
+// excludeSystemIDs list
+func sqlGetTitlesWithSystemsExcluding(
+	ctx context.Context,
+	db *sql.DB,
+	excludeSystemIDs []string,
+) ([]database.TitleWithSystem, error) {
+	if len(excludeSystemIDs) == 0 {
+		return sqlGetTitlesWithSystems(ctx, db)
+	}
+
+	// Build placeholders for the IN clause
+	placeholders := make([]string, len(excludeSystemIDs))
+	args := make([]any, len(excludeSystemIDs))
+	for i, systemID := range excludeSystemIDs {
+		placeholders[i] = "?"
+		args[i] = systemID
+	}
+
+	//nolint:gosec // using parameterized placeholders, not user input
+	query := fmt.Sprintf(`
+		SELECT t.DBID, t.Slug, t.Name, t.SystemDBID, s.SystemID
+		FROM MediaTitles t
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		WHERE s.SystemID NOT IN (%s)
+		ORDER BY t.DBID
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query titles with systems excluding %v: %w", excludeSystemIDs, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	titles := make([]database.TitleWithSystem, 0)
+	for rows.Next() {
+		var title database.TitleWithSystem
+		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID, &title.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan title with system: %w", err)
+		}
+		titles = append(titles, title)
+	}
+	return titles, rows.Err()
+}
+
+// sqlGetMediaWithFullPathExcluding retrieves all media with their
+// associated title and system information, excluding those belonging to
+// systems in the excludeSystemIDs list
+func sqlGetMediaWithFullPathExcluding(
+	ctx context.Context,
+	db *sql.DB,
+	excludeSystemIDs []string,
+) ([]database.MediaWithFullPath, error) {
+	if len(excludeSystemIDs) == 0 {
+		return sqlGetMediaWithFullPath(ctx, db)
+	}
+
+	// Build placeholders for the IN clause
+	placeholders := make([]string, len(excludeSystemIDs))
+	args := make([]any, len(excludeSystemIDs))
+	for i, systemID := range excludeSystemIDs {
+		placeholders[i] = "?"
+		args[i] = systemID
+	}
+
+	//nolint:gosec // using parameterized placeholders, not user input
+	query := fmt.Sprintf(`
+		SELECT m.DBID, m.Path, m.MediaTitleDBID, t.Slug, s.SystemID
+		FROM Media m
+		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
+		JOIN Systems s ON t.SystemDBID = s.DBID
+		WHERE s.SystemID NOT IN (%s)
+		ORDER BY m.DBID
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media with full path excluding %v: %w", excludeSystemIDs, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	media := make([]database.MediaWithFullPath, 0)
+	for rows.Next() {
+		var m database.MediaWithFullPath
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &m.TitleSlug, &m.SystemID); err != nil {
+			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
+		}
+		media = append(media, m)
+	}
+	return media, rows.Err()
+}

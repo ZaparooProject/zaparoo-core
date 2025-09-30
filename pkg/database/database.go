@@ -285,8 +285,15 @@ type MediaDBI interface {
 	GetAllSystems() ([]System, error)
 	GetAllMediaTitles() ([]MediaTitle, error)
 	GetAllMedia() ([]Media, error)
+	GetAllTags() ([]Tag, error)
+	GetAllTagTypes() ([]TagType, error)
 
 	// Optimized JOIN query methods for populating scan state
 	GetTitlesWithSystems() ([]TitleWithSystem, error)
 	GetMediaWithFullPath() ([]MediaWithFullPath, error)
+
+	// Optimized JOIN query methods for selective indexing (excluding specified systems)
+	GetSystemsExcluding(excludeSystemIDs []string) ([]System, error)
+	GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]TitleWithSystem, error)
+	GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]MediaWithFullPath, error)
 }
