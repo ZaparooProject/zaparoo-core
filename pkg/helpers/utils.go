@@ -37,7 +37,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -324,13 +323,45 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
-var reSlug = regexp.MustCompile(`(\(.*\))|(\[.*])|[^a-z0-9A-Z]`)
-
+// SlugifyString converts a string to a slug by removing special characters,
+// parentheses, brackets and their contents, and converting to lowercase.
+// Optimized implementation that avoids regex closures for better performance.
 func SlugifyString(input string) string {
-	rep := reSlug.ReplaceAllStringFunc(input, func(_ string) string {
-		return ""
-	})
-	return strings.ToLower(rep)
+	var builder strings.Builder
+	builder.Grow(len(input)) // Pre-allocate for better performance
+
+	skipDepth := 0 // Track nesting depth of ( ) or [ ]
+
+	for _, r := range input {
+		// Handle opening brackets/parentheses
+		if r == '(' || r == '[' {
+			skipDepth++
+			continue
+		}
+
+		// Handle closing brackets/parentheses
+		if r == ')' || r == ']' {
+			if skipDepth > 0 {
+				skipDepth--
+			}
+			continue
+		}
+
+		// Skip characters inside brackets/parentheses
+		if skipDepth > 0 {
+			continue
+		}
+
+		// Keep only alphanumeric characters
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		} else if r >= 'A' && r <= 'Z' {
+			// Convert to lowercase inline
+			builder.WriteRune(r + ('a' - 'A'))
+		}
+	}
+
+	return builder.String()
 }
 
 // CreateVirtualPath creates a properly encoded virtual path for media

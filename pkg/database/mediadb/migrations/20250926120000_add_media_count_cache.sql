@@ -9,9 +9,5 @@ CREATE TABLE MediaCountCache (
     LastUpdated INTEGER NOT NULL             -- Unix timestamp when cache was updated
 );
 
--- Index for potential cleanup operations based on age
-CREATE INDEX idx_media_count_cache_updated ON MediaCountCache(LastUpdated);
-
 -- +goose Down
-DROP INDEX IF EXISTS idx_media_count_cache_updated;
 DROP TABLE IF EXISTS MediaCountCache;

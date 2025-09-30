@@ -13,8 +13,7 @@ CREATE INDEX IF NOT EXISTS mediatitletags_tag_idx ON MediaTitleTags(TagDBID);
 CREATE INDEX IF NOT EXISTS supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID);
 CREATE INDEX IF NOT EXISTS supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID);
 
--- Also ensure the optimized search index exists
-CREATE INDEX IF NOT EXISTS mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug);
+-- Note: mediatitles_system_slug_idx created in 20250924041500_optimize_search_indexes.sql
 
 -- +goose Down
 -- We don't drop indexes on down migration as they may be needed by earlier migrations

@@ -12,13 +12,10 @@ CREATE TABLE IF NOT EXISTS SystemTagsCache (
     FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
--- Index for fast system-based tag lookups
-CREATE INDEX IF NOT EXISTS idx_systemtagscache_system ON SystemTagsCache(SystemDBID);
-
 -- Index for tag type ordering within systems
+-- Note: PRIMARY KEY (SystemDBID, TagDBID) already provides efficient SystemDBID lookups
 CREATE INDEX IF NOT EXISTS idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag);
 
 -- +goose Down
 DROP INDEX IF EXISTS idx_systemtagscache_type_tag;
-DROP INDEX IF EXISTS idx_systemtagscache_system;
 DROP TABLE IF EXISTS SystemTagsCache;
