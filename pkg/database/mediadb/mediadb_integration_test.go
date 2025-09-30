@@ -78,6 +78,68 @@ func TestMediaDB_OpenClose_Integration(t *testing.T) {
 	assert.Contains(t, err.Error(), "database is closed")
 }
 
+func TestMediaDB_TransactionCycle_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Test that transaction BEGIN/COMMIT cycle works correctly with PRAGMA optimizations
+	// This is a regression test for the double-BEGIN issue
+	err := mediaDB.BeginTransaction()
+	require.NoError(t, err, "BeginTransaction should succeed")
+
+	// Insert some test data within transaction
+	system := database.System{
+		DBID:     1,
+		SystemID: "test-system",
+		Name:     "Test System",
+	}
+
+	_, err = mediaDB.InsertSystem(system)
+	require.NoError(t, err, "Insert within transaction should succeed")
+
+	// Commit should work without errors
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err, "CommitTransaction should succeed")
+
+	// Verify data was committed
+	foundSystem, err := mediaDB.FindSystemBySystemID("test-system")
+	require.NoError(t, err)
+	assert.Equal(t, "test-system", foundSystem.SystemID)
+}
+
+func TestMediaDB_MultipleTransactionCycles_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Test multiple transaction cycles work correctly
+	// This ensures PRAGMA restoration works properly
+	for i := range 3 {
+		err := mediaDB.BeginTransaction()
+		require.NoError(t, err, "BeginTransaction cycle %d should succeed", i)
+
+		systemDef := systemdefs.AllSystems()[i]
+		system := database.System{
+			DBID:     int64(i + 1),
+			SystemID: systemDef.ID,
+			Name:     systemDef.ID, // Use ID as name for test
+		}
+
+		_, err = mediaDB.InsertSystem(system)
+		require.NoError(t, err, "Insert in cycle %d should succeed", i)
+
+		err = mediaDB.CommitTransaction()
+		require.NoError(t, err, "CommitTransaction cycle %d should succeed", i)
+	}
+
+	// Verify all systems were committed
+	for i := range 3 {
+		_, err := mediaDB.FindSystemBySystemID(systemdefs.AllSystems()[i].ID)
+		require.NoError(t, err, "System %d should be findable after commit", i)
+	}
+}
+
 func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)

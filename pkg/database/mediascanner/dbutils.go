@@ -24,12 +24,61 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
+
+// pathFragmentCache provides a simple LRU cache for parsed path fragments
+// to avoid redundant regex operations and string processing
+type pathFragmentCache struct {
+	cache   map[string]*MediaPathFragments
+	keys    []string
+	maxSize int
+	mu      sync.RWMutex
+}
+
+// globalPathFragmentCache is a package-level cache for path fragments
+var globalPathFragmentCache = &pathFragmentCache{
+	cache:   make(map[string]*MediaPathFragments, 5000),
+	keys:    make([]string, 0, 5000),
+	maxSize: 5000,
+}
+
+// get retrieves a cached path fragment if it exists
+func (c *pathFragmentCache) get(path string) (MediaPathFragments, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	frag, ok := c.cache[path]
+	if !ok {
+		return MediaPathFragments{}, false
+	}
+	return *frag, true
+}
+
+// put stores a path fragment in the cache, evicting oldest entry if cache is full
+func (c *pathFragmentCache) put(path string, frag *MediaPathFragments) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check if already exists
+	if _, exists := c.cache[path]; exists {
+		return
+	}
+
+	// Evict oldest if at capacity
+	if len(c.keys) >= c.maxSize {
+		oldest := c.keys[0]
+		delete(c.cache, oldest)
+		c.keys = c.keys[1:]
+	}
+
+	c.cache[path] = frag
+	c.keys = append(c.keys, path)
+}
 
 // We can't batch effectively without a sense of relationships
 // Instead of indexing string columns, use an in-memory map to track records to
@@ -38,9 +87,17 @@ import (
 // database.ScanState and DB transactions allow accumulation
 
 func FlushScanStateMaps(ss *database.ScanState) {
-	ss.SystemIDs = make(map[string]int)
-	ss.TitleIDs = make(map[string]int)
-	ss.MediaIDs = make(map[string]int)
+	// Clear maps by deleting all keys instead of reallocating
+	// This reuses the underlying memory allocation
+	for k := range ss.SystemIDs {
+		delete(ss.SystemIDs, k)
+	}
+	for k := range ss.TitleIDs {
+		delete(ss.TitleIDs, k)
+	}
+	for k := range ss.MediaIDs {
+		delete(ss.MediaIDs, k)
+	}
 	// Note: TagIDs and TagTypeIDs are preserved across batches for performance
 	// since tags are typically reused across different systems
 }
@@ -90,7 +147,7 @@ func AddMediaPath(
 		systemIndex = foundSystemIndex
 	}
 
-	titleKey := fmt.Sprintf("%v:%v", systemID, pf.Slug)
+	titleKey := systemID + ":" + pf.Slug
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
@@ -130,7 +187,7 @@ func AddMediaPath(
 		titleIndex = foundTitleIndex
 	}
 
-	mediaKey := fmt.Sprintf("%v:%v", systemID, pf.Path)
+	mediaKey := systemID + ":" + pf.Path
 	if foundMediaIndex, ok := ss.MediaIDs[mediaKey]; !ok {
 		ss.MediaIndex++
 		mediaIndex = ss.MediaIndex
@@ -534,7 +591,7 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 	} else {
 		for _, title := range titlesWithSystems {
 			// Direct construction - SystemID is already available from the JOIN
-			titleKey := fmt.Sprintf("%s:%s", title.SystemID, title.Slug)
+			titleKey := title.SystemID + ":" + title.Slug
 			ss.TitleIDs[titleKey] = int(title.DBID)
 		}
 	}
@@ -545,7 +602,7 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 	} else {
 		for _, m := range mediaWithFullPath {
 			// Direct construction - SystemID is already available from the JOIN
-			mediaKey := fmt.Sprintf("%s:%s", m.SystemID, m.Path)
+			mediaKey := m.SystemID + ":" + m.Path
 			ss.MediaIDs[mediaKey] = int(m.DBID)
 		}
 	}
@@ -638,7 +695,7 @@ func PopulateScanStateForSelectiveIndexing(
 		)
 	} else {
 		for _, title := range titlesWithSystems {
-			titleKey := fmt.Sprintf("%s:%s", title.SystemID, title.Slug)
+			titleKey := title.SystemID + ":" + title.Slug
 			ss.TitleIDs[titleKey] = int(title.DBID)
 		}
 	}
@@ -653,7 +710,7 @@ func PopulateScanStateForSelectiveIndexing(
 		)
 	} else {
 		for _, m := range mediaWithFullPath {
-			mediaKey := fmt.Sprintf("%s:%s", m.SystemID, m.Path)
+			mediaKey := m.SystemID + ":" + m.Path
 			ss.MediaIDs[mediaKey] = int(m.DBID)
 		}
 	}
@@ -675,6 +732,12 @@ func PopulateScanStateForSelectiveIndexing(
 }
 
 func GetPathFragments(path string) MediaPathFragments {
+	// Check cache first
+	if frag, ok := globalPathFragmentCache.get(path); ok {
+		return frag
+	}
+
+	// Cache miss - compute fragments
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
@@ -696,6 +759,9 @@ func GetPathFragments(path string) MediaPathFragments {
 	f.Title = getTitleFromFilename(f.FileName)
 	f.Slug = helpers.SlugifyString(f.Title)
 	f.Tags = getTagsFromFileName(f.FileName)
+
+	// Store in cache for future use
+	globalPathFragmentCache.put(path, &f)
 
 	return f
 }

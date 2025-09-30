@@ -403,10 +403,6 @@ const (
 	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
 	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
 	insertMediaTagSQL   = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
-
-	// Batch size for multi-row inserts - tuned for optimal performance
-	// Larger batches = fewer round trips but more memory
-	batchInsertSize = 500
 )
 
 // Fast prepared statement execution functions for batch operations during scanning

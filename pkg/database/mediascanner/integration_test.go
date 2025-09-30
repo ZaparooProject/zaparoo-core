@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -394,7 +395,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		// Verify TagTypes were created
 		initialTagTypeCount, err := mediaDB.GetMaxTagTypeID()
 		require.NoError(t, err)
-		assert.Greater(t, initialTagTypeCount, int64(0), "Should have TagTypes after full index")
+		assert.Positive(t, initialTagTypeCount, "Should have TagTypes after full index")
 	})
 
 	t.Run("Selective Reindex Preserves TagTypes", func(t *testing.T) {
@@ -496,7 +497,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 
 		// Begin transaction for media insertion
 		if beginErr := mediaDB.BeginTransaction(); beginErr != nil {
-			return beginErr
+			return fmt.Errorf("failed to begin transaction: %w", beginErr)
 		}
 
 		amigaEntries := batch.Entries["Amiga"]
@@ -536,7 +537,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 		// Verify TagTypes weren't duplicated or corrupted
 		allTagTypes, err := mediaDB.GetAllTagTypes()
 		require.NoError(t, err)
-		assert.Greater(t, len(allTagTypes), 0, "Should have TagTypes")
+		assert.NotEmpty(t, allTagTypes, "Should have TagTypes")
 
 		// Check for duplicate TagTypes by type
 		tagTypeNames := make(map[string]int)

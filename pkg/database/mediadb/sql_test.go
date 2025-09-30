@@ -246,7 +246,8 @@ func TestSqlTruncateSystems_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 3))
 
 	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
-	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
+	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
+	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
@@ -280,7 +281,8 @@ func TestSqlTruncateSystems_SingleSystem(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Expect cleanup of orphaned tags (RESTRICT prevented cascade, so we clean separately)
-	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
+	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
+	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
@@ -321,7 +323,8 @@ func TestSqlTruncateSystems_CleanupFailure(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Expect cleanup to fail
-	mock.ExpectExec(`(?s)DELETE FROM Tags WHERE DBID NOT IN.*DELETE FROM TagTypes WHERE DBID NOT IN`).
+	// Note: TagTypes are NOT deleted as they are global infrastructure shared across systems
+	mock.ExpectExec(`DELETE FROM Tags WHERE DBID NOT IN`).
 		WillReturnError(sql.ErrConnDone)
 
 	err = sqlTruncateSystems(context.Background(), db, systemIDs)
