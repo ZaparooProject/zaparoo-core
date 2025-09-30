@@ -20,14 +20,11 @@
 package mediascanner
 
 import (
-	"context"
-	"database/sql"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner/testdata"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,19 +34,9 @@ import (
 // This test was created because the original resume functionality was completely broken
 // but tests were passing because they only verified mock behavior, not actual functionality.
 func TestResumeWithRealDatabase(t *testing.T) {
-	// Create in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	// Create MediaDB instance
-	ctx := context.Background()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-
-	mediaDB := &mediadb.MediaDB{}
-	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
-	require.NoError(t, err)
+	// Create in-memory database with shared cache for transaction visibility
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
 
 	// Generate test data - small batch for focused testing
 	testSystems := []string{"NES", "SNES", "Genesis"}
@@ -71,10 +58,10 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err = SeedKnownTags(mediaDB, scanState)
+		err := SeedKnownTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
 		// Add systems and media
@@ -196,19 +183,9 @@ func TestResumeWithRealDatabase(t *testing.T) {
 // TestUniqueConstraintHandling tests that UNIQUE constraint violations are handled correctly
 // This specifically tests the scenario that was causing "UNIQUE constraint failed: Systems.DBID"
 func TestUniqueConstraintHandling(t *testing.T) {
-	// Create in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	// Create MediaDB instance
-	ctx := context.Background()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-
-	mediaDB := &mediadb.MediaDB{}
-	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
-	require.NoError(t, err)
+	// Create in-memory database with shared cache for transaction visibility
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
 
 	t.Run("No Constraint Violations With Proper Resume", func(t *testing.T) {
 		// First indexing run
@@ -226,10 +203,10 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err = SeedKnownTags(mediaDB, scanState)
+		err := SeedKnownTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction()
 		require.NoError(t, err)
 
 		// Add a few systems
@@ -295,19 +272,9 @@ func TestUniqueConstraintHandling(t *testing.T) {
 
 // TestDatabaseStateConsistency verifies database state remains consistent during operations
 func TestDatabaseStateConsistency(t *testing.T) {
-	// Create in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	// Create MediaDB instance
-	ctx := context.Background()
-	mockPlatform := mocks.NewMockPlatform()
-	mockPlatform.On("ID").Return("test-platform")
-
-	mediaDB := &mediadb.MediaDB{}
-	err = mediaDB.SetSQLForTesting(ctx, sqlDB, mockPlatform)
-	require.NoError(t, err)
+	// Create in-memory database with shared cache for transaction visibility
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
 
 	t.Run("GetMax Methods Return Consistent Results", func(t *testing.T) {
 		// Test empty database
@@ -374,5 +341,225 @@ func TestDatabaseStateConsistency(t *testing.T) {
 
 		assert.Equal(t, int(maxSystemID), testState.SystemsIndex, "PopulateScanStateFromDB should match GetMaxSystemID")
 		assert.Equal(t, int(maxTitleID), testState.TitlesIndex, "PopulateScanStateFromDB should match GetMaxTitleID")
+	})
+}
+
+// TestSelectiveIndexingPreservesTagTypes tests that selective reindexing of one system
+// does not delete TagTypes that are used by other systems.
+// This regression test catches the bug where sqlTruncateSystems() was incorrectly
+// deleting global TagTypes during cleanup, causing crashes when trying to add media.
+func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
+	// Create in-memory database with shared cache for transaction visibility
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
+	// Generate test data for multiple systems
+	testSystems := []string{"NES", "SNES", "Amiga"}
+	batch := testdata.CreateReproducibleBatch(testSystems, 3) // 3 games per system
+
+	t.Run("Full Index Creates TagTypes", func(t *testing.T) {
+		// Index all systems
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Seed known tags
+		err := SeedKnownTags(mediaDB, scanState)
+		require.NoError(t, err)
+
+		err = mediaDB.BeginTransaction()
+		require.NoError(t, err)
+
+		// Add media for all systems
+		for _, systemID := range testSystems {
+			entries := batch.Entries[systemID]
+			for _, entry := range entries {
+				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path)
+				require.NoError(t, addErr, "Should add media without error")
+			}
+		}
+
+		err = mediaDB.CommitTransaction()
+		require.NoError(t, err)
+
+		// Verify TagTypes were created
+		initialTagTypeCount, err := mediaDB.GetMaxTagTypeID()
+		require.NoError(t, err)
+		assert.Greater(t, initialTagTypeCount, int64(0), "Should have TagTypes after full index")
+	})
+
+	t.Run("Selective Reindex Preserves TagTypes", func(t *testing.T) {
+		// Get initial TagType count
+		initialTagTypeCount, err := mediaDB.GetMaxTagTypeID()
+		require.NoError(t, err)
+
+		// Reindex only Amiga system using TruncateSystems
+		err = mediaDB.TruncateSystems([]string{"Amiga"})
+		require.NoError(t, err)
+
+		// Verify TagTypes were NOT deleted
+		afterTruncateTagTypeCount, err := mediaDB.GetMaxTagTypeID()
+		require.NoError(t, err)
+		assert.Equal(t, initialTagTypeCount, afterTruncateTagTypeCount,
+			"TagTypes should be preserved during selective truncation")
+
+		// Re-populate scan state for selective indexing
+		reindexState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		err = PopulateScanStateForSelectiveIndexing(mediaDB, reindexState, []string{"Amiga"})
+		require.NoError(t, err)
+
+		// Re-add Amiga media - this should NOT crash with "Extension TagType not found"
+		err = mediaDB.BeginTransaction()
+		require.NoError(t, err)
+
+		amigaEntries := batch.Entries["Amiga"]
+		for _, entry := range amigaEntries {
+			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path)
+			require.NoError(t, addErr, "Should add Amiga media without TagType errors")
+		}
+
+		err = mediaDB.CommitTransaction()
+		require.NoError(t, err)
+
+		// Verify TagTypes still intact after reindexing
+		finalTagTypeCount, err := mediaDB.GetMaxTagTypeID()
+		require.NoError(t, err)
+		assert.Equal(t, initialTagTypeCount, finalTagTypeCount,
+			"TagTypes should remain unchanged after selective reindex")
+
+		// Verify other systems' media is still intact
+		allSystems, err := mediaDB.GetAllSystems()
+		require.NoError(t, err)
+		assert.Len(t, allSystems, 3, "Should still have all 3 systems")
+	})
+}
+
+// TestReindexSameSystemTwice tests that reindexing the same system multiple times
+// works correctly without crashes or data corruption.
+func TestReindexSameSystemTwice(t *testing.T) {
+	// Create in-memory database with shared cache for transaction visibility
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
+	// Generate test data
+	testSystems := []string{"Amiga"}
+	batch := testdata.CreateReproducibleBatch(testSystems, 5) // 5 games
+
+	// Helper function to index Amiga
+	indexAmiga := func() error {
+		scanState := &database.ScanState{
+			SystemIDs:     make(map[string]int),
+			TitleIDs:      make(map[string]int),
+			MediaIDs:      make(map[string]int),
+			TagTypeIDs:    make(map[string]int),
+			TagIDs:        make(map[string]int),
+			SystemsIndex:  0,
+			TitlesIndex:   0,
+			MediaIndex:    0,
+			TagTypesIndex: 0,
+			TagsIndex:     0,
+		}
+
+		// Check if we need to seed tags
+		maxTagTypeID, _ := mediaDB.GetMaxTagTypeID()
+		if maxTagTypeID == 0 {
+			if seedErr := SeedKnownTags(mediaDB, scanState); seedErr != nil {
+				return seedErr
+			}
+		} else {
+			// Populate state for existing data
+			if popErr := PopulateScanStateForSelectiveIndexing(mediaDB, scanState, []string{"Amiga"}); popErr != nil {
+				return popErr
+			}
+		}
+
+		// Begin transaction for media insertion
+		if beginErr := mediaDB.BeginTransaction(); beginErr != nil {
+			return beginErr
+		}
+
+		amigaEntries := batch.Entries["Amiga"]
+		for _, entry := range amigaEntries {
+			if _, _, addErr := AddMediaPath(mediaDB, scanState, "Amiga", entry.Path); addErr != nil {
+				return addErr
+			}
+		}
+
+		return mediaDB.CommitTransaction()
+	}
+
+	t.Run("First Index", func(t *testing.T) {
+		err := indexAmiga()
+		require.NoError(t, err)
+
+		// Verify data
+		maxMediaID, err := mediaDB.GetMaxMediaID()
+		require.NoError(t, err)
+		assert.Equal(t, int64(5), maxMediaID, "Should have 5 media entries")
+	})
+
+	t.Run("Second Index (Reindex)", func(t *testing.T) {
+		// Truncate Amiga system
+		err := mediaDB.TruncateSystems([]string{"Amiga"})
+		require.NoError(t, err)
+
+		// Reindex
+		err = indexAmiga()
+		require.NoError(t, err)
+
+		// Verify data exists (IDs continue incrementing after truncation)
+		allSystems, err := mediaDB.GetAllSystems()
+		require.NoError(t, err)
+		assert.Len(t, allSystems, 1, "Should have 1 system (Amiga)")
+
+		// Verify TagTypes weren't duplicated or corrupted
+		allTagTypes, err := mediaDB.GetAllTagTypes()
+		require.NoError(t, err)
+		assert.Greater(t, len(allTagTypes), 0, "Should have TagTypes")
+
+		// Check for duplicate TagTypes by type
+		tagTypeNames := make(map[string]int)
+		for _, tt := range allTagTypes {
+			tagTypeNames[tt.Type]++
+		}
+		for typeName, count := range tagTypeNames {
+			assert.Equal(t, 1, count, "TagType %s should not be duplicated", typeName)
+		}
+	})
+
+	t.Run("Third Index (Another Reindex)", func(t *testing.T) {
+		// Truncate Amiga system again
+		err := mediaDB.TruncateSystems([]string{"Amiga"})
+		require.NoError(t, err)
+
+		// Reindex again
+		err = indexAmiga()
+		require.NoError(t, err)
+
+		// Verify still correct
+		allSystems, err := mediaDB.GetAllSystems()
+		require.NoError(t, err)
+		assert.Len(t, allSystems, 1, "Should have 1 system (Amiga) after third index")
 	})
 }

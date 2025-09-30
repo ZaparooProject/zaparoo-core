@@ -292,6 +292,9 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 
 	// Clean up orphaned tags (RESTRICT prevents cascade, so we handle these separately)
 	// Only deletes truly orphaned tags that aren't referenced anywhere
+	// IMPORTANT: Do NOT delete TagTypes during selective indexing - they are global infrastructure
+	// shared across all systems. Deleting them would break other systems' media that reference
+	// TagTypes not used by the system being reindexed (e.g., "Extension" TagType).
 	cleanupStmt := `
 		DELETE FROM Tags WHERE DBID NOT IN (
 			SELECT TagDBID FROM MediaTags WHERE TagDBID IS NOT NULL
@@ -299,9 +302,6 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 			SELECT TagDBID FROM MediaTitleTags WHERE TagDBID IS NOT NULL
 			UNION
 			SELECT TypeTagDBID FROM SupportingMedia WHERE TypeTagDBID IS NOT NULL
-		);
-		DELETE FROM TagTypes WHERE DBID NOT IN (
-			SELECT TypeDBID FROM Tags WHERE TypeDBID IS NOT NULL
 		);
 	`
 	_, err = db.ExecContext(ctx, cleanupStmt)
@@ -403,6 +403,10 @@ const (
 	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
 	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
 	insertMediaTagSQL   = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
+
+	// Batch size for multi-row inserts - tuned for optimal performance
+	// Larger batches = fewer round trips but more memory
+	batchInsertSize = 500
 )
 
 // Fast prepared statement execution functions for batch operations during scanning
