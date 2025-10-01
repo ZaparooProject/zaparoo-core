@@ -56,10 +56,16 @@ func HandleSystems(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		sm, err := assets.GetSystemMetadata(id)
 		if err != nil {
 			log.Error().Err(err).Msgf("error getting system metadata: %s", id)
+		} else {
+			sr.Name = sm.Name
+			sr.Category = sm.Category
+			if sm.ReleaseDate != "" {
+				sr.ReleaseDate = &sm.ReleaseDate
+			}
+			if sm.Manufacturer != "" {
+				sr.Manufacturer = &sm.Manufacturer
+			}
 		}
-
-		sr.Name = sm.Name
-		sr.Category = sm.Category
 
 		respSystems = append(respSystems, sr)
 	}

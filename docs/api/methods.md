@@ -342,11 +342,13 @@ An object:
 
 ##### System object
 
-| Key      | Type   | Required | Description                                           |
-| :------- | :----- | :------- | :---------------------------------------------------- |
-| id       | string | Yes      | Internal system ID for this system.                   |
-| name     | string | Yes      | Display name of the system.                           |
-| category | string | Yes      | Category of system. This field is not yet formalised. |
+| Key          | Type   | Required | Description                                                              |
+| :----------- | :----- | :------- | :----------------------------------------------------------------------- |
+| id           | string | No       | Internal system ID for this system.                                      |
+| name         | string | No       | Display name of the system.                                              |
+| category     | string | No       | Category of system (e.g., "Console", "Computer"). Not yet formalised.    |
+| releaseDate  | string | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
+| manufacturer | string | No       | Manufacturer of the system (e.g., "Nintendo", "Sega").                   |
 
 ##### Pagination object
 
@@ -782,14 +784,18 @@ See [System object](#system-object).
   "result": {
     "systems": [
       {
-        "category": "Handheld",
         "id": "GameboyColor",
-        "name": "Gameboy Color"
+        "name": "Gameboy Color",
+        "category": "Handheld",
+        "releaseDate": "1998-10-21",
+        "manufacturer": "Nintendo"
       },
       {
-        "category": "Computer",
         "id": "EDSAC",
-        "name": "EDSAC"
+        "name": "EDSAC",
+        "category": "Computer",
+        "releaseDate": "1949-05-06",
+        "manufacturer": "University of Cambridge"
       }
     ]
   }
