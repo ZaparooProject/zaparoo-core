@@ -20,6 +20,7 @@
 package methods
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -580,6 +581,8 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
 			mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("SetLastIndexedSystem", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
+			mockMediaDB.On("SetJournalMode", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 			// Mock GetMax*ID methods for media indexing
 			mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()

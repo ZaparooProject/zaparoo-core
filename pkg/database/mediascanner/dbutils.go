@@ -204,6 +204,22 @@ func AddMediaPath(
 			var sqliteErr sqlite3.Error
 			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
 				log.Debug().Err(err).Msgf("media already exists: %s", pf.Path)
+
+				// Recover by finding the existing media's DBID
+				existingMedia, getErr := db.FindMedia(database.Media{
+					Path:           pf.Path,
+					MediaTitleDBID: int64(titleIndex),
+				})
+				if getErr != nil || existingMedia.DBID == 0 {
+					return 0, 0, fmt.Errorf(
+						"failed to get existing media %s after insert failed: %w",
+						pf.Path,
+						getErr,
+					)
+				}
+				mediaIndex = int(existingMedia.DBID)
+				ss.MediaIDs[mediaKey] = mediaIndex // Update cache with correct ID
+				log.Debug().Msgf("using existing media %s with DBID %d", pf.Path, mediaIndex)
 			} else {
 				log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
 			}

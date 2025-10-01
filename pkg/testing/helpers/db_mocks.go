@@ -940,6 +940,14 @@ func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
+func (m *MockMediaDBI) SetJournalMode(ctx context.Context, mode database.JournalMode) error {
+	args := m.Called(ctx, mode)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
 // GetMax*ID methods for resume functionality
 func (m *MockMediaDBI) GetMaxSystemID() (int64, error) {
 	args := m.Called()

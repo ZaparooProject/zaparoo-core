@@ -336,6 +336,7 @@ func GenerateMediaDB(
 				Exists:     true,
 				Indexing:   false,
 				Optimizing: optimizing,
+				TotalFiles: &total,
 			})
 		})
 

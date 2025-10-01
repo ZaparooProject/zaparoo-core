@@ -55,31 +55,54 @@ const (
 	IndexingStatusCancelled = "cancelled"
 )
 
-const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
+// Base connection parameters, excluding journal mode
+const baseSqliteConnParams = "&_synchronous=NORMAL&_busy_timeout=5000" +
 	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192&_foreign_keys=ON"
+
+// getSqliteConnParams constructs the full SQLite connection string with the specified journal mode.
+// For DELETE mode, synchronous=OFF is used for maximum write performance during indexing.
+func getSqliteConnParams(journalMode database.JournalMode) string {
+	// Start from base
+	params := baseSqliteConnParams
+
+	if journalMode == database.JournalModeDELETE {
+		// DELETE-mode connection is used exclusively during bulk indexing.
+		// Optimize aggressively for write throughput.
+		params = strings.Replace(params, "_synchronous=NORMAL", "_synchronous=OFF", 1)
+		// Turn FK checks off for faster inserts (we insert in FK-safe order)
+		params = strings.Replace(params, "_foreign_keys=ON", "_foreign_keys=OFF", 1)
+		// Increase cache size ~200 MB (negative means KB in SQLite semantics)
+		params = strings.Replace(params, "_cache_size=-48000", "_cache_size=-200000", 1)
+	}
+	return fmt.Sprintf("?_journal_mode=%s%s", journalMode, params)
+}
 
 type MediaDB struct {
 	clock                clockwork.Clock
 	ctx                  context.Context
 	pl                   platforms.Platform
+	stmtInsertMediaTitle *sql.Stmt
+	stmtInsertMediaTag   *sql.Stmt
 	stmtInsertMedia      *sql.Stmt
 	tx                   *sql.Tx
 	stmtInsertSystem     *sql.Stmt
-	stmtInsertMediaTitle *sql.Stmt
 	sql                  *sql.DB
 	stmtInsertTag        *sql.Stmt
-	stmtInsertMediaTag   *sql.Stmt
+	dbPath               string
 	backgroundOps        sync.WaitGroup
 	analyzeRetryDelay    time.Duration
 	vacuumRetryDelay     time.Duration
+	sqlMu                sync.RWMutex
 	isOptimizing         atomic.Bool
 	inTransaction        bool
 }
 
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
+	dbPath := filepath.Join(helpers.DataDir(pl), config.MediaDbFile)
 	db := &MediaDB{
 		sql:               nil,
 		pl:                pl,
+		dbPath:            dbPath,
 		ctx:               ctx,
 		clock:             clockwork.NewRealClock(),
 		analyzeRetryDelay: 10 * time.Second,
@@ -100,7 +123,7 @@ func (db *MediaDB) Open() error {
 			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
+	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams(database.JournalModeWAL))
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -183,6 +206,8 @@ func (db *MediaDB) GetOptimizationStep() (string, error) {
 }
 
 func (db *MediaDB) SetIndexingStatus(status string) error {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -190,6 +215,8 @@ func (db *MediaDB) SetIndexingStatus(status string) error {
 }
 
 func (db *MediaDB) GetIndexingStatus() (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
 	if db.sql == nil {
 		return "", ErrNullSQL
 	}
@@ -260,6 +287,77 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
+// SetJournalMode safely changes the journal mode of the database.
+// This operation requires closing the existing sql.DB connection and opening a new one.
+// It should only be called when no other operations are concurrently accessing the database.
+func (db *MediaDB) SetJournalMode(ctx context.Context, mode database.JournalMode) error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
+	dbPath := db.dbPath
+
+	// Close existing connection if open
+	if db.sql != nil {
+		log.Info().Msgf("closing existing database connection to change journal mode to %s", mode)
+		if err := db.sql.Close(); err != nil {
+			return fmt.Errorf("failed to close database before changing journal mode: %w", err)
+		}
+		db.sql = nil
+	}
+
+	// Open a new database connection with the specified journal mode
+	newConnParams := getSqliteConnParams(mode)
+	log.Info().Msgf("opening database with journal mode %s", mode)
+	sqlInstance, err := sql.Open("sqlite3", dbPath+newConnParams)
+	if err != nil {
+		// Attempt to re-open with original WAL mode on failure to leave DB in a usable state
+		log.Error().Err(err).Msgf("failed to open database with journal mode %s, attempting to revert to WAL", mode)
+		revertConnParams := getSqliteConnParams(database.JournalModeWAL)
+		if revertSQL, revertErr := sql.Open("sqlite3", dbPath+revertConnParams); revertErr == nil {
+			db.sql = revertSQL
+			log.Info().Msg("successfully reverted database to WAL mode after journal mode switch failure")
+		} else {
+			log.Error().Err(revertErr).
+				Msg("CRITICAL: failed to revert database to WAL mode after journal mode switch failure")
+		}
+		return fmt.Errorf("failed to open database with journal mode %s: %w", mode, err)
+	}
+	db.sql = sqlInstance
+
+	// Verify the journal mode
+	var resultMode string
+	err = db.sql.QueryRowContext(ctx, "PRAGMA journal_mode;").Scan(&resultMode)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to verify journal mode after switch")
+	} else if !strings.EqualFold(resultMode, string(mode)) {
+		log.Warn().Msgf("journal mode verification mismatch: requested %s, got %s", mode, resultMode)
+	}
+
+	// Explicitly set additional PRAGMAs for bulk indexing when in DELETE mode
+	if mode == database.JournalModeDELETE {
+		// synchronous already OFF via DSN; ensure at runtime too
+		if _, err := db.sql.ExecContext(ctx, "PRAGMA synchronous = OFF;"); err != nil {
+			log.Warn().Err(err).Msg("failed to set synchronous=OFF for DELETE mode")
+		}
+		if _, err := db.sql.ExecContext(ctx, "PRAGMA foreign_keys = OFF;"); err != nil {
+			log.Warn().Err(err).Msg("failed to set foreign_keys=OFF for DELETE mode")
+		}
+		if _, err := db.sql.ExecContext(ctx, "PRAGMA temp_store = MEMORY;"); err != nil {
+			log.Warn().Err(err).Msg("failed to set temp_store=MEMORY for DELETE mode")
+		}
+		if _, err := db.sql.ExecContext(ctx, "PRAGMA cache_size = -200000;"); err != nil {
+			log.Warn().Err(err).Msg("failed to set cache_size for DELETE mode")
+		}
+		var syncMode any
+		if scanErr := db.sql.QueryRowContext(ctx, "PRAGMA synchronous;").Scan(&syncMode); scanErr == nil {
+			log.Info().Msgf("set synchronous mode to %v for DELETE journal mode", syncMode)
+		}
+	}
+
+	log.Info().Msgf("switched journal mode to %s (verified: %s)", mode, resultMode)
+	return nil
+}
+
 func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -312,6 +410,12 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	db.isOptimizing.Store(false)
 
 	return nil
+}
+
+// SetDBPathForTesting sets the database path for testing purposes.
+// This is needed so SetJournalMode can reopen the same database file.
+func (db *MediaDB) SetDBPathForTesting(dbPath string) {
+	db.dbPath = dbPath
 }
 
 // closeAllPreparedStatements closes all prepared statements and sets them to nil

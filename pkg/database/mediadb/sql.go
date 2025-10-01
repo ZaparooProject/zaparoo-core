@@ -247,18 +247,29 @@ func sqlAnalyze(ctx context.Context, db *sql.DB) error {
 
 //goland:noinspection SqlWithoutWhere
 func sqlTruncate(ctx context.Context, db *sql.DB) error {
+	// Disable foreign keys to avoid CASCADE overhead during mass deletion
+	_, err := db.ExecContext(ctx, "PRAGMA foreign_keys = OFF;")
+	if err != nil {
+		return fmt.Errorf("failed to disable foreign keys: %w", err)
+	}
+	defer func() {
+		// Re-enable foreign keys after truncation
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON;")
+	}()
+
+	// Delete in reverse dependency order (children first, parents last)
+	// to avoid any cascading overhead and minimize index updates
 	sqlStmt := `
-	delete from Systems;
-	delete from MediaTitles;
-	delete from Media;
-	delete from TagTypes;
-	delete from Tags;
-	delete from MediaTags;
-	delete from MediaTitleTags;
 	delete from SupportingMedia;
-	vacuum;
+	delete from MediaTitleTags;
+	delete from MediaTags;
+	delete from Media;
+	delete from MediaTitles;
+	delete from Tags;
+	delete from TagTypes;
+	delete from Systems;
 	`
-	_, err := db.ExecContext(ctx, sqlStmt)
+	_, err = db.ExecContext(ctx, sqlStmt)
 	if err != nil {
 		return fmt.Errorf("failed to truncate database: %w", err)
 	}
@@ -547,35 +558,95 @@ func sqlInsertSystem(ctx context.Context, db *sql.DB, row database.System) (data
 
 func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
 	var row database.MediaTitle
-	stmt, err := db.PrepareContext(ctx, `
-		select
-		DBID, SystemDBID, Slug, Name
-		from MediaTitles
-		where DBID = ?
-		or Slug = ?
-		LIMIT 1;
-	`)
-	if err != nil {
-		return row, fmt.Errorf("failed to prepare find media title statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+
+	// Prefer exact DBID lookup when provided
+	if title.DBID != 0 {
+		stmt, err := db.PrepareContext(ctx, `
+            select
+            DBID, SystemDBID, Slug, Name
+            from MediaTitles
+            where DBID = ?
+            limit 1;
+        `)
+		if err != nil {
+			return row, fmt.Errorf("failed to prepare find media title by DBID statement: %w", err)
 		}
-	}()
-	err = stmt.QueryRowContext(ctx,
-		title.DBID,
-		title.Slug,
-	).Scan(
-		&row.DBID,
-		&row.SystemDBID,
-		&row.Slug,
-		&row.Name,
-	)
-	if err != nil {
-		return row, fmt.Errorf("failed to scan media title row: %w", err)
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close sql statement")
+			}
+		}()
+		err = stmt.QueryRowContext(ctx, title.DBID).Scan(
+			&row.DBID,
+			&row.SystemDBID,
+			&row.Slug,
+			&row.Name,
+		)
+		if err != nil {
+			return row, fmt.Errorf("failed to scan media title row by DBID: %w", err)
+		}
+		return row, nil
 	}
-	return row, nil
+
+	// If SystemDBID and Slug are provided, use both for accurate lookup
+	if title.SystemDBID != 0 && title.Slug != "" {
+		stmt, err := db.PrepareContext(ctx, `
+            select
+            DBID, SystemDBID, Slug, Name
+            from MediaTitles
+            where SystemDBID = ? and Slug = ?
+            limit 1;
+        `)
+		if err != nil {
+			return row, fmt.Errorf("failed to prepare find media title by system+slug statement: %w", err)
+		}
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close sql statement")
+			}
+		}()
+		err = stmt.QueryRowContext(ctx, title.SystemDBID, title.Slug).Scan(
+			&row.DBID,
+			&row.SystemDBID,
+			&row.Slug,
+			&row.Name,
+		)
+		if err != nil {
+			return row, fmt.Errorf("failed to scan media title row by system+slug: %w", err)
+		}
+		return row, nil
+	}
+
+	// Fallback to slug-only if that's all we have
+	if title.Slug != "" {
+		stmt, err := db.PrepareContext(ctx, `
+            select
+            DBID, SystemDBID, Slug, Name
+            from MediaTitles
+            where Slug = ?
+            limit 1;
+        `)
+		if err != nil {
+			return row, fmt.Errorf("failed to prepare find media title by slug statement: %w", err)
+		}
+		defer func() {
+			if closeErr := stmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close sql statement")
+			}
+		}()
+		err = stmt.QueryRowContext(ctx, title.Slug).Scan(
+			&row.DBID,
+			&row.SystemDBID,
+			&row.Slug,
+			&row.Name,
+		)
+		if err != nil {
+			return row, fmt.Errorf("failed to scan media title row by slug: %w", err)
+		}
+		return row, nil
+	}
+
+	return row, errors.New("insufficient parameters to find media title")
 }
 
 func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitle) (database.MediaTitle, error) {

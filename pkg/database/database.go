@@ -173,6 +173,15 @@ type ScanState struct {
 	TagsIndex     int
 }
 
+// JournalMode represents SQLite journal mode
+type JournalMode string
+
+// Journal mode constants
+const (
+	JournalModeWAL    JournalMode = "WAL"
+	JournalModeDELETE JournalMode = "DELETE"
+)
+
 /*
  * Interfaces for external deps
  */
@@ -229,6 +238,7 @@ type MediaDBI interface {
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
+	SetJournalMode(ctx context.Context, mode JournalMode) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)

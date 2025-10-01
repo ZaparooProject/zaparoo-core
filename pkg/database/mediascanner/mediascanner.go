@@ -494,7 +494,22 @@ func NewNamesIndex(
 		TagIDs:        make(map[string]int),
 	}
 
-	// 3. Truncate and Initial Status Set
+	// 3. Checkpoint WAL before switching journal modes to prevent locks
+	log.Info().Msg("checkpointing WAL before journal mode switch")
+	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
+		_, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+		if walErr != nil {
+			log.Warn().Err(walErr).Msg("WAL checkpoint failed, continuing anyway")
+		}
+	}
+
+	// Switch to DELETE journal mode for faster indexing
+	log.Info().Msg("switching to DELETE journal mode for indexing")
+	if err = db.SetJournalMode(ctx, database.JournalModeDELETE); err != nil {
+		return 0, fmt.Errorf("failed to switch to DELETE journal mode: %w", err)
+	}
+
+	// 4. Truncate and Initial Status Set
 	if !shouldResume {
 		log.Info().Msg("preparing database for fresh indexing")
 		// Set indexing systems before truncating
@@ -514,10 +529,12 @@ func NewNamesIndex(
 
 		// Sort currentSystemIDs to ensure order-insensitive comparison
 		sort.Strings(currentSystemIDs)
+		// Sort allSystemIDs as well to ensure consistent comparison
+		sort.Strings(allSystemIDs)
 
 		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
 			// Full indexing - use fast truncate
-			log.Info().Msg("performing full database truncation")
+			log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
 			err = db.Truncate()
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate database: %w", err)
@@ -589,8 +606,14 @@ func NewNamesIndex(
 		log.Info().Msg("successfully populated scan state for resume")
 	}
 
-	// Ensure transaction cleanup and status update on any error
+	// Ensure transaction cleanup, status update, and WAL restoration on completion or error
 	defer func() {
+		// Always switch back to WAL mode for normal operations
+		log.Info().Msg("restoring WAL journal mode after indexing")
+		if walErr := db.SetJournalMode(ctx, database.JournalModeWAL); walErr != nil {
+			log.Error().Err(walErr).Msg("failed to restore WAL journal mode after indexing")
+		}
+
 		if err != nil {
 			// Rollback any open transaction on error
 			if rbErr := db.RollbackTransaction(); rbErr != nil {

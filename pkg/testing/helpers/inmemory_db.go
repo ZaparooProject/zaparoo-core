@@ -22,10 +22,8 @@ package helpers
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"math/rand"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -34,12 +32,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// generateUniqueDBName creates a unique database name for each test to avoid conflicts
-func generateUniqueDBName(prefix string) string {
-	//nolint:gosec // Using math/rand is fine for test database names
-	return fmt.Sprintf("%s_%d_%d", prefix, time.Now().UnixNano(), rand.Int63())
-}
-
 func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	t.Helper()
 
@@ -47,12 +39,14 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 
-	// Open unique in-memory SQLite database for UserDB
-	// Use a unique name to avoid conflicts with other tests
-	dbName := generateUniqueDBName("userdb_test_memory")
-	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s:?mode=memory&cache=shared", dbName))
+	// Create temporary directory for test database
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "userdb_test.db")
+
+	// Open SQLite database using temp file (persists across connection close/reopen)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("Failed to open in-memory database: %v", err)
+		t.Fatalf("Failed to open test database: %v", err)
 	}
 
 	// Create UserDB instance and set the sql field directly
@@ -77,12 +71,14 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	t.Helper()
 
-	// Create unique in-memory SQLite database for MediaDB
-	// Use a unique name to avoid conflicts with other tests
-	dbName := generateUniqueDBName("mediadb_test_memory")
-	sqlDB, err := sql.Open("sqlite3", fmt.Sprintf("file:%s:?mode=memory&cache=shared", dbName))
+	// Create temporary directory for test database
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "mediadb_test.db")
+
+	// Open SQLite database using temp file (persists across connection close/reopen)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("Failed to open in-memory database: %v", err)
+		t.Fatalf("Failed to open test database: %v", err)
 	}
 
 	db = &mediadb.MediaDB{}
@@ -96,6 +92,8 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		}
 		t.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
+	// Set dbPath so SetJournalMode can reopen the same database file
+	db.SetDBPathForTesting(dbPath)
 
 	cleanup = func() {
 		if err := db.Close(); err != nil {
