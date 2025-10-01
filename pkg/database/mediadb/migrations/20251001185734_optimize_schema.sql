@@ -1,9 +1,27 @@
 -- +goose Up
--- Comprehensive foreign key migration for all tables
--- SQLite doesn't support adding foreign keys to existing tables,
--- so we need to recreate them with proper constraints
+-- Comprehensive schema optimization migration
+-- Consolidates: foreign keys, indexes, WITHOUT ROWID optimization, and cache tables
 
--- 1. MediaTitles: CASCADE from Systems
+-- Step 1: Truncate all tables to allow clean schema changes
+-- Disable foreign keys to avoid CASCADE overhead during mass deletion
+PRAGMA foreign_keys = OFF;
+
+-- Delete in reverse dependency order (children first, parents last)
+delete from SupportingMedia;
+delete from MediaTitleTags;
+delete from MediaTags;
+delete from Media;
+delete from MediaTitles;
+delete from Tags;
+delete from TagTypes;
+delete from Systems;
+
+-- Re-enable foreign keys for schema recreation
+PRAGMA foreign_keys = ON;
+
+-- Step 2: Recreate tables with foreign keys and optimizations
+
+-- 2.1 MediaTitles: Add CASCADE foreign key from Systems
 CREATE TABLE MediaTitles_new (
     DBID       INTEGER PRIMARY KEY,
     SystemDBID integer not null,
@@ -11,67 +29,52 @@ CREATE TABLE MediaTitles_new (
     Name       text    not null,
     FOREIGN KEY (SystemDBID) REFERENCES Systems(DBID) ON DELETE CASCADE
 );
-INSERT INTO MediaTitles_new SELECT * FROM MediaTitles;
 DROP TABLE MediaTitles;
 ALTER TABLE MediaTitles_new RENAME TO MediaTitles;
 
--- 2. Media: CASCADE from MediaTitles
+-- 2.2 Media: Add CASCADE foreign key from MediaTitles
 CREATE TABLE Media_new (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,
     Path           text    not null,
     FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE
 );
-INSERT INTO Media_new SELECT * FROM Media;
 DROP TABLE Media;
 ALTER TABLE Media_new RENAME TO Media;
 
--- 3. Tags: CASCADE from TagTypes
+-- 2.3 Tags: Add CASCADE foreign key from TagTypes
 CREATE TABLE Tags_new (
     DBID     INTEGER PRIMARY KEY,
     TypeDBID integer not null,
     Tag      text    not null,
     FOREIGN KEY (TypeDBID) REFERENCES TagTypes(DBID) ON DELETE CASCADE
 );
-INSERT INTO Tags_new SELECT * FROM Tags;
 DROP TABLE Tags;
 ALTER TABLE Tags_new RENAME TO Tags;
 
--- 4. MediaTags: CASCADE from Media, RESTRICT from Tags
+-- 2.4 MediaTags: Convert to WITHOUT ROWID with composite primary key
 CREATE TABLE MediaTags_new (
-    DBID      INTEGER PRIMARY KEY,
-    MediaDBID integer not null,
-    TagDBID   integer not null,
+    MediaDBID INTEGER NOT NULL,
+    TagDBID   INTEGER NOT NULL,
+    PRIMARY KEY(MediaDBID, TagDBID),
     FOREIGN KEY (MediaDBID) REFERENCES Media(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE RESTRICT,
-    UNIQUE(MediaDBID, TagDBID)
-);
--- Deduplicate MediaTags during migration (keep first occurrence of duplicates)
-INSERT INTO MediaTags_new (DBID, MediaDBID, TagDBID)
-SELECT MIN(DBID), MediaDBID, TagDBID
-FROM MediaTags
-GROUP BY MediaDBID, TagDBID;
+    FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE RESTRICT
+) WITHOUT ROWID;
 DROP TABLE MediaTags;
 ALTER TABLE MediaTags_new RENAME TO MediaTags;
 
--- 5. MediaTitleTags: CASCADE from MediaTitles, RESTRICT from Tags
+-- 2.5 MediaTitleTags: Convert to WITHOUT ROWID with composite primary key
 CREATE TABLE MediaTitleTags_new (
-    DBID           INTEGER PRIMARY KEY,
-    TagDBID        integer not null,
-    MediaTitleDBID integer not null,
+    MediaTitleDBID INTEGER NOT NULL,
+    TagDBID        INTEGER NOT NULL,
+    PRIMARY KEY(MediaTitleDBID, TagDBID),
     FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
-    FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE RESTRICT,
-    UNIQUE(MediaTitleDBID, TagDBID)
-);
--- Deduplicate MediaTitleTags during migration (keep first occurrence of duplicates)
-INSERT INTO MediaTitleTags_new (DBID, TagDBID, MediaTitleDBID)
-SELECT MIN(DBID), TagDBID, MediaTitleDBID
-FROM MediaTitleTags
-GROUP BY MediaTitleDBID, TagDBID;
+    FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE RESTRICT
+) WITHOUT ROWID;
 DROP TABLE MediaTitleTags;
 ALTER TABLE MediaTitleTags_new RENAME TO MediaTitleTags;
 
--- 6. SupportingMedia: CASCADE from MediaTitles, RESTRICT from Tags
+-- 2.6 SupportingMedia: Add CASCADE and RESTRICT foreign keys
 CREATE TABLE SupportingMedia_new (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,
@@ -82,71 +85,109 @@ CREATE TABLE SupportingMedia_new (
     FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
     FOREIGN KEY (TypeTagDBID) REFERENCES Tags(DBID) ON DELETE RESTRICT
 );
-INSERT INTO SupportingMedia_new SELECT * FROM SupportingMedia;
 DROP TABLE SupportingMedia;
 ALTER TABLE SupportingMedia_new RENAME TO SupportingMedia;
 
--- Recreate all indexes for optimal performance
+-- Step 3: Create optimized indexes
+
+-- MediaTitles indexes
 CREATE INDEX mediatitles_slug_idx ON MediaTitles(Slug);
-CREATE INDEX mediatitles_system_idx ON MediaTitles(SystemDBID);
+CREATE INDEX mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug);
+
+-- Media indexes
 CREATE INDEX media_mediatitle_idx ON Media(MediaTitleDBID);
+
+-- Tags indexes
 CREATE INDEX tags_tag_idx ON Tags(Tag);
 CREATE INDEX tags_tagtype_idx ON Tags(TypeDBID);
-CREATE INDEX mediatags_media_idx ON MediaTags(MediaDBID);
-CREATE INDEX mediatags_tag_idx ON MediaTags(TagDBID);
-CREATE INDEX mediatitletags_mediatitle_idx ON MediaTitleTags(MediaTitleDBID);
-CREATE INDEX mediatitletags_tag_idx ON MediaTitleTags(TagDBID);
+
+-- MediaTags indexes (reverse index for tag filtering)
+CREATE INDEX mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID);
+
+-- SupportingMedia indexes
 CREATE INDEX supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID);
 CREATE INDEX supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID);
 
+-- Step 4: Create cache tables
+
+-- 4.1 SystemTagsCache: Pre-computed tag associations per system
+CREATE TABLE SystemTagsCache (
+    SystemDBID INTEGER NOT NULL,
+    TagDBID INTEGER NOT NULL,
+    TagType TEXT NOT NULL,
+    Tag TEXT NOT NULL,
+    PRIMARY KEY (SystemDBID, TagDBID),
+    FOREIGN KEY (SystemDBID) REFERENCES Systems(DBID) ON DELETE CASCADE,
+    FOREIGN KEY (TagDBID) REFERENCES Tags(DBID) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX idx_systemtagscache_type_tag ON SystemTagsCache(SystemDBID, TagType, Tag);
+
+-- 4.2 MediaCountCache: Cached counts for random media selection
+CREATE TABLE MediaCountCache (
+    QueryHash TEXT PRIMARY KEY NOT NULL,
+    QueryParams TEXT NOT NULL,
+    Count INTEGER NOT NULL,
+    MinDBID INTEGER NOT NULL,
+    MaxDBID INTEGER NOT NULL,
+    LastUpdated INTEGER NOT NULL
+);
+
 -- +goose Down
--- Restore tables without foreign keys and constraints
+-- Restore original schema without optimizations
+
+-- Drop cache tables
+DROP TABLE IF EXISTS MediaCountCache;
+DROP INDEX IF EXISTS idx_systemtagscache_type_tag;
+DROP TABLE IF EXISTS SystemTagsCache;
+
+-- Restore MediaTitles without foreign keys
 CREATE TABLE MediaTitles_old (
     DBID       INTEGER PRIMARY KEY,
     SystemDBID integer not null,
     Slug       text    not null,
     Name       text    not null
 );
-INSERT INTO MediaTitles_old SELECT * FROM MediaTitles;
 DROP TABLE MediaTitles;
 ALTER TABLE MediaTitles_old RENAME TO MediaTitles;
 
+-- Restore Media without foreign keys
 CREATE TABLE Media_old (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,
     Path           text    not null
 );
-INSERT INTO Media_old SELECT * FROM Media;
 DROP TABLE Media;
 ALTER TABLE Media_old RENAME TO Media;
 
+-- Restore Tags without foreign keys
 CREATE TABLE Tags_old (
     DBID     INTEGER PRIMARY KEY,
     TypeDBID integer not null,
     Tag      text    not null
 );
-INSERT INTO Tags_old SELECT * FROM Tags;
 DROP TABLE Tags;
 ALTER TABLE Tags_old RENAME TO Tags;
 
+-- Restore MediaTags with ROWID
 CREATE TABLE MediaTags_old (
     DBID      INTEGER PRIMARY KEY,
     MediaDBID integer not null,
     TagDBID   integer not null
 );
-INSERT INTO MediaTags_old SELECT * FROM MediaTags;
 DROP TABLE MediaTags;
 ALTER TABLE MediaTags_old RENAME TO MediaTags;
 
+-- Restore MediaTitleTags with ROWID
 CREATE TABLE MediaTitleTags_old (
     DBID           INTEGER PRIMARY KEY,
     TagDBID        integer not null,
     MediaTitleDBID integer not null
 );
-INSERT INTO MediaTitleTags_old SELECT * FROM MediaTitleTags;
 DROP TABLE MediaTitleTags;
 ALTER TABLE MediaTitleTags_old RENAME TO MediaTitleTags;
 
+-- Restore SupportingMedia without foreign keys
 CREATE TABLE SupportingMedia_old (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,
@@ -155,19 +196,12 @@ CREATE TABLE SupportingMedia_old (
     ContentType    text    not null,
     Binary         blob
 );
-INSERT INTO SupportingMedia_old SELECT * FROM SupportingMedia;
 DROP TABLE SupportingMedia;
 ALTER TABLE SupportingMedia_old RENAME TO SupportingMedia;
 
--- Recreate indexes
+-- Recreate original indexes
 CREATE INDEX mediatitles_slug_idx ON MediaTitles(Slug);
 CREATE INDEX mediatitles_system_idx ON MediaTitles(SystemDBID);
 CREATE INDEX media_mediatitle_idx ON Media(MediaTitleDBID);
 CREATE INDEX tags_tag_idx ON Tags(Tag);
 CREATE INDEX tags_tagtype_idx ON Tags(TypeDBID);
-CREATE INDEX mediatags_media_idx ON MediaTags(MediaDBID);
-CREATE INDEX mediatags_tag_idx ON MediaTags(TagDBID);
-CREATE INDEX mediatitletags_mediatitle_idx ON MediaTitleTags(MediaTitleDBID);
-CREATE INDEX mediatitletags_tag_idx ON MediaTitleTags(TagDBID);
-CREATE INDEX supportingmedia_mediatitle_idx ON SupportingMedia(MediaTitleDBID);
-CREATE INDEX supportingmedia_typetag_idx ON SupportingMedia(TypeTagDBID);
