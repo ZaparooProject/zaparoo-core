@@ -84,16 +84,18 @@ func PathIsLauncher(
 		inRoot := false
 		isAbs := false
 
-		// Get root dirs once
+		// Get root dirs once and pre-lowercase
 		rootDirs := pl.RootDirs(cfg)
 
 		for _, root := range rootDirs {
+			lowerRoot := strings.ToLower(root)
 			if inRoot {
 				break
 			}
 			for _, folder := range l.Folders {
-				// Build full path once and lowercase it once
-				fullPath := strings.ToLower(filepath.Join(root, folder))
+				// Build full path from pre-lowered parts to avoid repeated ToLower on the whole string
+				lowerFolder := strings.ToLower(folder)
+				fullPath := filepath.Join(lowerRoot, lowerFolder)
 				if strings.HasPrefix(lp, fullPath) {
 					inRoot = true
 					break
@@ -119,16 +121,21 @@ func PathIsLauncher(
 		}
 	}
 
-	// check file extension
-	for _, ext := range l.Extensions {
-		// Lowercase extension once
-		lowerExt := strings.ToLower(ext)
-		if strings.HasSuffix(lp, lowerExt) {
-			return true
+	// check file extension (if declared)
+	if len(l.Extensions) > 0 {
+		for _, e := range l.Extensions {
+			if strings.HasSuffix(lp, strings.ToLower(e)) {
+				return true
+			}
 		}
+		// Extension didn't match - if there's a Test function, let it decide
+		if l.Test != nil {
+			return l.Test(cfg, lp)
+		}
+		return false
 	}
 
-	// finally, launcher's test func
+	// finally, launcher's test func (if no extensions were specified)
 	if l.Test != nil {
 		return l.Test(cfg, lp)
 	}

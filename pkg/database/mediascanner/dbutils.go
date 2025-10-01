@@ -130,7 +130,7 @@ func AddMediaPath(
 				return 0, 0, fmt.Errorf("error inserting system %s: %w", systemID, err)
 			}
 
-			log.Debug().Err(err).Msgf("system already exists: %s", systemID)
+			log.Trace().Err(err).Msgf("system already exists: %s", systemID)
 
 			// Try to get existing system ID from database when constraint violated
 			existingSystem, getErr := db.FindSystemBySystemID(systemID)
@@ -140,7 +140,7 @@ func AddMediaPath(
 			}
 			systemIndex = int(existingSystem.DBID)
 			ss.SystemIDs[systemID] = systemIndex // Update cache with existing ID
-			log.Debug().Msgf("using existing system %s with DBID %d", systemID, systemIndex)
+			log.Trace().Msgf("using existing system %s with DBID %d", systemID, systemIndex)
 		} else {
 			ss.SystemIDs[systemID] = systemIndex // Only update cache on success
 		}

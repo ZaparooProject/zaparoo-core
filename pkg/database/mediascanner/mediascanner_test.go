@@ -406,9 +406,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	// Mock indexing state methods for resume scenario
 	// First call: simulate interrupted indexing state
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	// Simulate interrupted at 'genesis'
 	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once()
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes", "snes", "genesis"}, nil).Once() // Match current systems
@@ -500,9 +498,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 
 	// Mock indexing state methods for invalid resume scenario (system not found triggers fallback)
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	// System no longer exists
 	mockMediaDB.On("GetLastIndexedSystem").Return("removed_system", nil).Once()
 	mockMediaDB.On("GetIndexingSystems").Return([]string{"nes"}, nil).Once() // Current systems
@@ -591,9 +587,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 
 	// Mock indexing state methods for failed previous indexing
 	mockMediaDB.On("GetIndexingStatus").Return("failed", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	// Should clear failed state and start fresh
 	mockMediaDB.On("SetLastIndexedSystem", "").Return(nil).Times(3) // Clear failed state + fresh start + final clear
 	mockMediaDB.On("SetIndexingStatus", "").Return(nil).Once()      // Clear failed status
@@ -749,9 +743,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	mockMediaDB.On("SetIndexingSystems", mock.AnythingOfType("[]string")).Return(nil).Once()
 
 	// Mock GetMax*ID methods for scan state population (may be called multiple times)
@@ -836,9 +828,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once()
 
 	// Mock GetMax*ID methods for scan state population (may be called multiple times)
@@ -921,9 +911,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 
 	// Mock resume scenario but with different systems
 	mockMediaDB.On("GetIndexingStatus").Return("running", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	// Was indexing genesis
 	mockMediaDB.On("GetLastIndexedSystem").Return("genesis", nil).Once()
 	// Previous systems differ from current
@@ -1014,11 +1002,9 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
-	mockMediaDB.On("SetIndexingSystems", []string{}).Return(nil).Once()                            // Empty systems list
-	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe()                        // Accept nil slice
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()         // For WAL checkpoint
+	mockMediaDB.On("SetIndexingSystems", []string{}).Return(nil).Once()     // Empty systems list
+	mockMediaDB.On("SetIndexingSystems", []string(nil)).Return(nil).Maybe() // Accept nil slice
 
 	// Mock GetAll* methods for PopulateScanStateFromDB
 	mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
@@ -1093,9 +1079,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 
 	// Mock indexing state methods for fresh start
 	mockMediaDB.On("GetIndexingStatus").Return("", nil).Twice()
-	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe()                                // For WAL checkpoint
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeDELETE).Return(nil).Once() // DELETE mode
-	mockMediaDB.On("SetJournalMode", mock.Anything, database.JournalModeWAL).Return(nil).Once()    // Back to WAL
+	mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
 	mockMediaDB.On("SetIndexingStatus", "running").Return(nil).Once()
 	mockMediaDB.On("SetIndexingSystems", []string{"nes"}).Return(nil).Once()
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()

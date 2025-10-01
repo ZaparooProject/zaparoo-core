@@ -75,8 +75,9 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "mediadb_test.db")
 
-	// Open SQLite database using temp file (persists across connection close/reopen)
-	sqlDB, err := sql.Open("sqlite3", dbPath)
+	// Open SQLite database using temp file with foreign keys enabled
+	// This matches the production database configuration and ensures CASCADE deletes work
+	sqlDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=ON")
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}

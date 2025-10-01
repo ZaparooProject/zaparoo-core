@@ -348,6 +348,10 @@ func (db *MediaDB) SetJournalMode(ctx context.Context, mode database.JournalMode
 		if _, err := db.sql.ExecContext(ctx, "PRAGMA cache_size = -200000;"); err != nil {
 			log.Warn().Err(err).Msg("failed to set cache_size for DELETE mode")
 		}
+		// Prevent spilling dirty pages to disk during large transactions
+		if _, err := db.sql.ExecContext(ctx, "PRAGMA cache_spill = OFF;"); err != nil {
+			log.Warn().Err(err).Msg("failed to set cache_spill=OFF for DELETE mode")
+		}
 		var syncMode any
 		if scanErr := db.sql.QueryRowContext(ctx, "PRAGMA synchronous;").Scan(&syncMode); scanErr == nil {
 			log.Info().Msgf("set synchronous mode to %v for DELETE journal mode", syncMode)
