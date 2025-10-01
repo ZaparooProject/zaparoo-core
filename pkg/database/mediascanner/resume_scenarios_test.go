@@ -120,7 +120,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 		}
 
 		// This is the critical function that was broken
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Verify scan state was populated correctly from database
@@ -159,7 +159,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Record the state after population

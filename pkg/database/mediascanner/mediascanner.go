@@ -382,27 +382,39 @@ func NewNamesIndex(
 
 	// Create list of system IDs for storage
 	currentSystemIDs := make([]string, 0, len(systems))
+	systemIDMap := make(map[string]bool, len(systems))
 	for _, sys := range systems {
 		currentSystemIDs = append(currentSystemIDs, sys.ID)
+		systemIDMap[sys.ID] = true
 	}
 
-	// 1. Determine resume state
+	// 1. Check for database locks or issues before starting
+	log.Info().Msg("checking database readiness for indexing")
+	// Quick database health check - try to read a simple value
+	_, checkErr := db.GetIndexingStatus()
+	if checkErr != nil {
+		return 0, fmt.Errorf("database not ready for indexing (possible lock or corruption): %w", checkErr)
+	}
+
+	// 2. Determine resume state
+	log.Info().Msg("determining indexing resume state")
 	indexingStatus, getStatusErr := db.GetIndexingStatus()
 	if getStatusErr != nil {
-		log.Warn().Err(getStatusErr).Msg("failed to get indexing status, assuming fresh start")
-		indexingStatus = "" // Treat as fresh start if status cannot be retrieved
+		return 0, fmt.Errorf("failed to get indexing status: %w", getStatusErr)
 	}
 
 	lastIndexedSystemID := ""
 	shouldResume := false
 
 	switch indexingStatus {
+	case "":
+		log.Info().Msg("starting fresh indexing (no previous indexing status)")
 	case mediadb.IndexingStatusRunning, mediadb.IndexingStatusPending:
+		log.Info().Msgf("found interrupted indexing with status: %s", indexingStatus)
 		var getSystemErr error
 		lastIndexedSystemID, getSystemErr = db.GetLastIndexedSystem()
 		if getSystemErr != nil {
-			log.Warn().Err(getSystemErr).Msg("failed to get last indexed system, assuming fresh start")
-			// Fall through to fresh index
+			return 0, fmt.Errorf("failed to get last indexed system during resume: %w", getSystemErr)
 		} else if lastIndexedSystemID != "" {
 			// Validate that we can resume with the current configuration
 			// Always check if we're indexing the same systems
@@ -412,15 +424,15 @@ func NewNamesIndex(
 			case getStoredErr != nil:
 				log.Warn().Err(getStoredErr).Msg("failed to get stored indexing configuration, assuming fresh start")
 			case !helpers.EqualStringSlices(storedSystems, currentSystemIDs):
-				log.Warn().Msg("System list changed from previous indexing, reverting to fresh index")
+				log.Warn().Msg("system list changed from previous indexing, reverting to fresh index")
 			default:
-				log.Info().Msgf("Previous indexing interrupted. Attempting to resume from system: %s",
+				log.Info().Msgf("previous indexing interrupted. attempting to resume from system: %s",
 					lastIndexedSystemID)
 				shouldResume = true
 			}
 		}
 	case mediadb.IndexingStatusFailed:
-		log.Info().Msg("Previous indexing run failed, starting fresh index.")
+		log.Info().Msg("previous indexing run failed, starting fresh index")
 		// Explicitly clear status for a fresh start after a failure
 		if setErr := db.SetLastIndexedSystem(""); setErr != nil {
 			log.Error().Err(setErr).Msg("failed to clear last indexed system after failed run")
@@ -455,7 +467,7 @@ func NewNamesIndex(
 			}
 		}
 		if !foundLastIndexed {
-			log.Warn().Msgf("Last indexed system '%s' not found in current system list. Reverting to full re-index.",
+			log.Warn().Msgf("last indexed system '%s' not found in current system list, reverting to full re-index",
 				lastIndexedSystemID)
 			shouldResume = false // Cannot resume reliably, force full re-index
 			// Clear state for a fresh start
@@ -482,15 +494,16 @@ func NewNamesIndex(
 		TagIDs:        make(map[string]int),
 	}
 
-	// 2. Truncate and Initial Status Set
+	// 3. Truncate and Initial Status Set
 	if !shouldResume {
+		log.Info().Msg("preparing database for fresh indexing")
 		// Set indexing systems before truncating
 		if setErr := db.SetIndexingSystems(currentSystemIDs); setErr != nil {
-			log.Error().Err(setErr).Msg("failed to set indexing systems")
+			return 0, fmt.Errorf("failed to set indexing systems: %w", setErr)
 		}
 
 		// Clear data for the specified systems (smart truncation)
-		log.Info().Msgf("Starting indexing for systems: %v", currentSystemIDs)
+		log.Info().Msgf("starting indexing for systems: %v", currentSystemIDs)
 
 		// Use smart truncation - if indexing all systems, use full truncate for performance
 		allSystems := systemdefs.AllSystems()
@@ -504,23 +517,37 @@ func NewNamesIndex(
 
 		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
 			// Full indexing - use fast truncate
+			log.Info().Msg("performing full database truncation")
 			err = db.Truncate()
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate database: %w", err)
 			}
+			log.Info().Msg("database truncation completed")
 		} else {
 			// Selective indexing - use system-specific truncation
+			log.Info().Msgf("performing selective truncation for systems: %v", currentSystemIDs)
 			err = db.TruncateSystems(currentSystemIDs)
 			if err != nil {
 				return 0, fmt.Errorf("failed to truncate systems %v: %w", currentSystemIDs, err)
 			}
+			log.Info().Msg("selective truncation completed")
 
 			// For selective indexing, populate scan state with max IDs, global data, and
 			// maps for systems NOT being reindexed to avoid conflicts with existing data
-			if err = PopulateScanStateForSelectiveIndexing(db, &scanState, currentSystemIDs); err != nil {
+			log.Info().Msgf(
+				"Populating scan state for selective indexing (excluding systems: %v)", currentSystemIDs,
+			)
+			if err = PopulateScanStateForSelectiveIndexing(ctx, db, &scanState, currentSystemIDs); err != nil {
+				// Check if this is a cancellation error
+				if errors.Is(err, context.Canceled) {
+					return handleCancellation(
+						ctx, db, "Media indexing cancelled during selective scan state population",
+					)
+				}
 				log.Error().Err(err).Msg("failed to populate scan state for selective indexing")
 				return 0, fmt.Errorf("failed to populate scan state for selective indexing: %w", err)
 			}
+			log.Info().Msg("successfully populated scan state for selective indexing")
 		}
 
 		if setErr := db.SetIndexingStatus(mediadb.IndexingStatusRunning); setErr != nil {
@@ -534,10 +561,12 @@ func NewNamesIndex(
 		// Check if we need to seed tags (they might exist from other systems)
 		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
 		if getMaxErr != nil || maxTagTypeID == 0 {
+			log.Info().Msg("seeding known tags for fresh indexing")
 			err = SeedKnownTags(db, &scanState)
 			if err != nil {
 				return 0, fmt.Errorf("failed to seed known tags: %w", err)
 			}
+			log.Info().Msg("successfully seeded known tags")
 		}
 	} else {
 		// If resuming, ensure status is "running" and populate existing scan state indexes
@@ -547,10 +576,17 @@ func NewNamesIndex(
 
 		// When resuming, we need to populate the scan state with existing data
 		// to avoid ID conflicts and continue from where we left off
-		err = PopulateScanStateFromDB(db, &scanState)
+		log.Info().Msg("populating scan state from existing database for resume")
+		err = PopulateScanStateFromDB(ctx, db, &scanState)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to populate scan state from database, continuing with fresh state")
+			// Check if this is a cancellation error
+			if errors.Is(err, context.Canceled) {
+				return handleCancellation(ctx, db, "Media indexing cancelled during scan state population")
+			}
+			log.Error().Err(err).Msg("failed to populate scan state from database")
+			return 0, fmt.Errorf("failed to populate scan state from database: %w", err)
 		}
+		log.Info().Msg("successfully populated scan state for resume")
 	}
 
 	// Ensure transaction cleanup and status update on any error
@@ -613,7 +649,7 @@ func NewNamesIndex(
 		systemID := k
 
 		if completedSystems[systemID] {
-			log.Debug().Msgf("Skipping already indexed system: %s", systemID)
+			log.Debug().Msgf("skipping already indexed system: %s", systemID)
 			status.Step++
 			update(status)
 			continue // Skip this system if it was already completed in a previous run
@@ -770,7 +806,15 @@ func NewNamesIndex(
 		systemID := l.SystemID
 		log.Debug().Msgf("launcher %s for system %s: scanner=%v scanned=%v",
 			l.ID, systemID, l.Scanner != nil, scannedLaunchers[l.ID])
+
+		// Only run custom scanners for systems in the current indexing operation
 		if !scannedLaunchers[l.ID] && l.Scanner != nil && systemID != "" {
+			// Check if this system is part of the current indexing operation
+			if !systemIDMap[systemID] {
+				log.Debug().Msgf("skipping %s scanner for system %s (not in current index)", l.ID, systemID)
+				continue
+			}
+
 			log.Debug().Msgf("running %s scanner for system: %s", l.ID, systemID)
 			results, scanErr := l.Scanner(ctx, cfg, systemID, []platforms.ScanResult{})
 			if scanErr != nil {
@@ -863,7 +907,7 @@ func NewNamesIndex(
 		for _, s := range systems {
 			systemID := s.ID
 			if completedSystems[systemID] {
-				log.Debug().Msgf("Skipping 'any' scanner for already completed system: %s", systemID)
+				log.Debug().Msgf("skipping 'any' scanner for already completed system: %s", systemID)
 				continue // Skip if system already fully processed
 			}
 

@@ -36,13 +36,13 @@ import (
 // TestIDContinuityAfterResume specifically tests that IDs continue sequentially after resume
 // This is the core issue that was causing "UNIQUE constraint failed" errors
 func TestIDContinuityAfterResume(t *testing.T) {
+	ctx := context.Background()
 	// Create in-memory SQLite database
 	sqlDB, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	// Create MediaDB instance
-	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 
@@ -120,7 +120,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		}
 
 		// This is the critical function that was broken
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Verify scan state was populated correctly
@@ -188,12 +188,12 @@ func TestIDContinuityAfterResume(t *testing.T) {
 
 // TestIDContinuityWithGaps tests that ID continuity works even when there are gaps in existing IDs
 func TestIDContinuityWithGaps(t *testing.T) {
+	ctx := context.Background()
 	// Create in-memory SQLite database
 	sqlDB, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 
@@ -303,7 +303,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		}
 
 		// This is the critical function that was broken
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Should use the maximum ID, not count of records
@@ -350,12 +350,12 @@ func TestIDContinuityWithGaps(t *testing.T) {
 
 // TestIDContinuityWithLargeNumbers tests ID continuity with very large existing IDs
 func TestIDContinuityWithLargeNumbers(t *testing.T) {
+	ctx := context.Background()
 	// Create in-memory SQLite database
 	sqlDB, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlatform.On("ID").Return("test-platform")
 
@@ -431,7 +431,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Should handle large numbers correctly

@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -35,6 +36,8 @@ import (
 // This test was created because the original resume functionality was completely broken
 // but tests were passing because they only verified mock behavior, not actual functionality.
 func TestResumeWithRealDatabase(t *testing.T) {
+	ctx := context.Background()
+
 	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -108,7 +111,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		}
 
 		// This is the critical function that was broken
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Verify scan state was populated correctly from database
@@ -147,7 +150,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err := PopulateScanStateFromDB(mediaDB, resumeState)
+		err := PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Record the state after population
@@ -184,6 +187,8 @@ func TestResumeWithRealDatabase(t *testing.T) {
 // TestUniqueConstraintHandling tests that UNIQUE constraint violations are handled correctly
 // This specifically tests the scenario that was causing "UNIQUE constraint failed: Systems.DBID"
 func TestUniqueConstraintHandling(t *testing.T) {
+	ctx := context.Background()
+
 	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -235,7 +240,7 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		}
 
 		// This call was broken and would lead to constraint violations
-		err = PopulateScanStateFromDB(mediaDB, resumeState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, resumeState)
 		require.NoError(t, err)
 
 		// Now continue indexing - this should not cause constraint violations
@@ -273,6 +278,8 @@ func TestUniqueConstraintHandling(t *testing.T) {
 
 // TestDatabaseStateConsistency verifies database state remains consistent during operations
 func TestDatabaseStateConsistency(t *testing.T) {
+	ctx := context.Background()
+
 	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -337,7 +344,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, testState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, testState)
 		require.NoError(t, err)
 
 		assert.Equal(t, int(maxSystemID), testState.SystemsIndex, "PopulateScanStateFromDB should match GetMaxSystemID")
@@ -350,6 +357,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 // This regression test catches the bug where sqlTruncateSystems() was incorrectly
 // deleting global TagTypes during cleanup, causing crashes when trying to add media.
 func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
+	ctx := context.Background()
 	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -427,7 +435,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateForSelectiveIndexing(mediaDB, reindexState, []string{"Amiga"})
+		err = PopulateScanStateForSelectiveIndexing(ctx, mediaDB, reindexState, []string{"Amiga"})
 		require.NoError(t, err)
 
 		// Re-add Amiga media - this should NOT crash with "Extension TagType not found"
@@ -459,6 +467,8 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 // TestReindexSameSystemTwice tests that reindexing the same system multiple times
 // works correctly without crashes or data corruption.
 func TestReindexSameSystemTwice(t *testing.T) {
+	ctx := context.Background()
+
 	// Create in-memory database with shared cache for transaction visibility
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -490,7 +500,8 @@ func TestReindexSameSystemTwice(t *testing.T) {
 			}
 		} else {
 			// Populate state for existing data
-			if popErr := PopulateScanStateForSelectiveIndexing(mediaDB, scanState, []string{"Amiga"}); popErr != nil {
+			popErr := PopulateScanStateForSelectiveIndexing(ctx, mediaDB, scanState, []string{"Amiga"})
+			if popErr != nil {
 				return popErr
 			}
 		}

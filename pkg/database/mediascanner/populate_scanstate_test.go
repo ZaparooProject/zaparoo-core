@@ -67,7 +67,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     999,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, scanState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
 		require.NoError(t, err)
 
 		// All indexes should be 0 for empty database
@@ -115,7 +115,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, scanState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
 		require.NoError(t, err)
 
 		assert.Equal(t, 2, scanState.SystemsIndex, "Should have SystemsIndex = 2")
@@ -166,7 +166,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, scanState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
 		require.NoError(t, err)
 
 		// Should use MAX values, not counts
@@ -180,19 +180,9 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 	t.Run("Error Handling With Mock Database", func(t *testing.T) {
 		t.Parallel()
 
-		// Use mock database to simulate errors - function should handle gracefully
+		// Test that function fails fast on first error instead of continuing
 		mockDB := &helpers.MockMediaDBI{}
-		mockDB.On("GetMaxSystemID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxTitleID").Return(int64(5), nil)
-		mockDB.On("GetMaxMediaID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
-		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
-		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
-		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
-		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
-		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
-		mockDB.On("GetAllTags").Return([]database.Tag{}, assert.AnError)
-		mockDB.On("GetAllTagTypes").Return([]database.TagType{}, assert.AnError)
+		mockDB.On("GetMaxSystemID").Return(int64(0), assert.AnError).Once()
 
 		scanState := &database.ScanState{
 			SystemIDs:     make(map[string]int),
@@ -207,35 +197,26 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err := PopulateScanStateFromDB(mockDB, scanState)
-		require.NoError(t, err, "Function should handle errors gracefully, not return error")
-
-		// Check that it fell back to 0 for failed calls, used values for successful calls
-		assert.Equal(t, 0, scanState.SystemsIndex, "Should fall back to 0 on error")
-		assert.Equal(t, 5, scanState.TitlesIndex, "Should use successful return value")
-		assert.Equal(t, 0, scanState.MediaIndex, "Should fall back to 0 on error")
-		assert.Equal(t, 3, scanState.TagTypesIndex, "Should use successful return value")
-		assert.Equal(t, 0, scanState.TagsIndex, "Should fall back to 0 on error")
+		err := PopulateScanStateFromDB(context.Background(), mockDB, scanState)
+		// Function now fails fast on first error
+		require.Error(t, err, "Function should fail fast when database operations fail")
+		assert.Contains(t, err.Error(), "failed to get max system ID", "Error should indicate which operation failed")
 
 		mockDB.AssertExpectations(t)
 	})
 
-	t.Run("Error Resilience", func(t *testing.T) {
+	t.Run("Error On GetAllSystems", func(t *testing.T) {
 		t.Parallel()
 
-		// Test that function is resilient to database errors and falls back to 0
+		// Test that function fails when GetAllSystems errors
 		mockDB := &helpers.MockMediaDBI{}
-		mockDB.On("GetMaxSystemID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxTitleID").Return(int64(10), nil)
-		mockDB.On("GetMaxMediaID").Return(int64(0), assert.AnError)
-		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil)
-		mockDB.On("GetMaxTagID").Return(int64(0), assert.AnError)
-		mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
-		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError)
-		mockDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, assert.AnError)
-		mockDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, assert.AnError)
-		mockDB.On("GetAllTags").Return([]database.Tag{}, assert.AnError)
-		mockDB.On("GetAllTagTypes").Return([]database.TagType{}, assert.AnError)
+		mockDB.On("GetMaxSystemID").Return(int64(5), nil).Once()
+		mockDB.On("GetMaxTitleID").Return(int64(10), nil).Once()
+		mockDB.On("GetMaxMediaID").Return(int64(15), nil).Once()
+		mockDB.On("GetMaxTagTypeID").Return(int64(3), nil).Once()
+		mockDB.On("GetMaxTagID").Return(int64(20), nil).Once()
+		// Fail on GetAllSystems
+		mockDB.On("GetAllSystems").Return([]database.System{}, assert.AnError).Once()
 
 		scanState := &database.ScanState{
 			SystemIDs:     make(map[string]int),
@@ -250,15 +231,13 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err := PopulateScanStateFromDB(mockDB, scanState)
-		require.NoError(t, err, "Function should not return error, but handle errors gracefully")
-
-		// Check that failed calls fall back to 0, successful calls use the returned value
-		assert.Equal(t, 0, scanState.SystemsIndex, "SystemsIndex should fall back to 0 on error")
-		assert.Equal(t, 10, scanState.TitlesIndex, "TitlesIndex should use successful return value")
-		assert.Equal(t, 0, scanState.MediaIndex, "MediaIndex should fall back to 0 on error")
-		assert.Equal(t, 3, scanState.TagTypesIndex, "TagTypesIndex should use successful return value")
-		assert.Equal(t, 0, scanState.TagsIndex, "TagsIndex should fall back to 0 on error")
+		err := PopulateScanStateFromDB(context.Background(), mockDB, scanState)
+		// Function should fail when data loading fails
+		require.Error(t, err, "Function should return error when GetAllSystems fails")
+		assert.Contains(
+			t, err.Error(), "failed to get existing systems",
+			"Error should indicate which operation failed",
+		)
 
 		mockDB.AssertExpectations(t)
 	})
@@ -328,7 +307,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, scanState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
 		require.NoError(t, err)
 
 		// Verify all values are populated correctly
@@ -373,7 +352,7 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = PopulateScanStateFromDB(mediaDB, scanState)
+		err = PopulateScanStateFromDB(ctx, mediaDB, scanState)
 		require.NoError(t, err)
 
 		assert.Equal(t, int(largeID), scanState.SystemsIndex, "Should handle large ID values")

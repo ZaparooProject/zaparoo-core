@@ -20,6 +20,7 @@
 package mediascanner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -139,7 +140,7 @@ func AddMediaPath(
 			}
 			systemIndex = int(existingSystem.DBID)
 			ss.SystemIDs[systemID] = systemIndex // Update cache with existing ID
-			log.Debug().Msgf("Using existing system %s with DBID %d", systemID, systemIndex)
+			log.Debug().Msgf("using existing system %s with DBID %d", systemID, systemIndex)
 		} else {
 			ss.SystemIDs[systemID] = systemIndex // Only update cache on success
 		}
@@ -179,7 +180,7 @@ func AddMediaPath(
 			}
 			titleIndex = int(existingTitle.DBID)
 			ss.TitleIDs[titleKey] = titleIndex // Update cache with correct ID
-			log.Debug().Msgf("Using existing media title %s with DBID %d", pf.Title, titleIndex)
+			log.Debug().Msgf("using existing media title %s with DBID %d", pf.Title, titleIndex)
 		} else {
 			ss.TitleIDs[titleKey] = titleIndex // Only update cache on success
 		}
@@ -252,7 +253,7 @@ func AddMediaPath(
 						log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", pf.Ext)
 					} else {
 						ss.TagIDs[pf.Ext] = int(existingTag.DBID)
-						log.Debug().Msgf("Using existing tag %s with DBID %d", pf.Ext, existingTag.DBID)
+						log.Debug().Msgf("using existing tag %s with DBID %d", pf.Ext, existingTag.DBID)
 					}
 				} else {
 					log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
@@ -393,7 +394,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 			return fmt.Errorf("error inserting tag type Unknown: %w", err)
 		}
-		log.Debug().Msg("Tag type 'Unknown' already exists, continuing")
+		log.Debug().Msg("tag type 'Unknown' already exists, continuing")
 		// Try to get the existing tag type to update our index
 		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Unknown"})
 		if getErr == nil && existingTagType.DBID > 0 {
@@ -418,7 +419,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 			return fmt.Errorf("error inserting tag unknown: %w", err)
 		}
-		log.Debug().Msg("Tag 'unknown' already exists, continuing")
+		log.Debug().Msg("tag 'unknown' already exists, continuing")
 		// Try to get the existing tag to update our index
 		existingTag, getErr := db.FindTag(database.Tag{Tag: "unknown"})
 		if getErr == nil && existingTag.DBID > 0 {
@@ -442,7 +443,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 			return fmt.Errorf("error inserting tag type Extension: %w", err)
 		}
-		log.Debug().Msg("Tag type 'Extension' already exists, continuing")
+		log.Debug().Msg("tag type 'Extension' already exists, continuing")
 		// Try to get the existing tag type to update our index
 		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Extension"})
 		if getErr == nil && existingTagType.DBID > 0 {
@@ -467,7 +468,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 			return fmt.Errorf("error inserting tag .ext: %w", err)
 		}
-		log.Debug().Msg("Tag '.ext' already exists, continuing")
+		log.Debug().Msg("tag '.ext' already exists, continuing")
 		// Try to get the existing tag to update our index
 		existingTag, getErr := db.FindTag(database.Tag{Tag: ".ext"})
 		if getErr == nil && existingTag.DBID > 0 {
@@ -492,7 +493,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 				return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
 			}
-			log.Debug().Msgf("Tag type '%s' already exists, continuing", typeStr)
+			log.Debug().Msgf("tag type '%s' already exists, continuing", typeStr)
 			// Try to get the existing tag type to update our index
 			existingTagType, getErr := db.FindTagType(database.TagType{Type: typeStr})
 			if getErr == nil && existingTagType.DBID > 0 {
@@ -518,7 +519,7 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 				if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
 					return fmt.Errorf("error inserting tag %s: %w", tag, err)
 				}
-				log.Debug().Msgf("Tag '%s' already exists, continuing", tag)
+				log.Debug().Msgf("tag '%s' already exists, continuing", tag)
 				// Try to get the existing tag to update our index
 				existingTag, getErr := db.FindTag(database.Tag{Tag: strings.ToLower(tag)})
 				if getErr == nil && existingTag.DBID > 0 {
@@ -535,99 +536,159 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 
 // PopulateScanStateFromDB initializes the scan state with existing database IDs
 // when resuming an interrupted indexing operation
-func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error {
+func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *database.ScanState) error {
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Get max IDs from existing data to continue indexing from the right point
 	maxSystemID, err := db.GetMaxSystemID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max system ID, starting from 0")
-		maxSystemID = 0
+		return fmt.Errorf("failed to get max system ID: %w", err)
 	}
 	ss.SystemsIndex = int(maxSystemID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTitleID, err := db.GetMaxTitleID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max title ID, starting from 0")
-		maxTitleID = 0
+		return fmt.Errorf("failed to get max title ID: %w", err)
 	}
 	ss.TitlesIndex = int(maxTitleID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxMediaID, err := db.GetMaxMediaID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max media ID, starting from 0")
-		maxMediaID = 0
+		return fmt.Errorf("failed to get max media ID: %w", err)
 	}
 	ss.MediaIndex = int(maxMediaID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTagTypeID, err := db.GetMaxTagTypeID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max tag type ID, starting from 0")
-		maxTagTypeID = 0
+		return fmt.Errorf("failed to get max tag type ID: %w", err)
 	}
 	ss.TagTypesIndex = int(maxTagTypeID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTagID, err := db.GetMaxTagID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max tag ID, starting from 0")
-		maxTagID = 0
+		return fmt.Errorf("failed to get max tag ID: %w", err)
 	}
 	ss.TagsIndex = int(maxTagID)
 
 	// Populate maps with existing data to prevent duplicate insertion attempts
 	// This is crucial for resuming indexing operations
 
+	// Check for cancellation before loading systems
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// First populate systems map
 	systems, err := db.GetAllSystems()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing systems, maps may be incomplete")
-	} else {
-		for _, system := range systems {
-			ss.SystemIDs[system.SystemID] = int(system.DBID)
-		}
+		return fmt.Errorf("failed to get existing systems: %w", err)
+	}
+	for _, system := range systems {
+		ss.SystemIDs[system.SystemID] = int(system.DBID)
+	}
+
+	// Check for cancellation before loading titles
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	titlesWithSystems, err := db.GetTitlesWithSystems()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing titles with systems, maps may be incomplete")
-	} else {
-		for _, title := range titlesWithSystems {
-			// Direct construction - SystemID is already available from the JOIN
-			titleKey := title.SystemID + ":" + title.Slug
-			ss.TitleIDs[titleKey] = int(title.DBID)
-		}
+		return fmt.Errorf("failed to get existing titles with systems: %w", err)
+	}
+	for _, title := range titlesWithSystems {
+		// Direct construction - SystemID is already available from the JOIN
+		titleKey := title.SystemID + ":" + title.Slug
+		ss.TitleIDs[titleKey] = int(title.DBID)
+	}
+
+	// Check for cancellation before loading media
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	mediaWithFullPath, err := db.GetMediaWithFullPath()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing media with full path, maps may be incomplete")
-	} else {
-		for _, m := range mediaWithFullPath {
-			// Direct construction - SystemID is already available from the JOIN
-			mediaKey := m.SystemID + ":" + m.Path
-			ss.MediaIDs[mediaKey] = int(m.DBID)
-		}
+		return fmt.Errorf("failed to get existing media with full path: %w", err)
+	}
+	for _, m := range mediaWithFullPath {
+		// Direct construction - SystemID is already available from the JOIN
+		mediaKey := m.SystemID + ":" + m.Path
+		ss.MediaIDs[mediaKey] = int(m.DBID)
+	}
+
+	// Check for cancellation before loading tag types
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	// Populate tag types map
 	tagTypes, err := db.GetAllTagTypes()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing tag types, maps may be incomplete")
-	} else {
-		for _, tagType := range tagTypes {
-			ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
-		}
+		return fmt.Errorf("failed to get existing tag types: %w", err)
+	}
+	for _, tagType := range tagTypes {
+		ss.TagTypeIDs[tagType.Type] = int(tagType.DBID)
+	}
+
+	// Check for cancellation before loading tags
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	// Populate tags map
 	tags, err := db.GetAllTags()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get existing tags, maps may be incomplete")
-	} else {
-		for _, tag := range tags {
-			ss.TagIDs[tag.Tag] = int(tag.DBID)
-		}
+		return fmt.Errorf("failed to get existing tags: %w", err)
+	}
+	for _, tag := range tags {
+		ss.TagIDs[tag.Tag] = int(tag.DBID)
 	}
 
-	log.Debug().Msgf("Populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d "+
+	log.Debug().Msgf("populated scan state from DB: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d "+
 		"(maps: TagTypes=%d, Tags=%d)",
 		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
 		ss.TagTypesIndex, ss.TagsIndex, len(ss.TagTypeIDs), len(ss.TagIDs))
@@ -639,41 +700,71 @@ func PopulateScanStateFromDB(db database.MediaDBI, ss *database.ScanState) error
 // Uses true lazy loading for Systems/TagTypes (via UNIQUE constraints) and minimal data loading
 // for MediaTitles/Media (only systems NOT being reindexed) to dramatically improve performance.
 func PopulateScanStateForSelectiveIndexing(
-	db database.MediaDBI, ss *database.ScanState, systemsToReindex []string,
+	ctx context.Context, db database.MediaDBI, ss *database.ScanState, systemsToReindex []string,
 ) error {
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Get max IDs from existing data to continue indexing from the right point
 	maxSystemID, err := db.GetMaxSystemID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max system ID, starting from 0")
-		maxSystemID = 0
+		return fmt.Errorf("failed to get max system ID: %w", err)
 	}
 	ss.SystemsIndex = int(maxSystemID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTitleID, err := db.GetMaxTitleID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max title ID, starting from 0")
-		maxTitleID = 0
+		return fmt.Errorf("failed to get max title ID: %w", err)
 	}
 	ss.TitlesIndex = int(maxTitleID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxMediaID, err := db.GetMaxMediaID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max media ID, starting from 0")
-		maxMediaID = 0
+		return fmt.Errorf("failed to get max media ID: %w", err)
 	}
 	ss.MediaIndex = int(maxMediaID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTagTypeID, err := db.GetMaxTagTypeID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max tag type ID, starting from 0")
-		maxTagTypeID = 0
+		return fmt.Errorf("failed to get max tag type ID: %w", err)
 	}
 	ss.TagTypesIndex = int(maxTagTypeID)
 
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	maxTagID, err := db.GetMaxTagID()
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to get max tag ID, starting from 0")
-		maxTagID = 0
+		return fmt.Errorf("failed to get max tag ID: %w", err)
 	}
 	ss.TagsIndex = int(maxTagID)
 
@@ -685,34 +776,40 @@ func PopulateScanStateForSelectiveIndexing(
 	// unique constraints on the columns we insert (no constraint on SystemDBID+Slug or Path)
 	// But we optimize by only loading data for systems NOT being reindexed
 
+	// Check for cancellation before loading titles
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Populate titles map (only for systems not being reindexed)
 	// Use optimized query that excludes systems being reindexed
 	titlesWithSystems, err := db.GetTitlesWithSystemsExcluding(systemsToReindex)
 	if err != nil {
-		log.Warn().Err(err).Msg(
-			"failed to get existing titles with systems (excluding reindexed), " +
-				"maps may be incomplete",
-		)
-	} else {
-		for _, title := range titlesWithSystems {
-			titleKey := title.SystemID + ":" + title.Slug
-			ss.TitleIDs[titleKey] = int(title.DBID)
-		}
+		return fmt.Errorf("failed to get existing titles with systems (excluding reindexed): %w", err)
+	}
+	for _, title := range titlesWithSystems {
+		titleKey := title.SystemID + ":" + title.Slug
+		ss.TitleIDs[titleKey] = int(title.DBID)
+	}
+
+	// Check for cancellation before loading media
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	// Populate media map (only for systems not being reindexed)
 	// Use optimized query that excludes systems being reindexed
 	mediaWithFullPath, err := db.GetMediaWithFullPathExcluding(systemsToReindex)
 	if err != nil {
-		log.Warn().Err(err).Msg(
-			"failed to get existing media with full path (excluding reindexed), " +
-				"maps may be incomplete",
-		)
-	} else {
-		for _, m := range mediaWithFullPath {
-			mediaKey := m.SystemID + ":" + m.Path
-			ss.MediaIDs[mediaKey] = int(m.DBID)
-		}
+		return fmt.Errorf("failed to get existing media with full path (excluding reindexed): %w", err)
+	}
+	for _, m := range mediaWithFullPath {
+		mediaKey := m.SystemID + ":" + m.Path
+		ss.MediaIDs[mediaKey] = int(m.DBID)
 	}
 
 	// For selective indexing, use true lazy loading for Systems, TagTypes, and Tags
@@ -721,9 +818,9 @@ func PopulateScanStateForSelectiveIndexing(
 	// 2. Not pre-loading any Tags (handled by constraint violations)
 	// 3. Only loading MediaTitles/Media for systems NOT being reindexed
 
-	log.Debug().Msgf("Populated scan state for selective indexing: "+
-		"MaxIDs: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; "+
-		"Maps: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; Systems to reindex: %v",
+	log.Debug().Msgf("populated scan state for selective indexing: "+
+		"maxIDs: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; "+
+		"maps: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; systems to reindex: %v",
 		ss.SystemsIndex, ss.TitlesIndex, ss.MediaIndex,
 		ss.TagTypesIndex, ss.TagsIndex, len(ss.SystemIDs), len(ss.TitleIDs), len(ss.MediaIDs),
 		len(ss.TagTypeIDs), len(ss.TagIDs), systemsToReindex)

@@ -56,7 +56,7 @@ const (
 )
 
 const sqliteConnParams = "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192"
+	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192&_foreign_keys=ON"
 
 type MediaDB struct {
 	clock                clockwork.Clock
@@ -988,6 +988,11 @@ func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
 	return sqlFindTagType(db.ctx, db.sql, row)
 }
 
+// InsertTagType inserts a new TagType into the database.
+// NOTE: TagType operations do not support transactions. TagTypes should be created
+// before beginning a transaction. This is acceptable because TagTypes are created
+// infrequently (typically 5-10 times during an entire media scan), whereas Tags and
+// Media are inserted thousands of times and benefit from transaction batching.
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
 	result, err := sqlInsertTagType(db.ctx, db.sql, row)
 
