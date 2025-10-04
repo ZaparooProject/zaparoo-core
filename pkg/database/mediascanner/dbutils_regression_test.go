@@ -157,7 +157,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				}).Return(database.Media{DBID: 1}, nil).Once()
 
 				// Extension tag type lookup fails (should not happen)
-				mockDB.On("FindTagType", database.TagType{Type: "Extension"}).
+				mockDB.On("FindTagType", database.TagType{Type: "extension"}).
 					Return(database.TagType{}, assert.AnError).Once()
 			},
 			expectedError: "extension tag type not found",
@@ -249,8 +249,8 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
 	// Extension tag type lookup (from scan state cache)
-	mockDB.On("FindTagType", database.TagType{Type: "Extension"}).
-		Return(database.TagType{DBID: 2, Type: "Extension"}, nil).Maybe()
+	mockDB.On("FindTagType", database.TagType{Type: "extension"}).
+		Return(database.TagType{DBID: 2, Type: "extension"}, nil).Maybe()
 
 	// Tag insert for .nes extension
 	mockDB.On("InsertTag", database.Tag{
@@ -258,6 +258,12 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 		Tag:      ".nes",
 		TypeDBID: int64(2),
 	}).Return(database.Tag{DBID: 1}, nil).Maybe()
+
+	// MediaTag insert for extension tag
+	mockDB.On("InsertMediaTag", database.MediaTag{
+		TagDBID:   int64(1),
+		MediaDBID: int64(1),
+	}).Return(database.MediaTag{}, nil).Maybe()
 
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 

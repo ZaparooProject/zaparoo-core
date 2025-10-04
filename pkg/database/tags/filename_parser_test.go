@@ -1,0 +1,457 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package tags
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestExtractTags(t *testing.T) {
+	tests := []struct {
+		name        string
+		filename    string
+		wantParen   []string
+		wantBracket []string
+	}{
+		{
+			name:        "simple tags",
+			filename:    "Game (USA)(En)[!].zip",
+			wantParen:   []string{"USA", "En"},
+			wantBracket: []string{"!"},
+		},
+		{
+			name:        "multiple bracket tags",
+			filename:    "Game (Japan)[h][cr][!].zip",
+			wantParen:   []string{"Japan"},
+			wantBracket: []string{"h", "cr", "!"},
+		},
+		{
+			name:        "no tags",
+			filename:    "PlainGame.zip",
+			wantParen:   []string{},
+			wantBracket: []string{},
+		},
+		{
+			name:        "only parentheses",
+			filename:    "Game (USA)(v1.2)(Beta).rom",
+			wantParen:   []string{"USA", "v1.2", "Beta"},
+			wantBracket: []string{},
+		},
+		{
+			name:        "only brackets",
+			filename:    "Game [!][f].bin",
+			wantParen:   []string{},
+			wantBracket: []string{"!", "f"},
+		},
+		{
+			name:        "empty tags ignored",
+			filename:    "Game ()(USA)[]En].zip",
+			wantParen:   []string{"USA"},
+			wantBracket: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotParen, gotBracket := extractTags(tt.filename)
+			assert.Equal(t, tt.wantParen, gotParen, "Parentheses tags mismatch")
+			assert.Equal(t, tt.wantBracket, gotBracket, "Bracket tags mismatch")
+		})
+	}
+}
+
+func TestExtractSpecialPatterns(t *testing.T) {
+	tests := []struct {
+		name          string
+		filename      string
+		wantRemaining string
+		wantTags      []CanonicalTag
+	}{
+		{
+			name:     "disc X of Y",
+			filename: "Final Fantasy VII (Disc 1 of 3)(USA).bin",
+			wantTags: []CanonicalTag{
+				{TagTypeMedia, TagMediaDisc},
+				{TagTypeDisc, TagDisc1},
+				{TagTypeDiscTotal, TagDiscTotal3},
+			},
+			wantRemaining: "Final Fantasy VII (USA).bin",
+		},
+		{
+			name:     "disc X of Y case insensitive",
+			filename: "Game (DISC 2 OF 2)(Europe).iso",
+			wantTags: []CanonicalTag{
+				{TagTypeMedia, TagMediaDisc},
+				{TagTypeDisc, TagDisc2},
+				{TagTypeDiscTotal, TagDiscTotal2},
+			},
+			wantRemaining: "Game (Europe).iso",
+		},
+		{
+			name:     "revision tag",
+			filename: "Sonic (Rev 1)(USA).md",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, TagRev1},
+			},
+			wantRemaining: "Sonic (USA).md",
+		},
+		{
+			name:     "revision tag with letter",
+			filename: "Game (Rev A)(Japan).sfc",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, TagRevA},
+			},
+			wantRemaining: "Game (Japan).sfc",
+		},
+		{
+			name:     "version tag",
+			filename: "Mario (v1.2)(USA).n64",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, "1.2"},
+			},
+			wantRemaining: "Mario (USA).n64",
+		},
+		{
+			name:     "version tag with multiple dots",
+			filename: "Game (v1.2.3)(Europe).gba",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, "1.2.3"},
+			},
+			wantRemaining: "Game (Europe).gba",
+		},
+		{
+			name:          "no special patterns",
+			filename:      "Plain Game (USA)(En).rom",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Plain Game (USA)(En).rom",
+		},
+		{
+			name:     "multiple special patterns",
+			filename: "FF7 (Disc 1 of 3)(v1.1)(USA).bin",
+			wantTags: []CanonicalTag{
+				{TagTypeMedia, TagMediaDisc},
+				{TagTypeDisc, TagDisc1},
+				{TagTypeDiscTotal, TagDiscTotal3},
+				{TagTypeRev, "1.1"},
+			},
+			wantRemaining: "FF7 (USA).bin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTags, gotRemaining := extractSpecialPatterns(tt.filename)
+			assert.Equal(t, tt.wantTags, gotTags, "Special pattern tags mismatch")
+			assert.Contains(t, gotRemaining, tt.wantRemaining[:len(tt.wantRemaining)-4],
+				"Remaining filename should contain base name")
+		})
+	}
+}
+
+func TestParseMultiLanguageTag(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		wantTags []CanonicalTag
+		wantNil  bool
+	}{
+		{
+			name: "three languages",
+			tag:  "En,Fr,De",
+			wantTags: []CanonicalTag{
+				{TagTypeLang, TagLangEN},
+				{TagTypeLang, TagLangFR},
+				{TagTypeLang, TagLangDE},
+			},
+		},
+		{
+			name: "two languages",
+			tag:  "En,Fr", // Use Fr which is in standalone lang list
+			wantTags: []CanonicalTag{
+				{TagTypeLang, TagLangEN},
+				{TagTypeLang, TagLangFR},
+			},
+		},
+		{
+			name:    "single language not multi",
+			tag:     "En",
+			wantNil: true,
+		},
+		{
+			name:    "comma but not languages",
+			tag:     "Test,Data",
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMultiLanguageTag(tt.tag)
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				assert.Equal(t, tt.wantTags, got)
+			}
+		})
+	}
+}
+
+func TestDisambiguateTag_BracketContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		tag      string
+		wantTags []CanonicalTag
+	}{
+		{
+			name: "tr in brackets is translated",
+			tag:  "tr",
+			wantTags: []CanonicalTag{
+				{TagTypeDump, TagDumpTranslated},
+			},
+		},
+		{
+			name: "verified dump",
+			tag:  "!",
+			wantTags: []CanonicalTag{
+				{TagTypeDump, TagDumpVerified},
+			},
+		},
+		{
+			name: "bad dump",
+			tag:  "b",
+			wantTags: []CanonicalTag{
+				{TagTypeDump, TagDumpBad},
+			},
+		},
+		{
+			name: "hacked",
+			tag:  "h",
+			wantTags: []CanonicalTag{
+				{TagTypeDump, TagDumpHacked},
+			},
+		},
+		{
+			name: "fixed",
+			tag:  "f",
+			wantTags: []CanonicalTag{
+				{TagTypeDump, TagDumpFixed},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &ParseContext{
+				CurrentTag:         tt.tag,
+				CurrentBracketType: "bracket",
+				ProcessedTags:      []CanonicalTag{},
+			}
+			got := disambiguateTag(ctx)
+			assert.Equal(t, tt.wantTags, got)
+		})
+	}
+}
+
+func TestDisambiguateTag_ParenthesesContext(t *testing.T) {
+	tests := []struct {
+		name          string
+		tag           string
+		processedTags []CanonicalTag
+		wantTags      []CanonicalTag
+		position      int
+	}{
+		{
+			name:          "ch with German lang is Switzerland",
+			tag:           "ch",
+			processedTags: []CanonicalTag{{TagTypeLang, TagLangDE}},
+			position:      1,
+			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionCH}},
+		},
+		{
+			name:          "ch without context is Chinese",
+			tag:           "ch",
+			processedTags: []CanonicalTag{},
+			position:      2,
+			wantTags:      []CanonicalTag{{TagTypeLang, TagLangZH}},
+		},
+		{
+			name:          "ch early position is region",
+			tag:           "ch",
+			processedTags: []CanonicalTag{},
+			position:      0,
+			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionCH}},
+		},
+		{
+			name:          "tr early is region",
+			tag:           "tr",
+			processedTags: []CanonicalTag{},
+			position:      0,
+			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionTR}},
+		},
+		{
+			name:          "tr with region already is language",
+			tag:           "tr",
+			processedTags: []CanonicalTag{{TagTypeRegion, TagRegionUS}},
+			position:      1,
+			wantTags:      []CanonicalTag{{TagTypeLang, TagLangTR}},
+		},
+		{
+			name:          "bs is always Bosnian language",
+			tag:           "bs",
+			processedTags: []CanonicalTag{},
+			position:      0,
+			wantTags:      []CanonicalTag{{TagTypeLang, TagLangBS}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &ParseContext{
+				CurrentTag:         tt.tag,
+				CurrentBracketType: "paren",
+				ProcessedTags:      tt.processedTags,
+				CurrentIndex:       tt.position,
+			}
+			got := disambiguateTag(ctx)
+			assert.Equal(t, tt.wantTags, got)
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []string // String representation for easy assertion
+	}{
+		{
+			name:     "simple No-Intro format",
+			filename: "Super Mario Bros (USA)(En)[!].nes",
+			wantTags: []string{"region:us", "lang:en", "dump:verified"},
+		},
+		{
+			name:     "ch disambiguation - Swiss with German",
+			filename: "Game (Ch)(De)[!].rom",
+			wantTags: []string{"region:ch", "lang:de", "dump:verified"},
+		},
+		{
+			name:     "ch disambiguation - Chinese",
+			filename: "Game (Japan)(Ch).rom",
+			wantTags: []string{"region:jp", "lang:zh"}, // jp doesn't auto-add ja in new parser
+		},
+		{
+			name:     "tr in brackets is translated",
+			filename: "Game (USA)(En)[tr].rom",
+			wantTags: []string{"region:us", "lang:en", "dump:translated"},
+		},
+		{
+			name:     "disc X of Y special pattern",
+			filename: "Final Fantasy VII (Disc 1 of 3)(USA)(En).bin",
+			wantTags: []string{"media:disc", "disc:1", "disctotal:3", "region:us", "lang:en"},
+		},
+		{
+			name:     "revision tag",
+			filename: "Sonic (Rev 1)(USA).md",
+			wantTags: []string{"rev:1", "region:us"}, // usa region, language not auto-added
+		},
+		{
+			name:     "version tag",
+			filename: "Mario Kart (v1.2)(Europe).n64",
+			wantTags: []string{"rev:1.2", "region:eu"},
+		},
+		{
+			name:     "multi-language tag",
+			filename: "Game (En,Fr,De)(Europe)[!].gba",
+			wantTags: []string{"lang:en", "lang:fr", "lang:de", "region:eu", "dump:verified"},
+		},
+		{
+			name:     "beta with dump info",
+			filename: "Prototype (Beta)(USA)[b].rom",
+			wantTags: []string{"unfinished:beta", "region:us", "dump:bad"},
+		},
+		{
+			name:     "multiple hacks",
+			filename: "Game (Japan)[h][cr][t].sfc",
+			wantTags: []string{"region:jp", "dump:hacked", "dump:cracked", "dump:trained"},
+		},
+		{
+			name:     "complex real-world example",
+			filename: "Legend of Zelda, The - Ocarina of Time (v1.2)(USA)(En)[!].z64",
+			wantTags: []string{"rev:1.2", "region:us", "lang:en", "dump:verified"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			// Check that all expected tags are present
+			for _, want := range tt.wantTags {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+
+			// Check we don't have unexpected extras (allow some flexibility)
+			assert.LessOrEqual(t, len(gotStrings), len(tt.wantTags)+2, "Too many tags returned")
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_NoDuplicates(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{
+			name:     "tr should not create duplicates",
+			filename: "Game (USA)(Tr)[tr].rom",
+		},
+		{
+			name:     "ch should not create duplicates",
+			filename: "Game (Ch)(De).rom",
+		},
+		{
+			name:     "bs should not create duplicates",
+			filename: "Game (BS)(Europe).sfc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			// Check for duplicates
+			seen := make(map[string]bool)
+			for _, tag := range gotStrings {
+				assert.False(t, seen[tag], "Duplicate tag found: %s in %v", tag, gotStrings)
+				seen[tag] = true
+			}
+		})
+	}
+}

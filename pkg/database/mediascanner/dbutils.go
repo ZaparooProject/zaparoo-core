@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
@@ -231,21 +232,23 @@ func AddMediaPath(
 	}
 
 	if pf.Ext != "" {
-		if _, ok := ss.TagIDs[pf.Ext]; !ok {
+		// Use composite key for extension tags to avoid collisions
+		extensionKey := "extension:" + pf.Ext
+		if _, ok := ss.TagIDs[extensionKey]; !ok {
 			// Get or create the Extension tag type ID dynamically
-			extensionTypeID, found := ss.TagTypeIDs["Extension"]
+			extensionTypeID, found := ss.TagTypeIDs["extension"]
 			if !found {
 				// Extension tag type doesn't exist in cache, try to look it up
-				existingTagType, getErr := db.FindTagType(database.TagType{Type: "Extension"})
+				existingTagType, getErr := db.FindTagType(database.TagType{Type: "extension"})
 				if getErr != nil || existingTagType.DBID == 0 {
 					return 0, 0, fmt.Errorf(
 						"extension tag type not found and not in cache "+
-							"(should not happen after SeedKnownTags): %w",
+							"(should not happen after SeedCanonicalTags): %w",
 						getErr,
 					)
 				}
 				extensionTypeID = int(existingTagType.DBID)
-				ss.TagTypeIDs["Extension"] = extensionTypeID
+				ss.TagTypeIDs["extension"] = extensionTypeID
 			}
 
 			ss.TagsIndex++
@@ -261,21 +264,33 @@ func AddMediaPath(
 				// Handle UNIQUE constraint violations gracefully - find existing tag and add to map
 				var sqliteErr sqlite3.Error
 				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-					log.Debug().Err(err).Msgf("tag Extension already exists: %s", pf.Ext)
+					log.Debug().Err(err).Msgf("tag extension already exists: %s", pf.Ext)
 
 					// Look up existing tag and add it to the map to prevent repeated insertion attempts
 					existingTag, getErr := db.FindTag(database.Tag{Tag: pf.Ext})
 					if getErr != nil || existingTag.DBID == 0 {
 						log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", pf.Ext)
 					} else {
-						ss.TagIDs[pf.Ext] = int(existingTag.DBID)
+						ss.TagIDs[extensionKey] = int(existingTag.DBID)
 						log.Debug().Msgf("using existing tag %s with DBID %d", pf.Ext, existingTag.DBID)
 					}
 				} else {
-					log.Error().Err(err).Msgf("error inserting tag Extension: %s", pf.Ext)
+					log.Error().Err(err).Msgf("error inserting tag extension: %s", pf.Ext)
 				}
 			} else {
-				ss.TagIDs[pf.Ext] = tagIndex // Only update cache on success
+				ss.TagIDs[extensionKey] = tagIndex // Only update cache on success
+			}
+		}
+
+		// Link the extension tag to the media
+		extensionTagIndex := ss.TagIDs[extensionKey]
+		if extensionTagIndex > 0 {
+			_, err := db.InsertMediaTag(database.MediaTag{
+				TagDBID:   int64(extensionTagIndex),
+				MediaDBID: int64(mediaIndex),
+			})
+			if err != nil {
+				log.Debug().Err(err).Msgf("media tag relationship already exists for extension: %s", pf.Ext)
 			}
 		}
 	}
@@ -314,17 +329,16 @@ type MediaPathFragments struct {
 }
 
 func getTagsFromFileName(filename string) []string {
-	re := helpers.CachedMustCompile(`\(([\w,\- ]*)\)|\[([\w,\- ]*)]`)
-	matches := re.FindAllString(filename, -1)
-	tags := make([]string, 0)
-	for _, padded := range matches {
-		unpadded := padded[1 : len(padded)-1]
-		split := strings.Split(unpadded, ",")
-		for _, tag := range split {
-			tags = append(tags, strings.ToLower(strings.TrimSpace(tag)))
-		}
+	canonicalStructs := tags.ParseFilenameToCanonicalTags(filename)
+
+	// Convert CanonicalTag structs to "type:value" format for database compatibility
+	// This matches the composite keys used in the TagIDs map
+	canonicalTags := make([]string, 0, len(canonicalStructs))
+	for _, ct := range canonicalStructs {
+		canonicalTags = append(canonicalTags, ct.String())
 	}
-	return tags
+
+	return canonicalTags
 }
 
 func getTitleFromFilename(filename string) string {
@@ -333,74 +347,25 @@ func getTitleFromFilename(filename string) string {
 	return strings.TrimSpace(title)
 }
 
-func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
-	typeMatches := map[string][]string{
-		"Version": {
-			"rev", "v",
-		},
-		"Language": {
-			"ar", "bg", "bs", "cs", "cy", "da", "de", "el", "en", "eo", "es", "et",
-			"fa", "fi", "fr", "ga", "gu", "he", "hi", "hr", "hu", "is", "it", "ja",
-			"ko", "lt", "lv", "ms", "nl", "no", "pl", "pt", "ro", "ru", "sk", "sl",
-			"sq", "sr", "sv", "th", "tr", "ur", "vi", "yi", "zh",
-		},
-		"Region": {
-			// NOINTRO
-			"world", "europe", "asia", "australia", "brazil", "canada", "china", "france",
-			"germany", "hong kong", "italy", "japan", "korea", "netherlands", "spain",
-			"sweden", "usa", "poland", "finland", "denmark", "portugal", "norway",
-			// TOSEC
-			"AE", "AL", "AS", "AT", "AU", "BA", "BE", "BG", "BR", "CA", "CH", "CL", "CN",
-			"CS", "CY", "CZ", "DE", "DK", "EE", "EG", "ES", "EU", "FI", "FR", "GB", "GR",
-			"HK", "HR", "HU", "ID", "IE", "IL", "IN", "IR", "IS", "IT", "JO", "JP", "KR",
-			"LT", "LU", "LV", "MN", "MX", "MY", "NL", "NO", "NP", "NZ", "OM", "PE", "PH",
-			"PL", "PT", "QA", "RO", "RU", "SE", "SG", "SI", "SK", "TH", "TR", "TW", "US",
-			"VN", "YU", "ZA",
-		},
-		"Year": {
-			"1970", "1971", "1972", "1973", "1974", "1975", "1976", "1977", "1978", "1979",
-			"1980", "1981", "1982", "1983", "1984", "1985", "1986", "1987", "1988", "1989",
-			"1990", "1991", "1992", "1993", "1994", "1995", "1996", "1997", "1998", "1999",
-			"2000", "2001", "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009",
-			"2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019",
-			"2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029",
-			"19xx", "197x", "198x", "199x", "20xx", "200x", "201x", "202x",
-		},
-		"Dev Status": {
-			"alpha", "beta", "preview", "pre-release", "proto", "sample",
-			"demo", "demo-kiosk", "demo-playable", "demo-rolling", "demo-slideshow",
-		},
-		"Media Type": {
-			"disc", "disk", "file", "part", "side", "tape",
-		},
-		"TOSEC System": {
-			"+2", "+2a", "+3", "130XE", "A1000", "A1200", "A1200-A4000", "A2000",
-			"A2000-A3000", "A2024", "A2500-A3000UX", "A3000", "A4000", "A4000T",
-			"A500", "A500+", "A500-A1000-A2000", "A500-A1000-A2000-CDTV", "A500-A1200",
-			"A500-A1200-A2000-A4000", "A500-A2000", "A500-A600-A2000", "A570", "A600",
-			"A600HD", "AGA", "AGA-CD32", "Aladdin Deck Enhancer", "CD32", "CDTV",
-			"Computrainer", "Doctor PC Jr.", "ECS", "ECS-AGA", "Executive", "Mega ST",
-			"Mega-STE", "OCS", "OCS-AGA", "ORCH80", "Osbourne 1", "PIANO90",
-			"PlayChoice-10", "Plus4", "Primo-A", "Primo-A64", "Primo-B", "Primo-B64",
-			"Pro-Primo", "ST", "STE", "STE-Falcon", "TT", "TURBO-R GT", "TURBO-R ST",
-			"VS DualSystem", "VS UniSystem",
-		},
-		"TOSEC Video": {
-			"CGA", "EGA", "HGC", "MCGA", "MDA", "NTSC", "NTSC-PAL", "PAL", "PAL-60",
-			"PAL-NTSC", "SVGA", "VGA", "XGA",
-		},
-		"TOSEC Copyright": {
-			"CW", "CW-R", "FW", "GW", "GW-R", "LW", "PD", "SW", "SW-R",
-		},
-		"TOSEC Dump Info": {
-			"cr", "f", "h", "m", "p", "t", "tr", "o", "u", "v", "b", "a", "!",
-		},
+// SeedCanonicalTags seeds the database with canonical GameDataBase-style hierarchical tags.
+// Tags follow the format: category:subcategory:value (e.g., "genre:sports:wrestling", "players:2:vs")
+// Tag definitions are in tags.go for centralized management.
+func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
+	// Use canonical tag definitions from tags.go
+	typeMatches := make(map[string][]string)
+	for tagType, tagValues := range tags.CanonicalTagDefinitions {
+		// Convert []TagValue to []string
+		strTags := make([]string, len(tagValues))
+		for i, tag := range tagValues {
+			strTags[i] = string(tag)
+		}
+		typeMatches[string(tagType)] = strTags
 	}
 
 	ss.TagTypesIndex++
 	_, err := db.InsertTagType(database.TagType{
 		DBID: int64(ss.TagTypesIndex),
-		Type: "Unknown",
+		Type: "unknown",
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback index increment on failure
@@ -408,17 +373,20 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		// Handle UNIQUE constraint violations gracefully - data may already exist
 		var sqliteErr sqlite3.Error
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag type Unknown: %w", err)
+			return fmt.Errorf("error inserting tag type unknown: %w", err)
 		}
-		log.Debug().Msg("tag type 'Unknown' already exists, continuing")
+		log.Debug().Msg("tag type 'unknown' already exists, continuing")
 		// Try to get the existing tag type to update our index
-		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Unknown"})
+		existingTagType, getErr := db.FindTagType(database.TagType{Type: "unknown"})
 		if getErr == nil && existingTagType.DBID > 0 {
-			ss.TagTypesIndex = int(existingTagType.DBID)
-			ss.TagTypeIDs["Unknown"] = ss.TagTypesIndex
+			// Update index only if this existing tag has a higher DBID
+			if int(existingTagType.DBID) > ss.TagTypesIndex {
+				ss.TagTypesIndex = int(existingTagType.DBID)
+			}
+			ss.TagTypeIDs["unknown"] = int(existingTagType.DBID)
 		}
 	} else {
-		ss.TagTypeIDs["Unknown"] = ss.TagTypesIndex
+		ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
 	}
 
 	ss.TagsIndex++
@@ -439,17 +407,22 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		// Try to get the existing tag to update our index
 		existingTag, getErr := db.FindTag(database.Tag{Tag: "unknown"})
 		if getErr == nil && existingTag.DBID > 0 {
-			ss.TagsIndex = int(existingTag.DBID)
-			ss.TagIDs["unknown"] = ss.TagsIndex
+			// Update index only if this existing tag has a higher DBID
+			if int(existingTag.DBID) > ss.TagsIndex {
+				ss.TagsIndex = int(existingTag.DBID)
+			}
+			// Use composite key for consistency
+			ss.TagIDs["unknown:unknown"] = int(existingTag.DBID)
 		}
 	} else {
-		ss.TagIDs["unknown"] = ss.TagsIndex
+		// Use composite key for consistency
+		ss.TagIDs["unknown:unknown"] = ss.TagsIndex
 	}
 
 	ss.TagTypesIndex++
 	_, err = db.InsertTagType(database.TagType{
 		DBID: int64(ss.TagTypesIndex),
-		Type: "Extension",
+		Type: "extension",
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback index increment on failure
@@ -457,45 +430,24 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 		// Handle UNIQUE constraint violations gracefully
 		var sqliteErr sqlite3.Error
 		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag type Extension: %w", err)
+			return fmt.Errorf("error inserting tag type extension: %w", err)
 		}
-		log.Debug().Msg("tag type 'Extension' already exists, continuing")
+		log.Debug().Msg("tag type 'extension' already exists, continuing")
 		// Try to get the existing tag type to update our index
-		existingTagType, getErr := db.FindTagType(database.TagType{Type: "Extension"})
+		existingTagType, getErr := db.FindTagType(database.TagType{Type: "extension"})
 		if getErr == nil && existingTagType.DBID > 0 {
-			ss.TagTypesIndex = int(existingTagType.DBID)
-			ss.TagTypeIDs["Extension"] = ss.TagTypesIndex
+			// Update index only if this existing tag has a higher DBID
+			if int(existingTagType.DBID) > ss.TagTypesIndex {
+				ss.TagTypesIndex = int(existingTagType.DBID)
+			}
+			ss.TagTypeIDs["extension"] = int(existingTagType.DBID)
 		}
 	} else {
-		ss.TagTypeIDs["Extension"] = ss.TagTypesIndex
+		ss.TagTypeIDs["extension"] = ss.TagTypesIndex
 	}
 
-	ss.TagsIndex++
-	_, err = db.InsertTag(database.Tag{
-		DBID:     int64(ss.TagsIndex),
-		Tag:      ".ext",
-		TypeDBID: int64(ss.TagTypesIndex),
-	})
-	if err != nil {
-		ss.TagsIndex-- // Rollback index increment on failure
-
-		// Handle UNIQUE constraint violations gracefully
-		var sqliteErr sqlite3.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag .ext: %w", err)
-		}
-		log.Debug().Msg("tag '.ext' already exists, continuing")
-		// Try to get the existing tag to update our index
-		existingTag, getErr := db.FindTag(database.Tag{Tag: ".ext"})
-		if getErr == nil && existingTag.DBID > 0 {
-			ss.TagsIndex = int(existingTag.DBID)
-			ss.TagIDs[".ext"] = ss.TagsIndex
-		}
-	} else {
-		ss.TagIDs[".ext"] = ss.TagsIndex
-	}
-
-	for typeStr, tags := range typeMatches {
+	// Seed canonical tag types and values
+	for typeStr, tagValues := range typeMatches {
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
 			DBID: int64(ss.TagTypesIndex),
@@ -513,18 +465,22 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 			// Try to get the existing tag type to update our index
 			existingTagType, getErr := db.FindTagType(database.TagType{Type: typeStr})
 			if getErr == nil && existingTagType.DBID > 0 {
-				ss.TagTypesIndex = int(existingTagType.DBID)
-				ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
+				// Update index only if this existing tag has a higher DBID
+				if int(existingTagType.DBID) > ss.TagTypesIndex {
+					ss.TagTypesIndex = int(existingTagType.DBID)
+				}
+				ss.TagTypeIDs[typeStr] = int(existingTagType.DBID)
 			}
 		} else {
 			ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
 		}
 
-		for _, tag := range tags {
+		for _, tag := range tagValues {
 			ss.TagsIndex++
+			tagValue := strings.ToLower(tag)
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
-				Tag:      strings.ToLower(tag),
+				Tag:      tagValue,
 				TypeDBID: int64(ss.TagTypesIndex),
 			})
 			if err != nil {
@@ -537,13 +493,20 @@ func SeedKnownTags(db database.MediaDBI, ss *database.ScanState) error {
 				}
 				log.Debug().Msgf("tag '%s' already exists, continuing", tag)
 				// Try to get the existing tag to update our index
-				existingTag, getErr := db.FindTag(database.Tag{Tag: strings.ToLower(tag)})
+				existingTag, getErr := db.FindTag(database.Tag{Tag: tagValue})
 				if getErr == nil && existingTag.DBID > 0 {
-					ss.TagsIndex = int(existingTag.DBID)
-					ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
+					// Update index only if this existing tag has a higher DBID
+					if int(existingTag.DBID) > ss.TagsIndex {
+						ss.TagsIndex = int(existingTag.DBID)
+					}
+					// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
+					compositeKey := typeStr + ":" + tagValue
+					ss.TagIDs[compositeKey] = int(existingTag.DBID)
 				}
 			} else {
-				ss.TagIDs[strings.ToLower(tag)] = ss.TagsIndex
+				// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
+				compositeKey := typeStr + ":" + tagValue
+				ss.TagIDs[compositeKey] = ss.TagsIndex
 			}
 		}
 	}
@@ -696,11 +659,11 @@ func PopulateScanStateFromDB(ctx context.Context, db database.MediaDBI, ss *data
 	}
 
 	// Populate tags map
-	tags, err := db.GetAllTags()
+	allTags, err := db.GetAllTags()
 	if err != nil {
 		return fmt.Errorf("failed to get existing tags: %w", err)
 	}
-	for _, tag := range tags {
+	for _, tag := range allTags {
 		ss.TagIDs[tag.Tag] = int(tag.DBID)
 	}
 

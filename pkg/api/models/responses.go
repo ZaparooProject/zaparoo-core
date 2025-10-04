@@ -60,11 +60,11 @@ type SettingsResponse struct {
 }
 
 type System struct {
+	ReleaseDate  *string `json:"releaseDate,omitempty"`
+	Manufacturer *string `json:"manufacturer,omitempty"`
 	ID           string  `json:"id,omitempty"`
 	Name         string  `json:"name,omitempty"`
 	Category     string  `json:"category,omitempty"`
-	ReleaseDate  *string `json:"releaseDate,omitempty"`
-	Manufacturer *string `json:"manufacturer,omitempty"`
 }
 
 type SystemsResponse struct {

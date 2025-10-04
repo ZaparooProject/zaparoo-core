@@ -262,7 +262,7 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 		}
 
 		params := models.SearchParams{
-			Query: name,
+			Query: &name,
 		}
 
 		if filterSystem != "" {

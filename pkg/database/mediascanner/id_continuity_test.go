@@ -68,7 +68,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err := mediaDB.BeginTransaction()
@@ -219,7 +219,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction (same pattern as working test)
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err := mediaDB.BeginTransaction()
@@ -381,7 +381,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction (same pattern as working tests)
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err := mediaDB.BeginTransaction()
@@ -486,7 +486,7 @@ func TestConcurrentIDGeneration(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err := mediaDB.BeginTransaction()

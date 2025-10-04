@@ -316,11 +316,11 @@ An object:
 
 | Key        | Type     | Required | Description                                                                                                                    |
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| query      | string   | Yes      | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. |
+| query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
 | maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
 | cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
-| tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. |
+| tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. Can be used without query or systems for tag-only searches. |
 | letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
 
 #### Result

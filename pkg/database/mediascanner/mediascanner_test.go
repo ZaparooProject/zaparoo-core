@@ -196,8 +196,8 @@ func TestScannerDoubleExecutionPrevention(t *testing.T) {
 	assert.False(t, shouldRunAgain, "Scanner should not execute again if already marked as scanned")
 }
 
-// TestSeedKnownTags_Success tests that SeedKnownTags works correctly under normal conditions
-func TestSeedKnownTags_Success(t *testing.T) {
+// TestSeedCanonicalTags_Success tests that SeedCanonicalTags works correctly under normal conditions
+func TestSeedCanonicalTags_Success(t *testing.T) {
 	t.Parallel()
 
 	// Use real database
@@ -211,40 +211,40 @@ func TestSeedKnownTags_Success(t *testing.T) {
 		TagIDs:        make(map[string]int),
 	}
 
-	// Call SeedKnownTags with real database
-	err := SeedKnownTags(mediaDB, scanState)
+	// Call SeedCanonicalTags with real database
+	err := SeedCanonicalTags(mediaDB, scanState)
 
 	// Verify no error occurred
-	require.NoError(t, err, "SeedKnownTags should not return an error on success")
+	require.NoError(t, err, "SeedCanonicalTags should not return an error on success")
 
 	// Verify state was updated correctly
 	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
 	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
-	assert.Contains(t, scanState.TagIDs, "unknown", "TagIDs should contain 'unknown' tag")
-	assert.Contains(t, scanState.TagIDs, ".ext", "TagIDs should contain '.ext' tag")
+	// Tags now use composite keys "type:value"
+	assert.Contains(t, scanState.TagIDs, "unknown:unknown", "TagIDs should contain 'unknown:unknown' composite key")
 
 	// Verify that specific tag types were processed and exist in scan state
 	// This tests the actual business logic without needing to query all tag types
-	unknownTagID, exists := scanState.TagTypeIDs["Unknown"]
-	assert.True(t, exists, "Unknown tag type should be in scan state")
-	assert.Positive(t, unknownTagID, "Unknown tag type should have positive ID")
+	unknownTagID, exists := scanState.TagTypeIDs["unknown"]
+	assert.True(t, exists, "unknown tag type should be in scan state")
+	assert.Positive(t, unknownTagID, "unknown tag type should have positive ID")
 
-	extensionTagID, exists := scanState.TagTypeIDs["Extension"]
-	assert.True(t, exists, "Extension tag type should be in scan state")
-	assert.Positive(t, extensionTagID, "Extension tag type should have positive ID")
+	extensionTagID, exists := scanState.TagTypeIDs["extension"]
+	assert.True(t, exists, "extension tag type should be in scan state")
+	assert.Positive(t, extensionTagID, "extension tag type should have positive ID")
 
 	// Verify that we can find the tag types in the database (tests actual insertion)
-	unknownType, err := mediaDB.FindTagType(database.TagType{Type: "Unknown"})
+	unknownType, err := mediaDB.FindTagType(database.TagType{Type: "unknown"})
 	require.NoError(t, err)
-	assert.Equal(t, "Unknown", unknownType.Type)
+	assert.Equal(t, "unknown", unknownType.Type)
 
-	extensionType, err := mediaDB.FindTagType(database.TagType{Type: "Extension"})
+	extensionType, err := mediaDB.FindTagType(database.TagType{Type: "extension"})
 	require.NoError(t, err)
-	assert.Equal(t, "Extension", extensionType.Type)
+	assert.Equal(t, "extension", extensionType.Type)
 }
 
-// TestSeedKnownTags_DatabaseError tests error handling when database operations fail
-func TestSeedKnownTags_DatabaseError(t *testing.T) {
+// TestSeedCanonicalTags_DatabaseError tests error handling when database operations fail
+func TestSeedCanonicalTags_DatabaseError(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -255,7 +255,7 @@ func TestSeedKnownTags_DatabaseError(t *testing.T) {
 		{
 			name:          "InsertTagType Unknown fails",
 			failOperation: "InsertTagType_Unknown",
-			expectedError: "error inserting tag type Unknown",
+			expectedError: "error inserting tag type unknown",
 		},
 		{
 			name:          "InsertTag unknown fails",
@@ -265,12 +265,7 @@ func TestSeedKnownTags_DatabaseError(t *testing.T) {
 		{
 			name:          "InsertTagType Extension fails",
 			failOperation: "InsertTagType_Extension",
-			expectedError: "error inserting tag type Extension",
-		},
-		{
-			name:          "InsertTag .ext fails",
-			failOperation: "InsertTag_.ext",
-			expectedError: "error inserting tag .ext",
+			expectedError: "error inserting tag type extension",
 		},
 	}
 
@@ -291,12 +286,12 @@ func TestSeedKnownTags_DatabaseError(t *testing.T) {
 			switch tc.failOperation {
 			case "InsertTagType_Unknown":
 				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Unknown"
+					return tagType.Type == "unknown"
 				})).Return(database.TagType{}, assert.AnError).Once()
 
 			case "InsertTag_unknown":
 				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Unknown"
+					return tagType.Type == "unknown"
 				})).Return(database.TagType{}, nil).Once()
 				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
 					return tag.Tag == "unknown"
@@ -304,35 +299,21 @@ func TestSeedKnownTags_DatabaseError(t *testing.T) {
 
 			case "InsertTagType_Extension":
 				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Unknown"
+					return tagType.Type == "unknown"
 				})).Return(database.TagType{}, nil).Once()
 				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
 					return tag.Tag == "unknown"
 				})).Return(database.Tag{}, nil).Once()
 				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Extension"
+					return tagType.Type == "extension"
 				})).Return(database.TagType{}, assert.AnError).Once()
-
-			case "InsertTag_.ext":
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Unknown"
-				})).Return(database.TagType{}, nil).Once()
-				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-					return tag.Tag == "unknown"
-				})).Return(database.Tag{}, nil).Once()
-				mockDB.On("InsertTagType", mock.MatchedBy(func(tagType database.TagType) bool {
-					return tagType.Type == "Extension"
-				})).Return(database.TagType{}, nil).Once()
-				mockDB.On("InsertTag", mock.MatchedBy(func(tag database.Tag) bool {
-					return tag.Tag == ".ext"
-				})).Return(database.Tag{}, assert.AnError).Once()
 			}
 
-			// Call SeedKnownTags
-			err := SeedKnownTags(mockDB, scanState)
+			// Call SeedCanonicalTags
+			err := SeedCanonicalTags(mockDB, scanState)
 
 			// Verify error occurred and contains expected message
-			require.Error(t, err, "SeedKnownTags should return an error when database operation fails")
+			require.Error(t, err, "SeedCanonicalTags should return an error when database operation fails")
 			assert.Contains(t, err.Error(), tc.expectedError, "Error message should contain expected text")
 
 			// Verify mock expectations
@@ -341,11 +322,11 @@ func TestSeedKnownTags_DatabaseError(t *testing.T) {
 	}
 }
 
-// TestSeedKnownTags_OutsideTransaction tests that SeedKnownTags can be called outside a transaction
-func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
+// TestSeedCanonicalTags_OutsideTransaction tests that SeedCanonicalTags can be called outside a transaction
+func TestSeedCanonicalTags_OutsideTransaction(t *testing.T) {
 	t.Parallel()
 
-	// This test ensures our fix allows SeedKnownTags to be called before BeginTransaction
+	// This test ensures our fix allows SeedCanonicalTags to be called before BeginTransaction
 	// We simulate this by ensuring the function works without any transaction context
 
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
@@ -358,11 +339,11 @@ func TestSeedKnownTags_OutsideTransaction(t *testing.T) {
 		TagIDs:        make(map[string]int),
 	}
 
-	// Call SeedKnownTags - this should work without any transaction context
-	err := SeedKnownTags(mediaDB, scanState)
+	// Call SeedCanonicalTags - this should work without any transaction context
+	err := SeedCanonicalTags(mediaDB, scanState)
 
 	// Verify success
-	require.NoError(t, err, "SeedKnownTags should work outside of transaction context")
+	require.NoError(t, err, "SeedCanonicalTags should work outside of transaction context")
 	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
 	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
 }

@@ -71,7 +71,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err := mediaDB.BeginTransaction()

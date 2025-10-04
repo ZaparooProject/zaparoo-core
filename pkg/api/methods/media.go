@@ -447,10 +447,6 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		maxResults = *params.MaxResults
 	}
 
-	if params.Query == "" && (params.Systems == nil || len(*params.Systems) == 0) {
-		return nil, errors.New("query or system is required")
-	}
-
 	ctx := env.State.GetContext()
 
 	// Handle cursor-based pagination
@@ -464,7 +460,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	system := params.Systems
-	query := params.Query
+	var query string
+	if params.Query != nil {
+		query = *params.Query
+	}
 	tags := params.Tags
 	letter := params.Letter
 

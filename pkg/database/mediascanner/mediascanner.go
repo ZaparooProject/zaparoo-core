@@ -589,7 +589,7 @@ func NewNamesIndex(
 		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
 		if getMaxErr != nil || maxTagTypeID == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
-			err = SeedKnownTags(db, &scanState)
+			err = SeedCanonicalTags(db, &scanState)
 			if err != nil {
 				return 0, fmt.Errorf("failed to seed known tags: %w", err)
 			}

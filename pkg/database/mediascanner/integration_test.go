@@ -62,7 +62,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err := SeedKnownTags(mediaDB, scanState)
+		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err = mediaDB.BeginTransaction()
@@ -209,7 +209,7 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		}
 
 		// Seed known tags BEFORE transaction
-		err := SeedKnownTags(mediaDB, scanState)
+		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err = mediaDB.BeginTransaction()
@@ -308,7 +308,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 			TagsIndex:     0,
 		}
 
-		err = SeedKnownTags(mediaDB, scanState)
+		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err = mediaDB.BeginTransaction()
@@ -382,7 +382,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		}
 
 		// Seed known tags
-		err := SeedKnownTags(mediaDB, scanState)
+		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
 		err = mediaDB.BeginTransaction()
@@ -495,7 +495,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 		// Check if we need to seed tags
 		maxTagTypeID, _ := mediaDB.GetMaxTagTypeID()
 		if maxTagTypeID == 0 {
-			if seedErr := SeedKnownTags(mediaDB, scanState); seedErr != nil {
+			if seedErr := SeedCanonicalTags(mediaDB, scanState); seedErr != nil {
 				return seedErr
 			}
 		} else {

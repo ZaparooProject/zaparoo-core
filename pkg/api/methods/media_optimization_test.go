@@ -114,11 +114,13 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			}
 
 			// Mock indexing status
-			statusInstance.indexing = tt.indexing
-			statusInstance.totalSteps = 10
-			statusInstance.currentStep = 5
-			statusInstance.currentDesc = "Processing files"
-			statusInstance.totalFiles = 1000
+			statusInstance.set(indexingStatusVals{
+				indexing:    tt.indexing,
+				totalSteps:  10,
+				currentStep: 5,
+				currentDesc: "Processing files",
+				totalFiles:  1000,
+			})
 
 			if !tt.indexing && (tt.optimizationStatus != "running" || tt.optimizationStatusErr != nil) {
 				// Mock GetLastGenerated for normal operation

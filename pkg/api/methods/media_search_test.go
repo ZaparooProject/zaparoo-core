@@ -141,8 +141,9 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	mockPlatform.On("NormalizePath", mock.Anything, "/games/super-mario.sfc").Return("/games/super-mario.sfc")
 
 	// Create request without cursor (initial request)
+	query := "mario"
 	params := models.SearchParams{
-		Query: "mario",
+		Query: &query,
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -232,8 +233,9 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	// Create request with cursor
 	cursorStr, err := encodeCursor(50)
 	require.NoError(t, err)
+	query := "mario"
 	params := models.SearchParams{
-		Query:      "mario",
+		Query:      &query,
 		MaxResults: &[]int{2}[0], // Request 2 results
 		Cursor:     &cursorStr,
 	}
@@ -282,8 +284,9 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 	// Create request with invalid cursor
 	invalidCursor := "invalid-cursor"
+	query := "mario"
 	params := models.SearchParams{
-		Query:  "mario",
+		Query:  &query,
 		Cursor: &invalidCursor,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -420,13 +423,14 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 
 	// Test valid letter parameter
 	letter := "M"
+	query := "test"
 	mockMediaDB.On("SearchMediaWithFilters", mock.Anything, mock.MatchedBy(func(filters *database.SearchFilters) bool {
 		return filters.Letter != nil && *filters.Letter == letter
 	})).Return([]database.SearchResultWithCursor{}, nil).Once()
 
 	// Create test parameters
 	params := models.SearchParams{
-		Query:  "test",
+		Query:  &query,
 		Letter: &letter,
 	}
 	paramBytes, _ := json.Marshal(params)
@@ -451,4 +455,139 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 
 	// Verify mock was called
 	mockMediaDB.AssertExpectations(t)
+}
+
+func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
+	// Setup mocks
+	mockUserDB := &helpers.MockUserDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Setup search results for blank query (should return all media)
+	expectedResults := []database.SearchResultWithCursor{
+		{SystemID: "NES", Name: "Game 1", Path: "/games/game1.nes", MediaID: 1},
+		{SystemID: "SNES", Name: "Game 2", Path: "/games/game2.sfc", MediaID: 2},
+	}
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything, // context
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			// Check that query is empty and all systems are searched
+			return filters.Query == "" &&
+				len(filters.Systems) > 0 && // Should have all systems
+				len(filters.Tags) == 0 &&
+				filters.Limit == 101
+		}),
+	).Return(expectedResults, nil)
+
+	mockPlatform.On("NormalizePath", mock.Anything, "/games/game1.nes").Return("/games/game1.nes")
+	mockPlatform.On("NormalizePath", mock.Anything, "/games/game2.sfc").Return("/games/game2.sfc")
+
+	// Create request with fully blank parameters
+	params := models.SearchParams{
+		// No Query, Systems, or Tags
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	// Create state
+	appState, _ := state.NewState(mockPlatform)
+
+	env := requests.RequestEnv{
+		Params: paramsJSON,
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	// Execute
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+
+	// Verify response
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok, "Should return SearchResults")
+	assert.Len(t, searchResults.Results, 2, "Should return all results")
+
+	// Verify mock was called
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestHandleMediaSearch_TagsOnly(t *testing.T) {
+	// Setup mocks
+	mockUserDB := &helpers.MockUserDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Setup search results for tag-only search
+	expectedResults := []database.SearchResultWithCursor{
+		{
+			SystemID: "NES", Name: "RPG Game 1", Path: "/games/rpg1.nes", MediaID: 1,
+			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+		},
+		{
+			SystemID: "SNES", Name: "RPG Game 2", Path: "/games/rpg2.sfc", MediaID: 2,
+			Tags: []database.TagInfo{{Tag: "RPG", Type: "genre"}},
+		},
+	}
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything, // context
+		mock.MatchedBy(func(filters *database.SearchFilters) bool {
+			// Check that query is empty but tags are provided
+			return filters.Query == "" &&
+				len(filters.Tags) == 1 &&
+				filters.Tags[0] == "genre:RPG" &&
+				len(filters.Systems) > 0 // Should have all systems
+		}),
+	).Return(expectedResults, nil)
+
+	mockPlatform.On("NormalizePath", mock.Anything, "/games/rpg1.nes").Return("/games/rpg1.nes")
+	mockPlatform.On("NormalizePath", mock.Anything, "/games/rpg2.sfc").Return("/games/rpg2.sfc")
+
+	// Create request with tags only (no query or systems)
+	tags := []string{"genre:RPG"}
+	params := models.SearchParams{
+		Tags: &tags,
+		// No Query or Systems specified
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	// Create state
+	appState, _ := state.NewState(mockPlatform)
+
+	env := requests.RequestEnv{
+		Params: paramsJSON,
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	// Execute
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+
+	// Verify response
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok, "Should return SearchResults")
+	assert.Len(t, searchResults.Results, 2, "Should return all tagged results")
+	assert.Len(t, searchResults.Results[0].Tags, 1, "Results should have tags")
+	assert.Equal(t, "RPG", searchResults.Results[0].Tags[0].Tag)
+	assert.Equal(t, "genre", searchResults.Results[0].Tags[0].Type)
+
+	// Verify mock was called
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
 }
