@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -34,27 +35,33 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// PathFragmentKey represents a unique key for caching path fragments
+type PathFragmentKey struct {
+	Path         string
+	FilenameTags bool
+}
+
 // pathFragmentCache provides a simple LRU cache for parsed path fragments
 // to avoid redundant regex operations and string processing
 type pathFragmentCache struct {
-	cache   map[string]*MediaPathFragments
-	keys    []string
+	cache   map[PathFragmentKey]*MediaPathFragments
+	keys    []PathFragmentKey
 	maxSize int
 	mu      sync.RWMutex
 }
 
 // globalPathFragmentCache is a package-level cache for path fragments
 var globalPathFragmentCache = &pathFragmentCache{
-	cache:   make(map[string]*MediaPathFragments, 5000),
-	keys:    make([]string, 0, 5000),
+	cache:   make(map[PathFragmentKey]*MediaPathFragments, 5000),
+	keys:    make([]PathFragmentKey, 0, 5000),
 	maxSize: 5000,
 }
 
 // get retrieves a cached path fragment if it exists
-func (c *pathFragmentCache) get(path string) (MediaPathFragments, bool) {
+func (c *pathFragmentCache) get(key PathFragmentKey) (MediaPathFragments, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	frag, ok := c.cache[path]
+	frag, ok := c.cache[key]
 	if !ok {
 		return MediaPathFragments{}, false
 	}
@@ -62,12 +69,12 @@ func (c *pathFragmentCache) get(path string) (MediaPathFragments, bool) {
 }
 
 // put stores a path fragment in the cache, evicting oldest entry if cache is full
-func (c *pathFragmentCache) put(path string, frag *MediaPathFragments) {
+func (c *pathFragmentCache) put(key PathFragmentKey, frag *MediaPathFragments) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Check if already exists
-	if _, exists := c.cache[path]; exists {
+	if _, exists := c.cache[key]; exists {
 		return
 	}
 
@@ -78,8 +85,8 @@ func (c *pathFragmentCache) put(path string, frag *MediaPathFragments) {
 		c.keys = c.keys[1:]
 	}
 
-	c.cache[path] = frag
-	c.keys = append(c.keys, path)
+	c.cache[key] = frag
+	c.keys = append(c.keys, key)
 }
 
 // We can't batch effectively without a sense of relationships
@@ -110,8 +117,9 @@ func AddMediaPath(
 	systemID string,
 	path string,
 	noExt bool,
+	cfg *config.Instance,
 ) (titleIndex, mediaIndex int, err error) {
-	pf := GetPathFragments(path, noExt)
+	pf := GetPathFragments(cfg, path, noExt)
 
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
@@ -232,15 +240,18 @@ func AddMediaPath(
 		mediaIndex = foundMediaIndex
 	}
 
-	if pf.Ext != "" {
+	// Extract extension tag only if filename tags are enabled
+	if pf.Ext != "" && (cfg == nil || cfg.FilenameTags()) {
+		// Remove leading dot from extension for tag storage
+		extWithoutDot := strings.TrimPrefix(pf.Ext, ".")
 		// Use composite key for extension tags to avoid collisions
-		extensionKey := "extension:" + pf.Ext
+		extensionKey := string(tags.TagTypeExtension) + ":" + extWithoutDot
 		if _, ok := ss.TagIDs[extensionKey]; !ok {
 			// Get or create the Extension tag type ID dynamically
-			extensionTypeID, found := ss.TagTypeIDs["extension"]
+			extensionTypeID, found := ss.TagTypeIDs[string(tags.TagTypeExtension)]
 			if !found {
 				// Extension tag type doesn't exist in cache, try to look it up
-				existingTagType, getErr := db.FindTagType(database.TagType{Type: "extension"})
+				existingTagType, getErr := db.FindTagType(database.TagType{Type: string(tags.TagTypeExtension)})
 				if getErr != nil || existingTagType.DBID == 0 {
 					return 0, 0, fmt.Errorf(
 						"extension tag type not found and not in cache "+
@@ -249,14 +260,14 @@ func AddMediaPath(
 					)
 				}
 				extensionTypeID = int(existingTagType.DBID)
-				ss.TagTypeIDs["extension"] = extensionTypeID
+				ss.TagTypeIDs[string(tags.TagTypeExtension)] = extensionTypeID
 			}
 
 			ss.TagsIndex++
 			tagIndex := ss.TagsIndex
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(tagIndex),
-				Tag:      pf.Ext,
+				Tag:      extWithoutDot,
 				TypeDBID: int64(extensionTypeID),
 			})
 			if err != nil {
@@ -265,18 +276,18 @@ func AddMediaPath(
 				// Handle UNIQUE constraint violations gracefully - find existing tag and add to map
 				var sqliteErr sqlite3.Error
 				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-					log.Debug().Err(err).Msgf("tag extension already exists: %s", pf.Ext)
+					log.Debug().Err(err).Msgf("tag extension already exists: %s", extWithoutDot)
 
 					// Look up existing tag and add it to the map to prevent repeated insertion attempts
-					existingTag, getErr := db.FindTag(database.Tag{Tag: pf.Ext})
+					existingTag, getErr := db.FindTag(database.Tag{Tag: extWithoutDot})
 					if getErr != nil || existingTag.DBID == 0 {
-						log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", pf.Ext)
+						log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", extWithoutDot)
 					} else {
 						ss.TagIDs[extensionKey] = int(existingTag.DBID)
-						log.Debug().Msgf("using existing tag %s with DBID %d", pf.Ext, existingTag.DBID)
+						log.Debug().Msgf("using existing tag %s with DBID %d", extWithoutDot, existingTag.DBID)
 					}
 				} else {
-					log.Error().Err(err).Msgf("error inserting tag extension: %s", pf.Ext)
+					log.Error().Err(err).Msgf("error inserting tag extension: %s", extWithoutDot)
 				}
 			} else {
 				ss.TagIDs[extensionKey] = tagIndex // Only update cache on success
@@ -291,7 +302,12 @@ func AddMediaPath(
 				MediaDBID: int64(mediaIndex),
 			})
 			if err != nil {
-				log.Debug().Err(err).Msgf("media tag relationship already exists for extension: %s", pf.Ext)
+				var sqliteErr sqlite3.Error
+				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
+					log.Trace().Err(err).Msgf("media tag relationship already exists for extension: %s", extWithoutDot)
+				} else {
+					log.Error().Err(err).Msgf("error inserting media tag relationship for extension: %s", extWithoutDot)
+				}
 			}
 		}
 	}
@@ -808,9 +824,15 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(path string, noExt bool) MediaPathFragments {
+func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFragments {
+	filenameTagsEnabled := cfg == nil || cfg.FilenameTags()
+	cacheKey := PathFragmentKey{
+		Path:         path,
+		FilenameTags: filenameTagsEnabled,
+	}
+
 	// Check cache first
-	if frag, ok := globalPathFragmentCache.get(path); ok {
+	if frag, ok := globalPathFragmentCache.get(cacheKey); ok {
 		return frag
 	}
 
@@ -842,10 +864,16 @@ func GetPathFragments(path string, noExt bool) MediaPathFragments {
 
 	f.Title = getTitleFromFilename(f.FileName)
 	f.Slug = helpers.SlugifyString(f.Title)
-	f.Tags = getTagsFromFileName(f.FileName)
+
+	// Extract tags from filename only if enabled in config (default to enabled for nil config)
+	if cfg == nil || cfg.FilenameTags() {
+		f.Tags = getTagsFromFileName(f.FileName)
+	} else {
+		f.Tags = []string{}
+	}
 
 	// Store in cache for future use
-	globalPathFragmentCache.put(path, &f)
+	globalPathFragmentCache.put(cacheKey, &f)
 
 	return f
 }

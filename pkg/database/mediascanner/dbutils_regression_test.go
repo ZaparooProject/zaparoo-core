@@ -194,6 +194,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				"NES",
 				"/games/nes/Super Mario Bros.nes",
 				false,
+				nil,
 			)
 
 			// CRITICAL: Error must be returned, not silently swallowed
@@ -253,10 +254,10 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 	mockDB.On("FindTagType", database.TagType{Type: "extension"}).
 		Return(database.TagType{DBID: 2, Type: "extension"}, nil).Maybe()
 
-	// Tag insert for .nes extension
+	// Tag insert for nes extension (dot removed)
 	mockDB.On("InsertTag", database.Tag{
 		DBID:     int64(1),
-		Tag:      ".nes",
+		Tag:      "nes",
 		TypeDBID: int64(2),
 	}).Return(database.Tag{DBID: 1}, nil).Maybe()
 
@@ -288,6 +289,7 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 		"NES",
 		"/games/nes/Super Mario Bros.nes",
 		false,
+		nil,
 	)
 
 	// CRITICAL: No error should be returned when recovery succeeds

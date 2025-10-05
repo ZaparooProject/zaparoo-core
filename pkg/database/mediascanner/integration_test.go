@@ -72,7 +72,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false)
+				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, nil)
 				assert.Positive(t, titleIndex, "Title index should be > 0")
 				assert.Positive(t, mediaIndex, "Media index should be > 0")
 			}
@@ -164,7 +164,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 
 		// Add one more system with games
 		newEntry := testdata.NewTestDataGenerator(12345).GenerateMediaEntry("Gameboy")
-		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path, false)
+		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path, false, nil)
 
 		// Verify the new IDs are sequential from where we left off
 		assert.Equal(t, originalTitlesIndex+1, titleIndex, "New title should get next available ID")
@@ -219,8 +219,8 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		testEntry1 := testdata.NewTestDataGenerator(11111).GenerateMediaEntry("NES")
 		testEntry2 := testdata.NewTestDataGenerator(22222).GenerateMediaEntry("SNES")
 
-		_, _, _ = AddMediaPath(mediaDB, scanState, "NES", testEntry1.Path, false)
-		_, _, _ = AddMediaPath(mediaDB, scanState, "SNES", testEntry2.Path, false)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "NES", testEntry1.Path, false, nil)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "SNES", testEntry2.Path, false, nil)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
@@ -253,8 +253,8 @@ func TestUniqueConstraintHandling(t *testing.T) {
 
 		// This used to cause "UNIQUE constraint failed: Systems.DBID" because
 		// PopulateScanStateFromDB wasn't working and indexes started from 0 again
-		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, resumeState, "Genesis", testEntry3.Path, false)
-		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, resumeState, "NES", testEntry4.Path, false)
+		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, resumeState, "Genesis", testEntry3.Path, false, nil)
+		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, resumeState, "NES", testEntry4.Path, false, nil)
 
 		// Verify no constraint violations and IDs are sequential
 		assert.Greater(t, titleIndex1, 2, "New title should have ID > 2")
@@ -316,7 +316,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 
 		// Add specific test data
 		entry := testdata.NewTestDataGenerator(55555).GenerateMediaEntry("PSX")
-		_, _, _ = AddMediaPath(mediaDB, scanState, "PSX", entry.Path, false)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "PSX", entry.Path, false, nil)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
@@ -392,7 +392,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false)
+				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, nil)
 				require.NoError(t, addErr, "Should add media without error")
 			}
 		}
@@ -444,7 +444,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 
 		amigaEntries := batch.Entries["Amiga"]
 		for _, entry := range amigaEntries {
-			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path, false)
+			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path, false, nil)
 			require.NoError(t, addErr, "Should add Amiga media without TagType errors")
 		}
 
@@ -513,7 +513,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 
 		amigaEntries := batch.Entries["Amiga"]
 		for _, entry := range amigaEntries {
-			if _, _, addErr := AddMediaPath(mediaDB, scanState, "Amiga", entry.Path, false); addErr != nil {
+			if _, _, addErr := AddMediaPath(mediaDB, scanState, "Amiga", entry.Path, false, nil); addErr != nil {
 				return addErr
 			}
 		}

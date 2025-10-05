@@ -55,11 +55,16 @@ type Values struct {
 	Readers      Readers   `toml:"readers,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
 	Audio        Audio     `toml:"audio,omitempty"`
+	Media        Media     `toml:"media,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`
 }
 
 type Audio struct {
 	ScanFeedback bool `toml:"scan_feedback,omitempty"`
+}
+
+type Media struct {
+	FilenameTags *bool `toml:"filename_tags,omitempty"`
 }
 
 type ZapScript struct {
@@ -313,6 +318,21 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.ScanFeedback = enabled
+}
+
+func (c *Instance) FilenameTags() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Media.FilenameTags == nil {
+		return true
+	}
+	return *c.vals.Media.FilenameTags
+}
+
+func (c *Instance) SetFilenameTags(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Media.FilenameTags = &enabled
 }
 
 func (c *Instance) DebugLogging() bool {
