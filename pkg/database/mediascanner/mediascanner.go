@@ -779,7 +779,7 @@ func NewNamesIndex(
 				batchStarted = true
 			}
 
-			if _, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path); addErr != nil {
+			if _, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt); addErr != nil {
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
@@ -904,7 +904,8 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					if _, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path); addErr != nil {
+					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt)
+					if addErr != nil {
 						return 0, fmt.Errorf(
 							"unrecoverable error adding custom scanner path %q: %w",
 							result.Path,
@@ -999,7 +1000,8 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					if _, _, addErr := AddMediaPath(db, &scanState, systemID, scanResult.Path); addErr != nil {
+					_, _, addErr := AddMediaPath(db, &scanState, systemID, scanResult.Path, scanResult.NoExt)
+					if addErr != nil {
 						return 0, fmt.Errorf(
 							"unrecoverable error adding 'any' scanner path %q: %w",
 							scanResult.Path,

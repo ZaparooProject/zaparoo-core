@@ -269,8 +269,9 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path: CreateVirtualPath("steam", appID, appName),
-				Name: appName,
+				Path:  CreateVirtualPath("steam", appID, appName),
+				Name:  appName,
+				NoExt: true,
 			})
 		}
 	}
@@ -324,8 +325,9 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path: CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
-				Name: shortcut.AppName,
+				Path:  CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Name:  shortcut.AppName,
+				NoExt: true,
 			})
 		}
 	}

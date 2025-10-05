@@ -193,6 +193,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				scanState,
 				"NES",
 				"/games/nes/Super Mario Bros.nes",
+				false,
 			)
 
 			// CRITICAL: Error must be returned, not silently swallowed
@@ -286,6 +287,7 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 		scanState,
 		"NES",
 		"/games/nes/Super Mario Bros.nes",
+		false,
 	)
 
 	// CRITICAL: No error should be returned when recovery succeeds

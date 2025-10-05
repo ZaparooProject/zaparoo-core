@@ -676,8 +676,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			for _, p := range fullPaths {
 				results = append(results, platforms.ScanResult{
-					Path: p,
-					Name: filepath.Base(p),
+					Path:  p,
+					Name:  filepath.Base(p),
+					NoExt: true,
 				})
 			}
 
@@ -752,8 +753,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 					if altName, ok := names[id]; ok {
 						results = append(results, platforms.ScanResult{
-							Path: filepath.Join(sf.Path, f),
-							Name: altName,
+							Path:  filepath.Join(sf.Path, f),
+							Name:  altName,
+							NoExt: true,
 						})
 					}
 				}

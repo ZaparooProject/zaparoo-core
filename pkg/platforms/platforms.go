@@ -104,6 +104,10 @@ type ScanResult struct {
 	// Name is the display name of the media, shown to the users and used for
 	// search queries.
 	Name string
+	// NoExt indicates this is a virtual path with no file extension.
+	// When true, filepath.Ext() extraction is skipped to avoid extracting
+	// garbage from paths like "/games/file.txt/Game (v1.0)" or "kodi://123/Dr. Strange".
+	NoExt bool
 }
 
 // Launcher defines how a platform launcher can launch media and what media it

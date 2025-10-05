@@ -81,7 +81,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path)
+				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false)
 				assert.Positive(t, titleIndex, "Title index should be > 0")
 				assert.Positive(t, mediaIndex, "Media index should be > 0")
 			}
@@ -173,7 +173,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 
 		// Add one more system with games
 		newEntry := testdata.NewTestDataGenerator(12345).GenerateMediaEntry("Gameboy")
-		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path)
+		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path, false)
 
 		// Verify the new IDs are sequential from where we left off
 		assert.Equal(t, originalTitlesIndex+1, titleIndex, "New title should get next available ID")

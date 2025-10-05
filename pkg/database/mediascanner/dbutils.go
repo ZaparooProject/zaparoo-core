@@ -109,8 +109,9 @@ func AddMediaPath(
 	ss *database.ScanState,
 	systemID string,
 	path string,
+	noExt bool,
 ) (titleIndex, mediaIndex int, err error) {
-	pf := GetPathFragments(path)
+	pf := GetPathFragments(path, noExt)
 
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
@@ -807,7 +808,7 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(path string) MediaPathFragments {
+func GetPathFragments(path string, noExt bool) MediaPathFragments {
 	// Check cache first
 	if frag, ok := globalPathFragmentCache.get(path); ok {
 		return frag
@@ -825,9 +826,16 @@ func GetPathFragments(path string) MediaPathFragments {
 
 	fileBase := filepath.Base(f.Path)
 
-	f.Ext = strings.ToLower(filepath.Ext(f.Path))
-	if helpers.HasSpace(f.Ext) {
+	// Skip extension extraction for virtual paths to avoid extracting garbage
+	// like ".)(ocs)" from "/games/file.txt/Game (v1.0)(ocs)" or
+	// ". Strange" from "kodi://123/Dr. Strange"
+	if noExt || helpers.ReURI.MatchString(path) {
 		f.Ext = ""
+	} else {
+		f.Ext = strings.ToLower(filepath.Ext(f.Path))
+		if helpers.HasSpace(f.Ext) {
+			f.Ext = ""
+		}
 	}
 
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
