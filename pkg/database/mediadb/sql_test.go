@@ -469,12 +469,12 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 		{ID: "NES"},
 	}
 	parts := []string{"mario"}
-	tags := []string{"Action"}
+	tags := []database.TagFilter{{Type: "genre", Value: "Action"}}
 
 	// Mock first query: get media items
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
-		WithArgs("NES", "%mario%", "Action", 10).
+		WithArgs("NES", "%mario%", "genre", "Action", 1, 10).
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
 			AddRow("NES", "/games/mario.nes", 1))
 

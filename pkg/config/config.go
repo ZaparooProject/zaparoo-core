@@ -46,6 +46,7 @@ const (
 )
 
 type Values struct {
+	Media        Media     `toml:"media,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
@@ -55,7 +56,6 @@ type Values struct {
 	Readers      Readers   `toml:"readers,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
 	Audio        Audio     `toml:"audio,omitempty"`
-	Media        Media     `toml:"media,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`
 }
 

@@ -1228,7 +1228,7 @@ func (m *MockMediaDBI) InvalidateCountCache() error {
 	return nil
 }
 
-func (m *MockMediaDBI) RandomGameWithQuery(query database.MediaQuery) (database.SearchResult, error) {
+func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
 	args := m.Called(query)
 	if result, ok := args.Get(0).(database.SearchResult); ok {
 		if err := args.Error(1); err != nil {

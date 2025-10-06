@@ -405,12 +405,12 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	query := database.MediaQuery{
 		Systems: []string{nesSystem.ID},
 	}
-	result, err = mediaDB.RandomGameWithQuery(query)
+	result, err = mediaDB.RandomGameWithQuery(&query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result.SystemID)
 
 	// Test that cache is working - second call should use cache
-	result2, err := mediaDB.RandomGameWithQuery(query)
+	result2, err := mediaDB.RandomGameWithQuery(&query)
 	require.NoError(t, err)
 	assert.Equal(t, nesSystem.ID, result2.SystemID)
 }
@@ -463,11 +463,11 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 	query := database.MediaQuery{
 		Systems: []string{nesSystem.ID},
 	}
-	_, err = mediaDB.RandomGameWithQuery(query)
+	_, err = mediaDB.RandomGameWithQuery(&query)
 	require.NoError(t, err)
 
 	// Verify cache exists
-	stats, found := mediaDB.GetCachedStats(ctx, query)
+	stats, found := mediaDB.GetCachedStats(ctx, &query)
 	assert.True(t, found)
 	assert.Equal(t, 1, stats.Count)
 
@@ -476,7 +476,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify cache is cleared
-	_, found = mediaDB.GetCachedStats(ctx, query)
+	_, found = mediaDB.GetCachedStats(ctx, &query)
 	assert.False(t, found)
 }
 
@@ -672,7 +672,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	filters := &database.SearchFilters{
 		Systems: []systemdefs.System{*nesSystem},
 		Query:   "mario",
-		Tags:    []string{"Action"},
+		Tags:    []database.TagFilter{{Type: "Genre", Value: "Action"}},
 		Limit:   10,
 	}
 	results, err := mediaDB.SearchMediaWithFilters(ctx, filters)

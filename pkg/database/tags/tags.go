@@ -19,8 +19,15 @@
 
 package tags
 
-// This tag system is inspired by the GameDataBase project's hierarchical tag taxonomy.
-// Reference: https://github.com/PigSaint/GameDataBase/blob/main/tags.yml
+import (
+	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+)
+
+// This tag system is inspired by the GameDataBase project's hierarchical
+// tag taxonomy. Reference: https://github.com/PigSaint/GameDataBase/blob/main/tags.yml
 
 // TagType represents a top-level tag category
 type TagType string
@@ -85,6 +92,43 @@ const (
 //
 // Our format differs from GameDataBase (#type:subtag>value) by using colons throughout
 // for simplicity, but the taxonomy and tag values are directly inspired by their work.
+
+// NormalizeTag normalizes a tag string for consistent querying and storage.
+// Applied to BOTH type and value parts separately.
+// Rules: trim whitespace, normalize colon spacing, lowercase, spaces→dashes,
+// remove periods and special chars (except colon, dash, and comma)
+func NormalizeTag(s string) string {
+	// 1. Trim whitespace
+	s = strings.TrimSpace(s)
+
+	// 2. Normalize colon spacing - remove spaces around colons first
+	s = helpers.CachedMustCompile(`\s*:\s*`).ReplaceAllString(s, ":")
+
+	// 3. Convert to lowercase
+	s = strings.ToLower(s)
+
+	// 4. Replace remaining spaces with dashes
+	s = strings.ReplaceAll(s, " ", "-")
+
+	// 5. Remove periods
+	s = strings.ReplaceAll(s, ".", "")
+
+	// 6. Remove other special chars (except colon, dash, and comma)
+	// Keep: a-z, 0-9, dash, colon, comma
+	s = helpers.CachedMustCompile(`[^a-z0-9:,-]`).ReplaceAllString(s, "")
+
+	return s
+}
+
+// NormalizeTagFilter normalizes a TagFilter for consistent querying.
+// Applies normalization to both Type and Value fields.
+func NormalizeTagFilter(filter database.TagFilter) database.TagFilter {
+	return database.TagFilter{
+		Type:  NormalizeTag(filter.Type),
+		Value: NormalizeTag(filter.Value),
+	}
+}
+
 var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypeInput: {
 		// Joystick types

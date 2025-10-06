@@ -111,6 +111,12 @@ type TagInfo struct {
 	Type string `json:"type"`
 }
 
+// TagFilter represents a tag type/value filter for queries
+type TagFilter struct {
+	Type  string // Tag type (e.g., "lang", "year", "players")
+	Value string // Tag value (e.g., "en", "1991", "2")
+}
+
 type SearchResultWithCursor struct {
 	SystemID string
 	Name     string
@@ -145,9 +151,10 @@ type FileInfo struct {
 
 // MediaQuery represents parameters for querying media counts used in random selection
 type MediaQuery struct {
-	PathGlob   string   `json:"pathGlob,omitempty"`
-	PathPrefix string   `json:"pathPrefix,omitempty"`
-	Systems    []string `json:"systems,omitempty"`
+	PathGlob   string      `json:"pathGlob,omitempty"`
+	PathPrefix string      `json:"pathPrefix,omitempty"`
+	Systems    []string    `json:"systems,omitempty"`
+	Tags       []TagFilter `json:"tags,omitempty"`
 }
 
 // SearchFilters represents parameters for filtered media search
@@ -156,7 +163,7 @@ type SearchFilters struct {
 	Letter  *string             `json:"letter,omitempty"`
 	Query   string              `json:"query"`
 	Systems []systemdefs.System `json:"systems,omitempty"`
-	Tags    []string            `json:"tags,omitempty"`
+	Tags    []TagFilter         `json:"tags,omitempty"`
 	Limit   int                 `json:"limit"`
 }
 
@@ -255,7 +262,7 @@ type MediaDBI interface {
 	IndexedSystems() ([]string, error)
 	SystemIndexed(system systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
-	RandomGameWithQuery(query MediaQuery) (SearchResult, error)
+	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)
 
 	FindSystem(row System) (System, error)

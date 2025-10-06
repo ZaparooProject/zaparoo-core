@@ -543,7 +543,8 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 			// Check that query is empty but tags are provided
 			return filters.Query == "" &&
 				len(filters.Tags) == 1 &&
-				filters.Tags[0] == "genre:RPG" &&
+				filters.Tags[0].Type == "genre" &&
+				filters.Tags[0].Value == "rpg" &&
 				len(filters.Systems) > 0 // Should have all systems
 		}),
 	).Return(expectedResults, nil)

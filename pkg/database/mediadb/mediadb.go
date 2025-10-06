@@ -780,7 +780,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.
-func (db *MediaDB) RandomGameWithQuery(query database.MediaQuery) (database.SearchResult, error) {
+func (db *MediaDB) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
 	var result database.SearchResult
 	if db.sql == nil {
 		return result, ErrNullSQL
@@ -826,7 +826,7 @@ type MediaStats struct {
 
 // GetCachedStats returns cached statistics for the given media query, if available.
 // Returns the stats and true if found, or empty stats and false if not cached.
-func (db *MediaDB) GetCachedStats(ctx context.Context, query database.MediaQuery) (MediaStats, bool) {
+func (db *MediaDB) GetCachedStats(ctx context.Context, query *database.MediaQuery) (MediaStats, bool) {
 	if db.sql == nil {
 		return MediaStats{}, false
 	}
@@ -853,7 +853,7 @@ func (db *MediaDB) GetCachedStats(ctx context.Context, query database.MediaQuery
 }
 
 // randomGameWithStats generates a random game selection using cached statistics.
-func (db *MediaDB) randomGameWithStats(query database.MediaQuery, stats MediaStats) (database.SearchResult, error) {
+func (db *MediaDB) randomGameWithStats(query *database.MediaQuery, stats MediaStats) (database.SearchResult, error) {
 	var row database.SearchResult
 
 	// Generate random DBID within the range
@@ -908,7 +908,7 @@ func (db *MediaDB) randomGameWithStats(query database.MediaQuery, stats MediaSta
 }
 
 // SetCachedStats stores statistics for the given media query in the cache.
-func (db *MediaDB) SetCachedStats(ctx context.Context, query database.MediaQuery, stats MediaStats) error {
+func (db *MediaDB) SetCachedStats(ctx context.Context, query *database.MediaQuery, stats MediaStats) error {
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -949,17 +949,27 @@ func (db *MediaDB) InvalidateCountCache() error {
 }
 
 // generateQueryHash creates a consistent hash for a MediaQuery for cache key purposes.
-func (*MediaDB) generateQueryHash(query database.MediaQuery) (string, error) {
+func (*MediaDB) generateQueryHash(query *database.MediaQuery) (string, error) {
 	// Normalize the query to ensure consistent hashing
 	normalized := database.MediaQuery{
 		Systems:    make([]string, len(query.Systems)),
 		PathGlob:   strings.ToLower(strings.TrimSpace(query.PathGlob)),
 		PathPrefix: strings.ToLower(strings.TrimSpace(query.PathPrefix)),
+		Tags:       make([]database.TagFilter, len(query.Tags)),
 	}
 
 	// Sort systems for consistent ordering
 	copy(normalized.Systems, query.Systems)
 	sort.Strings(normalized.Systems)
+
+	// Copy and sort tags for consistent ordering
+	copy(normalized.Tags, query.Tags)
+	sort.Slice(normalized.Tags, func(i, j int) bool {
+		if normalized.Tags[i].Type != normalized.Tags[j].Type {
+			return normalized.Tags[i].Type < normalized.Tags[j].Type
+		}
+		return normalized.Tags[i].Value < normalized.Tags[j].Value
+	})
 
 	// Marshal to JSON with consistent ordering
 	queryBytes, err := json.Marshal(normalized)

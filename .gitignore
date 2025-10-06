@@ -13,7 +13,7 @@ go.work
 .idea/
 .claude/
 .claudeignore
-*.changeset
+.opencode/
 
 *.db
 *.tar

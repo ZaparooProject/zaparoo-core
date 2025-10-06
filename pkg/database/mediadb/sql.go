@@ -1301,7 +1301,7 @@ func sqlSearchMediaWithFilters(
 	db *sql.DB,
 	systems []systemdefs.System,
 	parts []string,
-	tags []string,
+	tags []database.TagFilter,
 	letter *string,
 	cursor *int64,
 	limit int,
@@ -1331,18 +1331,30 @@ func sqlSearchMediaWithFilters(
 		args = append(args, *cursor)
 	}
 
-	// Add tag filtering condition
+	// Add tag filtering condition - requires type:value format (AND logic)
 	tagFilterCondition := ""
 	if len(tags) > 0 {
-		tagFilterCondition = `
+		// Build tag filter conditions for AND logic - media must have ALL specified tags
+		var tagConditions []string
+		for range tags {
+			tagConditions = append(tagConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
+		}
+
+		tagFilterCondition = fmt.Sprintf(`
 			AND Media.DBID IN (
 				SELECT MediaDBID FROM MediaTags
 				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-				WHERE Tags.Tag IN (` + prepareVariadic("?", ",", len(tags)) + `)
-			)`
-		for _, tag := range tags {
-			args = append(args, tag)
+				JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE %s
+				GROUP BY MediaDBID
+				HAVING COUNT(DISTINCT Tags.DBID) = ?
+			)`, strings.Join(tagConditions, " OR "))
+
+		// Add arguments in the same order as conditions, plus the count for HAVING clause
+		for _, tagFilter := range tags {
+			args = append(args, tagFilter.Type, tagFilter.Value)
 		}
+		args = append(args, len(tags)) // HAVING COUNT = number of tags (AND logic)
 	}
 
 	// Add letter filtering condition
@@ -1937,7 +1949,7 @@ func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (d
 
 // buildMediaQueryWhereClause creates WHERE clause and arguments for a MediaQuery.
 // Centralizes the logic to avoid duplication between different query functions.
-func buildMediaQueryWhereClause(query database.MediaQuery) (whereClause string, args []any) {
+func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string, args []any) {
 	var whereConditions []string
 
 	// System filtering
@@ -1975,6 +1987,31 @@ func buildMediaQueryWhereClause(query database.MediaQuery) (whereClause string, 
 		}
 	}
 
+	// Tag filtering - requires type:value format (AND logic)
+	if len(query.Tags) > 0 {
+		// Build tag filter conditions for AND logic - media must have ALL specified tags
+		var tagConditions []string
+		for range query.Tags {
+			tagConditions = append(tagConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
+		}
+
+		whereConditions = append(whereConditions,
+			fmt.Sprintf(`Media.DBID IN (
+				SELECT MediaDBID FROM MediaTags
+				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+				JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE %s
+				GROUP BY MediaDBID
+				HAVING COUNT(DISTINCT Tags.DBID) = ?
+			)`, strings.Join(tagConditions, " OR ")))
+
+		// Add arguments in the same order as conditions, plus the count for HAVING clause
+		for _, tagFilter := range query.Tags {
+			args = append(args, tagFilter.Type, tagFilter.Value)
+		}
+		args = append(args, len(query.Tags)) // HAVING COUNT = number of tags (AND logic)
+	}
+
 	if len(whereConditions) > 0 {
 		whereClause = "WHERE " + strings.Join(whereConditions, " AND ")
 	}
@@ -1984,7 +2021,7 @@ func buildMediaQueryWhereClause(query database.MediaQuery) (whereClause string, 
 
 // sqlRandomGameWithQueryAndStats returns a random game matching the query along with the computed statistics.
 func sqlRandomGameWithQueryAndStats(
-	ctx context.Context, db *sql.DB, query database.MediaQuery,
+	ctx context.Context, db *sql.DB, query *database.MediaQuery,
 ) (database.SearchResult, MediaStats, error) {
 	var row database.SearchResult
 	var stats MediaStats

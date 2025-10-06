@@ -20,6 +20,7 @@
 package zapscript
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -28,11 +29,59 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
+
+// parseTagsAdvArg parses comma-delimited tags from advanced args
+// Format: "type:value,type2:value2" -> [{Type:"type", Value:"value"}, {Type:"type2", Value:"value2"}]
+func parseTagsAdvArg(tagsStr string) []database.TagFilter {
+	if tagsStr == "" {
+		return nil
+	}
+
+	parts := strings.Split(tagsStr, ",")
+	tagFilters := make([]database.TagFilter, 0, len(parts))
+
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag == "" {
+			continue
+		}
+
+		// Check if tag contains type:value format
+		if strings.Contains(tag, ":") {
+			typValue := strings.SplitN(tag, ":", 2)
+			if len(typValue) == 2 {
+				tagType := strings.TrimSpace(typValue[0])
+				tagValue := strings.TrimSpace(typValue[1])
+				if tagType != "" && tagValue != "" {
+					// Normalize the tag filter for consistent querying
+					normalizedFilter := database.TagFilter{
+						Type:  tags.NormalizeTag(tagType),
+						Value: tags.NormalizeTag(tagValue),
+					}
+					tagFilters = append(tagFilters, normalizedFilter)
+				} else {
+					log.Warn().Str("tag", tag).Msg("Ignoring tag with empty type or value")
+				}
+			} else {
+				log.Warn().Str("tag", tag).Msg("Ignoring malformed tag; expected 'type:value' format")
+			}
+		} else {
+			log.Warn().Str("tag", tag).Msg("Ignoring malformed tag; expected 'type:value' format")
+		}
+	}
+
+	if len(tagFilters) == 0 {
+		return nil
+	}
+
+	return tagFilters
+}
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -80,6 +129,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, err
 	}
 
+	// Parse tags from advanced args
+	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
 	gamesdb := env.Database.MediaDB
 
 	if strings.EqualFold(query, "all") {
@@ -90,8 +142,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 		mediaQuery := database.MediaQuery{
 			Systems: systemIDs,
+			Tags:    tagFilters,
 		}
-		game, gameErr := gamesdb.RandomGameWithQuery(mediaQuery)
+		game, gameErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if gameErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
@@ -111,8 +164,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	if filepath.IsAbs(query) {
 		mediaQuery := database.MediaQuery{
 			PathPrefix: query,
+			Tags:       tagFilters,
 		}
-		searchResult, searchErr := gamesdb.RandomGameWithQuery(mediaQuery)
+		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
@@ -155,8 +209,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			}
 			mediaQuery := database.MediaQuery{
 				Systems: systemIDs,
+				Tags:    tagFilters,
 			}
-			game, randomErr := gamesdb.RandomGameWithQuery(mediaQuery)
+			game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 			if randomErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
@@ -178,8 +233,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		mediaQuery := database.MediaQuery{
 			Systems:  systemIDs,
 			PathGlob: query,
+			Tags:     tagFilters,
 		}
-		game, randomErr := gamesdb.RandomGameWithQuery(mediaQuery)
+		game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if randomErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game matching '%s': %w", query, randomErr)
 		}
@@ -213,8 +269,9 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 	mediaQuery := database.MediaQuery{
 		Systems: systemIDs,
+		Tags:    tagFilters,
 	}
-	game, err := gamesdb.RandomGameWithQuery(mediaQuery)
+	game, err := gamesdb.RandomGameWithQuery(&mediaQuery)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
@@ -458,6 +515,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, err
 	}
 
+	// Parse tags from advanced args
+	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
 	query = strings.ToLower(query)
 	query = strings.TrimSpace(query)
 
@@ -465,7 +525,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
-		res, searchErr := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
+		filters := database.SearchFilters{
+			Systems: systemdefs.AllSystems(),
+			Query:   query,
+			Tags:    tagFilters,
+			Limit:   1,
+		}
+		// TODO: context should come from service state
+		res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &filters)
 		if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search all systems for '%s': %w", query, searchErr)
 		}
@@ -503,7 +570,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
+	filters := database.SearchFilters{
+		Systems: systems,
+		Query:   query,
+		Tags:    tagFilters,
+		Limit:   1,
+	}
+	// TODO: context should come from service state
+	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &filters)
 	if searchErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", query, searchErr)
 	}

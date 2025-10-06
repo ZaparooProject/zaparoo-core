@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -80,39 +81,57 @@ const (
 	maxTagLength = 128
 )
 
-// validateAndNormalizeTags validates and normalizes a slice of tags
-// Returns error if validation fails, or normalized tags slice
-func validateAndNormalizeTags(tags []string) ([]string, error) {
-	if len(tags) > maxTagsCount {
-		return nil, fmt.Errorf("exceeded maximum number of tags for search: %d (max: %d)", len(tags), maxTagsCount)
+// parseAndValidateTagFilters converts raw tag strings to validated TagFilter structs
+func parseAndValidateTagFilters(tagSlice []string) ([]database.TagFilter, error) {
+	if len(tagSlice) > maxTagsCount {
+		return nil, fmt.Errorf("exceeded maximum number of tags: %d (max: %d)", len(tagSlice), maxTagsCount)
 	}
 
-	// Use a map to deduplicate and normalize
-	seen := make(map[string]bool)
-	normalized := make([]string, 0, len(tags))
+	// Use map for deduplication of normalized tags
+	normalizedFilters := make(map[string]database.TagFilter)
 
-	for _, tag := range tags {
-		// Trim whitespace
-		tag = strings.TrimSpace(tag)
-
-		// Skip empty tags
-		if tag == "" {
+	for _, tagStr := range tagSlice {
+		trimmedTag := strings.TrimSpace(tagStr)
+		if trimmedTag == "" {
 			continue
 		}
 
-		// Check length
-		if len(tag) > maxTagLength {
-			return nil, fmt.Errorf("tag too long: %q (max: %d characters)", tag, maxTagLength)
+		if len(trimmedTag) > maxTagLength {
+			return nil, fmt.Errorf("tag too long: %q (max: %d characters)", trimmedTag, maxTagLength)
 		}
 
-		// Deduplicate (case-sensitive)
-		if !seen[tag] {
-			seen[tag] = true
-			normalized = append(normalized, tag)
+		// Validate type:value format
+		parts := strings.SplitN(trimmedTag, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid tag format for %q: must be in 'type:value' format", trimmedTag)
+		}
+
+		tagType := strings.TrimSpace(parts[0])
+		tagValue := strings.TrimSpace(parts[1])
+		if tagType == "" || tagValue == "" {
+			return nil, fmt.Errorf("invalid tag %q: type and value cannot be empty", trimmedTag)
+		}
+
+		// Apply full normalization
+		filter := database.TagFilter{
+			Type:  tags.NormalizeTag(tagType),
+			Value: tags.NormalizeTag(tagValue),
+		}
+
+		// Deduplicate by normalized key
+		key := filter.Type + ":" + filter.Value
+		if _, seen := normalizedFilters[key]; !seen {
+			normalizedFilters[key] = filter
 		}
 	}
 
-	return normalized, nil
+	// Convert map to slice
+	result := make([]database.TagFilter, 0, len(normalizedFilters))
+	for _, filter := range normalizedFilters {
+		result = append(result, filter)
+	}
+
+	return result, nil
 }
 
 type indexingStatusVals struct {
@@ -464,16 +483,15 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	if params.Query != nil {
 		query = *params.Query
 	}
-	tags := params.Tags
+	tagParams := params.Tags
 	letter := params.Letter
 
-	// Validate and normalize tags parameter
-	var normalizedTags []string
-	if tags != nil && len(*tags) > 0 {
-		var validationErr error
-		normalizedTags, validationErr = validateAndNormalizeTags(*tags)
-		if validationErr != nil {
-			return nil, validationErr
+	// Validate and parse tags parameter - requires type:value format
+	var tagFilters []database.TagFilter
+	if tagParams != nil && len(*tagParams) > 0 {
+		tagFilters, err = parseAndValidateTagFilters(*tagParams)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -510,7 +528,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	filters := database.SearchFilters{
 		Systems: systems,
 		Query:   query,
-		Tags:    normalizedTags, // Will be empty if no tags provided
+		Tags:    tagFilters, // Will be empty if no tags provided
 		Letter:  validatedLetter,
 		Cursor:  cursor,
 		Limit:   limit,
@@ -598,14 +616,13 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 	system := params.Systems
 
-	var tags []database.TagInfo
+	var tagList []database.TagInfo
 	var err error
 
-	// Optimize for "all systems" case using ultra-fast query
+	// Optimize for "all systems" case
 	switch {
 	case system == nil || len(*system) == 0:
-		// Use ultra-fast query for all tags
-		tags, err = env.Database.MediaDB.GetAllUsedTags(ctx)
+		tagList, err = env.Database.MediaDB.GetAllUsedTags(ctx)
 	default:
 		// Specific systems - use cached approach with fallback
 		systems := make([]systemdefs.System, 0, len(*system))
@@ -616,14 +633,14 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 			}
 			systems = append(systems, *sys)
 		}
-		tags, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
+		tagList, err = env.Database.MediaDB.GetSystemTagsCached(ctx, systems)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error getting tags: %w", err)
 	}
 
 	return models.TagsResponse{
-		Tags: tags,
+		Tags: tagList,
 	}, nil
 }
 
