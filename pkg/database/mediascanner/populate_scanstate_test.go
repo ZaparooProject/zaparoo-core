@@ -271,11 +271,11 @@ func TestPopulateScanStateFromDB_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (1, 1, 'path/to/game1.nes')")
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (1, 1, 1, 'path/to/game1.nes')")
 		require.NoError(t, err)
 
 		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,
-			"INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (2, 2, 'path/to/game2.nes')")
+			"INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (2, 2, 1, 'path/to/game2.nes')")
 		require.NoError(t, err)
 
 		_, err = mediaDB.UnsafeGetSQLDb().ExecContext(ctx,

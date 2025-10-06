@@ -411,8 +411,9 @@ func sqlFindSystemBySystemID(ctx context.Context, db *sql.DB, systemID string) (
 const (
 	insertSystemSQL     = `INSERT INTO Systems (DBID, SystemID, Name) VALUES (?, ?, ?)`
 	insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
-	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, Path) VALUES (?, ?, ?)`
+	insertMediaSQL      = `INSERT INTO Media (DBID, MediaTitleDBID, SystemDBID, Path) VALUES (?, ?, ?, ?)`
 	insertTagSQL        = `INSERT INTO Tags (DBID, TypeDBID, Tag) VALUES (?, ?, ?)`
+	insertTagTypeSQL    = `INSERT INTO TagTypes (DBID, Type) VALUES (?, ?)`
 	insertMediaTagSQL   = `INSERT OR IGNORE INTO MediaTags (MediaDBID, TagDBID) VALUES (?, ?)`
 )
 
@@ -467,7 +468,7 @@ func sqlInsertMediaWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row dat
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.Path)
+	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert media statement: %w", err)
 	}
@@ -495,6 +496,28 @@ func sqlInsertTagWithPreparedStmt(ctx context.Context, stmt *sql.Stmt, row datab
 	lastID, err := res.LastInsertId()
 	if err != nil {
 		return row, fmt.Errorf("failed to get last insert ID for tag: %w", err)
+	}
+
+	row.DBID = lastID
+	return row, nil
+}
+
+func sqlInsertTagTypeWithPreparedStmt(
+	ctx context.Context, stmt *sql.Stmt, row database.TagType,
+) (database.TagType, error) {
+	var dbID any
+	if row.DBID != 0 {
+		dbID = row.DBID
+	}
+
+	res, err := stmt.ExecContext(ctx, dbID, row.Type)
+	if err != nil {
+		return row, fmt.Errorf("failed to execute prepared insert tag type statement: %w", err)
+	}
+
+	lastID, err := res.LastInsertId()
+	if err != nil {
+		return row, fmt.Errorf("failed to get last insert ID for tag type: %w", err)
 	}
 
 	row.DBID = lastID
@@ -683,11 +706,12 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 	var row database.Media
 	stmt, err := db.PrepareContext(ctx, `
 		select
-		DBID, MediaTitleDBID, Path
+		DBID, MediaTitleDBID, SystemDBID, Path
 		from Media
 		where DBID = ?
 		or (
 			MediaTitleDBID = ?
+			and SystemDBID = ?
 			and Path = ?
 		)
 		LIMIT 1;
@@ -703,10 +727,12 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 	err = stmt.QueryRowContext(ctx,
 		media.DBID,
 		media.MediaTitleDBID,
+		media.SystemDBID,
 		media.Path,
 	).Scan(
 		&row.DBID,
 		&row.MediaTitleDBID,
+		&row.SystemDBID,
 		&row.Path,
 	)
 	if err != nil {
@@ -731,7 +757,7 @@ func sqlInsertMedia(ctx context.Context, db *sql.DB, row database.Media) (databa
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.Path)
+	res, err := stmt.ExecContext(ctx, dbID, row.MediaTitleDBID, row.SystemDBID, row.Path)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media statement: %w", err)
 	}
@@ -2232,7 +2258,7 @@ func sqlGetTitlesWithSystems(ctx context.Context, db *sql.DB) ([]database.TitleW
 // sqlGetMediaWithFullPath retrieves all media with their associated title and system information using JOIN queries.
 func sqlGetMediaWithFullPath(ctx context.Context, db *sql.DB) ([]database.MediaWithFullPath, error) {
 	query := `
-		SELECT m.DBID, m.Path, m.MediaTitleDBID, t.Slug, s.SystemID
+		SELECT m.DBID, m.Path, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
 		FROM Media m
 		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
 		JOIN Systems s ON t.SystemDBID = s.DBID
@@ -2251,7 +2277,8 @@ func sqlGetMediaWithFullPath(ctx context.Context, db *sql.DB) ([]database.MediaW
 	media := make([]database.MediaWithFullPath, 0)
 	for rows.Next() {
 		var m database.MediaWithFullPath
-		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &m.TitleSlug, &m.SystemID); err != nil {
+		var systemDBID int64 // Temporary variable for the extra field
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID); err != nil {
 			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
 		}
 		media = append(media, m)
@@ -2416,7 +2443,7 @@ func sqlGetMediaWithFullPathExcluding(
 
 	//nolint:gosec // using parameterized placeholders, not user input
 	query := fmt.Sprintf(`
-		SELECT m.DBID, m.Path, m.MediaTitleDBID, t.Slug, s.SystemID
+		SELECT m.DBID, m.Path, m.MediaTitleDBID, m.SystemDBID, t.Slug, s.SystemID
 		FROM Media m
 		JOIN MediaTitles t ON m.MediaTitleDBID = t.DBID
 		JOIN Systems s ON t.SystemDBID = s.DBID
@@ -2437,7 +2464,8 @@ func sqlGetMediaWithFullPathExcluding(
 	media := make([]database.MediaWithFullPath, 0)
 	for rows.Next() {
 		var m database.MediaWithFullPath
-		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &m.TitleSlug, &m.SystemID); err != nil {
+		var systemDBID int64 // Temporary variable for the extra field
+		if err := rows.Scan(&m.DBID, &m.Path, &m.MediaTitleDBID, &systemDBID, &m.TitleSlug, &m.SystemID); err != nil {
 			return nil, fmt.Errorf("failed to scan media with full path: %w", err)
 		}
 		media = append(media, m)

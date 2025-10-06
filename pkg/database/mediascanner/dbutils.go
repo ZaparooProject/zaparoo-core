@@ -206,6 +206,7 @@ func AddMediaPath(
 			DBID:           int64(mediaIndex),
 			Path:           pf.Path,
 			MediaTitleDBID: int64(titleIndex),
+			SystemDBID:     int64(systemIndex),
 		})
 		if err != nil {
 			ss.MediaIndex-- // Rollback index increment on failure
@@ -219,6 +220,7 @@ func AddMediaPath(
 				existingMedia, getErr := db.FindMedia(database.Media{
 					Path:           pf.Path,
 					MediaTitleDBID: int64(titleIndex),
+					SystemDBID:     int64(systemIndex),
 				})
 				if getErr != nil || existingMedia.DBID == 0 {
 					return 0, 0, fmt.Errorf(
@@ -368,6 +370,10 @@ func getTitleFromFilename(filename string) string {
 // Tags follow the format: category:subcategory:value (e.g., "genre:sports:wrestling", "players:2:vs")
 // Tag definitions are in tags.go for centralized management.
 func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
+	if err := db.BeginTransaction(); err != nil {
+		return fmt.Errorf("failed to begin transaction for seeding tags: %w", err)
+	}
+
 	// Use canonical tag definitions from tags.go
 	typeMatches := make(map[string][]string)
 	for tagType, tagValues := range tags.CanonicalTagDefinitions {
@@ -527,6 +533,14 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 			}
 		}
 	}
+
+	if err := db.CommitTransaction(); err != nil {
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			log.Error().Err(rbErr).Msg("failed to rollback transaction after commit failure")
+		}
+		return fmt.Errorf("failed to commit tag seeding transaction: %w", err)
+	}
+
 	return nil
 }
 

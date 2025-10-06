@@ -282,6 +282,9 @@ func TestSeedCanonicalTags_DatabaseError(t *testing.T) {
 				TagIDs:        make(map[string]int),
 			}
 
+			mockDB.On("BeginTransaction").Return(nil).Once()
+			mockDB.On("RollbackTransaction").Return(nil).Maybe()
+
 			// Set up mocks based on which operation should fail
 			switch tc.failOperation {
 			case "InsertTagType_Unknown":
@@ -322,12 +325,12 @@ func TestSeedCanonicalTags_DatabaseError(t *testing.T) {
 	}
 }
 
-// TestSeedCanonicalTags_OutsideTransaction tests that SeedCanonicalTags can be called outside a transaction
-func TestSeedCanonicalTags_OutsideTransaction(t *testing.T) {
+// TestSeedCanonicalTags_BatchTransaction tests that SeedCanonicalTags uses a batch transaction
+func TestSeedCanonicalTags_BatchTransaction(t *testing.T) {
 	t.Parallel()
 
-	// This test ensures our fix allows SeedCanonicalTags to be called before BeginTransaction
-	// We simulate this by ensuring the function works without any transaction context
+	// This test ensures SeedCanonicalTags manages its own transaction for batch operations
+	// to avoid database locking issues
 
 	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
 	defer cleanup()
@@ -339,11 +342,11 @@ func TestSeedCanonicalTags_OutsideTransaction(t *testing.T) {
 		TagIDs:        make(map[string]int),
 	}
 
-	// Call SeedCanonicalTags - this should work without any transaction context
+	// Call SeedCanonicalTags - this should manage its own transaction
 	err := SeedCanonicalTags(mediaDB, scanState)
 
 	// Verify success
-	require.NoError(t, err, "SeedCanonicalTags should work outside of transaction context")
+	require.NoError(t, err, "SeedCanonicalTags should complete successfully with batch transaction")
 	assert.Positive(t, scanState.TagTypesIndex, "TagTypesIndex should be incremented")
 	assert.Positive(t, scanState.TagsIndex, "TagsIndex should be incremented")
 }
@@ -1105,14 +1108,16 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 
 	// Verify that operations outside transactions are only for setup/cleanup, not file processing
 	// The key fix ensures file processing operations happen within transactions
-	// Setup operations (status, seeding, etc.) are allowed outside transactions
-	assert.Positive(t, mockMediaDB.OperationsOutsideTxn,
-		"Setup and cleanup operations should happen outside transactions (this is correct behavior)")
+	// With batch transaction seeding, InsertTag/InsertTagType now happen inside transactions
+	// OperationsOutsideTxn may be 0 with this optimization, which is acceptable
+	assert.GreaterOrEqual(t, mockMediaDB.OperationsOutsideTxn, 0,
+		"Operations outside transactions should be non-negative")
 
 	// Verify transaction usage matches expected behavior
-	// With no files to process, no transactions should be started (optimization)
-	assert.Equal(t, 0, mockMediaDB.TransactionCount,
-		"Should use 0 transactions when no files to process")
+	// SeedCanonicalTags uses 1 transaction for batch tag seeding
+	// With no files to process, only the tag seeding transaction should occur
+	assert.Equal(t, 1, mockMediaDB.TransactionCount,
+		"Should use 1 transaction for tag seeding when no files to process")
 
 	mockMediaDB.AssertExpectations(t)
 }

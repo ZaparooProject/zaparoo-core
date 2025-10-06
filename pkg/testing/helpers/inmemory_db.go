@@ -93,7 +93,6 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		}
 		t.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
-	// Set dbPath so SetJournalMode can reopen the same database file
 	db.SetDBPathForTesting(dbPath)
 
 	cleanup = func() {

@@ -494,9 +494,6 @@ func NewNamesIndex(
 		TagIDs:        make(map[string]int),
 	}
 
-	// Track whether we switched to DELETE journal mode (needed for defer cleanup)
-	switchedToDeleteMode := false
-
 	// 3. Truncate and Initial Status Set
 	if !shouldResume {
 		log.Info().Msg("preparing database for fresh indexing")
@@ -521,22 +518,13 @@ func NewNamesIndex(
 		sort.Strings(allSystemIDs)
 
 		if len(currentSystemIDs) == len(allSystemIDs) && helpers.EqualStringSlices(currentSystemIDs, allSystemIDs) {
-			// Full indexing - use DELETE journal mode for maximum performance
-			// Checkpoint WAL before switching to prevent locks
-			log.Info().Msg("checkpointing WAL before switching to DELETE mode for full indexing")
+			log.Info().Msg("checkpointing WAL before full database truncation")
 			if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
 				_, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 				if walErr != nil {
 					log.Warn().Err(walErr).Msg("WAL checkpoint failed, continuing anyway")
 				}
 			}
-
-			// Switch to DELETE journal mode for faster bulk indexing
-			log.Info().Msg("switching to DELETE journal mode for full indexing")
-			if err = db.SetJournalMode(ctx, database.JournalModeDELETE); err != nil {
-				return 0, fmt.Errorf("failed to switch to DELETE journal mode: %w", err)
-			}
-			switchedToDeleteMode = true
 
 			// Full truncate - foreign keys not needed since we're deleting everything
 			log.Info().Msgf("performing full database truncation (indexing %d systems)", len(currentSystemIDs))
@@ -546,7 +534,7 @@ func NewNamesIndex(
 			}
 			log.Info().Msg("database truncation completed")
 		} else {
-			// Selective indexing - stay in WAL mode to preserve foreign key CASCADE deletes
+			// Selective indexing
 			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
 			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
 			log.Info().Msgf(
@@ -616,8 +604,7 @@ func NewNamesIndex(
 		sort.Strings(sortedAll)
 
 		if len(sortedCurrent) == len(sortedAll) && helpers.EqualStringSlices(sortedCurrent, sortedAll) {
-			switchedToDeleteMode = true
-			log.Info().Msg("resuming full index - will restore WAL mode on completion")
+			log.Info().Msg("resuming full index")
 		}
 
 		// When resuming, we need to populate the scan state with existing data
@@ -635,17 +622,8 @@ func NewNamesIndex(
 		log.Info().Msg("successfully populated scan state for resume")
 	}
 
-	// Ensure transaction cleanup, status update, and WAL restoration on completion or error
+	// Ensure transaction cleanup and status update on completion or error
 	defer func() {
-		// Only switch back to WAL if we switched to DELETE mode for full indexing
-		// Selective indexing stays in WAL mode throughout
-		if switchedToDeleteMode {
-			log.Info().Msg("restoring WAL journal mode after DELETE mode indexing")
-			if walErr := db.SetJournalMode(ctx, database.JournalModeWAL); walErr != nil {
-				log.Error().Err(walErr).Msg("failed to restore WAL journal mode after indexing")
-			}
-		}
-
 		if err != nil {
 			// Rollback any open transaction on error
 			if rbErr := db.RollbackTransaction(); rbErr != nil {

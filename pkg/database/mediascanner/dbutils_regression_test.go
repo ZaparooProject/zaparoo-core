@@ -154,6 +154,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 					DBID:           int64(1),
 					Path:           "/games/nes/Super Mario Bros.nes",
 					MediaTitleDBID: int64(1),
+					SystemDBID:     int64(1),
 				}).Return(database.Media{DBID: 1}, nil).Once()
 
 				// Extension tag type lookup fails (should not happen)
@@ -248,6 +249,7 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 		DBID:           int64(1),
 		Path:           "/games/nes/Super Mario Bros.nes",
 		MediaTitleDBID: int64(1),
+		SystemDBID:     int64(5), // Using recovered system ID
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
 	// Extension tag type lookup (from scan state cache)

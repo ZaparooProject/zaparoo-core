@@ -32,12 +32,15 @@ CREATE TABLE MediaTitles_new (
 DROP TABLE MediaTitles;
 ALTER TABLE MediaTitles_new RENAME TO MediaTitles;
 
--- 2.2 Media: Add CASCADE foreign key from MediaTitles
+-- 2.2 Media: Add CASCADE foreign key from MediaTitles, SystemDBID for duplicate prevention
 CREATE TABLE Media_new (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,
+    SystemDBID     integer not null,
     Path           text    not null,
-    FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE
+    FOREIGN KEY (MediaTitleDBID) REFERENCES MediaTitles(DBID) ON DELETE CASCADE,
+    FOREIGN KEY (SystemDBID) REFERENCES Systems(DBID) ON DELETE CASCADE,
+    UNIQUE(SystemDBID, Path)  -- Prevent duplicate media entries within same system
 );
 DROP TABLE Media;
 ALTER TABLE Media_new RENAME TO Media;
@@ -96,6 +99,7 @@ CREATE INDEX mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug);
 
 -- Media indexes
 CREATE INDEX media_mediatitle_idx ON Media(MediaTitleDBID);
+CREATE INDEX media_system_path_idx ON Media(SystemDBID, Path);  -- Supports duplicate prevention
 
 -- Tags indexes
 CREATE INDEX tags_tag_idx ON Tags(Tag);
@@ -151,7 +155,7 @@ CREATE TABLE MediaTitles_old (
 DROP TABLE MediaTitles;
 ALTER TABLE MediaTitles_old RENAME TO MediaTitles;
 
--- Restore Media without foreign keys
+-- Restore Media without foreign keys or SystemDBID
 CREATE TABLE Media_old (
     DBID           INTEGER PRIMARY KEY,
     MediaTitleDBID integer not null,

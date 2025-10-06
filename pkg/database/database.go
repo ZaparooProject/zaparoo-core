@@ -81,6 +81,7 @@ type Media struct {
 	Path           string
 	DBID           int64
 	MediaTitleDBID int64
+	SystemDBID     int64
 }
 
 type TagType struct {
@@ -245,7 +246,6 @@ type MediaDBI interface {
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
-	SetJournalMode(ctx context.Context, mode JournalMode) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)

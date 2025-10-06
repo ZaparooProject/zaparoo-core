@@ -55,26 +55,13 @@ const (
 	IndexingStatusCancelled = "cancelled"
 )
 
-// Base connection parameters, excluding journal mode
-const baseSqliteConnParams = "&_synchronous=NORMAL&_busy_timeout=5000" +
-	"&_cache_size=-48000&_temp_store=MEMORY&_mmap_size=0&_page_size=8192&_foreign_keys=ON"
-
-// getSqliteConnParams constructs the full SQLite connection string with the specified journal mode.
-// For DELETE mode, synchronous=OFF is used for maximum write performance during indexing.
-func getSqliteConnParams(journalMode database.JournalMode) string {
-	// Start from base
-	params := baseSqliteConnParams
-
-	if journalMode == database.JournalModeDELETE {
-		// DELETE-mode connection is used exclusively during bulk indexing.
-		// Optimize aggressively for write throughput.
-		params = strings.Replace(params, "_synchronous=NORMAL", "_synchronous=OFF", 1)
-		// Turn FK checks off for faster inserts (we insert in FK-safe order)
-		params = strings.Replace(params, "_foreign_keys=ON", "_foreign_keys=OFF", 1)
-		// Increase cache size ~200 MB (negative means KB in SQLite semantics)
-		params = strings.Replace(params, "_cache_size=-48000", "_cache_size=-200000", 1)
-	}
-	return fmt.Sprintf("?_journal_mode=%s%s", journalMode, params)
+// getSqliteConnParams constructs the SQLite connection string
+func getSqliteConnParams() string {
+	// Write-optimized WAL connection: defer checkpoints, keep dirty pages in RAM, larger cache
+	// synchronous=NORMAL is safe with WAL and provides good performance
+	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
+		"&_cache_size=-65536&_temp_store=MEMORY&_mmap_size=67108864" +
+		"&_page_size=8192&_foreign_keys=ON&_wal_autocheckpoint=0&_cache_spill=OFF"
 }
 
 type MediaDB struct {
@@ -88,6 +75,7 @@ type MediaDB struct {
 	stmtInsertSystem     *sql.Stmt
 	sql                  *sql.DB
 	stmtInsertTag        *sql.Stmt
+	stmtInsertTagType    *sql.Stmt
 	dbPath               string
 	backgroundOps        sync.WaitGroup
 	analyzeRetryDelay    time.Duration
@@ -123,7 +111,7 @@ func (db *MediaDB) Open() error {
 			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
 		}
 	}
-	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams(database.JournalModeWAL))
+	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -140,6 +128,12 @@ func (db *MediaDB) Open() error {
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA optimize;")
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
+	}
+
+	// Run WAL checkpoint on startup to clean up any orphaned WAL from crashes
+	_, err = db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to run WAL checkpoint on startup")
 	}
 
 	return nil
@@ -287,81 +281,6 @@ func (db *MediaDB) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
-// SetJournalMode safely changes the journal mode of the database.
-// This operation requires closing the existing sql.DB connection and opening a new one.
-// It should only be called when no other operations are concurrently accessing the database.
-func (db *MediaDB) SetJournalMode(ctx context.Context, mode database.JournalMode) error {
-	db.sqlMu.Lock()
-	defer db.sqlMu.Unlock()
-
-	dbPath := db.dbPath
-
-	// Close existing connection if open
-	if db.sql != nil {
-		log.Info().Msgf("closing existing database connection to change journal mode to %s", mode)
-		if err := db.sql.Close(); err != nil {
-			return fmt.Errorf("failed to close database before changing journal mode: %w", err)
-		}
-		db.sql = nil
-	}
-
-	// Open a new database connection with the specified journal mode
-	newConnParams := getSqliteConnParams(mode)
-	log.Info().Msgf("opening database with journal mode %s", mode)
-	sqlInstance, err := sql.Open("sqlite3", dbPath+newConnParams)
-	if err != nil {
-		// Attempt to re-open with original WAL mode on failure to leave DB in a usable state
-		log.Error().Err(err).Msgf("failed to open database with journal mode %s, attempting to revert to WAL", mode)
-		revertConnParams := getSqliteConnParams(database.JournalModeWAL)
-		if revertSQL, revertErr := sql.Open("sqlite3", dbPath+revertConnParams); revertErr == nil {
-			db.sql = revertSQL
-			log.Info().Msg("successfully reverted database to WAL mode after journal mode switch failure")
-		} else {
-			log.Error().Err(revertErr).
-				Msg("CRITICAL: failed to revert database to WAL mode after journal mode switch failure")
-		}
-		return fmt.Errorf("failed to open database with journal mode %s: %w", mode, err)
-	}
-	db.sql = sqlInstance
-
-	// Verify the journal mode
-	var resultMode string
-	err = db.sql.QueryRowContext(ctx, "PRAGMA journal_mode;").Scan(&resultMode)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to verify journal mode after switch")
-	} else if !strings.EqualFold(resultMode, string(mode)) {
-		log.Warn().Msgf("journal mode verification mismatch: requested %s, got %s", mode, resultMode)
-	}
-
-	// Explicitly set additional PRAGMAs for bulk indexing when in DELETE mode
-	if mode == database.JournalModeDELETE {
-		// synchronous already OFF via DSN; ensure at runtime too
-		if _, err := db.sql.ExecContext(ctx, "PRAGMA synchronous = OFF;"); err != nil {
-			log.Warn().Err(err).Msg("failed to set synchronous=OFF for DELETE mode")
-		}
-		if _, err := db.sql.ExecContext(ctx, "PRAGMA foreign_keys = OFF;"); err != nil {
-			log.Warn().Err(err).Msg("failed to set foreign_keys=OFF for DELETE mode")
-		}
-		if _, err := db.sql.ExecContext(ctx, "PRAGMA temp_store = MEMORY;"); err != nil {
-			log.Warn().Err(err).Msg("failed to set temp_store=MEMORY for DELETE mode")
-		}
-		if _, err := db.sql.ExecContext(ctx, "PRAGMA cache_size = -200000;"); err != nil {
-			log.Warn().Err(err).Msg("failed to set cache_size for DELETE mode")
-		}
-		// Prevent spilling dirty pages to disk during large transactions
-		if _, err := db.sql.ExecContext(ctx, "PRAGMA cache_spill = OFF;"); err != nil {
-			log.Warn().Err(err).Msg("failed to set cache_spill=OFF for DELETE mode")
-		}
-		var syncMode any
-		if scanErr := db.sql.QueryRowContext(ctx, "PRAGMA synchronous;").Scan(&syncMode); scanErr == nil {
-			log.Info().Msgf("set synchronous mode to %v for DELETE journal mode", syncMode)
-		}
-	}
-
-	log.Info().Msgf("switched journal mode to %s (verified: %s)", mode, resultMode)
-	return nil
-}
-
 func (db *MediaDB) Allocate() error {
 	if db.sql == nil {
 		return ErrNullSQL
@@ -416,8 +335,7 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	return nil
 }
 
-// SetDBPathForTesting sets the database path for testing purposes.
-// This is needed so SetJournalMode can reopen the same database file.
+// SetDBPathForTesting explicitly sets the DB path so test memory DBs can reload.
 func (db *MediaDB) SetDBPathForTesting(dbPath string) {
 	db.dbPath = dbPath
 }
@@ -447,6 +365,12 @@ func (db *MediaDB) closeAllPreparedStatements() {
 			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertTag")
 		}
 		db.stmtInsertTag = nil
+	}
+	if db.stmtInsertTagType != nil {
+		if closeErr := db.stmtInsertTagType.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close prepared statement: stmtInsertTagType")
+		}
+		db.stmtInsertTagType = nil
 	}
 	if db.stmtInsertMediaTag != nil {
 		if closeErr := db.stmtInsertMediaTag.Close(); closeErr != nil {
@@ -516,6 +440,11 @@ func (db *MediaDB) BeginTransaction() error {
 		return fmt.Errorf("failed to prepare insert tag statement: %w", err)
 	}
 
+	if db.stmtInsertTagType, err = tx.PrepareContext(db.ctx, insertTagTypeSQL); err != nil {
+		db.rollbackAndLogError()
+		return fmt.Errorf("failed to prepare insert tag type statement: %w", err)
+	}
+
 	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, insertMediaTagSQL); err != nil {
 		db.rollbackAndLogError()
 		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
@@ -563,6 +492,12 @@ func (db *MediaDB) CommitTransaction() error {
 		log.Warn().Err(tagCacheErr).Msg("failed to invalidate system tags cache after transaction commit")
 	}
 
+	// Run manual WAL checkpoint after commit to keep WAL size bounded during indexing
+	// Use TRUNCATE to reset the WAL file after commit, keeping reads fast
+	if _, chkErr := db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); chkErr != nil {
+		log.Warn().Err(chkErr).Msg("failed to run WAL checkpoint after transaction commit")
+	}
+
 	return nil
 }
 
@@ -580,6 +515,10 @@ func (db *MediaDB) insertMediaWithPreparedStmt(row database.Media) (database.Med
 
 func (db *MediaDB) insertTagWithPreparedStmt(row database.Tag) (database.Tag, error) {
 	return sqlInsertTagWithPreparedStmt(db.ctx, db.stmtInsertTag, row)
+}
+
+func (db *MediaDB) insertTagTypeWithPreparedStmt(row database.TagType) (database.TagType, error) {
+	return sqlInsertTagTypeWithPreparedStmt(db.ctx, db.stmtInsertTagType, row)
 }
 
 func (db *MediaDB) insertMediaTagWithPreparedStmt(row database.MediaTag) (database.MediaTag, error) {
@@ -1107,12 +1046,14 @@ func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
 }
 
 // InsertTagType inserts a new TagType into the database.
-// NOTE: TagType operations do not support transactions. TagTypes should be created
-// before beginning a transaction. This is acceptable because TagTypes are created
-// infrequently (typically 5-10 times during an entire media scan), whereas Tags and
-// Media are inserted thousands of times and benefit from transaction batching.
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
-	result, err := sqlInsertTagType(db.ctx, db.sql, row)
+	var result database.TagType
+	var err error
+	if db.stmtInsertTagType != nil {
+		result, err = db.insertTagTypeWithPreparedStmt(row)
+	} else {
+		result, err = sqlInsertTagType(db.ctx, db.sql, row)
+	}
 
 	// Only invalidate cache if NOT in a transaction (transactions invalidate once on commit)
 	if err == nil && !db.inTransaction {

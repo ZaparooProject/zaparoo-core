@@ -88,6 +88,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 		DBID:           int64(1),
 		Path:           "kodi-show://1/Loki",
 		MediaTitleDBID: int64(1),
+		SystemDBID:     int64(42), // Should use existing system DBID
 	}).Return(database.Media{DBID: 1}, nil).Once()
 
 	// Mock additional methods that might be called

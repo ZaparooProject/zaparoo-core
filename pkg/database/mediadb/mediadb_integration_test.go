@@ -171,6 +171,7 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 
 	// Test media insertion
 	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
 		Path:           "/games/test-game.rom",
 	}
@@ -262,6 +263,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 		require.NoError(t, titleErr)
 
 		media := database.Media{
+			SystemDBID:     insertedSystem.DBID,
 			MediaTitleDBID: insertedTitle.DBID,
 			Path:           game.path,
 		}
@@ -330,9 +332,11 @@ func TestMediaDB_SearchMediaPathWords_Integration(t *testing.T) {
 		require.NoError(t, titleErr)
 
 		media := database.Media{
+			SystemDBID:     insertedSystem.DBID,
 			MediaTitleDBID: insertedTitle.DBID,
 			Path:           game.path,
 		}
+
 		_, mediaErr := mediaDB.InsertMedia(media)
 		require.NoError(t, mediaErr)
 	}
@@ -385,6 +389,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 		require.NoError(t, titleErr)
 
 		media := database.Media{
+			SystemDBID:     insertedSystem.DBID,
 			MediaTitleDBID: insertedTitle.DBID,
 			Path:           "/roms/nes/game" + string(rune('0'+i)) + ".nes",
 		}
@@ -445,8 +450,9 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/nes/test.nes",
+		Path:           "/games/test-game.rom",
 	}
 	_, err = mediaDB.InsertMedia(media)
 	require.NoError(t, err)
@@ -511,6 +517,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	nesMedia := database.Media{
+		SystemDBID:     insertedNES.DBID,
 		MediaTitleDBID: insertedNESTitle.DBID,
 		Path:           "/roms/nes/game.nes",
 	}
@@ -534,6 +541,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	snesMedia := database.Media{
+		SystemDBID:     insertedSNES.DBID,
 		MediaTitleDBID: insertedSNESTitle.DBID,
 		Path:           "/roms/snes/game.sfc",
 	}
@@ -625,8 +633,9 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
 		MediaTitleDBID: insertedTitle.DBID,
-		Path:           "/roms/nes/mario.nes",
+		Path:           "/roms/nes/super-mario-bros.nes",
 	}
 	insertedMedia, err := mediaDB.InsertMedia(media)
 	require.NoError(t, err)
@@ -678,7 +687,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	results, err := mediaDB.SearchMediaWithFilters(ctx, filters)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
-	assert.Equal(t, "mario", results[0].Name) // Name comes from filename in path
+	assert.Equal(t, "super-mario-bros", results[0].Name) // Name comes from filename in path
 }
 
 func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {
@@ -737,6 +746,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 		require.NoError(t, titleErr)
 
 		media := database.Media{
+			SystemDBID:     insertedSystem.DBID,
 			MediaTitleDBID: insertedTitle.DBID,
 			Path:           "/roms/nes/game" + string(rune('0'+i)) + ".nes",
 		}
