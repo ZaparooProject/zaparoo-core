@@ -714,6 +714,10 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 			and SystemDBID = ?
 			and Path = ?
 		)
+		or (
+			SystemDBID = ?
+			and Path = ?
+		)
 		LIMIT 1;
 	`)
 	if err != nil {
@@ -727,6 +731,8 @@ func sqlFindMedia(ctx context.Context, db *sql.DB, media database.Media) (databa
 	err = stmt.QueryRowContext(ctx,
 		media.DBID,
 		media.MediaTitleDBID,
+		media.SystemDBID,
+		media.Path,
 		media.SystemDBID,
 		media.Path,
 	).Scan(

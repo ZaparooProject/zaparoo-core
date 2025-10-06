@@ -216,11 +216,11 @@ func AddMediaPath(
 			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
 				log.Debug().Err(err).Msgf("media already exists: %s", pf.Path)
 
-				// Recover by finding the existing media's DBID
+				// Recover by finding the existing media's DBID using only the UNIQUE constraint fields
+				// (SystemDBID, Path) to ensure we find the right row
 				existingMedia, getErr := db.FindMedia(database.Media{
-					Path:           pf.Path,
-					MediaTitleDBID: int64(titleIndex),
-					SystemDBID:     int64(systemIndex),
+					Path:       pf.Path,
+					SystemDBID: int64(systemIndex),
 				})
 				if getErr != nil || existingMedia.DBID == 0 {
 					return 0, 0, fmt.Errorf(

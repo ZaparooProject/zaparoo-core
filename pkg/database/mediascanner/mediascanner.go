@@ -538,7 +538,7 @@ func NewNamesIndex(
 			// DELETE mode disables FKs for performance, but TruncateSystems() relies on CASCADE
 			// to properly delete Media/MediaTitles/MediaTags when a System is deleted
 			log.Info().Msgf(
-				"performing selective truncation for systems: %v (keeping WAL mode for FK support)",
+				"performing selective truncation for systems: %v",
 				currentSystemIDs,
 			)
 			err = db.TruncateSystems(currentSystemIDs)
@@ -624,11 +624,18 @@ func NewNamesIndex(
 
 	// Ensure transaction cleanup and status update on completion or error
 	defer func() {
-		if err != nil {
-			// Rollback any open transaction on error
-			if rbErr := db.RollbackTransaction(); rbErr != nil {
+		// Always attempt to rollback any dangling transaction, whether success or failure
+		// On success, this should be a no-op (tx == nil), but ensures cleanup if
+		// the last transaction was never committed due to batchStarted being false
+		if rbErr := db.RollbackTransaction(); rbErr != nil {
+			if err != nil {
 				log.Error().Err(rbErr).Msg("failed to rollback transaction after error")
+			} else {
+				log.Debug().Err(rbErr).Msg("no transaction to rollback (expected)")
 			}
+		}
+
+		if err != nil {
 			// Mark indexing as failed on error
 			if setErr := db.SetIndexingStatus(mediadb.IndexingStatusFailed); setErr != nil {
 				log.Error().Err(setErr).Msg("failed to set indexing status to failed after error")
@@ -1074,6 +1081,17 @@ func NewNamesIndex(
 		log.Error().Err(cacheErr).Msg("failed to populate system tags cache after indexing")
 	} else {
 		log.Info().Msg("successfully populated system tags cache")
+	}
+
+	// Force WAL checkpoint to ensure all pending writes are flushed to disk
+	// This prevents stale locks from persisting if the process is interrupted
+	log.Info().Msg("forcing WAL checkpoint after indexing completion")
+	if sqlDB := db.UnsafeGetSQLDb(); sqlDB != nil {
+		if _, walErr := sqlDB.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE);"); walErr != nil {
+			log.Warn().Err(walErr).Msg("failed to checkpoint WAL after indexing")
+		} else {
+			log.Info().Msg("WAL checkpoint completed successfully")
+		}
 	}
 
 	// Mark optimization as pending
