@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -1337,6 +1338,7 @@ func sqlSearchMediaWithFilters(
 	letter *string,
 	cursor *int64,
 	limit int,
+	searchByName bool,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, limit)
 	if len(systems) == 0 {
@@ -1410,6 +1412,12 @@ func sqlSearchMediaWithFilters(
 
 	// Two-query approach to avoid expensive GROUP BY temporary B-trees
 	// Query 1: Get media items without tags (fast, no GROUP BY)
+	// Search field: use Name for non-Latin queries, Slug for normalized Latin queries
+	searchField := "MediaTitles.Slug"
+	if searchByName {
+		searchField = "MediaTitles.Name"
+	}
+
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	mediaQuery := `
 		SELECT
@@ -1423,7 +1431,7 @@ func sqlSearchMediaWithFilters(
 		prepareVariadic("?", ",", len(systems)) +
 		`)
 		AND ` +
-		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts)) +
+		prepareVariadic(" "+searchField+" like ? ", " and ", len(parts)) +
 		cursorCondition +
 		tagFilterCondition +
 		letterFilterCondition +
@@ -2010,7 +2018,7 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 		for _, part := range strings.Split(query.PathGlob, "*") {
 			if part != "" {
 				// Slugify search parts to match how titles are stored
-				parts = append(parts, helpers.SlugifyString(part))
+				parts = append(parts, slugs.SlugifyString(part))
 			}
 		}
 		for _, part := range parts {

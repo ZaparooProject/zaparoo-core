@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -323,47 +324,6 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
-// SlugifyString converts a string to a slug by removing special characters,
-// parentheses, brackets and their contents, and converting to lowercase.
-// Optimized implementation that avoids regex closures for better performance.
-func SlugifyString(input string) string {
-	var builder strings.Builder
-	builder.Grow(len(input)) // Pre-allocate for better performance
-
-	skipDepth := 0 // Track nesting depth of ( ) or [ ]
-
-	for _, r := range input {
-		// Handle opening brackets/parentheses
-		if r == '(' || r == '[' {
-			skipDepth++
-			continue
-		}
-
-		// Handle closing brackets/parentheses
-		if r == ')' || r == ']' {
-			if skipDepth > 0 {
-				skipDepth--
-			}
-			continue
-		}
-
-		// Skip characters inside brackets/parentheses
-		if skipDepth > 0 {
-			continue
-		}
-
-		// Keep only alphanumeric characters
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			builder.WriteRune(r)
-		} else if r >= 'A' && r <= 'Z' {
-			// Convert to lowercase inline
-			builder.WriteRune(r + ('a' - 'A'))
-		}
-	}
-
-	return builder.String()
-}
-
 // CreateVirtualPath creates a properly encoded virtual path for media
 // Example: "kodi-show", "123", "Some Hot/Cold" -> "kodi-show://123/Some%20Hot%2FCold"
 func CreateVirtualPath(scheme, id, name string) string {
@@ -436,7 +396,7 @@ func FilenameFromPath(p string) string {
 
 func SlugifyPath(filePath string) string {
 	fn := FilenameFromPath(filePath)
-	return SlugifyString(fn)
+	return slugs.SlugifyString(fn)
 }
 
 func HasSpace(s string) bool {

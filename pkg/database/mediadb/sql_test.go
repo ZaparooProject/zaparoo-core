@@ -485,7 +485,7 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
 			AddRow(1, "Action", "genre"))
 
-	results, err := sqlSearchMediaWithFilters(context.Background(), db, systems, parts, tags, nil, nil, 10)
+	results, err := sqlSearchMediaWithFilters(context.Background(), db, systems, parts, tags, nil, nil, 10, false)
 
 	require.NoError(t, err)
 	assert.Len(t, results, 1)

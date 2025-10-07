@@ -371,6 +371,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 	// With batching, we may have fewer transactions than systems
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -464,6 +465,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 	// With batching, we may have fewer transactions than systems
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -553,8 +555,9 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
-	mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
-	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+	mockMediaDB.On("UpdateLastGenerated").Return(nil)
+	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
 
 	// Mock tag seeding operations
@@ -709,6 +712,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -794,6 +798,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -877,6 +882,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -976,6 +982,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	// Transaction calls for file processing only
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()
@@ -1045,6 +1052,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	// Mock basic database operations
 	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
 	mockMediaDB.On("SetOptimizationStatus", mock.AnythingOfType("string")).Return(nil)
 	mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return().Maybe()

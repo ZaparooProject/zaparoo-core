@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -160,7 +161,7 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 	// Test media title insertion
 	mediaTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       helpers.SlugifyString("Test Game"),
+		Slug:       slugs.SlugifyString("Test Game"),
 		Name:       "Test Game",
 	}
 
@@ -256,7 +257,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	for _, game := range testGames {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       helpers.SlugifyString(game.name),
+			Slug:       slugs.SlugifyString(game.name),
 			Name:       game.name,
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
@@ -325,7 +326,7 @@ func TestMediaDB_SearchMediaPathWords_Integration(t *testing.T) {
 	for _, game := range testGames {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       helpers.SlugifyString(game.name),
+			Slug:       slugs.SlugifyString(game.name),
 			Name:       game.name,
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
@@ -382,7 +383,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       helpers.SlugifyString("Test Game " + string(rune('0'+i))),
+			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
@@ -443,7 +444,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       helpers.SlugifyString("Test Game"),
+		Slug:       slugs.SlugifyString("Test Game"),
 		Name:       "Test Game",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(title)
@@ -626,7 +627,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	// Create media with tags
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       helpers.SlugifyString("Super Mario Bros"),
+		Slug:       slugs.SlugifyString("Super Mario Bros"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(title)
@@ -739,7 +740,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       helpers.SlugifyString("Test Game " + string(rune('0'+i))),
+			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)

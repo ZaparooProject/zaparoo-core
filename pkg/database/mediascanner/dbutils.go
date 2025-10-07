@@ -29,6 +29,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/mattn/go-sqlite3"
@@ -877,7 +878,14 @@ func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFr
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
 	f.Title = getTitleFromFilename(f.FileName)
-	f.Slug = helpers.SlugifyString(f.Title)
+	f.Slug = slugs.SlugifyString(f.Title)
+
+	// For non-Latin titles that don't produce a slug, store the lowercase
+	// original title. This ensures Slug is never empty while the search
+	// logic (mediadb.go) falls back to the Name field for these cases.
+	if f.Slug == "" {
+		f.Slug = strings.ToLower(f.Title)
+	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
 	if cfg == nil || cfg.FilenameTags() {

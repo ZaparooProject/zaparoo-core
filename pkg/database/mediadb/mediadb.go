@@ -36,6 +36,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -571,9 +572,33 @@ func (db *MediaDB) SearchMediaWithFilters(
 	if db.sql == nil {
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
-	qWords := strings.Fields(strings.ToLower(filters.Query))
-	return sqlSearchMediaWithFilters(
-		ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Letter, filters.Cursor, filters.Limit)
+
+	// Slugify query words to match stored slugs
+	qWords := strings.Fields(filters.Query)
+	slugifiedWords := make([]string, 0, len(qWords))
+	hasNonLatinWords := false
+	for _, word := range qWords {
+		slug := slugs.SlugifyString(word)
+		if slug != "" {
+			slugifiedWords = append(slugifiedWords, slug)
+		} else if word != "" {
+			hasNonLatinWords = true
+		}
+	}
+
+	// Try slug-based search first
+	results, err := sqlSearchMediaWithFilters(
+		ctx, db.sql, filters.Systems, slugifiedWords, filters.Tags,
+		filters.Letter, filters.Cursor, filters.Limit, false)
+
+	// Fallback to raw name search if we have non-Latin words that slugified to empty
+	if err == nil && len(results) == 0 && hasNonLatinWords {
+		return sqlSearchMediaWithFilters(
+			ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Letter, filters.Cursor,
+			filters.Limit, true)
+	}
+
+	return results, err
 }
 
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
@@ -667,7 +692,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 	for _, part := range strings.Split(query, "*") {
 		if part != "" {
 			// Slugify search parts to match how titles are stored
-			parts = append(parts, helpers.SlugifyString(part))
+			parts = append(parts, slugs.SlugifyString(part))
 		}
 	}
 	if len(parts) == 0 {
