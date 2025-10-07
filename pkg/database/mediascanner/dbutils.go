@@ -884,7 +884,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFr
 	// original title. This ensures Slug is never empty while the search
 	// logic (mediadb.go) falls back to the Name field for these cases.
 	if f.Slug == "" {
-		f.Slug = strings.ToLower(f.Title)
+		f.Slug = strings.ToLower(f.FileName)
 	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
