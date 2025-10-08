@@ -471,10 +471,10 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	parts := []string{"mario"}
 	tags := []database.TagFilter{{Type: "genre", Value: "Action"}}
 
-	// Mock first query: get media items
+	// Mock first query: get media items (with EXISTS clause - no HAVING COUNT arg needed)
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
-		WithArgs("NES", "%mario%", "genre", "Action", 1, 10).
+		WithArgs("NES", "%mario%", "genre", "Action", 10).
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
 			AddRow("NES", "/games/mario.nes", 1))
 
@@ -659,5 +659,343 @@ func TestSqlInvalidateSystemTagsCache_EmptySystems(t *testing.T) {
 
 	err = sqlInvalidateSystemTagsCache(context.Background(), db, systems)
 	assert.NoError(t, err) // Should succeed with no-op
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{}
+
+	// Mock main query
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+
+	// Mock tags query (now always called even when no tag filters)
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "snes", results[0].SystemID)
+	assert.Equal(t, "Super Mario World", results[0].Name)
+	assert.Equal(t, "/games/super-mario-world.smc", results[0].Path)
+	assert.Equal(t, int64(1), results[0].MediaID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_WithTags(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{{Type: "region", Value: "usa"}, {Type: "genre", Value: "platform"}}
+
+	// Mock main query with tag filtering (with EXISTS clauses - no HAVING COUNT arg)
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug, "region", "usa", "genre", "platform").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world-usa.smc", 1))
+
+	// Mock tags query
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
+			AddRow(1, "usa", "region").
+			AddRow(1, "platform", "genre"))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "snes", results[0].SystemID)
+	assert.Equal(t, "Super Mario World", results[0].Name)
+	assert.Equal(t, "/games/super-mario-world-usa.smc", results[0].Path)
+	assert.Equal(t, int64(1), results[0].MediaID)
+
+	// Check tags are populated
+	assert.Len(t, results[0].Tags, 2)
+	assert.Contains(t, results[0].Tags, database.TagInfo{Tag: "usa", Type: "region"})
+	assert.Contains(t, results[0].Tags, database.TagInfo{Tag: "platform", Type: "genre"})
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_MultipleResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "genesis"
+	slug := "sonic"
+	tags := []database.TagFilter{}
+
+	// Mock main query returning multiple results
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("genesis", "Sonic the Hedgehog", "/games/sonic.bin", 1).
+			AddRow("genesis", "Sonic the Hedgehog 2", "/games/sonic2.bin", 2))
+
+	// Mock tags query (now always called even when no tag filters)
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1, 2).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+
+	// Check first result
+	assert.Equal(t, "genesis", results[0].SystemID)
+	assert.Equal(t, "Sonic the Hedgehog", results[0].Name)
+	assert.Equal(t, "/games/sonic.bin", results[0].Path)
+	assert.Equal(t, int64(1), results[0].MediaID)
+
+	// Check second result
+	assert.Equal(t, "genesis", results[1].SystemID)
+	assert.Equal(t, "Sonic the Hedgehog 2", results[1].Name)
+	assert.Equal(t, "/games/sonic2.bin", results[1].Path)
+	assert.Equal(t, int64(2), results[1].MediaID)
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_LoadsTagsWithoutFilters(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{}
+
+	// Mock main query
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("snes", "Super Mario World (USA)", "/games/smw-usa.smc", 1).
+			AddRow("snes", "Super Mario World (Europe)", "/games/smw-eu.smc", 2))
+
+	// Mock tags query - returns tags for both ROMs
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1, 2).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
+			AddRow(1, "en", "lang").
+			AddRow(1, "us", "region").
+			AddRow(2, "eu", "region"))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+
+	// Verify first ROM has tags loaded
+	assert.Equal(t, "Super Mario World (USA)", results[0].Name)
+	assert.Len(t, results[0].Tags, 2)
+	assert.Contains(t, results[0].Tags, database.TagInfo{Tag: "en", Type: "lang"})
+	assert.Contains(t, results[0].Tags, database.TagInfo{Tag: "us", Type: "region"})
+
+	// Verify second ROM has tags loaded
+	assert.Equal(t, "Super Mario World (Europe)", results[1].Name)
+	assert.Len(t, results[1].Tags, 1)
+	assert.Contains(t, results[1].Tags, database.TagInfo{Tag: "eu", Type: "region"})
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_NoResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "nes"
+	slug := "nonexistent"
+	tags := []database.TagFilter{}
+
+	// Mock main query returning no results
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_WithTagsNoResults(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{{Type: "region", Value: "japan"}}
+
+	// Mock main query returning no results (tag filter too restrictive, with EXISTS - no HAVING COUNT arg)
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug, "region", "japan").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{}
+
+	// Mock main query error
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnError(sql.ErrConnDone)
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute media by slug search query")
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_TagsQueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+
+	// Mock main query success (with EXISTS clause - no HAVING COUNT arg)
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug, "region", "usa").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+
+	// Mock tags query error
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1).
+		WillReturnError(sql.ErrTxDone)
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute tags query")
+	// Function returns partial results from main query even if tags query fails
+	assert.Len(t, results, 1)
+	assert.Equal(t, "snes", results[0].SystemID)
+	assert.Equal(t, "Super Mario World", results[0].Name)
+	assert.Equal(t, "/games/super-mario-world.smc", results[0].Path)
+	assert.Equal(t, int64(1), results[0].MediaID)
+	// Tags should be empty since tags query failed
+	assert.Empty(t, results[0].Tags)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{}
+
+	// Mock main query with wrong column count (scan error)
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug).
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name"}). // Missing Path and MediaID
+										AddRow("snes", "Super Mario World"))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to scan search result")
+	assert.Empty(t, results)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systemID := "snes"
+	slug := "supermarioworld"
+	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+
+	// Mock main query success (with EXISTS - no HAVING COUNT arg)
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
+		ExpectQuery().
+		WithArgs(systemID, slug, "region", "usa").
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "MediaID"}).
+			AddRow("snes", "Super Mario World", "/games/super-mario-world.smc", 1))
+
+	// Mock tags query with wrong column count (scan error)
+	mock.ExpectPrepare("SELECT.*MediaDBID.*Tags\\.Tag.*TagTypes\\.Type.*").
+		ExpectQuery().
+		WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID"}). // Missing Tag and Type
+									AddRow(1))
+
+	results, err := sqlSearchMediaBySlug(context.Background(), db, systemID, slug, tags)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to scan tags result")
+	// Function returns partial results from main query even if tags query fails
+	assert.Len(t, results, 1)
+	assert.Equal(t, "snes", results[0].SystemID)
+	assert.Equal(t, "Super Mario World", results[0].Name)
+	assert.Equal(t, "/games/super-mario-world.smc", results[0].Path)
+	assert.Equal(t, int64(1), results[0].MediaID)
+	// Tags should be empty since tags query failed
+	assert.Empty(t, results[0].Tags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

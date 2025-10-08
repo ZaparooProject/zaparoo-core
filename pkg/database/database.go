@@ -253,6 +253,9 @@ type MediaDBI interface {
 		ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
 	) ([]SearchResultWithCursor, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
+	SearchMediaBySlug(
+		ctx context.Context, systemID string, slug string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error

@@ -1,0 +1,458 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package zapscript
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/rs/zerolog/log"
+)
+
+// cmdSlug implements the launch.slug command for slug-based game launching
+//
+//nolint:gocritic // single-use parameter in command handler
+func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+	if len(env.Cmd.Args) != 1 {
+		return platforms.CmdResult{}, ErrArgCount
+	}
+
+	query := env.Cmd.Args[0]
+	if query == "" {
+		return platforms.CmdResult{}, ErrRequiredArgs
+	}
+
+	// Validate slug format
+	if !isSlugFormat(query) {
+		return platforms.CmdResult{}, fmt.Errorf(
+			"invalid slug format: %s (expected SystemID/GameName with no extensions or wildcards)", query)
+	}
+
+	// Parse SystemID/GameName format
+	ps := strings.SplitN(query, "/", 2)
+	if len(ps) < 2 {
+		return platforms.CmdResult{}, fmt.Errorf("invalid slug format: %s (expected SystemID/GameName)", query)
+	}
+
+	systemID, gameName := ps[0], ps[1]
+	if systemID == "" || gameName == "" {
+		return platforms.CmdResult{}, fmt.Errorf("invalid slug format: %s (both SystemID and GameName required)", query)
+	}
+
+	// Validate system ID
+	system, err := systemdefs.LookupSystem(systemID)
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
+	}
+	if system == nil {
+		return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
+	}
+
+	// Check system defaults for launcher if not already specified
+	if env.Cmd.AdvArgs["launcher"] == "" {
+		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
+			if env.Cmd.AdvArgs == nil {
+				env.Cmd.AdvArgs = make(map[string]string)
+			}
+			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+		}
+	}
+
+	launch, err := getAltLauncher(pl, env)
+	if err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	// Parse tags from advanced args
+	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
+	// Slugify the game name
+	slug := slugs.SlugifyString(gameName)
+	if slug == "" {
+		return platforms.CmdResult{}, fmt.Errorf("game name slugified to empty string: %s", gameName)
+	}
+
+	gamesdb := env.Database.MediaDB
+	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, systemID)
+
+	// Search for media by slug
+	results, err := gamesdb.SearchMediaBySlug(context.Background(), systemID, slug, tagFilters)
+	if err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
+	}
+
+	// If no results and the game name has a subtitle, try searching with just the main title
+	if len(results) == 0 {
+		matchInfo := slugs.GenerateMatchInfo(gameName)
+		if matchInfo.HasSubtitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
+			log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
+			results, err = gamesdb.SearchMediaBySlug(
+				context.Background(), systemID, matchInfo.MainTitleSlug, tagFilters)
+			if err != nil {
+				return platforms.CmdResult{},
+					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return platforms.CmdResult{}, fmt.Errorf("no results found for slug: %s/%s", systemID, gameName)
+	}
+
+	// If multiple results, apply intelligent selection
+	selectedResult := selectBestResult(results, tagFilters, env.Cfg)
+	log.Info().Msgf("selected result: %s (%s)", selectedResult.Name, selectedResult.Path)
+
+	return platforms.CmdResult{
+		MediaChanged: true,
+	}, launch(selectedResult.Path)
+}
+
+// selectBestResult implements intelligent selection when multiple media match a slug
+func selectBestResult(
+	results []database.SearchResultWithCursor, tagFilters []database.TagFilter, cfg *config.Instance,
+) database.SearchResultWithCursor {
+	if len(results) == 1 {
+		return results[0]
+	}
+
+	log.Info().Msgf("multiple results found (%d), picking best match", len(results))
+
+	// Priority 1: If user provided specific tags, filter by those first
+	if len(tagFilters) > 0 {
+		filtered := filterByTags(results, tagFilters)
+		if len(filtered) == 1 {
+			log.Info().Msg("selected result based on user-specified tags")
+			return filtered[0]
+		}
+		if len(filtered) > 0 {
+			results = filtered
+		}
+	}
+
+	// Priority 2: Prefer main game over variants (exclude demos, betas, prototypes, hacks)
+	mainGames := filterOutVariants(results)
+	if len(mainGames) == 1 {
+		log.Info().Msg("selected main game (filtered out variants)")
+		return mainGames[0]
+	}
+	if len(mainGames) > 0 {
+		results = mainGames
+	}
+
+	// Priority 3: Prefer original releases (exclude re-releases, reboxed)
+	originals := filterOutRereleases(results)
+	if len(originals) == 1 {
+		log.Info().Msg("selected original release (filtered out re-releases)")
+		return originals[0]
+	}
+	if len(originals) > 0 {
+		results = originals
+	}
+
+	// Priority 4: Prefer configured regions
+	preferredRegions := filterByPreferredRegions(results, cfg.DefaultRegions())
+	if len(preferredRegions) == 1 {
+		log.Info().Msg("selected preferred region")
+		return preferredRegions[0]
+	}
+	if len(preferredRegions) > 0 {
+		results = preferredRegions
+	}
+
+	// Priority 5: Prefer configured languages
+	preferredLanguages := filterByPreferredLanguages(results, cfg.DefaultLangs())
+	if len(preferredLanguages) == 1 {
+		log.Info().Msg("selected preferred language")
+		return preferredLanguages[0]
+	}
+	if len(preferredLanguages) > 0 {
+		results = preferredLanguages
+	}
+
+	// Priority 6: If still multiple, pick the first alphabetically by filename
+	log.Info().Msg("multiple results remain, selecting first alphabetically by filename")
+	return selectAlphabeticallyByFilename(results)
+}
+
+// filterByTags filters results that match all specified tags
+func filterByTags(
+	results []database.SearchResultWithCursor, tagFilters []database.TagFilter,
+) []database.SearchResultWithCursor {
+	var filtered []database.SearchResultWithCursor
+
+	for _, result := range results {
+		if hasAllTags(&result, tagFilters) {
+			filtered = append(filtered, result)
+		}
+	}
+
+	return filtered
+}
+
+// hasAllTags checks if a result has all the specified tags
+func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) bool {
+	if len(tagFilters) == 0 {
+		return true
+	}
+
+	// Create a map of result's tags for fast lookup
+	resultTags := make(map[string]string) // type -> value
+	for _, tag := range result.Tags {
+		resultTags[tag.Type] = tag.Tag
+	}
+
+	// Check if all required tags are present
+	for _, requiredTag := range tagFilters {
+		if value, exists := resultTags[requiredTag.Type]; !exists || value != requiredTag.Value {
+			return false
+		}
+	}
+
+	return true
+}
+
+// filterOutVariants removes demos, betas, prototypes, hacks, and other variants
+func filterOutVariants(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
+	var filtered []database.SearchResultWithCursor
+
+	for _, result := range results {
+		if !isVariant(&result) {
+			filtered = append(filtered, result)
+		}
+	}
+
+	return filtered
+}
+
+// isVariant checks if a result is a variant (demo, beta, prototype, hack, etc.)
+func isVariant(result *database.SearchResultWithCursor) bool {
+	for _, tag := range result.Tags {
+		switch tag.Type {
+		case string(tags.TagTypeUnfinished):
+			// Exclude demos, betas, prototypes
+			if strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedDemo)) ||
+				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedBeta)) ||
+				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedProto)) ||
+				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedAlpha)) {
+				return true
+			}
+		case string(tags.TagTypeUnlicensed):
+			// Exclude hacks, translations, bootlegs
+			if tag.Tag == string(tags.TagUnlicensedHack) ||
+				tag.Tag == string(tags.TagUnlicensedTranslation) ||
+				tag.Tag == string(tags.TagUnlicensedBootleg) ||
+				tag.Tag == string(tags.TagUnlicensedClone) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// filterOutRereleases removes re-releases and reboxed versions
+func filterOutRereleases(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
+	var filtered []database.SearchResultWithCursor
+
+	for _, result := range results {
+		if !isRerelease(&result) {
+			filtered = append(filtered, result)
+		}
+	}
+
+	return filtered
+}
+
+// isRerelease checks if a result is a re-release
+func isRerelease(result *database.SearchResultWithCursor) bool {
+	for _, tag := range result.Tags {
+		switch tag.Type {
+		case string(tags.TagTypeRerelease), string(tags.TagTypeReboxed):
+			return true
+		}
+	}
+	return false
+}
+
+// filterByPreferredRegions prefers configured regions over others
+func filterByPreferredRegions(
+	results []database.SearchResultWithCursor, preferredRegions []string,
+) []database.SearchResultWithCursor {
+	var preferred []database.SearchResultWithCursor
+	var untagged []database.SearchResultWithCursor
+	var others []database.SearchResultWithCursor
+
+	for _, result := range results {
+		regionMatch := getRegionMatch(&result, preferredRegions)
+		switch regionMatch {
+		case tagMatchPreferred:
+			preferred = append(preferred, result)
+		case tagMatchUntagged:
+			untagged = append(untagged, result)
+		case tagMatchOther:
+			others = append(others, result)
+		}
+	}
+
+	if len(preferred) > 0 {
+		return preferred
+	}
+	if len(untagged) > 0 {
+		return untagged
+	}
+	return others
+}
+
+type tagMatch int
+
+const (
+	tagMatchPreferred tagMatch = iota
+	tagMatchUntagged
+	tagMatchOther
+)
+
+// getRegionMatch checks if a result matches preferred regions
+func getRegionMatch(result *database.SearchResultWithCursor, preferredRegions []string) tagMatch {
+	hasRegionTag := false
+	for _, tag := range result.Tags {
+		if tag.Type == string(tags.TagTypeRegion) {
+			hasRegionTag = true
+			for _, preferred := range preferredRegions {
+				if tag.Tag == preferred {
+					return tagMatchPreferred
+				}
+			}
+		}
+	}
+	if !hasRegionTag {
+		return tagMatchUntagged
+	}
+	return tagMatchOther
+}
+
+// filterByPreferredLanguages prefers configured languages over others
+func filterByPreferredLanguages(
+	results []database.SearchResultWithCursor, preferredLangs []string,
+) []database.SearchResultWithCursor {
+	var preferred []database.SearchResultWithCursor
+	var untagged []database.SearchResultWithCursor
+	var others []database.SearchResultWithCursor
+
+	for _, result := range results {
+		langMatch := getLanguageMatch(&result, preferredLangs)
+		switch langMatch {
+		case tagMatchPreferred:
+			preferred = append(preferred, result)
+		case tagMatchUntagged:
+			untagged = append(untagged, result)
+		case tagMatchOther:
+			others = append(others, result)
+		}
+	}
+
+	if len(preferred) > 0 {
+		return preferred
+	}
+	if len(untagged) > 0 {
+		return untagged
+	}
+	return others
+}
+
+// getLanguageMatch checks if a result matches preferred languages
+func getLanguageMatch(result *database.SearchResultWithCursor, preferredLangs []string) tagMatch {
+	hasLangTag := false
+	for _, tag := range result.Tags {
+		if tag.Type == string(tags.TagTypeLang) {
+			hasLangTag = true
+			for _, preferred := range preferredLangs {
+				if tag.Tag == preferred {
+					return tagMatchPreferred
+				}
+			}
+		}
+	}
+	if !hasLangTag {
+		return tagMatchUntagged
+	}
+	return tagMatchOther
+}
+
+// selectAlphabeticallyByFilename selects the first result alphabetically by filename
+func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) database.SearchResultWithCursor {
+	if len(results) == 0 {
+		return database.SearchResultWithCursor{}
+	}
+
+	best := results[0]
+	bestFilename := filepath.Base(best.Path)
+
+	for _, result := range results[1:] {
+		resultFilename := filepath.Base(result.Path)
+		if resultFilename < bestFilename {
+			best = result
+			bestFilename = resultFilename
+		}
+	}
+	return best
+}
+
+// isSlugFormat checks if the input string matches slug format (system/game with no extensions or wildcards)
+func isSlugFormat(input string) bool {
+	// Must contain exactly one slash
+	slashCount := strings.Count(input, "/")
+	if slashCount != 1 {
+		return false
+	}
+
+	// Must not contain asterisk wildcards (used for search command passthrough)
+	if strings.Contains(input, "*") {
+		return false
+	}
+
+	// Split into system and game parts
+	parts := strings.SplitN(input, "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	system, game := parts[0], parts[1]
+
+	// Both parts must be non-empty
+	if system == "" || game == "" {
+		return false
+	}
+
+	// Game part should not look like a file path
+	if strings.Contains(game, "\\") || strings.Contains(game, "/") {
+		return false
+	}
+
+	return true
+}

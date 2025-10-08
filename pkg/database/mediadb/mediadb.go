@@ -601,6 +601,15 @@ func (db *MediaDB) SearchMediaWithFilters(
 	return results, err
 }
 
+func (db *MediaDB) SearchMediaBySlug(
+	ctx context.Context, systemID string, slug string, tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	return sqlSearchMediaBySlug(ctx, db.sql, systemID, slug, tags)
+}
+
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
 	if db.sql == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL

@@ -399,6 +399,12 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
+	// check for slug launch format: SystemID/Game Name
+	if isSlugFormat(path) {
+		log.Debug().Msgf("detected slug format, forwarding to cmdSlug: %s", path)
+		return cmdSlug(pl, env)
+	}
+
 	// attempt to parse the <system>/<path> format
 	ps := strings.SplitN(path, "/", 2)
 	if len(ps) < 2 {

@@ -783,3 +783,243 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create tag types BEFORE transaction (TagType doesn't support transactions properly)
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+
+	genreTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "genre"})
+	require.NoError(t, err)
+
+	// Insert test data with transaction for better performance
+	err = mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	// Create test systems
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Insert SNES system
+	snesDBSystem := database.System{
+		SystemID: snesSystem.ID,
+		Name:     "SNES",
+	}
+	insertedSNESSystem, err := mediaDB.InsertSystem(snesDBSystem)
+	require.NoError(t, err)
+
+	// Insert NES system
+	nesDBSystem := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedNESSystem, err := mediaDB.InsertSystem(nesDBSystem)
+	require.NoError(t, err)
+
+	// Create test media titles and media with various slug patterns
+	testGames := []struct {
+		systemID   string
+		name       string
+		path       string
+		tags       []database.TagInfo
+		systemDBID int64
+	}{
+		{
+			systemID:   snesSystem.ID,
+			systemDBID: insertedSNESSystem.DBID,
+			name:       "Super Mario World",
+			path:       "/roms/snes/Super Mario World.smc",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemID:   snesSystem.ID,
+			systemDBID: insertedSNESSystem.DBID,
+			name:       "Super Mario World 2: Yoshi's Island",
+			path:       "/roms/snes/Super Mario World 2 - Yoshi's Island.smc",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemID:   snesSystem.ID,
+			systemDBID: insertedSNESSystem.DBID,
+			name:       "The Legend of Zelda: A Link to the Past",
+			path:       "/roms/snes/Zelda - A Link to the Past.smc",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "adventure"}},
+		},
+		{
+			systemID:   nesSystem.ID,
+			systemDBID: insertedNESSystem.DBID,
+			name:       "Super Mario Bros",
+			path:       "/roms/nes/Super Mario Bros.nes",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemID:   nesSystem.ID,
+			systemDBID: insertedNESSystem.DBID,
+			name:       "Super Mario Bros 2",
+			path:       "/roms/nes/Super Mario Bros 2.nes",
+			tags:       []database.TagInfo{{Type: "region", Tag: "japan"}, {Type: "genre", Tag: "platform"}},
+		},
+		{
+			systemID:   nesSystem.ID,
+			systemDBID: insertedNESSystem.DBID,
+			name:       "Dr. Mario",
+			path:       "/roms/nes/Dr. Mario.nes",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "puzzle"}},
+		},
+		{
+			systemID:   nesSystem.ID,
+			systemDBID: insertedNESSystem.DBID,
+			name:       "Ms. Pac-Man",
+			path:       "/roms/nes/Ms. Pac-Man.nes",
+			tags:       []database.TagInfo{{Type: "region", Tag: "usa"}, {Type: "genre", Tag: "maze"}},
+		},
+	}
+
+	for _, game := range testGames {
+		title := database.MediaTitle{
+			SystemDBID: game.systemDBID,
+			Slug:       slugs.SlugifyString(game.name),
+			Name:       game.name,
+		}
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		require.NoError(t, titleErr)
+
+		media := database.Media{
+			SystemDBID:     game.systemDBID,
+			MediaTitleDBID: insertedTitle.DBID,
+			Path:           game.path,
+		}
+		insertedMedia, mediaErr := mediaDB.InsertMedia(media)
+		require.NoError(t, mediaErr)
+
+		// Add tags if specified using the proper tag insertion workflow
+		for _, tag := range game.tags {
+			var tagTypeDBID int64
+			switch tag.Type {
+			case "region":
+				tagTypeDBID = regionTagType.DBID
+			case "genre":
+				tagTypeDBID = genreTagType.DBID
+			}
+
+			// Create the tag
+			dbTag := database.Tag{
+				TypeDBID: tagTypeDBID,
+				Tag:      tag.Tag,
+			}
+			insertedTag, tagErr := mediaDB.FindOrInsertTag(dbTag)
+			require.NoError(t, tagErr)
+
+			// Associate tag with media
+			mediaTag := database.MediaTag{
+				MediaDBID: insertedMedia.DBID,
+				TagDBID:   insertedTag.DBID,
+			}
+			_, tagErr = mediaDB.InsertMediaTag(mediaTag)
+			require.NoError(t, tagErr)
+		}
+	}
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Test 1: Basic slug search - exact match
+	results, err := mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "Super Mario World", results[0].Name)
+	assert.Equal(t, "SNES", results[0].SystemID)
+	assert.Equal(t, "/roms/snes/Super Mario World.smc", results[0].Path)
+
+	// Test 2: Slug search with exact match - only one exact match
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1) // Only Super Mario World (exact match)
+
+	// Test 3: Slug search with tag filtering
+	tags := []database.TagFilter{{Type: "region", Value: "usa"}}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
+	require.NoError(t, err)
+	assert.Len(t, results, 1) // Only Super Mario World (exact match) and it's USA region
+
+	// Test 4: Slug search with restrictive tag filtering
+	tags = []database.TagFilter{{Type: "region", Value: "japan"}}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
+	require.NoError(t, err)
+	assert.Empty(t, results) // No Japanese SNES Mario games
+
+	// Test 5: Slug search with multiple tag filters (AND logic)
+	tags = []database.TagFilter{
+		{Type: "region", Value: "usa"},
+		{Type: "genre", Value: "platform"},
+	}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", tags)
+	require.NoError(t, err)
+	assert.Len(t, results, 1) // Only Super Mario World matches USA AND platform
+
+	// Test 6: Slug search across different systems
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "supermariobros", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1) // Only Super Mario Bros (exact match, not Super Mario Bros 2)
+
+	// Test 7: Slug search with dots in name (Dr. Mario)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "drmario", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "Dr. Mario", results[0].Name)
+
+	// Test 8: Slug search with dots and special characters (Ms. Pac-Man)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "mspacman", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "Ms. Pac-Man", results[0].Name)
+
+	// Test 9: Slug search with complex title (Zelda)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "legendofzeldaalinktothepast", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "The Legend of Zelda: A Link to the Past", results[0].Name)
+
+	// Test 10: No results found
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "nonexistentgame", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	// Test 11: Wrong system
+	results, err = mediaDB.SearchMediaBySlug(ctx, "genesis", "supermarioworld", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	// Test 12: Verify tags are populated in results
+	tags = []database.TagFilter{{Type: "genre", Value: "puzzle"}}
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "drmario", tags)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Len(t, results[0].Tags, 2) // region:usa and genre:puzzle
+	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "region", Tag: "usa"})
+	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "genre", Tag: "puzzle"})
+
+	// Test 13: Case sensitivity - slugs should be case insensitive
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "SUPERMARIOWORLD", nil)
+	require.NoError(t, err)
+	assert.Len(t, results, 1) // Should find the same result (case insensitive)
+
+	// Test 14: Empty slug
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	// Test 15: Empty system ID
+	results, err = mediaDB.SearchMediaBySlug(ctx, "", "supermarioworld", nil)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
