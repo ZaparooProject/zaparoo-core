@@ -101,10 +101,17 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	gamesdb := env.Database.MediaDB
 	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, system.ID)
 
-	// Search for media by slug
+	// Strategy 0: Exact match
 	results, err := gamesdb.SearchMediaBySlug(context.Background(), system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
+	}
+	if len(results) > 0 {
+		log.Debug().
+			Str("strategy", "exact_match").
+			Str("query", slug).
+			Int("result_count", len(results)).
+			Msg("match found via exact match strategy")
 	}
 
 	// Fallback 1: Prefix search on full normalized title with edition-aware ranking
@@ -144,12 +151,61 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 				log.Info().Msgf("found %d prefix matches, selected best: '%s' (score=%d)",
 					len(validCandidates), validCandidates[bestIdx].Slug, bestScore)
+				log.Debug().
+					Str("strategy", "prefix_match").
+					Str("query", slug).
+					Str("match", prefixResults[bestIdx].Name).
+					Int("score", bestScore).
+					Int("result_count", len(validCandidates)).
+					Msg("match found via prefix match strategy")
 				results = []database.SearchResultWithCursor{prefixResults[bestIdx]}
+			} else if len(prefixResults) > 0 {
+				// Strategy 1.5: Token-based similarity matching (word-order independent)
+				// If word sequence validation filtered out all candidates, try token matching
+				log.Info().Msgf("no valid prefix candidates, trying token-based matching on %d results", len(prefixResults))
+
+				type tokenMatchCandidate struct {
+					result database.SearchResultWithCursor
+					score  float64
+				}
+				var tokenCandidates []tokenMatchCandidate
+
+				for _, result := range prefixResults {
+					tokenScore := slugs.ScoreTokenMatch(gameName, result.Name)
+					if tokenScore > 0.5 {
+						tokenCandidates = append(tokenCandidates, tokenMatchCandidate{
+							result: result,
+							score:  tokenScore,
+						})
+					}
+				}
+
+				if len(tokenCandidates) > 0 {
+					bestScore := tokenCandidates[0].score
+					bestIdx := 0
+					for i := 1; i < len(tokenCandidates); i++ {
+						if tokenCandidates[i].score > bestScore {
+							bestScore = tokenCandidates[i].score
+							bestIdx = i
+						}
+					}
+
+					log.Info().Msgf("found %d token matches, selected best: '%s' (score=%.2f)",
+						len(tokenCandidates), tokenCandidates[bestIdx].result.Name, bestScore)
+					log.Debug().
+						Str("strategy", "token_match").
+						Str("query", slug).
+						Str("match", tokenCandidates[bestIdx].result.Name).
+						Float64("score", bestScore).
+						Int("result_count", len(tokenCandidates)).
+						Msg("match found via token-based matching strategy")
+					results = []database.SearchResultWithCursor{tokenCandidates[bestIdx].result}
+				}
 			}
 		}
 	}
 
-	// Fallback 2: Secondary title-dropping base search
+	// Strategy 2: Secondary title-dropping main title search
 	if len(results) == 0 {
 		matchInfo := slugs.GenerateMatchInfo(gameName)
 		if matchInfo.HasSecondaryTitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
@@ -159,6 +215,14 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 			if err != nil {
 				return platforms.CmdResult{},
 					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
+			}
+			if len(results) > 0 {
+				log.Debug().
+					Str("strategy", "main_title_only").
+					Str("query", slug).
+					Str("main_title_slug", matchInfo.MainTitleSlug).
+					Int("result_count", len(results)).
+					Msg("match found via main title only strategy")
 			}
 		}
 	}
@@ -185,10 +249,22 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 				} else if len(results) > 0 {
 					log.Info().Msgf("found %d results using secondary title-only prefix: '%s'",
 						len(results), secondarySlug)
+					log.Debug().
+						Str("strategy", "secondary_title_prefix").
+						Str("query", slug).
+						Str("secondary_slug", secondarySlug).
+						Int("result_count", len(results)).
+						Msg("match found via secondary title prefix strategy")
 				}
 			} else {
 				log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
 					len(results), secondarySlug)
+				log.Debug().
+					Str("strategy", "secondary_title_exact").
+					Str("query", slug).
+					Str("secondary_slug", secondarySlug).
+					Int("result_count", len(results)).
+					Msg("match found via secondary title exact strategy")
 			}
 		}
 	}
@@ -215,6 +291,14 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 			if len(results) > 0 {
 				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
+				log.Debug().
+					Str("strategy", "progressive_trim").
+					Str("query", slug).
+					Str("trim_slug", candidate.Slug).
+					Bool("exact", candidate.IsExactMatch).
+					Bool("prefix", candidate.IsPrefixMatch).
+					Int("result_count", len(results)).
+					Msg("match found via progressive trim strategy")
 				break
 			}
 		}
@@ -355,11 +439,14 @@ func isVariant(result *database.SearchResultWithCursor) bool {
 	for _, tag := range result.Tags {
 		switch tag.Type {
 		case string(tags.TagTypeUnfinished):
-			// Exclude demos, betas, prototypes
+			// Exclude demos, betas, prototypes, samples, previews, prereleases
 			if strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedDemo)) ||
 				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedBeta)) ||
 				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedProto)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedAlpha)) {
+				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedAlpha)) ||
+				tag.Tag == string(tags.TagUnfinishedSample) ||
+				tag.Tag == string(tags.TagUnfinishedPreview) ||
+				tag.Tag == string(tags.TagUnfinishedPrerelease) {
 				return true
 			}
 		case string(tags.TagTypeUnlicensed):
@@ -368,6 +455,11 @@ func isVariant(result *database.SearchResultWithCursor) bool {
 				tag.Tag == string(tags.TagUnlicensedTranslation) ||
 				tag.Tag == string(tags.TagUnlicensedBootleg) ||
 				tag.Tag == string(tags.TagUnlicensedClone) {
+				return true
+			}
+		case string(tags.TagTypeDump):
+			// Exclude bad dumps
+			if tag.Tag == string(tags.TagDumpBad) {
 				return true
 			}
 		}

@@ -261,3 +261,103 @@ func hasSequelLikeSuffix(slug string) bool {
 	}
 	return false
 }
+
+// ScoreTokenMatch scores how well a candidate matches a query using word-by-word matching.
+// This implements a Picard-style token-based similarity algorithm with asymmetric penalties.
+//
+// Algorithm:
+//  1. Break both query and candidate into normalized words
+//  2. For each query word, find the best matching candidate word
+//  3. Remove matched words from pool (prevents double-counting)
+//  4. Calculate score: matched_words / (query_words + unmatched_candidate_words * 0.4)
+//  5. Asymmetric penalty: unmatched words in longer string penalized at 0.4x
+//
+// This handles word order variations: "Link Awakening" matches "Awakening of Link"
+func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
+	queryWords := NormalizeToWords(queryTitle)
+	candidateWords := NormalizeToWords(candidateTitle)
+
+	if len(queryWords) == 0 || len(candidateWords) == 0 {
+		return 0.0
+	}
+
+	matchedQueryWords := 0
+	usedCandidateIndices := make(map[int]bool)
+
+	for _, queryWord := range queryWords {
+		bestMatchIdx := -1
+		bestMatchScore := 0.0
+
+		for candIdx, candWord := range candidateWords {
+			if usedCandidateIndices[candIdx] {
+				continue
+			}
+
+			score := wordSimilarity(queryWord, candWord)
+			if score > bestMatchScore {
+				bestMatchScore = score
+				bestMatchIdx = candIdx
+			}
+		}
+
+		if bestMatchIdx >= 0 && bestMatchScore > 0.8 {
+			matchedQueryWords++
+			usedCandidateIndices[bestMatchIdx] = true
+		}
+	}
+
+	unmatchedCandidateWords := len(candidateWords) - len(usedCandidateIndices)
+	denominator := float64(len(queryWords)) + float64(unmatchedCandidateWords)*0.4
+
+	if denominator == 0 {
+		return 0.0
+	}
+
+	return float64(matchedQueryWords) / denominator
+}
+
+// wordSimilarity calculates similarity between two words (0.0 to 1.0)
+func wordSimilarity(word1, word2 string) float64 {
+	if word1 == word2 {
+		return 1.0
+	}
+
+	if len(word1) == 0 || len(word2) == 0 {
+		return 0.0
+	}
+
+	shorter, longer := word1, word2
+	if len(word1) > len(word2) {
+		shorter, longer = word2, word1
+	}
+
+	if len(longer) > len(shorter)*2 {
+		return 0.0
+	}
+
+	if hasCommonPrefix(word1, word2, 3) {
+		return 0.85
+	}
+
+	return 0.0
+}
+
+// hasCommonPrefix checks if two words share a common prefix of at least minLen characters
+func hasCommonPrefix(word1, word2 string, minLen int) bool {
+	shorter := len(word1)
+	if len(word2) < shorter {
+		shorter = len(word2)
+	}
+
+	if shorter < minLen {
+		return false
+	}
+
+	for i := 0; i < shorter && i < minLen; i++ {
+		if word1[i] != word2[i] {
+			return false
+		}
+	}
+
+	return true
+}

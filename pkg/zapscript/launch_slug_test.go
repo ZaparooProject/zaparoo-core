@@ -347,6 +347,95 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 	}
 }
 
+func TestCmdSlugTokenMatching(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		systemID       string
+		slug           string
+		prefixResults  []database.SearchResultWithCursor
+		expectedMatch  string
+		shouldUseToken bool
+	}{
+		{
+			name:     "word order variation - awakening link matches links awakening",
+			input:    "gbc/awakening link",
+			systemID: "GameboyColor",
+			slug:     "awakeninglink",
+			prefixResults: []database.SearchResultWithCursor{
+				{SystemID: "GameboyColor", Name: "The Legend of Zelda: Link's Awakening DX", Path: "/test/zelda-dx.gbc"},
+			},
+			expectedMatch:  "The Legend of Zelda: Link's Awakening DX",
+			shouldUseToken: true,
+		},
+		{
+			name:     "reversed words - mario super matches super mario",
+			input:    "snes/mario super world",
+			systemID: "SNES",
+			slug:     "mariosuperworld",
+			prefixResults: []database.SearchResultWithCursor{
+				{SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
+			},
+			expectedMatch:  "Super Mario World",
+			shouldUseToken: true,
+		},
+		{
+			name:     "partial word order - turtles ninja matches ninja turtles",
+			input:    "nes/turtles ninja",
+			systemID: "NES",
+			slug:     "turtlesninja",
+			prefixResults: []database.SearchResultWithCursor{
+				{SystemID: "NES", Name: "Teenage Mutant Ninja Turtles", Path: "/test/tmnt.nes"},
+			},
+			expectedMatch:  "Teenage Mutant Ninja Turtles",
+			shouldUseToken: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlaylistController := playlists.PlaylistController{}
+			mockConfig := &config.Instance{}
+
+			db := &database.Database{
+				MediaDB: mockMediaDB,
+			}
+
+			cmd := parser.Command{
+				Name:    "launch.slug",
+				Args:    []string{tt.input},
+				AdvArgs: map[string]string{},
+			}
+
+			env := platforms.CmdEnv{
+				Playlist: mockPlaylistController,
+				Cfg:      mockConfig,
+				Database: db,
+				Cmd:      cmd,
+			}
+
+			mockMediaDB.On("SearchMediaBySlug",
+				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return([]database.SearchResultWithCursor{}, nil).Once()
+
+			mockMediaDB.On("SearchMediaBySlugPrefix",
+				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return(tt.prefixResults, nil).Once()
+
+			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+			result, err := cmdSlug(mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
 func TestCmdSlugEdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string
