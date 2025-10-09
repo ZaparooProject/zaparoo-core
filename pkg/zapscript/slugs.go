@@ -107,10 +107,52 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 
-	// If no results and the game name has a subtitle, try searching with just the main title
+	// Fallback 1: Prefix search on full normalized title with edition-aware ranking
+	if len(results) == 0 {
+		log.Info().Msgf("no exact match for '%s', trying prefix search with ranking", slug)
+		prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(context.Background(), system.ID, slug, tagFilters)
+		if prefixErr != nil {
+			log.Warn().Err(prefixErr).Msg("prefix search failed")
+		} else if len(prefixResults) > 0 {
+			queryWords := slugs.TokenizeSlugWords(slug)
+			var validCandidates []slugs.PrefixMatchCandidate
+
+			for _, result := range prefixResults {
+				candidateSlug := slugs.SlugifyString(result.Name)
+				candidateWords := slugs.TokenizeSlugWords(candidateSlug)
+
+				if len(queryWords) >= 2 && !slugs.StartsWithWordSequence(candidateWords, queryWords) {
+					continue
+				}
+
+				score := slugs.ScorePrefixCandidate(slug, candidateSlug)
+				validCandidates = append(validCandidates, slugs.PrefixMatchCandidate{
+					Slug:  candidateSlug,
+					Score: score,
+				})
+			}
+
+			if len(validCandidates) > 0 {
+				bestScore := validCandidates[0].Score
+				bestIdx := 0
+				for i := 1; i < len(validCandidates); i++ {
+					if validCandidates[i].Score > bestScore {
+						bestScore = validCandidates[i].Score
+						bestIdx = i
+					}
+				}
+
+				log.Info().Msgf("found %d prefix matches, selected best: '%s' (score=%d)",
+					len(validCandidates), validCandidates[bestIdx].Slug, bestScore)
+				results = []database.SearchResultWithCursor{prefixResults[bestIdx]}
+			}
+		}
+	}
+
+	// Fallback 2: Secondary title-dropping base search
 	if len(results) == 0 {
 		matchInfo := slugs.GenerateMatchInfo(gameName)
-		if matchInfo.HasSubtitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
+		if matchInfo.HasSecondaryTitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
 			log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
 			results, err = gamesdb.SearchMediaBySlug(
 				context.Background(), system.ID, matchInfo.MainTitleSlug, tagFilters)
@@ -121,6 +163,37 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		}
 	}
 
+	// Fallback 3: Secondary title-only literal search
+	if len(results) == 0 {
+		matchInfo := slugs.GenerateMatchInfo(gameName)
+		if matchInfo.HasSecondaryTitle && matchInfo.SecondaryTitleSlug != "" && len(matchInfo.SecondaryTitleSlug) >= 4 {
+			secondarySlug := matchInfo.SecondaryTitleSlug
+			log.Info().Msgf("no results, trying secondary title-only search: '%s'", secondarySlug)
+
+			results, err = gamesdb.SearchMediaBySlug(
+				context.Background(), system.ID, secondarySlug, tagFilters)
+			if err != nil {
+				log.Warn().Err(err).Msgf("secondary title-only exact search failed for '%s'", secondarySlug)
+			}
+
+			if len(results) == 0 {
+				results, err = gamesdb.SearchMediaBySlugPrefix(
+					context.Background(), system.ID, secondarySlug, tagFilters)
+				if err != nil {
+					log.Warn().Err(err).Msgf(
+						"secondary title-only prefix search failed for '%s'", secondarySlug)
+				} else if len(results) > 0 {
+					log.Info().Msgf("found %d results using secondary title-only prefix: '%s'",
+						len(results), secondarySlug)
+				}
+			} else {
+				log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
+					len(results), secondarySlug)
+			}
+		}
+	}
+
+	// Fallback 4: Progressive trim candidates
 	if len(results) == 0 {
 		candidates := slugs.GenerateProgressiveTrimCandidates(gameName)
 		for _, candidate := range candidates {

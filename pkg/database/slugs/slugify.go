@@ -32,15 +32,22 @@ import (
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
 // Multi-Stage Normalization Pipeline:
-//   Stage -1: Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
-//   Stage 0: Leading Article Normalization - "The Legend" / "Legend, The" → "Legend"
-//   Stage 1: Unicode Normalization - "Pokémon" → "Pokemon"
-//   Stage 2: Ampersand Normalization - "Sonic & Knuckles" → "Sonic and Knuckles"
-//   Stage 3: Metadata Stripping - "(USA) [!]" removed
-//   Stage 3.5: Edition/Version Suffix Stripping - "Game Version" / "Game Deluxe Edition" → "Game"
-//   Stage 4: Separator Normalization - "Zelda: Link's Awakening" → "Zelda Links Awakening"
-//   Stage 5: Roman Numeral Conversion - "VII" → "7"
-//   Stage 6: Final Slugification - Lowercase, alphanumeric only
+//   Stage 1: Unicode Normalization (Symbol Removal + NFKC + Diacritic Removal)
+//            - Symbol removal: "Sonic™" → "Sonic", "Game®" → "Game" (So: Other Symbol, Sc: Currency Symbol)
+//            - Compatibility normalization: "１. Game" → "1. Game", "ﬁ" → "fi"
+//            - Diacritic removal: "Pokémon" → "Pokemon", "Café" → "Cafe"
+//   Stage 2: Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
+//   Stage 3: Secondary Title Decomposition - Split on ":", " - ", or "'s "
+//            Strip leading articles ("The", "A", "An") from both main and secondary titles
+//            "Zelda: The Minish Cap" → "Zelda Minish Cap"
+//            "Disney's The Lion King" → "Disney's Lion King"
+//   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
+//   Stage 5: Ampersand Normalization - "Sonic & Knuckles" → "Sonic and Knuckles"
+//   Stage 6: Metadata Stripping - "(USA) [!]" removed
+//   Stage 7: Edition/Version Suffix Stripping - "Game Version" / "Game Deluxe Edition" → "Game"
+//   Stage 8: Separator Normalization - Remaining separators converted to spaces
+//   Stage 9: Roman Numeral Conversion - "VII" → "7"
+//   Stage 10: Final Slugification - Lowercase, alphanumeric only
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)
@@ -50,8 +57,11 @@ import (
 //   → "legendofzeldaocarinaoftime"
 
 var (
-	editionSuffixRegex    = regexp.MustCompile(`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`)
-	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[\.\s\-]+`)
+	editionSuffixRegex = regexp.MustCompile(
+		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
+			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
+	)
+	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[.\s\-]+`)
 	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
 	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
 	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
@@ -86,17 +96,15 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	symbolPredicate := runes.Predicate(func(r rune) bool {
+		return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
+	})
+	symbolRemover := runes.Remove(symbolPredicate)
+	if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
+		s = cleaned
+	}
 
-	if strings.HasPrefix(strings.ToLower(s), "the ") {
-		s = s[4:]
-		s = strings.TrimSpace(s)
-	}
-	if trailingArticleRegex.MatchString(s) {
-		s = trailingArticleRegex.ReplaceAllString(s, "$1")
-		s = strings.TrimSpace(s)
-	}
+	s = norm.NFKC.String(s)
 
 	t := transform.Chain(
 		norm.NFD,
@@ -105,6 +113,16 @@ func SlugifyString(input string) string {
 	)
 	if normalized, _, err := transform.String(t, s); err == nil {
 		s = normalized
+	}
+
+	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = splitAndStripArticles(s)
+
+	if trailingArticleRegex.MatchString(s) {
+		s = trailingArticleRegex.ReplaceAllString(s, "$1")
+		s = strings.TrimSpace(s)
 	}
 
 	s = strings.ReplaceAll(s, "&", " and ")
@@ -130,6 +148,55 @@ func SlugifyString(input string) string {
 
 	s = nonAlphanumRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
+
+	return s
+}
+
+func splitAndStripArticles(s string) string {
+	cleaned := strings.TrimSpace(s)
+
+	var mainTitle, secondaryTitle string
+	hasSecondary := false
+
+	if idx := strings.Index(cleaned, ":"); idx != -1 {
+		mainTitle = strings.TrimSpace(cleaned[:idx])
+		secondaryTitle = strings.TrimSpace(cleaned[idx+1:])
+		hasSecondary = true
+	} else if idx := strings.Index(cleaned, " - "); idx != -1 {
+		mainTitle = strings.TrimSpace(cleaned[:idx])
+		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
+		hasSecondary = true
+	} else if idx := strings.Index(cleaned, "'s "); idx != -1 {
+		mainTitle = strings.TrimSpace(cleaned[:idx+2])
+		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
+		hasSecondary = true
+	} else {
+		mainTitle = cleaned
+	}
+
+	mainTitle = stripLeadingArticleFromString(mainTitle)
+
+	if hasSecondary {
+		secondaryTitle = stripLeadingArticleFromString(secondaryTitle)
+		return strings.TrimSpace(mainTitle + " " + secondaryTitle)
+	}
+
+	return mainTitle
+}
+
+func stripLeadingArticleFromString(s string) string {
+	s = strings.TrimSpace(s)
+	lower := strings.ToLower(s)
+
+	if strings.HasPrefix(lower, "the ") {
+		return strings.TrimSpace(s[4:])
+	}
+	if strings.HasPrefix(lower, "a ") {
+		return strings.TrimSpace(s[2:])
+	}
+	if strings.HasPrefix(lower, "an ") {
+		return strings.TrimSpace(s[3:])
+	}
 
 	return s
 }

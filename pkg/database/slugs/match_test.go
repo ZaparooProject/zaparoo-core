@@ -25,273 +25,252 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGenerateMatchInfo(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name               string
-		input              string
-		expectedCanonical  string
-		expectedMainTitle  string
-		expectedSubtitle   string
-		expectedHasSubt    bool
-		expectedHasArticle bool
+func TestScorePrefixCandidate(t *testing.T) {
+	testCases := []struct {
+		name           string
+		querySlug      string
+		candidateSlug  string
+		compareTo      string
+		expectedHigher bool
 	}{
 		{
-			name:               "simple_title",
-			input:              "Super Mario World",
-			expectedCanonical:  "supermarioworld",
-			expectedMainTitle:  "supermarioworld",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
+			name:           "SE edition scores higher than sequel 2",
+			querySlug:      "alienbreed",
+			candidateSlug:  "alienbreedse",
+			expectedHigher: true,
+			compareTo:      "alienbreed2",
 		},
 		{
-			name:               "with_colon_subtitle",
-			input:              "The Legend of Zelda: Link's Awakening",
-			expectedCanonical:  "legendofzeldalinksawakening",
-			expectedMainTitle:  "legendofzelda",
-			expectedSubtitle:   "linksawakening",
-			expectedHasSubt:    true,
-			expectedHasArticle: true,
+			name:           "Remastered scores higher than sequel",
+			querySlug:      "finalfantasy",
+			candidateSlug:  "finalfantasyremastered",
+			expectedHigher: true,
+			compareTo:      "finalfantasy2",
 		},
 		{
-			name:               "with_hyphen_subtitle",
-			input:              "Mega Man - The Wily Wars",
-			expectedCanonical:  "megamanwilywars",
-			expectedMainTitle:  "megaman",
-			expectedSubtitle:   "wilywars",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "no_subtitle_with_article",
-			input:              "The Adventures of Link",
-			expectedCanonical:  "adventuresoflink",
-			expectedMainTitle:  "adventuresoflink",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "complex_with_metadata",
-			input:              "Final Fantasy VII: Crisis Core (USA)",
-			expectedCanonical:  "finalfantasy7crisiscore",
-			expectedMainTitle:  "finalfantasy7",
-			expectedSubtitle:   "crisiscore",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "empty_string",
-			input:              "",
-			expectedCanonical:  "",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "whitespace_only",
-			input:              "   ",
-			expectedCanonical:  "",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "only_article",
-			input:              "The",
-			expectedCanonical:  "the",
-			expectedMainTitle:  "the",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "article_with_colon_no_subtitle",
-			input:              "The Game:",
-			expectedCanonical:  "game",
-			expectedMainTitle:  "game",
-			expectedSubtitle:   "",
-			expectedHasSubt:    true,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "hyphen_subtitle_with_article",
-			input:              "The Matrix - Reloaded",
-			expectedCanonical:  "matrixreloaded",
-			expectedMainTitle:  "matrix",
-			expectedSubtitle:   "reloaded",
-			expectedHasSubt:    true,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "multiple_colons",
-			input:              "Game: Part: One",
-			expectedCanonical:  "gamepartone",
-			expectedMainTitle:  "game",
-			expectedSubtitle:   "partone",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "multiple_hyphens",
-			input:              "Game - Part - One",
-			expectedCanonical:  "gamepartone",
-			expectedMainTitle:  "game",
-			expectedSubtitle:   "partone",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "mixed_colon_and_hyphen",
-			input:              "Game: Part - One",
-			expectedCanonical:  "gamepartone",
-			expectedMainTitle:  "game",
-			expectedSubtitle:   "partone",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "colon_at_end",
-			input:              "Final Fantasy:",
-			expectedCanonical:  "finalfantasy",
-			expectedMainTitle:  "finalfantasy",
-			expectedSubtitle:   "",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "hyphen_at_end",
-			input:              "Final Fantasy - ",
-			expectedCanonical:  "finalfantasy",
-			expectedMainTitle:  "finalfantasy",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "colon_at_start",
-			input:              ": The Beginning",
-			expectedCanonical:  "beginning",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "beginning",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "hyphen_without_spaces",
-			input:              "F-Zero",
-			expectedCanonical:  "fzero",
-			expectedMainTitle:  "fzero",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "single_hyphen_with_spaces",
-			input:              "Game -",
-			expectedCanonical:  "game",
-			expectedMainTitle:  "game",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "article_case_sensitivity",
-			input:              "THE LAST OF US",
-			expectedCanonical:  "lastofus",
-			expectedMainTitle:  "lastofus",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "article_mixed_case",
-			input:              "ThE Legend",
-			expectedCanonical:  "legend",
-			expectedMainTitle:  "legend",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "subtitle_with_metadata",
-			input:              "Zelda: Link (USA)",
-			expectedCanonical:  "zeldalink",
-			expectedMainTitle:  "zelda",
-			expectedSubtitle:   "link",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "article_and_subtitle_with_metadata",
-			input:              "The Zelda: Link (USA)",
-			expectedCanonical:  "zeldalink",
-			expectedMainTitle:  "zelda",
-			expectedSubtitle:   "link",
-			expectedHasSubt:    true,
-			expectedHasArticle: true,
-		},
-		{
-			name:               "special_chars_only",
-			input:              "!@#$%",
-			expectedCanonical:  "",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "",
-			expectedHasSubt:    false,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "unicode_subtitle",
-			input:              "Pokémon: Red Version",
-			expectedCanonical:  "pokemonred",
-			expectedMainTitle:  "pokemon",
-			expectedSubtitle:   "red",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "non_latin_main_title",
-			input:              "ストリート: Fighter",
-			expectedCanonical:  "fighter",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "fighter",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "non_latin_subtitle",
-			input:              "Street: ファイター",
-			expectedCanonical:  "street",
-			expectedMainTitle:  "street",
-			expectedSubtitle:   "",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
-		},
-		{
-			name:               "both_non_latin",
-			input:              "ストリート: ファイター",
-			expectedCanonical:  "",
-			expectedMainTitle:  "",
-			expectedSubtitle:   "",
-			expectedHasSubt:    true,
-			expectedHasArticle: false,
+			name:           "Closer length preferred when no editions",
+			querySlug:      "speedball",
+			candidateSlug:  "speedball",
+			expectedHigher: true,
+			compareTo:      "speedballextendedmegasuperedition",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := GenerateMatchInfo(tt.input)
-			assert.Equal(t, tt.input, result.OriginalInput)
-			assert.Equal(t, tt.expectedCanonical, result.CanonicalSlug)
-			assert.Equal(t, tt.expectedMainTitle, result.MainTitleSlug)
-			assert.Equal(t, tt.expectedSubtitle, result.SubtitleSlug)
-			assert.Equal(t, tt.expectedHasSubt, result.HasSubtitle)
-			assert.Equal(t, tt.expectedHasArticle, result.HasLeadingArticle)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			score1 := ScorePrefixCandidate(tc.querySlug, tc.candidateSlug)
+			score2 := ScorePrefixCandidate(tc.querySlug, tc.compareTo)
+
+			if tc.expectedHigher {
+				assert.Greater(t, score1, score2,
+					"Expected %s (score=%d) to score higher than %s (score=%d)",
+					tc.candidateSlug, score1, tc.compareTo, score2)
+			} else {
+				assert.Less(t, score1, score2,
+					"Expected %s (score=%d) to score lower than %s (score=%d)",
+					tc.candidateSlug, score1, tc.compareTo, score2)
+			}
+		})
+	}
+}
+
+func TestTokenizeSlugWords(t *testing.T) {
+	testCases := []struct {
+		name     string
+		slug     string
+		expected []string
+	}{
+		{
+			name:     "Simple words",
+			slug:     "alien breed se",
+			expected: []string{"alien", "breed", "se"},
+		},
+		{
+			name:     "With numbers",
+			slug:     "alien breed 2",
+			expected: []string{"alien", "breed", "2"},
+		},
+		{
+			name:     "Mixed case normalized",
+			slug:     "Alien Breed SE",
+			expected: []string{"alien", "breed", "se"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := TokenizeSlugWords(tc.slug)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestStartsWithWordSequence(t *testing.T) {
+	testCases := []struct {
+		name      string
+		candidate []string
+		query     []string
+		expected  bool
+	}{
+		{
+			name:      "Exact prefix match",
+			candidate: []string{"alien", "breed", "se"},
+			query:     []string{"alien", "breed"},
+			expected:  true,
+		},
+		{
+			name:      "No match different first word",
+			candidate: []string{"alienator", "breedx"},
+			query:     []string{"alien", "breed"},
+			expected:  false,
+		},
+		{
+			name:      "Query longer than candidate",
+			candidate: []string{"alien"},
+			query:     []string{"alien", "breed"},
+			expected:  false,
+		},
+		{
+			name:      "Single word match",
+			candidate: []string{"mario", "bros"},
+			query:     []string{"mario"},
+			expected:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := StartsWithWordSequence(tc.candidate, tc.query)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestHasEditionLikeSuffix(t *testing.T) {
+	testCases := []struct {
+		slug     string
+		expected bool
+	}{
+		{"alienbreedse", true},
+		{"gameremastered", true},
+		{"specialedition", true},
+		{"directorscut", true},
+		{"cd32version", true},
+		{"alienbreed2", false},
+		{"simpleame", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.slug, func(t *testing.T) {
+			result := hasEditionLikeSuffix(tc.slug)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestHasSequelLikeSuffix(t *testing.T) {
+	testCases := []struct {
+		slug     string
+		expected bool
+	}{
+		{"alien breed 2", true},
+		{"final fantasy iii", true},
+		{"game 4", true},
+		{"game vii", true},
+		{"alien breed se", false},
+		{"simple game", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.slug, func(t *testing.T) {
+			result := hasSequelLikeSuffix(tc.slug)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestStripLeadingArticle(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		{"The Minish Cap", "Minish Cap"},
+		{"the minish cap", "minish cap"},
+		{"A New Hope", "New Hope"},
+		{"An Adventure", "Adventure"},
+		{"Game", "Game"},
+		{"  The  Spaced  ", "Spaced"},
+		{"Them", "Them"},
+		{"Another Day", "Another Day"},
+		{"", ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			result := stripLeadingArticle(tc.input)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestGenerateMatchInfoSecondaryTitleArticleStripping(t *testing.T) {
+	testCases := []struct {
+		name                      string
+		input                     string
+		expectedMainSlug          string
+		expectedSecondarySlug     string
+		expectedHasSecondaryTitle bool
+	}{
+		{
+			name:                      "Colon with leading article in secondary title",
+			input:                     "Legend of Zelda: The Minish Cap",
+			expectedMainSlug:          "legendofzelda",
+			expectedSecondarySlug:     "minishcap",
+			expectedHasSecondaryTitle: true,
+		},
+		{
+			name:                      "Dash with leading article in secondary title",
+			input:                     "Movie - The Game",
+			expectedMainSlug:          "movie",
+			expectedSecondarySlug:     "game",
+			expectedHasSecondaryTitle: true,
+		},
+		{
+			name:                      "Possessive with leading article in secondary title",
+			input:                     "Disney's The Lion King",
+			expectedMainSlug:          "disneys",
+			expectedSecondarySlug:     "lionking",
+			expectedHasSecondaryTitle: true,
+		},
+		{
+			name:                      "Secondary title with 'A' article",
+			input:                     "Batman: A Telltale Series",
+			expectedMainSlug:          "batman",
+			expectedSecondarySlug:     "telltaleseries",
+			expectedHasSecondaryTitle: true,
+		},
+		{
+			name:                      "Secondary title with 'An' article",
+			input:                     "Game: An Adventure",
+			expectedMainSlug:          "game",
+			expectedSecondarySlug:     "adventure",
+			expectedHasSecondaryTitle: true,
+		},
+		{
+			name:                      "Secondary title without article",
+			input:                     "Zelda: Link's Awakening",
+			expectedMainSlug:          "zelda",
+			expectedSecondarySlug:     "linksawakening",
+			expectedHasSecondaryTitle: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := GenerateMatchInfo(tc.input)
+			assert.Equal(t, tc.expectedMainSlug, result.MainTitleSlug)
+			assert.Equal(t, tc.expectedSecondarySlug, result.SecondaryTitleSlug)
+			assert.Equal(t, tc.expectedHasSecondaryTitle, result.HasSecondaryTitle)
 		})
 	}
 }

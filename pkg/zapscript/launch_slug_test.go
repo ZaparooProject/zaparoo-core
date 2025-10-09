@@ -233,7 +233,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 			name:               "subtitle fallback with colon separator",
 			input:              "genesis/sonic: the hedgehog",
 			systemID:           "Genesis",
-			initialSearchSlug:  "sonicthehedgehog",
+			initialSearchSlug:  "sonichedgehog",
 			fallbackSearchSlug: "sonic",
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults: []database.SearchResultWithCursor{
@@ -307,10 +307,25 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 				context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
 				Return(tt.initialResults, nil).Once()
 
-			if tt.expectFallback {
-				mockMediaDB.On("SearchMediaBySlug",
-					context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
-					Return(tt.fallbackResults, nil).Once()
+			if len(tt.initialResults) == 0 {
+				mockMediaDB.On("SearchMediaBySlugPrefix",
+					context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil).Once()
+
+				if tt.expectFallback {
+					mockMediaDB.On("SearchMediaBySlug",
+						context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
+						Return(tt.fallbackResults, nil).Once()
+
+					if len(tt.fallbackResults) == 0 {
+						mockMediaDB.On("SearchMediaBySlug",
+							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+							Return([]database.SearchResultWithCursor{}, nil).Maybe()
+						mockMediaDB.On("SearchMediaBySlugPrefix",
+							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+							Return([]database.SearchResultWithCursor{}, nil).Maybe()
+					}
+				}
 			}
 
 			if !tt.shouldError {

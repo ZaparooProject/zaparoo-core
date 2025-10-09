@@ -146,7 +146,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "roman_numeral_i_before_colon",
 			input:    "Game I: The Subtitle",
-			expected: "game1thesubtitle",
+			expected: "game1subtitle",
 		},
 		{
 			name:     "roman_numeral_i_midword_ski",
@@ -643,6 +643,151 @@ func TestSlugifyString(t *testing.T) {
 			input:    "Game Special Edition Version",
 			expected: "gamespecialedition",
 		},
+		{
+			name:     "secondary_title_colon_with_leading_article",
+			input:    "Legend of Zelda: The Minish Cap",
+			expected: "legendofzeldaminishcap",
+		},
+		{
+			name:     "secondary_title_dash_with_leading_article",
+			input:    "Movie - The Game",
+			expected: "moviegame",
+		},
+		{
+			name:     "secondary_title_possessive_with_leading_article",
+			input:    "Disney's The Lion King",
+			expected: "disneyslionking",
+		},
+		{
+			name:     "secondary_title_with_a_article",
+			input:    "Batman: A Telltale Series",
+			expected: "batmantelltaleseries",
+		},
+		{
+			name:     "secondary_title_with_an_article",
+			input:    "Game: An Adventure",
+			expected: "gameadventure",
+		},
+		{
+			name:     "secondary_title_no_article",
+			input:    "Zelda: Link's Awakening",
+			expected: "zeldalinksawakening",
+		},
+		{
+			name:     "main_title_leading_article_with_secondary",
+			input:    "The Legend of Zelda: Ocarina of Time",
+			expected: "legendofzeldaocarinaoftime",
+		},
+		{
+			name:     "both_titles_with_articles",
+			input:    "The Game: The Beginning",
+			expected: "gamebeginning",
+		},
+		{
+			name:     "trailing_article_without_secondary_title",
+			input:    "Legend of Zelda, The",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "trailing_article_with_secondary_title_colon",
+			input:    "Legend of Zelda, The: Link's Awakening",
+			expected: "legendofzeldalinksawakening",
+		},
+		{
+			name:     "trailing_article_with_secondary_title_dash",
+			input:    "Final Fantasy, The - 7",
+			expected: "finalfantasy7",
+		},
+		{
+			name:     "trailing_article_with_secondary_title_possessive",
+			input:    "Game, The's Adventure",
+			expected: "gamethesadventure",
+		},
+		{
+			name:     "multiple_delimiters_colon_first",
+			input:    "Legend of Zelda: Link's Awakening",
+			expected: "legendofzeldalinksawakening",
+		},
+		{
+			name:     "multiple_delimiters_colon_beats_dash",
+			input:    "Sonic - The Hedgehog: Part 2",
+			expected: "sonicthehedgehogpart2",
+		},
+		{
+			name:     "multiple_delimiters_dash_beats_possessive",
+			input:    "Mario's Adventure - The Quest",
+			expected: "mariosadventurequest",
+		},
+		{
+			name:     "all_three_delimiters_colon_wins",
+			input:    "Game's Title: The Subtitle - Extra",
+			expected: "gamestitlesubtitleextra",
+		},
+		{
+			name:     "possessive_before_colon_colon_wins",
+			input:    "Someone's Something: Time to Die",
+			expected: "someonessomethingtimetodie",
+		},
+		{
+			name:     "possessive_before_dash_dash_wins",
+			input:    "Player's Choice - Final Battle",
+			expected: "playerschoicefinalbattle",
+		},
+		{
+			name:     "fullwidth_number_prefix",
+			input:    "１. Super Mario Bros",
+			expected: "supermariobros",
+		},
+		{
+			name:     "fullwidth_delimiter_colon",
+			input:    "Zelda：Link's Awakening",
+			expected: "zeldalinksawakening",
+		},
+		{
+			name:     "fullwidth_delimiter_dash",
+			input:    "Game － The Sequel",
+			expected: "gamesequel",
+		},
+		{
+			name:     "ligature_fi",
+			input:    "ﬁnal Fantasy VII",
+			expected: "finalfantasy7",
+		},
+		{
+			name:     "superscript_number",
+			input:    "Game²",
+			expected: "game2",
+		},
+		{
+			name:     "circled_number",
+			input:    "① First Game",
+			expected: "firstgame",
+		},
+		{
+			name:     "trademark_symbol",
+			input:    "Sonic™ Adventure",
+			expected: "sonicadventure",
+		},
+		{
+			name:     "combined_fullwidth_and_unicode",
+			input:    "１. Pokémon：The Game",
+			expected: "pokemongame",
+		},
+		{
+			name:     "registered_symbol",
+			input:    "Game®",
+			expected: "game",
+		},
+		{
+			name:     "copyright_symbol",
+			input:    "©Disney's Game",
+			expected: "disneysgame",
+		},
+		{
+			name:     "service_mark_symbol",
+			input:    "Brand℠ Adventure",
+			expected: "brandadventure",
+		},
 	}
 
 	for _, tt := range tests {
@@ -663,6 +808,9 @@ func TestSlugifyStringIdempotency(t *testing.T) {
 		"Final Fantasy VII",
 		"Super Mario Bros (USA)",
 		"Sonic & Knuckles",
+		"Legend of Zelda: The Minish Cap",
+		"Disney's The Lion King",
+		"Movie - The Game",
 	}
 
 	for _, input := range inputs {

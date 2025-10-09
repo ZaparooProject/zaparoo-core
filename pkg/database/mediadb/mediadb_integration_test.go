@@ -984,7 +984,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Equal(t, "Ms. Pac-Man", results[0].Name)
 
 	// Test 9: Slug search with complex title (Zelda)
-	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "legendofzeldaalinktothepast", nil)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "legendofzeldalinktothepast", nil)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "The Legend of Zelda: A Link to the Past", results[0].Name)
