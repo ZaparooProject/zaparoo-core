@@ -1175,3 +1175,347 @@ func TestConjunctionNormalizationInWords(t *testing.T) {
 		})
 	}
 }
+
+func TestStripLeadingArticle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "the_prefix",
+			input:    "The Legend of Zelda",
+			expected: "Legend of Zelda",
+		},
+		{
+			name:     "a_prefix",
+			input:    "A New Hope",
+			expected: "New Hope",
+		},
+		{
+			name:     "an_prefix",
+			input:    "An American Tail",
+			expected: "American Tail",
+		},
+		{
+			name:     "no_article",
+			input:    "Super Mario Bros",
+			expected: "Super Mario Bros",
+		},
+		{
+			name:     "article_not_at_start",
+			input:    "Someone The Great",
+			expected: "Someone The Great",
+		},
+		{
+			name:     "the_lowercase",
+			input:    "the quick brown fox",
+			expected: "quick brown fox",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := stripLeadingArticle(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestStripMetadataBrackets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "parentheses",
+			input:    "Game (USA)",
+			expected: "Game",
+		},
+		{
+			name:     "square_brackets",
+			input:    "Game [!]",
+			expected: "Game",
+		},
+		{
+			name:     "braces",
+			input:    "Game {Europe}",
+			expected: "Game",
+		},
+		{
+			name:     "angle_brackets",
+			input:    "Game <Beta>",
+			expected: "Game",
+		},
+		{
+			name:     "all_bracket_types",
+			input:    "Game (USA)[!]{En}<Proto>",
+			expected: "Game",
+		},
+		{
+			name:     "multiple_same_type",
+			input:    "Game (USA) (v1.2)",
+			expected: "Game",
+		},
+		{
+			name:     "no_brackets",
+			input:    "Plain Game",
+			expected: "Plain Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := stripMetadataBrackets(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestStripEditionAndVersionSuffixes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "special_edition",
+			input:    "Game Special Edition",
+			expected: "Game",
+		},
+		{
+			name:     "deluxe_edition",
+			input:    "Title Deluxe Edition",
+			expected: "Title",
+		},
+		{
+			name:     "goty_edition",
+			input:    "Game GOTY Edition",
+			expected: "Game",
+		},
+		{
+			name:     "version_number",
+			input:    "Title v1.2",
+			expected: "Title",
+		},
+		{
+			name:     "version_roman",
+			input:    "Game vIII",
+			expected: "Game",
+		},
+		{
+			name:     "both_edition_and_version",
+			input:    "Game Special Edition v2.0",
+			expected: "Game Special Edition",
+		},
+		{
+			name:     "no_suffix",
+			input:    "Plain Game",
+			expected: "Plain Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := stripEditionAndVersionSuffixes(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNormalizeConjunctions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "ampersand",
+			input:    "Sonic & Knuckles",
+			expected: "Sonic  and  Knuckles",
+		},
+		{
+			name:     "plus_sign",
+			input:    "Rock + Roll Racing",
+			expected: "Rock and Roll Racing",
+		},
+		{
+			name:     "n_with_apostrophes",
+			input:    "Rock 'n' Roll",
+			expected: "Rock and Roll",
+		},
+		{
+			name:     "n_with_left_apostrophe",
+			input:    "Rock 'n Roll",
+			expected: "Rock and Roll",
+		},
+		{
+			name:     "n_with_right_apostrophe",
+			input:    "Rock n' Roll",
+			expected: "Rock and Roll",
+		},
+		{
+			name:     "standalone_n",
+			input:    "Rock n Roll",
+			expected: "Rock and Roll",
+		},
+		{
+			name:     "multiple_conjunctions",
+			input:    "Sonic & Tails + Knuckles 'n' Amy",
+			expected: "Sonic  and  Tails and Knuckles and Amy",
+		},
+		{
+			name:     "no_conjunctions",
+			input:    "Plain Game Title",
+			expected: "Plain Game Title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := normalizeConjunctions(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestConvertRomanNumerals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "numeral_vii",
+			input:    "Final Fantasy VII",
+			expected: "final fantasy 7",
+		},
+		{
+			name:     "numeral_ii",
+			input:    "Street Fighter II",
+			expected: "street fighter 2",
+		},
+		{
+			name:     "numeral_iii",
+			input:    "Game III",
+			expected: "game 3",
+		},
+		{
+			name:     "numeral_iv",
+			input:    "Title IV",
+			expected: "title 4",
+		},
+		{
+			name:     "numeral_v",
+			input:    "Game V",
+			expected: "game 5",
+		},
+		{
+			name:     "numeral_vi",
+			input:    "Game VI",
+			expected: "game 6",
+		},
+		{
+			name:     "numeral_viii",
+			input:    "Game VIII",
+			expected: "game 8",
+		},
+		{
+			name:     "numeral_ix",
+			input:    "Game IX",
+			expected: "game 9",
+		},
+		{
+			name:     "numeral_x_preserved",
+			input:    "Mega Man X",
+			expected: "mega man x",
+		},
+		{
+			name:     "numeral_xi",
+			input:    "Final Fantasy XI",
+			expected: "final fantasy 11",
+		},
+		{
+			name:     "numeral_xix",
+			input:    "Game XIX",
+			expected: "game 19",
+		},
+		{
+			name:     "suffix_i",
+			input:    "Game I",
+			expected: "game 1",
+		},
+		{
+			name:     "no_numerals",
+			input:    "Plain Game",
+			expected: "plain game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := convertRomanNumerals(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNormalizeSeparators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "colon",
+			input:    "Zelda:Link",
+			expected: "Zelda Link",
+		},
+		{
+			name:     "underscore",
+			input:    "Super_Mario_Bros",
+			expected: "Super Mario Bros",
+		},
+		{
+			name:     "hyphen",
+			input:    "Game-Title-Here",
+			expected: "Game Title Here",
+		},
+		{
+			name:     "mixed_separators",
+			input:    "Game:Title_With-Separators",
+			expected: "Game Title With Separators",
+		},
+		{
+			name:     "no_separators",
+			input:    "Plain Game",
+			expected: "Plain Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := normalizeSeparators(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

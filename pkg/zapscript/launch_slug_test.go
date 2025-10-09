@@ -366,7 +366,11 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 			systemID: "GameboyColor",
 			slug:     "awakeninglink",
 			prefixResults: []database.SearchResultWithCursor{
-				{SystemID: "GameboyColor", Name: "The Legend of Zelda: Link's Awakening DX", Path: "/test/zelda-dx.gbc"},
+				{
+					SystemID: "GameboyColor",
+					Name:     "The Legend of Zelda: Link's Awakening DX",
+					Path:     "/test/zelda-dx.gbc",
+				},
 			},
 			expectedMatch:  "The Legend of Zelda: Link's Awakening DX",
 			shouldUseToken: true,

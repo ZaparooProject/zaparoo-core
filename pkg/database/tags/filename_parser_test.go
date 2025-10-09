@@ -520,8 +520,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 	tests := []struct {
 		name          string
 		filename      string
-		wantTags      []CanonicalTag
 		wantRemaining string
+		wantTags      []CanonicalTag
 	}{
 		{
 			name:     "T+Eng newer translation",
@@ -641,8 +641,8 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 	tests := []struct {
 		name          string
 		filename      string
-		wantTags      []CanonicalTag
 		wantRemaining string
+		wantTags      []CanonicalTag
 	}{
 		{
 			name:     "standalone v1.0",

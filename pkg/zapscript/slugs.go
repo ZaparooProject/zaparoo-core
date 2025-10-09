@@ -164,7 +164,10 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 			} else if len(prefixResults) > 0 {
 				// Strategy 1.5: Token-based similarity matching (word-order independent)
 				// If word sequence validation filtered out all candidates, try token matching
-				log.Info().Msgf("no valid prefix candidates, trying token-based matching on %d results", len(prefixResults))
+				log.Info().Msgf(
+					"no valid prefix candidates, trying token-based matching on %d results",
+					len(prefixResults),
+				)
 
 				type tokenMatchCandidate struct {
 					result database.SearchResultWithCursor
@@ -275,9 +278,9 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	if len(results) == 0 && len(slug) >= 5 {
 		log.Info().Msgf("no results yet, trying fuzzy matching for '%s'", slug)
 
-		allSlugs, err := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to fetch all slugs for fuzzy matching")
+		allSlugs, fetchErr := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
+		if fetchErr != nil {
+			log.Warn().Err(fetchErr).Msg("failed to fetch all slugs for fuzzy matching")
 		} else if len(allSlugs) > 0 {
 			fuzzyMatches := findFuzzyMatches(slug, allSlugs, 2, 0.85)
 

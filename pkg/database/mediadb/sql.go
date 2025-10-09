@@ -1616,20 +1616,20 @@ func sqlGetAllSlugsForSystem(ctx context.Context, db *sql.DB, systemID string) (
 		}
 	}()
 
-	var slugs []string
+	slugList := make([]string, 0, 100)
 	for rows.Next() {
 		var slug string
 		if scanErr := rows.Scan(&slug); scanErr != nil {
 			return nil, fmt.Errorf("failed to scan slug: %w", scanErr)
 		}
-		slugs = append(slugs, slug)
+		slugList = append(slugList, slug)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error iterating slugs: %w", err)
 	}
 
-	return slugs, nil
+	return slugList, nil
 }
 
 // sqlGetTags - Optimized query using subquery approach

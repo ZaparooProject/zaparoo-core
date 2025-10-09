@@ -89,23 +89,6 @@ func GenerateMatchInfo(title string) GameMatchInfo {
 	return info
 }
 
-func stripLeadingArticle(s string) string {
-	s = strings.TrimSpace(s)
-	lower := strings.ToLower(s)
-
-	if strings.HasPrefix(lower, "the ") {
-		return strings.TrimSpace(s[4:])
-	}
-	if strings.HasPrefix(lower, "a ") {
-		return strings.TrimSpace(s[2:])
-	}
-	if strings.HasPrefix(lower, "an ") {
-		return strings.TrimSpace(s[3:])
-	}
-
-	return s
-}
-
 type ProgressiveTrimCandidate struct {
 	Slug          string
 	WordCount     int
@@ -116,11 +99,8 @@ type ProgressiveTrimCandidate struct {
 func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate {
 	cleaned := strings.TrimSpace(title)
 
-	cleaned = parenthesesRegex.ReplaceAllString(cleaned, "")
-	cleaned = bracketsRegex.ReplaceAllString(cleaned, "")
-	cleaned = bracesRegex.ReplaceAllString(cleaned, "")
-	cleaned = angleBracketsRegex.ReplaceAllString(cleaned, "")
-	cleaned = editionSuffixRegex.ReplaceAllString(cleaned, "")
+	cleaned = stripMetadataBrackets(cleaned)
+	cleaned = stripEditionAndVersionSuffixes(cleaned)
 	cleaned = strings.TrimSpace(cleaned)
 
 	words := strings.Fields(cleaned)

@@ -62,7 +62,7 @@ var (
 		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
 			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
 	)
-	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:[0-9]{1,3}(?:[.][0-9]{1,4})*|[IVX]{1,5})$`)
+	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
 	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[.\s\-]+`)
 	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
 	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
@@ -77,8 +77,11 @@ var (
 	nWithRightApostrophe  = regexp.MustCompile(`\s+n'\s+`)
 	nAloneRegex           = regexp.MustCompile(`\s+n\s+`)
 	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralOrder     = []string{"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII", "XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II"}
-	romanNumeralPatterns  = map[string]*regexp.Regexp{
+	romanNumeralOrder     = []string{
+		"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII",
+		"XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II",
+	}
+	romanNumeralPatterns = map[string]*regexp.Regexp{
 		"XIX":   regexp.MustCompile(`\bXIX\b`),
 		"XVIII": regexp.MustCompile(`\bXVIII\b`),
 		"XVII":  regexp.MustCompile(`\bXVII\b`),
@@ -153,36 +156,16 @@ func SlugifyString(input string) string {
 		s = strings.TrimSpace(s)
 	}
 
-	s = strings.ReplaceAll(s, "&", " and ")
-	s = plusRegex.ReplaceAllString(s, " and ")
-	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
-	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
-	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
-	s = nAloneRegex.ReplaceAllString(s, " and ")
+	s = normalizeConjunctions(s)
 
-	s = parenthesesRegex.ReplaceAllString(s, "")
-	s = bracketsRegex.ReplaceAllString(s, "")
-	s = bracesRegex.ReplaceAllString(s, "")
-	s = angleBracketsRegex.ReplaceAllString(s, "")
+	s = stripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
-	s = editionSuffixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	s = stripEditionAndVersionSuffixes(s)
 
-	s = versionSuffixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	s = normalizeSeparators(s)
 
-	s = separatorsRegex.ReplaceAllString(s, " ")
-
-	upperS := strings.ToUpper(s)
-
-	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
-
-	for _, roman := range romanNumeralOrder {
-		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
-	}
-
-	s = strings.ToLower(upperS)
+	s = convertRomanNumerals(s)
 
 	s = nonAlphanumRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
@@ -212,17 +195,25 @@ func splitAndStripArticles(s string) string {
 		mainTitle = cleaned
 	}
 
-	mainTitle = stripLeadingArticleFromString(mainTitle)
+	mainTitle = stripLeadingArticle(mainTitle)
 
 	if hasSecondary {
-		secondaryTitle = stripLeadingArticleFromString(secondaryTitle)
+		secondaryTitle = stripLeadingArticle(secondaryTitle)
 		return strings.TrimSpace(mainTitle + " " + secondaryTitle)
 	}
 
 	return mainTitle
 }
 
-func stripLeadingArticleFromString(s string) string {
+// stripLeadingArticle removes leading articles ("The", "A", "An") from a string.
+// This is a utility function used by both slug normalization and word-level matching.
+// It preserves the original case of non-article portions.
+//
+// Examples:
+//   - "The Legend of Zelda" → "Legend of Zelda"
+//   - "A New Hope" → "New Hope"
+//   - "An American Tail" → "American Tail"
+func stripLeadingArticle(s string) string {
 	s = strings.TrimSpace(s)
 	lower := strings.ToLower(s)
 
@@ -237,6 +228,79 @@ func stripLeadingArticleFromString(s string) string {
 	}
 
 	return s
+}
+
+// stripMetadataBrackets removes all bracket types (parentheses, square brackets, braces, angle brackets)
+// from a string. This is used to clean metadata like region codes, dump info, and tags from game titles.
+//
+// Examples:
+//   - "Game (USA) [!]" → "Game"
+//   - "Title {Europe} <Beta>" → "Title"
+func stripMetadataBrackets(s string) string {
+	s = parenthesesRegex.ReplaceAllString(s, "")
+	s = bracketsRegex.ReplaceAllString(s, "")
+	s = bracesRegex.ReplaceAllString(s, "")
+	s = angleBracketsRegex.ReplaceAllString(s, "")
+	return s
+}
+
+// stripEditionAndVersionSuffixes removes edition and version suffixes from game titles.
+// This includes patterns like "Deluxe Edition", "GOTY Edition", "v1.2", "vIII", etc.
+//
+// Examples:
+//   - "Game Special Edition" → "Game"
+//   - "Title v1.2" → "Title"
+//   - "Final Fantasy VII Ultimate Edition" → "Final Fantasy VII"
+func stripEditionAndVersionSuffixes(s string) string {
+	s = editionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+	s = versionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+	return s
+}
+
+// normalizeConjunctions converts various conjunction forms to the word "and".
+// Handles: "&", " + ", " 'n' ", " 'n ", " n' ", " n "
+//
+// Examples:
+//   - "Sonic & Knuckles" → "Sonic and Knuckles"
+//   - "Rock + Roll Racing" → "Rock and Roll Racing"
+//   - "Rock 'n' Roll" → "Rock and Roll"
+func normalizeConjunctions(s string) string {
+	s = strings.ReplaceAll(s, "&", " and ")
+	s = plusRegex.ReplaceAllString(s, " and ")
+	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
+	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
+	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
+	s = nAloneRegex.ReplaceAllString(s, " and ")
+	return s
+}
+
+// convertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.
+// Note: X is intentionally NOT converted to avoid "Mega Man X" → "Mega Man 10".
+//
+// Examples:
+//   - "Final Fantasy VII" → "Final Fantasy 7"
+//   - "Street Fighter II" → "Street Fighter 2"
+//   - "Mega Man X" → "Mega Man X" (unchanged)
+func convertRomanNumerals(s string) string {
+	upperS := strings.ToUpper(s)
+	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
+
+	for _, roman := range romanNumeralOrder {
+		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
+	}
+
+	return strings.ToLower(upperS)
+}
+
+// normalizeSeparators converts various separator characters (colons, underscores, hyphens) to spaces.
+//
+// Examples:
+//   - "Zelda:Link" → "Zelda Link"
+//   - "Super_Mario_Bros" → "Super Mario Bros"
+func normalizeSeparators(s string) string {
+	return separatorsRegex.ReplaceAllString(s, " ")
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
@@ -291,36 +355,16 @@ func NormalizeToWords(input string) []string {
 		s = strings.TrimSpace(s)
 	}
 
-	s = strings.ReplaceAll(s, "&", " and ")
-	s = plusRegex.ReplaceAllString(s, " and ")
-	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
-	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
-	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
-	s = nAloneRegex.ReplaceAllString(s, " and ")
+	s = normalizeConjunctions(s)
 
-	s = parenthesesRegex.ReplaceAllString(s, "")
-	s = bracketsRegex.ReplaceAllString(s, "")
-	s = bracesRegex.ReplaceAllString(s, "")
-	s = angleBracketsRegex.ReplaceAllString(s, "")
+	s = stripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
-	s = editionSuffixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	s = stripEditionAndVersionSuffixes(s)
 
-	s = versionSuffixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	s = normalizeSeparators(s)
 
-	s = separatorsRegex.ReplaceAllString(s, " ")
-
-	upperS := strings.ToUpper(s)
-
-	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
-
-	for _, roman := range romanNumeralOrder {
-		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
-	}
-
-	s = strings.ToLower(upperS)
+	s = convertRomanNumerals(s)
 
 	s = strings.TrimSpace(s)
 
