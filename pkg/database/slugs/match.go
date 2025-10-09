@@ -385,3 +385,105 @@ func hasCommonPrefix(word1, word2 string, minLen int) bool {
 
 	return true
 }
+
+// ScoreTokenSetRatio calculates similarity using set-based token matching.
+// This is more forgiving than ScoreTokenMatch for:
+//   - Extra words in either string (focuses on intersection)
+//   - Duplicate words (automatically deduplicated)
+//   - Complete word reordering (order-independent)
+//
+// Algorithm:
+//  1. Convert both strings to unique word sets
+//  2. Calculate intersection (common words)
+//  3. Score based on intersection coverage of both query and candidate
+//  4. Heavily weight query coverage (user's intent matters most)
+//  5. Apply modest penalty for extra words
+//
+// Example: "zelda link awakening dx" vs "Legend of Zelda Link's Awakening"
+//
+//	Intersection: {zelda, link, awakening}
+//	Query has: +dx
+//	Candidate has: +legend, +of
+//	Score: ~0.70 (3 of 4 query words matched, with minor penalty for extras)
+func ScoreTokenSetRatio(queryTitle, candidateTitle string) float64 {
+	queryWords := NormalizeToWords(queryTitle)
+	candWords := NormalizeToWords(candidateTitle)
+
+	if len(queryWords) == 0 || len(candWords) == 0 {
+		return 0.0
+	}
+
+	querySet := uniqueWords(queryWords)
+	candSet := uniqueWords(candWords)
+
+	intersection := setIntersection(querySet, candSet)
+
+	if len(intersection) == 0 {
+		return 0.0
+	}
+
+	intersectionSize := float64(len(intersection))
+	querySize := float64(len(querySet))
+	candSize := float64(len(candSet))
+
+	queryCoverage := intersectionSize / querySize
+	candCoverage := intersectionSize / candSize
+
+	baseScore := (queryCoverage*0.8 + candCoverage*0.2)
+
+	queryExtras := querySize - intersectionSize
+	candExtras := candSize - intersectionSize
+	totalExtras := queryExtras + candExtras
+
+	if totalExtras > 0 {
+		totalWords := querySize + candSize
+		extraRatio := totalExtras / totalWords
+		penalty := extraRatio * 0.2
+		baseScore *= (1.0 - penalty)
+	}
+
+	return baseScore
+}
+
+// uniqueWords returns unique words from a slice, preserving order
+func uniqueWords(words []string) []string {
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(words))
+	for _, w := range words {
+		if !seen[w] {
+			seen[w] = true
+			result = append(result, w)
+		}
+	}
+	return result
+}
+
+// setIntersection returns words that appear in both sets
+func setIntersection(set1, set2 []string) []string {
+	m := make(map[string]bool)
+	for _, w := range set1 {
+		m[w] = true
+	}
+	result := make([]string, 0)
+	for _, w := range set2 {
+		if m[w] {
+			result = append(result, w)
+		}
+	}
+	return result
+}
+
+// setDifference returns words in set1 that are not in set2
+func setDifference(set1, set2 []string) []string {
+	m := make(map[string]bool)
+	for _, w := range set2 {
+		m[w] = true
+	}
+	result := make([]string, 0)
+	for _, w := range set1 {
+		if !m[w] {
+			result = append(result, w)
+		}
+	}
+	return result
+}

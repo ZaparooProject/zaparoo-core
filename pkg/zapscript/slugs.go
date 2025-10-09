@@ -177,10 +177,17 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 				for _, result := range prefixResults {
 					tokenScore := slugs.ScoreTokenMatch(gameName, result.Name)
-					if tokenScore > 0.5 {
+					setScore := slugs.ScoreTokenSetRatio(gameName, result.Name)
+
+					bestScore := tokenScore
+					if setScore > bestScore {
+						bestScore = setScore
+					}
+
+					if bestScore > 0.5 {
 						tokenCandidates = append(tokenCandidates, tokenMatchCandidate{
 							result: result,
-							score:  tokenScore,
+							score:  bestScore,
 						})
 					}
 				}
