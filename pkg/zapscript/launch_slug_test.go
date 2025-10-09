@@ -48,21 +48,21 @@ func TestCmdSlug(t *testing.T) {
 		{
 			name:           "valid slug format",
 			input:          "snes/Super Mario World",
-			expectedSystem: "snes",
+			expectedSystem: "SNES",
 			expectedSlug:   "supermarioworld",
 			shouldError:    false,
 		},
 		{
 			name:           "slug with special characters",
 			input:          "genesis/Sonic & Knuckles",
-			expectedSystem: "genesis",
+			expectedSystem: "Genesis",
 			expectedSlug:   "sonicandknuckles",
 			shouldError:    false,
 		},
 		{
 			name:           "slug with subtitle",
 			input:          "n64/The Legend of Zelda: Ocarina of Time",
-			expectedSystem: "n64",
+			expectedSystem: "Nintendo64",
 			expectedSlug:   "legendofzeldaocarinaoftime",
 			shouldError:    false,
 		},
@@ -72,19 +72,28 @@ func TestCmdSlug(t *testing.T) {
 			shouldError: true,
 		},
 		{
-			name:        "invalid format - multiple slashes",
-			input:       "snes/game/extra",
-			shouldError: true,
+			name:           "multiple slashes in game title - valid (WCW/nWo)",
+			input:          "ps1/WCW/nWo Thunder",
+			expectedSystem: "PSX",
+			expectedSlug:   "wcwnwothunder",
+			shouldError:    false,
 		},
 		{
 			name:           "has extension - passes slug format validation",
 			input:          "snes/game.smc",
-			expectedSystem: "snes",
+			expectedSystem: "SNES",
 			expectedSlug:   "gamesmc",
 			shouldError:    false,
 		},
 		{
-			name:        "invalid format - has wildcard",
+			name:           "asterisk in middle - valid (Q*bert)",
+			input:          "atari2600/Q*bert",
+			expectedSystem: "Atari2600",
+			expectedSlug:   "qbert",
+			shouldError:    false,
+		},
+		{
+			name:        "suffix wildcard - invalid",
 			input:       "snes/game*",
 			shouldError: true,
 		},
@@ -156,7 +165,7 @@ func TestCmdSlugWithTags(t *testing.T) {
 	}
 
 	input := "snes/Super Mario World"
-	expectedSystem := "snes"
+	expectedSystem := "SNES"
 	expectedSlug := "supermarioworld"
 	expectedTags := []database.TagFilter{
 		{Type: "region", Value: "usa"},
@@ -210,7 +219,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 		{
 			name:               "subtitle fallback triggers when no initial results",
 			input:              "snes/zelda: ocarina",
-			systemID:           "snes",
+			systemID:           "SNES",
 			initialSearchSlug:  "zeldaocarina",
 			fallbackSearchSlug: "zelda",
 			initialResults:     []database.SearchResultWithCursor{},
@@ -223,7 +232,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 		{
 			name:               "subtitle fallback with colon separator",
 			input:              "genesis/sonic: the hedgehog",
-			systemID:           "genesis",
+			systemID:           "Genesis",
 			initialSearchSlug:  "sonicthehedgehog",
 			fallbackSearchSlug: "sonic",
 			initialResults:     []database.SearchResultWithCursor{},
@@ -236,7 +245,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 		{
 			name:               "subtitle fallback with dash separator",
 			input:              "ps1/final fantasy - 7",
-			systemID:           "ps1",
+			systemID:           "PSX",
 			initialSearchSlug:  "finalfantasy7",
 			fallbackSearchSlug: "finalfantasy",
 			initialResults:     []database.SearchResultWithCursor{},
@@ -249,7 +258,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 		{
 			name:              "no fallback when initial search succeeds",
 			input:             "n64/mario 64",
-			systemID:          "n64",
+			systemID:          "Nintendo64",
 			initialSearchSlug: "mario64",
 			initialResults: []database.SearchResultWithCursor{
 				{SystemID: "n64", Name: "Super Mario 64", Path: "/test/mario64.z64"},
@@ -260,7 +269,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 		{
 			name:               "error when both searches fail",
 			input:              "snes/nonexistent: game",
-			systemID:           "snes",
+			systemID:           "SNES",
 			initialSearchSlug:  "nonexistentgame",
 			fallbackSearchSlug: "nonexistent",
 			initialResults:     []database.SearchResultWithCursor{},
@@ -394,7 +403,7 @@ func TestCmdSlugEdgeCases(t *testing.T) {
 	}
 }
 
-func TestIsSlugFormat(t *testing.T) {
+func TestMightBeSlug(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -416,19 +425,29 @@ func TestIsSlugFormat(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "multiple slashes - not slug",
-			input:    "snes/game/extra",
-			expected: false,
+			name:     "multiple slashes in game title - IS a slug (WCW/nWo)",
+			input:    "ps1/WCW/nWo Thunder",
+			expected: true,
 		},
 		{
-			name:     "has extension - passes slug format but would be caught by file check",
+			name:     "has extension - might be slug (file check runs first)",
 			input:    "snes/game.smc",
 			expected: true,
 		},
 		{
-			name:     "has wildcard - not slug",
+			name:     "has suffix wildcard - not slug",
 			input:    "snes/game*",
 			expected: false,
+		},
+		{
+			name:     "has prefix wildcard - not slug",
+			input:    "snes/*game",
+			expected: false,
+		},
+		{
+			name:     "asterisk in middle of title - IS a slug (Q*bert)",
+			input:    "atari2600/Q*bert",
+			expected: true,
 		},
 		{
 			name:     "empty string",
@@ -459,7 +478,7 @@ func TestIsSlugFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isSlugFormat(tt.input)
+			result := mightBeSlug(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

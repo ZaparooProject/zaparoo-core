@@ -32,10 +32,12 @@ import (
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
 // Multi-Stage Normalization Pipeline:
+//   Stage -1: Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
 //   Stage 0: Leading Article Normalization - "The Legend" / "Legend, The" → "Legend"
 //   Stage 1: Unicode Normalization - "Pokémon" → "Pokemon"
 //   Stage 2: Ampersand Normalization - "Sonic & Knuckles" → "Sonic and Knuckles"
 //   Stage 3: Metadata Stripping - "(USA) [!]" removed
+//   Stage 3.5: Edition/Version Suffix Stripping - "Game Version" / "Game Deluxe Edition" → "Game"
 //   Stage 4: Separator Normalization - "Zelda: Link's Awakening" → "Zelda Links Awakening"
 //   Stage 5: Roman Numeral Conversion - "VII" → "7"
 //   Stage 6: Final Slugification - Lowercase, alphanumeric only
@@ -47,16 +49,16 @@ import (
 //   SlugifyString("The Legend of Zelda: Ocarina of Time (USA) [!]")
 //   → "legendofzeldaocarinaoftime"
 
-// TODO: titles with no latin characters at all (e.g. Chinese-only) will be
-// reduced to an empty string. need to handle during insert and search.
-
 var (
-	parenthesesRegex     = regexp.MustCompile(`\s*\([^)]*\)`)
-	bracketsRegex        = regexp.MustCompile(`\s*\[[^\]]*\]`)
-	separatorsRegex      = regexp.MustCompile(`[:_\-]+`)
-	nonAlphanumRegex     = regexp.MustCompile(`[^a-z0-9]+`)
-	romanNumeralI        = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralPatterns = map[string]*regexp.Regexp{
+	editionSuffixRegex    = regexp.MustCompile(`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`)
+	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[\.\s\-]+`)
+	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
+	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
+	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
+	nonAlphanumRegex      = regexp.MustCompile(`[^a-z0-9]+`)
+	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
+	romanNumeralPatterns  = map[string]*regexp.Regexp{
 		"IX":   regexp.MustCompile(`\bIX\b`),
 		"VIII": regexp.MustCompile(`\bVIII\b`),
 		"VII":  regexp.MustCompile(`\bVII\b`),
@@ -84,12 +86,15 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
+	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
 	if strings.HasPrefix(strings.ToLower(s), "the ") {
 		s = s[4:]
 		s = strings.TrimSpace(s)
 	}
-	if strings.HasSuffix(strings.ToLower(s), ", the") {
-		s = s[:len(s)-5]
+	if trailingArticleRegex.MatchString(s) {
+		s = trailingArticleRegex.ReplaceAllString(s, "$1")
 		s = strings.TrimSpace(s)
 	}
 
@@ -106,6 +111,9 @@ func SlugifyString(input string) string {
 
 	s = parenthesesRegex.ReplaceAllString(s, "")
 	s = bracketsRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = editionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 
 	s = separatorsRegex.ReplaceAllString(s, " ")

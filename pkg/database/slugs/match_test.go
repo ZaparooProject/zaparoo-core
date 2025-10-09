@@ -247,9 +247,9 @@ func TestGenerateMatchInfo(t *testing.T) {
 		{
 			name:               "unicode_subtitle",
 			input:              "Pokémon: Red Version",
-			expectedCanonical:  "pokemonredversion",
+			expectedCanonical:  "pokemonred",
 			expectedMainTitle:  "pokemon",
-			expectedSubtitle:   "redversion",
+			expectedSubtitle:   "red",
 			expectedHasSubt:    true,
 			expectedHasArticle: false,
 		},

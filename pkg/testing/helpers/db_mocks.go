@@ -475,6 +475,22 @@ func (m *MockMediaDBI) SearchMediaBySlug(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SearchMediaBySlugPrefix(
+	ctx context.Context, systemID string, slugPrefix string, tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	args := m.Called(ctx, systemID, slugPrefix, tags)
+	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) GetTags(
 	ctx context.Context,
 	systems []systemdefs.System,

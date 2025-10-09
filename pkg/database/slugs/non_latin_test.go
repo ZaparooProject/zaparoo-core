@@ -151,7 +151,7 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Mathematical symbols",
 			input:    "Game ∞ + ∑ Edition",
-			expected: "gameedition",
+			expected: "game",
 		},
 		{
 			name:     "Mixed scripts complex",

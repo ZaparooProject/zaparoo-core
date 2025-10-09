@@ -83,3 +83,69 @@ func GenerateMatchInfo(title string) GameMatchInfo {
 
 	return info
 }
+
+type ProgressiveTrimCandidate struct {
+	Slug          string
+	WordCount     int
+	IsExactMatch  bool
+	IsPrefixMatch bool
+}
+
+func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate {
+	cleaned := strings.TrimSpace(title)
+
+	cleaned = parenthesesRegex.ReplaceAllString(cleaned, "")
+	cleaned = bracketsRegex.ReplaceAllString(cleaned, "")
+	cleaned = editionSuffixRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.TrimSpace(cleaned)
+
+	words := strings.Fields(cleaned)
+	if len(words) < 3 {
+		return nil
+	}
+
+	var candidates []ProgressiveTrimCandidate
+	seenSlugs := make(map[string]bool)
+
+	maxTrimCount := len(words) - 2
+	if maxTrimCount > 10 {
+		maxTrimCount = 10
+	}
+
+	for trimCount := 0; trimCount <= maxTrimCount; trimCount++ {
+		remainingWords := words[:len(words)-trimCount]
+		if len(remainingWords) < 2 {
+			break
+		}
+
+		trimmedTitle := strings.Join(remainingWords, " ")
+		slug := SlugifyString(trimmedTitle)
+
+		if len(slug) < 6 {
+			break
+		}
+
+		if seenSlugs[slug] {
+			continue
+		}
+		seenSlugs[slug] = true
+
+		candidate := ProgressiveTrimCandidate{
+			Slug:          slug,
+			WordCount:     len(remainingWords),
+			IsExactMatch:  true,
+			IsPrefixMatch: false,
+		}
+		candidates = append(candidates, candidate)
+
+		prefixCandidate := ProgressiveTrimCandidate{
+			Slug:          slug,
+			WordCount:     len(remainingWords),
+			IsExactMatch:  false,
+			IsPrefixMatch: true,
+		}
+		candidates = append(candidates, prefixCandidate)
+	}
+
+	return candidates
+}

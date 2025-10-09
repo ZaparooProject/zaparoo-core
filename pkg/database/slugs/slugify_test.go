@@ -64,6 +64,31 @@ func TestSlugifyString(t *testing.T) {
 			expected: "megaman",
 		},
 		{
+			name:     "trailing_article_before_subtitle_dash",
+			input:    "Legend of Zelda, The - Ocarina of Time",
+			expected: "legendofzeldaocarinaoftime",
+		},
+		{
+			name:     "trailing_article_before_subtitle_colon",
+			input:    "Legend of Zelda, The: Ocarina of Time",
+			expected: "legendofzeldaocarinaoftime",
+		},
+		{
+			name:     "trailing_article_before_metadata",
+			input:    "Legend of Zelda, The (USA) (Rev 1)",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "trailing_article_before_brackets",
+			input:    "Mega Man, The [!]",
+			expected: "megaman",
+		},
+		{
+			name:     "trailing_article_with_extra_spaces",
+			input:    "Game, The   -   Subtitle",
+			expected: "gamesubtitle",
+		},
+		{
 			name:     "ampersand_sonic",
 			input:    "Sonic & Knuckles",
 			expected: "sonicandknuckles",
@@ -371,27 +396,27 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "quotation_marks",
 			input:    `Game "The Best" Edition`,
-			expected: "gamethebestedition",
+			expected: "gamethebest",
 		},
 		{
 			name:     "single_quotes",
 			input:    "Game 'Special' Edition",
-			expected: "gamespecialedition",
+			expected: "gamespecial",
 		},
 		{
 			name:     "backticks",
 			input:    "Game `Limited` Edition",
-			expected: "gamelimitededition",
+			expected: "gamelimited",
 		},
 		{
 			name:     "currency_symbols",
 			input:    "Game $99 Edition",
-			expected: "game99edition",
+			expected: "game99",
 		},
 		{
 			name:     "percentage_symbol",
 			input:    "Game 100% Edition",
-			expected: "game100edition",
+			expected: "game100",
 		},
 		{
 			name:     "plus_minus_symbols",
@@ -446,7 +471,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "less_greater_than",
 			input:    "Game <Ultimate> Edition",
-			expected: "gameultimateedition",
+			expected: "gameultimate",
 		},
 		{
 			name:     "comma_separator",
@@ -497,6 +522,126 @@ func TestSlugifyString(t *testing.T) {
 			name:     "non_breaking_space",
 			input:    "Game\u00A0Title",
 			expected: "gametitle",
+		},
+		{
+			name:     "leading_number_prefix_dot",
+			input:    "1. Super Mario Bros",
+			expected: "supermariobros",
+		},
+		{
+			name:     "leading_number_prefix_dash",
+			input:    "2 - Sonic the Hedgehog",
+			expected: "sonicthehedgehog",
+		},
+		{
+			name:     "leading_number_prefix_space",
+			input:    "03 Zelda",
+			expected: "zelda",
+		},
+		{
+			name:     "leading_number_prefix_multiple_digits",
+			input:    "123. Game",
+			expected: "game",
+		},
+		{
+			name:     "game_name_starting_with_number",
+			input:    "1942",
+			expected: "1942",
+		},
+		{
+			name:     "game_name_starting_with_number_words",
+			input:    "7th Saga",
+			expected: "7thsaga",
+		},
+		{
+			name:     "game_name_3d",
+			input:    "3D Worldrunner",
+			expected: "3dworldrunner",
+		},
+		{
+			name:     "leading_prefix_with_article",
+			input:    "1. The Legend of Zelda",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "leading_prefix_with_metadata",
+			input:    "01 - Super Mario Bros (USA)",
+			expected: "supermariobros",
+		},
+		{
+			name:     "edition_suffix_version",
+			input:    "Pokemon Ruby Version",
+			expected: "pokemonruby",
+		},
+		{
+			name:     "edition_suffix_firered_version",
+			input:    "Pokemon FireRed Version",
+			expected: "pokemonfirered",
+		},
+		{
+			name:     "edition_suffix_edition",
+			input:    "Skyrim Special Edition",
+			expected: "skyrim",
+		},
+		{
+			name:     "edition_suffix_deluxe",
+			input:    "Grand Theft Auto V Deluxe Edition",
+			expected: "grandtheftauto5",
+		},
+		{
+			name:     "edition_suffix_goty",
+			input:    "The Witcher 3 GOTY Edition",
+			expected: "witcher3",
+		},
+		{
+			name:     "edition_suffix_game_of_the_year",
+			input:    "Fallout 4 Game of the Year Edition",
+			expected: "fallout4",
+		},
+		{
+			name:     "edition_suffix_definitive",
+			input:    "Halo The Master Chief Collection Definitive Edition",
+			expected: "halothemasterchiefcollection",
+		},
+		{
+			name:     "edition_suffix_ultimate",
+			input:    "Forza Horizon 5 Ultimate Edition",
+			expected: "forzahorizon5",
+		},
+		{
+			name:     "edition_suffix_case_insensitive",
+			input:    "Game VERSION",
+			expected: "game",
+		},
+		{
+			name:     "edition_suffix_mixed_case",
+			input:    "Test DeLuXe EdItIoN",
+			expected: "test",
+		},
+		{
+			name:     "edition_not_at_end",
+			input:    "Version Control System",
+			expected: "versioncontrolsystem",
+		},
+		{
+			name:     "edition_with_metadata",
+			input:    "Pokemon Emerald Version (USA)",
+			expected: "pokemonemerald",
+		},
+		{
+			name:     "edition_with_article",
+			input:    "The Legend of Zelda Special Edition",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "edition_with_number_prefix",
+			input:    "1. Super Mario Bros Deluxe Edition",
+			expected: "supermariobros",
+		},
+		{
+			name:     "multiple_edition_words",
+			input:    "Game Special Edition Version",
+			expected: "gamespecialedition",
 		},
 	}
 

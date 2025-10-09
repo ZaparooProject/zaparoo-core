@@ -48,9 +48,9 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	// Validate slug format
-	if !isSlugFormat(query) {
+	if !isValidSlugFormat(query) {
 		return platforms.CmdResult{}, fmt.Errorf(
-			"invalid slug format: %s (expected SystemID/GameName with no extensions or wildcards)", query)
+			"invalid slug format: %s (expected SystemID/GameName)", query)
 	}
 
 	// Parse SystemID/GameName format
@@ -99,10 +99,10 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	gamesdb := env.Database.MediaDB
-	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, systemID)
+	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, system.ID)
 
 	// Search for media by slug
-	results, err := gamesdb.SearchMediaBySlug(context.Background(), systemID, slug, tagFilters)
+	results, err := gamesdb.SearchMediaBySlug(context.Background(), system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
@@ -113,7 +113,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		if matchInfo.HasSubtitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
 			log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
 			results, err = gamesdb.SearchMediaBySlug(
-				context.Background(), systemID, matchInfo.MainTitleSlug, tagFilters)
+				context.Background(), system.ID, matchInfo.MainTitleSlug, tagFilters)
 			if err != nil {
 				return platforms.CmdResult{},
 					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
@@ -122,7 +122,33 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	if len(results) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("no results found for slug: %s/%s", systemID, gameName)
+		candidates := slugs.GenerateProgressiveTrimCandidates(gameName)
+		for _, candidate := range candidates {
+			log.Info().Msgf("trying progressive trim candidate: '%s' (exact=%v, prefix=%v)",
+				candidate.Slug, candidate.IsExactMatch, candidate.IsPrefixMatch)
+
+			if candidate.IsExactMatch {
+				results, err = gamesdb.SearchMediaBySlug(
+					context.Background(), system.ID, candidate.Slug, tagFilters)
+			} else if candidate.IsPrefixMatch {
+				results, err = gamesdb.SearchMediaBySlugPrefix(
+					context.Background(), system.ID, candidate.Slug, tagFilters)
+			}
+
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to search with candidate '%s'", candidate.Slug)
+				continue
+			}
+
+			if len(results) > 0 {
+				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
+				break
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return platforms.CmdResult{}, fmt.Errorf("no results found for slug: %s/%s", system.ID, gameName)
 	}
 
 	// If multiple results, apply intelligent selection
@@ -423,20 +449,15 @@ func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) d
 	return best
 }
 
-// isSlugFormat checks if the input string matches slug format (system/game with no extensions or wildcards)
-func isSlugFormat(input string) bool {
-	// Must contain exactly one slash
-	slashCount := strings.Count(input, "/")
-	if slashCount != 1 {
+// mightBeSlug checks if input might be a slug format for routing purposes in cmdLaunch.
+// This is a lenient check that allows characters that will be normalized during slugification.
+func mightBeSlug(input string) bool {
+	// Must contain at least one slash
+	if !strings.Contains(input, "/") {
 		return false
 	}
 
-	// Must not contain asterisk wildcards (used for search command passthrough)
-	if strings.Contains(input, "*") {
-		return false
-	}
-
-	// Split into system and game parts
+	// Split into system and game parts (only on first slash)
 	parts := strings.SplitN(input, "/", 2)
 	if len(parts) != 2 {
 		return false
@@ -449,8 +470,47 @@ func isSlugFormat(input string) bool {
 		return false
 	}
 
-	// Game part should not look like a file path
-	if strings.Contains(game, "\\") || strings.Contains(game, "/") {
+	// Reject obvious wildcard patterns which should go to search instead (but allow Q*bert)
+	if strings.HasPrefix(game, "*") || strings.HasSuffix(game, "*") {
+		return false
+	}
+
+	// Game part should not contain backslashes (Windows file path indicator)
+	if strings.Contains(game, "\\") {
+		return false
+	}
+
+	return true
+}
+
+// isValidSlugFormat checks if the input string is valid slug format for cmdSlug.
+// This is a strict validation used after routing to cmdSlug.
+func isValidSlugFormat(input string) bool {
+	// Must contain at least one slash
+	if !strings.Contains(input, "/") {
+		return false
+	}
+
+	// Split into system and game parts (only on first slash)
+	parts := strings.SplitN(input, "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	system, game := parts[0], parts[1]
+
+	// Both parts must be non-empty
+	if system == "" || game == "" {
+		return false
+	}
+
+	// Reject wildcard patterns (but allow Q*bert)
+	if strings.HasPrefix(game, "*") || strings.HasSuffix(game, "*") {
+		return false
+	}
+
+	// Game part should not contain backslashes (Windows file path indicator)
+	if strings.Contains(game, "\\") {
 		return false
 	}
 

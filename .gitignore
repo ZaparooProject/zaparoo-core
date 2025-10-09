@@ -39,3 +39,6 @@ tmp/
 /cmd/windows/winres/winres.json
 
 worktrees/
+
+/pkg/zapscript/testdata/*.db
+/pkg/zapscript/testdata/*.txt
