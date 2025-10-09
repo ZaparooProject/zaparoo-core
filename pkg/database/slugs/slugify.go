@@ -42,7 +42,8 @@ import (
 //            "Zelda: The Minish Cap" → "Zelda Minish Cap"
 //            "Disney's The Lion King" → "Disney's Lion King"
 //   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
-//   Stage 5: Ampersand Normalization - "Sonic & Knuckles" → "Sonic and Knuckles"
+//   Stage 5: Conjunction Normalization - "&", "+", "'n'" variants → "and"
+//            "Sonic & Knuckles" / "Rock + Roll" / "Rock 'n' Roll" → "...and..."
 //   Stage 6: Metadata Stripping - "(USA) [!]" removed
 //   Stage 7: Edition/Version Suffix Stripping - "Game Version" / "Game Deluxe Edition" → "Game"
 //   Stage 8: Separator Normalization - Remaining separators converted to spaces
@@ -70,6 +71,11 @@ var (
 	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
 	nonAlphanumRegex      = regexp.MustCompile(`[^a-z0-9]+`)
 	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	plusRegex             = regexp.MustCompile(`\s+\+\s+`)
+	nWithApostrophesRegex = regexp.MustCompile(`\s+'n'\s+`)
+	nWithLeftApostrophe   = regexp.MustCompile(`\s+'n\s+`)
+	nWithRightApostrophe  = regexp.MustCompile(`\s+n'\s+`)
+	nAloneRegex           = regexp.MustCompile(`\s+n\s+`)
 	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
 	romanNumeralOrder     = []string{"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII", "XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II"}
 	romanNumeralPatterns  = map[string]*regexp.Regexp{
@@ -148,6 +154,11 @@ func SlugifyString(input string) string {
 	}
 
 	s = strings.ReplaceAll(s, "&", " and ")
+	s = plusRegex.ReplaceAllString(s, " and ")
+	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
+	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
+	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
+	s = nAloneRegex.ReplaceAllString(s, " and ")
 
 	s = parenthesesRegex.ReplaceAllString(s, "")
 	s = bracketsRegex.ReplaceAllString(s, "")
@@ -281,6 +292,11 @@ func NormalizeToWords(input string) []string {
 	}
 
 	s = strings.ReplaceAll(s, "&", " and ")
+	s = plusRegex.ReplaceAllString(s, " and ")
+	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
+	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
+	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
+	s = nAloneRegex.ReplaceAllString(s, " and ")
 
 	s = parenthesesRegex.ReplaceAllString(s, "")
 	s = bracketsRegex.ReplaceAllString(s, "")

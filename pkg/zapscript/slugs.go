@@ -271,44 +271,9 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		}
 	}
 
-	// Fallback 4: Progressive trim candidates
-	if len(results) == 0 {
-		candidates := slugs.GenerateProgressiveTrimCandidates(gameName)
-		for _, candidate := range candidates {
-			log.Info().Msgf("trying progressive trim candidate: '%s' (exact=%v, prefix=%v)",
-				candidate.Slug, candidate.IsExactMatch, candidate.IsPrefixMatch)
-
-			if candidate.IsExactMatch {
-				results, err = gamesdb.SearchMediaBySlug(
-					context.Background(), system.ID, candidate.Slug, tagFilters)
-			} else if candidate.IsPrefixMatch {
-				results, err = gamesdb.SearchMediaBySlugPrefix(
-					context.Background(), system.ID, candidate.Slug, tagFilters)
-			}
-
-			if err != nil {
-				log.Warn().Err(err).Msgf("failed to search with candidate '%s'", candidate.Slug)
-				continue
-			}
-
-			if len(results) > 0 {
-				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
-				log.Debug().
-					Str("strategy", "progressive_trim").
-					Str("query", slug).
-					Str("trim_slug", candidate.Slug).
-					Bool("exact", candidate.IsExactMatch).
-					Bool("prefix", candidate.IsPrefixMatch).
-					Int("result_count", len(results)).
-					Msg("match found via progressive trim strategy")
-				break
-			}
-		}
-	}
-
-	// Strategy 5: Levenshtein fuzzy matching (typo tolerance)
+	// Strategy 4: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
 	if len(results) == 0 && len(slug) >= 5 {
-		log.Info().Msgf("all strategies failed, trying fuzzy matching for '%s'", slug)
+		log.Info().Msgf("no results yet, trying fuzzy matching for '%s'", slug)
 
 		allSlugs, err := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
 		if err != nil {
@@ -338,6 +303,43 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 						break
 					}
 				}
+			}
+		}
+	}
+
+	// Strategy 5: Progressive trim candidates (last resort)
+	// Aggressively removes words from the end - handles overly-verbose queries
+	if len(results) == 0 {
+		log.Info().Msgf("all strategies failed, trying progressive truncation as last resort")
+		candidates := slugs.GenerateProgressiveTrimCandidates(gameName)
+		for _, candidate := range candidates {
+			log.Info().Msgf("trying progressive trim candidate: '%s' (exact=%v, prefix=%v)",
+				candidate.Slug, candidate.IsExactMatch, candidate.IsPrefixMatch)
+
+			if candidate.IsExactMatch {
+				results, err = gamesdb.SearchMediaBySlug(
+					context.Background(), system.ID, candidate.Slug, tagFilters)
+			} else if candidate.IsPrefixMatch {
+				results, err = gamesdb.SearchMediaBySlugPrefix(
+					context.Background(), system.ID, candidate.Slug, tagFilters)
+			}
+
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to search with candidate '%s'", candidate.Slug)
+				continue
+			}
+
+			if len(results) > 0 {
+				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
+				log.Debug().
+					Str("strategy", "progressive_trim").
+					Str("query", slug).
+					Str("trim_slug", candidate.Slug).
+					Bool("exact", candidate.IsExactMatch).
+					Bool("prefix", candidate.IsPrefixMatch).
+					Int("result_count", len(results)).
+					Msg("match found via progressive trim strategy")
+				break
 			}
 		}
 	}

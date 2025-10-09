@@ -1047,3 +1047,131 @@ func TestNormalizeToWordsVsSlugify(t *testing.T) {
 		})
 	}
 }
+
+func TestConjunctionNormalization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "ampersand",
+			input:    "Sonic & Knuckles",
+			expected: "sonicandknuckles",
+		},
+		{
+			name:     "plus_sign",
+			input:    "Rock + Roll Racing",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "n_with_both_apostrophes",
+			input:    "Rock 'n' Roll Racing",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "n_with_left_apostrophe",
+			input:    "Rock 'n Roll Racing",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "n_with_right_apostrophe",
+			input:    "Rock n' Roll Racing",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "standalone_n",
+			input:    "Rock n Roll Racing",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "multiple_conjunctions",
+			input:    "Sonic & Knuckles + Tails 'n' Shadow",
+			expected: "sonicandknucklesandtailsandshadow",
+		},
+		{
+			name:     "already_and",
+			input:    "Sonic and Knuckles",
+			expected: "sonicandknuckles",
+		},
+		{
+			name:     "mixed_conjunctions",
+			input:    "Rock 'n Roll & Jazz + Blues",
+			expected: "rockandrollandjazzandblues",
+		},
+		{
+			name:     "conjunction_with_metadata",
+			input:    "Rock + Roll Racing (USA) [!]",
+			expected: "rockandrollracing",
+		},
+		{
+			name:     "does_not_match_cplusplus",
+			input:    "C++Programming",
+			expected: "cprogramming",
+		},
+		{
+			name:     "does_not_match_n_without_spaces",
+			input:    "nintendo",
+			expected: "nintendo",
+		},
+		{
+			name:     "does_not_match_n_at_start",
+			input:    "n Roll Racing",
+			expected: "nrollracing",
+		},
+		{
+			name:     "does_not_match_n_at_end",
+			input:    "Rock n",
+			expected: "rockn",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SlugifyString(tt.input)
+			assert.Equal(t, tt.expected, result, "Conjunction normalization failed")
+		})
+	}
+}
+
+func TestConjunctionNormalizationInWords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "plus_sign_words",
+			input:    "Rock + Roll Racing",
+			expected: []string{"rock", "and", "roll", "racing"},
+		},
+		{
+			name:     "n_with_apostrophes_words",
+			input:    "Rock 'n' Roll",
+			expected: []string{"rock", "and", "roll"},
+		},
+		{
+			name:     "standalone_n_words",
+			input:    "Rock n Roll",
+			expected: []string{"rock", "and", "roll"},
+		},
+		{
+			name:     "multiple_conjunctions_words",
+			input:    "Sonic & Tails + Knuckles 'n' Amy",
+			expected: []string{"sonic", "and", "tails", "and", "knuckles", "and", "amy"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := NormalizeToWords(tt.input)
+			assert.Equal(t, tt.expected, result, "Conjunction normalization in words failed")
+		})
+	}
+}
