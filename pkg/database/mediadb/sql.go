@@ -1589,6 +1589,49 @@ func sqlGetAllUsedTags(ctx context.Context, db *sql.DB) ([]database.TagInfo, err
 	return tags, nil
 }
 
+func sqlGetAllSlugsForSystem(ctx context.Context, db *sql.DB, systemID string) ([]string, error) {
+	stmt, err := db.PrepareContext(ctx, `
+		SELECT DISTINCT MediaTitles.Slug
+		FROM MediaTitles
+		JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
+		WHERE Systems.SystemID = ?
+		ORDER BY MediaTitles.Slug
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare get all slugs statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute get all slugs query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	var slugs []string
+	for rows.Next() {
+		var slug string
+		if scanErr := rows.Scan(&slug); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan slug: %w", scanErr)
+		}
+		slugs = append(slugs, slug)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return slugs, nil
+}
+
 // sqlGetTags - Optimized query using subquery approach
 // This performs significantly better than the original 6-table join by filtering early
 func sqlGetTags(
@@ -2493,7 +2536,7 @@ func sqlSearchMediaBySlug(
 
 	whereConditions := []string{
 		"Systems.SystemID = ?",
-		"MediaTitles.Slug = ? COLLATE NOCASE",
+		"MediaTitles.Slug = ?",
 	}
 
 	// Add tag filtering condition - requires type:value format (AND logic)
@@ -2651,7 +2694,7 @@ func sqlSearchMediaBySlugPrefix(
 
 	whereConditions := []string{
 		"Systems.SystemID = ?",
-		"MediaTitles.Slug LIKE ? COLLATE NOCASE",
+		"MediaTitles.Slug LIKE ?",
 	}
 
 	if len(tags) > 0 {

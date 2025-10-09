@@ -1008,10 +1008,10 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "region", Tag: "usa"})
 	assert.Contains(t, results[0].Tags, database.TagInfo{Type: "genre", Tag: "puzzle"})
 
-	// Test 13: Case sensitivity - slugs should be case insensitive
-	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "SUPERMARIOWORLD", nil)
+	// Test 13: Lowercase slug matching (slugs are always normalized to lowercase)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "supermarioworld", nil)
 	require.NoError(t, err)
-	assert.Len(t, results, 1) // Should find the same result (case insensitive)
+	assert.Len(t, results, 1) // Should find the result with lowercase slug
 
 	// Test 14: Empty slug
 	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "", nil)

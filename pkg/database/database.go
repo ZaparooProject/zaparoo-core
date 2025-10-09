@@ -259,6 +259,7 @@ type MediaDBI interface {
 	SearchMediaBySlugPrefix(
 		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
+	GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error

@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/hbollon/go-edlib"
 	"github.com/rs/zerolog/log"
 )
 
@@ -304,6 +306,42 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		}
 	}
 
+	// Strategy 5: Levenshtein fuzzy matching (typo tolerance)
+	if len(results) == 0 && len(slug) >= 5 {
+		log.Info().Msgf("all strategies failed, trying fuzzy matching for '%s'", slug)
+
+		allSlugs, err := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to fetch all slugs for fuzzy matching")
+		} else if len(allSlugs) > 0 {
+			fuzzyMatches := findFuzzyMatches(slug, allSlugs, 2, 0.55)
+
+			if len(fuzzyMatches) > 0 {
+				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")
+				for _, match := range fuzzyMatches {
+					log.Debug().
+						Str("slug", match.Slug).
+						Float32("similarity", match.Similarity).
+						Msg("attempting fuzzy match")
+					results, err = gamesdb.SearchMediaBySlug(
+						context.Background(), system.ID, match.Slug, tagFilters)
+					if err == nil && len(results) > 0 {
+						log.Info().Msgf("found match via fuzzy search: '%s' (similarity=%.2f)",
+							match.Slug, match.Similarity)
+						log.Debug().
+							Str("strategy", "levenshtein_fuzzy").
+							Str("query", slug).
+							Str("match", match.Slug).
+							Float64("similarity", float64(match.Similarity)).
+							Int("result_count", len(results)).
+							Msg("match found via Levenshtein fuzzy matching")
+						break
+					}
+				}
+			}
+		}
+	}
+
 	if len(results) == 0 {
 		return platforms.CmdResult{}, fmt.Errorf("no results found for slug: %s/%s", system.ID, gameName)
 	}
@@ -419,6 +457,64 @@ func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.T
 	}
 
 	return true
+}
+
+type fuzzyMatch struct {
+	Slug       string
+	Similarity float32
+}
+
+// findFuzzyMatches returns slugs that fuzzy match the query using Levenshtein distance
+// Results are filtered by maxDistance and minSimilarity, sorted by similarity (best first)
+func findFuzzyMatches(query string, candidates []string, maxDistance int, minSimilarity float32) []fuzzyMatch {
+	var matches []fuzzyMatch
+
+	for _, candidate := range candidates {
+		// Skip exact matches (already handled by earlier strategies)
+		if candidate == query {
+			continue
+		}
+
+		// Length pre-filter: skip candidates with length difference > maxDistance
+		lenDiff := len(query) - len(candidate)
+		if lenDiff < 0 {
+			lenDiff = -lenDiff
+		}
+		if lenDiff > maxDistance {
+			continue
+		}
+
+		// Calculate similarity
+		similarity, err := edlib.StringsSimilarity(query, candidate, edlib.Levenshtein)
+		if err != nil {
+			continue
+		}
+
+		// Debug logging for close matches (helps troubleshoot fuzzy matching)
+		if similarity > 0.5 {
+			log.Debug().
+				Str("query", query).
+				Str("candidate", candidate).
+				Float32("similarity", similarity).
+				Float32("minSimilarity", minSimilarity).
+				Msg("fuzzy match candidate evaluation")
+		}
+
+		// Filter by minimum similarity threshold
+		if similarity >= minSimilarity {
+			matches = append(matches, fuzzyMatch{
+				Slug:       candidate,
+				Similarity: similarity,
+			})
+		}
+	}
+
+	// Sort by similarity (highest first)
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Similarity > matches[j].Similarity
+	})
+
+	return matches
 }
 
 // filterOutVariants removes demos, betas, prototypes, hacks, and other variants

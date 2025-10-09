@@ -619,6 +619,13 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
 }
 
+func (db *MediaDB) GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error) {
+	if db.sql == nil {
+		return make([]string, 0), ErrNullSQL
+	}
+	return sqlGetAllSlugsForSystem(ctx, db.sql, systemID)
+}
+
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
 	if db.sql == nil {
 		return make([]database.TagInfo, 0), ErrNullSQL

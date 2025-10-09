@@ -324,6 +324,9 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 						mockMediaDB.On("SearchMediaBySlugPrefix",
 							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
 							Return([]database.SearchResultWithCursor{}, nil).Maybe()
+						mockMediaDB.On("GetAllSlugsForSystem",
+							mock.Anything, tt.systemID).
+							Return([]string{}, nil).Maybe()
 					}
 				}
 			}
@@ -423,6 +426,110 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 			mockMediaDB.On("SearchMediaBySlugPrefix",
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return(tt.prefixResults, nil).Once()
+
+			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+			result, err := cmdSlug(mockPlatform, env)
+
+			require.NoError(t, err)
+			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
+		})
+	}
+}
+
+func TestCmdSlugLevenshteinFuzzy(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		systemID      string
+		slug          string
+		allSlugs      []string
+		expectedMatch string
+	}{
+		{
+			name:          "typo - missing character (zelad -> zelda)",
+			input:         "nes/zelad",
+			systemID:      "NES",
+			slug:          "zelad",
+			allSlugs:      []string{"zelda", "mario", "sonic"},
+			expectedMatch: "zelda",
+		},
+		{
+			name:          "typo - wrong character (sanic -> sonic)",
+			input:         "genesis/sanic",
+			systemID:      "Genesis",
+			slug:          "sanic",
+			allSlugs:      []string{"sonic", "sonicandknuckles", "streets"},
+			expectedMatch: "sonic",
+		},
+		{
+			name:          "typo - transposed characters (mraio -> mario)",
+			input:         "snes/mraio",
+			systemID:      "SNES",
+			slug:          "mraio",
+			allSlugs:      []string{"mario", "megaman", "metroid"},
+			expectedMatch: "mario",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMediaDB := helpers.NewMockMediaDBI()
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlaylistController := playlists.PlaylistController{}
+			mockConfig := &config.Instance{}
+
+			db := &database.Database{
+				MediaDB: mockMediaDB,
+			}
+
+			cmd := parser.Command{
+				Name:    "launch.slug",
+				Args:    []string{tt.input},
+				AdvArgs: map[string]string{},
+			}
+
+			env := platforms.CmdEnv{
+				Playlist: mockPlaylistController,
+				Cfg:      mockConfig,
+				Database: db,
+				Cmd:      cmd,
+			}
+
+			// All earlier strategies fail
+			mockMediaDB.On("SearchMediaBySlug",
+				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return([]database.SearchResultWithCursor{}, nil).Once()
+			mockMediaDB.On("SearchMediaBySlugPrefix",
+				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return([]database.SearchResultWithCursor{}, nil).Once()
+
+			// Fuzzy matching returns all slugs
+			mockMediaDB.On("GetAllSlugsForSystem",
+				context.Background(), tt.systemID).
+				Return(tt.allSlugs, nil).Once()
+
+			// Fuzzy match succeeds (MUST come before .Maybe() to take precedence)
+			expectedResults := []database.SearchResultWithCursor{
+				{
+					SystemID: tt.systemID,
+					Name:     tt.expectedMatch,
+					Path:     "/test/" + tt.expectedMatch,
+				},
+			}
+			mockMediaDB.On("SearchMediaBySlug",
+				context.Background(), tt.systemID, tt.expectedMatch, []database.TagFilter(nil)).
+				Return(expectedResults, nil).Once()
+
+			// Secondary title searches also fail (no ':' or '-' in query)
+			mockMediaDB.On("SearchMediaBySlug",
+				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+				Return([]database.SearchResultWithCursor{}, nil).Maybe()
+			mockMediaDB.On("SearchMediaBySlugPrefix",
+				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+				Return([]database.SearchResultWithCursor{}, nil).Maybe()
 
 			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
