@@ -263,14 +263,21 @@ func hasSequelLikeSuffix(slug string) bool {
 }
 
 // ScoreTokenMatch scores how well a candidate matches a query using word-by-word matching.
-// This implements a Picard-style token-based similarity algorithm with asymmetric penalties.
+// This implements a Picard-style token-based similarity algorithm with asymmetric penalties
+// and weighted word scoring.
 //
 // Algorithm:
 //  1. Break both query and candidate into normalized words
 //  2. For each query word, find the best matching candidate word
 //  3. Remove matched words from pool (prevents double-counting)
-//  4. Calculate score: matched_words / (query_words + unmatched_candidate_words * 0.4)
-//  5. Asymmetric penalty: unmatched words in longer string penalized at 0.4x
+//  4. Apply word-level weights: longer/unique words score higher than common words
+//  5. Calculate score: weighted_matched_words / (weighted_query_words + unmatched_candidate_words * 0.4)
+//  6. Asymmetric penalty: unmatched words in longer string penalized at 0.4x
+//
+// Word weighting:
+//   - Longer words (6+ chars): +10 bonus (e.g., "minish", "awakening")
+//   - Common words: -5 penalty (e.g., "of", "the", "and")
+//   - Default weight: 10
 //
 // This handles word order variations: "Link Awakening" matches "Awakening of Link"
 func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
@@ -281,10 +288,14 @@ func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
 		return 0.0
 	}
 
-	matchedQueryWords := 0
+	weightedMatchedScore := 0.0
+	totalQueryWeight := 0.0
 	usedCandidateIndices := make(map[int]bool)
 
 	for _, queryWord := range queryWords {
+		queryWeight := getWordWeight(queryWord)
+		totalQueryWeight += queryWeight
+
 		bestMatchIdx := -1
 		bestMatchScore := 0.0
 
@@ -301,19 +312,52 @@ func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
 		}
 
 		if bestMatchIdx >= 0 && bestMatchScore > 0.8 {
-			matchedQueryWords++
+			weightedMatchedScore += queryWeight
 			usedCandidateIndices[bestMatchIdx] = true
 		}
 	}
 
 	unmatchedCandidateWords := len(candidateWords) - len(usedCandidateIndices)
-	denominator := float64(len(queryWords)) + float64(unmatchedCandidateWords)*0.4
+	denominator := totalQueryWeight + float64(unmatchedCandidateWords)*0.4*10.0
 
 	if denominator == 0 {
 		return 0.0
 	}
 
-	return float64(matchedQueryWords) / denominator
+	return weightedMatchedScore / denominator
+}
+
+// getWordWeight returns the importance weight for a word in matching.
+// Longer/unique words are more important than common filler words.
+func getWordWeight(word string) float64 {
+	baseWeight := 10.0
+
+	if len(word) >= 6 {
+		baseWeight += 10.0
+	}
+
+	if isCommonWord(word) {
+		baseWeight -= 5.0
+	}
+
+	return baseWeight
+}
+
+// isCommonWord checks if a word is a common filler word with low discriminative value.
+func isCommonWord(word string) bool {
+	commonWords := map[string]bool{
+		"of":  true,
+		"the": true,
+		"and": true,
+		"a":   true,
+		"an":  true,
+		"in":  true,
+		"on":  true,
+		"at":  true,
+		"to":  true,
+		"for": true,
+	}
+	return commonWords[word]
 }
 
 // wordSimilarity calculates similarity between two words (0.0 to 1.0)
@@ -322,7 +366,7 @@ func wordSimilarity(word1, word2 string) float64 {
 		return 1.0
 	}
 
-	if len(word1) == 0 || len(word2) == 0 {
+	if word1 == "" || word2 == "" {
 		return 0.0
 	}
 

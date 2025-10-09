@@ -356,8 +356,8 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 		input          string
 		systemID       string
 		slug           string
-		prefixResults  []database.SearchResultWithCursor
 		expectedMatch  string
+		prefixResults  []database.SearchResultWithCursor
 		shouldUseToken bool
 	}{
 		{
@@ -445,8 +445,8 @@ func TestCmdSlugLevenshteinFuzzy(t *testing.T) {
 		input         string
 		systemID      string
 		slug          string
-		allSlugs      []string
 		expectedMatch string
+		allSlugs      []string
 	}{
 		{
 			name:          "typo - missing character (zelad -> zelda)",
