@@ -471,7 +471,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "less_greater_than",
 			input:    "Game <Ultimate> Edition",
-			expected: "gameultimate",
+			expected: "game",
 		},
 		{
 			name:     "comma_separator",
@@ -788,6 +788,101 @@ func TestSlugifyString(t *testing.T) {
 			input:    "Brand℠ Adventure",
 			expected: "brandadventure",
 		},
+		{
+			name:     "version_suffix_v1_2",
+			input:    "Game v1.2",
+			expected: "game",
+		},
+		{
+			name:     "version_suffix_v10",
+			input:    "Title v10",
+			expected: "title",
+		},
+		{
+			name:     "version_suffix_vIII",
+			input:    "Game vIII",
+			expected: "game",
+		},
+		{
+			name:     "version_suffix_v1",
+			input:    "Pokemon Red v1",
+			expected: "pokemonred",
+		},
+		{
+			name:     "version_suffix_with_dot",
+			input:    "Game v.1.0",
+			expected: "game",
+		},
+		{
+			name:     "version_suffix_complex",
+			input:    "Title v1.2.3.4",
+			expected: "title",
+		},
+		{
+			name:     "roman_numeral_xi",
+			input:    "Final Fantasy XI",
+			expected: "finalfantasy11",
+		},
+		{
+			name:     "roman_numeral_xii",
+			input:    "Final Fantasy XII",
+			expected: "finalfantasy12",
+		},
+		{
+			name:     "roman_numeral_xiii",
+			input:    "Final Fantasy XIII",
+			expected: "finalfantasy13",
+		},
+		{
+			name:     "roman_numeral_xiv",
+			input:    "Final Fantasy XIV",
+			expected: "finalfantasy14",
+		},
+		{
+			name:     "roman_numeral_xv",
+			input:    "Final Fantasy XV",
+			expected: "finalfantasy15",
+		},
+		{
+			name:     "roman_numeral_xvi",
+			input:    "Game XVI",
+			expected: "game16",
+		},
+		{
+			name:     "roman_numeral_xvii",
+			input:    "Game XVII",
+			expected: "game17",
+		},
+		{
+			name:     "roman_numeral_xviii",
+			input:    "Game XVIII",
+			expected: "game18",
+		},
+		{
+			name:     "roman_numeral_xix",
+			input:    "Game XIX",
+			expected: "game19",
+		},
+		{
+			name:     "roman_numeral_x_preserved",
+			input:    "Mega Man X",
+			expected: "megamanx",
+		},
+		{
+			name:     "braces_stripped",
+			input:    "Game {Special}",
+			expected: "game",
+		},
+		{
+			name:     "angle_brackets_stripped",
+			input:    "Game <Ultimate>",
+			expected: "game",
+		},
+		{
+			name:     "mixed_brackets_braces_angles",
+			input:    "Game (USA) [!] {Special} <Edition>",
+			expected: "game",
+		},
 	}
 
 	for _, tt := range tests {
@@ -834,6 +929,121 @@ func BenchmarkSlugifyString(b *testing.B) {
 			for range b.N {
 				SlugifyString(tc)
 			}
+		})
+	}
+}
+
+func TestNormalizeToWords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "basic_title",
+			input:    "Super Mario Bros",
+			expected: []string{"super", "mario", "bros"},
+		},
+		{
+			name:     "with_metadata",
+			input:    "Legend of Zelda (USA) [!]",
+			expected: []string{"legend", "of", "zelda"},
+		},
+		{
+			name:     "with_roman_numerals",
+			input:    "Final Fantasy VII",
+			expected: []string{"final", "fantasy", "7"},
+		},
+		{
+			name:     "with_article_and_secondary",
+			input:    "The Legend of Zelda: The Minish Cap",
+			expected: []string{"legend", "of", "zelda", "minish", "cap"},
+		},
+		{
+			name:     "with_ampersand",
+			input:    "Sonic & Knuckles",
+			expected: []string{"sonic", "and", "knuckles"},
+		},
+		{
+			name:     "with_separators",
+			input:    "Mega-Man-X",
+			expected: []string{"mega", "man", "x"},
+		},
+		{
+			name:     "empty_input",
+			input:    "",
+			expected: []string{},
+		},
+		{
+			name:     "only_metadata",
+			input:    "(USA) [!]",
+			expected: []string{},
+		},
+		{
+			name:     "complex_title",
+			input:    "The Pokémon Stadium 2 (USA) (Rev A) [!]",
+			expected: []string{"pokemon", "stadium", "2"},
+		},
+		{
+			name:     "with_edition_suffix",
+			input:    "Skyrim Special Edition",
+			expected: []string{"skyrim"},
+		},
+		{
+			name:     "sequel_numbers",
+			input:    "Street Fighter II Turbo",
+			expected: []string{"street", "fighter", "2", "turbo"},
+		},
+		{
+			name:     "multiple_roman_numerals",
+			input:    "Final Fantasy VII Part II",
+			expected: []string{"final", "fantasy", "7", "part", "2"},
+		},
+		{
+			name:     "preserves_x",
+			input:    "Mega Man X",
+			expected: []string{"mega", "man", "x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := NormalizeToWords(tt.input)
+			assert.Equal(t, tt.expected, result, "NormalizeToWords result mismatch")
+		})
+	}
+}
+
+func TestNormalizeToWordsVsSlugify(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"basic", "Super Mario Bros"},
+		{"metadata", "Legend of Zelda (USA)"},
+		{"roman_numerals", "Final Fantasy VII"},
+		{"secondary_title", "Zelda: Link's Awakening"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			slug := SlugifyString(tt.input)
+			words := NormalizeToWords(tt.input)
+
+			wordsJoined := ""
+			for _, word := range words {
+				wordsJoined += word
+			}
+
+			assert.Equal(t, slug, wordsJoined,
+				"NormalizeToWords joined should equal SlugifyString")
 		})
 	}
 }

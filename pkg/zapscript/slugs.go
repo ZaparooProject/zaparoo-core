@@ -114,17 +114,17 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		if prefixErr != nil {
 			log.Warn().Err(prefixErr).Msg("prefix search failed")
 		} else if len(prefixResults) > 0 {
-			queryWords := slugs.TokenizeSlugWords(slug)
+			queryWords := slugs.NormalizeToWords(gameName)
 			var validCandidates []slugs.PrefixMatchCandidate
 
 			for _, result := range prefixResults {
-				candidateSlug := slugs.SlugifyString(result.Name)
-				candidateWords := slugs.TokenizeSlugWords(candidateSlug)
+				candidateWords := slugs.NormalizeToWords(result.Name)
 
 				if len(queryWords) >= 2 && !slugs.StartsWithWordSequence(candidateWords, queryWords) {
 					continue
 				}
 
+				candidateSlug := slugs.SlugifyString(result.Name)
 				score := slugs.ScorePrefixCandidate(slug, candidateSlug)
 				validCandidates = append(validCandidates, slugs.PrefixMatchCandidate{
 					Slug:  candidateSlug,

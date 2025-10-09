@@ -61,32 +61,54 @@ var (
 		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
 			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
 	)
+	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:[0-9]{1,3}(?:[.][0-9]{1,4})*|[IVX]{1,5})$`)
 	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[.\s\-]+`)
 	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
 	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
+	bracesRegex           = regexp.MustCompile(`\s*\{[^}]*\}`)
+	angleBracketsRegex    = regexp.MustCompile(`\s*<[^>]*>`)
 	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
 	nonAlphanumRegex      = regexp.MustCompile(`[^a-z0-9]+`)
 	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
+	romanNumeralOrder     = []string{"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII", "XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II"}
 	romanNumeralPatterns  = map[string]*regexp.Regexp{
-		"IX":   regexp.MustCompile(`\bIX\b`),
-		"VIII": regexp.MustCompile(`\bVIII\b`),
-		"VII":  regexp.MustCompile(`\bVII\b`),
-		"VI":   regexp.MustCompile(`\bVI\b`),
-		"IV":   regexp.MustCompile(`\bIV\b`),
-		"V":    regexp.MustCompile(`\bV\b`),
-		"III":  regexp.MustCompile(`\bIII\b`),
-		"II":   regexp.MustCompile(`\bII\b`),
+		"XIX":   regexp.MustCompile(`\bXIX\b`),
+		"XVIII": regexp.MustCompile(`\bXVIII\b`),
+		"XVII":  regexp.MustCompile(`\bXVII\b`),
+		"XVI":   regexp.MustCompile(`\bXVI\b`),
+		"XIV":   regexp.MustCompile(`\bXIV\b`),
+		"XV":    regexp.MustCompile(`\bXV\b`),
+		"XIII":  regexp.MustCompile(`\bXIII\b`),
+		"XII":   regexp.MustCompile(`\bXII\b`),
+		"XI":    regexp.MustCompile(`\bXI\b`),
+		"IX":    regexp.MustCompile(`\bIX\b`),
+		"VIII":  regexp.MustCompile(`\bVIII\b`),
+		"VII":   regexp.MustCompile(`\bVII\b`),
+		"VI":    regexp.MustCompile(`\bVI\b`),
+		"IV":    regexp.MustCompile(`\bIV\b`),
+		"V":     regexp.MustCompile(`\bV\b`),
+		"III":   regexp.MustCompile(`\bIII\b`),
+		"II":    regexp.MustCompile(`\bII\b`),
 	}
 	romanNumeralReplacements = map[string]string{
-		"IX":   "9",
-		"VIII": "8",
-		"VII":  "7",
-		"VI":   "6",
-		"IV":   "4",
-		"V":    "5",
-		"III":  "3",
-		"II":   "2",
+		"XIX":   "19",
+		"XVIII": "18",
+		"XVII":  "17",
+		"XVI":   "16",
+		"XIV":   "14",
+		"XV":    "15",
+		"XIII":  "13",
+		"XII":   "12",
+		"XI":    "11",
+		"IX":    "9",
+		"VIII":  "8",
+		"VII":   "7",
+		"VI":    "6",
+		"IV":    "4",
+		"V":     "5",
+		"III":   "3",
+		"II":    "2",
 	}
 )
 
@@ -129,9 +151,14 @@ func SlugifyString(input string) string {
 
 	s = parenthesesRegex.ReplaceAllString(s, "")
 	s = bracketsRegex.ReplaceAllString(s, "")
+	s = bracesRegex.ReplaceAllString(s, "")
+	s = angleBracketsRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 
 	s = editionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = versionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 
 	s = separatorsRegex.ReplaceAllString(s, " ")
@@ -140,8 +167,8 @@ func SlugifyString(input string) string {
 
 	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
 
-	for roman, arabic := range romanNumeralReplacements {
-		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, arabic)
+	for _, roman := range romanNumeralOrder {
+		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
 	}
 
 	s = strings.ToLower(upperS)
@@ -199,4 +226,96 @@ func stripLeadingArticleFromString(s string) string {
 	}
 
 	return s
+}
+
+// NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
+// This function runs Stages 1-9 of SlugifyString but STOPS before Stage 10 (final alphanumeric collapse).
+//
+// The result preserves spaces between words, enabling word-level operations like:
+//   - Token-based similarity matching
+//   - Word sequence validation
+//   - Sequel suffix detection
+//   - Weighted word scoring
+//
+// Example:
+//
+//	NormalizeToWords("The Legend of Zelda: Ocarina of Time (USA)")
+//	→ "legend of zelda ocarina of time"
+//	→ []string{"legend", "of", "zelda", "ocarina", "of", "time"}
+//
+// Note: For database queries and slug matching, use SlugifyString() instead.
+// This function is for scoring and ranking operations only.
+func NormalizeToWords(input string) []string {
+	s := strings.TrimSpace(input)
+	if s == "" {
+		return []string{}
+	}
+
+	symbolPredicate := runes.Predicate(func(r rune) bool {
+		return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
+	})
+	symbolRemover := runes.Remove(symbolPredicate)
+	if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
+		s = cleaned
+	}
+
+	s = norm.NFKC.String(s)
+
+	t := transform.Chain(
+		norm.NFD,
+		runes.Remove(runes.In(unicode.Mn)),
+		norm.NFC,
+	)
+	if normalized, _, err := transform.String(t, s); err == nil {
+		s = normalized
+	}
+
+	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = splitAndStripArticles(s)
+
+	if trailingArticleRegex.MatchString(s) {
+		s = trailingArticleRegex.ReplaceAllString(s, "$1")
+		s = strings.TrimSpace(s)
+	}
+
+	s = strings.ReplaceAll(s, "&", " and ")
+
+	s = parenthesesRegex.ReplaceAllString(s, "")
+	s = bracketsRegex.ReplaceAllString(s, "")
+	s = bracesRegex.ReplaceAllString(s, "")
+	s = angleBracketsRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = editionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = versionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	s = separatorsRegex.ReplaceAllString(s, " ")
+
+	upperS := strings.ToUpper(s)
+
+	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
+
+	for _, roman := range romanNumeralOrder {
+		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
+	}
+
+	s = strings.ToLower(upperS)
+
+	s = strings.TrimSpace(s)
+
+	s = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == ' ' {
+			return r
+		}
+		return -1
+	}, s)
+
+	words := strings.Fields(s)
+
+	return words
 }

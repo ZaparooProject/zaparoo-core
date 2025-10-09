@@ -118,6 +118,8 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 
 	cleaned = parenthesesRegex.ReplaceAllString(cleaned, "")
 	cleaned = bracketsRegex.ReplaceAllString(cleaned, "")
+	cleaned = bracesRegex.ReplaceAllString(cleaned, "")
+	cleaned = angleBracketsRegex.ReplaceAllString(cleaned, "")
 	cleaned = editionSuffixRegex.ReplaceAllString(cleaned, "")
 	cleaned = strings.TrimSpace(cleaned)
 
@@ -246,7 +248,7 @@ func hasSequelLikeSuffix(slug string) bool {
 		"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
 	}
 
-	words := TokenizeSlugWords(slug)
+	words := NormalizeToWords(slug)
 	if len(words) == 0 {
 		return false
 	}
