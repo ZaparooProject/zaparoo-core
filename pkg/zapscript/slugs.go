@@ -314,7 +314,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to fetch all slugs for fuzzy matching")
 		} else if len(allSlugs) > 0 {
-			fuzzyMatches := findFuzzyMatches(slug, allSlugs, 2, 0.55)
+			fuzzyMatches := findFuzzyMatches(slug, allSlugs, 2, 0.85)
 
 			if len(fuzzyMatches) > 0 {
 				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")
@@ -329,12 +329,12 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 						log.Info().Msgf("found match via fuzzy search: '%s' (similarity=%.2f)",
 							match.Slug, match.Similarity)
 						log.Debug().
-							Str("strategy", "levenshtein_fuzzy").
+							Str("strategy", "jarowinkler_fuzzy").
 							Str("query", slug).
 							Str("match", match.Slug).
 							Float64("similarity", float64(match.Similarity)).
 							Int("result_count", len(results)).
-							Msg("match found via Levenshtein fuzzy matching")
+							Msg("match found via Jaro-Winkler fuzzy matching")
 						break
 					}
 				}
@@ -464,8 +464,11 @@ type fuzzyMatch struct {
 	Similarity float32
 }
 
-// findFuzzyMatches returns slugs that fuzzy match the query using Levenshtein distance
-// Results are filtered by maxDistance and minSimilarity, sorted by similarity (best first)
+// findFuzzyMatches returns slugs that fuzzy match the query using Jaro-Winkler similarity.
+// Jaro-Winkler is optimized for short strings and heavily weights matching prefixes,
+// making it ideal for game titles where users typically get the start correct.
+// It also naturally handles British/American spelling variations (e.g., "colour" vs "color").
+// Results are filtered by maxDistance and minSimilarity, sorted by similarity (best first).
 func findFuzzyMatches(query string, candidates []string, maxDistance int, minSimilarity float32) []fuzzyMatch {
 	var matches []fuzzyMatch
 
@@ -484,14 +487,11 @@ func findFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 			continue
 		}
 
-		// Calculate similarity
-		similarity, err := edlib.StringsSimilarity(query, candidate, edlib.Levenshtein)
-		if err != nil {
-			continue
-		}
+		// Calculate Jaro-Winkler similarity (0.0 to 1.0)
+		similarity := edlib.JaroWinklerSimilarity(query, candidate)
 
 		// Debug logging for close matches (helps troubleshoot fuzzy matching)
-		if similarity > 0.5 {
+		if similarity > 0.7 {
 			log.Debug().
 				Str("query", query).
 				Str("candidate", candidate).

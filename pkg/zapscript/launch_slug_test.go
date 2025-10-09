@@ -439,7 +439,7 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 	}
 }
 
-func TestCmdSlugLevenshteinFuzzy(t *testing.T) {
+func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 	tests := []struct {
 		name          string
 		input         string
@@ -471,6 +471,14 @@ func TestCmdSlugLevenshteinFuzzy(t *testing.T) {
 			slug:          "mraio",
 			allSlugs:      []string{"mario", "megaman", "metroid"},
 			expectedMatch: "mario",
+		},
+		{
+			name:          "spelling - british vs american (honour -> honor)",
+			input:         "pc/honourguard",
+			systemID:      "PC",
+			slug:          "honourguard",
+			allSlugs:      []string{"honorguard", "halflife", "halo"},
+			expectedMatch: "honorguard",
 		},
 	}
 
