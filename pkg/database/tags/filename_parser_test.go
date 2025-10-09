@@ -455,3 +455,244 @@ func TestParseFilenameToCanonicalTags_NoDuplicates(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
+	tests := []struct {
+		name          string
+		filename      string
+		wantTags      []CanonicalTag
+		wantRemaining string
+	}{
+		{
+			name:     "T+Eng newer translation",
+			filename: "Final Fantasy V T+Eng.smc",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangEN},
+			},
+			wantRemaining: "Final Fantasy V smc",
+		},
+		{
+			name:     "T-Ger older translation",
+			filename: "Secret of Mana T-Ger.sfc",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslationOld},
+				{TagTypeLang, TagLangDE},
+			},
+			wantRemaining: "Secret of Mana sfc",
+		},
+		{
+			name:     "TFre generic translation",
+			filename: "Chrono Trigger TFre.smc",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangFR},
+			},
+			wantRemaining: "Chrono Trigger smc",
+		},
+		{
+			name:     "T+Eng v1.0 with version",
+			filename: "Fire Emblem T+Eng v1.0.gba",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangEN},
+				{TagTypeRev, "1.0"},
+			},
+			wantRemaining: "Fire Emblem gba",
+		},
+		{
+			name:     "T+Spa v2.1.3 with multi-part version",
+			filename: "Mother 3 T+Spa v2.1.3.gba",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangES},
+				{TagTypeRev, "2.1.3"},
+			},
+			wantRemaining: "Mother 3 gba",
+		},
+		{
+			name:     "T+Ita Italian translation",
+			filename: "Pokemon Ruby T+Ita.gba",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangIT},
+			},
+			wantRemaining: "Pokemon Ruby gba",
+		},
+		{
+			name:     "T+Rus Russian translation",
+			filename: "Zelda T+Rus v1.5.nes",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangRU},
+				{TagTypeRev, "1.5"},
+			},
+			wantRemaining: "Zelda nes",
+		},
+		{
+			name:     "T+Por Portuguese translation",
+			filename: "Final Fantasy VI T+Por.smc",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangPT},
+			},
+			wantRemaining: "Final Fantasy VI smc",
+		},
+		{
+			name:     "translation with other tags",
+			filename: "Game (USA) T+Eng v2.0 [!].rom",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangEN},
+				{TagTypeRev, "2.0"},
+			},
+			wantRemaining: "Game (USA) [!].rom",
+		},
+		{
+			name:          "no translation tag",
+			filename:      "Regular Game (USA).rom",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Regular Game (USA).rom",
+		},
+		{
+			name:          "C++ should not match T+",
+			filename:      "C++ Tutorial (USA).pdf",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "C++ Tutorial (USA).pdf",
+		},
+		{
+			name:          "ATP should not match T+",
+			filename:      "ATP Tennis (USA).rom",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "ATP Tennis (USA).rom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTags, gotRemaining := extractSpecialPatterns(tt.filename)
+			assert.Equal(t, tt.wantTags, gotTags, "Translation tags mismatch")
+			assert.Equal(t, tt.wantRemaining, gotRemaining, "Remaining filename mismatch")
+		})
+	}
+}
+
+func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
+	tests := []struct {
+		name          string
+		filename      string
+		wantTags      []CanonicalTag
+		wantRemaining string
+	}{
+		{
+			name:     "standalone v1.0",
+			filename: "Game Name v1.0.rom",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, "1.0"},
+			},
+			wantRemaining: "Game Name .rom",
+		},
+		{
+			name:     "standalone v2.1.3",
+			filename: "Another Game v2.1.3.bin",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, "2.1.3"},
+			},
+			wantRemaining: "Another Game .bin",
+		},
+		{
+			name:     "v1 single digit",
+			filename: "Old Game v1.smc",
+			wantTags: []CanonicalTag{
+				{TagTypeRev, "1"},
+			},
+			wantRemaining: "Old Game .smc",
+		},
+		{
+			name:     "version not extracted if translation already has it",
+			filename: "Game T+Eng v1.0.rom",
+			wantTags: []CanonicalTag{
+				{TagTypeUnlicensed, TagUnlicensedTranslation},
+				{TagTypeLang, TagLangEN},
+				{TagTypeRev, "1.0"},
+			},
+			wantRemaining: "Game rom",
+		},
+		{
+			name:          "no version tag",
+			filename:      "Plain Game.rom",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Plain Game.rom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTags, gotRemaining := extractSpecialPatterns(tt.filename)
+			assert.Equal(t, tt.wantTags, gotTags, "Version tags mismatch")
+			assert.Equal(t, tt.wantRemaining, gotRemaining, "Remaining filename mismatch")
+		})
+	}
+}
+
+func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		wantContains []string
+	}{
+		{
+			name:     "T+Eng full parsing",
+			filename: "Final Fantasy V T+Eng v1.1 (USA)[!].smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:en",
+				"rev:1.1",
+				"region:us",
+				"dump:verified",
+			},
+		},
+		{
+			name:     "T-Ger full parsing",
+			filename: "Secret of Mana T-Ger (Europe).sfc",
+			wantContains: []string{
+				"unlicensed:translation:old",
+				"lang:de",
+				"region:eu",
+			},
+		},
+		{
+			name:     "TFre without version",
+			filename: "Chrono Trigger TFre (France).smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:fr",
+				"region:fr",
+			},
+		},
+		{
+			name:     "translation with region language",
+			filename: "Pokemon Ruby T+Ita v2.0 (Italy)(It).gba",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:it",
+				"rev:2.0",
+				"region:it",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+		})
+	}
+}

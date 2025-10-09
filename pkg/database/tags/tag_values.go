@@ -422,12 +422,13 @@ const (
 
 // Unlicensed tag values
 const (
-	TagUnlicensed            TagValue = "unlicensed"
-	TagUnlicensedBootleg     TagValue = "bootleg"
-	TagUnlicensedHack        TagValue = "hack"
-	TagUnlicensedClone       TagValue = "clone"
-	TagUnlicensedTranslation TagValue = "translation"
-	TagUnlicensedAftermarket TagValue = "aftermarket"
+	TagUnlicensed               TagValue = "unlicensed"
+	TagUnlicensedBootleg        TagValue = "bootleg"
+	TagUnlicensedHack           TagValue = "hack"
+	TagUnlicensedClone          TagValue = "clone"
+	TagUnlicensedTranslation    TagValue = "translation"
+	TagUnlicensedTranslationOld TagValue = "translation:old"
+	TagUnlicensedAftermarket    TagValue = "aftermarket"
 )
 
 // Dump tag values

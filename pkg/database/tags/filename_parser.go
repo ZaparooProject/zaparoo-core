@@ -134,6 +134,91 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		remaining = versionRe.ReplaceAllString(remaining, "")
 	}
 
+	// Pattern 4: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
+	// Format: T[+-]?<lang_code>( v<version>)?
+	// Examples: "T+Eng", "T-Ger", "TFre", "T+Eng v1.0", "T+Spa v2.1.3"
+	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
+	transRe := helpers.CachedMustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+	if matches := transRe.FindStringSubmatch(remaining); len(matches) >= 5 {
+		// matches[1] = prefix (^ or space)
+		// matches[2] = "T"
+		// matches[3] = +/- or empty
+		// matches[4] = language code
+		// matches[5] = version number or empty
+		plusMinus := matches[3]
+		langCode := strings.ToLower(matches[4])
+		versionNum := ""
+		if len(matches) > 5 && matches[5] != "" {
+			versionNum = matches[5]
+		}
+
+		// Only process if it's a valid translation tag pattern:
+		// - Has +/- prefix (T+Eng, T-Ger), OR
+		// - Language code is exactly 3 letters (TFre, TEng)
+		isValid := plusMinus != "" || len(langCode) == 3
+
+		if isValid {
+			// Map 3-letter ROM codes to 2-letter ISO 639-1 codes
+			langMap := map[string]string{
+				"eng": "en", "ger": "de", "fre": "fr", "spa": "es", "ita": "it",
+				"rus": "ru", "por": "pt", "dut": "nl", "swe": "sv", "nor": "no",
+				"fin": "fi", "dan": "da", "pol": "pl", "cze": "cs", "gre": "el",
+				"hun": "hu", "tur": "tr", "ara": "ar", "heb": "he", "jpn": "ja",
+				"kor": "ko", "chi": "zh", "bra": "pt",
+			}
+
+			// Convert 3-letter to 2-letter if needed
+			if mappedLang, ok := langMap[langCode]; ok {
+				langCode = mappedLang
+			}
+
+			// Add translation tag based on +/- prefix
+			// T+ or T (no prefix) = current/generic translation (use base tag)
+			// T- = older/outdated translation (use :old hierarchical tag)
+			if plusMinus == "-" {
+				tags = append(tags, CanonicalTag{TagTypeUnlicensed, TagUnlicensedTranslationOld})
+			} else {
+				// T+ and T both use the base translation tag
+				tags = append(tags, CanonicalTag{TagTypeUnlicensed, TagUnlicensedTranslation})
+			}
+
+			// Add language tag (map to canonical language codes)
+			langTags := mapFilenameTagToCanonical(langCode)
+			for _, lt := range langTags {
+				if lt.Type == TagTypeLang {
+					tags = append(tags, lt)
+					break
+				}
+			}
+
+			// If version number present, add as revision tag
+			if versionNum != "" {
+				tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionNum)})
+			}
+
+			// Replace the matched pattern, preserving leading space if present
+			remaining = transRe.ReplaceAllString(remaining, " ")
+		}
+	}
+
+	// Pattern 5: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
+	// Only extract if not already processed as part of translation pattern
+	bracketlessVersionRe := helpers.CachedMustCompile(`\bv(\d+(?:\.\d+)*)`)
+	if matches := bracketlessVersionRe.FindStringSubmatch(remaining); len(matches) > 1 {
+		// Check if we already extracted a version from translation pattern
+		hasVersion := false
+		for _, tag := range tags {
+			if tag.Type == TagTypeRev {
+				hasVersion = true
+				break
+			}
+		}
+		if !hasVersion {
+			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(matches[1])})
+			remaining = bracketlessVersionRe.ReplaceAllString(remaining, "")
+		}
+	}
+
 	return tags, remaining
 }
 

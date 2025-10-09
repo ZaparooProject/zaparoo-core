@@ -625,12 +625,13 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypeUnlicensed: {
 		// Unofficial/unlicensed releases
 		// Note: Use flat "unlicensed" when specific type is unknown
-		TagUnlicensed,            // Generic unlicensed (specific type unknown)
-		TagUnlicensedBootleg,     // Unauthorized copy/pirate
-		TagUnlicensedHack,        // ROM hack/modification
-		TagUnlicensedClone,       // Hardware clone system
-		TagUnlicensedTranslation, // Fan translation
-		TagUnlicensedAftermarket, // Made after original market cycle ended
+		TagUnlicensed,               // Generic unlicensed (specific type unknown)
+		TagUnlicensedBootleg,        // Unauthorized copy/pirate
+		TagUnlicensedHack,           // ROM hack/modification
+		TagUnlicensedClone,          // Hardware clone system
+		TagUnlicensedTranslation,    // Fan translation (current/generic)
+		TagUnlicensedTranslationOld, // Outdated fan translation (T-)
+		TagUnlicensedAftermarket,    // Made after original market cycle ended
 		// Publisher-specific
 		TagUnlicensedSachen, // Sachen unlicensed (NES)
 	},
