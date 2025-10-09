@@ -45,13 +45,16 @@ type RawTag struct {
 	Position    int    // Position in the tag sequence
 }
 
-// extractTags uses a manual state machine to extract tags from parentheses and brackets.
+// extractTags uses a manual state machine to extract tags from parentheses, brackets, braces, and angle brackets.
 // Returns separate slices for parentheses tags and bracket tags to aid disambiguation.
+// Braces {} and angle brackets <> are treated like parentheses for tag extraction.
 func extractTags(filename string) (parenTags, bracketTags []string) {
 	const (
 		stateOutside = iota
 		stateInParen
 		stateInBracket
+		stateInBrace
+		stateInAngle
 	)
 
 	state := stateOutside
@@ -71,6 +74,12 @@ func extractTags(filename string) (parenTags, bracketTags []string) {
 			case '[':
 				state = stateInBracket
 				tagStart = i + 1
+			case '{':
+				state = stateInBrace
+				tagStart = i + 1
+			case '<':
+				state = stateInAngle
+				tagStart = i + 1
 			}
 
 		case stateInParen:
@@ -87,6 +96,24 @@ func extractTags(filename string) (parenTags, bracketTags []string) {
 				tag := filename[tagStart:i]
 				if tag != "" {
 					bracketTags = append(bracketTags, tag)
+				}
+				state = stateOutside
+			}
+
+		case stateInBrace:
+			if char == '}' {
+				tag := filename[tagStart:i]
+				if tag != "" {
+					parenTags = append(parenTags, tag) // Treat like parentheses
+				}
+				state = stateOutside
+			}
+
+		case stateInAngle:
+			if char == '>' {
+				tag := filename[tagStart:i]
+				if tag != "" {
+					parenTags = append(parenTags, tag) // Treat like parentheses
 				}
 				state = stateOutside
 			}

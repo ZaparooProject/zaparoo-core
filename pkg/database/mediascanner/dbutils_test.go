@@ -218,3 +218,74 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	// Verify all mocks were called as expected (FindSystem should NOT have been called)
 	mockDB.AssertExpectations(t)
 }
+
+func TestGetTitleFromFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{
+			name:     "strips parentheses",
+			filename: "Super Mario Bros (USA)",
+			want:     "Super Mario Bros",
+		},
+		{
+			name:     "strips square brackets",
+			filename: "Legend of Zelda [!]",
+			want:     "Legend of Zelda",
+		},
+		{
+			name:     "strips braces",
+			filename: "Game Title {Europe}",
+			want:     "Game Title",
+		},
+		{
+			name:     "strips angle brackets",
+			filename: "Sonic <Beta>",
+			want:     "Sonic",
+		},
+		{
+			name:     "strips all bracket types",
+			filename: "Final Fantasy (USA)[!]{En}<Proto>",
+			want:     "Final Fantasy",
+		},
+		{
+			name:     "handles mixed metadata",
+			filename: "Metal Gear Solid (Disc 1 of 2) (USA) [!]",
+			want:     "Metal Gear Solid",
+		},
+		{
+			name:     "no brackets returns full name",
+			filename: "Plain Game Name",
+			want:     "Plain Game Name",
+		},
+		{
+			name:     "trims whitespace",
+			filename: "  Spaced Name  (USA)",
+			want:     "Spaced Name",
+		},
+		{
+			name:     "preserves dashes and colons in title",
+			filename: "Legend of Zelda: Link's Awakening - DX (USA)",
+			want:     "Legend of Zelda: Link's Awakening - DX",
+		},
+		{
+			name:     "handles brace before other brackets",
+			filename: "Game {Proto} (USA) [!]",
+			want:     "Game",
+		},
+		{
+			name:     "handles angle before other brackets",
+			filename: "Game <Alpha> (USA) [!]",
+			want:     "Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getTitleFromFilename(tt.filename)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -79,6 +79,66 @@ func TestExtractTags(t *testing.T) {
 	}
 }
 
+func TestExtractTags_BracesAndAngles(t *testing.T) {
+	tests := []struct {
+		name        string
+		filename    string
+		wantParen   []string
+		wantBracket []string
+	}{
+		{
+			name:        "braces treated like parentheses",
+			filename:    "Game {USA}.rom",
+			wantParen:   []string{"USA"},
+			wantBracket: []string{},
+		},
+		{
+			name:        "angle brackets treated like parentheses",
+			filename:    "Game <Europe>.bin",
+			wantParen:   []string{"Europe"},
+			wantBracket: []string{},
+		},
+		{
+			name:        "mixed bracket types",
+			filename:    "Game (USA){En}<Beta>[!].zip",
+			wantParen:   []string{"USA", "En", "Beta"},
+			wantBracket: []string{"!"},
+		},
+		{
+			name:        "multiple braces",
+			filename:    "Game {Japan}{v1.0}.sfc",
+			wantParen:   []string{"Japan", "v1.0"},
+			wantBracket: []string{},
+		},
+		{
+			name:        "multiple angles",
+			filename:    "Game <Proto><Alpha>.nes",
+			wantParen:   []string{"Proto", "Alpha"},
+			wantBracket: []string{},
+		},
+		{
+			name:        "all four bracket types",
+			filename:    "Game (USA)[!]{En}<Beta>.rom",
+			wantParen:   []string{"USA", "En", "Beta"},
+			wantBracket: []string{"!"},
+		},
+		{
+			name:        "empty braces and angles ignored",
+			filename:    "Game {}<>(USA).rom",
+			wantParen:   []string{"USA"},
+			wantBracket: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotParen, gotBracket := extractTags(tt.filename)
+			assert.Equal(t, tt.wantParen, gotParen, "Parentheses tags mismatch")
+			assert.Equal(t, tt.wantBracket, gotBracket, "Bracket tags mismatch")
+		})
+	}
+}
+
 func TestExtractSpecialPatterns(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -692,6 +752,56 @@ func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
 
 			for _, want := range tt.wantContains {
 				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+		})
+	}
+}
+
+func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		wantTags     []CanonicalTag
+		wantContains []string
+	}{
+		{
+			name:         "region in braces",
+			filename:     "Super Mario Bros {USA}.nes",
+			wantContains: []string{"region:us"},
+		},
+		{
+			name:         "language in angle brackets",
+			filename:     "Final Fantasy <En>.sfc",
+			wantContains: []string{"lang:en"},
+		},
+		{
+			name:         "beta in braces",
+			filename:     "Sonic {Beta}.md",
+			wantContains: []string{"unfinished:beta"},
+		},
+		{
+			name:         "mixed brackets",
+			filename:     "Game (USA){En}<Proto>[!].zip",
+			wantContains: []string{"region:us", "lang:en", "unfinished:proto", "dump:verified"},
+		},
+		{
+			name:         "version in braces",
+			filename:     "Zelda {v1.0}.rom",
+			wantContains: []string{"rev:1.0"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tags := ParseFilenameToCanonicalTags(tt.filename)
+
+			tagStrings := make([]string, 0, len(tags))
+			for _, tag := range tags {
+				tagStrings = append(tagStrings, string(tag.Type)+":"+string(tag.Value))
+			}
+
+			for _, expected := range tt.wantContains {
+				assert.Contains(t, tagStrings, expected, "Expected tag %s not found in %v", expected, tagStrings)
 			}
 		})
 	}

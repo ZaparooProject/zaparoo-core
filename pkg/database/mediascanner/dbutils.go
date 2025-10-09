@@ -362,7 +362,7 @@ func getTagsFromFileName(filename string) []string {
 }
 
 func getTitleFromFilename(filename string) string {
-	r := helpers.CachedMustCompile(`^([^(\[]*)`)
+	r := helpers.CachedMustCompile(`^([^(\[{<]*)`)
 	title := r.FindString(filename)
 	return strings.TrimSpace(title)
 }
