@@ -36,32 +36,32 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Japanese katakana only",
 			input:    "ストリートファイター",
-			expected: "",
+			expected: "ストリートファイター", // CJK preserved
 		},
 		{
 			name:     "Chinese characters only",
 			input:    "街头霸王", //nolint:gosmopolitan // Intentionally testing Chinese character handling
-			expected: "",
+			expected: "街头霸王", // CJK preserved
 		},
 		{
 			name:     "Korean characters only",
 			input:    "스트리트파이터",
-			expected: "",
+			expected: "스트리트파이터", // CJK preserved
 		},
 		{
 			name:     "Arabic characters only",
 			input:    "سوبر ماريو",
-			expected: "",
+			expected: "", // Arabic stripped (not in CJK category)
 		},
 		{
 			name:     "Cyrillic characters only",
 			input:    "Супер Марио",
-			expected: "",
+			expected: "", // Cyrillic stripped (not in CJK category)
 		},
 		{
 			name:     "Greek characters only",
 			input:    "Σούπερ Μάριο",
-			expected: "",
+			expected: "", // Greek stripped (not in CJK category)
 		},
 		{
 			name:     "Mixed Latin and Japanese",
@@ -136,7 +136,7 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Japanese with Roman numerals",
 			input:    "ファイナルファンタジー VII",
-			expected: "7",
+			expected: "ファイナルファンタジー7", // CJK preserved, Roman numeral converted
 		},
 		{
 			name:     "Emoji characters only",
