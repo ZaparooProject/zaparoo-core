@@ -1219,7 +1219,7 @@ func TestStripLeadingArticle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := stripLeadingArticle(tt.input)
+			result := StripLeadingArticle(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1273,7 +1273,7 @@ func TestStripMetadataBrackets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := stripMetadataBrackets(tt.input)
+			result := StripMetadataBrackets(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1327,7 +1327,7 @@ func TestStripEditionAndVersionSuffixes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := stripEditionAndVersionSuffixes(tt.input)
+			result := StripEditionAndVersionSuffixes(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

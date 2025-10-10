@@ -23,16 +23,15 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/hbollon/go-edlib"
 	"github.com/rs/zerolog/log"
 )
 
@@ -134,18 +133,18 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 			log.Warn().Err(prefixErr).Msg("prefix search failed")
 		} else if len(prefixResults) > 0 {
 			queryWords := slugs.NormalizeToWords(gameName)
-			var validCandidates []slugs.PrefixMatchCandidate
+			var validCandidates []matcher.PrefixMatchCandidate
 
 			for _, result := range prefixResults {
 				candidateWords := slugs.NormalizeToWords(result.Name)
 
-				if len(queryWords) >= 2 && !slugs.StartsWithWordSequence(candidateWords, queryWords) {
+				if len(queryWords) >= 2 && !matcher.StartsWithWordSequence(candidateWords, queryWords) {
 					continue
 				}
 
 				candidateSlug := slugs.SlugifyString(result.Name)
-				score := slugs.ScorePrefixCandidate(slug, candidateSlug)
-				validCandidates = append(validCandidates, slugs.PrefixMatchCandidate{
+				score := matcher.ScorePrefixCandidate(slug, candidateSlug)
+				validCandidates = append(validCandidates, matcher.PrefixMatchCandidate{
 					Slug:  candidateSlug,
 					Score: score,
 				})
@@ -186,15 +185,15 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 				var tokenCandidates []tokenMatchCandidate
 
 				for _, result := range prefixResults {
-					tokenScore := slugs.ScoreTokenMatch(gameName, result.Name)
-					setScore := slugs.ScoreTokenSetRatio(gameName, result.Name)
+					tokenScore := matcher.ScoreTokenMatch(gameName, result.Name)
+					setScore := matcher.ScoreTokenSetRatio(gameName, result.Name)
 
 					bestScore := tokenScore
 					if setScore > bestScore {
 						bestScore = setScore
 					}
 
-					if bestScore > slugs.TokenMatchMinScore {
+					if bestScore > matcher.TokenMatchMinScore {
 						tokenCandidates = append(tokenCandidates, tokenMatchCandidate{
 							result: result,
 							score:  bestScore,
@@ -229,7 +228,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 	// Strategy 2: Secondary title-dropping main title search
 	if len(results) == 0 {
-		matchInfo := slugs.GenerateMatchInfo(gameName)
+		matchInfo := matcher.GenerateMatchInfo(gameName)
 		if matchInfo.HasSecondaryTitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
 			log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
 			results, err = gamesdb.SearchMediaBySlug(
@@ -251,7 +250,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 
 	// Fallback 3: Secondary title-only literal search
 	if len(results) == 0 {
-		matchInfo := slugs.GenerateMatchInfo(gameName)
+		matchInfo := matcher.GenerateMatchInfo(gameName)
 		if matchInfo.HasSecondaryTitle &&
 			matchInfo.SecondaryTitleSlug != "" &&
 			len(matchInfo.SecondaryTitleSlug) >= minSecondaryTitleSlugLength {
@@ -301,7 +300,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		if fetchErr != nil {
 			log.Warn().Err(fetchErr).Msg("failed to fetch all slugs for fuzzy matching")
 		} else if len(allSlugs) > 0 {
-			fuzzyMatches := findFuzzyMatches(slug, allSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
+			fuzzyMatches := matcher.FindFuzzyMatches(slug, allSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
 
 			if len(fuzzyMatches) > 0 {
 				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")
@@ -333,7 +332,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	// Aggressively removes words from the end - handles overly-verbose queries
 	if len(results) == 0 {
 		log.Info().Msgf("all strategies failed, trying progressive truncation as last resort")
-		candidates := slugs.GenerateProgressiveTrimCandidates(gameName)
+		candidates := matcher.GenerateProgressiveTrimCandidates(gameName)
 		for _, candidate := range candidates {
 			log.Info().Msgf("trying progressive trim candidate: '%s' (exact=%v, prefix=%v)",
 				candidate.Slug, candidate.IsExactMatch, candidate.IsPrefixMatch)
@@ -481,64 +480,6 @@ func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.T
 	}
 
 	return true
-}
-
-type fuzzyMatch struct {
-	Slug       string
-	Similarity float32
-}
-
-// findFuzzyMatches returns slugs that fuzzy match the query using Jaro-Winkler similarity.
-// Jaro-Winkler is optimized for short strings and heavily weights matching prefixes,
-// making it ideal for game titles where users typically get the start correct.
-// It also naturally handles British/American spelling variations (e.g., "colour" vs "color").
-// Results are filtered by maxDistance and minSimilarity, sorted by similarity (best first).
-func findFuzzyMatches(query string, candidates []string, maxDistance int, minSimilarity float32) []fuzzyMatch {
-	var matches []fuzzyMatch
-
-	for _, candidate := range candidates {
-		// Skip exact matches (already handled by earlier strategies)
-		if candidate == query {
-			continue
-		}
-
-		// Length pre-filter: skip candidates with length difference > maxDistance
-		lenDiff := len(query) - len(candidate)
-		if lenDiff < 0 {
-			lenDiff = -lenDiff
-		}
-		if lenDiff > maxDistance {
-			continue
-		}
-
-		// Calculate Jaro-Winkler similarity (0.0 to 1.0)
-		similarity := edlib.JaroWinklerSimilarity(query, candidate)
-
-		// Debug logging for close matches (helps troubleshoot fuzzy matching)
-		if similarity > 0.7 {
-			log.Debug().
-				Str("query", query).
-				Str("candidate", candidate).
-				Float32("similarity", similarity).
-				Float32("minSimilarity", minSimilarity).
-				Msg("fuzzy match candidate evaluation")
-		}
-
-		// Filter by minimum similarity threshold
-		if similarity >= minSimilarity {
-			matches = append(matches, fuzzyMatch{
-				Slug:       candidate,
-				Similarity: similarity,
-			})
-		}
-	}
-
-	// Sort by similarity (highest first)
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].Similarity > matches[j].Similarity
-	})
-
-	return matches
 }
 
 // filterOutVariants removes demos, betas, prototypes, hacks, and other variants

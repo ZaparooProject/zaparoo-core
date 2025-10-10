@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -280,11 +281,76 @@ func TestGetTitleFromFilename(t *testing.T) {
 			filename: "Game <Alpha> (USA) [!]",
 			want:     "Game",
 		},
+		{
+			name:     "strips leading number with period",
+			filename: "01. Super Mario Bros (USA)",
+			want:     "Super Mario Bros",
+		},
+		{
+			name:     "strips leading number with dash",
+			filename: "42 - Answer (USA)",
+			want:     "Answer",
+		},
+		{
+			name:     "strips leading number with space",
+			filename: "1 Game Title (USA)",
+			want:     "Game Title",
+		},
+		{
+			name:     "normalizes underscores to spaces",
+			filename: "Super_Mario_Bros (USA)",
+			want:     "Super Mario Bros",
+		},
+		{
+			name:     "normalizes mixed underscores and spaces",
+			filename: "Mega_Man_X (USA)",
+			want:     "Mega Man X",
+		},
+		{
+			name:     "converts ampersand to and",
+			filename: "Sonic & Knuckles (USA)",
+			want:     "Sonic and Knuckles",
+		},
+		{
+			name:     "normalizes multiple spaces",
+			filename: "Game   Title   Here (USA)",
+			want:     "Game Title Here",
+		},
+		{
+			name:     "handles all transformations combined",
+			filename: "01. Super_Mario_Bros & Luigi   (USA)",
+			want:     "Super Mario Bros and Luigi",
+		},
+		{
+			name:     "preserves dashes in title after cleanup",
+			filename: "Zelda - Link's Awakening (USA)",
+			want:     "Zelda - Link's Awakening",
+		},
+		{
+			name:     "preserves colons in title after cleanup",
+			filename: "Game: The Subtitle (USA)",
+			want:     "Game: The Subtitle",
+		},
+		{
+			name:     "handles no brackets with underscores",
+			filename: "Super_Mario_World",
+			want:     "Super Mario World",
+		},
+		{
+			name:     "handles leading number without brackets",
+			filename: "01. Game Title",
+			want:     "Game Title",
+		},
+		{
+			name:     "handles ampersand without brackets",
+			filename: "Rock & Roll Racing",
+			want:     "Rock and Roll Racing",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getTitleFromFilename(tt.filename)
+			got := tags.ParseTitleFromFilename(tt.filename)
 			assert.Equal(t, tt.want, got)
 		})
 	}

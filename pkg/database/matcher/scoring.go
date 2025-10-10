@@ -17,10 +17,12 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package slugs
+package matcher
 
 import (
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 const (
@@ -89,30 +91,16 @@ func GenerateMatchInfo(title string) GameMatchInfo {
 		cleaned = strings.TrimPrefix(cleaned, "the ")
 	}
 
-	var mainTitle, secondaryTitle string
-	if idx := strings.Index(cleaned, ":"); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+1:])
-		info.HasSecondaryTitle = true
-	} else if idx := strings.Index(cleaned, " - "); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		info.HasSecondaryTitle = true
-	} else if idx := strings.Index(cleaned, "'s "); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx+2])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		info.HasSecondaryTitle = true
-	} else {
-		mainTitle = cleaned
-	}
+	mainTitle, secondaryTitle, hasSecondary := slugs.SplitTitle(cleaned)
+	info.HasSecondaryTitle = hasSecondary
 
 	if info.HasSecondaryTitle {
-		secondaryTitle = stripLeadingArticle(secondaryTitle)
-		info.MainTitleSlug = SlugifyString(mainTitle)
-		info.SecondaryTitleSlug = SlugifyString(secondaryTitle)
+		secondaryTitle = slugs.StripLeadingArticle(secondaryTitle)
+		info.MainTitleSlug = slugs.SlugifyString(mainTitle)
+		info.SecondaryTitleSlug = slugs.SlugifyString(secondaryTitle)
 		info.CanonicalSlug = info.MainTitleSlug + info.SecondaryTitleSlug
 	} else {
-		info.CanonicalSlug = SlugifyString(mainTitle)
+		info.CanonicalSlug = slugs.SlugifyString(mainTitle)
 		info.MainTitleSlug = info.CanonicalSlug
 	}
 
@@ -129,8 +117,8 @@ type ProgressiveTrimCandidate struct {
 func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate {
 	cleaned := strings.TrimSpace(title)
 
-	cleaned = stripMetadataBrackets(cleaned)
-	cleaned = stripEditionAndVersionSuffixes(cleaned)
+	cleaned = slugs.StripMetadataBrackets(cleaned)
+	cleaned = slugs.StripEditionAndVersionSuffixes(cleaned)
 	cleaned = strings.TrimSpace(cleaned)
 
 	words := strings.Fields(cleaned)
@@ -153,7 +141,7 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 		}
 
 		trimmedTitle := strings.Join(remainingWords, " ")
-		slug := SlugifyString(trimmedTitle)
+		slug := slugs.SlugifyString(trimmedTitle)
 
 		if len(slug) < minProgressiveTrimSlugLength {
 			break
@@ -187,18 +175,6 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 type PrefixMatchCandidate struct {
 	Slug  string
 	Score int
-}
-
-func TokenizeSlugWords(slug string) []string {
-	return strings.Fields(strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == ' ' {
-			return r
-		}
-		if r >= 'A' && r <= 'Z' {
-			return r + 32
-		}
-		return ' '
-	}, slug))
 }
 
 func StartsWithWordSequence(candidate, query []string) bool {
@@ -258,7 +234,7 @@ func hasSequelLikeSuffix(slug string) bool {
 		"ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
 	}
 
-	words := NormalizeToWords(slug)
+	words := slugs.NormalizeToWords(slug)
 	if len(words) == 0 {
 		return false
 	}
@@ -291,8 +267,8 @@ func hasSequelLikeSuffix(slug string) bool {
 //
 // This handles word order variations: "Link Awakening" matches "Awakening of Link"
 func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
-	queryWords := NormalizeToWords(queryTitle)
-	candidateWords := NormalizeToWords(candidateTitle)
+	queryWords := slugs.NormalizeToWords(queryTitle)
+	candidateWords := slugs.NormalizeToWords(candidateTitle)
 
 	if len(queryWords) == 0 || len(candidateWords) == 0 {
 		return 0.0
@@ -436,8 +412,8 @@ func hasCommonPrefix(word1, word2 string, minLen int) bool {
 //	Candidate has: +legend, +of
 //	Score: ~0.70 (3 of 4 query words matched, with minor penalty for extras)
 func ScoreTokenSetRatio(queryTitle, candidateTitle string) float64 {
-	queryWords := NormalizeToWords(queryTitle)
-	candWords := NormalizeToWords(candidateTitle)
+	queryWords := slugs.NormalizeToWords(queryTitle)
+	candWords := slugs.NormalizeToWords(candidateTitle)
 
 	if len(queryWords) == 0 || len(candWords) == 0 {
 		return 0.0

@@ -171,39 +171,48 @@ func SlugifyString(input string) string {
 	return strings.TrimSpace(asciiSlug)
 }
 
-func splitAndStripArticles(s string) string {
-	cleaned := strings.TrimSpace(s)
+// SplitTitle splits a title into main and secondary parts based on delimiter priority.
+// Delimiter priority (highest to lowest): ":", " - ", "'s "
+// Returns (mainTitle, secondaryTitle, hasSecondary).
+// Note: For "'s " delimiter, the "'s" is retained in the main title.
+//
+// Examples:
+//   - "Zelda: Link's Awakening" → ("Zelda", "Link's Awakening", true)
+//   - "Game - Subtitle" → ("Game", "Subtitle", true)
+//   - "Mario's Adventure" → ("Mario's", "Adventure", true)
+//   - "Simple Title" → ("Simple Title", "", false)
+func SplitTitle(title string) (mainTitle, secondaryTitle string, hasSecondary bool) {
+	cleaned := strings.TrimSpace(title)
 
-	var mainTitle, secondaryTitle string
-	hasSecondary := false
-
+	// Delimiter priority: ":" highest, then " - ", then "'s "
 	if idx := strings.Index(cleaned, ":"); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+1:])
-		hasSecondary = true
-	} else if idx := strings.Index(cleaned, " - "); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		hasSecondary = true
-	} else if idx := strings.Index(cleaned, "'s "); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx+2])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		hasSecondary = true
-	} else {
-		mainTitle = cleaned
+		return strings.TrimSpace(cleaned[:idx]), strings.TrimSpace(cleaned[idx+1:]), true
+	}
+	if idx := strings.Index(cleaned, " - "); idx != -1 {
+		return strings.TrimSpace(cleaned[:idx]), strings.TrimSpace(cleaned[idx+3:]), true
+	}
+	if idx := strings.Index(cleaned, "'s "); idx != -1 {
+		// Retain "'s" in the main title
+		return strings.TrimSpace(cleaned[:idx+2]), strings.TrimSpace(cleaned[idx+3:]), true
 	}
 
-	mainTitle = stripLeadingArticle(mainTitle)
+	return cleaned, "", false
+}
+
+func splitAndStripArticles(s string) string {
+	mainTitle, secondaryTitle, hasSecondary := SplitTitle(s)
+
+	mainTitle = StripLeadingArticle(mainTitle)
 
 	if hasSecondary {
-		secondaryTitle = stripLeadingArticle(secondaryTitle)
+		secondaryTitle = StripLeadingArticle(secondaryTitle)
 		return strings.TrimSpace(mainTitle + " " + secondaryTitle)
 	}
 
 	return mainTitle
 }
 
-// stripLeadingArticle removes leading articles ("The", "A", "An") from a string.
+// StripLeadingArticle removes leading articles ("The", "A", "An") from a string.
 // This is a utility function used by both slug normalization and word-level matching.
 // It preserves the original case of non-article portions.
 //
@@ -211,7 +220,7 @@ func splitAndStripArticles(s string) string {
 //   - "The Legend of Zelda" → "Legend of Zelda"
 //   - "A New Hope" → "New Hope"
 //   - "An American Tail" → "American Tail"
-func stripLeadingArticle(s string) string {
+func StripLeadingArticle(s string) string {
 	s = strings.TrimSpace(s)
 	lower := strings.ToLower(s)
 
@@ -228,13 +237,13 @@ func stripLeadingArticle(s string) string {
 	return s
 }
 
-// stripMetadataBrackets removes all bracket types (parentheses, square brackets, braces, angle brackets)
+// StripMetadataBrackets removes all bracket types (parentheses, square brackets, braces, angle brackets)
 // from a string. This is used to clean metadata like region codes, dump info, and tags from game titles.
 //
 // Examples:
 //   - "Game (USA) [!]" → "Game"
 //   - "Title {Europe} <Beta>" → "Title"
-func stripMetadataBrackets(s string) string {
+func StripMetadataBrackets(s string) string {
 	s = parenthesesRegex.ReplaceAllString(s, "")
 	s = bracketsRegex.ReplaceAllString(s, "")
 	s = bracesRegex.ReplaceAllString(s, "")
@@ -242,14 +251,14 @@ func stripMetadataBrackets(s string) string {
 	return s
 }
 
-// stripEditionAndVersionSuffixes removes edition and version suffixes from game titles.
+// StripEditionAndVersionSuffixes removes edition and version suffixes from game titles.
 // This includes patterns like "Deluxe Edition", "GOTY Edition", "v1.2", "vIII", etc.
 //
 // Examples:
 //   - "Game Special Edition" → "Game"
 //   - "Title v1.2" → "Title"
 //   - "Final Fantasy VII Ultimate Edition" → "Final Fantasy VII"
-func stripEditionAndVersionSuffixes(s string) string {
+func StripEditionAndVersionSuffixes(s string) string {
 	s = editionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 	s = versionSuffixRegex.ReplaceAllString(s, "")
@@ -266,6 +275,8 @@ func stripEditionAndVersionSuffixes(s string) string {
 //   - "Rock + Roll Racing" → "Rock and Roll Racing"
 //   - "Zelda:Link" → "Zelda Link"
 //   - "Super_Mario_Bros" → "Super Mario Bros"
+//
+// This is an internal function used by the normalization pipeline.
 func normalizeSymbolsAndSeparators(s string) string {
 	// Simple symbol replacements (faster than regex)
 	s = strings.ReplaceAll(s, "&", " and ")
@@ -290,6 +301,8 @@ func normalizeSymbolsAndSeparators(s string) string {
 //   - "Final Fantasy VII" → "Final Fantasy 7"
 //   - "Street Fighter II" → "Street Fighter 2"
 //   - "Mega Man X" → "Mega Man X" (unchanged)
+//
+// This is an internal function used by the normalization pipeline.
 func convertRomanNumerals(s string) string {
 	upperS := strings.ToUpper(s)
 	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
@@ -397,10 +410,10 @@ func normalizeInternal(input string) string {
 
 	s = normalizeSymbolsAndSeparators(s)
 
-	s = stripMetadataBrackets(s)
+	s = StripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
-	s = stripEditionAndVersionSuffixes(s)
+	s = StripEditionAndVersionSuffixes(s)
 
 	s = convertRomanNumerals(s)
 

@@ -541,3 +541,42 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 
 	return allTags
 }
+
+// ParseTitleFromFilename extracts a clean, human-readable display title from a filename.
+// It removes metadata brackets and normalizes common filename artifacts for better presentation.
+//
+// Transformations applied:
+//   - Removes everything after first bracket of any type: (), [], {}, <>
+//   - Strips leading numbers (e.g., "01. ", "42 - ")
+//   - Normalizes underscores and multiple separators to spaces
+//   - Converts "&" to "and"
+//   - Normalizes multiple spaces to single space
+//
+// Examples:
+//   - "Super Mario Bros (USA) [!]" → "Super Mario Bros"
+//   - "01. Legend of Zelda (USA)" → "Legend of Zelda"
+//   - "Super_Mario_Bros (USA)" → "Super Mario Bros"
+//   - "Sonic & Knuckles" → "Sonic and Knuckles"
+//   - "Game   Title  (USA)" → "Game Title"
+func ParseTitleFromFilename(filename string) string {
+	// Step 1: Extract title before first bracket
+	r := helpers.CachedMustCompile(`^([^(\[{<]*)`)
+	title := r.FindString(filename)
+	title = strings.TrimSpace(title)
+
+	// Step 2: Strip leading numbers (e.g., "01. ", "42 - ")
+	leadingNum := helpers.CachedMustCompile(`^\d+[.\s\-]+`)
+	title = leadingNum.ReplaceAllString(title, "")
+
+	// Step 3: Normalize underscores to spaces
+	title = strings.ReplaceAll(title, "_", " ")
+
+	// Step 4: Convert "&" to "and"
+	title = strings.ReplaceAll(title, "&", "and")
+
+	// Step 5: Normalize multiple spaces to single space
+	multiSpace := helpers.CachedMustCompile(`\s+`)
+	title = multiSpace.ReplaceAllString(title, " ")
+
+	return strings.TrimSpace(title)
+}

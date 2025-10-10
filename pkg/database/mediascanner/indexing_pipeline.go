@@ -361,12 +361,6 @@ func getTagsFromFileName(filename string) []string {
 	return canonicalTags
 }
 
-func getTitleFromFilename(filename string) string {
-	r := helpers.CachedMustCompile(`^([^(\[{<]*)`)
-	title := r.FindString(filename)
-	return strings.TrimSpace(title)
-}
-
 // SeedCanonicalTags seeds the database with canonical GameDataBase-style hierarchical tags.
 // Tags follow the format: category:subcategory:value (e.g., "genre:sports:wrestling", "players:2:vs")
 // Tag definitions are in tags.go for centralized management.
@@ -877,7 +871,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFr
 
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
-	f.Title = getTitleFromFilename(f.FileName)
+	f.Title = tags.ParseTitleFromFilename(f.FileName)
 	f.Slug = slugs.SlugifyString(f.Title)
 
 	// For non-Latin titles that don't produce a slug, store the lowercase

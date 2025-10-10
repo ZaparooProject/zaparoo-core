@@ -20,10 +20,15 @@ The system is built around **two primary workflows** supported by shared normali
 
 ### Shared Libraries
 
-- **Slug Normalizer** (`pkg/database/slugs/slugify.go`) - Canonical slug generation
-- **Tag Parser** (`pkg/database/tags/filename_parser.go`) - Extract metadata from filenames
-- **Title Extractor** (`pkg/database/mediascanner/dbutils.go`) - Clean display titles
-- **Match Utilities** (`pkg/database/slugs/match.go`) - Scoring and ranking algorithms
+- **Slug Normalizer** (`pkg/database/slugs/`) - Canonical slug generation and normalization
+  - `slugify.go` - Core 10-stage normalization pipeline
+  - `scripts.go` - Script detection (CJK, Cyrillic, Arabic, etc.)
+  - `normalization.go` - Script-specific normalization rules
+- **Matcher** (`pkg/database/matcher/`) - Resolution-specific matching algorithms
+  - `scoring.go` - Token/prefix scoring, candidate ranking
+  - `fuzzy.go` - Jaro-Winkler fuzzy matching
+- **Tag Parser** (`pkg/database/tags/filename_parser.go`) - Extract metadata and titles from filenames
+- **Indexing Pipeline** (`pkg/database/mediascanner/indexing_pipeline.go`) - Filesystem scanning and database population
 
 ## Shared Library: Slug Normalizer
 
@@ -359,7 +364,7 @@ Finds all titles starting with the query slug, then ranks by score:
 - `"super mario"` → `["super", "mario"]` matches `"super mario bros"` → `["super", "mario", "bros"]` ✓
 - `"super mario"` → `["super", "mario"]` does NOT match `"super metroid"` → `["super", "metroid"]` ✗
 
-**Scoring Algorithm** (`ScorePrefixCandidate` in `pkg/database/slugs/match.go`):
+**Scoring Algorithm** (`ScorePrefixCandidate` in `pkg/database/matcher/scoring.go`):
 
 ```
 base_score = 0
@@ -388,8 +393,8 @@ return score
 
 **Functions:**
 
-- `ScoreTokenMatch(query, candidate)` in `pkg/database/slugs/match.go`
-- `ScoreTokenSetRatio(query, candidate)` in `pkg/database/slugs/match.go`
+- `ScoreTokenMatch(query, candidate)` in `pkg/database/matcher/scoring.go`
+- `ScoreTokenSetRatio(query, candidate)` in `pkg/database/matcher/scoring.go`
 
 When word sequence validation filters out all prefix candidates, attempts order-independent word matching using **two complementary methods**. The system uses the **maximum score** from both approaches.
 
@@ -445,7 +450,7 @@ Both work well:
 
 #### Strategy 4: Secondary Title-Dropping Main Title Search
 
-**Function:** `GenerateMatchInfo(title)` in `pkg/database/slugs/match.go`
+**Function:** `GenerateMatchInfo(title)` in `pkg/database/matcher/scoring.go`
 
 Detects secondary title delimiters and searches for just the main title:
 
@@ -521,7 +526,7 @@ Handles typos and spelling variations using Jaro-Winkler similarity:
 
 #### Strategy 7: Progressive Trim Candidates
 
-**Function:** `GenerateProgressiveTrimCandidates(title)` in `pkg/database/slugs/match.go`
+**Function:** `GenerateProgressiveTrimCandidates(title)` in `pkg/database/matcher/scoring.go`
 
 Last resort strategy: progressively removes words from the end of the title for overly-verbose queries:
 
@@ -806,7 +811,7 @@ TagType (DBID, Type)
 
 **Purpose:** Extract clean, human-readable titles from filenames for display purposes. Simple utility used by the indexing workflow.
 
-**Location:** `pkg/database/mediascanner/dbutils.go` → `getTitleFromFilename()`
+**Location:** `pkg/database/tags/filename_parser.go` → `ParseTitleFromFilename()`
 
 **Used By:** Indexing Workflow (via `GetPathFragments()`)
 
@@ -866,15 +871,15 @@ func getTitleFromFilename(filename string) string {
 | `normalizeConjunctions()`             | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
 | `convertRomanNumerals()`              | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
 | `normalizeSeparators()`               | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
-| `GenerateMatchInfo()`                 | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `GenerateProgressiveTrimCandidates()` | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScorePrefixCandidate()`              | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScoreTokenMatch()`                   | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScoreTokenSetRatio()`                | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `StartsWithWordSequence()`            | `pkg/database/slugs/match.go`          | ❌        | ✅ Used   | ❌        | ❌        |
-| `findFuzzyMatches()`                  | `pkg/zapscript/slugs.go`               | ❌        | ✅ Used   | ❌        | ❌        |
-| `getTitleFromFilename()`              | `pkg/database/mediascanner/dbutils.go` | ❌        | ❌        | ✅ Used   | ✅ Core   |
-| `getTagsFromFileName()`               | `pkg/database/mediascanner/dbutils.go` | ❌        | ❌        | ✅ Used   | ❌        |
+| `GenerateMatchInfo()`                 | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `GenerateProgressiveTrimCandidates()` | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScorePrefixCandidate()`              | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScoreTokenMatch()`                   | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScoreTokenSetRatio()`                | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `StartsWithWordSequence()`            | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
+| `FindFuzzyMatches()`                  | `pkg/database/matcher/fuzzy.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `ParseTitleFromFilename()`            | `pkg/database/tags/filename_parser.go`         | ❌        | ❌        | ✅ Used   | ✅ Core   |
+| `getTagsFromFileName()`               | `pkg/database/mediascanner/indexing_pipeline.go` | ❌        | ❌        | ✅ Used   | ❌        |
 | `tags.ParseFilenameToCanonicalTags()` | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
 | `tags.extractTags()`                  | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
 | `tags.extractSpecialPatterns()`       | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
@@ -898,11 +903,11 @@ func getTitleFromFilename(filename string) string {
 - `romanNumeralPatterns` - Roman numeral patterns (II-XIX), used by `convertRomanNumerals()`
 - `romanNumeralReplacements` - Roman numeral to Arabic mappings
 
-**From Process 2 (match.go):**
+**From Process 2 (matcher/scoring.go):**
 
 - Uses shared regex from Process 1 via utility functions
 
-**From Process 4 (dbutils.go):**
+**From Process 4 (tags/filename_parser.go):**
 
 - Title extraction: `^([^(\[{<]*)` - Matches until first bracket of any type
 
@@ -1054,4 +1059,4 @@ When we can't distinguish between dual-language titles (`"Street Fighter スト�
 7. Cache slugified values - slugification is deterministic and expensive (regex-heavy)
 8. Database indexes on slugs are critical for Resolution Workflow performance
 9. Test edge cases: unicode, possessives, Roman numerals, special characters, **CJK text**, **mixed-language titles**
-10. Magic numbers are now named constants - see `pkg/database/slugs/match.go` and `pkg/zapscript/slugs.go`
+10. Magic numbers are now named constants - see `pkg/database/matcher/scoring.go` and `pkg/zapscript/slugs.go`
