@@ -252,7 +252,9 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	// Fallback 3: Secondary title-only literal search
 	if len(results) == 0 {
 		matchInfo := slugs.GenerateMatchInfo(gameName)
-		if matchInfo.HasSecondaryTitle && matchInfo.SecondaryTitleSlug != "" && len(matchInfo.SecondaryTitleSlug) >= minSecondaryTitleSlugLength {
+		if matchInfo.HasSecondaryTitle &&
+			matchInfo.SecondaryTitleSlug != "" &&
+			len(matchInfo.SecondaryTitleSlug) >= minSecondaryTitleSlugLength {
 			secondarySlug := matchInfo.SecondaryTitleSlug
 			log.Info().Msgf("no results, trying secondary title-only search: '%s'", secondarySlug)
 

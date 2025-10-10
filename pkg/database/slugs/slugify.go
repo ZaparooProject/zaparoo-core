@@ -26,7 +26,6 @@ import (
 
 	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
-	"golang.org/x/text/unicode/norm"
 	"golang.org/x/text/width"
 )
 
@@ -59,24 +58,37 @@ var (
 		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
 			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
 	)
-	versionSuffixRegex      = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	leadingNumPrefixRegex   = regexp.MustCompile(`^\d+[.\s\-]+`)
-	parenthesesRegex        = regexp.MustCompile(`\s*\([^)]*\)`)
-	bracketsRegex           = regexp.MustCompile(`\s*\[[^\]]*\]`)
-	bracesRegex             = regexp.MustCompile(`\s*\{[^}]*\}`)
-	angleBracketsRegex      = regexp.MustCompile(`\s*<[^>]*>`)
-	separatorsRegex         = regexp.MustCompile(`[:_\-]+`)
-	nonAlphanumRegex        = regexp.MustCompile(`[^a-z0-9]+`)
-	cjkRegex                = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}]`)
-	nonAlphanumKeepCJKRegex = regexp.MustCompile(`[^a-z0-9\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}]+`)
-	trailingArticleRegex    = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
-	plusRegex               = regexp.MustCompile(`\s+\+\s+`)
-	nWithApostrophesRegex   = regexp.MustCompile(`\s+'n'\s+`)
-	nWithLeftApostrophe     = regexp.MustCompile(`\s+'n\s+`)
-	nWithRightApostrophe    = regexp.MustCompile(`\s+n'\s+`)
-	nAloneRegex             = regexp.MustCompile(`\s+n\s+`)
-	romanNumeralI           = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralOrder       = []string{
+	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[.\s\-]+`)
+	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
+	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
+	bracesRegex           = regexp.MustCompile(`\s*\{[^}]*\}`)
+	angleBracketsRegex    = regexp.MustCompile(`\s*<[^>]*>`)
+	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
+	nonAlphanumRegex      = regexp.MustCompile(`[^a-z0-9]+`)
+	cjkRegex              = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}]`)
+
+	nonAlphanumKeepUnicodeRegex = regexp.MustCompile(
+		`[^a-z0-9` +
+			`\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}` +
+			`\p{Cyrillic}` +
+			`\p{Greek}` +
+			`\p{Devanagari}\p{Bengali}\p{Tamil}\p{Telugu}\p{Kannada}\p{Malayalam}` +
+			`\p{Gurmukhi}\p{Gujarati}\p{Oriya}\p{Sinhala}` +
+			`\p{Arabic}` +
+			`\p{Hebrew}` +
+			`\p{Thai}\p{Myanmar}\p{Khmer}\p{Lao}` +
+			`\p{Ethiopic}` +
+			`]+`,
+	)
+	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	plusRegex             = regexp.MustCompile(`\s+\+\s+`)
+	nWithApostrophesRegex = regexp.MustCompile(`\s+'n'\s+`)
+	nWithLeftApostrophe   = regexp.MustCompile(`\s+'n\s+`)
+	nWithRightApostrophe  = regexp.MustCompile(`\s+n'\s+`)
+	nAloneRegex           = regexp.MustCompile(`\s+n\s+`)
+	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
+	romanNumeralOrder     = []string{
 		"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII",
 		"XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II",
 	}
@@ -126,21 +138,32 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	// Stage 10: Final Slugification (CJK-Aware)
+	// Stage 10: Final Slugification (Multi-Script Aware)
 	// Create both ASCII-only and Unicode-preserving versions
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
-	unicodeSlug := nonAlphanumKeepCJKRegex.ReplaceAllString(s, "")
+	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
 
-	// For any title containing CJK characters, use the Unicode slug which preserves
-	// both Latin and CJK portions. This enables matching on either part:
+	// Lowercase the slugs with Turkish-aware case folding if needed
+	if containsTurkishChars(s) {
+		asciiSlug = strings.ToLowerSpecial(unicode.TurkishCase, asciiSlug)
+		unicodeSlug = strings.ToLowerSpecial(unicode.TurkishCase, unicodeSlug)
+	} else {
+		asciiSlug = strings.ToLower(asciiSlug)
+		unicodeSlug = strings.ToLower(unicodeSlug)
+	}
+
+	// For any title containing non-Latin characters, use the Unicode slug which preserves
+	// both Latin and non-Latin portions. This enables matching on either part:
 	//   - "ドラゴンクエストIII" → "ドラゴンクエスト3" (pure CJK)
 	//   - "Street Fighter ストリート" → "streetfighterストリート" (mixed: searchable by either part)
-	//   - "Super Mario Bros" → "supermariobros" (pure Latin)
+	//   - "Тетрис" → "тетрис" (Cyrillic preserved)
+	//   - "Super Mario Bros" → "supermariobros" (pure Latin, ASCII)
 	//
 	// The Unicode slug already contains both parts concatenated, so mixed-language
-	// titles remain searchable by either their Latin OR CJK portions without
+	// titles remain searchable by either their Latin OR non-Latin portions without
 	// requiring schema changes or alternate slug columns.
-	if cjkRegex.MatchString(s) {
+	script := detectScript(s)
+	if needsUnicodeSlug(script) {
 		return strings.TrimSpace(unicodeSlug)
 	}
 
@@ -357,26 +380,9 @@ func normalizeInternal(input string) string {
 		s = cleaned
 	}
 
-	// Unicode normalization: different strategies for CJK vs Latin
-	if !cjkRegex.MatchString(s) {
-		// Latin text: Apply NFKC compatibility normalization and diacritic removal
-		s = norm.NFKC.String(s)
-
-		// Diacritic removal for Latin scripts (Pokémon → Pokemon)
-		t := transform.Chain(
-			norm.NFD,
-			runes.Remove(runes.In(unicode.Mn)),
-			norm.NFC,
-		)
-		if normalized, _, err := transform.String(t, s); err == nil {
-			s = normalized
-		}
-	} else {
-		// CJK text: Only apply NFC (canonical composition)
-		// This is safe and necessary to compose combining marks from width.Fold
-		// Avoid NFKC (mangles katakana) and NFD+mark removal (strips dakuten/handakuten)
-		s = norm.NFC.String(s)
-	}
+	// Unicode normalization: script-specific strategies
+	script := detectScript(s)
+	s = normalizeByScript(s, script)
 
 	// Stages 3-9: Text transformations
 	s = leadingNumPrefixRegex.ReplaceAllString(s, "")

@@ -43,13 +43,13 @@ func TestSlugifyString_CJKPreservation(t *testing.T) {
 		},
 		{
 			name:     "Japanese hiragana only",
-			input:    "どうぶつの森",
-			expected: "どうぶつの森",
+			input:    "どうぶつの森", //nolint:gosmopolitan // Japanese test data
+			expected: "どうぶつの森", //nolint:gosmopolitan // Japanese test data
 		},
 		{
 			name:     "Chinese characters only",
-			input:    "街头霸王", //nolint:gosmopolitan
-			expected: "街头霸王",
+			input:    "街头霸王", //nolint:gosmopolitan // Chinese test data
+			expected: "街头霸王", //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Korean Hangul only",
@@ -82,8 +82,8 @@ func TestSlugifyString_CJKPreservation(t *testing.T) {
 		},
 		{
 			name:     "Mixed Latin and Chinese",
-			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan
-			expected: "supermario超级马里奥",
+			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan // Chinese test data
+			expected: "supermario超级马里奥",   //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Mixed Latin and Korean",
@@ -239,8 +239,8 @@ func TestSlugifyString_MixedLanguageMatchingCompatibility(t *testing.T) {
 		},
 		{
 			name:        "Multiple CJK segments concatenated",
-			input:       "Final 最终 Fantasy 幻想 VII", //nolint:gosmopolitan
-			expected:    "final最终fantasy幻想7",
+			input:       "Final 最终 Fantasy 幻想 VII", //nolint:gosmopolitan // Chinese test data
+			expected:    "final最终fantasy幻想7",       //nolint:gosmopolitan // Chinese test data
 			description: "All segments (Latin + CJK) concatenated with numerals converted",
 		},
 	}
@@ -280,8 +280,8 @@ func TestNormalizeToWords_CJKSupport(t *testing.T) {
 		},
 		{
 			name:     "Chinese with Latin",
-			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan
-			expected: []string{"super", "mario", "超级马里奥"},
+			input:    "Super Mario 超级马里奥",                 //nolint:gosmopolitan // Chinese test data
+			expected: []string{"super", "mario", "超级马里奥"}, //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Korean with spaces",

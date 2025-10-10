@@ -40,8 +40,8 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		},
 		{
 			name:     "Chinese characters only",
-			input:    "街头霸王", //nolint:gosmopolitan // Intentionally testing Chinese character handling
-			expected: "街头霸王", // CJK preserved
+			input:    "街头霸王", //nolint:gosmopolitan // Chinese test data
+			expected: "街头霸王", //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Korean characters only",
@@ -51,17 +51,17 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Arabic characters only",
 			input:    "سوبر ماريو",
-			expected: "", // Arabic stripped (not in CJK category)
+			expected: "سوبرماريو", // Arabic preserved with multi-script support
 		},
 		{
 			name:     "Cyrillic characters only",
 			input:    "Супер Марио",
-			expected: "", // Cyrillic stripped (not in CJK category)
+			expected: "супермарио", // Cyrillic preserved and lowercased
 		},
 		{
 			name:     "Greek characters only",
 			input:    "Σούπερ Μάριο",
-			expected: "", // Greek stripped (not in CJK category)
+			expected: "σουπερμαριο", // Greek preserved, lowercased, diacritics removed
 		},
 		{
 			name:     "Mixed Latin and Japanese",
@@ -70,8 +70,8 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		},
 		{
 			name:     "Mixed Latin and Chinese",
-			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan // Intentionally testing mixed Chinese
-			expected: "supermario超级马里奥",
+			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan // Chinese test data
+			expected: "supermario超级马里奥",   //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Mixed Latin and Korean",
@@ -130,8 +130,8 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		},
 		{
 			name:     "Mixed non-Latin with metadata",
-			input:    "Super Mario 超级 (USA) [!]", //nolint:gosmopolitan // Intentionally testing Chinese with metadata
-			expected: "supermario超级",
+			input:    "Super Mario 超级 (USA) [!]", //nolint:gosmopolitan // Chinese test data
+			expected: "supermario超级",             //nolint:gosmopolitan // Chinese test data
 		},
 		{
 			name:     "Japanese with Roman numerals",
@@ -155,8 +155,8 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		},
 		{
 			name:     "Mixed scripts complex",
-			input:    "The Zelda 传说 ストリート: Link's Awakening", //nolint:gosmopolitan // Testing mixed scripts
-			expected: "zelda传说ストリートlinksawakening",
+			input:    "The Zelda 传说 ストリート: Link's Awakening", //nolint:gosmopolitan // Chinese test data
+			expected: "zelda传说ストリートlinksawakening",           //nolint:gosmopolitan // Chinese test data
 		},
 	}
 
