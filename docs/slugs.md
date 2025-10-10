@@ -25,27 +25,51 @@ The system consists of four separate processes:
 
 ### Normalization Pipeline
 
-#### Stage 1: Unicode Normalization (Symbol Removal + NFKC + Diacritic Removal)
+#### Stage 0: Width Normalization
+
+**Process:**
+
+Converts fullwidth and halfwidth characters to their normalized forms using `width.Fold`:
+
+- **ASCII characters**: Fullwidth → Halfwidth (enables Latin text processing)
+- **CJK characters**: Halfwidth → Fullwidth (ensures consistent display and matching)
+
+**Why width normalization first?** This ensures all subsequent stages work on consistent character widths. Fullwidth ASCII becomes regular ASCII for regex matching, while halfwidth katakana becomes fullwidth for proper CJK handling.
+
+**Examples:**
+
+- Fullwidth ASCII: `"ＡＢＣＤＥＦ"` → `"ABCDEF"`
+- Fullwidth numbers: `"１２３"` → `"123"`
+- Fullwidth delimiters: `"Game：Subtitle"` → `"Game:Subtitle"`
+- Halfwidth katakana: `"ｳｴｯｼﾞ"` → `"ウエッジ"`
+- Mixed: `"Super Ｍario １２３"` → `"Super Mario 123"`
+
+#### Stage 1: Unicode Normalization (Symbol Removal + NFKC/NFC + Diacritic Removal)
 
 **Process:**
 
 1. **Symbol Removal** - Removes unicode symbols from categories `So` (Other Symbol: ™, ®, ©, ℠) and `Sc` (Currency Symbol: $, €, ¥). Math symbols like `<`, `>`, `+` are preserved for later removal.
-2. **NFKC Normalization** - Normalizes compatibility characters to their canonical forms
-3. **NFD + Mark Removal + NFC** - Removes diacritical marks while preserving base characters
+2. **Script-Aware Normalization**:
+   - **For Latin text** (no CJK detected):
+     - NFKC Normalization - Normalizes compatibility characters to their canonical forms
+     - NFD + Mark Removal + NFC - Removes diacritical marks while preserving base characters
+   - **For CJK text** (contains Chinese, Japanese, or Korean characters):
+     - NFC only - Canonical composition to properly combine marks from width.Fold
+     - **No NFKC** - Prevents mangling of katakana characters
+     - **No diacritic removal** - Preserves essential marks (dakuten, handakuten)
 
-Unicode normalization happens first to ensure all subsequent regex patterns and string operations work on predictable, canonical text. This prevents bugs where full-width or compatibility characters bypass pattern matching.
+Unicode normalization ensures all subsequent regex patterns and string operations work on predictable, canonical text. CJK-specific handling prevents corruption of Japanese/Korean/Chinese characters.
 
 **Why remove symbols first?** NFKC converts some symbols to ASCII letters (™→TM, ℠→SM), which would incorrectly become part of the slug. By removing symbols first, we ensure they're completely stripped rather than converted. Math symbols are preserved because they'll be handled by the final non-alphanumeric cleanup stage.
 
 **Examples:**
 
 - Symbols: `"Sonic™"` → `"Sonic"`, `"Game®"` → `"Game"` (removed, not converted to letters)
-- Full-width numbers: `"１. Game"` → `"1. Game"` (enables prefix stripping)
-- Full-width delimiters: `"Game：Subtitle"` → `"Game:Subtitle"` (enables delimiter matching)
-- Diacritics: `"Pokémon"` → `"Pokemon"`, `"Café"` → `"Cafe"`
+- Diacritics (Latin): `"Pokémon"` → `"Pokemon"`, `"Café"` → `"Cafe"`
 - Ligatures: `"ﬁnal"` → `"final"`
 - Superscripts: `"Game²"` → `"Game2"`
 - Other compatibility chars: `"①"` → `"1"`
+- CJK preserved: `"ドラゴンクエスト"` → `"ドラゴンクエスト"`
 
 #### Stage 2: Leading Number Prefix Stripping
 
@@ -192,17 +216,32 @@ Converts Roman numerals (II-XIX) to Arabic numbers:
 
 **Note:** Order matters - longer numerals must be matched first to avoid partial replacements. X is intentionally excluded to preserve game titles like "Mega Man X" and "MegaRace X".
 
-#### Stage 10: Final Slugification
+#### Stage 10: Final Slugification (CJK-Aware)
 
-**Pattern:** `[^a-z0-9]+` → removed
+**Patterns:**
 
-Final cleanup:
+- ASCII-only: `[^a-z0-9]+` → removed
+- Unicode-preserving: `[^a-z0-9\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}...]+` → removed
 
-1. Convert to lowercase
-2. Remove all non-alphanumeric characters (spaces, punctuation, etc.)
+**Process:**
+
+1. Generate both ASCII and Unicode versions of the slug
+2. Apply intelligent selection:
+   - If ASCII slug is very short (<4 chars) AND original contains CJK characters → use Unicode slug
+   - Otherwise → use ASCII slug for maximum matching compatibility
 3. Trim whitespace
 
-**Result:** `"legendofzelda7"`, `"streetfighter2"`, `"finalfantasy11"`, etc.
+**Why hybrid approach?** This handles both pure CJK titles (preserved for matching) and mixed Latin+CJK titles (ASCII preferred for matching Latin queries).
+
+**Examples:**
+
+- Pure CJK: `"ドラゴンクエスト"` → `"ドラゴンクエスト"` (preserved)
+- CJK with numeral: `"ファイナルファンタジーVII"` → `"ファイナルファンタジー7"` (CJK + converted numeral)
+- Mixed Latin+CJK: `"Street Fighter ストリート"` → `"streetfighter"` (ASCII preferred)
+- Pure Latin: `"The Legend of Zelda"` → `"legendofzelda"` (standard behavior)
+- Short ASCII from CJK: `"ドラゴンクエストIII"` → `"ドラゴンクエスト3"` (not just `"3"`)
+
+**Result:** Intelligent matching that preserves CJK when needed, strips it when ASCII is available.
 
 ### Idempotency Guarantee
 
@@ -212,12 +251,15 @@ The slugification function is **idempotent and deterministic**:
 SlugifyString(SlugifyString(x)) == SlugifyString(x)
 ```
 
-Running slugification multiple times produces the same result.
+Running slugification multiple times produces the same result. This holds true for both Latin and CJK text.
 
-### Complete Example
+### Complete Examples
+
+#### Example 1: Latin Title with Metadata
 
 ```
 Input:    "The Legend of Zelda: The Minish Cap (USA) [!]"
+Stage 0:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
 Stage 1:  "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
 Stage 2:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no leading numbers)
 Stage 3:  "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
@@ -227,7 +269,41 @@ Stage 6:  "Legend of Zelda Minish Cap" (removed "(USA) [!]")
 Stage 7:  "Legend of Zelda Minish Cap" (no edition suffix)
 Stage 8:  "Legend of Zelda Minish Cap" (no remaining separators)
 Stage 9:  "Legend of Zelda Minish Cap" (no Roman numerals)
-Stage 10: "legendofzeldaminishcap"
+Stage 10: "legendofzeldaminishcap" (ASCII slug)
+```
+
+#### Example 2: Pure CJK Title
+
+```
+Input:    "ドラゴンクエストVII (Japan)"
+Stage 0:  "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
+Stage 1:  "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
+Stage 2:  "ドラゴンクエストVII (Japan)" (no leading numbers)
+Stage 3:  "ドラゴンクエストVII (Japan)" (no secondary title)
+Stage 4:  "ドラゴンクエストVII (Japan)" (no trailing article)
+Stage 5:  "ドラゴンクエストVII (Japan)" (no ampersands)
+Stage 6:  "ドラゴンクエストVII" (removed "(Japan)")
+Stage 7:  "ドラゴンクエストVII" (no edition suffix)
+Stage 8:  "ドラゴンクエストVII" (no separators)
+Stage 9:  "ドラゴンクエスト7" (VII → 7)
+Stage 10: "ドラゴンクエスト7" (Unicode slug - ASCII would be just "7")
+```
+
+#### Example 3: Mixed Latin + CJK Title
+
+```
+Input:    "Street Fighter ストリートファイター (USA)"
+Stage 0:  "Street Fighter ストリートファイター (USA)" (width normalized)
+Stage 1:  "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
+Stage 2:  "Street Fighter ストリートファイター (USA)" (no leading numbers)
+Stage 3:  "Street Fighter ストリートファイター (USA)" (no secondary title)
+Stage 4:  "Street Fighter ストリートファイター (USA)" (no trailing article)
+Stage 5:  "Street Fighter ストリートファイター (USA)" (no ampersands)
+Stage 6:  "Street Fighter ストリートファイター" (removed "(USA)")
+Stage 7:  "Street Fighter ストリートファイター" (no edition suffix)
+Stage 8:  "Street Fighter ストリートファイター" (no separators)
+Stage 9:  "Street Fighter ストリートファイター" (no Roman numerals)
+Stage 10: "streetfighter" (ASCII slug - Latin present, CJK stripped)
 ```
 
 ---
@@ -589,11 +665,11 @@ Function: `selectAlphabeticallyByFilename()`
 4. **Extract filename**: Remove extension from base path using `strings.CutSuffix()`
 5. **Extract title**: Call `getTitleFromFilename()` (Process 4)
 6. **Slugify title**: Call `slugs.SlugifyString(title)` (Process 1)
-7. **Handle non-Latin titles**: If slug is empty, use lowercase filename as fallback
+7. **Handle CJK titles**: If slug is empty (legacy behavior), use lowercase filename as fallback. With CJK support, pure CJK slugs are now preserved.
 8. **Extract tags**: Call `getTagsFromFileName()` → `tags.ParseFilenameToCanonicalTags()` (if enabled in config)
 9. **Cache result**: Store PathFragments for future lookups
 
-**Example:**
+**Example 1: Latin Title**
 
 ```
 Path:     "/roms/nes/Super Mario Bros (USA) [!].nes"
@@ -602,6 +678,17 @@ Title:    "Super Mario Bros"
 Slug:     "supermariobros"
 Ext:      ".nes"
 Tags:     ["region:usa", "dumpinfo:verified"]
+```
+
+**Example 2: CJK Title**
+
+```
+Path:     "/roms/sfc/ドラゴンクエストVII (Japan).sfc"
+FileName: "ドラゴンクエストVII (Japan)"
+Title:    "ドラゴンクエストVII"
+Slug:     "ドラゴンクエスト7"
+Ext:      ".sfc"
+Tags:     ["region:jp"]
 ```
 
 #### Step 2: Extract Tags from Filename (`getTagsFromFileName()`)
@@ -851,13 +938,15 @@ Match Against DB ← [Process 3: Index] ← Filesystem Scan
 
 **Responsibilities:**
 
-- ✅ Unicode normalization (NFKC, diacritics)
+- ✅ Width normalization (fullwidth/halfwidth conversion)
+- ✅ Unicode normalization (script-aware: NFKC for Latin, NFC for CJK)
+- ✅ Diacritic removal (Latin only, preserves CJK marks)
 - ✅ Article stripping (leading, trailing, secondary)
 - ✅ Metadata removal (parentheses, brackets)
 - ✅ Edition suffix stripping
 - ✅ Roman numeral conversion
 - ✅ Case normalization (lowercase)
-- ✅ Final slug generation (alphanumeric only)
+- ✅ Final slug generation (intelligent: ASCII or Unicode based on content)
 
 **Does NOT:**
 
@@ -914,6 +1003,45 @@ Match Against DB ← [Process 3: Index] ← Filesystem Scan
 
 ---
 
+## CJK Support
+
+**Overview:**
+
+As of the previous commit ("token set ratio matching"), the slug system supports **intelligent hybrid slug generation** for CJK (Chinese, Japanese, Korean) titles:
+
+**Key Features:**
+
+1. **Pure CJK titles preserved**: `"ドラゴンクエスト"` → `"ドラゴンクエスト"` (not stripped)
+2. **Mixed Latin+CJK uses ASCII**: `"Street Fighter ストリート"` → `"streetfighter"` (CJK stripped for Latin matching)
+3. **Width normalization**: Fullwidth ASCII → halfwidth, halfwidth katakana → fullwidth
+4. **Script-aware Unicode normalization**:
+   - Latin: NFKC + diacritic removal (traditional behavior)
+   - CJK: NFC only (prevents katakana corruption)
+5. **Intelligent slug selection**: Short ASCII slugs (<4 chars) from CJK titles use Unicode version
+
+**Why This Matters:**
+
+- **Before**: Pure CJK titles produced empty slugs, requiring lowercase filename fallback
+- **After**: Pure CJK titles produce meaningful Unicode slugs for proper matching
+- **Compatibility**: Mixed-language titles still produce ASCII slugs for cross-language matching
+
+**Implementation Details:**
+
+- Width normalization (`width.Fold`) added as Stage 0
+- CJK detection regex: `[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}...]`
+- Script detection determines NFKC (Latin) vs NFC (CJK) normalization path
+- Dual slug generation (ASCII + Unicode) with intelligent selection in Stage 10
+
+**Examples:**
+
+| Input                              | Output                     | Reasoning                                   |
+| ---------------------------------- | -------------------------- | ------------------------------------------- |
+| `"ドラゴンクエストVII"`            | `"ドラゴンクエスト7"`      | Pure CJK preserved, Roman numeral converted |
+| `"Street Fighter ストリート"`      | `"streetfighter"`          | Mixed → ASCII preferred for matching        |
+| `"ファイナルファンタジー (Japan)"` | `"ファイナルファンタジー"` | Pure CJK, metadata stripped                 |
+| `"Ａｂｃ123ＤＥＦ"`                | `"abc123def"`              | Fullwidth ASCII normalized to halfwidth     |
+| `"ｳｴｯｼﾞ"`                          | `"ウエッジ"`               | Halfwidth katakana normalized to fullwidth  |
+
 ## Implementation Notes
 
 **For Developers:**
@@ -926,4 +1054,4 @@ Match Against DB ← [Process 3: Index] ← Filesystem Scan
 6. All processes use deterministic, idempotent operations where possible
 7. Cache slugified values - slugification is deterministic
 8. Index on slugs for performance in Process 2 queries
-9. Test edge cases: unicode, possessives, Roman numerals, special characters
+9. Test edge cases: unicode, possessives, Roman numerals, special characters, **CJK text**
