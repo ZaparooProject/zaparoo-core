@@ -23,6 +23,36 @@ import (
 	"strings"
 )
 
+const (
+	// Word weighting constants for token-based matching
+	baseWordWeight    = 10.0
+	longWordBonus     = 10.0
+	longWordMinLength = 6
+	commonWordPenalty = 5.0
+
+	// Token matching thresholds
+	wordSimilarityThreshold   = 0.8
+	unmatchedCandidatePenalty = 0.4
+
+	// TokenMatchMinScore is the minimum similarity score required for token-based matching
+	TokenMatchMinScore = 0.5
+
+	// Token set ratio weights
+	queryCoverageWeight     = 0.8
+	candidateCoverageWeight = 0.2
+	extraWordsPenaltyFactor = 0.2
+
+	// Word similarity
+	maxLengthRatioForSimilarity = 2.0
+	commonPrefixMinLength       = 3
+	commonPrefixSimilarity      = 0.85
+
+	// Progressive trim limits
+	maxProgressiveTrimIterations = 10
+	minProgressiveTrimSlugLength = 6
+	minProgressiveTrimWordCount  = 3
+)
+
 // GameMatchInfo contains metadata extracted from a game title for intelligent matching.
 // This structure supports multi-strategy resolution where the canonical slug may not match
 // but fallback strategies (e.g., matching just the main title) can be attempted.
@@ -104,7 +134,7 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 	cleaned = strings.TrimSpace(cleaned)
 
 	words := strings.Fields(cleaned)
-	if len(words) < 3 {
+	if len(words) < minProgressiveTrimWordCount {
 		return nil
 	}
 
@@ -112,8 +142,8 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 	seenSlugs := make(map[string]bool)
 
 	maxTrimCount := len(words) - 1
-	if maxTrimCount > 10 {
-		maxTrimCount = 10
+	if maxTrimCount > maxProgressiveTrimIterations {
+		maxTrimCount = maxProgressiveTrimIterations
 	}
 
 	for trimCount := 0; trimCount <= maxTrimCount; trimCount++ {
@@ -125,7 +155,7 @@ func GenerateProgressiveTrimCandidates(title string) []ProgressiveTrimCandidate 
 		trimmedTitle := strings.Join(remainingWords, " ")
 		slug := SlugifyString(trimmedTitle)
 
-		if len(slug) < 6 {
+		if len(slug) < minProgressiveTrimSlugLength {
 			break
 		}
 
@@ -291,14 +321,14 @@ func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
 			}
 		}
 
-		if bestMatchIdx >= 0 && bestMatchScore > 0.8 {
+		if bestMatchIdx >= 0 && bestMatchScore > wordSimilarityThreshold {
 			weightedMatchedScore += queryWeight
 			usedCandidateIndices[bestMatchIdx] = true
 		}
 	}
 
 	unmatchedCandidateWords := len(candidateWords) - len(usedCandidateIndices)
-	denominator := totalQueryWeight + float64(unmatchedCandidateWords)*0.4*10.0
+	denominator := totalQueryWeight + float64(unmatchedCandidateWords)*unmatchedCandidatePenalty*baseWordWeight
 
 	if denominator == 0 {
 		return 0.0
@@ -310,17 +340,17 @@ func ScoreTokenMatch(queryTitle, candidateTitle string) float64 {
 // getWordWeight returns the importance weight for a word in matching.
 // Longer/unique words are more important than common filler words.
 func getWordWeight(word string) float64 {
-	baseWeight := 10.0
+	weight := baseWordWeight
 
-	if len(word) >= 6 {
-		baseWeight += 10.0
+	if len(word) >= longWordMinLength {
+		weight += longWordBonus
 	}
 
 	if isCommonWord(word) {
-		baseWeight -= 5.0
+		weight -= commonWordPenalty
 	}
 
-	return baseWeight
+	return weight
 }
 
 // isCommonWord checks if a word is a common filler word with low discriminative value.
@@ -355,12 +385,12 @@ func wordSimilarity(word1, word2 string) float64 {
 		shorter, longer = word2, word1
 	}
 
-	if len(longer) > len(shorter)*2 {
+	if float64(len(longer)) > float64(len(shorter))*maxLengthRatioForSimilarity {
 		return 0.0
 	}
 
-	if hasCommonPrefix(word1, word2, 3) {
-		return 0.85
+	if hasCommonPrefix(word1, word2, commonPrefixMinLength) {
+		return commonPrefixSimilarity
 	}
 
 	return 0.0
@@ -429,7 +459,7 @@ func ScoreTokenSetRatio(queryTitle, candidateTitle string) float64 {
 	queryCoverage := intersectionSize / querySize
 	candCoverage := intersectionSize / candSize
 
-	baseScore := (queryCoverage*0.8 + candCoverage*0.2)
+	baseScore := (queryCoverage*queryCoverageWeight + candCoverage*candidateCoverageWeight)
 
 	queryExtras := querySize - intersectionSize
 	candExtras := candSize - intersectionSize
@@ -438,7 +468,7 @@ func ScoreTokenSetRatio(queryTitle, candidateTitle string) float64 {
 	if totalExtras > 0 {
 		totalWords := querySize + candSize
 		extraRatio := totalExtras / totalWords
-		penalty := extraRatio * 0.2
+		penalty := extraRatio * extraWordsPenaltyFactor
 		baseScore *= (1.0 - penalty)
 	}
 

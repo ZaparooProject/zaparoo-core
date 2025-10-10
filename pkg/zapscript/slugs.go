@@ -36,6 +36,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// Fuzzy matching thresholds
+	minSlugLengthForFuzzy   = 5
+	fuzzyMatchMaxLengthDiff = 2
+	fuzzyMatchMinSimilarity = 0.85
+
+	// Secondary title minimum length for search
+	minSecondaryTitleSlugLength = 4
+)
+
 // cmdSlug implements the launch.slug command for slug-based game launching
 //
 //nolint:gocritic // single-use parameter in command handler
@@ -184,7 +194,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 						bestScore = setScore
 					}
 
-					if bestScore > 0.5 {
+					if bestScore > slugs.TokenMatchMinScore {
 						tokenCandidates = append(tokenCandidates, tokenMatchCandidate{
 							result: result,
 							score:  bestScore,
@@ -242,7 +252,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	// Fallback 3: Secondary title-only literal search
 	if len(results) == 0 {
 		matchInfo := slugs.GenerateMatchInfo(gameName)
-		if matchInfo.HasSecondaryTitle && matchInfo.SecondaryTitleSlug != "" && len(matchInfo.SecondaryTitleSlug) >= 4 {
+		if matchInfo.HasSecondaryTitle && matchInfo.SecondaryTitleSlug != "" && len(matchInfo.SecondaryTitleSlug) >= minSecondaryTitleSlugLength {
 			secondarySlug := matchInfo.SecondaryTitleSlug
 			log.Info().Msgf("no results, trying secondary title-only search: '%s'", secondarySlug)
 
@@ -282,14 +292,14 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	// Strategy 4: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
-	if len(results) == 0 && len(slug) >= 5 {
+	if len(results) == 0 && len(slug) >= minSlugLengthForFuzzy {
 		log.Info().Msgf("no results yet, trying fuzzy matching for '%s'", slug)
 
 		allSlugs, fetchErr := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
 		if fetchErr != nil {
 			log.Warn().Err(fetchErr).Msg("failed to fetch all slugs for fuzzy matching")
 		} else if len(allSlugs) > 0 {
-			fuzzyMatches := findFuzzyMatches(slug, allSlugs, 2, 0.85)
+			fuzzyMatches := findFuzzyMatches(slug, allSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
 
 			if len(fuzzyMatches) > 0 {
 				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")

@@ -78,22 +78,22 @@ func TestSlugifyString_CJKPreservation(t *testing.T) {
 		{
 			name:     "Mixed Latin and Japanese",
 			input:    "Street Fighter ストリート",
-			expected: "streetfighter",
+			expected: "streetfighterストリート",
 		},
 		{
 			name:     "Mixed Latin and Chinese",
 			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan
-			expected: "supermario",
+			expected: "supermario超级马里奥",
 		},
 		{
 			name:     "Mixed Latin and Korean",
-			input:    "Zelda 젤다의 전설",
-			expected: "zelda",
+			input:    "Zelda 젤다의전설",
+			expected: "zelda젤다의전설",
 		},
 		{
 			name:     "Latin dominant with CJK subtitle",
 			input:    "Final Fantasy VII ファイナルファンタジー7",
-			expected: "finalfantasy77", // VII->7 and 7 from Japanese = 77
+			expected: "finalfantasy7ファイナルファンタジー7", // VII->7, both parts concatenated
 		},
 
 		// CJK with metadata - metadata stripped, CJK preserved
@@ -226,22 +226,22 @@ func TestSlugifyString_MixedLanguageMatchingCompatibility(t *testing.T) {
 		description string
 	}{
 		{
-			name:        "CJK suffix stripped for Latin query matching",
+			name:        "CJK suffix concatenated for dual searchability",
 			input:       "Super Mario Bros スーパーマリオ",
-			expected:    "supermariobros",
-			description: "Latin query 'Super Mario Bros' matches DB entry with CJK suffix",
+			expected:    "supermariobrosスーパーマリオ",
+			description: "Both Latin and CJK portions preserved - searchable by either",
 		},
 		{
-			name:        "CJK prefix stripped for Latin query matching",
+			name:        "CJK prefix concatenated (order preserved)",
 			input:       "スーパーマリオ Super Mario Bros",
-			expected:    "supermariobros",
-			description: "Word order doesn't matter - same ASCII slug produced",
+			expected:    "スーパーマリオsupermariobros",
+			description: "Order preserved - both parts searchable",
 		},
 		{
-			name:        "Multiple CJK segments stripped",
+			name:        "Multiple CJK segments concatenated",
 			input:       "Final 最终 Fantasy 幻想 VII", //nolint:gosmopolitan
-			expected:    "finalfantasy7",
-			description: "All CJK segments removed, ASCII preserved",
+			expected:    "final最终fantasy幻想7",
+			description: "All segments (Latin + CJK) concatenated with numerals converted",
 		},
 	}
 

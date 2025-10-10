@@ -1,31 +1,47 @@
 # Slug System Reference
 
-This document describes the four distinct processes in Zaparoo Core's title normalization and matching system. Each process has clear responsibilities and uses shared functions where appropriate.
+This document describes Zaparoo Core's title normalization and matching system, which enables fuzzy matching between user-provided game titles (from NFC tags) and messy ROM filenames.
 
-## Overview
+## Architecture Overview
 
-The system consists of four separate processes:
+The system is built around **two primary workflows** supported by shared normalization and parsing libraries:
 
-1. **User Input Slug Normalization** - Convert user-provided titles to normalized slugs for matching
-2. **Slug Resolution** - Match normalized slugs against the media database
-3. **Filename Indexing** - Convert filesystem paths to database entries with slugs and tags
-4. **Title Extraction** - Extract human-readable titles from filenames for display
+### Primary Workflows
 
-## Process 1: User Input Slug Normalization
+1. **Indexing Workflow** - Scans filesystem and populates the media database
+   - Parses filenames to extract titles and metadata tags
+   - Generates normalized slugs for matching
+   - Stores structured data for fast lookups
 
-**Purpose:** Convert user-provided game titles (from NFC tags, API calls, command line) into canonical, normalized slugs optimized for fuzzy matching.
+2. **Resolution Workflow** - Matches user queries against the indexed database
+   - Normalizes user input using the same rules as indexing
+   - Executes progressive fallback strategies for fuzzy matching
+   - Selects best result when multiple matches exist
+
+### Shared Libraries
+
+- **Slug Normalizer** (`pkg/database/slugs/slugify.go`) - Canonical slug generation
+- **Tag Parser** (`pkg/database/tags/filename_parser.go`) - Extract metadata from filenames
+- **Title Extractor** (`pkg/database/mediascanner/dbutils.go`) - Clean display titles
+- **Match Utilities** (`pkg/database/slugs/match.go`) - Scoring and ranking algorithms
+
+## Shared Library: Slug Normalizer
+
+**Purpose:** Convert any game title into a canonical, normalized slug optimized for fuzzy matching. Used by both indexing and resolution workflows.
 
 **Location:** `pkg/database/slugs/slugify.go` → `SlugifyString()`
 
-**Usage:** Called by Process 2 (Slug Resolution) in `pkg/zapscript/slugs.go`
+**Used By:**
+- Resolution Workflow: Normalizes user queries
+- Indexing Workflow: Normalizes filenames for database storage
 
-**Input:** User-provided title string (e.g., `"The Legend of Zelda: Ocarina of Time"`)
+**Input:** Any title string (e.g., `"The Legend of Zelda: Ocarina of Time"`)
 
 **Output:** Normalized slug string (e.g., `"legendofzeldaocarinaoftime"`)
 
 ### Normalization Pipeline
 
-#### Stage 0: Width Normalization
+#### Stage 1: Width Normalization
 
 **Process:**
 
@@ -44,7 +60,7 @@ Converts fullwidth and halfwidth characters to their normalized forms using `wid
 - Halfwidth katakana: `"ｳｴｯｼﾞ"` → `"ウエッジ"`
 - Mixed: `"Super Ｍario １２３"` → `"Super Mario 123"`
 
-#### Stage 1: Unicode Normalization (Symbol Removal + NFKC/NFC + Diacritic Removal)
+#### Stage 2: Unicode Normalization (Symbol Removal + NFKC/NFC + Diacritic Removal)
 
 **Process:**
 
@@ -71,7 +87,7 @@ Unicode normalization ensures all subsequent regex patterns and string operation
 - Other compatibility chars: `"①"` → `"1"`
 - CJK preserved: `"ドラゴンクエスト"` → `"ドラゴンクエスト"`
 
-#### Stage 2: Leading Number Prefix Stripping
+#### Stage 3: Leading Number Prefix Stripping
 
 **Pattern:** `^\d+[.\s\-]+`
 
@@ -81,7 +97,7 @@ Removes common list numbering prefixes:
 - `"01 - Game Title"` → `"Game Title"`
 - `"42. Answer"` → `"Answer"`
 
-#### Stage 3: Secondary Title Decomposition and Article Stripping
+#### Stage 4: Secondary Title Decomposition and Article Stripping
 
 **Secondary Title Delimiters (Priority Order):**
 
@@ -110,7 +126,7 @@ Removes common list numbering prefixes:
 - `"Someone's Something: Time to Die"` → `"Someone's Something Time to Die"` (`:` takes priority over `'s `)
 - `"Player's Choice - Final Battle"` → `"Player's Choice Final Battle"` (`-` takes priority over `'s `)
 
-#### Stage 4: Trailing Article Normalization
+#### Stage 5: Trailing Article Normalization
 
 **Pattern:** `,\s*the\s*($|[\s:\-\(\[])` (case-insensitive)
 
@@ -119,10 +135,11 @@ Removes ", The" from the end:
 - `"Legend, The"` → `"Legend"`
 - `"Mega Man, The"` → `"Mega Man"`
 
-#### Stage 5: Conjunction Normalization
+#### Stage 6: Symbol and Separator Normalization
 
-**Patterns (via `normalizeConjunctions()`):**
+**Patterns (via `normalizeSymbolsAndSeparators()`):**
 
+Conjunctions:
 - `&` → `and`
 - `\s+\+\s+` → `and` (plus with spaces)
 - `\s+'n'\s+` → `and` (n with both apostrophes)
@@ -130,16 +147,18 @@ Removes ", The" from the end:
 - `\s+n'\s+` → `and` (n with right apostrophe)
 - `\s+n\s+` → `and` (standalone n)
 
-Converts various conjunction forms to the word "and":
+Separators:
+- `[:_\-]+` → ` ` (space)
+
+Converts conjunctions and separators in one pass:
 
 - `"Sonic & Knuckles"` → `"Sonic and Knuckles"`
 - `"Rock + Roll Racing"` → `"Rock and Roll Racing"`
 - `"Rock 'n' Roll"` → `"Rock and Roll"`
-- `"Rock 'n Roll"` → `"Rock and Roll"`
-- `"Rock n' Roll"` → `"Rock and Roll"`
-- `"Rock n Roll"` → `"Rock and Roll"`
+- `"Zelda:Link"` → `"Zelda Link"`
+- `"Super_Mario_Bros"` → `"Super Mario Bros"`
 
-#### Stage 6: Metadata Stripping
+#### Stage 7: Metadata Stripping
 
 **Patterns (via `stripMetadataBrackets()`):**
 
@@ -156,7 +175,7 @@ Removes region codes, tags, and other metadata from all bracket types:
 - `"Sonic <Beta>"` → `"Sonic"`
 - `"Title (Rev 1) [b] {En} <Proto>"` → `"Title"`
 
-#### Stage 7: Edition/Version Suffix Stripping
+#### Stage 8: Edition/Version Suffix Stripping
 
 **Patterns (via `stripEditionAndVersionSuffixes()`):**
 
@@ -171,16 +190,6 @@ Removes common edition and version suffixes:
 - `"Title v1.2"` → `"Title"`
 - `"Game v1.2.3"` → `"Game"`
 - `"Final Fantasy vVII"` → `"Final Fantasy"`
-
-#### Stage 8: Separator Normalization
-
-**Pattern (via `normalizeSeparators()`):** `[:_\-]+` → ` ` (space)
-
-Converts remaining separators to spaces:
-
-- `"Zelda:Link"` → `"Zelda Link"`
-- `"Super_Mario_Bros"` → `"Super Mario Bros"`
-- `"Game-Title-Here"` → `"Game Title Here"`
 
 #### Stage 9: Roman Numeral Conversion
 
@@ -227,21 +236,23 @@ Converts Roman numerals (II-XIX) to Arabic numbers:
 
 1. Generate both ASCII and Unicode versions of the slug
 2. Apply intelligent selection:
-   - If ASCII slug is very short (<4 chars) AND original contains CJK characters → use Unicode slug
-   - Otherwise → use ASCII slug for maximum matching compatibility
+   - If original contains CJK characters → use Unicode slug (contains both Latin AND CJK)
+   - Otherwise → use ASCII slug (pure Latin)
 3. Trim whitespace
 
-**Why hybrid approach?** This handles both pure CJK titles (preserved for matching) and mixed Latin+CJK titles (ASCII preferred for matching Latin queries).
+**Why use Unicode slug for mixed titles?** The Unicode slug naturally concatenates both Latin and CJK portions, making the title searchable by EITHER part without requiring separate database columns. This handles cases where we can't distinguish between dual-language titles (`"Street Fighter ストリート"`) and translation pairs (`"Street Fighter (USA) ストリートファイター (Japan)"`).
 
 **Examples:**
 
 - Pure CJK: `"ドラゴンクエスト"` → `"ドラゴンクエスト"` (preserved)
 - CJK with numeral: `"ファイナルファンタジーVII"` → `"ファイナルファンタジー7"` (CJK + converted numeral)
-- Mixed Latin+CJK: `"Street Fighter ストリート"` → `"streetfighter"` (ASCII preferred)
+- Mixed Latin+CJK: `"Street Fighter ストリート"` → `"streetfighterストリート"` (both parts preserved!)
 - Pure Latin: `"The Legend of Zelda"` → `"legendofzelda"` (standard behavior)
-- Short ASCII from CJK: `"ドラゴンクエストIII"` → `"ドラゴンクエスト3"` (not just `"3"`)
 
-**Result:** Intelligent matching that preserves CJK when needed, strips it when ASCII is available.
+**Result:** 
+- Pure Latin titles: Clean ASCII slugs
+- Any title with CJK: Concatenated slug containing both Latin and CJK portions
+- User can search by either part and matching strategies handle both cases
 
 ### Idempotency Guarantee
 
@@ -258,82 +269,74 @@ Running slugification multiple times produces the same result. This holds true f
 #### Example 1: Latin Title with Metadata
 
 ```
-Input:    "The Legend of Zelda: The Minish Cap (USA) [!]"
-Stage 0:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
-Stage 1:  "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
-Stage 2:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no leading numbers)
-Stage 3:  "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
-Stage 4:  "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
-Stage 5:  "Legend of Zelda Minish Cap (USA) [!]" (no ampersands)
-Stage 6:  "Legend of Zelda Minish Cap" (removed "(USA) [!]")
-Stage 7:  "Legend of Zelda Minish Cap" (no edition suffix)
-Stage 8:  "Legend of Zelda Minish Cap" (no remaining separators)
-Stage 9:  "Legend of Zelda Minish Cap" (no Roman numerals)
-Stage 10: "legendofzeldaminishcap" (ASCII slug)
+Input:     "The Legend of Zelda: The Minish Cap (USA) [!]"
+Stage 1:   "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
+Stage 2:   "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
+Stage 3:   "The Legend of Zelda: The Minish Cap (USA) [!]" (no leading numbers)
+Stage 4:   "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
+Stage 5:   "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
+Stage 6:   "Legend of Zelda Minish Cap (USA) [!]" (no symbols/separators to normalize)
+Stage 7:   "Legend of Zelda Minish Cap" (removed "(USA) [!]")
+Stage 8:   "Legend of Zelda Minish Cap" (no edition suffix)
+Stage 9:   "Legend of Zelda Minish Cap" (no Roman numerals)
+Stage 10:  "legendofzeldaminishcap" (ASCII slug - no CJK detected)
 ```
 
 #### Example 2: Pure CJK Title
 
 ```
-Input:    "ドラゴンクエストVII (Japan)"
-Stage 0:  "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
-Stage 1:  "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
-Stage 2:  "ドラゴンクエストVII (Japan)" (no leading numbers)
-Stage 3:  "ドラゴンクエストVII (Japan)" (no secondary title)
-Stage 4:  "ドラゴンクエストVII (Japan)" (no trailing article)
-Stage 5:  "ドラゴンクエストVII (Japan)" (no ampersands)
-Stage 6:  "ドラゴンクエストVII" (removed "(Japan)")
-Stage 7:  "ドラゴンクエストVII" (no edition suffix)
-Stage 8:  "ドラゴンクエストVII" (no separators)
-Stage 9:  "ドラゴンクエスト7" (VII → 7)
-Stage 10: "ドラゴンクエスト7" (Unicode slug - ASCII would be just "7")
+Input:     "ドラゴンクエストVII (Japan)"
+Stage 1:   "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
+Stage 2:   "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
+Stage 3:   "ドラゴンクエストVII (Japan)" (no leading numbers)
+Stage 4:   "ドラゴンクエストVII (Japan)" (no secondary title)
+Stage 5:   "ドラゴンクエストVII (Japan)" (no trailing article)
+Stage 6:   "ドラゴンクエストVII (Japan)" (no symbols/separators to normalize)
+Stage 7:   "ドラゴンクエストVII" (removed "(Japan)")
+Stage 8:   "ドラゴンクエストVII" (no edition suffix)
+Stage 9:   "ドラゴンクエスト7" (VII → 7)
+Stage 10:  "ドラゴンクエスト7" (Unicode slug - CJK detected)
 ```
 
 #### Example 3: Mixed Latin + CJK Title
 
 ```
-Input:    "Street Fighter ストリートファイター (USA)"
-Stage 0:  "Street Fighter ストリートファイター (USA)" (width normalized)
-Stage 1:  "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
-Stage 2:  "Street Fighter ストリートファイター (USA)" (no leading numbers)
-Stage 3:  "Street Fighter ストリートファイター (USA)" (no secondary title)
-Stage 4:  "Street Fighter ストリートファイター (USA)" (no trailing article)
-Stage 5:  "Street Fighter ストリートファイター (USA)" (no ampersands)
-Stage 6:  "Street Fighter ストリートファイター" (removed "(USA)")
-Stage 7:  "Street Fighter ストリートファイター" (no edition suffix)
-Stage 8:  "Street Fighter ストリートファイター" (no separators)
-Stage 9:  "Street Fighter ストリートファイター" (no Roman numerals)
-Stage 10: "streetfighter" (ASCII slug - Latin present, CJK stripped)
+Input:     "Street Fighter ストリートファイター (USA)"
+Stage 1:   "Street Fighter ストリートファイター (USA)" (width normalized)
+Stage 2:   "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
+Stage 3:   "Street Fighter ストリートファイター (USA)" (no leading numbers)
+Stage 4:   "Street Fighter ストリートファイター (USA)" (no secondary title)
+Stage 5:   "Street Fighter ストリートファイター (USA)" (no trailing article)
+Stage 6:   "Street Fighter ストリートファイター (USA)" (no symbols/separators to normalize)
+Stage 7:   "Street Fighter ストリートファイター" (removed "(USA)")
+Stage 8:   "Street Fighter ストリートファイター" (no edition suffix)
+Stage 9:   "Street Fighter ストリートファイター" (no Roman numerals)
+Stage 10:  "streetfighterストリートファイター" (Unicode slug - contains both Latin + CJK!)
 ```
 
 ---
 
-## Process 2: Slug Resolution
+## Resolution Workflow
 
-**Purpose:** Match a normalized slug against the media database using progressively more aggressive fuzzy matching strategies.
+**Purpose:** Match user queries against the indexed media database using progressive fallback strategies for robust fuzzy matching.
 
-**Location:** `pkg/zapscript/slugs.go` → `cmdSlug()`
+**Entry Point:** `pkg/zapscript/slugs.go` → `cmdSlug()`
 
 **Input:** System ID + user-provided title (e.g., `"nes/Super Mario Bros"`)
 
 **Output:** Best matching `database.SearchResultWithCursor` (media entry to launch)
 
-**Shared Functions:**
+**Uses:**
 
-- Uses `SlugifyString()` from Process 1
-- Uses `NormalizeToWords()` from Process 1
-- Uses `GenerateMatchInfo()` from `pkg/database/slugs/match.go`
-- Uses `GenerateProgressiveTrimCandidates()` from `pkg/database/slugs/match.go`
-- Uses `ScorePrefixCandidate()` from `pkg/database/slugs/match.go`
-- Uses `ScoreTokenMatch()` from `pkg/database/slugs/match.go`
-- Uses `ScoreTokenSetRatio()` from `pkg/database/slugs/match.go`
-- Uses `findFuzzyMatches()` (Jaro-Winkler) from `pkg/zapscript/slugs.go`
+- **Slug Normalizer**: `SlugifyString()`, `NormalizeToWords()`
+- **Match Utilities**: `GenerateMatchInfo()`, `ScorePrefixCandidate()`, `ScoreTokenMatch()`, `ScoreTokenSetRatio()`, `GenerateProgressiveTrimCandidates()`
+- **Fuzzy Matching**: `findFuzzyMatches()` (Jaro-Winkler similarity)
 
 ### Resolution Strategies
 
 Resolution attempts multiple fallback strategies in order:
 
-#### Strategy 0: Exact Match
+#### Strategy 1: Exact Match
 
 **Database Function:** `SearchMediaBySlug(systemID, slug, tagFilters)`
 
@@ -343,7 +346,7 @@ Direct lookup of the slugified query:
 - Slug: `"supermariobros"` (via `SlugifyString()`)
 - Matches: Database entries with exact slug `"supermariobros"`
 
-#### Strategy 1: Prefix Match with Edition-Aware Ranking
+#### Strategy 2: Prefix Match with Edition-Aware Ranking
 
 **Database Function:** `SearchMediaBySlugPrefix(systemID, slug, tagFilters)`
 
@@ -381,7 +384,7 @@ score -= abs(len(candidate) - len(query))
 return score
 ```
 
-#### Strategy 1.5: Token-Based Similarity Matching (Hybrid Approach)
+#### Strategy 3: Token-Based Similarity Matching (Hybrid Approach)
 
 **Functions:**
 
@@ -440,7 +443,7 @@ Both work well:
 - `"mario super world"` vs `"Super Mario World"`: TokenMatch: 1.00, SetRatio: 0.92
 - `"super mario bros 3 usa"` vs `"Super Mario Bros 3"`: TokenMatch: 0.67, SetRatio: 0.72
 
-#### Strategy 2: Secondary Title-Dropping Main Title Search
+#### Strategy 4: Secondary Title-Dropping Main Title Search
 
 **Function:** `GenerateMatchInfo(title)` in `pkg/database/slugs/match.go`
 
@@ -465,7 +468,7 @@ Detects secondary title delimiters and searches for just the main title:
 - `"Sonic - The Hedgehog"` → main: `"sonic"`, secondary: `"hedgehog"` (article "The" stripped from secondary)
 - `"Sid Meier's Pirates"` → main: `"sidmeiers"` (includes `'s`), secondary: `"pirates"`
 
-#### Strategy 3: Secondary Title-Only Literal Search
+#### Strategy 5: Secondary Title-Only Literal Search
 
 For titles with secondary titles, searches using ONLY the secondary title portion:
 
@@ -485,7 +488,7 @@ For titles with secondary titles, searches using ONLY the secondary title portio
 - Secondary title slug: `"ocarinaoftime"` (extracted by `GenerateMatchInfo()`)
 - Searches for games matching just `"ocarinaoftime"`
 
-#### Strategy 4: Jaro-Winkler Fuzzy Matching
+#### Strategy 6: Jaro-Winkler Fuzzy Matching
 
 **Function:** `findFuzzyMatches()` in `pkg/zapscript/slugs.go`
 
@@ -516,7 +519,7 @@ Handles typos and spelling variations using Jaro-Winkler similarity:
 - `"colour"` vs `"color"` (similarity: 0.967)
 - `"honour"` vs `"honor"` (similarity: 0.967)
 
-#### Strategy 5: Progressive Trim Candidates
+#### Strategy 7: Progressive Trim Candidates
 
 **Function:** `GenerateProgressiveTrimCandidates(title)` in `pkg/database/slugs/match.go`
 
@@ -634,24 +637,25 @@ Function: `selectAlphabeticallyByFilename()`
 
 ---
 
-## Process 3: Filename Indexing
+## Indexing Workflow
 
-**Purpose:** Convert filesystem paths into database entries with slugs and extracted tags for searching.
+**Purpose:** Scan filesystem and populate the media database with normalized, searchable entries.
 
-**Location:** `pkg/database/mediascanner/dbutils.go`
+**Entry Point:** `pkg/database/mediascanner/` → Scanner orchestration
 
-- `AddMediaPath()` (main insertion logic)
-- `GetPathFragments()` (path parsing)
+**Core Functions:**
+- `AddMediaPath()` - Database insertion logic
+- `GetPathFragments()` - Path parsing and caching
 
 **Input:** File path (e.g., `"/roms/nes/Super Mario Bros (USA) [!].nes"`)
 
 **Output:** Database entries (System, MediaTitle, Media, MediaTags)
 
-**Shared Functions:**
+**Uses:**
 
-- Uses `SlugifyString()` from Process 1
-- Uses `getTitleFromFilename()` from Process 4
-- Uses `tags.ParseFilenameToCanonicalTags()` for tag extraction
+- **Slug Normalizer**: `SlugifyString()` for matchable slugs
+- **Title Extractor**: `getTitleFromFilename()` for display names
+- **Tag Parser**: `tags.ParseFilenameToCanonicalTags()` for metadata extraction
 
 ### Indexing Pipeline
 
@@ -798,17 +802,17 @@ TagType (DBID, Type)
 
 ---
 
-## Process 4: Title Extraction
+## Shared Library: Title Extractor
 
-**Purpose:** Extract a clean, human-readable title from a filename for display in the UI and database.
+**Purpose:** Extract clean, human-readable titles from filenames for display purposes. Simple utility used by the indexing workflow.
 
 **Location:** `pkg/database/mediascanner/dbutils.go` → `getTitleFromFilename()`
+
+**Used By:** Indexing Workflow (via `GetPathFragments()`)
 
 **Input:** Filename without extension (e.g., `"Super Mario Bros (USA) [!]"`)
 
 **Output:** Human-readable title (e.g., `"Super Mario Bros"`)
-
-**Usage:** Called only by Process 3 during indexing (via `GetPathFragments()`)
 
 ### Extraction Method
 
@@ -932,74 +936,69 @@ Match Against DB ← [Process 3: Index] ← Filesystem Scan
 
 ---
 
-## Process Responsibilities
+## Component Responsibilities
 
-### Process 1: User Input Slug Normalization
+### Slug Normalizer Library
 
-**Responsibilities:**
+**What It Does:**
 
-- ✅ Width normalization (fullwidth/halfwidth conversion)
-- ✅ Unicode normalization (script-aware: NFKC for Latin, NFC for CJK)
-- ✅ Diacritic removal (Latin only, preserves CJK marks)
-- ✅ Article stripping (leading, trailing, secondary)
-- ✅ Metadata removal (parentheses, brackets)
-- ✅ Edition suffix stripping
-- ✅ Roman numeral conversion
-- ✅ Case normalization (lowercase)
-- ✅ Final slug generation (intelligent: ASCII or Unicode based on content)
+- Width normalization (fullwidth/halfwidth conversion)
+- Unicode normalization (script-aware: NFKC for Latin, NFC for CJK)
+- Diacritic removal (Latin only, preserves CJK marks)
+- Article stripping (leading, trailing, secondary)
+- Symbol and separator normalization
+- Metadata removal (parentheses, brackets)
+- Edition suffix stripping
+- Roman numeral conversion
+- Final slug generation (concatenates Latin + CJK when both present)
 
-**Does NOT:**
+**Used By:** Both Resolution and Indexing workflows
 
-- ❌ Extract tags from filename
-- ❌ Match against database
-- ❌ Store results in database
+### Resolution Workflow
 
-### Process 2: Slug Resolution
+**What It Does:**
 
-**Responsibilities:**
+- Parses `SystemID/GameName` format from user input
+- Normalizes user queries via Slug Normalizer
+- Executes 6-strategy progressive fallback cascade
+- Scores and ranks multiple matches
+- Applies tag filters
+- Selects best result based on user preferences
 
-- ✅ Parse `SystemID/GameName` format
-- ✅ Call Process 1 to normalize user input
-- ✅ Execute progressive fallback strategies (exact, prefix, main title, secondary title, trim)
-- ✅ Score and rank multiple matches
-- ✅ Apply tag filters
-- ✅ Select best result based on user preferences
+**Does NOT:** Modify the database or extract tags from filenames
 
-**Does NOT:**
+### Indexing Workflow
 
-- ❌ Normalize filenames from filesystem
-- ❌ Insert data into database
-- ❌ Extract tags from filenames
+**What It Does:**
 
-### Process 3: Filename Indexing
+- Scans filesystem for media files
+- Extracts human-readable titles via Title Extractor
+- Generates normalized slugs via Slug Normalizer
+- Extracts metadata tags via Tag Parser
+- Inserts/updates database entries (System, MediaTitle, Media, Tags)
+- Handles UNIQUE constraint violations gracefully
+- Caches path fragments for performance
 
-**Responsibilities:**
+**Does NOT:** Match user queries (that's the Resolution Workflow)
 
-- ✅ Scan filesystem for media files
-- ✅ Call Process 4 to extract human-readable titles
-- ✅ Call Process 1 to generate slugs
-- ✅ Extract tags from filenames (region, language, dump info, etc.)
-- ✅ Insert/update database entries (System, MediaTitle, Media, Tags)
-- ✅ Handle UNIQUE constraint violations gracefully
-- ✅ Cache path fragments for performance
+### Title Extractor Library
 
-**Does NOT:**
+**What It Does:**
 
-- ❌ Match user input against database (that's Process 2)
-- ❌ Display titles to users (uses stored MediaTitle.Name)
+- Extracts clean titles from filenames (strips metadata brackets)
+- Provides human-readable strings for UI display
 
-### Process 4: Title Extraction
+**Used By:** Indexing Workflow only
 
-**Responsibilities:**
+### Tag Parser Library
 
-- ✅ Extract clean title from filename (strip metadata)
-- ✅ Provide human-readable string for display
+**What It Does:**
 
-**Does NOT:**
+- Parses No-Intro/TOSEC-style filename metadata
+- Extracts region, language, version, dump status tags
+- Converts to canonical tag format
 
-- ❌ Normalize for matching (that's Process 1)
-- ❌ Extract tags (that's Process 3)
-- ❌ Interact with database directly
+**Used By:** Indexing Workflow only
 
 ---
 
@@ -1007,51 +1006,52 @@ Match Against DB ← [Process 3: Index] ← Filesystem Scan
 
 **Overview:**
 
-As of the previous commit ("token set ratio matching"), the slug system supports **intelligent hybrid slug generation** for CJK (Chinese, Japanese, Korean) titles:
+The slug system supports **concatenated slug generation** for CJK (Chinese, Japanese, Korean) titles, preserving both Latin and CJK portions when both are present.
 
 **Key Features:**
 
 1. **Pure CJK titles preserved**: `"ドラゴンクエスト"` → `"ドラゴンクエスト"` (not stripped)
-2. **Mixed Latin+CJK uses ASCII**: `"Street Fighter ストリート"` → `"streetfighter"` (CJK stripped for Latin matching)
+2. **Mixed Latin+CJK concatenated**: `"Street Fighter ストリート"` → `"streetfighterストリート"` (both parts kept!)
 3. **Width normalization**: Fullwidth ASCII → halfwidth, halfwidth katakana → fullwidth
 4. **Script-aware Unicode normalization**:
    - Latin: NFKC + diacritic removal (traditional behavior)
    - CJK: NFC only (prevents katakana corruption)
-5. **Intelligent slug selection**: Short ASCII slugs (<4 chars) from CJK titles use Unicode version
+5. **Searchable by either part**: Resolution strategies handle both Latin and CJK queries
 
-**Why This Matters:**
+**Why Concatenation?**
 
-- **Before**: Pure CJK titles produced empty slugs, requiring lowercase filename fallback
-- **After**: Pure CJK titles produce meaningful Unicode slugs for proper matching
-- **Compatibility**: Mixed-language titles still produce ASCII slugs for cross-language matching
+When we can't distinguish between dual-language titles (`"Street Fighter ストリート"`) and translation pairs in filenames, concatenating both parts ensures the title remains searchable by EITHER the Latin OR CJK portion. The Resolution Workflow's strategies (prefix matching, fuzzy matching) handle both cases naturally.
 
 **Implementation Details:**
 
 - Width normalization (`width.Fold`) added as Stage 0
 - CJK detection regex: `[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}...]`
 - Script detection determines NFKC (Latin) vs NFC (CJK) normalization path
-- Dual slug generation (ASCII + Unicode) with intelligent selection in Stage 10
+- When CJK detected: use Unicode slug (automatically contains both Latin + CJK)
+- When no CJK: use ASCII-only slug
 
 **Examples:**
 
-| Input                              | Output                     | Reasoning                                   |
-| ---------------------------------- | -------------------------- | ------------------------------------------- |
-| `"ドラゴンクエストVII"`            | `"ドラゴンクエスト7"`      | Pure CJK preserved, Roman numeral converted |
-| `"Street Fighter ストリート"`      | `"streetfighter"`          | Mixed → ASCII preferred for matching        |
-| `"ファイナルファンタジー (Japan)"` | `"ファイナルファンタジー"` | Pure CJK, metadata stripped                 |
-| `"Ａｂｃ123ＤＥＦ"`                | `"abc123def"`              | Fullwidth ASCII normalized to halfwidth     |
-| `"ｳｴｯｼﾞ"`                          | `"ウエッジ"`               | Halfwidth katakana normalized to fullwidth  |
+| Input                              | Output                              | Reasoning                                        |
+| ---------------------------------- | ----------------------------------- | ------------------------------------------------ |
+| `"ドラゴンクエストVII"`            | `"ドラゴンクエスト7"`               | Pure CJK preserved, Roman numeral converted      |
+| `"Street Fighter ストリート"`      | `"streetfighterストリート"`         | Mixed → both parts concatenated, searchable both |
+| `"ファイナルファンタジー (Japan)"` | `"ファイナルファンタジー"`          | Pure CJK, metadata stripped                      |
+| `"Ａｂｃ123ＤＥＦ"`                | `"abc123def"`                       | Fullwidth ASCII normalized to halfwidth          |
+| `"ｳｴｯｼﾞ"`                          | `"ウエッジ"`                        | Halfwidth katakana normalized to fullwidth       |
+| `"Super Mario スーパーマリオ"`     | `"supermarioスーパーマリオ"`        | Searchable by "supermario" OR "スーパーマリオ"  |
 
 ## Implementation Notes
 
 **For Developers:**
 
-1. **Process 1** is the single source of truth for slug normalization - both user input and indexed filenames use the same rules
-2. **Process 2** is the only process that matches against the database - it owns all resolution strategies
-3. **Process 3** is responsible for all database writes during indexing
-4. **Process 4** is a simple extraction utility used only during indexing
-5. Shared functions are in `pkg/database/slugs/` for slug operations and `pkg/database/tags/` for tag operations
-6. All processes use deterministic, idempotent operations where possible
-7. Cache slugified values - slugification is deterministic
-8. Index on slugs for performance in Process 2 queries
-9. Test edge cases: unicode, possessives, Roman numerals, special characters, **CJK text**
+1. **Slug Normalizer** is the single source of truth - both workflows use identical normalization
+2. **Resolution Workflow** owns all database querying and matching strategies
+3. **Indexing Workflow** is responsible for all database writes
+4. **Title Extractor** is a simple utility (5 lines) used only during indexing
+5. Shared libraries are in `pkg/database/slugs/` for slug operations and `pkg/database/tags/` for tag operations
+6. All normalization uses deterministic, idempotent operations
+7. Cache slugified values - slugification is deterministic and expensive (regex-heavy)
+8. Database indexes on slugs are critical for Resolution Workflow performance
+9. Test edge cases: unicode, possessives, Roman numerals, special characters, **CJK text**, **mixed-language titles**
+10. Magic numbers are now named constants - see `pkg/database/slugs/match.go` and `pkg/zapscript/slugs.go`

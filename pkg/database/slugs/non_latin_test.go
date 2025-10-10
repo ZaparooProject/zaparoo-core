@@ -66,17 +66,17 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Mixed Latin and Japanese",
 			input:    "Street Fighter ストリート",
-			expected: "streetfighter",
+			expected: "streetfighterストリート",
 		},
 		{
 			name:     "Mixed Latin and Chinese",
 			input:    "Super Mario 超级马里奥", //nolint:gosmopolitan // Intentionally testing mixed Chinese
-			expected: "supermario",
+			expected: "supermario超级马里奥",
 		},
 		{
 			name:     "Mixed Latin and Korean",
-			input:    "Zelda 젤다의 전설",
-			expected: "zelda",
+			input:    "Zelda 젤다의전설",
+			expected: "zelda젤다의전설",
 		},
 		{
 			name:     "Accented characters normalized",
@@ -131,7 +131,7 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Mixed non-Latin with metadata",
 			input:    "Super Mario 超级 (USA) [!]", //nolint:gosmopolitan // Intentionally testing Chinese with metadata
-			expected: "supermario",
+			expected: "supermario超级",
 		},
 		{
 			name:     "Japanese with Roman numerals",
@@ -156,7 +156,7 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Mixed scripts complex",
 			input:    "The Zelda 传说 ストリート: Link's Awakening", //nolint:gosmopolitan // Testing mixed scripts
-			expected: "zeldalinksawakening",
+			expected: "zelda传说ストリートlinksawakening",
 		},
 	}
 

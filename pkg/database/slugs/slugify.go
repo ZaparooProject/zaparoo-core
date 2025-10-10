@@ -32,24 +32,20 @@ import (
 
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
-// Multi-Stage Normalization Pipeline:
-//   Stage 1: Unicode Normalization (Symbol Removal + NFKC + Diacritic Removal)
-//            - Symbol removal: "Sonic™" → "Sonic", "Game®" → "Game" (So: Other Symbol, Sc: Currency Symbol)
-//            - Compatibility normalization: "１. Game" → "1. Game", "ﬁ" → "fi"
-//            - Diacritic removal: "Pokémon" → "Pokemon", "Café" → "Cafe"
-//   Stage 2: Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
-//   Stage 3: Secondary Title Decomposition - Split on ":", " - ", or "'s "
-//            Strip leading articles ("The", "A", "An") from both main and secondary titles
-//            "Zelda: The Minish Cap" → "Zelda Minish Cap"
-//            "Disney's The Lion King" → "Disney's Lion King"
-//   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
-//   Stage 5: Conjunction Normalization - "&", "+", "'n'" variants → "and"
-//            "Sonic & Knuckles" / "Rock + Roll" / "Rock 'n' Roll" → "...and..."
-//   Stage 6: Metadata Stripping - "(USA) [!]" removed
-//   Stage 7: Edition/Version Suffix Stripping - "Game Version" / "Game Deluxe Edition" → "Game"
-//   Stage 8: Separator Normalization - Remaining separators converted to spaces
-//   Stage 9: Roman Numeral Conversion - "VII" → "7"
-//   Stage 10: Final Slugification - Lowercase, alphanumeric only
+// 10-Stage Normalization Pipeline:
+//   Stage 1:  Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
+//   Stage 2:  Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
+//             "Sonic™" → "Sonic", "Pokémon" → "Pokemon"
+//   Stage 3:  Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
+//   Stage 4:  Secondary Title Decomposition - Split on ":", " - ", or "'s "
+//             Strip leading articles from both main and secondary titles
+//             "Zelda: The Minish Cap" → "Zelda Minish Cap"
+//   Stage 5:  Trailing Article Normalization - "Legend, The" → "Legend"
+//   Stage 6:  Symbol and Separator Normalization - "&"→"and", ":"→space, etc.
+//   Stage 7:  Metadata Stripping - "(USA) [!]" removed
+//   Stage 8:  Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
+//   Stage 9:  Roman Numeral Conversion - "VII" → "7"
+//   Stage 10: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)
@@ -130,25 +126,25 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	// Stage 10: Final Slugification (CJK-aware)
+	// Stage 10: Final Slugification (CJK-Aware)
 	// Create both ASCII-only and Unicode-preserving versions
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
 	unicodeSlug := nonAlphanumKeepCJKRegex.ReplaceAllString(s, "")
 
-	// Intelligent selection: If the ASCII slug is very short (< 4 chars) and
-	// the original string contained CJK characters, the ASCII version is likely
-	// ambiguous and not useful for matching. In this case, prefer the Unicode slug.
+	// For any title containing CJK characters, use the Unicode slug which preserves
+	// both Latin and CJK portions. This enables matching on either part:
+	//   - "ドラゴンクエストIII" → "ドラゴンクエスト3" (pure CJK)
+	//   - "Street Fighter ストリート" → "streetfighterストリート" (mixed: searchable by either part)
+	//   - "Super Mario Bros" → "supermariobros" (pure Latin)
 	//
-	// This handles cases like:
-	//   - "ドラゴンクエストIII" → "ドラゴンクエスト3" (not "3")
-	//   - "Super Mario Bros" → "supermariobros" (not "supermariobrosスーパーマリオ")
-	//   - "1942" → "1942" (game title, kept even though short)
-	if len(asciiSlug) < 4 && cjkRegex.MatchString(s) {
+	// The Unicode slug already contains both parts concatenated, so mixed-language
+	// titles remain searchable by either their Latin OR CJK portions without
+	// requiring schema changes or alternate slug columns.
+	if cjkRegex.MatchString(s) {
 		return strings.TrimSpace(unicodeSlug)
 	}
 
-	// For titles with meaningful Latin components, return the clean ASCII slug
-	// for maximum matching compatibility across different language inputs
+	// For pure Latin titles, return the clean ASCII slug
 	return strings.TrimSpace(asciiSlug)
 }
 
@@ -238,20 +234,29 @@ func stripEditionAndVersionSuffixes(s string) string {
 	return s
 }
 
-// normalizeConjunctions converts various conjunction forms to the word "and".
-// Handles: "&", " + ", " 'n' ", " 'n ", " n' ", " n "
+// normalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
+// Handles conjunctions: "&", " + ", " 'n' " variants → "and"
+// Handles separators: ":", "_", "-" → space
 //
 // Examples:
 //   - "Sonic & Knuckles" → "Sonic and Knuckles"
 //   - "Rock + Roll Racing" → "Rock and Roll Racing"
-//   - "Rock 'n' Roll" → "Rock and Roll"
-func normalizeConjunctions(s string) string {
+//   - "Zelda:Link" → "Zelda Link"
+//   - "Super_Mario_Bros" → "Super Mario Bros"
+func normalizeSymbolsAndSeparators(s string) string {
+	// Simple symbol replacements (faster than regex)
 	s = strings.ReplaceAll(s, "&", " and ")
+
+	// Regex-based replacements for context-sensitive patterns
 	s = plusRegex.ReplaceAllString(s, " and ")
 	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
 	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
 	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
 	s = nAloneRegex.ReplaceAllString(s, " and ")
+
+	// Separator normalization
+	s = separatorsRegex.ReplaceAllString(s, " ")
+
 	return s
 }
 
@@ -271,15 +276,6 @@ func convertRomanNumerals(s string) string {
 	}
 
 	return strings.ToLower(upperS)
-}
-
-// normalizeSeparators converts various separator characters (colons, underscores, hyphens) to spaces.
-//
-// Examples:
-//   - "Zelda:Link" → "Zelda Link"
-//   - "Super_Mario_Bros" → "Super Mario Bros"
-func normalizeSeparators(s string) string {
-	return separatorsRegex.ReplaceAllString(s, " ")
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
@@ -319,21 +315,20 @@ func NormalizeToWords(input string) []string {
 	return strings.Fields(s)
 }
 
-// normalizeInternal performs Stages 0-9 of the slug normalization pipeline.
+// normalizeInternal performs Stages 1-9 of the slug normalization pipeline.
 // This function is shared by both SlugifyString and NormalizeToWords to eliminate
 // code duplication and ensure consistent normalization behavior.
 //
 // Stages performed:
 //
-//	Stage 0: Width Normalization - Converts fullwidth characters to halfwidth
-//	Stage 1: Unicode Normalization (Symbol Removal + NFKC + Diacritic Removal)
-//	Stage 2: Leading Number Prefix Stripping
-//	Stage 3: Secondary Title Decomposition and Article Stripping
-//	Stage 4: Trailing Article Normalization
-//	Stage 5: Conjunction Normalization
-//	Stage 6: Metadata Stripping
-//	Stage 7: Edition/Version Suffix Stripping
-//	Stage 8: Separator Normalization
+//	Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
+//	Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
+//	Stage 3: Leading Number Prefix Stripping
+//	Stage 4: Secondary Title Decomposition and Article Stripping
+//	Stage 5: Trailing Article Normalization
+//	Stage 6: Symbol and Separator Normalization
+//	Stage 7: Metadata Stripping
+//	Stage 8: Edition/Version Suffix Stripping
 //	Stage 9: Roman Numeral Conversion
 //
 // Returns the normalized string with preserved spaces and case changes.
@@ -344,7 +339,7 @@ func normalizeInternal(input string) string {
 		return ""
 	}
 
-	// Stage 0: Width normalization
+	// Stage 1: Width Normalization
 	// For CJK characters (katakana/hangul), normalize halfwidth → fullwidth for consistency
 	// For ASCII characters, normalize fullwidth → halfwidth for Latin matching
 	// The width.Fold transformer does exactly this: narrows Latin, widens CJK
@@ -352,7 +347,7 @@ func normalizeInternal(input string) string {
 		s = normalized
 	}
 
-	// Stage 1: Unicode Normalization
+	// Stage 2: Unicode Normalization
 	// Remove symbols (trademark, copyright, currency)
 	symbolPredicate := runes.Predicate(func(r rune) bool {
 		return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
@@ -383,7 +378,7 @@ func normalizeInternal(input string) string {
 		s = norm.NFC.String(s)
 	}
 
-	// Stages 2-9: Text transformations
+	// Stages 3-9: Text transformations
 	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 
@@ -394,14 +389,12 @@ func normalizeInternal(input string) string {
 		s = strings.TrimSpace(s)
 	}
 
-	s = normalizeConjunctions(s)
+	s = normalizeSymbolsAndSeparators(s)
 
 	s = stripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
 	s = stripEditionAndVersionSuffixes(s)
-
-	s = normalizeSeparators(s)
 
 	s = convertRomanNumerals(s)
 
