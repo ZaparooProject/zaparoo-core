@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -36,58 +35,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// PathFragmentKey represents a unique key for caching path fragments
 type PathFragmentKey struct {
 	Path         string
 	FilenameTags bool
-}
-
-// pathFragmentCache provides a simple LRU cache for parsed path fragments
-// to avoid redundant regex operations and string processing
-type pathFragmentCache struct {
-	cache   map[PathFragmentKey]*MediaPathFragments
-	keys    []PathFragmentKey
-	maxSize int
-	mu      sync.RWMutex
-}
-
-// globalPathFragmentCache is a package-level cache for path fragments
-var globalPathFragmentCache = &pathFragmentCache{
-	cache:   make(map[PathFragmentKey]*MediaPathFragments, 5000),
-	keys:    make([]PathFragmentKey, 0, 5000),
-	maxSize: 5000,
-}
-
-// get retrieves a cached path fragment if it exists
-func (c *pathFragmentCache) get(key PathFragmentKey) (MediaPathFragments, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	frag, ok := c.cache[key]
-	if !ok {
-		return MediaPathFragments{}, false
-	}
-	return *frag, true
-}
-
-// put stores a path fragment in the cache, evicting oldest entry if cache is full
-func (c *pathFragmentCache) put(key PathFragmentKey, frag *MediaPathFragments) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Check if already exists
-	if _, exists := c.cache[key]; exists {
-		return
-	}
-
-	// Evict oldest if at capacity
-	if len(c.keys) >= c.maxSize {
-		oldest := c.keys[0]
-		delete(c.cache, oldest)
-		c.keys = c.keys[1:]
-	}
-
-	c.cache[key] = frag
-	c.keys = append(c.keys, key)
 }
 
 // We can't batch effectively without a sense of relationships
@@ -834,18 +784,6 @@ func PopulateScanStateForSelectiveIndexing(
 }
 
 func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFragments {
-	filenameTagsEnabled := cfg == nil || cfg.FilenameTags()
-	cacheKey := PathFragmentKey{
-		Path:         path,
-		FilenameTags: filenameTagsEnabled,
-	}
-
-	// Check cache first
-	if frag, ok := globalPathFragmentCache.get(cacheKey); ok {
-		return frag
-	}
-
-	// Cache miss - compute fragments
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
@@ -887,9 +825,6 @@ func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFr
 	} else {
 		f.Tags = []string{}
 	}
-
-	// Store in cache for future use
-	globalPathFragmentCache.put(cacheKey, &f)
 
 	return f
 }

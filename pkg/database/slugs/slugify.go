@@ -58,16 +58,9 @@ var (
 		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
 			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
 	)
-	versionSuffixRegex    = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	leadingNumPrefixRegex = regexp.MustCompile(`^\d+[.\s\-]+`)
-	parenthesesRegex      = regexp.MustCompile(`\s*\([^)]*\)`)
-	bracketsRegex         = regexp.MustCompile(`\s*\[[^\]]*\]`)
-	bracesRegex           = regexp.MustCompile(`\s*\{[^}]*\}`)
-	angleBracketsRegex    = regexp.MustCompile(`\s*<[^>]*>`)
-	separatorsRegex       = regexp.MustCompile(`[:_\-]+`)
-	nonAlphanumRegex      = regexp.MustCompile(`[^a-z0-9]+`)
-	cjkRegex              = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}]`)
-
+	versionSuffixRegex          = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	leadingNumPrefixRegex       = regexp.MustCompile(`^\d+[.\s\-]+`)
+	nonAlphanumRegex            = regexp.MustCompile(`[^a-z0-9]+`)
 	nonAlphanumKeepUnicodeRegex = regexp.MustCompile(
 		`[^a-z0-9` +
 			`\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}` +
@@ -81,14 +74,9 @@ var (
 			`\p{Ethiopic}` +
 			`]+`,
 	)
-	trailingArticleRegex  = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
-	plusRegex             = regexp.MustCompile(`\s+\+\s+`)
-	nWithApostrophesRegex = regexp.MustCompile(`\s+'n'\s+`)
-	nWithLeftApostrophe   = regexp.MustCompile(`\s+'n\s+`)
-	nWithRightApostrophe  = regexp.MustCompile(`\s+n'\s+`)
-	nAloneRegex           = regexp.MustCompile(`\s+n\s+`)
-	romanNumeralI         = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralOrder     = []string{
+	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+	romanNumeralI        = regexp.MustCompile(`\sI($|[\s:_\-])`)
+	romanNumeralOrder    = []string{
 		"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII",
 		"XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II",
 	}
@@ -243,12 +231,49 @@ func StripLeadingArticle(s string) string {
 // Examples:
 //   - "Game (USA) [!]" → "Game"
 //   - "Title {Europe} <Beta>" → "Title"
+//   - "Game ((nested)) [test]" → "Game"
 func StripMetadataBrackets(s string) string {
-	s = parenthesesRegex.ReplaceAllString(s, "")
-	s = bracketsRegex.ReplaceAllString(s, "")
-	s = bracesRegex.ReplaceAllString(s, "")
-	s = angleBracketsRegex.ReplaceAllString(s, "")
-	return s
+	var result strings.Builder
+	result.Grow(len(s))
+
+	// Track nesting depth for each bracket type: 0=(), 1=[], 2={}, 3=<>
+	depth := [4]int{}
+
+	for _, r := range s {
+		switch r {
+		case '(':
+			depth[0]++
+		case ')':
+			if depth[0] > 0 {
+				depth[0]--
+			}
+		case '[':
+			depth[1]++
+		case ']':
+			if depth[1] > 0 {
+				depth[1]--
+			}
+		case '{':
+			depth[2]++
+		case '}':
+			if depth[2] > 0 {
+				depth[2]--
+			}
+		case '<':
+			depth[3]++
+		case '>':
+			if depth[3] > 0 {
+				depth[3]--
+			}
+		default:
+			// Only write runes when we're not inside any brackets
+			if depth[0] == 0 && depth[1] == 0 && depth[2] == 0 && depth[3] == 0 {
+				result.WriteRune(r)
+			}
+		}
+	}
+
+	return strings.TrimSpace(result.String())
 }
 
 // StripEditionAndVersionSuffixes removes edition and version suffixes from game titles.
@@ -278,20 +303,21 @@ func StripEditionAndVersionSuffixes(s string) string {
 //
 // This is an internal function used by the normalization pipeline.
 func normalizeSymbolsAndSeparators(s string) string {
-	// Simple symbol replacements (faster than regex)
 	s = strings.ReplaceAll(s, "&", " and ")
+	s = strings.ReplaceAll(s, " + ", " and ")
+	s = strings.ReplaceAll(s, " 'n' ", " and ")
+	s = strings.ReplaceAll(s, " 'n ", " and ")
+	s = strings.ReplaceAll(s, " n' ", " and ")
+	s = strings.ReplaceAll(s, " n ", " and ")
 
-	// Regex-based replacements for context-sensitive patterns
-	s = plusRegex.ReplaceAllString(s, " and ")
-	s = nWithApostrophesRegex.ReplaceAllString(s, " and ")
-	s = nWithLeftApostrophe.ReplaceAllString(s, " and ")
-	s = nWithRightApostrophe.ReplaceAllString(s, " and ")
-	s = nAloneRegex.ReplaceAllString(s, " and ")
-
-	// Separator normalization
-	s = separatorsRegex.ReplaceAllString(s, " ")
-
-	return s
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ':', '_', '-':
+			return ' '
+		default:
+			return r
+		}
+	}, s)
 }
 
 // convertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.

@@ -19,8 +19,6 @@
 
 package slugs
 
-import "regexp"
-
 // ScriptType represents different writing systems supported by the slug system.
 // Each script type may require different normalization strategies.
 type ScriptType int
@@ -40,76 +38,94 @@ const (
 	ScriptAmharic                    // Amharic/Ethiopic
 )
 
-// Script detection regexes
-var (
-	// CJK: Chinese, Japanese, Korean (already defined in slugify.go)
-	// cjkRegex = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}]`)
-
-	// Cyrillic script (Russian, Ukrainian, Bulgarian, Serbian, etc.)
-	cyrillicRegex = regexp.MustCompile(`[\p{Cyrillic}]`)
-
-	// Greek script
-	greekRegex = regexp.MustCompile(`[\p{Greek}]`)
-
-	indicRegex = regexp.MustCompile(
-		`[\p{Devanagari}\p{Bengali}\p{Tamil}\p{Telugu}\p{Kannada}\p{Malayalam}` +
-			`\p{Gurmukhi}\p{Gujarati}\p{Oriya}\p{Sinhala}]`,
-	)
-
-	// Arabic script (includes Urdu, Persian/Farsi)
-	arabicRegex = regexp.MustCompile(`[\p{Arabic}]`)
-
-	// Hebrew script
-	hebrewRegex = regexp.MustCompile(`[\p{Hebrew}]`)
-
-	// Southeast Asian scripts (no word boundaries, require n-gram matching)
-	thaiRegex    = regexp.MustCompile(`[\p{Thai}]`)
-	burmeseRegex = regexp.MustCompile(`[\p{Myanmar}]`)
-	khmerRegex   = regexp.MustCompile(`[\p{Khmer}]`)
-	laoRegex     = regexp.MustCompile(`[\p{Lao}]`)
-
-	// Amharic/Ethiopic script
-	amharicRegex = regexp.MustCompile(`[\p{Ethiopic}]`)
-)
-
 // detectScript identifies the primary writing system used in a string.
-// Detection uses short-circuit evaluation in order of prevalence to optimize performance.
 // Returns the first matching script type, or ScriptLatin as the default.
 func detectScript(s string) ScriptType {
-	// Check in order of global prevalence for performance optimization
-	if cjkRegex.MatchString(s) {
-		return ScriptCJK
+	// Fast path: Check if pure ASCII
+	hasNonASCII := false
+	for _, r := range s {
+		if r > 127 {
+			hasNonASCII = true
+			break
+		}
 	}
-	if cyrillicRegex.MatchString(s) {
-		return ScriptCyrillic
+	if !hasNonASCII {
+		return ScriptLatin
 	}
-	if indicRegex.MatchString(s) {
-		return ScriptIndic
+
+	// Single pass through string checking Unicode ranges
+	// Ordered by global prevalence for early exit
+	for _, r := range s {
+		// CJK Detection
+		if (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
+			(r >= 0x3400 && r <= 0x4DBF) || // CJK Extension A
+			(r >= 0x3040 && r <= 0x309F) || // Hiragana
+			(r >= 0x30A0 && r <= 0x30FF) || // Katakana
+			(r >= 0xAC00 && r <= 0xD7A3) || // Hangul
+			r == 0x30FC || r == 0x30FB || r == 0x3005 {
+			return ScriptCJK
+		}
+
+		// Cyrillic
+		if r >= 0x0400 && r <= 0x04FF {
+			return ScriptCyrillic
+		}
+
+		// Indic scripts
+		if (r >= 0x0900 && r <= 0x097F) || // Devanagari
+			(r >= 0x0980 && r <= 0x09FF) || // Bengali
+			(r >= 0x0B80 && r <= 0x0BFF) || // Tamil
+			(r >= 0x0C00 && r <= 0x0C7F) || // Telugu
+			(r >= 0x0C80 && r <= 0x0CFF) || // Kannada
+			(r >= 0x0D00 && r <= 0x0D7F) || // Malayalam
+			(r >= 0x0A00 && r <= 0x0A7F) || // Gurmukhi
+			(r >= 0x0A80 && r <= 0x0AFF) || // Gujarati
+			(r >= 0x0B00 && r <= 0x0B7F) || // Oriya
+			(r >= 0x0D80 && r <= 0x0DFF) { // Sinhala
+			return ScriptIndic
+		}
+
+		// Arabic
+		if r >= 0x0600 && r <= 0x06FF {
+			return ScriptArabic
+		}
+
+		// Thai
+		if r >= 0x0E00 && r <= 0x0E7F {
+			return ScriptThai
+		}
+
+		// Greek
+		if r >= 0x0370 && r <= 0x03FF {
+			return ScriptGreek
+		}
+
+		// Hebrew
+		if r >= 0x0590 && r <= 0x05FF {
+			return ScriptHebrew
+		}
+
+		// Burmese/Myanmar
+		if r >= 0x1000 && r <= 0x109F {
+			return ScriptBurmese
+		}
+
+		// Khmer
+		if r >= 0x1780 && r <= 0x17FF {
+			return ScriptKhmer
+		}
+
+		// Lao
+		if r >= 0x0E80 && r <= 0x0EFF {
+			return ScriptLao
+		}
+
+		// Ethiopic/Amharic
+		if r >= 0x1200 && r <= 0x137F {
+			return ScriptAmharic
+		}
 	}
-	if arabicRegex.MatchString(s) {
-		return ScriptArabic
-	}
-	if thaiRegex.MatchString(s) {
-		return ScriptThai
-	}
-	if greekRegex.MatchString(s) {
-		return ScriptGreek
-	}
-	if hebrewRegex.MatchString(s) {
-		return ScriptHebrew
-	}
-	if burmeseRegex.MatchString(s) {
-		return ScriptBurmese
-	}
-	if khmerRegex.MatchString(s) {
-		return ScriptKhmer
-	}
-	if laoRegex.MatchString(s) {
-		return ScriptLao
-	}
-	if amharicRegex.MatchString(s) {
-		return ScriptAmharic
-	}
+
 	return ScriptLatin
 }
 
