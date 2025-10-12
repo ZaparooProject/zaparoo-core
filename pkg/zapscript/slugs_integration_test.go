@@ -41,7 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testDataDir = "testdata"
+const testDataDir = "testdata/inputs"
 
 type launchCapture struct {
 	Path string

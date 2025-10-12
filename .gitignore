@@ -41,5 +41,9 @@ tmp/
 worktrees/
 
 /pkg/zapscript/testdata/*.db
-/pkg/zapscript/testdata/*.txt
-*.dat
+/pkg/zapscript/testdata/inputs/*.txt
+/pkg/zapscript/testdata/**/*.bat
+/pkg/zapscript/testdata/**/*.dat
+/pkg/zapscript/testdata/**/*.cue
+/pkg/zapscript/testdata/**/*.dvd
+/pkg/zapscript/testdata/**/*.gdi
