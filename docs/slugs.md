@@ -9,6 +9,7 @@ The system is built around **two primary workflows** supported by shared normali
 ### Primary Workflows
 
 1. **Indexing Workflow** - Scans filesystem and populates the media database
+
    - Parses filenames to extract titles and metadata tags
    - Generates normalized slugs for matching
    - Stores structured data for fast lookups
@@ -21,7 +22,7 @@ The system is built around **two primary workflows** supported by shared normali
 ### Shared Libraries
 
 - **Slug Normalizer** (`pkg/database/slugs/`) - Canonical slug generation and normalization
-  - `slugify.go` - Core 10-stage normalization pipeline
+  - `slugify.go` - Core 9-stage normalization pipeline
   - `scripts.go` - Script detection (CJK, Cyrillic, Arabic, etc.)
   - `normalization.go` - Script-specific normalization rules
 - **Matcher** (`pkg/database/matcher/`) - Resolution-specific matching algorithms
@@ -37,6 +38,7 @@ The system is built around **two primary workflows** supported by shared normali
 **Location:** `pkg/database/slugs/slugify.go` → `SlugifyString()`
 
 **Used By:**
+
 - Resolution Workflow: Normalizes user queries
 - Indexing Workflow: Normalizes filenames for database storage
 
@@ -92,17 +94,7 @@ Unicode normalization ensures all subsequent regex patterns and string operation
 - Other compatibility chars: `"①"` → `"1"`
 - CJK preserved: `"ドラゴンクエスト"` → `"ドラゴンクエスト"`
 
-#### Stage 3: Leading Number Prefix Stripping
-
-**Pattern:** `^\d+[.\s\-]+`
-
-Removes common list numbering prefixes:
-
-- `"1. Game Title"` → `"Game Title"`
-- `"01 - Game Title"` → `"Game Title"`
-- `"42. Answer"` → `"Answer"`
-
-#### Stage 4: Secondary Title Decomposition and Article Stripping
+#### Stage 3: Secondary Title Decomposition and Article Stripping
 
 **Secondary Title Delimiters (Priority Order):**
 
@@ -131,7 +123,7 @@ Removes common list numbering prefixes:
 - `"Someone's Something: Time to Die"` → `"Someone's Something Time to Die"` (`:` takes priority over `'s `)
 - `"Player's Choice - Final Battle"` → `"Player's Choice Final Battle"` (`-` takes priority over `'s `)
 
-#### Stage 5: Trailing Article Normalization
+#### Stage 4: Trailing Article Normalization
 
 **Pattern:** `,\s*the\s*($|[\s:\-\(\[])` (case-insensitive)
 
@@ -140,11 +132,12 @@ Removes ", The" from the end:
 - `"Legend, The"` → `"Legend"`
 - `"Mega Man, The"` → `"Mega Man"`
 
-#### Stage 6: Symbol and Separator Normalization
+#### Stage 5: Symbol and Separator Normalization
 
 **Patterns (via `normalizeSymbolsAndSeparators()`):**
 
 Conjunctions:
+
 - `&` → `and`
 - `\s+\+\s+` → `and` (plus with spaces)
 - `\s+'n'\s+` → `and` (n with both apostrophes)
@@ -153,6 +146,7 @@ Conjunctions:
 - `\s+n\s+` → `and` (standalone n)
 
 Separators:
+
 - `[:_\-]+` → ` ` (space)
 
 Converts conjunctions and separators in one pass:
@@ -163,7 +157,7 @@ Converts conjunctions and separators in one pass:
 - `"Zelda:Link"` → `"Zelda Link"`
 - `"Super_Mario_Bros"` → `"Super Mario Bros"`
 
-#### Stage 7: Metadata Stripping
+#### Stage 6: Metadata Stripping
 
 **Patterns (via `stripMetadataBrackets()`):**
 
@@ -180,23 +174,34 @@ Removes region codes, tags, and other metadata from all bracket types:
 - `"Sonic <Beta>"` → `"Sonic"`
 - `"Title (Rev 1) [b] {En} <Proto>"` → `"Title"`
 
-#### Stage 8: Edition/Version Suffix Stripping
+#### Stage 7: Edition/Version Suffix Stripping
 
 **Patterns (via `stripEditionAndVersionSuffixes()`):**
 
-- Edition suffix: `(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`
+- Edition suffix: `(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)$`
 - Version suffix: `\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`
 
-Removes common edition and version suffixes:
+Removes standalone edition/version words and version numbers. **Does NOT strip semantic descriptors** like "Special", "Ultimate", "Remastered", "Deluxe", or "Definitive" - these represent different products that users may want to target specifically.
 
-- `"Game Special Edition"` → `"Game"`
-- `"Title Deluxe Edition"` → `"Title"`
-- `"Game Version"` → `"Game"`
-- `"Title v1.2"` → `"Title"`
-- `"Game v1.2.3"` → `"Game"`
-- `"Final Fantasy vVII"` → `"Final Fantasy"`
+**Supported Languages:**
 
-#### Stage 9: Roman Numeral Conversion
+- English: version, edition
+- German: ausgabe (edition)
+- Italian: versione, edizione
+- Portuguese: versao, edicao (after diacritic normalization in Stage 2)
+- Japanese: バージョン (version), エディション (edition), ヴァージョン (version alt.)
+
+**Examples:**
+
+- `"Pokemon Red Version"` → `"Pokemon Red"` (standalone word stripped)
+- `"Game Edition"` → `"Game"` (standalone word stripped)
+- `"Title v1.2"` → `"Title"` (version number stripped)
+- `"Spiel Ausgabe"` (German) → `"Spiel"` (German edition word stripped)
+- `"Game Special Edition"` → `"Game Special"` (Special kept, Edition stripped)
+- `"Final Fantasy vVII"` → `"Final Fantasy"` (version number stripped)
+- `"Street Fighter II Champion Edition"` → `"Street Fighter 2 Champion"` (Edition stripped, Roman numeral converted in Stage 8)
+
+#### Stage 8: Roman Numeral Conversion
 
 **Patterns (via `convertRomanNumerals()`):**
 
@@ -230,7 +235,7 @@ Converts Roman numerals (II-XIX) to Arabic numbers:
 
 **Note:** Order matters - longer numerals must be matched first to avoid partial replacements. X is intentionally excluded to preserve game titles like "Mega Man X" and "MegaRace X".
 
-#### Stage 10: Final Slugification (CJK-Aware)
+#### Stage 9: Final Slugification (CJK-Aware)
 
 **Patterns:**
 
@@ -254,7 +259,8 @@ Converts Roman numerals (II-XIX) to Arabic numbers:
 - Mixed Latin+CJK: `"Street Fighter ストリート"` → `"streetfighterストリート"` (both parts preserved!)
 - Pure Latin: `"The Legend of Zelda"` → `"legendofzelda"` (standard behavior)
 
-**Result:** 
+**Result:**
+
 - Pure Latin titles: Clean ASCII slugs
 - Any title with CJK: Concatenated slug containing both Latin and CJK portions
 - User can search by either part and matching strategies handle both cases
@@ -274,49 +280,46 @@ Running slugification multiple times produces the same result. This holds true f
 #### Example 1: Latin Title with Metadata
 
 ```
-Input:     "The Legend of Zelda: The Minish Cap (USA) [!]"
-Stage 1:   "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
-Stage 2:   "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
-Stage 3:   "The Legend of Zelda: The Minish Cap (USA) [!]" (no leading numbers)
-Stage 4:   "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
-Stage 5:   "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
-Stage 6:   "Legend of Zelda Minish Cap (USA) [!]" (no symbols/separators to normalize)
-Stage 7:   "Legend of Zelda Minish Cap" (removed "(USA) [!]")
-Stage 8:   "Legend of Zelda Minish Cap" (no edition suffix)
-Stage 9:   "Legend of Zelda Minish Cap" (no Roman numerals)
-Stage 10:  "legendofzeldaminishcap" (ASCII slug - no CJK detected)
+Input:    "The Legend of Zelda: The Minish Cap (USA) [!]"
+Stage 1:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
+Stage 2:  "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
+Stage 3:  "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
+Stage 4:  "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
+Stage 5:  "Legend of Zelda Minish Cap (USA) [!]" (no symbols/separators to normalize)
+Stage 6:  "Legend of Zelda Minish Cap" (removed "(USA) [!]")
+Stage 7:  "Legend of Zelda Minish Cap" (no edition suffix)
+Stage 8:  "Legend of Zelda Minish Cap" (no Roman numerals)
+Stage 9:  "legendofzeldaminishcap" (ASCII slug - no CJK detected)
 ```
 
 #### Example 2: Pure CJK Title
 
 ```
-Input:     "ドラゴンクエストVII (Japan)"
-Stage 1:   "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
-Stage 2:   "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
-Stage 3:   "ドラゴンクエストVII (Japan)" (no leading numbers)
-Stage 4:   "ドラゴンクエストVII (Japan)" (no secondary title)
-Stage 5:   "ドラゴンクエストVII (Japan)" (no trailing article)
-Stage 6:   "ドラゴンクエストVII (Japan)" (no symbols/separators to normalize)
-Stage 7:   "ドラゴンクエストVII" (removed "(Japan)")
-Stage 8:   "ドラゴンクエストVII" (no edition suffix)
-Stage 9:   "ドラゴンクエスト7" (VII → 7)
-Stage 10:  "ドラゴンクエスト7" (Unicode slug - CJK detected)
+Input:    "ドラゴンクエストVII (Japan)"
+Stage 1:  "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
+Stage 2:  "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
+Stage 3:  "ドラゴンクエストVII (Japan)" (no secondary title)
+Stage 4:  "ドラゴンクエストVII (Japan)" (no trailing article)
+Stage 5:  "ドラゴンクエストVII (Japan)" (no symbols/separators to normalize)
+Stage 6:  "ドラゴンクエストVII" (removed "(Japan)")
+Stage 7:  "ドラゴンクエストVII" (no edition suffix)
+Stage 8:  "ドラゴンクエスト7" (VII → 7)
+Stage 9:  "ドラゴンクエスト7" (Unicode slug - CJK detected)
 ```
 
 #### Example 3: Mixed Latin + CJK Title
 
 ```
-Input:     "Street Fighter ストリートファイター (USA)"
-Stage 1:   "Street Fighter ストリートファイター (USA)" (width normalized)
-Stage 2:   "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
-Stage 3:   "Street Fighter ストリートファイター (USA)" (no leading numbers)
-Stage 4:   "Street Fighter ストリートファイター (USA)" (no secondary title)
-Stage 5:   "Street Fighter ストリートファイター (USA)" (no trailing article)
-Stage 6:   "Street Fighter ストリートファイター (USA)" (no symbols/separators to normalize)
-Stage 7:   "Street Fighter ストリートファイター" (removed "(USA)")
-Stage 8:   "Street Fighter ストリートファイター" (no edition suffix)
-Stage 9:   "Street Fighter ストリートファイター" (no Roman numerals)
-Stage 10:  "streetfighterストリートファイター" (Unicode slug - contains both Latin + CJK!)
+Input:    "Street Fighter ストリートファイター (USA)"
+Stage 1:  "Street Fighter ストリートファイター (USA)" (width normalized)
+Stage 2:  "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
+Stage 3:  "Street Fighter ストリートファイター (USA)" (no secondary title)
+Stage 4:  "Street Fighter ストリートファイター (USA)" (no trailing article)
+Stage 5:  "Street Fighter ストリートファイター (USA)" (no symbols/separators to normalize)
+Stage 6:  "Street Fighter ストリートファイター" (removed "(USA)")
+Stage 7:  "Street Fighter ストリートファイター" (no edition suffix)
+Stage 8:  "Street Fighter ストリートファイター" (no Roman numerals)
+Stage 9:  "streetfighterストリートファイター" (Unicode slug - contains both Latin + CJK!)
 ```
 
 ---
@@ -649,6 +652,7 @@ Function: `selectAlphabeticallyByFilename()`
 **Entry Point:** `pkg/database/mediascanner/` → Scanner orchestration
 
 **Core Functions:**
+
 - `AddMediaPath()` - Database insertion logic
 - `GetPathFragments()` - Path parsing and caching
 
@@ -664,40 +668,136 @@ Function: `selectAlphabeticallyByFilename()`
 
 ### Indexing Pipeline
 
+#### Pre-Processing Step: Contextual Leading Number Detection
+
+**Location:** `pkg/database/mediascanner/mediascanner.go` → `detectNumberingPattern()`
+
+**Purpose:** Distinguish between intentional list numbering (e.g., "1. Game.zip", "2. Game.zip") and legitimate title numbers (e.g., "1942.zip", "007.zip") by analyzing the entire directory context.
+
+**Detection Algorithm:**
+
+```go
+func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool
+```
+
+**Parameters:**
+
+- `files`: All files in a directory
+- `threshold`: Minimum ratio of matching files (default: 0.5 = 50%)
+- `minFiles`: Minimum file count to apply heuristic (default: 5)
+
+**Pattern:** `^\d{1,3}[.\s\-]+` (matches "1. ", "01 - ", "42. ", etc.)
+
+**Logic:**
+
+1. Count files matching the list numbering pattern
+2. Calculate ratio: `matching_files / total_files`
+3. Apply stripping if: `ratio > threshold AND total_files >= minFiles`
+
+**Why per-directory?** This prevents false positives where a few legitimately numbered games (like "1942", "007") would trigger stripping for the entire directory.
+
+**Examples:**
+
+Directory with list numbering (stripping enabled):
+
+```
+1. Super Mario Bros.nes
+2. Legend of Zelda.nes
+3. Metroid.nes
+4. Mega Man.nes
+5. Castlevania.nes
+→ 5/5 files match (100% > 50%) → stripLeadingNumbers = true
+```
+
+Directory with legitimate numbers (stripping disabled):
+
+```
+1942.nes
+1943.nes
+Galaga.nes
+Pac-Man.nes
+Donkey Kong.nes
+→ 2/5 files match (40% < 50%) → stripLeadingNumbers = false
+```
+
+Mixed directory (stripping disabled - not enough files):
+
+```
+1. Game A.nes
+2. Game B.nes
+Game C.nes
+→ 2/3 files match (67% > 50%) BUT total < 5 → stripLeadingNumbers = false
+```
+
+**Application:**
+
+The `stripLeadingNumbers` boolean is then passed to:
+
+1. `ParseTitleFromFilename(filename, stripLeadingNumbers)` → Affects display title extraction
+2. Indirectly affects slugification since `SlugifyString()` receives the pre-processed title
+
+**Cache Key:** The `stripLeadingNumbers` flag is part of the `PathFragmentKey` cache key: `{Path, FilenameTags, StripLeadingNumbers}`
+
 #### Step 1: Extract Path Fragments (`GetPathFragments()`)
 
 **Process:**
 
-1. **Check cache**: PathFragments are cached with key `(path, filenameTagsEnabled)`
+1. **Check cache**: PathFragments are cached with key `(path, filenameTagsEnabled, stripLeadingNumbers)`
 2. **Clean path**: `filepath.Clean(path)` unless URI scheme detected (e.g., `kodi://`)
 3. **Extract extension**: `filepath.Ext()` → lowercase, skip if contains spaces or is URI
 4. **Extract filename**: Remove extension from base path using `strings.CutSuffix()`
-5. **Extract title**: Call `getTitleFromFilename()` (Process 4)
-6. **Slugify title**: Call `slugs.SlugifyString(title)` (Process 1)
+5. **Extract title**: Call `ParseTitleFromFilename(filename, stripLeadingNumbers)` → applies contextual leading number stripping if enabled
+6. **Slugify title**: Call `slugs.SlugifyString(title)` → receives pre-processed title from Step 5
 7. **Handle CJK titles**: If slug is empty (legacy behavior), use lowercase filename as fallback. With CJK support, pure CJK slugs are now preserved.
 8. **Extract tags**: Call `getTagsFromFileName()` → `tags.ParseFilenameToCanonicalTags()` (if enabled in config)
 9. **Cache result**: Store PathFragments for future lookups
 
-**Example 1: Latin Title**
+**Example 1: Latin Title (no list numbering detected)**
 
 ```
-Path:     "/roms/nes/Super Mario Bros (USA) [!].nes"
-FileName: "Super Mario Bros (USA) [!]"
-Title:    "Super Mario Bros"
-Slug:     "supermariobros"
-Ext:      ".nes"
-Tags:     ["region:usa", "dumpinfo:verified"]
+Path:              "/roms/nes/Super Mario Bros (USA) [!].nes"
+FileName:          "Super Mario Bros (USA) [!]"
+StripLeadingNums:  false
+Title:             "Super Mario Bros"
+Slug:              "supermariobros"
+Ext:               ".nes"
+Tags:              ["region:usa", "dumpinfo:verified"]
 ```
 
-**Example 2: CJK Title**
+**Example 2: Title with list numbering (detected in directory context)**
 
 ```
-Path:     "/roms/sfc/ドラゴンクエストVII (Japan).sfc"
-FileName: "ドラゴンクエストVII (Japan)"
-Title:    "ドラゴンクエストVII"
-Slug:     "ドラゴンクエスト7"
-Ext:      ".sfc"
-Tags:     ["region:jp"]
+Path:              "/roms/nes/1. Super Mario Bros (USA).nes"
+FileName:          "1. Super Mario Bros (USA)"
+StripLeadingNums:  true (detected at directory level)
+Title:             "Super Mario Bros" (leading "1. " stripped)
+Slug:              "supermariobros"
+Ext:               ".nes"
+Tags:              ["region:usa"]
+```
+
+**Example 3: Legitimate numbered title (no list pattern detected)**
+
+```
+Path:              "/roms/nes/1942 (USA).nes"
+FileName:          "1942 (USA)"
+StripLeadingNums:  false (directory context: <50% match)
+Title:             "1942" (number preserved)
+Slug:              "1942"
+Ext:               ".nes"
+Tags:              ["region:usa"]
+```
+
+**Example 4: CJK Title**
+
+```
+Path:              "/roms/sfc/ドラゴンクエストVII (Japan).sfc"
+FileName:          "ドラゴンクエストVII (Japan)"
+StripLeadingNums:  false
+Title:             "ドラゴンクエストVII"
+Slug:              "ドラゴンクエスト7"
+Ext:               ".sfc"
+Tags:              ["region:jp"]
 ```
 
 #### Step 2: Extract Tags from Filename (`getTagsFromFileName()`)
@@ -815,39 +915,52 @@ TagType (DBID, Type)
 
 **Used By:** Indexing Workflow (via `GetPathFragments()`)
 
-**Input:** Filename without extension (e.g., `"Super Mario Bros (USA) [!]"`)
+**Input:**
+
+- `filename`: Filename without extension (e.g., `"Super Mario Bros (USA) [!]"`)
+- `stripLeadingNumbers`: Boolean flag from contextual detection (see Pre-Processing Step)
 
 **Output:** Human-readable title (e.g., `"Super Mario Bros"`)
 
 ### Extraction Method
 
-**Implementation:**
-
-```go
-func getTitleFromFilename(filename string) string {
-    r := helpers.CachedMustCompile(`^([^(\[{<]*)`)
-    title := r.FindString(filename)
-    return strings.TrimSpace(title)
-}
-```
-
-**Regex Pattern:** `^([^(\[{<]*)` (updated from `^([^(\[]*)` to include `{}` and `<>`)
-
 **Process:**
 
-1. Match everything from start of string until first `(`, `[`, `{`, or `<`
-2. Extract matched portion using `FindString()`
-3. Trim whitespace using `strings.TrimSpace()`
+1. **Optional Pre-Processing** (if `stripLeadingNumbers == true`):
+   - Apply leading number stripping: `^\d+[.\s\-]+`
+   - Trim whitespace
+2. **Extract title before first bracket**:
+   - Pattern: `^([^(\[{<]*)`
+   - Matches until first `(`, `[`, `{`, or `<`
+3. **Normalize separators**:
+   - Convert underscores to spaces
+   - Normalize conjunctions (`&` → `and`)
+   - Collapse multiple spaces
+
+**Why stripLeadingNumbers is contextual:** The parameter is determined per-directory by analyzing the entire file set (see "Pre-Processing Step: Contextual Leading Number Detection"). This prevents false positives where legitimate numbered titles like "1942" would be incorrectly stripped.
 
 **Examples:**
 
+Without leading number stripping (`stripLeadingNumbers = false`):
+
 - `"Super Mario Bros (USA) [!]"` → `"Super Mario Bros"`
+- `"1942 (USA)"` → `"1942"` (number preserved)
+- `"007 - Everything or Nothing (USA)"` → `"007 - Everything or Nothing"` (number preserved)
+
+With leading number stripping (`stripLeadingNumbers = true`):
+
+- `"1. Super Mario Bros (USA)"` → `"Super Mario Bros"` (list prefix stripped)
+- `"01 - Legend of Zelda (USA)"` → `"Legend of Zelda"` (list prefix stripped)
+- `"42. Metroid (USA)"` → `"Metroid"` (list prefix stripped)
+
+Other examples:
+
 - `"Legend of Zelda - Link's Awakening (v1.0)"` → `"Legend of Zelda - Link's Awakening"`
 - `"Final Fantasy VII (Disc 1 of 3)"` → `"Final Fantasy VII"`
 - `"Game Title {Europe}"` → `"Game Title"`
 - `"Sonic <Beta>"` → `"Sonic"`
 - `"Final Fantasy (USA)[!]{En}<Proto>"` → `"Final Fantasy"`
-- `"Sonic & Knuckles"` → `"Sonic & Knuckles"` (no changes - no metadata)
+- `"Sonic & Knuckles"` → `"Sonic and Knuckles"` (conjunction normalized)
 
 **Storage:**
 
@@ -861,28 +974,28 @@ func getTitleFromFilename(filename string) string {
 
 ### Core Shared Functions
 
-| Function                              | Location                               | Process 1 | Process 2 | Process 3 | Process 4 |
-| ------------------------------------- | -------------------------------------- | --------- | --------- | --------- | --------- |
-| `SlugifyString()`                     | `pkg/database/slugs/slugify.go`        | ✅ Core   | ✅ Used   | ✅ Used   | ❌        |
-| `NormalizeToWords()`                  | `pkg/database/slugs/slugify.go`        | ✅ Helper | ✅ Used   | ❌        | ❌        |
-| `stripLeadingArticle()`               | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
-| `stripMetadataBrackets()`             | `pkg/database/slugs/slugify.go`        | ✅ Helper | ✅ Used   | ❌        | ❌        |
-| `stripEditionAndVersionSuffixes()`    | `pkg/database/slugs/slugify.go`        | ✅ Helper | ✅ Used   | ❌        | ❌        |
-| `normalizeConjunctions()`             | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
-| `convertRomanNumerals()`              | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
-| `normalizeSeparators()`               | `pkg/database/slugs/slugify.go`        | ✅ Helper | ❌        | ❌        | ❌        |
-| `GenerateMatchInfo()`                 | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `GenerateProgressiveTrimCandidates()` | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScorePrefixCandidate()`              | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScoreTokenMatch()`                   | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `ScoreTokenSetRatio()`                | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `StartsWithWordSequence()`            | `pkg/database/matcher/scoring.go`              | ❌        | ✅ Used   | ❌        | ❌        |
-| `FindFuzzyMatches()`                  | `pkg/database/matcher/fuzzy.go`                | ❌        | ✅ Used   | ❌        | ❌        |
-| `ParseTitleFromFilename()`            | `pkg/database/tags/filename_parser.go`         | ❌        | ❌        | ✅ Used   | ✅ Core   |
+| Function                              | Location                                         | Process 1 | Process 2 | Process 3 | Process 4 |
+| ------------------------------------- | ------------------------------------------------ | --------- | --------- | --------- | --------- |
+| `SlugifyString()`                     | `pkg/database/slugs/slugify.go`                  | ✅ Core   | ✅ Used   | ✅ Used   | ❌        |
+| `NormalizeToWords()`                  | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ✅ Used   | ❌        | ❌        |
+| `stripLeadingArticle()`               | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ❌        | ❌        | ❌        |
+| `stripMetadataBrackets()`             | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ✅ Used   | ❌        | ❌        |
+| `stripEditionAndVersionSuffixes()`    | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ✅ Used   | ❌        | ❌        |
+| `normalizeConjunctions()`             | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ❌        | ❌        | ❌        |
+| `convertRomanNumerals()`              | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ❌        | ❌        | ❌        |
+| `normalizeSeparators()`               | `pkg/database/slugs/slugify.go`                  | ✅ Helper | ❌        | ❌        | ❌        |
+| `GenerateMatchInfo()`                 | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `GenerateProgressiveTrimCandidates()` | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScorePrefixCandidate()`              | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScoreTokenMatch()`                   | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `ScoreTokenSetRatio()`                | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `StartsWithWordSequence()`            | `pkg/database/matcher/scoring.go`                | ❌        | ✅ Used   | ❌        | ❌        |
+| `FindFuzzyMatches()`                  | `pkg/database/matcher/fuzzy.go`                  | ❌        | ✅ Used   | ❌        | ❌        |
+| `ParseTitleFromFilename()`            | `pkg/database/tags/filename_parser.go`           | ❌        | ❌        | ✅ Used   | ✅ Core   |
 | `getTagsFromFileName()`               | `pkg/database/mediascanner/indexing_pipeline.go` | ❌        | ❌        | ✅ Used   | ❌        |
-| `tags.ParseFilenameToCanonicalTags()` | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
-| `tags.extractTags()`                  | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
-| `tags.extractSpecialPatterns()`       | `pkg/database/tags/filename_parser.go` | ❌        | ❌        | ✅ Used   | ❌        |
+| `tags.ParseFilenameToCanonicalTags()` | `pkg/database/tags/filename_parser.go`           | ❌        | ❌        | ✅ Used   | ❌        |
+| `tags.extractTags()`                  | `pkg/database/tags/filename_parser.go`           | ❌        | ❌        | ✅ Used   | ❌        |
+| `tags.extractSpecialPatterns()`       | `pkg/database/tags/filename_parser.go`           | ❌        | ❌        | ✅ Used   | ❌        |
 
 ### Shared Regex Patterns
 
@@ -890,7 +1003,6 @@ func getTitleFromFilename(filename string) string {
 
 - `editionSuffixRegex` - Edition suffix stripping, used by `stripEditionAndVersionSuffixes()`
 - `versionSuffixRegex` - Version suffix stripping (`v1.2`, `vIII`), used by `stripEditionAndVersionSuffixes()`
-- `leadingNumPrefixRegex` - Leading number prefix stripping (`1.`, `01 -`)
 - `parenthesesRegex` - Parentheses removal, used by `stripMetadataBrackets()`
 - `bracketsRegex` - Bracket removal, used by `stripMetadataBrackets()`
 - `bracesRegex` - Brace removal, used by `stripMetadataBrackets()`
@@ -910,6 +1022,7 @@ func getTitleFromFilename(filename string) string {
 **From Process 4 (tags/filename_parser.go):**
 
 - Title extraction: `^([^(\[{<]*)` - Matches until first bracket of any type
+- Leading number prefix: `^\d+[.\s\-]+` - Detects list numbering (used contextually, not in slug pipeline)
 
 **From Tag Extraction (filename_parser.go):**
 
@@ -932,7 +1045,7 @@ Normalized Slug
 [Process 2: Resolve]
     ↓
 Match Against DB ← [Process 3: Index] ← Filesystem Scan
-                        ↑                        ↓
+                        ↑                       ↓
                     [Process 4: Extract]   Database Entry
                                                 ↓
                                           MediaTitle.Name (for display)
@@ -1037,14 +1150,14 @@ When we can't distinguish between dual-language titles (`"Street Fighter スト�
 
 **Examples:**
 
-| Input                              | Output                              | Reasoning                                        |
-| ---------------------------------- | ----------------------------------- | ------------------------------------------------ |
-| `"ドラゴンクエストVII"`            | `"ドラゴンクエスト7"`               | Pure CJK preserved, Roman numeral converted      |
-| `"Street Fighter ストリート"`      | `"streetfighterストリート"`         | Mixed → both parts concatenated, searchable both |
-| `"ファイナルファンタジー (Japan)"` | `"ファイナルファンタジー"`          | Pure CJK, metadata stripped                      |
-| `"Ａｂｃ123ＤＥＦ"`                | `"abc123def"`                       | Fullwidth ASCII normalized to halfwidth          |
-| `"ｳｴｯｼﾞ"`                          | `"ウエッジ"`                        | Halfwidth katakana normalized to fullwidth       |
-| `"Super Mario スーパーマリオ"`     | `"supermarioスーパーマリオ"`        | Searchable by "supermario" OR "スーパーマリオ"  |
+| Input                              | Output                       | Reasoning                                        |
+| ---------------------------------- | ---------------------------- | ------------------------------------------------ |
+| `"ドラゴンクエストVII"`            | `"ドラゴンクエスト7"`        | Pure CJK preserved, Roman numeral converted      |
+| `"Street Fighter ストリート"`      | `"streetfighterストリート"`  | Mixed → both parts concatenated, searchable both |
+| `"ファイナルファンタジー (Japan)"` | `"ファイナルファンタジー"`   | Pure CJK, metadata stripped                      |
+| `"Ａｂｃ123ＤＥＦ"`                | `"abc123def"`                | Fullwidth ASCII normalized to halfwidth          |
+| `"ｳｴｯｼﾞ"`                          | `"ウエッジ"`                 | Halfwidth katakana normalized to fullwidth       |
+| `"Super Mario スーパーマリオ"`     | `"supermarioスーパーマリオ"` | Searchable by "supermario" OR "スーパーマリオ"   |
 
 ## Implementation Notes
 
