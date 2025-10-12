@@ -55,8 +55,8 @@ import (
 
 var (
 	editionSuffixRegex = regexp.MustCompile(
-		`(?i)\s+(Version|Edition|GOTY\s+Edition|Game\s+of\s+the\s+Year\s+Edition|` +
-			`Deluxe\s+Edition|Special\s+Edition|Definitive\s+Edition|Ultimate\s+Edition)$`,
+		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
+			`バージョン|エディション|ヴァージョン)$`,
 	)
 	versionSuffixRegex          = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
 	leadingNumPrefixRegex       = regexp.MustCompile(`^\d+[.\s\-]+`)
@@ -288,16 +288,29 @@ func StripMetadataBrackets(s string) string {
 	return strings.TrimSpace(result.String())
 }
 
-// StripEditionAndVersionSuffixes removes edition and version suffixes from game titles.
-// This includes patterns like "Deluxe Edition", "GOTY Edition", "v1.2", "vIII", etc.
+// StripEditionAndVersionSuffixes removes edition/version words and version numbers from game titles.
+// Only strips standalone words ("version", "edition") and their multi-language equivalents.
+// Does NOT strip semantic edition markers like "Special", "Ultimate", "Remastered" - these
+// represent different products and users may want to target them specifically.
+//
+// Supported languages:
+//   - English: version, edition
+//   - German: ausgabe (edition)
+//   - Italian: versione, edizione
+//   - Portuguese: versao, edicao (after diacritic normalization in Stage 2)
+//   - Japanese: バージョン (version), エディション (edition), ヴァージョン (version alt.)
 //
 // Examples:
-//   - "Game Special Edition" → "Game"
+//   - "Pokemon Red Version" → "Pokemon Red"
+//   - "Game Edition" → "Game"
 //   - "Title v1.2" → "Title"
-//   - "Final Fantasy VII Ultimate Edition" → "Final Fantasy VII"
+//   - "Spiel Ausgabe" (German) → "Spiel"
+//   - "Game Special Edition" → "Game Special" (Special kept, Edition stripped)
 func StripEditionAndVersionSuffixes(s string) string {
+	// TODO: are these suffixes getting included as detected tags?
 	s = editionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
+	// TODO: are these version tags getting included as detected tags?
 	s = versionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 	return s

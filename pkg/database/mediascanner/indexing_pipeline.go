@@ -272,9 +272,64 @@ func AddMediaPath(
 			tagIndex = foundTagIndex
 		}
 
+		// Dynamically create revision tags if they don't exist
+		// This allows version numbers like "v7.2502" to be stored as "rev:7-2502"
+		if tagIndex == 0 && strings.HasPrefix(tagStr, string(tags.TagTypeRev)+":") {
+			// Extract the revision value (everything after "rev:")
+			revValue := strings.TrimPrefix(tagStr, string(tags.TagTypeRev)+":")
+
+			// Get or create the Rev tag type ID dynamically
+			revTypeID, found := ss.TagTypeIDs[string(tags.TagTypeRev)]
+			if !found {
+				// Rev tag type doesn't exist in cache, try to look it up
+				existingTagType, getErr := db.FindTagType(database.TagType{Type: string(tags.TagTypeRev)})
+				if getErr != nil || existingTagType.DBID == 0 {
+					log.Error().Err(getErr).Msgf(
+						"rev tag type not found and not in cache " +
+							"(should not happen after SeedCanonicalTags)",
+					)
+					continue
+				}
+				revTypeID = int(existingTagType.DBID)
+				ss.TagTypeIDs[string(tags.TagTypeRev)] = revTypeID
+			}
+
+			// Create the new revision tag
+			ss.TagsIndex++
+			tagIndex = ss.TagsIndex
+			_, insertErr := db.InsertTag(database.Tag{
+				DBID:     int64(tagIndex),
+				Tag:      revValue,
+				TypeDBID: int64(revTypeID),
+			})
+			if insertErr != nil {
+				ss.TagsIndex-- // Rollback index increment on failure
+
+				// Handle UNIQUE constraint violations gracefully - find existing tag and add to map
+				var sqliteErr sqlite3.Error
+				if !errors.As(insertErr, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
+					log.Error().Err(insertErr).Msgf("error inserting revision tag: %s", revValue)
+					continue
+				}
+				log.Debug().Err(insertErr).Msgf("revision tag already exists: %s", revValue)
+
+				// Look up existing tag and add it to the map
+				existingTag, getErr := db.FindTag(database.Tag{Tag: revValue})
+				if getErr != nil || existingTag.DBID == 0 {
+					log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", revValue)
+					continue
+				}
+				tagIndex = int(existingTag.DBID)
+				ss.TagIDs[tagStr] = tagIndex
+				log.Debug().Msgf("using existing revision tag %s with DBID %d", revValue, existingTag.DBID)
+			} else {
+				ss.TagIDs[tagStr] = tagIndex // Only update cache on success
+			}
+		}
+
 		if tagIndex == 0 {
-			// Don't insert unknown tags for now
-			// log.Error().Msgf("error inserting media tag relationship: %s", tagStr)
+			// Don't insert unknown tags for other tag types
+			log.Debug().Msgf("skipping unknown tag: %s", tagStr)
 			continue
 		}
 

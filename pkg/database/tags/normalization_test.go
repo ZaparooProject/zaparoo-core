@@ -47,9 +47,9 @@ func TestNormalizeTag(t *testing.T) {
 			expected: "multi-player",
 		},
 		{
-			name:     "remove periods",
+			name:     "periods to dashes",
 			input:    "year.1991",
-			expected: "year1991",
+			expected: "year-1991",
 		},
 		{
 			name:     "remove special chars except colon and dash",
@@ -113,7 +113,7 @@ func TestNormalizeTagFilter(t *testing.T) {
 			},
 			expected: database.TagFilter{
 				Type:  "year",
-				Value: "1991",
+				Value: "1-991",
 			},
 		},
 		{

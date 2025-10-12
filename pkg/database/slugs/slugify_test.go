@@ -581,32 +581,32 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "edition_suffix_edition",
 			input:    "Skyrim Special Edition",
-			expected: "skyrim",
+			expected: "skyrimspecial",
 		},
 		{
 			name:     "edition_suffix_deluxe",
 			input:    "Grand Theft Auto V Deluxe Edition",
-			expected: "grandtheftauto5",
+			expected: "grandtheftauto5deluxe",
 		},
 		{
 			name:     "edition_suffix_goty",
 			input:    "The Witcher 3 GOTY Edition",
-			expected: "witcher3",
+			expected: "witcher3goty",
 		},
 		{
 			name:     "edition_suffix_game_of_the_year",
 			input:    "Fallout 4 Game of the Year Edition",
-			expected: "fallout4",
+			expected: "fallout4gameoftheyear",
 		},
 		{
 			name:     "edition_suffix_definitive",
 			input:    "Halo The Master Chief Collection Definitive Edition",
-			expected: "halothemasterchiefcollection",
+			expected: "halothemasterchiefcollectiondefinitive",
 		},
 		{
 			name:     "edition_suffix_ultimate",
 			input:    "Forza Horizon 5 Ultimate Edition",
-			expected: "forzahorizon5",
+			expected: "forzahorizon5ultimate",
 		},
 		{
 			name:     "edition_suffix_case_insensitive",
@@ -616,7 +616,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "edition_suffix_mixed_case",
 			input:    "Test DeLuXe EdItIoN",
-			expected: "test",
+			expected: "testdeluxe",
 		},
 		{
 			name:     "edition_not_at_end",
@@ -631,12 +631,12 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "edition_with_article",
 			input:    "The Legend of Zelda Special Edition",
-			expected: "legendofzelda",
+			expected: "legendofzeldaspecial",
 		},
 		{
 			name:     "edition_with_number_prefix",
 			input:    "1. Super Mario Bros Deluxe Edition",
-			expected: "supermariobros",
+			expected: "supermariobrosdeluxe",
 		},
 		{
 			name:     "multiple_edition_words",
@@ -989,7 +989,7 @@ func TestNormalizeToWords(t *testing.T) {
 		{
 			name:     "with_edition_suffix",
 			input:    "Skyrim Special Edition",
-			expected: []string{"skyrim"},
+			expected: []string{"skyrim", "special"},
 		},
 		{
 			name:     "sequel_numbers",
@@ -1290,17 +1290,17 @@ func TestStripEditionAndVersionSuffixes(t *testing.T) {
 		{
 			name:     "special_edition",
 			input:    "Game Special Edition",
-			expected: "Game",
+			expected: "Game Special",
 		},
 		{
 			name:     "deluxe_edition",
 			input:    "Title Deluxe Edition",
-			expected: "Title",
+			expected: "Title Deluxe",
 		},
 		{
 			name:     "goty_edition",
 			input:    "Game GOTY Edition",
-			expected: "Game",
+			expected: "Game GOTY",
 		},
 		{
 			name:     "version_number",

@@ -103,7 +103,7 @@ const (
 // NormalizeTag normalizes a tag string for consistent querying and storage.
 // Applied to BOTH type and value parts separately.
 // Rules: trim whitespace, normalize colon spacing, lowercase, spaces→dashes,
-// remove periods and special chars (except colon, dash, and comma)
+// periods→dashes, and remove special chars (except colon, dash, and comma)
 func NormalizeTag(s string) string {
 	// 1. Trim whitespace
 	s = strings.TrimSpace(s)
@@ -117,8 +117,8 @@ func NormalizeTag(s string) string {
 	// 4. Replace remaining spaces with dashes
 	s = strings.ReplaceAll(s, " ", "-")
 
-	// 5. Remove periods
-	s = strings.ReplaceAll(s, ".", "")
+	// 5. Convert periods to dashes (for version numbers like "1.2.3" → "1-2-3")
+	s = strings.ReplaceAll(s, ".", "-")
 
 	// 6. Remove other special chars (except colon, dash, and comma)
 	// Keep: a-z, 0-9, dash, colon, comma
