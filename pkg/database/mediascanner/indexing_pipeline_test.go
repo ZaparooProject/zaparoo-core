@@ -96,7 +96,7 @@ func TestAddMediaPath_SystemInsertFailure(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, _ := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, nil)
+	titleIndex, mediaIndex, _ := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil)
 
 	// Verify that the function succeeded and returned valid indices
 	// With the bug, this would return (0, 0) because systemIndex would be 0
@@ -151,7 +151,7 @@ func TestAddMediaPath_SystemInsertFailure_CannotFindExisting(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, nil)
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil)
 
 	// Function should return error and (0, 0) to prevent invalid data
 	require.Error(t, err, "should return error when system cannot be resolved")
@@ -205,7 +205,7 @@ func TestAddMediaPath_NonUniqueError(t *testing.T) {
 	mockDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
 
 	// Call AddMediaPath with a TV show path
-	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, nil)
+	titleIndex, mediaIndex, err := AddMediaPath(mockDB, scanState, "TV", "kodi-show://1/Loki", false, false, nil)
 
 	// Function should return error and (0, 0) for non-recoverable errors
 	require.Error(t, err, "should return error for non-recoverable database errors")
@@ -282,19 +282,19 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "Game",
 		},
 		{
-			name:     "strips leading number with period",
+			name:     "preserves leading number with period (no stripping)",
 			filename: "01. Super Mario Bros (USA)",
-			want:     "Super Mario Bros",
+			want:     "01. Super Mario Bros",
 		},
 		{
-			name:     "strips leading number with dash",
+			name:     "preserves leading number with dash (no stripping)",
 			filename: "42 - Answer (USA)",
-			want:     "Answer",
+			want:     "42 - Answer",
 		},
 		{
-			name:     "strips leading number with space",
+			name:     "preserves leading number with space (no stripping)",
 			filename: "1 Game Title (USA)",
-			want:     "Game Title",
+			want:     "1 Game Title",
 		},
 		{
 			name:     "normalizes underscores to spaces",
@@ -317,9 +317,9 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "Game Title Here",
 		},
 		{
-			name:     "handles all transformations combined",
+			name:     "handles all transformations combined (no number stripping)",
 			filename: "01. Super_Mario_Bros & Luigi   (USA)",
-			want:     "Super Mario Bros and Luigi",
+			want:     "01. Super Mario Bros and Luigi",
 		},
 		{
 			name:     "preserves dashes in title after cleanup",
@@ -337,9 +337,9 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "Super Mario World",
 		},
 		{
-			name:     "handles leading number without brackets",
+			name:     "preserves leading number without brackets (no stripping)",
 			filename: "01. Game Title",
-			want:     "Game Title",
+			want:     "01. Game Title",
 		},
 		{
 			name:     "handles ampersand without brackets",
@@ -350,7 +350,8 @@ func TestGetTitleFromFilename(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tags.ParseTitleFromFilename(tt.filename)
+			// Pass false for stripLeadingNumbers - we removed unconditional stripping
+			got := tags.ParseTitleFromFilename(tt.filename, false)
 			assert.Equal(t, tt.want, got)
 		})
 	}

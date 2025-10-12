@@ -43,17 +43,17 @@ func TestGetPathFragments_FilenameTagsConfig(t *testing.T) {
 	testPath := "/games/nes/Super Mario Bros (USA, Europe) (Rev 1).nes"
 
 	// Test with filename tags enabled
-	fragmentsEnabled := GetPathFragments(cfgEnabled, testPath, false)
+	fragmentsEnabled := GetPathFragments(cfgEnabled, testPath, false, false)
 	require.NotEmpty(t, fragmentsEnabled.Tags, "filename tags should be extracted when enabled")
 	require.Contains(t, fragmentsEnabled.Tags, "rev:1", "revision tag should be extracted")
 	require.Contains(t, fragmentsEnabled.Tags, "unknown:usa,-europe", "region tag should be extracted")
 
 	// Test with filename tags disabled
-	fragmentsDisabled := GetPathFragments(cfgDisabled, testPath, false)
+	fragmentsDisabled := GetPathFragments(cfgDisabled, testPath, false, false)
 	require.Empty(t, fragmentsDisabled.Tags, "filename tags should not be extracted when disabled")
 
 	// Test with nil config (should behave as enabled for backward compatibility)
-	fragmentsNil := GetPathFragments(nil, testPath, false)
+	fragmentsNil := GetPathFragments(nil, testPath, false, false)
 	t.Logf("Tags with nil config: %v", fragmentsNil.Tags)
 	require.NotEmpty(t, fragmentsNil.Tags, "filename tags should be extracted when config is nil")
 	require.Contains(t, fragmentsNil.Tags, "rev:1", "revision tag should be extracted when config is nil")
@@ -73,16 +73,16 @@ func TestGetPathFragments_CacheKeyWithConfig(t *testing.T) {
 	testPath := "/games/nes/Super Mario Bros (USA).nes"
 
 	// Get fragments with enabled config
-	fragments1 := GetPathFragments(cfgEnabled, testPath, false)
+	fragments1 := GetPathFragments(cfgEnabled, testPath, false, false)
 	require.NotEmpty(t, fragments1.Tags, "should have tags when enabled")
 
 	// Get fragments with disabled config - should return different result
-	fragments2 := GetPathFragments(cfgDisabled, testPath, false)
+	fragments2 := GetPathFragments(cfgDisabled, testPath, false, false)
 	require.Empty(t, fragments2.Tags, "should have no tags when disabled")
 
 	// Verify cache works correctly by calling again with same configs
-	fragments1Again := GetPathFragments(cfgEnabled, testPath, false)
-	fragments2Again := GetPathFragments(cfgDisabled, testPath, false)
+	fragments1Again := GetPathFragments(cfgEnabled, testPath, false, false)
+	fragments2Again := GetPathFragments(cfgDisabled, testPath, false, false)
 
 	require.Len(t, fragments1Again.Tags, len(fragments1.Tags), "cached result should be same for enabled config")
 	require.Empty(t, fragments2Again.Tags, "cached result should be same for disabled config")

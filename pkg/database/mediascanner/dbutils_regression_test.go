@@ -195,6 +195,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				"NES",
 				"/games/nes/Super Mario Bros.nes",
 				false,
+				false,
 				nil,
 			)
 
@@ -290,6 +291,7 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 		scanState,
 		"NES",
 		"/games/nes/Super Mario Bros.nes",
+		false,
 		false,
 		nil,
 	)

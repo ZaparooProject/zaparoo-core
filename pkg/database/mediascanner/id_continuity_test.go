@@ -81,7 +81,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		for _, systemID := range systems {
 			for range 3 { // 3 games per system
 				entry := generator.GenerateMediaEntry(systemID)
-				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, nil)
+				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil)
 				assert.Positive(t, titleIndex, "Title index should be positive")
 				assert.Positive(t, mediaIndex, "Media index should be positive")
 			}
@@ -140,7 +140,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		// Add new system with games
 		for i := range 2 { // 2 games for Genesis
 			entry := generator.GenerateMediaEntry("Genesis")
-			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Genesis", entry.Path, false, nil)
+			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Genesis", entry.Path, false, false, nil)
 
 			// These are the critical assertions - IDs must continue from where Phase 1 left off
 			expectedTitleID := int(phase1MaxTitleID) + i + 1
@@ -155,7 +155,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		// Add more games to existing system (NES)
 		for i := range 2 { // 2 more NES games
 			entry := generator.GenerateMediaEntry("NES")
-			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "NES", entry.Path, false, nil)
+			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "NES", entry.Path, false, false, nil)
 
 			// These should continue the sequence
 			// +2 for Genesis games, +i for this loop, +1 for next ID
@@ -230,12 +230,12 @@ func TestIDContinuityWithGaps(t *testing.T) {
 
 		// Create a few entries normally to establish the schema
 		entry1 := generator.GenerateMediaEntry("NES")
-		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, scanState, "NES", entry1.Path, false, nil)
+		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, scanState, "NES", entry1.Path, false, false, nil)
 		assert.Positive(t, titleIndex1)
 		assert.Positive(t, mediaIndex1)
 
 		entry2 := generator.GenerateMediaEntry("SNES")
-		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, scanState, "SNES", entry2.Path, false, nil)
+		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, scanState, "SNES", entry2.Path, false, false, nil)
 		assert.Positive(t, titleIndex2)
 		assert.Positive(t, mediaIndex2)
 
@@ -251,12 +251,12 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		require.NoError(t, err)
 
 		entry3 := generator.GenerateMediaEntry("Genesis")
-		titleIndex3, mediaIndex3, _ := AddMediaPath(mediaDB, scanState, "Genesis", entry3.Path, false, nil)
+		titleIndex3, mediaIndex3, _ := AddMediaPath(mediaDB, scanState, "Genesis", entry3.Path, false, false, nil)
 		assert.Positive(t, titleIndex3)
 		assert.Positive(t, mediaIndex3)
 
 		entry4 := generator.GenerateMediaEntry("GameBoy")
-		titleIndex4, mediaIndex4, _ := AddMediaPath(mediaDB, scanState, "GameBoy", entry4.Path, false, nil)
+		titleIndex4, mediaIndex4, _ := AddMediaPath(mediaDB, scanState, "GameBoy", entry4.Path, false, false, nil)
 		assert.Positive(t, titleIndex4)
 		assert.Positive(t, mediaIndex4)
 
@@ -318,7 +318,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 
 		generator := testdata.NewTestDataGenerator(3000)
 		entry := generator.GenerateMediaEntry("ColecoVision")
-		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "ColecoVision", entry.Path, false, nil)
+		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "ColecoVision", entry.Path, false, false, nil)
 
 		// Should get the next ID after the highest, not fill gaps
 		expectedTitleID := int(phase1MaxTitleID) + 1
@@ -390,7 +390,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 		// Create some initial data normally
 		generator := testdata.NewTestDataGenerator(4000)
 		entry1 := generator.GenerateMediaEntry("NES")
-		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, scanState, "NES", entry1.Path, false, nil)
+		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, scanState, "NES", entry1.Path, false, false, nil)
 		assert.Positive(t, titleIndex1)
 		assert.Positive(t, mediaIndex1)
 
@@ -444,7 +444,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 
 		generator := testdata.NewTestDataGenerator(4000)
 		entry := generator.GenerateMediaEntry("GameBoy")
-		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "GameBoy", entry.Path, false, nil)
+		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "GameBoy", entry.Path, false, false, nil)
 
 		// Should continue from large ID
 		expectedTitleID := int(finalMaxTitleID) + 1
@@ -499,7 +499,7 @@ func TestConcurrentIDGeneration(t *testing.T) {
 
 		for i := range 5 {
 			entry := generator.GenerateMediaEntry("NES")
-			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, "NES", entry.Path, false, nil)
+			titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, "NES", entry.Path, false, false, nil)
 
 			expectedTitleIDs = append(expectedTitleIDs, titleIndex)
 			expectedMediaIDs = append(expectedMediaIDs, mediaIndex)

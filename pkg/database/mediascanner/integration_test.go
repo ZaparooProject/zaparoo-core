@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner/testdata"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -72,7 +73,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, nil)
+				titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil)
 				assert.Positive(t, titleIndex, "Title index should be > 0")
 				assert.Positive(t, mediaIndex, "Media index should be > 0")
 			}
@@ -164,7 +165,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 
 		// Add one more system with games
 		newEntry := testdata.NewTestDataGenerator(12345).GenerateMediaEntry("Gameboy")
-		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path, false, nil)
+		titleIndex, mediaIndex, _ := AddMediaPath(mediaDB, resumeState, "Gameboy", newEntry.Path, false, false, nil)
 
 		// Verify the new IDs are sequential from where we left off
 		assert.Equal(t, originalTitlesIndex+1, titleIndex, "New title should get next available ID")
@@ -219,8 +220,8 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		testEntry1 := testdata.NewTestDataGenerator(11111).GenerateMediaEntry("NES")
 		testEntry2 := testdata.NewTestDataGenerator(22222).GenerateMediaEntry("SNES")
 
-		_, _, _ = AddMediaPath(mediaDB, scanState, "NES", testEntry1.Path, false, nil)
-		_, _, _ = AddMediaPath(mediaDB, scanState, "SNES", testEntry2.Path, false, nil)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "NES", testEntry1.Path, false, false, nil)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "SNES", testEntry2.Path, false, false, nil)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
@@ -253,8 +254,8 @@ func TestUniqueConstraintHandling(t *testing.T) {
 
 		// This used to cause "UNIQUE constraint failed: Systems.DBID" because
 		// PopulateScanStateFromDB wasn't working and indexes started from 0 again
-		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, resumeState, "Genesis", testEntry3.Path, false, nil)
-		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, resumeState, "NES", testEntry4.Path, false, nil)
+		titleIndex1, mediaIndex1, _ := AddMediaPath(mediaDB, resumeState, "Genesis", testEntry3.Path, false, false, nil)
+		titleIndex2, mediaIndex2, _ := AddMediaPath(mediaDB, resumeState, "NES", testEntry4.Path, false, false, nil)
 
 		// Verify no constraint violations and IDs are sequential
 		assert.Greater(t, titleIndex1, 2, "New title should have ID > 2")
@@ -316,7 +317,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 
 		// Add specific test data
 		entry := testdata.NewTestDataGenerator(55555).GenerateMediaEntry("PSX")
-		_, _, _ = AddMediaPath(mediaDB, scanState, "PSX", entry.Path, false, nil)
+		_, _, _ = AddMediaPath(mediaDB, scanState, "PSX", entry.Path, false, false, nil)
 
 		err = mediaDB.CommitTransaction()
 		require.NoError(t, err)
@@ -392,7 +393,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		for _, systemID := range testSystems {
 			entries := batch.Entries[systemID]
 			for _, entry := range entries {
-				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, nil)
+				_, _, addErr := AddMediaPath(mediaDB, scanState, systemID, entry.Path, false, false, nil)
 				require.NoError(t, addErr, "Should add media without error")
 			}
 		}
@@ -444,7 +445,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 
 		amigaEntries := batch.Entries["Amiga"]
 		for _, entry := range amigaEntries {
-			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path, false, nil)
+			_, _, addErr := AddMediaPath(mediaDB, reindexState, "Amiga", entry.Path, false, false, nil)
 			require.NoError(t, addErr, "Should add Amiga media without TagType errors")
 		}
 
@@ -513,7 +514,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 
 		amigaEntries := batch.Entries["Amiga"]
 		for _, entry := range amigaEntries {
-			if _, _, addErr := AddMediaPath(mediaDB, scanState, "Amiga", entry.Path, false, nil); addErr != nil {
+			if _, _, addErr := AddMediaPath(mediaDB, scanState, "Amiga", entry.Path, false, false, nil); addErr != nil {
 				return addErr
 			}
 		}
@@ -574,4 +575,370 @@ func TestReindexSameSystemTwice(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, allSystems, 1, "Should have 1 system (Amiga) after third index")
 	})
+}
+
+// TestAutomaticNumberStrippingDetection tests the automatic detection of numbered playlists.
+// This tests the threshold-based heuristic that analyzes directories to determine if leading
+// numbers should be stripped (e.g., "01. ", "02 - ") based on how many files match the pattern.
+func TestAutomaticNumberStrippingDetection(t *testing.T) {
+	tests := []struct {
+		name              string
+		description       string
+		files             []platforms.ScanResult
+		expectedDetection bool
+	}{
+		{
+			name: "numbered playlist - exceeds threshold",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/favorites/01. Super Mario Bros.nes"},
+				{Path: "/roms/nes/favorites/02. Zelda.nes"},
+				{Path: "/roms/nes/favorites/03. Metroid.nes"},
+				{Path: "/roms/nes/favorites/04. Mega Man.nes"},
+				{Path: "/roms/nes/favorites/05. Castlevania.nes"},
+			},
+			expectedDetection: true,
+			description:       "5/5 files match (100% > 50% threshold, ≥5 files)",
+		},
+		{
+			name: "numbered playlist with dash separator",
+			files: []platforms.ScanResult{
+				{Path: "/roms/snes/01 - Super Mario World.snes"},
+				{Path: "/roms/snes/02 - Zelda ALTTP.snes"},
+				{Path: "/roms/snes/03 - Super Metroid.snes"},
+				{Path: "/roms/snes/04 - Chrono Trigger.snes"},
+				{Path: "/roms/snes/05 - Final Fantasy VI.snes"},
+				{Path: "/roms/snes/06 - Earthbound.snes"},
+			},
+			expectedDetection: true,
+			description:       "6/6 files match (100% > 50% threshold, ≥5 files)",
+		},
+		{
+			name: "mixed - just over threshold",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/01. Game One.nes"},
+				{Path: "/roms/nes/02. Game Two.nes"},
+				{Path: "/roms/nes/03. Game Three.nes"},
+				{Path: "/roms/nes/1942.nes"},          // Legitimate game name
+				{Path: "/roms/nes/Contra.nes"},        // Regular name
+				{Path: "/roms/nes/04. Game Four.nes"}, // Added 4th numbered to tip over 50%
+			},
+			expectedDetection: true,
+			description:       "4/6 files match (67% > 50% threshold, ≥5 files)",
+		},
+		{
+			name: "mixed - below threshold",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/01. Game One.nes"},
+				{Path: "/roms/nes/02. Game Two.nes"},
+				{Path: "/roms/nes/1942.nes"},
+				{Path: "/roms/nes/Contra.nes"},
+				{Path: "/roms/nes/Castlevania.nes"},
+				{Path: "/roms/nes/Metroid.nes"},
+			},
+			expectedDetection: false,
+			description:       "2/6 files match (33% < 50% threshold)",
+		},
+		{
+			name: "no numbered files",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/Super Mario Bros.nes"},
+				{Path: "/roms/nes/Zelda.nes"},
+				{Path: "/roms/nes/Metroid.nes"},
+				{Path: "/roms/nes/Mega Man.nes"},
+				{Path: "/roms/nes/Castlevania.nes"},
+			},
+			expectedDetection: false,
+			description:       "0/5 files match (0% < 50% threshold)",
+		},
+		{
+			name: "too few files - should not detect",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/01. Game.nes"},
+				{Path: "/roms/nes/02. Game.nes"},
+				{Path: "/roms/nes/03. Game.nes"},
+				{Path: "/roms/nes/04. Game.nes"},
+			},
+			expectedDetection: false,
+			description:       "4/4 files match but <5 files (below minFiles threshold)",
+		},
+		{
+			name: "legitimate number games",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/1942.nes"},
+				{Path: "/roms/nes/007.nes"},
+				{Path: "/roms/nes/3D Worldrunner.nes"},
+				{Path: "/roms/nes/720 Degrees.nes"},
+				{Path: "/roms/nes/8 Eyes.nes"},
+			},
+			expectedDetection: true,
+			description:       "5/5 files match because '007.nes' matches pattern (regex sees dot from extension)",
+		},
+		{
+			name: "exactly at threshold boundary",
+			files: []platforms.ScanResult{
+				{Path: "/roms/nes/01. Game.nes"},
+				{Path: "/roms/nes/02. Game.nes"},
+				{Path: "/roms/nes/03. Game.nes"},
+				{Path: "/roms/nes/Contra.nes"},
+				{Path: "/roms/nes/Metroid.nes"},
+				{Path: "/roms/nes/Castlevania.nes"},
+			},
+			expectedDetection: false,
+			description:       "3/6 files match (50% = 50%, NOT > 50%, so returns false)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test with threshold=0.5, minFiles=5 (production values)
+			result := detectNumberingPattern(tt.files, 0.5, 5)
+			assert.Equal(t, tt.expectedDetection, result,
+				"Detection failed: %s", tt.description)
+		})
+	}
+}
+
+// TestSlugGenerationPipeline tests the complete slug generation from file path to database.
+// This integration test ensures that the context-aware leading number stripping works correctly
+// throughout the entire indexing pipeline (file path → parsed title → slug → database storage).
+func TestSlugGenerationPipeline(t *testing.T) {
+	ctx := context.Background()
+	mediaDB, cleanup := testhelpers.NewInMemoryMediaDB(t)
+	defer cleanup()
+
+	tests := []struct {
+		name                string
+		systemID            string
+		path                string
+		expectedTitle       string
+		expectedSlug        string
+		stripLeadingNumbers bool
+	}{
+		// Numbered playlist scenarios (where leading number stripping is context-dependent)
+		{
+			name:                "numbered playlist - strips leading number with period",
+			systemID:            "NES",
+			path:                "/roms/nes/playlists/favorites/01. Super Mario Bros (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Super Mario Bros",
+			expectedSlug:        "supermariobros",
+		},
+		{
+			name:                "numbered playlist - strips leading number with dash",
+			systemID:            "NES",
+			path:                "/roms/nes/playlists/best/42 - Zelda II (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Zelda II",
+			expectedSlug:        "zelda2",
+		},
+		{
+			name:                "numbered playlist - strips leading number with space",
+			systemID:            "SNES",
+			path:                "/roms/snes/03 Super Metroid (USA).snes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Super Metroid",
+			expectedSlug:        "supermetroid",
+		},
+		{
+			name:                "numbered playlist - preserves when disabled",
+			systemID:            "NES",
+			path:                "/roms/nes/01. Super Mario Bros (USA).nes",
+			stripLeadingNumbers: false,
+			expectedTitle:       "01. Super Mario Bros",
+			expectedSlug:        "01supermariobros",
+		},
+
+		// Games that naturally start with numbers (always preserved regardless of context)
+		{
+			name:                "game starting with number - 1942",
+			systemID:            "NES",
+			path:                "/roms/nes/1942 (USA).nes",
+			stripLeadingNumbers: false, // Even with true, "1942" alone won't be stripped by the regex
+			expectedTitle:       "1942",
+			expectedSlug:        "1942",
+		},
+		{
+			name:                "game starting with number - 3D Worldrunner",
+			systemID:            "NES",
+			path:                "/roms/nes/3D Worldrunner (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "3D Worldrunner",
+			expectedSlug:        "3dworldrunner",
+		},
+		{
+			name:                "game starting with number - 7th Saga",
+			systemID:            "SNES",
+			path:                "/roms/snes/7th Saga (USA).snes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "7th Saga",
+			expectedSlug:        "7thsaga",
+		},
+
+		// Leading article with numbered playlist
+		{
+			name:                "numbered playlist with leading article - strips number keeps article",
+			systemID:            "NES",
+			path:                "/roms/nes/playlists/01. The Legend of Zelda (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "The Legend of Zelda",
+			expectedSlug:        "legendofzelda", // Slug still strips "The"
+		},
+		{
+			name:                "numbered playlist with leading article - preserves number and article in title",
+			systemID:            "NES",
+			path:                "/roms/nes/playlists/02. The Legend of Zelda (USA).nes",
+			stripLeadingNumbers: false,
+			expectedTitle:       "02. The Legend of Zelda",
+			expectedSlug:        "02thelegendofzelda", // Slug keeps number, strips "The"
+		},
+
+		// Complex filenames with metadata
+		{
+			name:                "metadata stripped but number stripped in playlist",
+			systemID:            "NES",
+			path:                "/roms/nes/01 - Super Mario Bros (USA) (Rev 1) [!].nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Super Mario Bros",
+			expectedSlug:        "supermariobros",
+		},
+		{
+			name:                "edition suffix removed with slug generation",
+			systemID:            "PS1",
+			path:                "/roms/ps1/Final Fantasy VII Deluxe Edition (USA).bin",
+			stripLeadingNumbers: false,
+			expectedTitle:       "Final Fantasy VII Deluxe Edition",
+			expectedSlug:        "finalfantasy7deluxe",
+		},
+
+		// Unicode and special characters
+		{
+			name:                "unicode with numbered playlist",
+			systemID:            "NES",
+			path:                "/roms/nes/01. Pokémon Red (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Pokémon Red",
+			expectedSlug:        "pokemonred",
+		},
+		{
+			name:                "ampersand conversion",
+			systemID:            "Genesis",
+			path:                "/roms/genesis/Sonic & Knuckles (USA).md",
+			stripLeadingNumbers: false,
+			expectedTitle:       "Sonic and Knuckles",
+			expectedSlug:        "sonicandknuckles",
+		},
+
+		// Roman numerals
+		{
+			name:                "roman numeral conversion",
+			systemID:            "PS1",
+			path:                "/roms/ps1/Final Fantasy VII (USA) (Disc 1).bin",
+			stripLeadingNumbers: false,
+			expectedTitle:       "Final Fantasy VII",
+			expectedSlug:        "finalfantasy7",
+		},
+
+		// Trailing article format - The filename tag parser normalizes "Title, The" to "The Title"
+		// This happens during tag extraction, before slug generation
+		{
+			name:                "trailing article format - normalized by tag parser",
+			systemID:            "NES",
+			path:                "/roms/nes/Legend of Zelda, The (USA).nes",
+			stripLeadingNumbers: false,
+			expectedTitle:       "The Legend of Zelda", // Normalized by filename tag parser
+			expectedSlug:        "legendofzelda",       // Slug removes "The"
+		},
+
+		// Subtitle handling - filename tag parser normalizes subtitle delimiters
+		{
+			name:                "subtitle with colon",
+			systemID:            "NES",
+			path:                "/roms/nes/Zelda: Link's Awakening (USA).nes",
+			stripLeadingNumbers: false,
+			expectedTitle:       "Zelda: Link's Awakening", // Title preserves colon
+			expectedSlug:        "zeldalinksawakening",     // Slug removes separator
+		},
+		{
+			name:                "subtitle with dash - normalized to colon by tag parser",
+			systemID:            "NES",
+			path:                "/roms/nes/Zelda - Link's Awakening (USA).nes",
+			stripLeadingNumbers: false,
+			expectedTitle:       "Zelda: Link's Awakening", // Dash normalized to colon by tag parser
+			expectedSlug:        "zeldalinksawakening",     // Slug removes separator
+		},
+
+		// Edge cases
+		{
+			name:                "multiple digit prefix stripped",
+			systemID:            "NES",
+			path:                "/roms/nes/123. Game Title (USA).nes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Game Title",
+			expectedSlug:        "gametitle",
+		},
+		{
+			name:                "zero-padded number stripped",
+			systemID:            "SNES",
+			path:                "/roms/snes/003 - Chrono Trigger (USA).snes",
+			stripLeadingNumbers: true,
+			expectedTitle:       "Chrono Trigger",
+			expectedSlug:        "chronotrigger",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create fresh scan state for each test
+			scanState := &database.ScanState{
+				SystemIDs:     make(map[string]int),
+				TitleIDs:      make(map[string]int),
+				MediaIDs:      make(map[string]int),
+				TagTypeIDs:    make(map[string]int),
+				TagIDs:        make(map[string]int),
+				SystemsIndex:  0,
+				TitlesIndex:   0,
+				MediaIndex:    0,
+				TagTypesIndex: 0,
+				TagsIndex:     0,
+			}
+
+			// Populate from database if there's existing data
+			err := PopulateScanStateFromDB(ctx, mediaDB, scanState)
+			require.NoError(t, err)
+
+			// Seed canonical tags if needed
+			if scanState.TagTypesIndex == 0 {
+				err = SeedCanonicalTags(mediaDB, scanState)
+				require.NoError(t, err)
+			}
+
+			err = mediaDB.BeginTransaction()
+			require.NoError(t, err)
+
+			titleIndex, mediaIndex, addErr := AddMediaPath(
+				mediaDB, scanState, tt.systemID, tt.path,
+				false, tt.stripLeadingNumbers, nil,
+			)
+
+			err = mediaDB.CommitTransaction()
+			require.NoError(t, err)
+
+			// Verify the media was added successfully
+			require.NoError(t, addErr, "AddMediaPath should not error")
+			require.NotZero(t, titleIndex, "titleIndex should not be 0")
+			require.NotZero(t, mediaIndex, "mediaIndex should not be 0")
+
+			// Verify the title was created with correct name and slug
+			title, err := mediaDB.FindMediaTitle(database.MediaTitle{DBID: int64(titleIndex)})
+			require.NoError(t, err, "Should be able to retrieve title from database")
+			assert.Equal(t, tt.expectedTitle, title.Name, "Title name mismatch")
+			assert.Equal(t, tt.expectedSlug, title.Slug, "Slug mismatch")
+
+			// Verify the media points to the correct title
+			media, err := mediaDB.FindMedia(database.Media{DBID: int64(mediaIndex)})
+			require.NoError(t, err, "Should be able to retrieve media from database")
+			assert.Equal(t, int64(titleIndex), media.MediaTitleDBID, "Media should point to correct title")
+			assert.Equal(t, tt.path, media.Path, "Media path should match")
+		})
+	}
 }

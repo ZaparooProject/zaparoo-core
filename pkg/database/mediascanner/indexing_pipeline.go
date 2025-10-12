@@ -36,8 +36,9 @@ import (
 )
 
 type PathFragmentKey struct {
-	Path         string
-	FilenameTags bool
+	Path                string
+	FilenameTags        bool
+	StripLeadingNumbers bool
 }
 
 // We can't batch effectively without a sense of relationships
@@ -68,9 +69,10 @@ func AddMediaPath(
 	systemID string,
 	path string,
 	noExt bool,
+	stripLeadingNumbers bool,
 	cfg *config.Instance,
 ) (titleIndex, mediaIndex int, err error) {
-	pf := GetPathFragments(cfg, path, noExt)
+	pf := GetPathFragments(cfg, path, noExt, stripLeadingNumbers)
 
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
@@ -838,7 +840,7 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFragments {
+func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumbers bool) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
@@ -864,7 +866,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt bool) MediaPathFr
 
 	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
-	f.Title = tags.ParseTitleFromFilename(f.FileName)
+	f.Title = tags.ParseTitleFromFilename(f.FileName, stripLeadingNumbers)
 	f.Slug = slugs.SlugifyString(f.Title)
 
 	// For non-Latin titles that don't produce a slug, store the lowercase

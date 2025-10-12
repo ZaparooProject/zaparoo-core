@@ -526,22 +526,22 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "leading_number_prefix_dot",
 			input:    "1. Super Mario Bros",
-			expected: "supermariobros",
+			expected: "1supermariobros",
 		},
 		{
 			name:     "leading_number_prefix_dash",
 			input:    "2 - Sonic the Hedgehog",
-			expected: "sonicthehedgehog",
+			expected: "2sonicthehedgehog",
 		},
 		{
 			name:     "leading_number_prefix_space",
 			input:    "03 Zelda",
-			expected: "zelda",
+			expected: "03zelda",
 		},
 		{
 			name:     "leading_number_prefix_multiple_digits",
 			input:    "123. Game",
-			expected: "game",
+			expected: "123game",
 		},
 		{
 			name:     "game_name_starting_with_number",
@@ -561,12 +561,12 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "leading_prefix_with_article",
 			input:    "1. The Legend of Zelda",
-			expected: "legendofzelda",
+			expected: "1thelegendofzelda",
 		},
 		{
 			name:     "leading_prefix_with_metadata",
 			input:    "01 - Super Mario Bros (USA)",
-			expected: "supermariobros",
+			expected: "01supermariobros",
 		},
 		{
 			name:     "edition_suffix_version",
@@ -636,7 +636,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "edition_with_number_prefix",
 			input:    "1. Super Mario Bros Deluxe Edition",
-			expected: "supermariobrosdeluxe",
+			expected: "1supermariobrosdeluxe",
 		},
 		{
 			name:     "multiple_edition_words",
@@ -736,7 +736,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "fullwidth_number_prefix",
 			input:    "１. Super Mario Bros",
-			expected: "supermariobros",
+			expected: "1supermariobros",
 		},
 		{
 			name:     "fullwidth_delimiter_colon",
@@ -761,7 +761,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "circled_number",
 			input:    "① First Game",
-			expected: "firstgame",
+			expected: "1firstgame",
 		},
 		{
 			name:     "trademark_symbol",
@@ -771,7 +771,7 @@ func TestSlugifyString(t *testing.T) {
 		{
 			name:     "combined_fullwidth_and_unicode",
 			input:    "１. Pokémon：The Game",
-			expected: "pokemongame",
+			expected: "1pokemongame",
 		},
 		{
 			name:     "registered_symbol",
@@ -1579,7 +1579,7 @@ func TestSlugifyStringRegression_AsciiFastPath(t *testing.T) {
 		{
 			name:     "pure_ascii_leading_number",
 			input:    "007 - The World is Not Enough",
-			expected: "worldisnotenough",
+			expected: "007worldisnotenough",
 		},
 		{
 			name:     "pure_ascii_edition_suffix",

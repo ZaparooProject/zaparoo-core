@@ -36,8 +36,8 @@ var (
 
 	// Title parsing
 	reTitleExtract = regexp.MustCompile(`^([^(\[{<]*)`)
-	reLeadingNum   = regexp.MustCompile(`^\d+[.\s\-]+`)
 	reMultiSpace   = regexp.MustCompile(`\s+`)
+	reLeadingNum   = regexp.MustCompile(`^\d+[.\s\-]+`)
 )
 
 // ParseContext holds context information for disambiguating tags during parsing.
@@ -555,26 +555,35 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 // ParseTitleFromFilename extracts a clean, human-readable display title from a filename.
 // It removes metadata brackets and normalizes common filename artifacts for better presentation.
 //
+// The stripLeadingNumbers parameter controls whether leading number prefixes like "1. ", "01 - ", etc.
+// should be removed. This should only be true when contextual detection confirms list-based numbering
+// is present in the directory.
+//
 // Transformations applied:
+//   - Optionally removes leading number prefixes (e.g., "1. ", "01 - ") if stripLeadingNumbers is true
 //   - Removes everything after first bracket of any type: (), [], {}, <>
-//   - Strips leading numbers (e.g., "01. ", "42 - ")
 //   - Normalizes underscores and multiple separators to spaces
 //   - Converts "&" to "and"
 //   - Normalizes multiple spaces to single space
 //
 // Examples:
 //   - "Super Mario Bros (USA) [!]" → "Super Mario Bros"
-//   - "01. Legend of Zelda (USA)" → "Legend of Zelda"
 //   - "Super_Mario_Bros (USA)" → "Super Mario Bros"
 //   - "Sonic & Knuckles" → "Sonic and Knuckles"
-//   - "Game   Title  (USA)" → "Game Title"
-func ParseTitleFromFilename(filename string) string {
-	// Step 1: Extract title before first bracket
-	title := reTitleExtract.FindString(filename)
-	title = strings.TrimSpace(title)
+//   - "1. Game Title (USA)" → "Game Title" (if stripLeadingNumbers is true)
+//   - "1942 (USA)" → "1942" (if stripLeadingNumbers is false)
+func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	// Step 1: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
+	// Only done when contextual detection confirms list-based numbering
+	title := filename
+	if stripLeadingNumbers {
+		title = reLeadingNum.ReplaceAllString(title, "")
+		title = strings.TrimSpace(title)
+	}
 
-	// Step 2: Strip leading numbers (e.g., "01. ", "42 - ")
-	title = reLeadingNum.ReplaceAllString(title, "")
+	// Step 2: Extract title before first bracket
+	title = reTitleExtract.FindString(title)
+	title = strings.TrimSpace(title)
 
 	// Step 3: Normalize underscores to spaces
 	title = strings.ReplaceAll(title, "_", " ")

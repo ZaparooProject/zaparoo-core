@@ -26,6 +26,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -43,6 +44,35 @@ const (
 	maxFilesPerTransaction   = 10000
 	maxSystemsPerTransaction = 10
 )
+
+// listNumberingRegex matches file list numbering patterns like "1. ", "01 - ", "42. "
+var listNumberingRegex = regexp.MustCompile(`^\d{1,3}[.\s\-]+`)
+
+// detectNumberingPattern returns true if a significant portion of files match list numbering pattern.
+// This heuristic detects directory-wide list numbering (e.g., "1. Game.zip", "2. Game.zip")
+// to distinguish from legitimate title numbers (e.g., "1942.zip", "007.zip").
+//
+// Parameters:
+//   - files: slice of scan results to analyze
+//   - threshold: minimum ratio of matching files (0.0-1.0) to trigger stripping
+//   - minFiles: minimum number of files required to apply heuristic
+//
+// Returns true if >threshold% of files match AND file count >= minFiles.
+func detectNumberingPattern(files []platforms.ScanResult, threshold float64, minFiles int) bool {
+	if len(files) < minFiles {
+		return false // Don't apply heuristic to small file sets
+	}
+
+	matchCount := 0
+	for _, file := range files {
+		filename := filepath.Base(file.Path)
+		if listNumberingRegex.MatchString(filename) {
+			matchCount++
+		}
+	}
+
+	return float64(matchCount)/float64(len(files)) > threshold
+}
 
 type PathResult struct {
 	Path   string
@@ -748,6 +778,19 @@ func NewNamesIndex(
 
 		scannedSystems[systemID] = true
 
+		// Group files by directory and determine stripping policy per directory
+		filesByDir := make(map[string][]platforms.ScanResult)
+		for _, file := range files {
+			dir := filepath.Dir(file.Path)
+			filesByDir[dir] = append(filesByDir[dir], file)
+		}
+
+		stripPolicyByDir := make(map[string]bool)
+		for dir, dirFiles := range filesByDir {
+			// Use 50% threshold and require at least 5 files to apply heuristic
+			stripPolicyByDir[dir] = detectNumberingPattern(dirFiles, 0.5, 5)
+		}
+
 		for _, file := range files {
 			// Check for cancellation between file processing
 			select {
@@ -764,7 +807,12 @@ func NewNamesIndex(
 				batchStarted = true
 			}
 
-			if _, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, cfg); addErr != nil {
+			// Look up stripping policy for this file's directory
+			dir := filepath.Dir(file.Path)
+			shouldStrip := stripPolicyByDir[dir]
+
+			_, _, addErr := AddMediaPath(db, &scanState, systemID, file.Path, file.NoExt, shouldStrip, cfg)
+			if addErr != nil {
 				return 0, fmt.Errorf("unrecoverable error adding media path %q: %w", file.Path, addErr)
 			}
 			filesInBatch++
@@ -889,7 +937,8 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, cfg)
+					// Custom scanner files: don't apply number stripping heuristic (false)
+					_, _, addErr := AddMediaPath(db, &scanState, systemID, result.Path, result.NoExt, false, cfg)
 					if addErr != nil {
 						return 0, fmt.Errorf(
 							"unrecoverable error adding custom scanner path %q: %w",
@@ -985,7 +1034,10 @@ func NewNamesIndex(
 						batchStarted = true
 					}
 
-					_, _, addErr := AddMediaPath(db, &scanState, systemID, scanResult.Path, scanResult.NoExt, cfg)
+					// 'Any' scanner files: don't apply number stripping heuristic (false)
+					_, _, addErr := AddMediaPath(
+						db, &scanState, systemID, scanResult.Path, scanResult.NoExt, false, cfg,
+					)
 					if addErr != nil {
 						return 0, fmt.Errorf(
 							"unrecoverable error adding 'any' scanner path %q: %w",

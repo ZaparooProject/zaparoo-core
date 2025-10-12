@@ -31,20 +31,19 @@ import (
 
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
-// 10-Stage Normalization Pipeline:
-//   Stage 1:  Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
-//   Stage 2:  Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
-//             "Sonic™" → "Sonic", "Pokémon" → "Pokemon"
-//   Stage 3:  Leading Number Prefix Stripping - "1. Game" / "01 - Game" → "Game"
-//   Stage 4:  Secondary Title Decomposition - Split on ":", " - ", or "'s "
-//             Strip leading articles from both main and secondary titles
-//             "Zelda: The Minish Cap" → "Zelda Minish Cap"
-//   Stage 5:  Trailing Article Normalization - "Legend, The" → "Legend"
-//   Stage 6:  Symbol and Separator Normalization - "&"→"and", ":"→space, etc.
-//   Stage 7:  Metadata Stripping - "(USA) [!]" removed
-//   Stage 8:  Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
-//   Stage 9:  Roman Numeral Conversion - "VII" → "7"
-//   Stage 10: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
+// 9-Stage Normalization Pipeline:
+//   Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
+//   Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
+//            "Sonic™" → "Sonic", "Pokémon" → "Pokemon"
+//   Stage 3: Secondary Title Decomposition - Split on ":", " - ", or "'s "
+//            Strip leading articles from both main and secondary titles
+//            "Zelda: The Minish Cap" → "Zelda Minish Cap"
+//   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
+//   Stage 5: Symbol and Separator Normalization - "&"→"and", ":"→space, etc.
+//   Stage 6: Metadata Stripping - "(USA) [!]" removed
+//   Stage 7: Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
+//   Stage 8: Roman Numeral Conversion - "VII" → "7"
+//   Stage 9: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)
@@ -59,7 +58,6 @@ var (
 			`バージョン|エディション|ヴァージョン)$`,
 	)
 	versionSuffixRegex          = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
-	leadingNumPrefixRegex       = regexp.MustCompile(`^\d+[.\s\-]+`)
 	nonAlphanumRegex            = regexp.MustCompile(`[^a-z0-9]+`)
 	nonAlphanumKeepUnicodeRegex = regexp.MustCompile(
 		`[^a-z0-9` +
@@ -402,7 +400,7 @@ func NormalizeToWords(input string) []string {
 	return strings.Fields(s)
 }
 
-// normalizeInternal performs Stages 1-9 of the slug normalization pipeline.
+// normalizeInternal performs Stages 1-8 of the slug normalization pipeline.
 // This function is shared by both SlugifyString and NormalizeToWords to eliminate
 // code duplication and ensure consistent normalization behavior.
 //
@@ -410,16 +408,15 @@ func NormalizeToWords(input string) []string {
 //
 //	Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
 //	Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
-//	Stage 3: Leading Number Prefix Stripping
-//	Stage 4: Secondary Title Decomposition and Article Stripping
-//	Stage 5: Trailing Article Normalization
-//	Stage 6: Symbol and Separator Normalization
-//	Stage 7: Metadata Stripping
-//	Stage 8: Edition/Version Suffix Stripping
-//	Stage 9: Roman Numeral Conversion
+//	Stage 3: Secondary Title Decomposition and Article Stripping
+//	Stage 4: Trailing Article Normalization
+//	Stage 5: Symbol and Separator Normalization
+//	Stage 6: Metadata Stripping
+//	Stage 7: Edition/Version Suffix Stripping
+//	Stage 8: Roman Numeral Conversion
 //
 // Returns the normalized string with preserved spaces and case changes.
-// The final Stage 10 (character filtering) is applied separately by the calling function.
+// The final Stage 9 (character filtering) is applied separately by the calling function.
 func normalizeInternal(input string) string {
 	s := strings.TrimSpace(input)
 	if s == "" {
@@ -452,10 +449,7 @@ func normalizeInternal(input string) string {
 		s = normalizeByScript(s, script)
 	}
 
-	// Stages 3-9: Text transformations
-	s = leadingNumPrefixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
-
+	// Stages 3-8: Text transformations
 	s = splitAndStripArticles(s)
 
 	if trailingArticleRegex.MatchString(s) {
