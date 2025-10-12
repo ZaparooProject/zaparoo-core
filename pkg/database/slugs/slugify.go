@@ -120,6 +120,17 @@ var (
 	}
 )
 
+// isASCII checks if a string contains only ASCII characters (bytes < 128).
+// This is used for the ASCII fast-path optimization to skip expensive Unicode processing.
+func isASCII(s string) bool {
+	for i := range s {
+		if s[i] >= 128 {
+			return false
+		}
+	}
+	return true
+}
+
 func SlugifyString(input string) string {
 	s := normalizeInternal(input)
 	if s == "" {
@@ -128,6 +139,7 @@ func SlugifyString(input string) string {
 
 	// Stage 10: Final Slugification (Multi-Script Aware)
 	// Create both ASCII-only and Unicode-preserving versions
+	// Note: Even for ASCII strings, we need both slugs for proper script detection logic
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
 	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
 
@@ -401,27 +413,31 @@ func normalizeInternal(input string) string {
 		return ""
 	}
 
-	// Stage 1: Width Normalization
-	// For CJK characters (katakana/hangul), normalize halfwidth → fullwidth for consistency
-	// For ASCII characters, normalize fullwidth → halfwidth for Latin matching
-	// The width.Fold transformer does exactly this: narrows Latin, widens CJK
-	if normalized, _, err := transform.String(width.Fold, s); err == nil {
-		s = normalized
-	}
+	// ASCII fast-path: Skip expensive Unicode processing for pure ASCII strings
+	// ASCII strings don't need width normalization, symbol removal, or script-specific normalization
+	if !isASCII(s) {
+		// Stage 1: Width Normalization
+		// For CJK characters (katakana/hangul), normalize halfwidth → fullwidth for consistency
+		// For ASCII characters, normalize fullwidth → halfwidth for Latin matching
+		// The width.Fold transformer does exactly this: narrows Latin, widens CJK
+		if normalized, _, err := transform.String(width.Fold, s); err == nil {
+			s = normalized
+		}
 
-	// Stage 2: Unicode Normalization
-	// Remove symbols (trademark, copyright, currency)
-	symbolPredicate := runes.Predicate(func(r rune) bool {
-		return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
-	})
-	symbolRemover := runes.Remove(symbolPredicate)
-	if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
-		s = cleaned
-	}
+		// Stage 2: Unicode Normalization
+		// Remove symbols (trademark, copyright, currency)
+		symbolPredicate := runes.Predicate(func(r rune) bool {
+			return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
+		})
+		symbolRemover := runes.Remove(symbolPredicate)
+		if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
+			s = cleaned
+		}
 
-	// Unicode normalization: script-specific strategies
-	script := detectScript(s)
-	s = normalizeByScript(s, script)
+		// Unicode normalization: script-specific strategies
+		script := detectScript(s)
+		s = normalizeByScript(s, script)
+	}
 
 	// Stages 3-9: Text transformations
 	s = leadingNumPrefixRegex.ReplaceAllString(s, "")

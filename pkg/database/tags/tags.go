@@ -20,14 +20,21 @@
 package tags
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 )
 
 // This tag system is inspired by the GameDataBase project's hierarchical
 // tag taxonomy. Reference: https://github.com/PigSaint/GameDataBase/blob/main/tags.yml
+
+// Package-level compiled regexes for tag normalization.
+// These are compiled once at initialization for optimal performance.
+var (
+	reColonSpacing = regexp.MustCompile(`\s*:\s*`)
+	reSpecialChars = regexp.MustCompile(`[^a-z0-9:,-]`)
+)
 
 // TagType represents a top-level tag category
 type TagType string
@@ -102,7 +109,7 @@ func NormalizeTag(s string) string {
 	s = strings.TrimSpace(s)
 
 	// 2. Normalize colon spacing - remove spaces around colons first
-	s = helpers.CachedMustCompile(`\s*:\s*`).ReplaceAllString(s, ":")
+	s = reColonSpacing.ReplaceAllString(s, ":")
 
 	// 3. Convert to lowercase
 	s = strings.ToLower(s)
@@ -115,7 +122,7 @@ func NormalizeTag(s string) string {
 
 	// 6. Remove other special chars (except colon, dash, and comma)
 	// Keep: a-z, 0-9, dash, colon, comma
-	s = helpers.CachedMustCompile(`[^a-z0-9:,-]`).ReplaceAllString(s, "")
+	s = reSpecialChars.ReplaceAllString(s, "")
 
 	return s
 }

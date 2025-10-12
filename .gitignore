@@ -42,3 +42,4 @@ worktrees/
 
 /pkg/zapscript/testdata/*.db
 /pkg/zapscript/testdata/*.txt
+*.dat

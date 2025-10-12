@@ -20,9 +20,24 @@
 package tags
 
 import (
+	"regexp"
 	"strings"
+)
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+// Package-level compiled regexes for filename parsing.
+// These are compiled once at initialization for optimal performance.
+var (
+	// Special pattern extraction
+	reDisc               = regexp.MustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
+	reRev                = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
+	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
+	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
+
+	// Title parsing
+	reTitleExtract = regexp.MustCompile(`^([^(\[{<]*)`)
+	reLeadingNum   = regexp.MustCompile(`^\d+[.\s\-]+`)
+	reMultiSpace   = regexp.MustCompile(`\s+`)
 )
 
 // ParseContext holds context information for disambiguating tags during parsing.
@@ -137,36 +152,32 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	remaining = filename
 
 	// Pattern 1: "Disc X of Y" - most common multi-disc format
-	discRe := helpers.CachedMustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
-	if matches := discRe.FindStringSubmatch(remaining); len(matches) > 2 {
+	if matches := reDisc.FindStringSubmatch(remaining); len(matches) > 2 {
 		tags = append(tags,
 			CanonicalTag{TagTypeMedia, TagValue("disc")},
 			CanonicalTag{TagTypeDisc, TagValue(matches[1])},
 			CanonicalTag{TagTypeDiscTotal, TagValue(matches[2])},
 		)
-		remaining = discRe.ReplaceAllString(remaining, "")
+		remaining = reDisc.ReplaceAllString(remaining, "")
 	}
 
 	// Pattern 2: Revision tags - "Rev 1", "Rev A", "Rev-1"
-	revRe := helpers.CachedMustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
-	if matches := revRe.FindStringSubmatch(remaining); len(matches) > 1 {
+	if matches := reRev.FindStringSubmatch(remaining); len(matches) > 1 {
 		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(strings.ToLower(matches[1]))})
-		remaining = revRe.ReplaceAllString(remaining, "")
+		remaining = reRev.ReplaceAllString(remaining, "")
 	}
 
 	// Pattern 3: Version tags - "v1.2", "v1.2.3"
-	versionRe := helpers.CachedMustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
-	if matches := versionRe.FindStringSubmatch(remaining); len(matches) > 1 {
+	if matches := reVersion.FindStringSubmatch(remaining); len(matches) > 1 {
 		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(matches[1])})
-		remaining = versionRe.ReplaceAllString(remaining, "")
+		remaining = reVersion.ReplaceAllString(remaining, "")
 	}
 
 	// Pattern 4: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
 	// Format: T[+-]?<lang_code>( v<version>)?
 	// Examples: "T+Eng", "T-Ger", "TFre", "T+Eng v1.0", "T+Spa v2.1.3"
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
-	transRe := helpers.CachedMustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
-	if matches := transRe.FindStringSubmatch(remaining); len(matches) >= 5 {
+	if matches := reTrans.FindStringSubmatch(remaining); len(matches) >= 5 {
 		// matches[1] = prefix (^ or space)
 		// matches[2] = "T"
 		// matches[3] = +/- or empty
@@ -224,14 +235,13 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			}
 
 			// Replace the matched pattern, preserving leading space if present
-			remaining = transRe.ReplaceAllString(remaining, " ")
+			remaining = reTrans.ReplaceAllString(remaining, " ")
 		}
 	}
 
 	// Pattern 5: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
 	// Only extract if not already processed as part of translation pattern
-	bracketlessVersionRe := helpers.CachedMustCompile(`\bv(\d+(?:\.\d+)*)`)
-	if matches := bracketlessVersionRe.FindStringSubmatch(remaining); len(matches) > 1 {
+	if matches := reBracketlessVersion.FindStringSubmatch(remaining); len(matches) > 1 {
 		// Check if we already extracted a version from translation pattern
 		hasVersion := false
 		for _, tag := range tags {
@@ -242,7 +252,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		}
 		if !hasVersion {
 			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(matches[1])})
-			remaining = bracketlessVersionRe.ReplaceAllString(remaining, "")
+			remaining = reBracketlessVersion.ReplaceAllString(remaining, "")
 		}
 	}
 
@@ -560,13 +570,11 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 //   - "Game   Title  (USA)" → "Game Title"
 func ParseTitleFromFilename(filename string) string {
 	// Step 1: Extract title before first bracket
-	r := helpers.CachedMustCompile(`^([^(\[{<]*)`)
-	title := r.FindString(filename)
+	title := reTitleExtract.FindString(filename)
 	title = strings.TrimSpace(title)
 
 	// Step 2: Strip leading numbers (e.g., "01. ", "42 - ")
-	leadingNum := helpers.CachedMustCompile(`^\d+[.\s\-]+`)
-	title = leadingNum.ReplaceAllString(title, "")
+	title = reLeadingNum.ReplaceAllString(title, "")
 
 	// Step 3: Normalize underscores to spaces
 	title = strings.ReplaceAll(title, "_", " ")
@@ -575,8 +583,7 @@ func ParseTitleFromFilename(filename string) string {
 	title = strings.ReplaceAll(title, "&", "and")
 
 	// Step 5: Normalize multiple spaces to single space
-	multiSpace := helpers.CachedMustCompile(`\s+`)
-	title = multiSpace.ReplaceAllString(title, " ")
+	title = reMultiSpace.ReplaceAllString(title, " ")
 
 	return strings.TrimSpace(title)
 }

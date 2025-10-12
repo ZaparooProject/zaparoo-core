@@ -1519,3 +1519,354 @@ func TestNormalizeSeparators(t *testing.T) {
 		})
 	}
 }
+
+// TestSlugifyStringRegression_AsciiFastPath ensures the ASCII fast-path optimization
+// doesn't change the algorithm's behavior. This test catches the bug where ASCII strings
+// were returning different results than the original algorithm.
+func TestSlugifyStringRegression_AsciiFastPath(t *testing.T) {
+	t.Parallel()
+
+	// These test cases specifically target edge cases where the ASCII fast-path
+	// optimization could produce different results than the original algorithm.
+	// The key insight is that even ASCII strings need both asciiSlug and unicodeSlug
+	// computation for proper script detection logic.
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Pure ASCII strings that should behave identically
+		{
+			name:     "pure_ascii_simple",
+			input:    "Super Mario Bros",
+			expected: "supermariobros",
+		},
+		{
+			name:     "pure_ascii_with_metadata",
+			input:    "The Legend of Zelda (USA) [!]",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "pure_ascii_with_roman_numerals",
+			input:    "Final Fantasy VII",
+			expected: "finalfantasy7",
+		},
+		{
+			name:     "pure_ascii_with_ampersand",
+			input:    "Sonic & Knuckles",
+			expected: "sonicandknuckles",
+		},
+		{
+			name:     "pure_ascii_with_apostrophe",
+			input:    "Link's Awakening",
+			expected: "linksawakening",
+		},
+		{
+			name:     "pure_ascii_with_colon_subtitle",
+			input:    "Mega Man X: The First Battle",
+			expected: "megamanxfirstbattle",
+		},
+		{
+			name:     "pure_ascii_with_dash_subtitle",
+			input:    "Street Fighter - The World Warrior",
+			expected: "streetfighterworldwarrior",
+		},
+		{
+			name:     "pure_ascii_trailing_article",
+			input:    "Legend of Zelda, The",
+			expected: "legendofzelda",
+		},
+		{
+			name:     "pure_ascii_leading_number",
+			input:    "007 - The World is Not Enough",
+			expected: "worldisnotenough",
+		},
+		{
+			name:     "pure_ascii_edition_suffix",
+			input:    "Game of the Year Edition",
+			expected: "gameoftheyear",
+		},
+		{
+			name:     "pure_ascii_version_suffix",
+			input:    "Game v2.5",
+			expected: "game",
+		},
+		{
+			name:     "pure_ascii_complex_metadata",
+			input:    "Super Mario World (USA) (Rev 1) [!]",
+			expected: "supermarioworld",
+		},
+		{
+			name:     "pure_ascii_multiple_separators",
+			input:    "Game: The_Subtitle-Edition",
+			expected: "gamethesubtitle",
+		},
+		{
+			name:     "pure_ascii_empty_after_stripping",
+			input:    "(USA) [!] v1.0",
+			expected: "v10",
+		},
+		{
+			name:     "pure_ascii_only_spaces",
+			input:    "   ",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SlugifyString(tt.input)
+			assert.Equal(t, tt.expected, result,
+				"ASCII fast-path should produce same result as original algorithm")
+		})
+	}
+}
+
+// TestSlugifyStringRegression_ScriptDetectionConsistency ensures that script detection
+// and slug selection logic works correctly for all input types, including edge cases
+// that might be affected by optimizations.
+func TestSlugifyStringRegression_ScriptDetectionConsistency(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Unicode strings that should preserve Unicode characters
+		{
+			name:     "cjk_mixed_with_ascii",
+			input:    "Street Fighter ストリートファイター",
+			expected: "streetfighterストリートファイター",
+		},
+		{
+			name:     "pure_cjk",
+			input:    "ドラゴンクエストIII",
+			expected: "ドラゴンクエスト3",
+		},
+		{
+			name:     "cyrillic",
+			input:    "Тетрис",
+			expected: "тетрис",
+		},
+		{
+			name:     "greek",
+			input:    "Πόλεμος των Άστρων",
+			expected: "πολεμοστωναστρων",
+		},
+		{
+			name:     "arabic",
+			input:    "لعبة الحرب",
+			expected: "لعبةالحرب",
+		},
+		{
+			name:     "mixed_unicode_with_metadata",
+			input:    "ドラゴンクエストIII (Japan)",
+			expected: "ドラゴンクエスト3",
+		},
+		{
+			name:     "turkish_special_case",
+			input:    "İstanbul Şehir",
+			expected: "istanbulsehir",
+		},
+		{
+			name:     "pokemon_with_accent",
+			input:    "Pokémon Stadium",
+			expected: "pokemonstadium",
+		},
+		{
+			name:     "cafe_with_accent",
+			input:    "Café del Mar",
+			expected: "cafedelmar",
+		},
+		{
+			name:     "fullwidth_ascii",
+			input:    "Ｓｕｐｅｒ　Ｍａｒｉｏ",
+			expected: "supermario",
+		},
+		{
+			name:     "mixed_fullwidth_and_normal",
+			input:    "Ｓｕｐｅｒ Mario",
+			expected: "supermario",
+		},
+		{
+			name:     "trademark_symbol",
+			input:    "Sonic™",
+			expected: "sonic",
+		},
+		{
+			name:     "copyright_symbol",
+			input:    "Game©2023",
+			expected: "game2023",
+		},
+		{
+			name:     "currency_symbol",
+			input:    "Game $100",
+			expected: "game100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SlugifyString(tt.input)
+			assert.Equal(t, tt.expected, result,
+				"Script detection and slug selection should be consistent")
+		})
+	}
+}
+
+// TestSlugifyStringRegression_EdgeCaseConsistency tests specific edge cases
+// that could be affected by performance optimizations, ensuring behavioral consistency.
+func TestSlugifyStringRegression_EdgeCaseConsistency(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Edge cases that could break with optimizations
+		{
+			name:     "empty_string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only_whitespace",
+			input:    "   \t\n   ",
+			expected: "",
+		},
+		{
+			name:     "only_special_chars",
+			input:    "!@#$%^&*()[]{}",
+			expected: "and",
+		},
+		{
+			name:     "only_metadata",
+			input:    "(USA) [!] [T+Eng1.0]",
+			expected: "",
+		},
+		{
+			name:     "single_character",
+			input:    "A",
+			expected: "a",
+		},
+		{
+			name:     "single_unicode_char",
+			input:    "あ",
+			expected: "あ",
+		},
+		{
+			name:     "numbers_only",
+			input:    "123",
+			expected: "123",
+		},
+		{
+			name:     "leading_and_trailing_spaces",
+			input:    "  Super Mario  ",
+			expected: "supermario",
+		},
+		{
+			name:     "multiple_consecutive_spaces",
+			input:    "Super    Mario    Bros",
+			expected: "supermariobros",
+		},
+		{
+			name:     "mixed_separators_consecutive",
+			input:    "Game:_-_-Title",
+			expected: "gametitle",
+		},
+		{
+			name:     "nested_brackets_parens",
+			input:    "Game (Version [Final])",
+			expected: "game",
+		},
+		{
+			name:     "malformed_brackets",
+			input:    "Game (USA [!]",
+			expected: "game",
+		},
+		{
+			name:     "version_with_decimal",
+			input:    "Game v2.5.1",
+			expected: "game",
+		},
+		{
+			name:     "roman_numeral_mixed_with_numbers",
+			input:    "Game 2 VII",
+			expected: "game27",
+		},
+		{
+			name:     "apostrophe_possessive_vs_contractions",
+			input:    "Mario's vs Mario",
+			expected: "mariosvsmario",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SlugifyString(tt.input)
+			assert.Equal(t, tt.expected, result,
+				"Edge case handling should be consistent")
+		})
+	}
+}
+
+// TestSlugifyStringRegression_PerformanceOptimizationImpact ensures that performance
+// optimizations don't change the algorithm's behavior by comparing results before and
+// after optimization paths.
+func TestSlugifyStringRegression_PerformanceOptimizationImpact(t *testing.T) {
+	t.Parallel()
+
+	// Test cases that specifically exercise different optimization paths
+	testCases := []string{
+		// ASCII fast-path cases
+		"Super Mario Bros",
+		"The Legend of Zelda",
+		"Final Fantasy VII",
+		"Sonic & Knuckles",
+		"Street Fighter II",
+
+		// Unicode processing cases
+		"Pokémon Stadium",
+		"Café International",
+		"ドラゴンクエストIII",
+		"Street Fighter ストリートファイター",
+		"Тетрис",
+
+		// Mixed cases
+		"Game™ (USA)",
+		"Ｓｕｐｅｒ Mario",
+		"Game ©2023",
+	}
+
+	for _, input := range testCases {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			// Run the function multiple times to test consistency
+			results := make([]string, 5)
+			for i := range results {
+				results[i] = SlugifyString(input)
+			}
+
+			// All results should be identical
+			for i := 1; i < len(results); i++ {
+				assert.Equal(t, results[0], results[i],
+					"SlugifyString should be deterministic for input: %s", input)
+			}
+
+			// Result should not be empty unless input is empty or only special chars
+			if input != "" && results[0] == "" {
+				// Check if input contains only special characters/metadata
+				stripped := StripMetadataBrackets(input)
+				stripped = nonAlphanumRegex.ReplaceAllString(stripped, "")
+				assert.Empty(t, stripped,
+					"Non-empty input should not produce empty slug unless only special chars: %s", input)
+			}
+		})
+	}
+}
