@@ -305,10 +305,12 @@ func StripMetadataBrackets(s string) string {
 //   - "Spiel Ausgabe" (German) → "Spiel"
 //   - "Game Special Edition" → "Game Special" (Special kept, Edition stripped)
 func StripEditionAndVersionSuffixes(s string) string {
-	// TODO: are these suffixes getting included as detected tags?
+	// Edition suffix words (version, edition, etc.) are detected and tagged in filename_parser.go
+	// as edition:version or edition:edition tags before being stripped here.
 	s = editionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
-	// TODO: are these version tags getting included as detected tags?
+	// Version numbers (v1.0, v2.3, etc.) are detected and tagged in filename_parser.go
+	// as rev:X-Y tags before being stripped here.
 	s = versionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 	return s

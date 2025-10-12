@@ -89,6 +89,7 @@ const (
 	TagTypeDump          TagType = "dump"          // Dump quality/status
 	TagTypeMedia         TagType = "media"         // Media type (disc, disk, tape, etc.)
 	TagTypeExtension     TagType = "extension"     // File extension
+	TagTypeEdition       TagType = "edition"       // Edition markers (version/edition words)
 	TagTypeUnknown       TagType = "unknown"       // Unknown tags
 )
 
@@ -742,5 +743,13 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypeExtension: {
 		// File extensions - dynamically populated based on system configurations
 		// Note: Actual values come from platform-specific supported extensions
+	},
+
+	TagTypeEdition: {
+		// Edition markers - indicates presence of edition/version words that are stripped from slugs
+		// These are generic markers without specific descriptors (e.g., "Special", "Ultimate")
+		// TODO: could add specific edition tags
+		TagEditionVersion, // "Version" or equivalent in any language
+		TagEditionEdition, // "Edition" or equivalent in any language
 	},
 }

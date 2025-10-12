@@ -1325,3 +1325,9 @@ const (
 	TagYear201X TagValue = "201x"
 	TagYear202X TagValue = "202x"
 )
+
+// Edition tag values
+const (
+	TagEditionVersion TagValue = "version"
+	TagEditionEdition TagValue = "edition"
+)

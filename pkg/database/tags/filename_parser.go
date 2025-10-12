@@ -33,6 +33,9 @@ var (
 	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
 	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
 	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
+	reEditionWord        = regexp.MustCompile(
+		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
+	)
 
 	// Title parsing
 	reTitleExtract = regexp.MustCompile(`^([^(\[{<]*)`)
@@ -254,6 +257,32 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(matches[1])})
 			remaining = reBracketlessVersion.ReplaceAllString(remaining, "")
 		}
+	}
+
+	// Pattern 6: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
+	// Detects standalone edition words that will be stripped by slugification
+	if matches := reEditionWord.FindStringSubmatch(remaining); len(matches) > 1 {
+		editionWord := strings.ToLower(matches[1])
+
+		// Determine if this is a "version" word or "edition" word
+		// Version words: version, versione, versao, バージョン, ヴァージョン
+		// Edition words: edition, ausgabe, edizione, edicao, エディション
+		versionWords := map[string]bool{
+			"version":  true,
+			"versione": true,
+			"versao":   true,
+			"バージョン":    true,
+			"ヴァージョン":   true,
+		}
+
+		if versionWords[editionWord] {
+			tags = append(tags, CanonicalTag{TagTypeEdition, TagEditionVersion})
+		} else {
+			tags = append(tags, CanonicalTag{TagTypeEdition, TagEditionEdition})
+		}
+
+		// Don't remove the word from remaining - it's part of the title and will be
+		// stripped later by slugification. We just want to tag its presence.
 	}
 
 	return tags, remaining

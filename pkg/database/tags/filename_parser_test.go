@@ -806,3 +806,187 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractSpecialPatterns_EditionWords(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		wantTags []CanonicalTag
+	}{
+		// English
+		{
+			name:     "English version",
+			filename: "Game Version (USA).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "English edition",
+			filename: "Game Edition (USA).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		{
+			name:     "version before parentheses",
+			filename: "Deluxe Version (USA).bin",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "edition before brackets",
+			filename: "Ultimate Edition [!].iso",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// German
+		{
+			name:     "German ausgabe",
+			filename: "Spiel Ausgabe (Germany).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// Italian
+		{
+			name:     "Italian versione",
+			filename: "Gioco Versione (Italy).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "Italian edizione",
+			filename: "Gioco Edizione (Italy).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// Portuguese
+		{
+			name:     "Portuguese versao",
+			filename: "Jogo Versao (Brazil).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "Portuguese edicao",
+			filename: "Jogo Edicao (Brazil).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// Japanese
+		{
+			name:     "Japanese version (バージョン)",
+			filename: "ゲーム バージョン (Japan).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "Japanese version (ヴァージョン)",
+			filename: "ゲーム ヴァージョン (Japan).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "Japanese edition (エディション)",
+			filename: "ゲーム エディション (Japan).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// Case insensitivity
+		{
+			name:     "VERSION uppercase",
+			filename: "Game VERSION (USA).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "Edition mixed case",
+			filename: "Game EdItIoN (USA).rom",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// At end of filename
+		{
+			name:     "version at end",
+			filename: "Special Version",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+		},
+		{
+			name:     "edition at end",
+			filename: "Limited Edition",
+			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+		},
+		// No match
+		{
+			name:     "version in middle of word should not match",
+			filename: "Perversion Game (USA).rom",
+			wantTags: []CanonicalTag{},
+		},
+		{
+			name:     "no edition words",
+			filename: "Regular Game (USA).rom",
+			wantTags: []CanonicalTag{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTags, _ := extractSpecialPatterns(tt.filename)
+			assert.Equal(t, tt.wantTags, gotTags, "Edition word tags mismatch")
+			// Note: Edition words are NOT removed from filename - they're just tagged
+			// The words will be stripped later by slugification
+		})
+	}
+}
+
+func TestParseFilenameToCanonicalTags_EditionWords(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		wantContains []string
+	}{
+		{
+			name:         "English version with region",
+			filename:     "Deluxe Version (USA)(En)[!].rom",
+			wantContains: []string{"edition:version", "region:us", "lang:en", "dump:verified"},
+		},
+		{
+			name:         "English edition with region",
+			filename:     "Ultimate Edition (Europe)(En,Fr,De).iso",
+			wantContains: []string{"edition:edition", "region:eu", "lang:en", "lang:fr", "lang:de"},
+		},
+		{
+			name:         "German ausgabe",
+			filename:     "Spiel Ausgabe (Germany)(De).rom",
+			wantContains: []string{"edition:edition", "region:de", "lang:de"},
+		},
+		{
+			name:         "Italian versione",
+			filename:     "Gioco Versione (Italy)(It)[!].rom",
+			wantContains: []string{"edition:version", "region:it", "lang:it", "dump:verified"},
+		},
+		{
+			name:         "Portuguese edicao",
+			filename:     "Jogo Edicao (Brazil)(Pt).rom",
+			wantContains: []string{"edition:edition", "region:br", "lang:pt"},
+		},
+		{
+			name:         "Japanese バージョン",
+			filename:     "ゲーム バージョン (Japan)(Ja).rom",
+			wantContains: []string{"edition:version", "region:jp", "lang:ja"},
+		},
+		{
+			name:         "Japanese エディション",
+			filename:     "ゲーム エディション (Japan)(Ja)[!].rom",
+			wantContains: []string{"edition:edition", "region:jp", "lang:ja", "dump:verified"},
+		},
+		{
+			name:         "version with revision number",
+			filename:     "Game Version (v1.2)(USA).rom",
+			wantContains: []string{"edition:version", "rev:1.2", "region:us"},
+		},
+		{
+			name:         "edition with disc info",
+			filename:     "RPG Edition (Disc 1 of 2)(USA).iso",
+			wantContains: []string{"edition:edition", "media:disc", "disc:1", "disctotal:2", "region:us"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+		})
+	}
+}
