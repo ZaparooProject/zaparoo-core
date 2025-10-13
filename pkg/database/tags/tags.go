@@ -90,6 +90,9 @@ const (
 	TagTypeMedia         TagType = "media"         // Media type (disc, disk, tape, etc.)
 	TagTypeExtension     TagType = "extension"     // File extension
 	TagTypeEdition       TagType = "edition"       // Edition markers (version/edition words)
+	TagTypePerspective   TagType = "perspective"   // Camera perspective and view angle
+	TagTypeArt           TagType = "art"           // Art style and visual presentation
+	TagTypeAccessibility TagType = "accessibility" // Accessibility features
 	TagTypeUnknown       TagType = "unknown"       // Unknown tags
 )
 
@@ -97,6 +100,13 @@ const (
 //   - Flat tags: Just the value (e.g., "trackball", "quiz")
 //   - Hierarchical tags: Colon-separated (e.g., "joystick:4", "sports:wrestling")
 //   - All values are normalized (lowercase, spaces→dashes, no periods)
+//
+// Multi-language tags:
+//   Filenames can specify multiple languages using either comma or plus separators:
+//   - No-Intro format: "(En,Fr,De)" → generates lang:en, lang:fr, lang:de
+//   - TOSEC format:    "(En+Fr+De)" → generates lang:en, lang:fr, lang:de
+//   Both formats are dynamically parsed and produce individual language tags.
+//   Minimum 2 languages required for multi-language detection.
 //
 // Our format differs from GameDataBase (#type:subtag>value) by using colons throughout
 // for simplicity, but the taxonomy and tag values are directly inspired by their work.
@@ -288,6 +298,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonControllerLifefitness, TagAddonControllerTaptapmat, TagAddonControllerTeevgolf,
 		TagAddonControllerLasabirdie, TagAddonControllerGrip, TagAddonControllerTsurikon64,
 		TagAddonControllerPartytap, TagAddonControllerClimberstick, TagAddonControllerJuujikeycover,
+		TagAddonControllerJCart, TagAddonControllerRumble,
 		// Light guns
 		TagAddonLightgunLightphaser, TagAddonLightgunMenacer, TagAddonLightgunVirtuagun,
 		TagAddonLightgunZapper, TagAddonLightgunSuperscope, TagAddonLightgunJustifier,
@@ -326,7 +337,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonOnlineSegachannel, TagAddonOnlineSaturnmodem, TagAddonOnlineNetlink,
 		TagAddonOnlineXband, TagAddonOnlineMeganet, TagAddonOnlineTeleplay,
 		TagAddonOnlineNetworksystem, TagAddonOnlineNDM24, TagAddonOnlineSatellaview,
-		TagAddonOnlineRandnetmodem,
+		TagAddonOnlineNintendopower, TagAddonOnlineSeganet, TagAddonOnlineRandnetmodem,
 		// Other addons
 		TagAddonVibrationRumblepak,
 		TagAddonGlasses3DGlasses, TagAddonGlassesSegaVR, TagAddonGlasses3DSystem, TagAddonGlasses3DGoggle,
@@ -338,9 +349,6 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonPrinterPocketprinter, TagAddonPrinterPrintbooster,
 		TagAddonBarcodeboy, TagAddonRSS, TagAddonPocketcamera, TagAddonCapturecassette,
 		TagAddonPhotoreader, TagAddonDevelobox, TagAddonTeststation,
-		// SNES and other special hardware
-		TagAddonSNESSatellaview, TagAddonSNESSufami, TagAddonSNESNintendopower,
-		TagAddonControllerJCart, TagAddonControllerRumble, TagAddonNetworkSeganet,
 	},
 	TagTypeEmbedded: {
 		// Embedded extra hardware inside the cartridge itself.
@@ -473,13 +481,15 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	},
 	TagTypeDisc: {
 		// Disc number for multi-disc games (which disc this file is)
-		TagDisc1, TagDisc2, TagDisc3, TagDisc4,
+		TagDisc1, TagDisc2, TagDisc3, TagDisc4, TagDisc5,
+		TagDisc6, TagDisc7, TagDisc8, TagDisc9, TagDisc10,
 	},
 
 	TagTypeDiscTotal: {
 		// Total number of discs in the complete set
 		// Example: Final Fantasy VII disc 2 would have both disc:2 and disctotal:3
-		TagDiscTotal2, TagDiscTotal3, TagDiscTotal4,
+		TagDiscTotal2, TagDiscTotal3, TagDiscTotal4, TagDiscTotal5,
+		TagDiscTotal6, TagDiscTotal7, TagDiscTotal8, TagDiscTotal9, TagDiscTotal10,
 	},
 
 	TagTypeBased: {
@@ -751,5 +761,35 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// TODO: could add specific edition tags
 		TagEditionVersion, // "Version" or equivalent in any language
 		TagEditionEdition, // "Edition" or equivalent in any language
+	},
+
+	TagTypePerspective: {
+		// Camera perspective and view angle
+		// Describes how the player views the game world
+		TagPerspectiveFirstperson, TagPerspectiveThirdperson, TagPerspectiveTopdown,
+		TagPerspectiveIsometric, TagPerspectiveFixedcamera,
+		// Sidescrolling with sub-categories
+		TagPerspectiveSidescrollHorizontal, TagPerspectiveSidescrollVertical,
+	},
+
+	TagTypeArt: {
+		// Art style and visual presentation
+		// Base dimensions - games can have both a dimension tag and a style tag
+		TagArt2D, TagArt3D,
+		// Art styles
+		TagArtPixelart, TagArtCelshaded, TagArtVector, TagArtDigitized, TagArtHanddrawn,
+	},
+
+	TagTypeAccessibility: {
+		// Accessibility features for players with disabilities
+		// Hierarchical structure: accessibility:category:feature
+		// Visual accessibility
+		TagAccessibilityVisualColorblindMode, TagAccessibilityVisualHighContrast,
+		TagAccessibilityVisualTextSizeAdjust,
+		// Audio accessibility
+		TagAccessibilityAudioSubtitles, TagAccessibilityAudioMonoAudio,
+		TagAccessibilityAudioVisualCues,
+		// Input accessibility
+		TagAccessibilityInputRemappableControls, TagAccessibilityInputOneButtonMode,
 	},
 }

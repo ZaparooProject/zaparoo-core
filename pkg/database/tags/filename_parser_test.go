@@ -235,7 +235,7 @@ func TestParseMultiLanguageTag(t *testing.T) {
 		wantNil  bool
 	}{
 		{
-			name: "three languages",
+			name: "comma-separated three languages (No-Intro)",
 			tag:  "En,Fr,De",
 			wantTags: []CanonicalTag{
 				{TagTypeLang, TagLangEN},
@@ -244,11 +244,38 @@ func TestParseMultiLanguageTag(t *testing.T) {
 			},
 		},
 		{
-			name: "two languages",
-			tag:  "En,Fr", // Use Fr which is in standalone lang list
+			name: "comma-separated two languages",
+			tag:  "En,Fr",
 			wantTags: []CanonicalTag{
 				{TagTypeLang, TagLangEN},
 				{TagTypeLang, TagLangFR},
+			},
+		},
+		{
+			name: "plus-separated two languages (TOSEC)",
+			tag:  "En+Fr",
+			wantTags: []CanonicalTag{
+				{TagTypeLang, TagLangEN},
+				{TagTypeLang, TagLangFR},
+			},
+		},
+		{
+			name: "plus-separated three languages",
+			tag:  "En+De+Es",
+			wantTags: []CanonicalTag{
+				{TagTypeLang, TagLangEN},
+				{TagTypeLang, TagLangDE},
+				{TagTypeLang, TagLangES},
+			},
+		},
+		{
+			name: "plus-separated four languages",
+			tag:  "En+Fr+De+It",
+			wantTags: []CanonicalTag{
+				{TagTypeLang, TagLangEN},
+				{TagTypeLang, TagLangFR},
+				{TagTypeLang, TagLangDE},
+				{TagTypeLang, TagLangIT},
 			},
 		},
 		{
@@ -260,6 +287,16 @@ func TestParseMultiLanguageTag(t *testing.T) {
 			name:    "comma but not languages",
 			tag:     "Test,Data",
 			wantNil: true,
+		},
+		{
+			name:    "plus but not languages",
+			tag:     "Test+Data",
+			wantNil: true,
+		},
+		{
+			name:    "single language with plus returns nil",
+			tag:     "En+Invalid",
+			wantNil: true, // Only one valid language, so returns nil
 		},
 	}
 
@@ -439,9 +476,19 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			wantTags: []string{"rev:1-2", "region:eu"},
 		},
 		{
-			name:     "multi-language tag",
+			name:     "multi-language comma-separated (No-Intro)",
 			filename: "Game (En,Fr,De)(Europe)[!].gba",
 			wantTags: []string{"lang:en", "lang:fr", "lang:de", "region:eu", "dump:verified"},
+		},
+		{
+			name:     "multi-language plus-separated (TOSEC)",
+			filename: "Game (En+Fr)(Europe)[!].gba",
+			wantTags: []string{"lang:en", "lang:fr", "region:eu", "dump:verified"},
+		},
+		{
+			name:     "multi-language plus four languages",
+			filename: "Game (En+Fr+De+It)(World).iso",
+			wantTags: []string{"lang:en", "lang:fr", "lang:de", "lang:it", "region:world"},
 		},
 		{
 			name:     "beta with dump info",

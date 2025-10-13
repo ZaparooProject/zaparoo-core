@@ -146,25 +146,25 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// Note: Some language codes overlap with region codes above and are merged there.
 	// These are either standalone language codes or ones where the region mapping doesn't auto-add the language.
-	"ar":        {{TagTypeLang, TagLangAR}},
-	"bs":        {{TagTypeLang, TagLangBS}},
-	"el":        {{TagTypeLang, TagLangEL}},
-	"en":        {{TagTypeLang, TagLangEN}},
-	"eo":        {{TagTypeLang, TagLangEO}},
-	"fa":        {{TagTypeLang, TagLangFA}},
-	"ga":        {{TagTypeLang, TagLangGA}},
-	"gu":        {{TagTypeLang, TagLangGU}},
-	"he":        {{TagTypeLang, TagLangHE}},
-	"hi":        {{TagTypeLang, TagLangHI}},
-	"ms":        {{TagTypeLang, TagLangMS}},
-	"sl":        {{TagTypeLang, TagLangSL}},
-	"sq":        {{TagTypeLang, TagLangSQ}},
-	"sr":        {{TagTypeLang, TagLangSR}},
-	"ur":        {{TagTypeLang, TagLangUR}},
-	"vi":        {{TagTypeLang, TagLangVI}},
-	"yi":        {{TagTypeLang, TagLangYI}},
-	"zh":        {{TagTypeLang, TagLangZH}},
-	"fremen":    {{TagTypeLang, TagLangFR}, {TagTypeLang, TagLangEN}},     // French+English multi-language
+	"ar": {{TagTypeLang, TagLangAR}},
+	"bs": {{TagTypeLang, TagLangBS}},
+	"el": {{TagTypeLang, TagLangEL}},
+	"en": {{TagTypeLang, TagLangEN}},
+	"eo": {{TagTypeLang, TagLangEO}},
+	"fa": {{TagTypeLang, TagLangFA}},
+	"ga": {{TagTypeLang, TagLangGA}},
+	"gu": {{TagTypeLang, TagLangGU}},
+	"he": {{TagTypeLang, TagLangHE}},
+	"hi": {{TagTypeLang, TagLangHI}},
+	"ms": {{TagTypeLang, TagLangMS}},
+	"sl": {{TagTypeLang, TagLangSL}},
+	"sq": {{TagTypeLang, TagLangSQ}},
+	"sr": {{TagTypeLang, TagLangSR}},
+	"ur": {{TagTypeLang, TagLangUR}},
+	"vi": {{TagTypeLang, TagLangVI}},
+	"yi": {{TagTypeLang, TagLangYI}},
+	"zh": {{TagTypeLang, TagLangZH}},
+	// Language variants (not multi-language - these are specific dialects/scripts)
 	"ch-trad":   {{TagTypeLang, TagLangZH}, {TagTypeLang, TagLangZHTrad}}, // Traditional Chinese
 	"ch-simple": {{TagTypeLang, TagLangZH}, {TagTypeLang, TagLangZHHans}}, // Simplified Chinese
 	"bra":       {{TagTypeLang, TagLangPTBR}},                             // Brazilian Portuguese
@@ -366,16 +366,16 @@ var allTagMappings = map[string][]CanonicalTag{
 	"megaplay": {{TagTypeArcadeBoard, TagArcadeBoardSegaMegaplay}}, // MegaPlay arcade
 	"mp":       {{TagTypeArcadeBoard, TagArcadeBoardSegaMegaplay}}, // MegaPlay (short form)
 	// "bs" is ambiguous: Bosnian language vs Satellaview - handled in filename_parser.go
-	"satellaview": {{TagTypeAddon, TagAddonSNESSatellaview}}, // Satellaview (full name)
+	"satellaview": {{TagTypeAddon, TagAddonOnlineSatellaview}}, // Satellaview online service
 	// "st" is ambiguous: Sufami Turbo vs other uses - handled in filename_parser.go
-	"sufami-turbo": {{TagTypeAddon, TagAddonSNESSufami}}, // Sufami Turbo (full name)
+	"sufami-turbo": {{TagTypeAddon, TagAddonPeripheralSufami}}, // Sufami Turbo cartridge adapter
 	// "np" is ambiguous: Nintendo Power vs other uses - handled in filename_parser.go
-	"nintendo-power": {{TagTypeAddon, TagAddonSNESNintendopower}}, // Nintendo Power (full name)
-	"j-cart":         {{TagTypeAddon, TagAddonControllerJCart}},   // J-Cart (Genesis controller ports)
-	"sn":             {{TagTypeAddon, TagAddonNetworkSeganet}},    // Sega-Net
-	"sega-net":       {{TagTypeAddon, TagAddonNetworkSeganet}},    // Sega-Net (full name)
-	"sachen":         {{TagTypeUnlicensed, TagUnlicensedSachen}},  // Sachen unlicensed (NES)
-	"rumble-version": {{TagTypeAddon, TagAddonControllerRumble}},  // Rumble Pak version
+	"nintendo-power": {{TagTypeAddon, TagAddonOnlineNintendopower}}, // Nintendo Power kiosk service
+	"j-cart":         {{TagTypeAddon, TagAddonControllerJCart}},     // J-Cart (Genesis controller ports)
+	"sn":             {{TagTypeAddon, TagAddonOnlineSeganet}},       // Sega-Net online service
+	"sega-net":       {{TagTypeAddon, TagAddonOnlineSeganet}},       // Sega-Net (full name)
+	"sachen":         {{TagTypeUnlicensed, TagUnlicensedSachen}},    // Sachen unlicensed (NES)
+	"rumble-version": {{TagTypeAddon, TagAddonControllerRumble}},    // Rumble Pak version
 
 	// ============================================================================
 	// MULTICART AND COMPILATION MAPPINGS
@@ -408,6 +408,12 @@ var allTagMappings = map[string][]CanonicalTag{
 	"disc-2":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc2}},
 	"disc-3":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc3}},
 	"disc-4":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc4}},
+	"disc-5":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc5}},
+	"disc-6":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc6}},
+	"disc-7":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc7}},
+	"disc-8":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc8}},
+	"disc-9":    {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc9}},
+	"disc-10":   {{TagTypeMedia, TagMediaDisc}, {TagTypeDisc, TagDisc10}},
 	"disk":      {{TagTypeMedia, TagMediaDisk}},
 	"file":      {{TagTypeMedia, TagMediaFile}},
 	"part":      {{TagTypeMedia, TagMediaPart}},

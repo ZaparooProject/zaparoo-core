@@ -514,6 +514,8 @@ const (
 	TagAddonControllerPartytap         TagValue = "controller:partytap"
 	TagAddonControllerClimberstick     TagValue = "controller:climberstick"
 	TagAddonControllerJuujikeycover    TagValue = "controller:juujikeycover"
+	TagAddonControllerJCart            TagValue = "controller:jcart"  // J-Cart (Genesis controller ports on cartridge)
+	TagAddonControllerRumble           TagValue = "controller:rumble" // Rumble support
 
 	// Light guns
 	TagAddonLightgunLightphaser     TagValue = "lightgun:lightphaser"
@@ -615,6 +617,8 @@ const (
 	TagAddonOnlineNetworksystem TagValue = "online:networksystem"
 	TagAddonOnlineNDM24         TagValue = "online:ndm24"
 	TagAddonOnlineSatellaview   TagValue = "online:satellaview"
+	TagAddonOnlineNintendopower TagValue = "online:nintendopower"
+	TagAddonOnlineSeganet       TagValue = "online:seganet"
 	TagAddonOnlineRandnetmodem  TagValue = "online:randnetmodem"
 
 	// Other addons
@@ -869,17 +873,29 @@ const (
 
 // Disc tag values
 const (
-	TagDisc1 TagValue = "1"
-	TagDisc2 TagValue = "2"
-	TagDisc3 TagValue = "3"
-	TagDisc4 TagValue = "4"
+	TagDisc1  TagValue = "1"
+	TagDisc2  TagValue = "2"
+	TagDisc3  TagValue = "3"
+	TagDisc4  TagValue = "4"
+	TagDisc5  TagValue = "5"
+	TagDisc6  TagValue = "6"
+	TagDisc7  TagValue = "7"
+	TagDisc8  TagValue = "8"
+	TagDisc9  TagValue = "9"
+	TagDisc10 TagValue = "10"
 )
 
 // Disc total tag values
 const (
-	TagDiscTotal2 TagValue = "2"
-	TagDiscTotal3 TagValue = "3"
-	TagDiscTotal4 TagValue = "4"
+	TagDiscTotal2  TagValue = "2"
+	TagDiscTotal3  TagValue = "3"
+	TagDiscTotal4  TagValue = "4"
+	TagDiscTotal5  TagValue = "5"
+	TagDiscTotal6  TagValue = "6"
+	TagDiscTotal7  TagValue = "7"
+	TagDiscTotal8  TagValue = "8"
+	TagDiscTotal9  TagValue = "9"
+	TagDiscTotal10 TagValue = "10"
 )
 
 // Based tag values
@@ -1210,16 +1226,6 @@ const (
 	TagArcadeBoardSegaMegaplay TagValue = "sega:megaplay"
 )
 
-// Addon tag values (SNES and other special hardware)
-const (
-	TagAddonSNESSatellaview   TagValue = "snes:satellaview"
-	TagAddonSNESSufami        TagValue = "snes:sufami"
-	TagAddonSNESNintendopower TagValue = "snes:nintendopower"
-	TagAddonControllerJCart   TagValue = "controller:jcart"
-	TagAddonControllerRumble  TagValue = "controller:rumble"
-	TagAddonNetworkSeganet    TagValue = "network:seganet"
-)
-
 // Unlicensed publisher tag values
 const (
 	TagUnlicensedSachen TagValue = "unlicensed:sachen"
@@ -1330,4 +1336,46 @@ const (
 const (
 	TagEditionVersion TagValue = "version"
 	TagEditionEdition TagValue = "edition"
+)
+
+// Perspective tag values
+const (
+	TagPerspectiveFirstperson          TagValue = "firstperson"
+	TagPerspectiveThirdperson          TagValue = "thirdperson"
+	TagPerspectiveTopdown              TagValue = "topdown"
+	TagPerspectiveIsometric            TagValue = "isometric"
+	TagPerspectiveFixedcamera          TagValue = "fixedcamera"
+	TagPerspectiveSidescrollHorizontal TagValue = "sidescroll:horizontal"
+	TagPerspectiveSidescrollVertical   TagValue = "sidescroll:vertical"
+)
+
+// Art style tag values
+const (
+	// Base dimensions
+	TagArt2D TagValue = "2d"
+	TagArt3D TagValue = "3d"
+
+	// Art styles
+	TagArtPixelart  TagValue = "pixelart"
+	TagArtCelshaded TagValue = "celshaded"
+	TagArtVector    TagValue = "vector"
+	TagArtDigitized TagValue = "digitized"
+	TagArtHanddrawn TagValue = "handdrawn"
+)
+
+// Accessibility tag values
+const (
+	// Visual accessibility
+	TagAccessibilityVisualColorblindMode TagValue = "visual:colorblindmode"
+	TagAccessibilityVisualHighContrast   TagValue = "visual:highcontrast"
+	TagAccessibilityVisualTextSizeAdjust TagValue = "visual:textsizeadjust"
+
+	// Audio accessibility
+	TagAccessibilityAudioSubtitles  TagValue = "audio:subtitles"
+	TagAccessibilityAudioMonoAudio  TagValue = "audio:monoaudio"
+	TagAccessibilityAudioVisualCues TagValue = "audio:visualcues"
+
+	// Input accessibility
+	TagAccessibilityInputRemappableControls TagValue = "input:remappablecontrols"
+	TagAccessibilityInputOneButtonMode      TagValue = "input:onebuttonmode"
 )

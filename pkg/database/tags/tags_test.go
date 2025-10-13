@@ -347,7 +347,7 @@ func TestSpecificTagTypeRules(t *testing.T) {
 		tags := CanonicalTagDefinitions[TagTypeLang]
 
 		for _, tag := range tags {
-			// Should be 2-7 characters (ISO codes, special like "fremen", or variants like "zh-trad")
+			// Should be 2-7 characters (ISO codes and variants like "zh-trad", "pt-br")
 			assert.GreaterOrEqual(t, len(tag), 2,
 				"Language code should be at least 2 characters: %s", tag)
 			assert.LessOrEqual(t, len(tag), 7,

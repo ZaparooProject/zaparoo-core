@@ -332,21 +332,29 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	return tags, remaining
 }
 
-// parseMultiLanguageTag handles comma-separated language tags like "(En,Fr,De)"
-// Returns individual language tags or nil if not a multi-language tag
+// parseMultiLanguageTag handles multi-language tags in both formats:
+//   - Comma-separated (No-Intro): "(En,Fr,De)" → lang:en, lang:fr, lang:de
+//   - Plus-separated (TOSEC): "(En+Fr)" → lang:en, lang:fr
+//
+// Returns individual language tags or nil if not a multi-language tag.
 func parseMultiLanguageTag(tag string) []CanonicalTag {
-	// Multi-language tags contain commas
-	if !strings.Contains(tag, ",") {
-		return nil
+	// Multi-language tags contain commas or plus signs
+	var parts []string
+	switch {
+	case strings.Contains(tag, ","):
+		parts = strings.Split(tag, ",")
+	case strings.Contains(tag, "+"):
+		parts = strings.Split(tag, "+")
+	default:
+		return nil // Single language
 	}
 
-	parts := strings.Split(tag, ",")
 	var langs []CanonicalTag
 
 	for _, part := range parts {
 		normalized := NormalizeTag(part)
-		// Check if it's a known language code (2 chars typically)
-		if len(normalized) == 2 || len(normalized) == 3 {
+		// Check if it's a known language code (2-3 chars typically)
+		if len(normalized) >= 2 && len(normalized) <= 3 {
 			// Try to map as language
 			mapped := mapFilenameTagToCanonical(normalized)
 			for _, ct := range mapped {
@@ -498,22 +506,22 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		return []CanonicalTag{{TagTypeLang, TagLangHI}}
 
 	case "st":
-		// "st" could be Sufami Turbo (SNES addon) but that's rare
+		// "st" could be Sufami Turbo (SNES peripheral cartridge adapter) but that's rare
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, TagAddonSNESSufami}}
+				return []CanonicalTag{{TagTypeAddon, TagAddonPeripheralSufami}}
 			}
 		}
 		// Otherwise, fallback to map (might be unknown)
 		return mapFilenameTagToCanonical(tag)
 
 	case "np":
-		// "np" could be Nintendo Power (SNES cartridge) but uncommon
+		// "np" could be Nintendo Power (SNES kiosk service) but uncommon
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, TagAddonSNESNintendopower}}
+				return []CanonicalTag{{TagTypeAddon, TagAddonOnlineNintendopower}}
 			}
 		}
 		// Otherwise, fallback to map
