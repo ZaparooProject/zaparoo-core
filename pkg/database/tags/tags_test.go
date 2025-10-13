@@ -38,7 +38,7 @@ func TestTagTypeConstants(t *testing.T) {
 	}{
 		{"Input", TagTypeInput, "input"},
 		{"Players", TagTypePlayers, "players"},
-		{"Genre", TagTypeGenre, "genre"},
+		{"GameGenre", TagTypeGameGenre, "gamegenre"},
 		{"Addon", TagTypeAddon, "addon"},
 		{"Embedded", TagTypeEmbedded, "embedded"},
 		{"Save", TagTypeSave, "save"},
@@ -79,7 +79,7 @@ func TestTagTypeConstants(t *testing.T) {
 // TestTagTypeNaming verifies TagType constants follow naming conventions
 func TestTagTypeNaming(t *testing.T) {
 	allTypes := []TagType{
-		TagTypeInput, TagTypePlayers, TagTypeGenre, TagTypeAddon, TagTypeEmbedded,
+		TagTypeInput, TagTypePlayers, TagTypeGameGenre, TagTypeAddon, TagTypeEmbedded,
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
@@ -117,7 +117,7 @@ func TestTagTypeNaming(t *testing.T) {
 // TestCanonicalTagDefinitionsCompleteness verifies all TagTypes have entries
 func TestCanonicalTagDefinitionsCoverage(t *testing.T) {
 	allTypes := []TagType{
-		TagTypeInput, TagTypePlayers, TagTypeGenre, TagTypeAddon, TagTypeEmbedded,
+		TagTypeInput, TagTypePlayers, TagTypeGameGenre, TagTypeAddon, TagTypeEmbedded,
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,
@@ -568,7 +568,7 @@ func TestTagTypeStringConversion(t *testing.T) {
 	testCases := map[string]TagType{
 		"input":       TagTypeInput,
 		"players":     TagTypePlayers,
-		"genre":       TagTypeGenre,
+		"gamegenre":   TagTypeGameGenre,
 		"disctotal":   TagTypeDiscTotal,
 		"extension":   TagTypeExtension,
 		"mameparent":  TagTypeMameParent,
@@ -590,7 +590,7 @@ func TestTagTypeStringConversion(t *testing.T) {
 // TestNoTagTypeCollisions verifies no two TagTypes have the same string value
 func TestNoTagTypeCollisions(t *testing.T) {
 	allTypes := []TagType{
-		TagTypeInput, TagTypePlayers, TagTypeGenre, TagTypeAddon, TagTypeEmbedded,
+		TagTypeInput, TagTypePlayers, TagTypeGameGenre, TagTypeAddon, TagTypeEmbedded,
 		TagTypeSave, TagTypeArcadeBoard, TagTypeCompatibility, TagTypeDisc, TagTypeDiscTotal,
 		TagTypeBased, TagTypeSearch, TagTypeMultigame, TagTypeReboxed, TagTypePort,
 		TagTypeLang, TagTypeUnfinished, TagTypeRerelease, TagTypeRev, TagTypeSet,

@@ -61,7 +61,7 @@ func (t CanonicalTag) String() string {
 const (
 	TagTypeInput         TagType = "input"         // Input devices and controls
 	TagTypePlayers       TagType = "players"       // Player count and modes
-	TagTypeGenre         TagType = "genre"         // Game genre and subgenres
+	TagTypeGameGenre     TagType = "gamegenre"     // Game genre and subgenres
 	TagTypeAddon         TagType = "addon"         // External peripherals and add-ons
 	TagTypeEmbedded      TagType = "embedded"      // Embedded chips and internal hardware
 	TagTypeSave          TagType = "save"          // Save mechanism
@@ -189,91 +189,91 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagPlayersAlt,  // Alternating turns
 	},
 
-	TagTypeGenre: {
+	TagTypeGameGenre: {
 		// Genre hierarchy uses 1-2 levels: "genre" or "genre:subgenre"
 		// Examples: "action", "action:platformer", "sports:wrestling"
 		// Action
-		TagGenreAction, TagGenreActionPlatformer, TagGenreActionMaze, TagGenreActionBlockbreaker,
-		TagGenreActionRunAndGun, TagGenreActionHackAndSlash, TagGenreActionMetroidvania, TagGenreActionRoguelite,
+		TagGameGenreAction, TagGameGenreActionPlatformer, TagGameGenreActionMaze, TagGameGenreActionBlockbreaker,
+		TagGameGenreActionRunAndGun, TagGameGenreActionHackAndSlash, TagGameGenreActionMetroidvania, TagGameGenreActionRoguelite,
 		// Adventure
-		TagGenreAdventure, TagGenreAdventurePointClick, TagGenreAdventureVisualNovel,
-		TagGenreAdventureSurvivalHorror, TagGenreAdventureText,
+		TagGameGenreAdventure, TagGameGenreAdventurePointClick, TagGameGenreAdventureVisualNovel,
+		TagGameGenreAdventureSurvivalHorror, TagGameGenreAdventureText,
 		// Board games - digital versions of classic board/card games
-		TagGenreBoard, TagGenreBoardCards, TagGenreBoardHanafuda, TagGenreBoardChess, TagGenreBoardShougi,
-		TagGenreBoardGo, TagGenreBoardMahjong, TagGenreBoardReversi, TagGenreBoardOthello,
-		TagGenreBoardBackgammon, TagGenreBoardParty, TagGenreBoardJankenpon,
+		TagGameGenreBoard, TagGameGenreBoardCards, TagGameGenreBoardHanafuda, TagGameGenreBoardChess, TagGameGenreBoardShougi,
+		TagGameGenreBoardGo, TagGameGenreBoardMahjong, TagGameGenreBoardReversi, TagGameGenreBoardOthello,
+		TagGameGenreBoardBackgammon, TagGameGenreBoardParty, TagGameGenreBoardJankenpon,
 
 		// Fighting
-		TagGenreBrawler,       // Beat'em up (Streets of Rage, Double Dragon)
-		TagGenreFighting,      // Fighting games
-		TagGenreFightingMelee, // Close-quarters fighting
+		TagGameGenreBrawler,       // Beat'em up (Streets of Rage, Double Dragon)
+		TagGameGenreFighting,      // Fighting games
+		TagGameGenreFightingMelee, // Close-quarters fighting
 
 		// Minigames
-		TagGenreMinigames,
+		TagGameGenreMinigames,
 
 		// Parlor games - arcade/amusement games
-		TagGenreParlor, TagGenreParlorPinball, TagGenreParlorJackpot, TagGenreParlorPachinko,
-		TagGenreParlorDarts, TagGenreParlorBowling, TagGenreParlorBilliards,
-		TagGenreParlorMogurataiji, // Whac-A-Mole
-		TagGenreParlorKiddieride,  // Coin-operated kiddie rides
-		TagGenreParlorMechanical,  // Mechanical arcade games
+		TagGameGenreParlor, TagGameGenreParlorPinball, TagGameGenreParlorJackpot, TagGameGenreParlorPachinko,
+		TagGameGenreParlorDarts, TagGameGenreParlorBowling, TagGameGenreParlorBilliards,
+		TagGameGenreParlorMogurataiji, // Whac-A-Mole
+		TagGameGenreParlorKiddieride,  // Coin-operated kiddie rides
+		TagGameGenreParlorMechanical,  // Mechanical arcade games
 		// Quiz
-		TagGenreQuiz,
+		TagGameGenreQuiz,
 
 		// Racing
-		TagGenreRacing, TagGenreRacingCombat, TagGenreRacingDriving,
+		TagGameGenreRacing, TagGameGenreRacingCombat, TagGameGenreRacingDriving,
 
 		// RPG - Role-Playing Game
-		TagGenreRPG,
-		TagGenreRPGAction,         // Action RPG
-		TagGenreRPGJapanese,       // JRPG (Japanese RPG)
-		TagGenreRPGStrategy,       // Strategy RPG / Tactical RPG
-		TagGenreRPGDungeonCrawler, // Dungeon crawler
-		TagGenreRPGMMO,            // MMO RPG
+		TagGameGenreRPG,
+		TagGameGenreRPGAction,         // Action RPG
+		TagGameGenreRPGJapanese,       // JRPG (Japanese RPG)
+		TagGameGenreRPGStrategy,       // Strategy RPG / Tactical RPG
+		TagGameGenreRPGDungeonCrawler, // Dungeon crawler
+		TagGameGenreRPGMMO,            // MMO RPG
 
 		// Rhythm
-		TagGenreRhythm, TagGenreRhythmKaraoke, TagGenreRhythmDance,
+		TagGameGenreRhythm, TagGameGenreRhythmKaraoke, TagGameGenreRhythmDance,
 
 		// Shoot'em up (shmup)
-		TagGenreShmup,
-		TagGenreShmupHorizontal, // Horizontal scrolling
-		TagGenreShmupVertical,   // Vertical scrolling
-		TagGenreShmupIsometric,  // Isometric
-		TagGenreShmupDanmaku,    // Bullet hell
+		TagGameGenreShmup,
+		TagGameGenreShmupHorizontal, // Horizontal scrolling
+		TagGameGenreShmupVertical,   // Vertical scrolling
+		TagGameGenreShmupIsometric,  // Isometric
+		TagGameGenreShmupDanmaku,    // Bullet hell
 		// Shooting
-		TagGenreShooting, TagGenreShootingGallery, TagGenreShootingRail, TagGenreShootingFPS, TagGenreShootingTPS,
+		TagGameGenreShooting, TagGameGenreShootingGallery, TagGameGenreShootingRail, TagGameGenreShootingFPS, TagGameGenreShootingTPS,
 		// Puzzle
-		TagGenrePuzzle, TagGenrePuzzleDrop, TagGenrePuzzleMind,
+		TagGameGenrePuzzle, TagGameGenrePuzzleDrop, TagGameGenrePuzzleMind,
 		// Simulation
-		TagGenreSim, TagGenreSimStrategy, TagGenreSimCardgame, TagGenreSimFlight, TagGenreSimTrain,
-		TagGenreSimDate, TagGenreSimOtome, TagGenreSimLife, TagGenreSimFarm, TagGenreSimPet,
-		TagGenreSimFishing, TagGenreSimGod, TagGenreSimDerby, TagGenreSimBuilding, TagGenreSimCooking,
+		TagGameGenreSim, TagGameGenreSimStrategy, TagGameGenreSimCardgame, TagGameGenreSimFlight, TagGameGenreSimTrain,
+		TagGameGenreSimDate, TagGameGenreSimOtome, TagGameGenreSimLife, TagGameGenreSimFarm, TagGameGenreSimPet,
+		TagGameGenreSimFishing, TagGameGenreSimGod, TagGameGenreSimDerby, TagGameGenreSimBuilding, TagGameGenreSimCooking,
 		// Sports
-		TagGenreSports, TagGenreSportsSoccer, TagGenreSportsBasketball, TagGenreSportsBaseball,
-		TagGenreSportsVolleyball, TagGenreSportsRugby, TagGenreSportsFootball, TagGenreSportsDodgeball,
-		TagGenreSportsHockey, TagGenreSportsSkiing, TagGenreSportsSkateboarding, TagGenreSportsSnowboarding,
-		TagGenreSportsTennis, TagGenreSportsPingpong, TagGenreSportsPaddle, TagGenreSportsSquash,
-		TagGenreSportsBadminton, TagGenreSportsFlyingdisc, TagGenreSportsCycling, TagGenreSportsFormula1,
-		TagGenreSportsRally, TagGenreSportsNascar, TagGenreSportsMotoGP, TagGenreSportsMotocross,
-		TagGenreSportsKarting, TagGenreSportsJetski, TagGenreSportsGolf, TagGenreSportsCricket,
-		TagGenreSportsBoxing, TagGenreSportsKickboxing, TagGenreSportsWrestling, TagGenreSportsSumo,
-		TagGenreSportsKarate, TagGenreSportsJudo, TagGenreSportsKendo, TagGenreSportsTaekwondo,
-		TagGenreSportsMMA, TagGenreSportsDecathlon, TagGenreSportsRunning, TagGenreSportsArchery,
-		TagGenreSportsSwimming, TagGenreSportsRowing, TagGenreSportsKayak, TagGenreSportsSurf,
+		TagGameGenreSports, TagGameGenreSportsSoccer, TagGameGenreSportsBasketball, TagGameGenreSportsBaseball,
+		TagGameGenreSportsVolleyball, TagGameGenreSportsRugby, TagGameGenreSportsFootball, TagGameGenreSportsDodgeball,
+		TagGameGenreSportsHockey, TagGameGenreSportsSkiing, TagGameGenreSportsSkateboarding, TagGameGenreSportsSnowboarding,
+		TagGameGenreSportsTennis, TagGameGenreSportsPingpong, TagGameGenreSportsPaddle, TagGameGenreSportsSquash,
+		TagGameGenreSportsBadminton, TagGameGenreSportsFlyingdisc, TagGameGenreSportsCycling, TagGameGenreSportsFormula1,
+		TagGameGenreSportsRally, TagGameGenreSportsNascar, TagGameGenreSportsMotoGP, TagGameGenreSportsMotocross,
+		TagGameGenreSportsKarting, TagGameGenreSportsJetski, TagGameGenreSportsGolf, TagGameGenreSportsCricket,
+		TagGameGenreSportsBoxing, TagGameGenreSportsKickboxing, TagGameGenreSportsWrestling, TagGameGenreSportsSumo,
+		TagGameGenreSportsKarate, TagGameGenreSportsJudo, TagGameGenreSportsKendo, TagGameGenreSportsTaekwondo,
+		TagGameGenreSportsMMA, TagGameGenreSportsDecathlon, TagGameGenreSportsRunning, TagGameGenreSportsArchery,
+		TagGameGenreSportsSwimming, TagGameGenreSportsRowing, TagGameGenreSportsKayak, TagGameGenreSportsSurf,
 		// Not a game - software/applications that aren't games
-		TagGenreNotAGame,
-		TagGenreNotAGameEducational, // Educational software
-		TagGenreNotAGameDrawing,     // Drawing/paint programs
-		TagGenreNotAGamePopcorn,     // Popcorn vending machines (arcade)
-		TagGenreNotAGamePurikura,    // Photo sticker booths
-		TagGenreNotAGameRedemption,  // Ticket redemption games
-		TagGenreNotAGameMedia,       // Media playback
-		TagGenreNotAGameMagazine,    // Digital magazines
-		TagGenreNotAGameApplication, // General applications
-		TagGenreNotAGameTest,        // Test/diagnostic software
-		TagGenreNotAGameSDK,         // Software development kits
-		TagGenreNotAGameSlideshow,   // Picture slideshows
-		TagGenreNotAGameSound,       // Audio-only content
+		TagGameGenreNotAGame,
+		TagGameGenreNotAGameEducational, // Educational software
+		TagGameGenreNotAGameDrawing,     // Drawing/paint programs
+		TagGameGenreNotAGamePopcorn,     // Popcorn vending machines (arcade)
+		TagGameGenreNotAGamePurikura,    // Photo sticker booths
+		TagGameGenreNotAGameRedemption,  // Ticket redemption games
+		TagGameGenreNotAGameMedia,       // Media playback
+		TagGameGenreNotAGameMagazine,    // Digital magazines
+		TagGameGenreNotAGameApplication, // General applications
+		TagGameGenreNotAGameTest,        // Test/diagnostic software
+		TagGameGenreNotAGameSDK,         // Software development kits
+		TagGameGenreNotAGameSlideshow,   // Picture slideshows
+		TagGameGenreNotAGameSound,       // Audio-only content
 	},
 
 	TagTypeAddon: {
