@@ -1206,6 +1206,7 @@ func sqlSearchMediaPathPartsWithCursor(
 	mediaQuery := `
 		SELECT
 			Systems.SystemID,
+			MediaTitles.Name,
 			Media.Path,
 			Media.DBID
 		FROM Systems
@@ -1246,10 +1247,9 @@ func sqlSearchMediaPathPartsWithCursor(
 	mediaIDs := make([]int64, 0, limit)
 	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		if scanErr := mediaRows.Scan(&result.SystemID, &result.Path, &result.MediaID); scanErr != nil {
+		if scanErr := mediaRows.Scan(&result.SystemID, &result.Name, &result.Path, &result.MediaID); scanErr != nil {
 			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
-		result.Name = helpers.FilenameFromPath(result.Path)
 		result.Tags = []database.TagInfo{} // Initialize empty tags
 		results = append(results, result)
 		mediaIDs = append(mediaIDs, result.MediaID)
@@ -1415,6 +1415,7 @@ func sqlSearchMediaWithFilters(
 	mediaQuery := `
 		SELECT
 			Systems.SystemID,
+			MediaTitles.Name,
 			Media.Path,
 			Media.DBID
 		FROM Systems
@@ -1457,10 +1458,9 @@ func sqlSearchMediaWithFilters(
 	mediaIDs := make([]int64, 0, limit)
 	for mediaRows.Next() {
 		result := database.SearchResultWithCursor{}
-		if scanErr := mediaRows.Scan(&result.SystemID, &result.Path, &result.MediaID); scanErr != nil {
+		if scanErr := mediaRows.Scan(&result.SystemID, &result.Name, &result.Path, &result.MediaID); scanErr != nil {
 			return results, fmt.Errorf("failed to scan media result: %w", scanErr)
 		}
-		result.Name = helpers.FilenameFromPath(result.Path)
 		result.Tags = []database.TagInfo{} // Initialize empty tags
 		results = append(results, result)
 		mediaIDs = append(mediaIDs, result.MediaID)

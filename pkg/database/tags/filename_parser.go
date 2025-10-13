@@ -33,6 +33,7 @@ var (
 	reDisc               = regexp.MustCompile(`(?i)\(Disc\s+(\d+)\s+of\s+(\d+)\)`)
 	reRev                = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
 	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
+	reYear               = regexp.MustCompile(`\((19[789]\d|20\d{2})\)`)
 	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
 	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
 	reEditionWord        = regexp.MustCompile(
@@ -53,24 +54,38 @@ var langMap = map[string]string{
 	"kor": "ko", "chi": "zh", "bra": "pt",
 }
 
+// BracketType represents the type of bracket enclosing a tag.
+// Different bracket types follow different conventions (No-Intro/TOSEC).
+type BracketType uint8
+
+const (
+	// BracketTypeParen represents tags in parentheses (), braces {}, or angle brackets <>.
+	// These typically contain region, language, version, and dev status information.
+	BracketTypeParen BracketType = iota
+
+	// BracketTypeSquare represents tags in square brackets [].
+	// These always contain dump-related information (verified, bad, hacked, etc.).
+	BracketTypeSquare
+)
+
 // ParseContext holds context information for disambiguating tags during parsing.
 // This follows the No-Intro/TOSEC convention of using tag position and bracket type
 // to determine meaning.
 type ParseContext struct {
 	Filename           string
 	CurrentTag         string
-	CurrentBracketType string
 	ParenTags          []string
 	BracketTags        []string
 	ProcessedTags      []CanonicalTag
 	CurrentIndex       int
+	CurrentBracketType BracketType
 }
 
 // RawTag represents an extracted tag before canonical mapping
 type RawTag struct {
 	Value       string
-	BracketType string // "paren" or "bracket"
-	Position    int    // Position in the tag sequence
+	BracketType BracketType // BracketTypeParen or BracketTypeSquare
+	Position    int         // Position in the tag sequence
 }
 
 // extractTags uses a manual state machine to extract tags from parentheses, brackets, braces, and angle brackets.
@@ -181,17 +196,31 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 
 	// Pattern 2: Revision tags - "Rev 1", "Rev A", "Rev-1"
 	if indices := reRev.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(strings.ToLower(remaining[indices[2]:indices[3]]))})
+		revValue := strings.ToLower(remaining[indices[2]:indices[3]])
+		// Normalize periods to dashes (e.g., "1.2" → "1-2")
+		revValue = strings.ReplaceAll(revValue, ".", "-")
+		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(revValue)})
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
 	// Pattern 3: Version tags - "v1.2", "v1.2.3"
 	if indices := reVersion.FindStringSubmatchIndex(remaining); len(indices) > 0 {
-		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(remaining[indices[2]:indices[3]])})
+		versionValue := remaining[indices[2]:indices[3]]
+		// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
+		versionValue = strings.ReplaceAll(versionValue, ".", "-")
+		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionValue)})
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
-	// Pattern 4: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
+	// Pattern 4: Year tags - "(1995)", "(2004)"
+	// Matches years 1970-2099 in parentheses
+	if indices := reYear.FindStringSubmatchIndex(remaining); len(indices) > 0 {
+		yearValue := remaining[indices[2]:indices[3]]
+		tags = append(tags, CanonicalTag{TagTypeYear, TagValue(yearValue)})
+		remaining = remaining[:indices[0]] + remaining[indices[1]:]
+	}
+
+	// Pattern 6: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
 	// Format: T[+-]?<lang_code>( v<version>)?
 	// Examples: "T+Eng", "T-Ger", "TFre", "T+Eng v1.0", "T+Spa v2.1.3"
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
@@ -244,6 +273,8 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 
 			// If version number present, add as revision tag
 			if versionNum != "" {
+				// Normalize periods to dashes (e.g., "1.2" → "1-2")
+				versionNum = strings.ReplaceAll(versionNum, ".", "-")
 				tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionNum)})
 			}
 
@@ -252,7 +283,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		}
 	}
 
-	// Pattern 5: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
+	// Pattern 7: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
 	// Only extract if not already processed as part of translation pattern
 	if indices := reBracketlessVersion.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		// Check if we already extracted a version from translation pattern
@@ -264,12 +295,15 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			}
 		}
 		if !hasVersion {
-			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(remaining[indices[2]:indices[3]])})
+			versionValue := remaining[indices[2]:indices[3]]
+			// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
+			versionValue = strings.ReplaceAll(versionValue, ".", "-")
+			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionValue)})
 			remaining = remaining[:indices[0]] + remaining[indices[1]:]
 		}
 	}
 
-	// Pattern 6: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
+	// Pattern 8: Edition/Version word detection - "Version", "Edition", and multi-language equivalents
 	// Detects standalone edition words that will be stripped by slugification
 	if indices := reEditionWord.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		editionWord := strings.ToLower(remaining[indices[2]:indices[3]])
@@ -310,7 +344,7 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 	var langs []CanonicalTag
 
 	for _, part := range parts {
-		normalized := normalizeTagValue(part)
+		normalized := NormalizeTag(part)
 		// Check if it's a known language code (2 chars typically)
 		if len(normalized) == 2 || len(normalized) == 3 {
 			// Try to map as language
@@ -336,16 +370,18 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 // - Bracket tags are always dump info
 // - Tag position and previously seen tag types provide context
 func disambiguateTag(ctx *ParseContext) []CanonicalTag {
-	normalized := normalizeTagValue(ctx.CurrentTag)
+	// Bracket tags need special handling BEFORE normalization
+	// because some dump markers (!, !p) contain special characters
+	if ctx.CurrentBracketType == BracketTypeSquare {
+		return mapBracketTag(ctx.CurrentTag)
+	}
+
+	// For parentheses tags, normalize and process
+	normalized := NormalizeTag(ctx.CurrentTag)
 
 	// First check if it's a multi-language tag (En,Fr,De)
 	if multiLang := parseMultiLanguageTag(normalized); multiLang != nil {
 		return multiLang
-	}
-
-	// Bracket tags are always dump info or hacks
-	if ctx.CurrentBracketType == "bracket" {
-		return mapBracketTag(normalized)
 	}
 
 	// For parentheses tags, use position and context
@@ -354,27 +390,37 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 
 // mapBracketTag maps tags from square brackets [].
 // These are always dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
+// NOTE: This function receives the raw tag (not normalized) to preserve special characters like !
 func mapBracketTag(tag string) []CanonicalTag {
-	// Special handling for ambiguous tags in bracket context
+	// Special handling for dump markers with special characters (must come BEFORE normalization)
 	switch tag {
+	case "!":
+		return []CanonicalTag{{TagTypeDump, TagDumpVerified}}
+	case "!p":
+		return []CanonicalTag{{TagTypeDump, TagDumpPending}}
+	}
+
+	// Normalize the tag for regular processing
+	normalized := NormalizeTag(tag)
+
+	// Handle standard dump info tags
+	switch normalized {
 	case "tr":
 		// In brackets, "tr" is always "translated" (dump info)
-		return []CanonicalTag{{TagTypeDump, "translated"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpTranslated}}
 	case "b":
-		return []CanonicalTag{{TagTypeDump, "bad"}}
-	case "!":
-		return []CanonicalTag{{TagTypeDump, "verified"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpBad}}
 	case "h":
-		return []CanonicalTag{{TagTypeDump, "hacked"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpHacked}}
 	case "f":
-		return []CanonicalTag{{TagTypeDump, "fixed"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpFixed}}
 	case "cr":
-		return []CanonicalTag{{TagTypeDump, "cracked"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpCracked}}
 	case "t":
-		return []CanonicalTag{{TagTypeDump, "trained"}}
+		return []CanonicalTag{{TagTypeDump, TagDumpTrained}}
 	default:
 		// Try default mapping, filtering for dump-related tags only
-		mapped := mapFilenameTagToCanonical(tag)
+		mapped := mapFilenameTagToCanonical(normalized)
 		var dumpTags []CanonicalTag
 		for _, ct := range mapped {
 			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed {
@@ -384,7 +430,7 @@ func mapBracketTag(tag string) []CanonicalTag {
 		if len(dumpTags) > 0 {
 			return dumpTags
 		}
-		return []CanonicalTag{{TagTypeDump, TagValue(tag)}}
+		return []CanonicalTag{{TagTypeDump, TagValue(normalized)}}
 	}
 }
 
@@ -414,48 +460,49 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 	case "ch":
 		// If we have German language, "Ch" is Switzerland (region)
 		for _, pt := range ctx.ProcessedTags {
-			if pt.Type == TagTypeLang && pt.Value == "de" {
-				return []CanonicalTag{{TagTypeRegion, "ch"}}
+			if pt.Type == TagTypeLang && pt.Value == TagLangDE {
+				return []CanonicalTag{{TagTypeRegion, TagRegionCH}}
 			}
 		}
 		// If no region yet and early in sequence, prefer region
 		if !hasRegion && ctx.CurrentIndex < 2 {
-			return []CanonicalTag{{TagTypeRegion, "ch"}}
+			return []CanonicalTag{{TagTypeRegion, TagRegionCH}}
 		}
 		// Otherwise, Chinese language
-		return []CanonicalTag{{TagTypeLang, "zh"}}
+		return []CanonicalTag{{TagTypeLang, TagLangZH}}
 
 	case "tr":
 		// In parentheses, "tr" is Turkey (region) or Turkish (language)
 		// Never "translated" (that's only in brackets)
 		if !hasRegion && ctx.CurrentIndex < 2 {
-			return []CanonicalTag{{TagTypeRegion, "tr"}}
+			return []CanonicalTag{{TagTypeRegion, TagRegionTR}}
 		}
 		if !hasLanguage {
-			return []CanonicalTag{{TagTypeLang, "tr"}}
+			return []CanonicalTag{{TagTypeLang, TagLangTR}}
 		}
 		// Default to region if ambiguous
-		return []CanonicalTag{{TagTypeRegion, "tr"}}
+		return []CanonicalTag{{TagTypeRegion, TagRegionTR}}
 
 	case "bs":
 		// "bs" in parentheses is almost always Bosnian language
 		// Broadcast Satellite would be "satellaview" or in special hardware context
-		return []CanonicalTag{{TagTypeLang, "bs"}}
+		return []CanonicalTag{{TagTypeLang, TagLangBS}}
 
 	case "hi":
 		// In brackets, "hi" is "hacked intro"
-		if ctx.CurrentBracketType == "bracket" {
-			return []CanonicalTag{{TagTypeDump, "hacked"}, {TagTypeDump, "hacked:intro"}}
+		if ctx.CurrentBracketType == BracketTypeSquare {
+			// Note: "hacked:intro" doesn't have a constant yet, keeping as raw string
+			return []CanonicalTag{{TagTypeDump, TagDumpHacked}, {TagTypeDump, "hacked:intro"}}
 		}
 		// In parentheses, "hi" is Hindi language
-		return []CanonicalTag{{TagTypeLang, "hi"}}
+		return []CanonicalTag{{TagTypeLang, TagLangHI}}
 
 	case "st":
 		// "st" could be Sufami Turbo (SNES addon) but that's rare
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, "snes:sufami"}}
+				return []CanonicalTag{{TagTypeAddon, TagAddonSNESSufami}}
 			}
 		}
 		// Otherwise, fallback to map (might be unknown)
@@ -466,7 +513,7 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, "snes:nintendopower"}}
+				return []CanonicalTag{{TagTypeAddon, TagAddonSNESNintendopower}}
 			}
 		}
 		// Otherwise, fallback to map
@@ -570,7 +617,7 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 	for i, tag := range parenTags {
 		ctx.CurrentTag = tag
 		ctx.CurrentIndex = i
-		ctx.CurrentBracketType = "paren"
+		ctx.CurrentBracketType = BracketTypeParen
 
 		resolved := disambiguateTag(ctx)
 		allTags = append(allTags, resolved...)
@@ -581,7 +628,7 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 	for i, tag := range bracketTags {
 		ctx.CurrentTag = tag
 		ctx.CurrentIndex = i
-		ctx.CurrentBracketType = "bracket"
+		ctx.CurrentBracketType = BracketTypeSquare
 
 		resolved := disambiguateTag(ctx)
 		allTags = append(allTags, resolved...)

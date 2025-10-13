@@ -21,24 +21,6 @@ package tags
 
 import "strings"
 
-// normalizeTagValue normalizes a tag value for comparison and storage.
-// Converts to lowercase, removes spaces/periods, and trims whitespace.
-func normalizeTagValue(tag string) string {
-	// Trim whitespace first
-	normalized := strings.TrimSpace(tag)
-
-	// Convert to lowercase
-	normalized = strings.ToLower(normalized)
-
-	// Replace spaces with dashes
-	normalized = strings.ReplaceAll(normalized, " ", "-")
-
-	// Remove periods
-	normalized = strings.ReplaceAll(normalized, ".", "")
-
-	return normalized
-}
-
 // mapFilenameTagToCanonical converts filename-based tags (No-Intro, TOSEC conventions)
 // to canonical GameDataBase-style hierarchical tags.
 // Returns a slice of canonical tags as some filename tags map to multiple canonical tags.
@@ -190,36 +172,8 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// YEAR MAPPINGS
 	// ============================================================================
-	"1970": {{TagTypeYear, TagYear1970}}, "1971": {{TagTypeYear, TagYear1971}},
-	"1972": {{TagTypeYear, TagYear1972}}, "1973": {{TagTypeYear, TagYear1973}},
-	"1974": {{TagTypeYear, TagYear1974}}, "1975": {{TagTypeYear, TagYear1975}},
-	"1976": {{TagTypeYear, TagYear1976}}, "1977": {{TagTypeYear, TagYear1977}},
-	"1978": {{TagTypeYear, TagYear1978}}, "1979": {{TagTypeYear, TagYear1979}},
-	"1980": {{TagTypeYear, TagYear1980}}, "1981": {{TagTypeYear, TagYear1981}},
-	"1982": {{TagTypeYear, TagYear1982}}, "1983": {{TagTypeYear, TagYear1983}},
-	"1984": {{TagTypeYear, TagYear1984}}, "1985": {{TagTypeYear, TagYear1985}},
-	"1986": {{TagTypeYear, TagYear1986}}, "1987": {{TagTypeYear, TagYear1987}},
-	"1988": {{TagTypeYear, TagYear1988}}, "1989": {{TagTypeYear, TagYear1989}},
-	"1990": {{TagTypeYear, TagYear1990}}, "1991": {{TagTypeYear, TagYear1991}},
-	"1992": {{TagTypeYear, TagYear1992}}, "1993": {{TagTypeYear, TagYear1993}},
-	"1994": {{TagTypeYear, TagYear1994}}, "1995": {{TagTypeYear, TagYear1995}},
-	"1996": {{TagTypeYear, TagYear1996}}, "1997": {{TagTypeYear, TagYear1997}},
-	"1998": {{TagTypeYear, TagYear1998}}, "1999": {{TagTypeYear, TagYear1999}},
-	"2000": {{TagTypeYear, TagYear2000}}, "2001": {{TagTypeYear, TagYear2001}},
-	"2002": {{TagTypeYear, TagYear2002}}, "2003": {{TagTypeYear, TagYear2003}},
-	"2004": {{TagTypeYear, TagYear2004}}, "2005": {{TagTypeYear, TagYear2005}},
-	"2006": {{TagTypeYear, TagYear2006}}, "2007": {{TagTypeYear, TagYear2007}},
-	"2008": {{TagTypeYear, TagYear2008}}, "2009": {{TagTypeYear, TagYear2009}},
-	"2010": {{TagTypeYear, TagYear2010}}, "2011": {{TagTypeYear, TagYear2011}},
-	"2012": {{TagTypeYear, TagYear2012}}, "2013": {{TagTypeYear, TagYear2013}},
-	"2014": {{TagTypeYear, TagYear2014}}, "2015": {{TagTypeYear, TagYear2015}},
-	"2016": {{TagTypeYear, TagYear2016}}, "2017": {{TagTypeYear, TagYear2017}},
-	"2018": {{TagTypeYear, TagYear2018}}, "2019": {{TagTypeYear, TagYear2019}},
-	"2020": {{TagTypeYear, TagYear2020}}, "2021": {{TagTypeYear, TagYear2021}},
-	"2022": {{TagTypeYear, TagYear2022}}, "2023": {{TagTypeYear, TagYear2023}},
-	"2024": {{TagTypeYear, TagYear2024}}, "2025": {{TagTypeYear, TagYear2025}},
-	"2026": {{TagTypeYear, TagYear2026}}, "2027": {{TagTypeYear, TagYear2027}},
-	"2028": {{TagTypeYear, TagYear2028}}, "2029": {{TagTypeYear, TagYear2029}},
+	// Note: Exact years (1970-2099) are handled dynamically in extractSpecialPatterns
+	// Wildcard years for unknown/approximate dates (TOSEC convention)
 	"19xx": {{TagTypeYear, TagYear19XX}}, "197x": {{TagTypeYear, TagYear197X}},
 	"198x": {{TagTypeYear, TagYear198X}}, "199x": {{TagTypeYear, TagYear199X}},
 	"20xx": {{TagTypeYear, TagYear20XX}}, "200x": {{TagTypeYear, TagYear200X}},
@@ -257,7 +211,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// VERSION/REVISION MAPPINGS
 	// ============================================================================
-	// Dotted versions (v1.0, v1.1) get both base and specific tags for searchability
+	// Note: Dotted versions (v1.0, v1.2.3) are handled dynamically in extractSpecialPatterns
 	"rev":   {{TagTypeRev, TagRev1}},
 	"rev-1": {{TagTypeRev, TagRev1}},
 	"rev-2": {{TagTypeRev, TagRev2}},
@@ -276,42 +230,6 @@ var allTagMappings = map[string][]CanonicalTag{
 	"v3":    {{TagTypeRev, TagRev3}},
 	"v4":    {{TagTypeRev, TagRev4}},
 	"v5":    {{TagTypeRev, TagRev5}},
-	// v1.x versions (comprehensive)
-	"v1-0": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_0}},
-	"v1-1": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_1}},
-	"v1-2": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_2}},
-	"v1-3": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_3}},
-	"v1-4": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_4}},
-	"v1-5": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_5}},
-	"v1-6": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_6}},
-	"v1-7": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_7}},
-	"v1-8": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_8}},
-	"v1-9": {{TagTypeRev, TagRev1}, {TagTypeRev, TagRev1_9}},
-	// v2.x versions
-	"v2-0": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_0}},
-	"v2-1": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_1}},
-	"v2-2": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_2}},
-	"v2-3": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_3}},
-	"v2-4": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_4}},
-	"v2-5": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_5}},
-	"v2-6": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_6}},
-	"v2-7": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_7}},
-	"v2-8": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_8}},
-	"v2-9": {{TagTypeRev, TagRev2}, {TagTypeRev, TagRev2_9}},
-	// v3.x versions
-	"v3-0": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_0}},
-	"v3-1": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_1}},
-	"v3-2": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_2}},
-	"v3-3": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_3}},
-	"v3-4": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_4}},
-	"v3-5": {{TagTypeRev, TagRev3}, {TagTypeRev, TagRev3_5}},
-	// v4.x and v5.x (less common, just .0-.2)
-	"v4-0": {{TagTypeRev, TagRev4}, {TagTypeRev, TagRev4_0}},
-	"v4-1": {{TagTypeRev, TagRev4}, {TagTypeRev, TagRev4_1}},
-	"v4-2": {{TagTypeRev, TagRev4}, {TagTypeRev, TagRev4_2}},
-	"v5-0": {{TagTypeRev, TagRev5}, {TagTypeRev, TagRev5_0}},
-	"v5-1": {{TagTypeRev, TagRev5}, {TagTypeRev, TagRev5_1}},
-	"v5-2": {{TagTypeRev, TagRev5}, {TagTypeRev, TagRev5_2}},
 	// Program revisions (NES-specific)
 	"prg":  {{TagTypeRev, TagRevPRG}},
 	"prg0": {{TagTypeRev, TagRevPRG0}},

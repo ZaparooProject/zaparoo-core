@@ -33,7 +33,7 @@ import (
 // These are compiled once at initialization for optimal performance.
 var (
 	reColonSpacing = regexp.MustCompile(`\s*:\s*`)
-	reSpecialChars = regexp.MustCompile(`[^a-z0-9:,-]`)
+	reSpecialChars = regexp.MustCompile(`[^a-z0-9:,+\-]`)
 )
 
 // TagType represents a top-level tag category

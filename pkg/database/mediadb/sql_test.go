@@ -472,11 +472,11 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	tags := []database.TagFilter{{Type: "genre", Value: "Action"}}
 
 	// Mock first query: get media items (with EXISTS clause - no HAVING COUNT arg needed)
-	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*Media\\.Path.*Media\\.DBID.*").
+	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
 		WithArgs("NES", "%mario%", "genre", "Action", 10).
-		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Path", "DBID"}).
-			AddRow("NES", "/games/mario.nes", 1))
+		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
+			AddRow("NES", "Mario", "/games/mario.nes", 1))
 
 	// Mock second query: get tags for the media items
 	mock.ExpectPrepare("SELECT.*MediaTags\\.MediaDBID.*Tags\\.Tag.*").

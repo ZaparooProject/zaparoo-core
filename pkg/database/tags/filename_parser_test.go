@@ -186,7 +186,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "version tag",
 			filename: "Mario (v1.2)(USA).n64",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1.2"},
+				{TagTypeRev, "1-2"},
 			},
 			wantRemaining: "Mario (USA).n64",
 		},
@@ -194,7 +194,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "version tag with multiple dots",
 			filename: "Game (v1.2.3)(Europe).gba",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1.2.3"},
+				{TagTypeRev, "1-2-3"},
 			},
 			wantRemaining: "Game (Europe).gba",
 		},
@@ -211,7 +211,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 				{TagTypeMedia, TagMediaDisc},
 				{TagTypeDisc, TagDisc1},
 				{TagTypeDiscTotal, TagDiscTotal3},
-				{TagTypeRev, "1.1"},
+				{TagTypeRev, "1-1"},
 			},
 			wantRemaining: "FF7 (USA).bin",
 		},
@@ -322,7 +322,7 @@ func TestDisambiguateTag_BracketContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &ParseContext{
 				CurrentTag:         tt.tag,
-				CurrentBracketType: "bracket",
+				CurrentBracketType: BracketTypeSquare,
 				ProcessedTags:      []CanonicalTag{},
 			}
 			got := disambiguateTag(ctx)
@@ -387,7 +387,7 @@ func TestDisambiguateTag_ParenthesesContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &ParseContext{
 				CurrentTag:         tt.tag,
-				CurrentBracketType: "paren",
+				CurrentBracketType: BracketTypeParen,
 				ProcessedTags:      tt.processedTags,
 				CurrentIndex:       tt.position,
 			}
@@ -436,7 +436,7 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 		{
 			name:     "version tag",
 			filename: "Mario Kart (v1.2)(Europe).n64",
-			wantTags: []string{"rev:1.2", "region:eu"},
+			wantTags: []string{"rev:1-2", "region:eu"},
 		},
 		{
 			name:     "multi-language tag",
@@ -456,7 +456,7 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 		{
 			name:     "complex real-world example",
 			filename: "Legend of Zelda, The - Ocarina of Time (v1.2)(USA)(En)[!].z64",
-			wantTags: []string{"rev:1.2", "region:us", "lang:en", "dump:verified"},
+			wantTags: []string{"rev:1-2", "region:us", "lang:en", "dump:verified"},
 		},
 	}
 
@@ -556,7 +556,7 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			wantTags: []CanonicalTag{
 				{TagTypeUnlicensed, TagUnlicensedTranslation},
 				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "1.0"},
+				{TagTypeRev, "1-0"},
 			},
 			wantRemaining: "Fire Emblem gba",
 		},
@@ -566,7 +566,7 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			wantTags: []CanonicalTag{
 				{TagTypeUnlicensed, TagUnlicensedTranslation},
 				{TagTypeLang, TagLangES},
-				{TagTypeRev, "2.1.3"},
+				{TagTypeRev, "2-1-3"},
 			},
 			wantRemaining: "Mother 3 gba",
 		},
@@ -585,7 +585,7 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			wantTags: []CanonicalTag{
 				{TagTypeUnlicensed, TagUnlicensedTranslation},
 				{TagTypeLang, TagLangRU},
-				{TagTypeRev, "1.5"},
+				{TagTypeRev, "1-5"},
 			},
 			wantRemaining: "Zelda nes",
 		},
@@ -604,7 +604,7 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			wantTags: []CanonicalTag{
 				{TagTypeUnlicensed, TagUnlicensedTranslation},
 				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "2.0"},
+				{TagTypeRev, "2-0"},
 			},
 			wantRemaining: "Game (USA) [!].rom",
 		},
@@ -648,7 +648,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "standalone v1.0",
 			filename: "Game Name v1.0.rom",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1.0"},
+				{TagTypeRev, "1-0"},
 			},
 			wantRemaining: "Game Name .rom",
 		},
@@ -656,7 +656,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "standalone v2.1.3",
 			filename: "Another Game v2.1.3.bin",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "2.1.3"},
+				{TagTypeRev, "2-1-3"},
 			},
 			wantRemaining: "Another Game .bin",
 		},
@@ -674,7 +674,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			wantTags: []CanonicalTag{
 				{TagTypeUnlicensed, TagUnlicensedTranslation},
 				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "1.0"},
+				{TagTypeRev, "1-0"},
 			},
 			wantRemaining: "Game rom",
 		},
@@ -707,7 +707,7 @@ func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
 			wantContains: []string{
 				"unlicensed:translation",
 				"lang:en",
-				"rev:1.1",
+				"rev:1-1",
 				"region:us",
 				"dump:verified",
 			},
@@ -736,7 +736,7 @@ func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
 			wantContains: []string{
 				"unlicensed:translation",
 				"lang:it",
-				"rev:2.0",
+				"rev:2-0",
 				"region:it",
 			},
 		},
@@ -787,7 +787,7 @@ func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 		{
 			name:         "version in braces",
 			filename:     "Zelda {v1.0}.rom",
-			wantContains: []string{"rev:1.0"},
+			wantContains: []string{"rev:1-0"},
 		},
 	}
 
@@ -967,7 +967,7 @@ func TestParseFilenameToCanonicalTags_EditionWords(t *testing.T) {
 		{
 			name:         "version with revision number",
 			filename:     "Game Version (v1.2)(USA).rom",
-			wantContains: []string{"edition:version", "rev:1.2", "region:us"},
+			wantContains: []string{"edition:version", "rev:1-2", "region:us"},
 		},
 		{
 			name:         "edition with disc info",

@@ -97,10 +97,10 @@ func TestMapFilenameTagToCanonical(t *testing.T) {
 			},
 		},
 		{
-			name:  "Year",
-			input: "1990",
+			name:  "Wildcard year (specific year unknown within 1980s)",
+			input: "198x",
 			expected: []CanonicalTag{
-				{TagTypeYear, TagYear1990},
+				{TagTypeYear, TagYear198X},
 			},
 		},
 		{

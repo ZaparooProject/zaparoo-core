@@ -688,7 +688,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	results, err := mediaDB.SearchMediaWithFilters(ctx, filters)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
-	assert.Equal(t, "super-mario-bros", results[0].Name) // Name comes from filename in path
+	assert.Equal(t, "Super Mario Bros", results[0].Name) // Name comes from MediaTitles.Name
 }
 
 func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {
