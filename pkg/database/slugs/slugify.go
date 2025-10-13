@@ -73,54 +73,32 @@ var (
 			`]+`,
 	)
 	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
-	// romanNumeralI is intentionally aggressive to match classic game sequels
-	// ("Final Fantasy I" ↔ "Final Fantasy 1"). May convert "I" as a pronoun
-	// (e.g., "The Day I Became" → "day1became"), but deterministic matching
-	// is more important than semantic purity for the slug system.
-	romanNumeralI     = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralOrder = []string{
-		"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII",
-		"XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II",
-	}
-	romanNumeralPatterns = map[string]*regexp.Regexp{
-		"XIX":   regexp.MustCompile(`\bXIX\b`),
-		"XVIII": regexp.MustCompile(`\bXVIII\b`),
-		"XVII":  regexp.MustCompile(`\bXVII\b`),
-		"XVI":   regexp.MustCompile(`\bXVI\b`),
-		"XIV":   regexp.MustCompile(`\bXIV\b`),
-		"XV":    regexp.MustCompile(`\bXV\b`),
-		"XIII":  regexp.MustCompile(`\bXIII\b`),
-		"XII":   regexp.MustCompile(`\bXII\b`),
-		"XI":    regexp.MustCompile(`\bXI\b`),
-		"IX":    regexp.MustCompile(`\bIX\b`),
-		"VIII":  regexp.MustCompile(`\bVIII\b`),
-		"VII":   regexp.MustCompile(`\bVII\b`),
-		"VI":    regexp.MustCompile(`\bVI\b`),
-		"IV":    regexp.MustCompile(`\bIV\b`),
-		"V":     regexp.MustCompile(`\bV\b`),
-		"III":   regexp.MustCompile(`\bIII\b`),
-		"II":    regexp.MustCompile(`\bII\b`),
-	}
-	romanNumeralReplacements = map[string]string{
-		"XIX":   "19",
-		"XVIII": "18",
-		"XVII":  "17",
-		"XVI":   "16",
-		"XIV":   "14",
-		"XV":    "15",
-		"XIII":  "13",
-		"XII":   "12",
-		"XI":    "11",
-		"IX":    "9",
-		"VIII":  "8",
-		"VII":   "7",
-		"VI":    "6",
-		"IV":    "4",
-		"V":     "5",
-		"III":   "3",
-		"II":    "2",
-	}
 )
+
+// romanNumeralReplacementTable defines pattern-to-number mappings for roman numeral conversion.
+// - X is intentionally omitted to avoid avoid games like "Mega Man X" being converted.
+// - I is handled as a special case in ConvertRomanNumerals.
+// This is basically a best effort approach to cover common misspellings but not need to have
+// some exhausting full roman numeral parser.
+var romanNumeralReplacementTable = []struct{ pattern, replacement string }{
+	{"XIX", "19"},
+	{"XVIII", "18"},
+	{"XVII", "17"},
+	{"XVI", "16"},
+	{"XIV", "14"},
+	{"XV", "15"},
+	{"XIII", "13"},
+	{"XII", "12"},
+	{"XI", "11"},
+	{"IX", "9"},
+	{"VIII", "8"},
+	{"VII", "7"},
+	{"VI", "6"},
+	{"IV", "4"},
+	{"V", "5"},
+	{"III", "3"},
+	{"II", "2"},
+}
 
 // isASCII checks if a string contains only ASCII characters (bytes < 128).
 // This is used for the ASCII fast-path optimization to skip expensive Unicode processing.
@@ -431,13 +409,66 @@ func ConvertRomanNumerals(s string) string {
 	}
 
 	upperS := strings.ToUpper(s)
-	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
 
-	for _, roman := range romanNumeralOrder {
-		upperS = romanNumeralPatterns[roman].ReplaceAllString(upperS, romanNumeralReplacements[roman])
+	var result strings.Builder
+	result.Grow(len(upperS))
+
+	// Manual scan to replace roman numerals only at word boundaries
+	// A word boundary is: start of string or previous char is not a word char (letter/digit/_)
+	// and end of string or next char is not a word char
+	i := 0
+	for i < len(upperS) {
+		// Check if we're at a potential roman numeral start
+		// Word boundary: start of string or previous char is not a word character
+		atWordBoundary := i == 0 || !isWordChar(rune(upperS[i-1]))
+
+		if !atWordBoundary {
+			result.WriteByte(upperS[i])
+			i++
+			continue
+		}
+
+		// Try to match roman numerals
+		matched := false
+		for _, num := range romanNumeralReplacementTable {
+			if i+len(num.pattern) <= len(upperS) && upperS[i:i+len(num.pattern)] == num.pattern {
+				// Check word boundary after numeral
+				endIdx := i + len(num.pattern)
+				atEnd := endIdx == len(upperS) || !isWordChar(rune(upperS[endIdx]))
+
+				if atEnd {
+					result.WriteString(num.replacement)
+					i += len(num.pattern)
+					matched = true
+					break
+				}
+			}
+		}
+
+		// Special case for single "I" - only match at word boundary
+		if !matched && upperS[i] == 'I' {
+			endIdx := i + 1
+			if endIdx == len(upperS) || !isWordChar(rune(upperS[endIdx])) {
+				result.WriteString("1")
+				i++
+				matched = true
+			}
+		}
+
+		if !matched {
+			result.WriteByte(upperS[i])
+			i++
+		}
 	}
 
-	return strings.ToLower(upperS)
+	return strings.ToLower(result.String())
+}
+
+// isWordChar checks if a rune is a word character (letter, digit, or underscore)
+// This matches regex \w behavior for word boundaries
+func isWordChar(r rune) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+		(r >= '0' && r <= '9') || r == '_' || unicode.IsLetter(r)
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.

@@ -1870,3 +1870,218 @@ func TestSlugifyStringRegression_PerformanceOptimizationImpact(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertRomanNumerals_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Word boundaries - should NOT convert
+		{
+			name:     "word_containing_i_should_not_convert",
+			input:    "this is invisible",
+			expected: "this is invisible",
+		},
+		{
+			name:     "word_containing_v_should_not_convert",
+			input:    "vivid river",
+			expected: "vivid river",
+		},
+		{
+			name:     "word_containing_iv_should_not_convert",
+			input:    "alive and giving",
+			expected: "alive and giving",
+		},
+		{
+			name:     "word_containing_ix_should_not_convert",
+			input:    "mixing pixel",
+			expected: "mixing pixel",
+		},
+		{
+			name:     "word_containing_vii_should_not_convert",
+			input:    "soviet viio",
+			expected: "soviet viio",
+		},
+
+		// Adjacent to digits - should NOT convert
+		{
+			name:     "v_adjacent_to_digit",
+			input:    "v1.0",
+			expected: "v1.0",
+		},
+		{
+			name:     "vii_adjacent_to_digit",
+			input:    "version VII2",
+			expected: "version vii2",
+		},
+		{
+			name:     "digit_then_roman",
+			input:    "1IX test",
+			expected: "1ix test",
+		},
+
+		// Adjacent to punctuation - SHOULD convert
+		{
+			name:     "roman_with_colon",
+			input:    "Game VII: Subtitle",
+			expected: "game 7: subtitle",
+		},
+		{
+			name:     "roman_with_dash",
+			input:    "Game III-Part",
+			expected: "game 3-part",
+		},
+		{
+			name:     "roman_with_underscore_no_convert",
+			input:    "Game_II_Final",
+			expected: "game_ii_final", // Underscore is a word char, so no boundary
+		},
+		{
+			name:     "roman_after_underscore_with_space",
+			input:    "Game_ II Final",
+			expected: "game_ 2 final", // Space creates boundary
+		},
+		{
+			name:     "roman_with_parenthesis",
+			input:    "Game (II)",
+			expected: "game (2)",
+		},
+
+		// At string boundaries
+		{
+			name:     "roman_at_start",
+			input:    "III Kings",
+			expected: "3 kings",
+		},
+		{
+			name:     "roman_at_end",
+			input:    "Final VII",
+			expected: "final 7",
+		},
+		{
+			name:     "only_roman",
+			input:    "VII",
+			expected: "7",
+		},
+
+		// Multiple romans
+		{
+			name:     "multiple_romans_in_string",
+			input:    "Game II Part III",
+			expected: "game 2 part 3",
+		},
+		{
+			name:     "three_romans",
+			input:    "I II III",
+			expected: "1 2 3",
+		},
+
+		// Adjacent to Unicode/CJK - SHOULD convert
+		{
+			name:     "roman_adjacent_to_cjk",
+			input:    "ドラゴンクエストIII",
+			expected: "ドラゴンクエスト3",
+		},
+		{
+			name:     "roman_between_cjk",
+			input:    "ファイナルファンタジーVII",
+			expected: "ファイナルファンタジー7",
+		},
+		{
+			name:     "cjk_space_roman",
+			input:    "ドラゴンクエスト VII",
+			expected: "ドラゴンクエスト 7",
+		},
+
+		// Pattern matching order (longest first)
+		{
+			name:     "xviii_not_viii_then_i",
+			input:    "Game XVIII",
+			expected: "game 18",
+		},
+		{
+			name:     "xiii_not_iii",
+			input:    "Game XIII",
+			expected: "game 13",
+		},
+
+		// Case variations
+		{
+			name:     "lowercase_roman",
+			input:    "game vii",
+			expected: "game 7",
+		},
+		{
+			name:     "mixed_case_roman",
+			input:    "Game ViI",
+			expected: "game 7",
+		},
+
+		// Invalid/non-standard patterns - should NOT convert
+		{
+			name:     "invalid_iiii",
+			input:    "Game IIII",
+			expected: "game iiii",
+		},
+		{
+			name:     "invalid_vv",
+			input:    "Game VV",
+			expected: "game vv",
+		},
+		{
+			name:     "invalid_iix",
+			input:    "Game IIX",
+			expected: "game iix",
+		},
+
+		// Edge cases
+		{
+			name:     "empty_string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only_spaces",
+			input:    "   ",
+			expected: "   ",
+		},
+		{
+			name:     "single_i_at_start",
+			input:    "I am",
+			expected: "1 am",
+		},
+		{
+			name:     "single_i_at_end",
+			input:    "Part I",
+			expected: "part 1",
+		},
+
+		// Real-world game titles
+		{
+			name:     "007_world_is_not_enough",
+			input:    "007 World Is Not Enough",
+			expected: "007 world is not enough",
+		},
+		{
+			name:     "marios_vs_mario",
+			input:    "Mario's vs Mario",
+			expected: "mario's vs mario",
+		},
+		{
+			name:     "cafe_international",
+			input:    "Cafe International",
+			expected: "cafe international",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ConvertRomanNumerals(tt.input)
+			assert.Equal(t, tt.expected, result, "ConvertRomanNumerals failed for input: %q", tt.input)
+		})
+	}
+}
