@@ -1386,7 +1386,7 @@ func TestNormalizeConjunctions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := normalizeSymbolsAndSeparators(tt.input)
+			result := NormalizeSymbolsAndSeparators(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1470,7 +1470,7 @@ func TestConvertRomanNumerals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := convertRomanNumerals(tt.input)
+			result := ConvertRomanNumerals(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1514,7 +1514,7 @@ func TestNormalizeSeparators(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := normalizeSymbolsAndSeparators(tt.input)
+			result := NormalizeSymbolsAndSeparators(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

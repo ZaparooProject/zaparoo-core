@@ -331,7 +331,7 @@ func AddMediaPath(
 
 		if tagIndex == 0 {
 			// Don't insert unknown tags for other tag types
-			log.Debug().Msgf("skipping unknown tag: %s", tagStr)
+			log.Trace().Msgf("skipping unknown tag: %s", tagStr)
 			continue
 		}
 

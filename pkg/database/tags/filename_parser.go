@@ -22,6 +22,8 @@ package tags
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 // Package-level compiled regexes for filename parsing.
@@ -38,9 +40,8 @@ var (
 	)
 
 	// Title parsing
-	reTitleExtract = regexp.MustCompile(`^([^(\[{<]*)`)
-	reMultiSpace   = regexp.MustCompile(`\s+`)
-	reLeadingNum   = regexp.MustCompile(`^\d+[.\s\-]+`)
+	reMultiSpace = regexp.MustCompile(`\s+`)
+	reLeadingNum = regexp.MustCompile(`^\d+[.\s\-]+`)
 )
 
 // ParseContext holds context information for disambiguating tags during parsing.
@@ -590,37 +591,44 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 //
 // Transformations applied:
 //   - Optionally removes leading number prefixes (e.g., "1. ", "01 - ") if stripLeadingNumbers is true
-//   - Removes everything after first bracket of any type: (), [], {}, <>
-//   - Normalizes underscores and multiple separators to spaces
-//   - Converts "&" to "and"
+//   - Converts underscores to spaces (common filename artifact)
+//   - Removes all bracket content: (), [], {}, <>
 //   - Normalizes multiple spaces to single space
 //
 // Examples:
 //   - "Super Mario Bros (USA) [!]" → "Super Mario Bros"
 //   - "Super_Mario_Bros (USA)" → "Super Mario Bros"
-//   - "Sonic & Knuckles" → "Sonic and Knuckles"
+//   - "Sonic & Knuckles (USA)" → "Sonic & Knuckles"
+//   - "Street Fighter II: The World Warrior" → "Street Fighter II: The World Warrior"
 //   - "1. Game Title (USA)" → "Game Title" (if stripLeadingNumbers is true)
 //   - "1942 (USA)" → "1942" (if stripLeadingNumbers is false)
+//
+// Note: This uses shared normalization functions from the slugs package to eliminate
+// code duplication. However, it only applies transformations appropriate for display
+// titles (no Roman numeral conversion, edition stripping, etc.).
 func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
+	// Import the slugs package for shared normalization functions
+	// This eliminates code duplication while keeping display-appropriate behavior
+	title := filename
+
 	// Step 1: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
 	// Only done when contextual detection confirms list-based numbering
-	title := filename
 	if stripLeadingNumbers {
 		title = reLeadingNum.ReplaceAllString(title, "")
 		title = strings.TrimSpace(title)
 	}
 
-	// Step 2: Extract title before first bracket
-	title = reTitleExtract.FindString(title)
-	title = strings.TrimSpace(title)
-
-	// Step 3: Normalize underscores to spaces
+	// Step 2: Convert underscores to spaces (common filename artifact)
 	title = strings.ReplaceAll(title, "_", " ")
 
-	// Step 4: Convert "&" to "and"
-	title = strings.ReplaceAll(title, "&", "and")
+	// Step 3: Remove all bracket content using shared function from slugs package
+	// This replaces the previous regex-based extraction with a more robust implementation
+	// that handles nested brackets and all bracket types uniformly
+	title = slugs.StripMetadataBrackets(title)
+	title = strings.TrimSpace(title)
 
-	// Step 5: Normalize multiple spaces to single space
+	// Step 4: Normalize multiple spaces to single space
+	// This handles cases where bracket removal creates gaps like "Game [USA] [!]" → "Game  "
 	title = reMultiSpace.ReplaceAllString(title, " ")
 
 	return strings.TrimSpace(title)

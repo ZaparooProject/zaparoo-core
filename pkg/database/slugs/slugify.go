@@ -129,6 +129,78 @@ func isASCII(s string) bool {
 	return true
 }
 
+// NormalizeWidth performs width normalization on a string.
+// Converts fullwidth ASCII characters to halfwidth (for Latin text processing).
+// Converts halfwidth CJK characters to fullwidth (for consistent display and matching).
+//
+// Examples:
+//   - Fullwidth ASCII: "ＡＢＣＤＥＦ" → "ABCDEF"
+//   - Fullwidth numbers: "１２３" → "123"
+//   - Halfwidth katakana: "ｳｴｯｼﾞ" → "ウエッジ"
+//   - Mixed: "Super Ｍario １２３" → "Super Mario 123"
+//
+// This is Stage 1 of the normalization pipeline.
+// Returns the input unchanged if normalization fails.
+func NormalizeWidth(s string) string {
+	if normalized, _, err := transform.String(width.Fold, s); err == nil {
+		return normalized
+	}
+	return s
+}
+
+// NormalizeUnicode performs Unicode normalization with symbol removal and script-aware processing.
+// This combines several operations:
+//   - Removes Unicode symbols (trademark ™, copyright ©, currency $€¥)
+//   - Applies script-specific normalization (NFKC for Latin, NFC for CJK, etc.)
+//   - Removes diacritics for Latin scripts (Pokémon → Pokemon)
+//   - Preserves essential marks for CJK scripts
+//
+// Examples:
+//   - Symbols: "Sonic™" → "Sonic", "Game©" → "Game"
+//   - Diacritics (Latin): "Pokémon" → "Pokemon", "Café" → "Cafe"
+//   - Ligatures: "ﬁnal" → "final"
+//   - CJK preserved: "ドラゴンクエスト" → "ドラゴンクエスト"
+//
+// This is Stage 2 of the normalization pipeline.
+// Returns the input unchanged if normalization fails or if input is pure ASCII.
+func NormalizeUnicode(s string) string {
+	// Skip Unicode processing for pure ASCII strings (optimization)
+	if isASCII(s) {
+		return s
+	}
+
+	// Remove Unicode symbols (trademark, copyright, currency)
+	symbolPredicate := runes.Predicate(func(r rune) bool {
+		return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
+	})
+	symbolRemover := runes.Remove(symbolPredicate)
+	if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
+		s = cleaned
+	}
+
+	// Apply script-specific normalization
+	script := detectScript(s)
+	return normalizeByScript(s, script)
+}
+
+// StripTrailingArticle removes trailing articles like ", The" from the end of a string.
+//
+// Pattern: `, The` followed by end of string or separator characters (space, colon, dash, parenthesis, bracket)
+//
+// Examples:
+//   - "Legend, The" → "Legend"
+//   - "Mega Man, The" → "Mega Man"
+//   - "Story, the:" → "Story:" (case insensitive)
+//
+// This is Stage 4 of the normalization pipeline.
+func StripTrailingArticle(s string) string {
+	if trailingArticleRegex.MatchString(s) {
+		s = trailingArticleRegex.ReplaceAllString(s, "$1")
+		return strings.TrimSpace(s)
+	}
+	return s
+}
+
 func SlugifyString(input string) string {
 	s := normalizeInternal(input)
 	if s == "" {
@@ -316,7 +388,7 @@ func StripEditionAndVersionSuffixes(s string) string {
 	return s
 }
 
-// normalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
+// NormalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
 // Handles conjunctions: "&", " + ", " 'n' " variants → "and"
 // Handles separators: ":", "_", "-" → space
 //
@@ -326,8 +398,8 @@ func StripEditionAndVersionSuffixes(s string) string {
 //   - "Zelda:Link" → "Zelda Link"
 //   - "Super_Mario_Bros" → "Super Mario Bros"
 //
-// This is an internal function used by the normalization pipeline.
-func normalizeSymbolsAndSeparators(s string) string {
+// This is Stage 5 of the normalization pipeline.
+func NormalizeSymbolsAndSeparators(s string) string {
 	s = strings.ReplaceAll(s, "&", " and ")
 	s = strings.ReplaceAll(s, " + ", " and ")
 	s = strings.ReplaceAll(s, " 'n' ", " and ")
@@ -345,7 +417,7 @@ func normalizeSymbolsAndSeparators(s string) string {
 	}, s)
 }
 
-// convertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.
+// ConvertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.
 // Note: X is intentionally NOT converted to avoid "Mega Man X" → "Mega Man 10".
 //
 // Examples:
@@ -353,8 +425,8 @@ func normalizeSymbolsAndSeparators(s string) string {
 //   - "Street Fighter II" → "Street Fighter 2"
 //   - "Mega Man X" → "Mega Man X" (unchanged)
 //
-// This is an internal function used by the normalization pipeline.
-func convertRomanNumerals(s string) string {
+// This is Stage 8 of the normalization pipeline.
+func ConvertRomanNumerals(s string) string {
 	upperS := strings.ToUpper(s)
 	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
 
@@ -425,50 +497,32 @@ func normalizeInternal(input string) string {
 		return ""
 	}
 
-	// ASCII fast-path: Skip expensive Unicode processing for pure ASCII strings
-	// ASCII strings don't need width normalization, symbol removal, or script-specific normalization
 	if !isASCII(s) {
-		// Stage 1: Width Normalization
-		// For CJK characters (katakana/hangul), normalize halfwidth → fullwidth for consistency
-		// For ASCII characters, normalize fullwidth → halfwidth for Latin matching
-		// The width.Fold transformer does exactly this: narrows Latin, widens CJK
-		if normalized, _, err := transform.String(width.Fold, s); err == nil {
-			s = normalized
-		}
+		// Stage 1: Width Normalization (skip for ASCII-only strings)
+		s = NormalizeWidth(s)
 
-		// Stage 2: Unicode Normalization
-		// Remove symbols (trademark, copyright, currency)
-		symbolPredicate := runes.Predicate(func(r rune) bool {
-			return unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r)
-		})
-		symbolRemover := runes.Remove(symbolPredicate)
-		if cleaned, _, err := transform.String(symbolRemover, s); err == nil {
-			s = cleaned
-		}
-
-		// Unicode normalization: script-specific strategies
-		script := detectScript(s)
-		s = normalizeByScript(s, script)
+		// Stage 2: Unicode Normalization (skip for ASCII-only strings)
+		s = NormalizeUnicode(s)
 	}
 
-	// Stages 3-8: Text transformations
+	// Stage 3: Secondary Title Decomposition and Article Stripping
 	s = splitAndStripArticles(s)
 
-	if trailingArticleRegex.MatchString(s) {
-		s = trailingArticleRegex.ReplaceAllString(s, "$1")
-		s = strings.TrimSpace(s)
-	}
+	// Stage 4: Trailing Article Removal
+	s = StripTrailingArticle(s)
 
-	s = normalizeSymbolsAndSeparators(s)
+	// Stage 5: Symbol and Separator Normalization
+	s = NormalizeSymbolsAndSeparators(s)
 
+	// Stage 6: Metadata Stripping
 	s = StripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
+	// Stage 7: Edition/Version Suffix Stripping
 	s = StripEditionAndVersionSuffixes(s)
 
-	s = convertRomanNumerals(s)
+	// Stage 8: Roman Numeral Conversion
+	s = ConvertRomanNumerals(s)
 
-	s = strings.TrimSpace(s)
-
-	return s
+	return strings.TrimSpace(s)
 }

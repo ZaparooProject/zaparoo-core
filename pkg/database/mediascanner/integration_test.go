@@ -820,11 +820,11 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			expectedSlug:        "pokemonred",
 		},
 		{
-			name:                "ampersand conversion",
+			name:                "ampersand preserved in title",
 			systemID:            "Genesis",
 			path:                "/roms/genesis/Sonic & Knuckles (USA).md",
 			stripLeadingNumbers: false,
-			expectedTitle:       "Sonic and Knuckles",
+			expectedTitle:       "Sonic & Knuckles",
 			expectedSlug:        "sonicandknuckles",
 		},
 

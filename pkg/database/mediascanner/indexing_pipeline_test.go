@@ -297,19 +297,19 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "1 Game Title",
 		},
 		{
-			name:     "normalizes underscores to spaces",
+			name:     "converts underscores to spaces",
 			filename: "Super_Mario_Bros (USA)",
 			want:     "Super Mario Bros",
 		},
 		{
-			name:     "normalizes mixed underscores and spaces",
+			name:     "converts mixed underscores and spaces",
 			filename: "Mega_Man_X (USA)",
 			want:     "Mega Man X",
 		},
 		{
-			name:     "converts ampersand to and",
+			name:     "preserves ampersand",
 			filename: "Sonic & Knuckles (USA)",
-			want:     "Sonic and Knuckles",
+			want:     "Sonic & Knuckles",
 		},
 		{
 			name:     "normalizes multiple spaces",
@@ -319,7 +319,7 @@ func TestGetTitleFromFilename(t *testing.T) {
 		{
 			name:     "handles all transformations combined (no number stripping)",
 			filename: "01. Super_Mario_Bros & Luigi   (USA)",
-			want:     "01. Super Mario Bros and Luigi",
+			want:     "01. Super Mario Bros & Luigi",
 		},
 		{
 			name:     "preserves dashes in title after cleanup",
@@ -332,7 +332,7 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "Game: The Subtitle",
 		},
 		{
-			name:     "handles no brackets with underscores",
+			name:     "converts underscores without brackets",
 			filename: "Super_Mario_World",
 			want:     "Super Mario World",
 		},
@@ -342,9 +342,9 @@ func TestGetTitleFromFilename(t *testing.T) {
 			want:     "01. Game Title",
 		},
 		{
-			name:     "handles ampersand without brackets",
+			name:     "preserves ampersand without brackets",
 			filename: "Rock & Roll Racing",
-			want:     "Rock and Roll Racing",
+			want:     "Rock & Roll Racing",
 		},
 	}
 
