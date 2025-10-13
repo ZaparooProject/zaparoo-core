@@ -71,8 +71,10 @@ func removeHebrewVowelMarks(s string) string {
 }
 
 // normalizeGreekPunctuation converts Greek-specific punctuation to standard forms.
+// Also normalizes final sigma (ς) to regular sigma (σ) for consistent matching.
 func normalizeGreekPunctuation(s string) string {
 	s = strings.ReplaceAll(s, ";", "?") // Greek question mark (looks like semicolon)
+	s = strings.ReplaceAll(s, "ς", "σ") // Final sigma → regular sigma for matching
 	return s
 }
 
@@ -107,6 +109,15 @@ func removeThaiToneMarks(s string) string {
 	return s
 }
 
+// normalizeTurkishCharacters handles Turkish-specific character transliterations.
+// Turkish dotless i (ı, U+0131) and dotted İ (İ, U+0130) are not diacritic variants
+// but separate letters in the Turkish alphabet. For ASCII matching, they need explicit handling.
+func normalizeTurkishCharacters(s string) string {
+	s = strings.ReplaceAll(s, "ı", "i") // dotless i → i
+	s = strings.ReplaceAll(s, "İ", "I") // dotted İ → I
+	return s
+}
+
 // normalizeLatinExtended handles special cases for Latin-based scripts with unique requirements.
 // This includes Vietnamese (tone diacritics) and Turkish (dotted/dotless I).
 // Note: Case folding happens later in the pipeline (final slugification stage).
@@ -116,18 +127,10 @@ func normalizeLatinExtended(s string, preserveVietnamese bool) string {
 		s = removeDiacritics(s)
 	}
 
-	return s
-}
+	// Turkish-specific character normalization
+	s = normalizeTurkishCharacters(s)
 
-// containsTurkishChars checks if the string contains Turkish-specific characters.
-func containsTurkishChars(s string) bool {
-	for _, r := range s {
-		// Turkish-specific: dotless i (ı), capital dotted I (İ), ğ, ş, ç
-		if r == 'ı' || r == 'İ' || r == 'ğ' || r == 'Ğ' || r == 'ş' || r == 'Ş' {
-			return true
-		}
-	}
-	return false
+	return s
 }
 
 // normalizeByScript applies script-specific normalization rules.

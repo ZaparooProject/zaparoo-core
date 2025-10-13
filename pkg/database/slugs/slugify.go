@@ -73,8 +73,12 @@ var (
 			`]+`,
 	)
 	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
-	romanNumeralI        = regexp.MustCompile(`\sI($|[\s:_\-])`)
-	romanNumeralOrder    = []string{
+	// romanNumeralI is intentionally aggressive to match classic game sequels
+	// ("Final Fantasy I" ↔ "Final Fantasy 1"). May convert "I" as a pronoun
+	// (e.g., "The Day I Became" → "day1became"), but deterministic matching
+	// is more important than semantic purity for the slug system.
+	romanNumeralI     = regexp.MustCompile(`\sI($|[\s:_\-])`)
+	romanNumeralOrder = []string{
 		"XIX", "XVIII", "XVII", "XVI", "XV", "XIV", "XIII",
 		"XII", "XI", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II",
 	}
@@ -208,19 +212,12 @@ func SlugifyString(input string) string {
 	}
 
 	// Stage 10: Final Slugification (Multi-Script Aware)
+	// Note: s is already lowercase from Stage 8 (ConvertRomanNumerals)
+
 	// Create both ASCII-only and Unicode-preserving versions
 	// Note: Even for ASCII strings, we need both slugs for proper script detection logic
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
 	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
-
-	// Lowercase the slugs with Turkish-aware case folding if needed
-	if containsTurkishChars(s) {
-		asciiSlug = strings.ToLowerSpecial(unicode.TurkishCase, asciiSlug)
-		unicodeSlug = strings.ToLowerSpecial(unicode.TurkishCase, unicodeSlug)
-	} else {
-		asciiSlug = strings.ToLower(asciiSlug)
-		unicodeSlug = strings.ToLower(unicodeSlug)
-	}
 
 	// For any title containing non-Latin characters, use the Unicode slug which preserves
 	// both Latin and non-Latin portions. This enables matching on either part:
@@ -427,6 +424,12 @@ func NormalizeSymbolsAndSeparators(s string) string {
 //
 // This is Stage 8 of the normalization pipeline.
 func ConvertRomanNumerals(s string) string {
+	// Early exit: skip processing if no Roman numeral characters present
+	// Always lowercase before returning since this is the last stage of normalizeInternal
+	if !strings.ContainsAny(s, "ivxIVX") {
+		return strings.ToLower(s)
+	}
+
 	upperS := strings.ToUpper(s)
 	upperS = romanNumeralI.ReplaceAllString(upperS, " 1$1")
 
