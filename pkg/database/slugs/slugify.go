@@ -189,7 +189,7 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	// Stage 10: Final Slugification (Multi-Script Aware)
+	// Stage 9: Final Slugification (Multi-Script Aware)
 	// Note: s is already lowercase from Stage 8 (ConvertRomanNumerals)
 
 	// Create both ASCII-only and Unicode-preserving versions
@@ -472,7 +472,7 @@ func isWordChar(r rune) bool {
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
-// This function runs Stages 1-9 of SlugifyString but STOPS before Stage 10 (final alphanumeric collapse).
+// This function runs Stages 1-8 of SlugifyString but STOPS before Stage 9 (final alphanumeric collapse).
 //
 // The result preserves spaces between words, enabling word-level operations like:
 //   - Token-based similarity matching
@@ -521,9 +521,9 @@ func NormalizeToWords(input string) []string {
 //	Stage 5: Symbol and Separator Normalization
 //	Stage 6: Metadata Stripping
 //	Stage 7: Edition/Version Suffix Stripping
-//	Stage 8: Roman Numeral Conversion
+//	Stage 8: Roman Numeral Conversion (includes lowercasing)
 //
-// Returns the normalized string with preserved spaces and case changes.
+// Returns the normalized string with preserved spaces and lowercase text.
 // The final Stage 9 (character filtering) is applied separately by the calling function.
 func normalizeInternal(input string) string {
 	s := strings.TrimSpace(input)
