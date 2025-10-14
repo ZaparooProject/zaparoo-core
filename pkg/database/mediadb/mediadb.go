@@ -421,6 +421,9 @@ func (db *MediaDB) closeAllPreparedStatements() {
 
 // RollbackTransaction rolls back the current transaction and cleans up resources
 func (db *MediaDB) RollbackTransaction() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
 	if db.tx == nil {
 		return nil // No active transaction
 	}
@@ -440,15 +443,35 @@ func (db *MediaDB) RollbackTransaction() error {
 }
 
 // rollbackAndLogError helper function to handle rollback with error logging
+// Note: This is called from BeginTransaction which already holds the mutex lock,
+// so we perform the rollback directly without calling RollbackTransaction
 func (db *MediaDB) rollbackAndLogError() {
-	if rbErr := db.RollbackTransaction(); rbErr != nil {
+	if db.tx == nil {
+		return
+	}
+
+	// Clean up prepared statements first
+	db.closeAllPreparedStatements()
+
+	// Rollback the transaction
+	if rbErr := db.tx.Rollback(); rbErr != nil {
 		log.Error().Err(rbErr).Msg("failed to rollback transaction during prepared statement setup")
 	}
+	db.tx = nil
+	db.inTransaction = false
 }
 
 func (db *MediaDB) BeginTransaction() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
 	if db.sql == nil {
 		return ErrNullSQL
+	}
+
+	// Check if a transaction is already active
+	if db.inTransaction {
+		return errors.New("transaction already in progress")
 	}
 
 	// Begin a proper transaction
@@ -496,6 +519,9 @@ func (db *MediaDB) BeginTransaction() error {
 }
 
 func (db *MediaDB) CommitTransaction() error {
+	db.sqlMu.Lock()
+	defer db.sqlMu.Unlock()
+
 	if db.tx == nil {
 		return nil // No active transaction
 	}
