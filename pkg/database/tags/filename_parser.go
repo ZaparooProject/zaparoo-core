@@ -372,6 +372,61 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 	return nil
 }
 
+// parseMultiRegionTag handles multi-region tags in various formats:
+//   - Comma-separated: "(USA, Europe)" → region:us + lang:en, region:eu
+//   - Dash-separated: "(EU-US)" → region:eu, region:us + lang:en
+//   - Comma-dash: "(USA,-Europe)" → region:us + lang:en, region:eu
+//
+// Returns individual region (and associated language) tags or nil if not a multi-region tag.
+func parseMultiRegionTag(tag string) []CanonicalTag {
+	// Multi-region tags can use commas, dashes, or combinations
+	var parts []string
+
+	// First, try splitting by comma (handles "USA, Europe" and "USA,-Europe")
+	switch {
+	case strings.Contains(tag, ","):
+		parts = strings.Split(tag, ",")
+	case strings.Contains(tag, "-"):
+		// Split by dash (handles "EU-US")
+		parts = strings.Split(tag, "-")
+	default:
+		return nil // Single region
+	}
+
+	var regions []CanonicalTag
+
+	for _, part := range parts {
+		// Clean up the part (remove leading/trailing whitespace and dashes)
+		part = strings.TrimSpace(part)
+		part = strings.Trim(part, "-")
+		if part == "" {
+			continue
+		}
+
+		normalized := NormalizeTag(part)
+		// Try to map as region
+		mapped := mapFilenameTagToCanonical(normalized)
+		for _, ct := range mapped {
+			if ct.Type == TagTypeRegion || ct.Type == TagTypeLang {
+				regions = append(regions, ct)
+			}
+		}
+	}
+
+	// Only return if we found at least 2 region-related tags
+	// (regions may also include their associated languages, so we check for any region/lang tags)
+	regionCount := 0
+	for _, ct := range regions {
+		if ct.Type == TagTypeRegion {
+			regionCount++
+		}
+	}
+	if regionCount >= 2 {
+		return regions
+	}
+	return nil
+}
+
 // disambiguateTag uses context to determine the correct canonical tag(s) for an ambiguous raw tag.
 // This implements No-Intro/TOSEC conventions:
 // - Parentheses tags appear in order: region → language → version → dev status
@@ -390,6 +445,11 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 	// First check if it's a multi-language tag (En,Fr,De)
 	if multiLang := parseMultiLanguageTag(normalized); multiLang != nil {
 		return multiLang
+	}
+
+	// Check if it's a multi-region tag (USA, Europe or EU-US)
+	if multiRegion := parseMultiRegionTag(normalized); multiRegion != nil {
+		return multiRegion
 	}
 
 	// For parentheses tags, use position and context

@@ -67,6 +67,8 @@ const (
 	TagTypeSave          TagType = "save"          // Save mechanism
 	TagTypeArcadeBoard   TagType = "arcadeboard"   // Arcade board types
 	TagTypeCompatibility TagType = "compatibility" // System compatibility tags
+	TagTypeSupplement    TagType = "supplement"    // Supplementary content (dlc, update, expansion, theme, avatar)
+	TagTypeDistribution  TagType = "distribution"  // Digital distribution platform (virtual-console, wiiware, xblig)
 	TagTypeDisc          TagType = "disc"          // Disc number for multi-disc games
 	TagTypeDiscTotal     TagType = "disctotal"     // Total number of discs in a multi-disc set
 	TagTypeBased         TagType = "based"         // Based on (movie, manga, etc.)
@@ -479,11 +481,24 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagCompatibilityPrimoPrimoB64, TagCompatibilityPrimoProprimo,
 		// ColecoVision
 		TagCompatibilityColecoAdam,
+		// Apple II
+		TagCompatibilityApple2Plus, TagCompatibilityApple2E,
+		// Memory requirements
+		TagCompatibilityMemory16K, TagCompatibilityMemory128K, TagCompatibilityMemory48K128K,
 		// Other
 		TagCompatibilityIBMPCDoctorPCJr, TagCompatibilityOsbourneOsbourne1,
 		TagCompatibilityMiscOrch80, TagCompatibilityMiscPiano90,
 		// Arcade
 		TagCompatibilityNintendoPlaychoice10, TagCompatibilityNintendoVSDualsystem, TagCompatibilityNintendoVSUnisystem,
+	},
+	TagTypeSupplement: {
+		// Supplementary content for DLC, updates, and expansions (post-release content)
+		TagSupplementDLC, TagSupplementUpdate, TagSupplementExpansion,
+		TagSupplementTheme, TagSupplementAvatar,
+	},
+	TagTypeDistribution: {
+		// Digital distribution platforms
+		TagDistributionVirtualConsole, TagDistributionWiiWare, TagDistributionXBLIG, TagDistributionDSiWare,
 	},
 	TagTypeDisc: {
 		// Disc number for multi-disc games (which disc this file is)
@@ -631,26 +646,23 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 	TagTypeRev: {
 		TagRev1, TagRev2, TagRev3, TagRev4, TagRev5,
 		TagRevA, TagRevB, TagRevC, TagRevD, TagRevE, TagRevG,
-		// Sub-versions (dotted versions like v1.0, v1.1)
-		TagRev1_0, TagRev1_1, TagRev1_2, TagRev1_3, TagRev1_4, TagRev1_5, TagRev1_6, TagRev1_7, TagRev1_8, TagRev1_9,
-		TagRev2_0, TagRev2_1, TagRev2_2, TagRev2_3, TagRev2_4, TagRev2_5, TagRev2_6, TagRev2_7, TagRev2_8, TagRev2_9,
-		TagRev3_0, TagRev3_1, TagRev3_2, TagRev3_3, TagRev3_4, TagRev3_5,
-		TagRev4_0, TagRev4_1, TagRev4_2,
-		TagRev5_0, TagRev5_1, TagRev5_2,
 		// Program revisions (NES-specific)
 		TagRevPRG, TagRevPRG0, TagRevPRG1, TagRevPRG2, TagRevPRG3,
+		// Note: Dotted versions (v1.0, v1.2.3, etc.) are handled dynamically
+		// by the parser and do not need hardcoded constants.
 	},
 	TagTypeSet: {
 		TagSet1, TagSet2, TagSet3, TagSet4, TagSet5, TagSet6, TagSet7, TagSet8,
 	},
 	TagTypeAlt: {
-		TagAlt1, TagAlt2, TagAlt3,
+		TagAlt, TagAlt1, TagAlt2, TagAlt3,
 	},
 	TagTypeUnlicensed: {
 		// Unofficial/unlicensed releases
 		// Note: Use flat "unlicensed" when specific type is unknown
 		TagUnlicensed,               // Generic unlicensed (specific type unknown)
 		TagUnlicensedBootleg,        // Unauthorized copy/pirate
+		TagUnlicensedPirate,         // Pirate/unauthorized release
 		TagUnlicensedHack,           // ROM hack/modification
 		TagUnlicensedClone,          // Hardware clone system
 		TagUnlicensedTranslation,    // Fan translation (current/generic)
@@ -746,12 +758,16 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 
 	TagTypeMedia: {
 		// Media type - physical format
-		TagMediaDisc, // Optical disc (CD, DVD, etc.)
-		TagMediaDisk, // Magnetic disk (floppy)
-		TagMediaFile, // File-based
-		TagMediaPart, // Multi-part file
-		TagMediaSide, // Side of disk/tape
-		TagMediaTape, // Cassette tape
+		TagMediaDisc,  // Optical disc (CD, DVD, etc.)
+		TagMediaDisk,  // Magnetic disk (floppy)
+		TagMediaFile,  // File-based
+		TagMediaPart,  // Multi-part file
+		TagMediaSide,  // Side of disk/tape (generic)
+		TagMediaSideA, // Side A
+		TagMediaSideB, // Side B
+		TagMediaSideC, // Side C
+		TagMediaSideD, // Side D
+		TagMediaTape,  // Cassette tape
 		// Additional media types
 		TagMediaCart, TagMediaN64DD, TagMediaFDS, TagMediaEReader, TagMediaMultiboot,
 	},
@@ -765,8 +781,9 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Edition markers - indicates presence of edition/version words that are stripped from slugs
 		// These are generic markers without specific descriptors (e.g., "Special", "Ultimate")
 		// TODO: could add specific edition tags
-		TagEditionVersion, // "Version" or equivalent in any language
-		TagEditionEdition, // "Edition" or equivalent in any language
+		TagEditionVersion,  // "Version" or equivalent in any language
+		TagEditionEdition,  // "Edition" or equivalent in any language
+		TagEditionRemaster, // "Remaster" or "Remastered"
 	},
 
 	TagTypePerspective: {

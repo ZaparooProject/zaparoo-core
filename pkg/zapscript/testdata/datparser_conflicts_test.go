@@ -29,6 +29,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 )
 
 type DATEntry struct {
@@ -644,4 +645,220 @@ func isProperSubset(setA, setB []string) bool {
 		}
 	}
 	return true
+}
+
+// UnmappedTagInfo tracks information about an unmapped tag
+type UnmappedTagInfo struct {
+	Tag        string            // The normalized tag value
+	Count      int               // Number of times this tag appears
+	Systems    map[string]int    // System ID -> count of occurrences in that system
+	Examples   []string          // Example filenames containing this tag (max 5)
+	DATFiles   map[string]bool   // DAT files where this tag appears
+}
+
+// TestUnmappedTags_AllDATs analyzes all DAT files to identify tags that are not mapped
+// in the tag_mappings.go file. This helps prioritize which tags to add mappings for.
+func TestUnmappedTags_AllDATs(t *testing.T) {
+	datsDir := filepath.Join("dats")
+
+	if _, err := os.Stat(datsDir); os.IsNotExist(err) {
+		t.Skipf("DATs directory not found: %s", datsDir)
+	}
+
+	// Track unmapped tags
+	unmappedTags := make(map[string]*UnmappedTagInfo)
+	systemUnmappedCounts := make(map[string]map[string]bool) // systemID -> set of unmapped tags
+
+	// Statistics
+	totalGames := 0
+	totalTagsExtracted := 0
+	totalMappedTags := 0
+	totalUnmappedTags := 0
+	processedDATs := 0
+	skippedDATs := 0
+
+	// Walk through all DAT files
+	err := filepath.Walk(datsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() || !strings.HasSuffix(path, ".dat") {
+			return nil
+		}
+
+		// Parse DAT file
+		dat, err := ParseDATFile(path)
+		if err != nil {
+			t.Logf("Skipping %s: %v", filepath.Base(path), err)
+			skippedDATs++
+			return nil
+		}
+
+		// Match system ID
+		systemID, err := MatchSystemID(dat.Header.Name)
+		if err != nil {
+			t.Logf("No system match for %s (%s)", filepath.Base(path), dat.Header.Name)
+			skippedDATs++
+			return nil
+		}
+
+		processedDATs++
+		datFileName := filepath.Base(path)
+
+		// Initialize system tracking if needed
+		if systemUnmappedCounts[systemID] == nil {
+			systemUnmappedCounts[systemID] = make(map[string]bool)
+		}
+
+		// Process each game in the DAT
+		for _, game := range dat.Games {
+			gameName := game.Name
+			if gameName == "" {
+				gameName = game.Description
+			}
+
+			if strings.TrimSpace(gameName) == "" {
+				continue
+			}
+
+			totalGames++
+
+			// Parse tags from the filename using the canonical tag parser
+			canonicalTags := tags.ParseFilenameToCanonicalTags(gameName)
+			totalTagsExtracted += len(canonicalTags)
+
+			// Analyze each tag
+			for _, canonicalTag := range canonicalTags {
+				if canonicalTag.Type == tags.TagTypeUnknown {
+					// This is an unmapped tag
+					totalUnmappedTags++
+					tagValue := string(canonicalTag.Value)
+
+					// Initialize tracking if this is a new unmapped tag
+					if unmappedTags[tagValue] == nil {
+						unmappedTags[tagValue] = &UnmappedTagInfo{
+							Tag:      tagValue,
+							Count:    0,
+							Systems:  make(map[string]int),
+							Examples: make([]string, 0, 5),
+							DATFiles: make(map[string]bool),
+						}
+					}
+
+					info := unmappedTags[tagValue]
+					info.Count++
+					info.Systems[systemID]++
+					info.DATFiles[datFileName] = true
+					systemUnmappedCounts[systemID][tagValue] = true
+
+					// Store example filename (max 5)
+					if len(info.Examples) < 5 {
+						info.Examples = append(info.Examples, gameName)
+					}
+				} else {
+					totalMappedTags++
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("Error walking DAT files: %v", err)
+	}
+
+	// Generate report
+	t.Logf("\n=== UNMAPPED TAG ANALYSIS ===\n")
+	t.Logf("Total DAT files processed: %d", processedDATs)
+	t.Logf("Total DAT files skipped: %d", skippedDATs)
+	t.Logf("Total game entries analyzed: %d", totalGames)
+	t.Logf("Total tags extracted: %d", totalTagsExtracted)
+	t.Logf("Mapped tags: %d (%.1f%%)", totalMappedTags,
+		float64(totalMappedTags)/float64(totalTagsExtracted)*100)
+	t.Logf("Unmapped tags: %d (%.1f%%)\n", totalUnmappedTags,
+		float64(totalUnmappedTags)/float64(totalTagsExtracted)*100)
+
+	if len(unmappedTags) == 0 {
+		t.Log("✅ No unmapped tags found! All tags are mapped.")
+		return
+	}
+
+	// Sort unmapped tags by frequency
+	type tagFreq struct {
+		tag  string
+		info *UnmappedTagInfo
+	}
+	sortedTags := make([]tagFreq, 0, len(unmappedTags))
+	for tag, info := range unmappedTags {
+		sortedTags = append(sortedTags, tagFreq{tag, info})
+	}
+	sort.Slice(sortedTags, func(i, j int) bool {
+		return sortedTags[i].info.Count > sortedTags[j].info.Count
+	})
+
+	// Report top N unmapped tags
+	topN := 50
+	if len(sortedTags) < topN {
+		topN = len(sortedTags)
+	}
+
+	t.Logf("\n=== TOP %d UNMAPPED TAGS ===\n", topN)
+	for i := 0; i < topN; i++ {
+		tf := sortedTags[i]
+		info := tf.info
+
+		t.Logf("\n#%d: %q (%d occurrences)", i+1, info.Tag, info.Count)
+
+		// Show top systems for this tag
+		type systemFreq struct {
+			system string
+			count  int
+		}
+		systemFreqs := make([]systemFreq, 0, len(info.Systems))
+		for sys, count := range info.Systems {
+			systemFreqs = append(systemFreqs, systemFreq{sys, count})
+		}
+		sort.Slice(systemFreqs, func(i, j int) bool {
+			return systemFreqs[i].count > systemFreqs[j].count
+		})
+
+		// Show top 5 systems
+		systemStrs := make([]string, 0, 5)
+		for j := 0; j < len(systemFreqs) && j < 5; j++ {
+			systemStrs = append(systemStrs, fmt.Sprintf("%s (%d)", systemFreqs[j].system, systemFreqs[j].count))
+		}
+		t.Logf("  Systems: %s", strings.Join(systemStrs, ", "))
+
+		// Show example filenames
+		t.Logf("  Examples:")
+		for _, example := range info.Examples {
+			t.Logf("    - %q", example)
+		}
+	}
+
+	// Report unmapped tags by system
+	t.Logf("\n=== UNMAPPED TAGS BY SYSTEM ===\n")
+
+	type systemStat struct {
+		systemID    string
+		uniqueTags  int
+	}
+	systemStats := make([]systemStat, 0, len(systemUnmappedCounts))
+	for systemID, tagSet := range systemUnmappedCounts {
+		systemStats = append(systemStats, systemStat{systemID, len(tagSet)})
+	}
+	sort.Slice(systemStats, func(i, j int) bool {
+		return systemStats[i].uniqueTags > systemStats[j].uniqueTags
+	})
+
+	for _, stat := range systemStats {
+		t.Logf("%s: %d unique unmapped tags", stat.systemID, stat.uniqueTags)
+	}
+
+	// Summary message
+	t.Logf("\n=== SUMMARY ===")
+	t.Logf("Found %d unique unmapped tags across all systems.", len(unmappedTags))
+	t.Logf("Consider adding mappings for the most common tags to improve tag coverage.")
 }

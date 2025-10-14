@@ -497,7 +497,7 @@ func TestSlugsAreAlphanumeric(t *testing.T) {
 		for _, slug := range sys.Slugs {
 			// Check if slug contains only lowercase alphanumeric characters
 			for i, r := range slug {
-				if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+				if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
 					invalidSlugs = append(invalidSlugs,
 						fmt.Sprintf("  System %s: slug %q contains invalid character %q at position %d",
 							sysID, slug, string(r), i))

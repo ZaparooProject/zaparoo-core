@@ -371,12 +371,16 @@ const (
 
 // Media tag values
 const (
-	TagMediaDisc TagValue = "disc"
-	TagMediaDisk TagValue = "disk"
-	TagMediaFile TagValue = "file"
-	TagMediaPart TagValue = "part"
-	TagMediaSide TagValue = "side"
-	TagMediaTape TagValue = "tape"
+	TagMediaDisc  TagValue = "disc"
+	TagMediaDisk  TagValue = "disk"
+	TagMediaFile  TagValue = "file"
+	TagMediaPart  TagValue = "part"
+	TagMediaSide  TagValue = "side"
+	TagMediaSideA TagValue = "side-a"
+	TagMediaSideB TagValue = "side-b"
+	TagMediaSideC TagValue = "side-c"
+	TagMediaSideD TagValue = "side-d"
+	TagMediaTape  TagValue = "tape"
 )
 
 // Revision tag values
@@ -426,6 +430,7 @@ const (
 	TagUnlicensedBootleg        TagValue = "bootleg"
 	TagUnlicensedHack           TagValue = "hack"
 	TagUnlicensedClone          TagValue = "clone"
+	TagUnlicensedPirate         TagValue = "pirate"
 	TagUnlicensedTranslation    TagValue = "translation"
 	TagUnlicensedTranslationOld TagValue = "translation:old"
 	TagUnlicensedAftermarket    TagValue = "aftermarket"
@@ -1110,6 +1115,7 @@ const (
 
 // Alt tag values
 const (
+	TagAlt  TagValue = "alt" // Generic alternate version
 	TagAlt1 TagValue = "1"
 	TagAlt2 TagValue = "2"
 	TagAlt3 TagValue = "3"
@@ -1122,46 +1128,8 @@ const (
 	TagLangPTBR   TagValue = "pt-br"   // Brazilian Portuguese
 )
 
-// Revision sub-version tag values (dotted versions like v1.0, v1.1)
+// Program revision tag values (NES-specific)
 const (
-	// v1.x versions
-	TagRev1_0 TagValue = "1-0"
-	TagRev1_1 TagValue = "1-1"
-	TagRev1_2 TagValue = "1-2"
-	TagRev1_3 TagValue = "1-3"
-	TagRev1_4 TagValue = "1-4"
-	TagRev1_5 TagValue = "1-5"
-	TagRev1_6 TagValue = "1-6"
-	TagRev1_7 TagValue = "1-7"
-	TagRev1_8 TagValue = "1-8"
-	TagRev1_9 TagValue = "1-9"
-	// v2.x versions
-	TagRev2_0 TagValue = "2-0"
-	TagRev2_1 TagValue = "2-1"
-	TagRev2_2 TagValue = "2-2"
-	TagRev2_3 TagValue = "2-3"
-	TagRev2_4 TagValue = "2-4"
-	TagRev2_5 TagValue = "2-5"
-	TagRev2_6 TagValue = "2-6"
-	TagRev2_7 TagValue = "2-7"
-	TagRev2_8 TagValue = "2-8"
-	TagRev2_9 TagValue = "2-9"
-	// v3.x versions
-	TagRev3_0 TagValue = "3-0"
-	TagRev3_1 TagValue = "3-1"
-	TagRev3_2 TagValue = "3-2"
-	TagRev3_3 TagValue = "3-3"
-	TagRev3_4 TagValue = "3-4"
-	TagRev3_5 TagValue = "3-5"
-	// v4.x versions
-	TagRev4_0 TagValue = "4-0"
-	TagRev4_1 TagValue = "4-1"
-	TagRev4_2 TagValue = "4-2"
-	// v5.x versions
-	TagRev5_0 TagValue = "5-0"
-	TagRev5_1 TagValue = "5-1"
-	TagRev5_2 TagValue = "5-2"
-	// Program revisions (NES-specific)
 	TagRevPRG  TagValue = "prg"
 	TagRevPRG0 TagValue = "prg:0"
 	TagRevPRG1 TagValue = "prg:1"
@@ -1334,8 +1302,9 @@ const (
 
 // Edition tag values
 const (
-	TagEditionVersion TagValue = "version"
-	TagEditionEdition TagValue = "edition"
+	TagEditionVersion  TagValue = "version"
+	TagEditionEdition  TagValue = "edition"
+	TagEditionRemaster TagValue = "remaster"
 )
 
 // Perspective tag values
@@ -1378,4 +1347,34 @@ const (
 	// Input accessibility
 	TagAccessibilityInputRemappableControls TagValue = "input:remappablecontrols"
 	TagAccessibilityInputOneButtonMode      TagValue = "input:onebuttonmode"
+)
+
+// Supplement tag values
+const (
+	TagSupplementDLC       TagValue = "dlc"
+	TagSupplementUpdate    TagValue = "update"
+	TagSupplementExpansion TagValue = "expansion"
+	TagSupplementTheme     TagValue = "theme"
+	TagSupplementAvatar    TagValue = "avatar"
+)
+
+// Distribution platform tag values
+const (
+	TagDistributionVirtualConsole TagValue = "virtualconsole"
+	TagDistributionWiiWare        TagValue = "wiiware"
+	TagDistributionXBLIG          TagValue = "xblig"
+	TagDistributionDSiWare        TagValue = "dsiware"
+)
+
+// Apple II compatibility tag values
+const (
+	TagCompatibilityApple2Plus TagValue = "apple2:plus"
+	TagCompatibilityApple2E    TagValue = "apple2:e"
+)
+
+// Memory compatibility tag values
+const (
+	TagCompatibilityMemory16K     TagValue = "memory:16k"
+	TagCompatibilityMemory128K    TagValue = "memory:128k"
+	TagCompatibilityMemory48K128K TagValue = "memory:48k-128k"
 )

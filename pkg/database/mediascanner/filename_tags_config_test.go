@@ -46,7 +46,10 @@ func TestGetPathFragments_FilenameTagsConfig(t *testing.T) {
 	fragmentsEnabled := GetPathFragments(cfgEnabled, testPath, false, false)
 	require.NotEmpty(t, fragmentsEnabled.Tags, "filename tags should be extracted when enabled")
 	require.Contains(t, fragmentsEnabled.Tags, "rev:1", "revision tag should be extracted")
-	require.Contains(t, fragmentsEnabled.Tags, "unknown:usa,-europe", "region tag should be extracted")
+	// Multi-region tags are now properly parsed into individual regions
+	require.Contains(t, fragmentsEnabled.Tags, "region:us", "USA region tag should be extracted")
+	require.Contains(t, fragmentsEnabled.Tags, "region:eu", "Europe region tag should be extracted")
+	require.Contains(t, fragmentsEnabled.Tags, "lang:en", "English language tag should be extracted")
 
 	// Test with filename tags disabled
 	fragmentsDisabled := GetPathFragments(cfgDisabled, testPath, false, false)

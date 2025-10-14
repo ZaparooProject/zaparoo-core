@@ -84,7 +84,7 @@ var allTagMappings = map[string][]CanonicalTag{
 	"ch": {{TagTypeRegion, TagRegionCH}},
 	"cl": {{TagTypeRegion, TagRegionCL}, {TagTypeLang, TagLangES}}, // Chile
 	"cn": {{TagTypeRegion, TagRegionCN}, {TagTypeLang, TagLangZH}},
-	"cs": {{TagTypeRegion, TagRegionCS}},
+	"cs": {{TagTypeRegion, TagRegionCS}, {TagTypeLang, TagLangCS}}, // Serbia, also Czech language
 	"cy": {{TagTypeRegion, TagRegionCY}},
 	"cz": {{TagTypeRegion, TagRegionCZ}, {TagTypeLang, TagLangCS}},
 	"de": {{TagTypeRegion, TagRegionDE}, {TagTypeLang, TagLangDE}},
@@ -146,8 +146,10 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// Note: Some language codes overlap with region codes above and are merged there.
 	// These are either standalone language codes or ones where the region mapping doesn't auto-add the language.
+	// The following are already mapped with regions: cs, da, fi, nl, no, pt, sv
 	"ar": {{TagTypeLang, TagLangAR}},
 	"bs": {{TagTypeLang, TagLangBS}},
+	"da": {{TagTypeLang, TagLangDA}},
 	"el": {{TagTypeLang, TagLangEL}},
 	"en": {{TagTypeLang, TagLangEN}},
 	"eo": {{TagTypeLang, TagLangEO}},
@@ -156,10 +158,13 @@ var allTagMappings = map[string][]CanonicalTag{
 	"gu": {{TagTypeLang, TagLangGU}},
 	"he": {{TagTypeLang, TagLangHE}},
 	"hi": {{TagTypeLang, TagLangHI}},
+	"ja": {{TagTypeLang, TagLangJA}},
+	"ko": {{TagTypeLang, TagLangKO}},
 	"ms": {{TagTypeLang, TagLangMS}},
 	"sl": {{TagTypeLang, TagLangSL}},
 	"sq": {{TagTypeLang, TagLangSQ}},
 	"sr": {{TagTypeLang, TagLangSR}},
+	"sv": {{TagTypeLang, TagLangSV}},
 	"ur": {{TagTypeLang, TagLangUR}},
 	"vi": {{TagTypeLang, TagLangVI}},
 	"yi": {{TagTypeLang, TagLangYI}},
@@ -239,6 +244,16 @@ var allTagMappings = map[string][]CanonicalTag{
 	"unl":  {{TagTypeUnlicensed, TagUnlicensed}}, // No-Intro unlicensed flag
 
 	// ============================================================================
+	// UNLICENSED/PIRATE MAPPINGS
+	// ============================================================================
+	"pirate": {{TagTypeUnlicensed, TagUnlicensedPirate}}, // Pirate/unauthorized release
+
+	// ============================================================================
+	// ALTERNATE VERSION MAPPINGS
+	// ============================================================================
+	"alt": {{TagTypeAlt, TagAlt}}, // Generic alternate version
+
+	// ============================================================================
 	// VIDEO FORMAT MAPPINGS (TOSEC)
 	// ============================================================================
 	"cga":      {{TagTypeVideo, TagVideoCGA}},
@@ -299,6 +314,13 @@ var allTagMappings = map[string][]CanonicalTag{
 	// ============================================================================
 	// TOSEC SYSTEM-SPECIFIC MAPPINGS
 	// ============================================================================
+	// Apple II systems
+	"ii+": {{TagTypeCompatibility, TagCompatibilityApple2Plus}},
+	"iie": {{TagTypeCompatibility, TagCompatibilityApple2E}},
+	// Memory requirements
+	"16k":      {{TagTypeCompatibility, TagCompatibilityMemory16K}},
+	"128k":     {{TagTypeCompatibility, TagCompatibilityMemory128K}},
+	"48k-128k": {{TagTypeCompatibility, TagCompatibilityMemory48K128K}},
 	// Amiga systems
 	"+2":                     {{TagTypeCompatibility, TagCompatibilityAmigaPlus2}},
 	"+2a":                    {{TagTypeCompatibility, TagCompatibilityAmigaPlus2A}},
@@ -400,6 +422,26 @@ var allTagMappings = map[string][]CanonicalTag{
 	"genesis-bundle": {{TagTypeReboxed, TagReboxedBundleGenesis}},
 
 	// ============================================================================
+	// SUPPLEMENT MAPPINGS
+	// ============================================================================
+	// Supplementary content types (DLC, updates, expansions)
+	"dlc":    {{TagTypeSupplement, TagSupplementDLC}},
+	"update": {{TagTypeSupplement, TagSupplementUpdate}},
+	"patch":  {{TagTypeSupplement, TagSupplementUpdate}},    // Merged with update
+	"addon":  {{TagTypeSupplement, TagSupplementExpansion}}, // For content expansions, not hardware peripherals
+	"theme":  {{TagTypeSupplement, TagSupplementTheme}},     // Visual themes (PS3/Vita/PSP)
+	"avatar": {{TagTypeSupplement, TagSupplementAvatar}},    // Avatar items (PS3/Vita)
+
+	// ============================================================================
+	// DISTRIBUTION PLATFORM MAPPINGS
+	// ============================================================================
+	// Digital distribution platforms and online services
+	"virtual-console": {{TagTypeDistribution, TagDistributionVirtualConsole}}, // Nintendo Virtual Console
+	"wiiware":         {{TagTypeDistribution, TagDistributionWiiWare}},        // Nintendo WiiWare
+	"xblig":           {{TagTypeDistribution, TagDistributionXBLIG}},          // Xbox Live Indie Games
+	"dsiware":         {{TagTypeDistribution, TagDistributionDSiWare}},        // Nintendo DSiWare
+
+	// ============================================================================
 	// MEDIA TYPE MAPPINGS
 	// ============================================================================
 	// Note: "Disc X of Y" format is handled specially in getTagsFromFileName()
@@ -418,13 +460,45 @@ var allTagMappings = map[string][]CanonicalTag{
 	"file":      {{TagTypeMedia, TagMediaFile}},
 	"part":      {{TagTypeMedia, TagMediaPart}},
 	"side":      {{TagTypeMedia, TagMediaSide}},
+	"side-a":    {{TagTypeMedia, TagMediaSideA}}, // Cassette/disk side A
+	"side-b":    {{TagTypeMedia, TagMediaSideB}}, // Cassette/disk side B
+	"side-c":    {{TagTypeMedia, TagMediaSideC}}, // Cassette/disk side C
+	"side-d":    {{TagTypeMedia, TagMediaSideD}}, // Cassette/disk side D
 	"tape":      {{TagTypeMedia, TagMediaTape}},
-	"cart":      {{TagTypeMedia, TagMediaCart}},                       // Cartridge format
-	"cartridge": {{TagTypeMedia, TagMediaCart}},                       // Cartridge (full name)
-	"n64dd":     {{TagTypeMedia, TagMediaN64DD}},                      // Nintendo 64DD disk
-	"fds":       {{TagTypeMedia, TagMediaFDS}},                        // Famicom Disk System
-	"e-reader":  {{TagTypeMedia, TagMediaEReader}},                    // e-Reader card
-	"mb":        {{TagTypeMedia, TagMediaMultiboot}},                  // Multiboot ROM (GBA)
-	"multiboot": {{TagTypeMedia, TagMediaMultiboot}},                  // Multiboot (full name)
-	"adam":      {{TagTypeCompatibility, TagCompatibilityColecoAdam}}, // ColecoVision ADAM
+	"cart":      {{TagTypeMedia, TagMediaCart}},      // Cartridge format
+	"cartridge": {{TagTypeMedia, TagMediaCart}},      // Cartridge (full name)
+	"n64dd":     {{TagTypeMedia, TagMediaN64DD}},     // Nintendo 64DD disk
+	"fds":       {{TagTypeMedia, TagMediaFDS}},       // Famicom Disk System
+	"e-reader":  {{TagTypeMedia, TagMediaEReader}},   // e-Reader card
+	"mb":        {{TagTypeMedia, TagMediaMultiboot}}, // Multiboot ROM (GBA)
+	"multiboot": {{TagTypeMedia, TagMediaMultiboot}}, // Multiboot (full name)
+	// Disk-X-of-Y compound patterns (commonly found in TOSEC DATs)
+	"disk-1-of-2": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc1}, {TagTypeDiscTotal, TagDiscTotal2}},
+	"disk-2-of-2": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc2}, {TagTypeDiscTotal, TagDiscTotal2}},
+	"disk-1-of-3": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc1}, {TagTypeDiscTotal, TagDiscTotal3}},
+	"disk-2-of-3": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc2}, {TagTypeDiscTotal, TagDiscTotal3}},
+	"disk-3-of-3": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc3}, {TagTypeDiscTotal, TagDiscTotal3}},
+	"disk-1-of-4": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc1}, {TagTypeDiscTotal, TagDiscTotal4}},
+	"disk-2-of-4": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc2}, {TagTypeDiscTotal, TagDiscTotal4}},
+	"disk-3-of-4": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc3}, {TagTypeDiscTotal, TagDiscTotal4}},
+	"disk-4-of-4": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc4}, {TagTypeDiscTotal, TagDiscTotal4}},
+	"disk-1-of-5": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc1}, {TagTypeDiscTotal, TagDiscTotal5}},
+	"disk-2-of-5": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc2}, {TagTypeDiscTotal, TagDiscTotal5}},
+	"disk-3-of-5": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc3}, {TagTypeDiscTotal, TagDiscTotal5}},
+	"disk-4-of-5": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc4}, {TagTypeDiscTotal, TagDiscTotal5}},
+	"disk-5-of-5": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc5}, {TagTypeDiscTotal, TagDiscTotal5}},
+	"disk-1-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc1}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"disk-2-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc2}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"disk-3-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc3}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"disk-4-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc4}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"disk-5-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc5}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"disk-6-of-6": {{TagTypeMedia, TagMediaDisk}, {TagTypeDisc, TagDisc6}, {TagTypeDiscTotal, TagDiscTotal6}},
+	"adam":        {{TagTypeCompatibility, TagCompatibilityColecoAdam}}, // ColecoVision ADAM
+
+	// ============================================================================
+	// EDITION MAPPINGS
+	// ============================================================================
+	// Edition markers (remaster, special, deluxe, etc.)
+	"remaster":   {{TagTypeEdition, TagEditionRemaster}},
+	"remastered": {{TagTypeEdition, TagEditionRemaster}}, // Normalize to same value
 }
