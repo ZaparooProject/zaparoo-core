@@ -1023,3 +1023,327 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
+
+// TestMediaDB_CacheInvalidation_OnInsert_Integration tests that caches are properly invalidated on inserts
+func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create tag type before transaction
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+
+	// Setup initial data
+	err = mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.SlugifyString("Mario"),
+		Name:       "Super Mario Bros",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/mario.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	usaTag := database.Tag{
+		TypeDBID: regionTagType.DBID,
+		Tag:      "usa",
+	}
+	insertedTag, err := mediaDB.FindOrInsertTag(usaTag)
+	require.NoError(t, err)
+
+	// Associate tag with media
+	mediaTag := database.MediaTag{
+		MediaDBID: insertedMedia.DBID,
+		TagDBID:   insertedTag.DBID,
+	}
+	_, err = mediaDB.InsertMediaTag(mediaTag)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Populate all caches
+	err = mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	require.NoError(t, err)
+
+	// Verify caches are populated
+	_, _, slugCacheFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.True(t, slugCacheFound, "slug cache should be populated")
+
+	tags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
+	require.NoError(t, err)
+	assert.NotEmpty(t, tags, "system tags cache should be populated")
+
+	// Insert a new media title (outside transaction to trigger invalidation)
+	newTitle := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.SlugifyString("Zelda"),
+		Name:       "The Legend of Zelda",
+	}
+	_, err = mediaDB.InsertMediaTitle(newTitle)
+	require.NoError(t, err)
+
+	// Verify slug cache was invalidated (InsertMediaTitle uses AllSystems scope)
+	_, _, slugCacheAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.False(t, slugCacheAfter, "slug cache should be invalidated after InsertMediaTitle")
+}
+
+// TestMediaDB_CacheInvalidation_OnTransaction_Integration tests cache invalidation during transactions
+func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Setup initial data
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	// Insert initial data in transaction
+	err = mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.SlugifyString("Mario"),
+		Name:       "Super Mario Bros",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/mario.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Cache a slug resolution
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	require.NoError(t, err)
+
+	// Verify cache exists
+	_, _, found := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.True(t, found, "cache should exist before transaction")
+
+	// Start new transaction and insert more data
+	err = mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	// Insert should NOT invalidate cache during transaction
+	newTitle := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.SlugifyString("Zelda"),
+		Name:       "The Legend of Zelda",
+	}
+	_, err = mediaDB.InsertMediaTitle(newTitle)
+	require.NoError(t, err)
+
+	// Cache should still exist during transaction
+	_, _, foundDuring := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.True(t, foundDuring, "cache should NOT be invalidated during transaction")
+
+	// Commit transaction
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// After commit, caches are invalidated
+	_, _, foundAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.False(t, foundAfter, "cache should be invalidated after transaction commit")
+}
+
+// TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration tests slug cache invalidation on system truncate
+func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Setup multiple systems
+	err := mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+	snesSystem, err := systemdefs.GetSystem("SNES")
+	require.NoError(t, err)
+
+	nesSystemDB := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedNES, err := mediaDB.InsertSystem(nesSystemDB)
+	require.NoError(t, err)
+
+	snesSystemDB := database.System{
+		SystemID: snesSystem.ID,
+		Name:     "SNES",
+	}
+	insertedSNES, err := mediaDB.InsertSystem(snesSystemDB)
+	require.NoError(t, err)
+
+	// Add media for both systems
+	nesTitle := database.MediaTitle{
+		SystemDBID: insertedNES.DBID,
+		Slug:       slugs.SlugifyString("Mario"),
+		Name:       "Super Mario Bros",
+	}
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(nesTitle)
+	require.NoError(t, err)
+
+	nesMedia := database.Media{
+		SystemDBID:     insertedNES.DBID,
+		MediaTitleDBID: insertedNESTitle.DBID,
+		Path:           "/roms/nes/mario.nes",
+	}
+	insertedNESMedia, err := mediaDB.InsertMedia(nesMedia)
+	require.NoError(t, err)
+
+	snesTitle := database.MediaTitle{
+		SystemDBID: insertedSNES.DBID,
+		Slug:       slugs.SlugifyString("Zelda"),
+		Name:       "The Legend of Zelda",
+	}
+	insertedSNESTitle, err := mediaDB.InsertMediaTitle(snesTitle)
+	require.NoError(t, err)
+
+	snesMedia := database.Media{
+		SystemDBID:     insertedSNES.DBID,
+		MediaTitleDBID: insertedSNESTitle.DBID,
+		Path:           "/roms/snes/zelda.smc",
+	}
+	insertedSNESMedia, err := mediaDB.InsertMedia(snesMedia)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Cache slug resolutions for both systems
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedNESMedia.DBID, "exact")
+	require.NoError(t, err)
+
+	err = mediaDB.SetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil, insertedSNESMedia.DBID, "exact")
+	require.NoError(t, err)
+
+	// Verify both caches exist
+	_, _, nesFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.True(t, nesFound, "NES cache should exist")
+
+	_, _, snesFound := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
+	assert.True(t, snesFound, "SNES cache should exist")
+
+	// Truncate NES system only
+	err = mediaDB.TruncateSystems([]string{nesSystem.ID})
+	require.NoError(t, err)
+
+	// Verify NES cache is gone but SNES cache remains
+	_, _, nesAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.False(t, nesAfter, "NES cache should be invalidated")
+
+	_, _, snesAfter := mediaDB.GetCachedSlugResolution(ctx, snesSystem.ID, "zelda", nil)
+	assert.True(t, snesAfter, "SNES cache should remain")
+}
+
+// TestMediaDB_Truncate_AllCachesCleared_Integration tests full truncate clears all caches
+func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
+	t.Parallel()
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Setup data
+	err := mediaDB.BeginTransaction()
+	require.NoError(t, err)
+
+	nesSystem, err := systemdefs.GetSystem("NES")
+	require.NoError(t, err)
+
+	system := database.System{
+		SystemID: nesSystem.ID,
+		Name:     "NES",
+	}
+	insertedSystem, err := mediaDB.InsertSystem(system)
+	require.NoError(t, err)
+
+	title := database.MediaTitle{
+		SystemDBID: insertedSystem.DBID,
+		Slug:       slugs.SlugifyString("Mario"),
+		Name:       "Super Mario Bros",
+	}
+	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	require.NoError(t, err)
+
+	media := database.Media{
+		SystemDBID:     insertedSystem.DBID,
+		MediaTitleDBID: insertedTitle.DBID,
+		Path:           "/roms/mario.nes",
+	}
+	insertedMedia, err := mediaDB.InsertMedia(media)
+	require.NoError(t, err)
+
+	err = mediaDB.CommitTransaction()
+	require.NoError(t, err)
+
+	// Populate all caches
+	err = mediaDB.PopulateSystemTagsCache(ctx)
+	require.NoError(t, err)
+
+	err = mediaDB.SetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil, insertedMedia.DBID, "exact")
+	require.NoError(t, err)
+
+	// Verify caches are populated
+	_, _, slugFound := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.True(t, slugFound, "slug cache should be populated")
+
+	// Truncate all data
+	err = mediaDB.Truncate()
+	require.NoError(t, err)
+
+	// Verify slug cache is cleared
+	_, _, slugAfter := mediaDB.GetCachedSlugResolution(ctx, nesSystem.ID, "mario", nil)
+	assert.False(t, slugAfter, "slug cache should be cleared after truncate")
+
+	// Verify system tags cache is cleared
+	tags, err := mediaDB.GetSystemTagsCached(ctx, []systemdefs.System{*nesSystem})
+	require.NoError(t, err)
+	assert.Empty(t, tags, "system tags cache should be cleared after truncate")
+}

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -537,54 +538,49 @@ func DoLaunch(
 var (
 	userDirCache       string
 	userDirCacheExists bool
-	userDirCacheInit   bool
+	userDirOnce        sync.Once
 )
 
 // HasUserDir checks if a "user" directory exists next to the Zaparoo binary
 // and returns true and the absolute path to it. This directory is used as a
 // parent for all platform directories if it exists, for a portable install.
 // The result is cached after the first call for better performance.
+// This function is safe for concurrent use.
 func HasUserDir() (string, bool) {
-	// Return cached result if already initialized
-	if userDirCacheInit {
-		return userDirCache, userDirCacheExists
-	}
+	userDirOnce.Do(func() {
+		exeDir := ""
+		envExe := os.Getenv(config.AppEnv)
+		var err error
 
-	exeDir := ""
-	envExe := os.Getenv(config.AppEnv)
-	var err error
-
-	if envExe != "" {
-		exeDir = envExe
-	} else {
-		exeDir, err = os.Executable()
-		if err != nil {
-			userDirCacheInit = true
-			userDirCacheExists = false
-			return "", false
+		if envExe != "" {
+			exeDir = envExe
+		} else {
+			exeDir, err = os.Executable()
+			if err != nil {
+				userDirCacheExists = false
+				return
+			}
 		}
-	}
 
-	parent := filepath.Dir(exeDir)
-	userDir := filepath.Join(parent, config.UserDir)
+		parent := filepath.Dir(exeDir)
+		userDir := filepath.Join(parent, config.UserDir)
 
-	info, err := os.Stat(userDir)
-	if err != nil {
-		userDirCacheInit = true
-		userDirCacheExists = false
-		return "", false
-	}
-	if !info.IsDir() {
-		userDirCacheInit = true
-		userDirCacheExists = false
-		return "", false
-	}
+		info, err := os.Stat(userDir)
+		if err != nil {
+			userDirCacheExists = false
+			return
+		}
+		if !info.IsDir() {
+			userDirCacheExists = false
+			return
+		}
 
-	// Cache the result
-	userDirCache = userDir
-	userDirCacheExists = true
-	userDirCacheInit = true
-	return userDir, true
+		// Cache the result
+		userDirCache = userDir
+		userDirCacheExists = true
+	})
+
+	return userDirCache, userDirCacheExists
 }
 
 func ConfigDir(pl platforms.Platform) string {

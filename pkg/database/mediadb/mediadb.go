@@ -88,10 +88,8 @@ type MediaDB struct {
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
 type invalidationScope struct {
-	// If true, all caches for all systems are affected (most conservative)
+	SystemIDs  []string
 	AllSystems bool
-	// If AllSystems is false, these system IDs are affected (more granular)
-	SystemIDs []string
 }
 
 // invalidateCaches handles all cache invalidation in one place
@@ -708,32 +706,20 @@ func (db *MediaDB) GetSystemTagsCached(ctx context.Context, systems []systemdefs
 		return sqlGetTags(ctx, db.sql, systems)
 	}
 
-	// If cache is empty (no results), check if it's because cache is not populated
+	// If cache is empty (no results), auto-populate for requested systems (self-healing)
 	if len(tags) == 0 {
-		// Check if cache has any data at all
-		var cacheCount int
-		countStmt, countErr := db.sql.PrepareContext(ctx, "SELECT COUNT(*) FROM SystemTagsCache")
-		if countErr == nil {
-			defer func() {
-				if closeErr := countStmt.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Msg("failed to close count statement")
-				}
-			}()
-			countErr = countStmt.QueryRowContext(ctx).Scan(&cacheCount)
-			if countErr == nil && cacheCount == 0 {
-				log.Info().Msg("system tags cache is empty, populating for requested systems")
+		log.Debug().Int("system_count", len(systems)).Msg("cache miss, populating for requested systems")
 
-				// Self-healing: populate cache for requested systems (best effort)
-				if populateErr := db.PopulateSystemTagsCacheForSystems(ctx, systems); populateErr != nil {
-					log.Warn().Err(populateErr).Msg("failed to populate cache, using direct query")
-				} else {
-					log.Debug().Int("system_count", len(systems)).Msg("successfully populated cache for systems")
-				}
-
-				// Fall back to direct SQL query
-				return sqlGetTags(ctx, db.sql, systems)
-			}
+		// Self-healing: populate cache for requested systems (best effort)
+		if populateErr := db.PopulateSystemTagsCacheForSystems(ctx, systems); populateErr != nil {
+			log.Warn().Err(populateErr).Msg("failed to populate cache, using direct query")
+		} else {
+			log.Debug().Int("system_count", len(systems)).Msg("successfully populated cache for systems")
 		}
+
+		// Always fall back to direct SQL query when cache returns no results
+		// This ensures we return data even if cache population fails or systems have no tags
+		return sqlGetTags(ctx, db.sql, systems)
 	}
 
 	return tags, nil

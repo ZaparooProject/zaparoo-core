@@ -662,6 +662,170 @@ func TestSqlInvalidateSystemTagsCache_EmptySystems(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestSqlPopulateSystemTagsCacheForSystems tests selective cache population for specific systems
+func TestSqlPopulateSystemTagsCacheForSystems_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "nes"},
+		{ID: "snes"},
+	}
+
+	// Mock system DBID lookups - single prepared statement, multiple queries
+	systemStmt := mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?")
+	systemStmt.ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	systemStmt.ExpectQuery().WithArgs("snes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(2))
+
+	// Mock selective delete for these systems
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(0, 10)) // Deleted 10 old cache entries
+
+	// Mock selective INSERT for these systems
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+		ExpectExec().WithArgs(1, 2).
+		WillReturnResult(sqlmock.NewResult(1, 15)) // Inserted 15 new cache entries
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSqlPopulateSystemTagsCacheForSystems_EmptySystems verifies no-op for empty systems list
+func TestSqlPopulateSystemTagsCacheForSystems_EmptySystems(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Should return immediately without any database operations
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, []systemdefs.System{})
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSqlPopulateSystemTagsCacheForSystems_SingleSystem tests selective cache population for one system
+func TestSqlPopulateSystemTagsCacheForSystems_SingleSystem(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Mock system DBID lookup
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	// Mock selective delete
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	// Mock selective INSERT
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 8))
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSqlPopulateSystemTagsCacheForSystems_NonExistentSystem verifies graceful handling of non-existent systems
+func TestSqlPopulateSystemTagsCacheForSystems_NonExistentSystem(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{
+		{ID: "nes"},
+		{ID: "nonexistent"},
+	}
+
+	// Mock system DBID lookups
+	systemStmt := mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?")
+	systemStmt.ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+	systemStmt.ExpectQuery().WithArgs("nonexistent").
+		WillReturnError(sql.ErrNoRows) // System not found
+
+	// Should still process NES successfully
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(1, 8))
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	assert.NoError(t, err, "should continue processing valid systems even if some don't exist")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSqlPopulateSystemTagsCacheForSystems_DeleteError verifies error handling on delete failure
+func TestSqlPopulateSystemTagsCacheForSystems_DeleteError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Mock system DBID lookup
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	// Mock delete failure
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1).
+		WillReturnError(sql.ErrConnDone)
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to clear cache for specific systems")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSqlPopulateSystemTagsCacheForSystems_InsertError verifies error handling on insert failure
+func TestSqlPopulateSystemTagsCacheForSystems_InsertError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	systems := []systemdefs.System{{ID: "nes"}}
+
+	// Mock system DBID lookup
+	mock.ExpectPrepare("SELECT DBID FROM Systems WHERE SystemID = ?").
+		ExpectQuery().WithArgs("nes").
+		WillReturnRows(sqlmock.NewRows([]string{"DBID"}).AddRow(1))
+
+	// Mock delete success
+	mock.ExpectPrepare("DELETE FROM SystemTagsCache WHERE SystemDBID IN.*").
+		ExpectExec().WithArgs(1).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	// Mock insert failure
+	mock.ExpectPrepare(`INSERT INTO SystemTagsCache.*WHERE s.DBID IN.*`).
+		ExpectExec().WithArgs(1).
+		WillReturnError(sql.ErrTxDone)
+
+	err = sqlPopulateSystemTagsCacheForSystems(context.Background(), db, systems)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to populate cache for specific systems")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestSqlSearchMediaBySlug_Success(t *testing.T) {
 	t.Parallel()
 	db, mock, err := testsqlmock.NewSQLMock()
