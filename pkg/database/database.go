@@ -278,7 +278,7 @@ type MediaDBI interface {
 	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
-	SystemIndexed(system systemdefs.System) bool
+	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
 	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
 	GetTotalMediaCount() (int, error)

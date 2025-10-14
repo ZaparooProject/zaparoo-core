@@ -600,7 +600,7 @@ func (m *MockMediaDBI) IndexedSystems() ([]string, error) {
 	return nil, nil
 }
 
-func (m *MockMediaDBI) SystemIndexed(system systemdefs.System) bool {
+func (m *MockMediaDBI) SystemIndexed(system *systemdefs.System) bool {
 	args := m.Called(system)
 	return args.Bool(0)
 }

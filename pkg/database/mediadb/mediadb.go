@@ -798,7 +798,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.
-func (db *MediaDB) SystemIndexed(system systemdefs.System) bool {
+func (db *MediaDB) SystemIndexed(system *systemdefs.System) bool {
 	if db.sql == nil {
 		return false
 	}
@@ -828,7 +828,7 @@ func (db *MediaDB) RandomGame(systems []systemdefs.System) (database.SearchResul
 		return result, fmt.Errorf("failed to select random system: %w", err)
 	}
 
-	return sqlRandomGame(db.ctx, db.sql, system)
+	return sqlRandomGame(db.ctx, db.sql, &system)
 }
 
 // RandomGameWithQuery returns a random game matching the specified MediaQuery.

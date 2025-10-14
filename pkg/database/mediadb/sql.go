@@ -1714,7 +1714,7 @@ func sqlGetTags(
 	return tags, nil
 }
 
-func sqlSystemIndexed(ctx context.Context, db *sql.DB, system systemdefs.System) bool {
+func sqlSystemIndexed(ctx context.Context, db *sql.DB, system *systemdefs.System) bool {
 	systemID := ""
 	q, err := db.PrepareContext(ctx, `
 		select
@@ -2062,7 +2062,7 @@ func sqlIndexedSystems(ctx context.Context, db *sql.DB) ([]string, error) {
 	return list, err
 }
 
-func sqlRandomGame(ctx context.Context, db *sql.DB, system systemdefs.System) (database.SearchResult, error) {
+func sqlRandomGame(ctx context.Context, db *sql.DB, system *systemdefs.System) (database.SearchResult, error) {
 	var row database.SearchResult
 
 	// Step 1: Get count, min DBID, and max DBID for this system

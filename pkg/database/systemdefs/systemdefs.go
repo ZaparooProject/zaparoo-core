@@ -23,6 +23,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 )
 
 // The Systems list contains all the supported systems such as consoles,
@@ -37,7 +40,16 @@ type System struct {
 	ID        string
 	Aliases   []string
 	Fallbacks []string
+	// Pre-defined slug variations for natural language matching (manufacturer prefixes, regional names, etc.)
+	Slugs []string
 }
+
+// Lazy initialization for system lookup map
+var (
+	lookupMap     map[string]*System
+	lookupMapOnce sync.Once
+	errLookupMap  error
+)
 
 // MapKeys returns a list of all keys in a map.
 func MapKeys[K comparable, V any](m map[K]V) []K {
@@ -66,17 +78,91 @@ func GetSystem(id string) (*System, error) {
 	return nil, fmt.Errorf("unknown system: %s", id)
 }
 
-// LookupSystem case-insensitively looks up system ID definition including aliases.
-func LookupSystem(id string) (*System, error) {
-	for k, v := range Systems {
-		if strings.EqualFold(k, id) {
-			return &v, nil
+// buildLookupMap initializes the system lookup map with all possible lookup keys.
+// This includes: lowercase IDs, lowercase aliases, slugified IDs, slugified aliases,
+// and custom slugs. It detects and reports collisions at initialization time.
+func buildLookupMap() error {
+	lookupMapOnce.Do(func() {
+		lookupMap = make(map[string]*System)
+		keyOwner := make(map[string]string) // Track which system owns each key for collision detection
+
+		addKey := func(key, systemID, sourceType string) {
+			if key == "" {
+				return // Skip empty keys
+			}
+
+			if ownerID, exists := keyOwner[key]; exists {
+				if ownerID != systemID {
+					// Collision detected between different systems
+					if errLookupMap == nil {
+						errLookupMap = fmt.Errorf(
+							"system lookup collision: key %q (from %s of %s) is already owned by system %q",
+							key, sourceType, systemID, ownerID,
+						)
+					}
+				}
+				return // Redundant key within the same system is acceptable
+			}
+
+			keyOwner[key] = systemID
+			// Get pointer to the system in the Systems map
+			sys := Systems[systemID]
+			lookupMap[key] = &sys
 		}
 
-		for _, alias := range v.Aliases {
-			if strings.EqualFold(alias, id) {
-				return &v, nil
+		// Process all systems in a deterministic order
+		for _, id := range AlphaMapKeys(Systems) {
+			system := Systems[id]
+
+			// 1. Add lowercase ID
+			addKey(strings.ToLower(system.ID), system.ID, "ID")
+
+			// 2. Add lowercase aliases
+			for _, alias := range system.Aliases {
+				addKey(strings.ToLower(alias), system.ID, "Alias")
 			}
+
+			// 3. Add slugified ID (auto-derived)
+			addKey(slugs.SlugifyString(system.ID), system.ID, "Slug(ID)")
+
+			// 4. Add slugified aliases (auto-derived)
+			for _, alias := range system.Aliases {
+				addKey(slugs.SlugifyString(alias), system.ID, "Slug(Alias)")
+			}
+
+			// 5. Add custom slugs
+			for _, slug := range system.Slugs {
+				addKey(slug, system.ID, "CustomSlug")
+			}
+		}
+	})
+
+	return errLookupMap
+}
+
+// LookupSystem case-insensitively looks up system ID definition including aliases and slugs.
+// It uses a two-step strategy:
+//  1. Fast path: Check lowercase input against the lookup map (exact ID/alias matches)
+//  2. Natural language path: Slugify input and check against the map (handles manufacturer
+//     prefixes, regional names, etc.)
+func LookupSystem(id string) (*System, error) {
+	// Initialize the lookup map if needed
+	if err := buildLookupMap(); err != nil {
+		return nil, fmt.Errorf("failed to build system lookup map: %w", err)
+	}
+
+	// Step 1: Try case-insensitive match (fast path for exact/alias matches)
+	lowerID := strings.ToLower(id)
+	if system, ok := lookupMap[lowerID]; ok {
+		return system, nil
+	}
+
+	// Step 2: Try slugified match (natural language path)
+	slugifiedID := slugs.SlugifyString(id)
+	if slugifiedID != lowerID {
+		// Only check if slugification changed the string
+		if system, ok := lookupMap[slugifiedID]; ok {
+			return system, nil
 		}
 	}
 
@@ -308,27 +394,34 @@ const (
 var Systems = map[string]System{
 	// Consoles
 	System3DO: {
-		ID: System3DO,
+		ID:    System3DO,
+		Slugs: []string{"panasonic3do"},
 	},
 	System3DS: {
-		ID: System3DS,
+		ID:    System3DS,
+		Slugs: []string{"nintendo3ds", "n3ds", "3dsxl", "2ds", "new3ds", "new2ds"},
 	},
 	SystemAdventureVision: {
 		ID:      SystemAdventureVision,
 		Aliases: []string{"AVision"},
+		Slugs:   []string{"entexadventurevision"},
 	},
 	SystemArcadia: {
-		ID: SystemArcadia,
+		ID:    SystemArcadia,
+		Slugs: []string{"arcadia2001", "emersonarcadia"},
 	},
 	SystemAmigaCD32: {
 		ID:        SystemAmigaCD32,
+		Slugs:     []string{"cd32", "commodoreamigacd32"},
 		Fallbacks: []string{SystemAmiga},
 	},
 	SystemAstrocade: {
-		ID: SystemAstrocade,
+		ID:    SystemAstrocade,
+		Slugs: []string{"ballyastrocade", "bally"},
 	},
 	SystemAtari2600: {
 		ID:        SystemAtari2600,
+		Slugs:     []string{"vcs", "atari2600vcs", "atarivcs"},
 		Fallbacks: []string{SystemAtari7800},
 	},
 	SystemAtari5200: {
@@ -336,13 +429,15 @@ var Systems = map[string]System{
 	},
 	SystemAtari7800: {
 		ID:        SystemAtari7800,
+		Slugs:     []string{"prosystem"},
 		Fallbacks: []string{SystemAtari2600},
 	},
 	SystemAtariLynx: {
 		ID: SystemAtariLynx,
 	},
 	SystemAtariXEGS: {
-		ID: SystemAtariXEGS,
+		ID:    SystemAtariXEGS,
+		Slugs: []string{"xegs", "atarixe"},
 	},
 	SystemCasioPV1000: {
 		ID:      SystemCasioPV1000,
@@ -351,9 +446,11 @@ var Systems = map[string]System{
 	SystemCDI: {
 		ID:      SystemCDI,
 		Aliases: []string{"CD-i"},
+		Slugs:   []string{"philipscdi"},
 	},
 	SystemChannelF: {
-		ID: SystemChannelF,
+		ID:    SystemChannelF,
+		Slugs: []string{"fairchildchannelf"},
 	},
 	SystemColecoVision: {
 		ID:        SystemColecoVision,
@@ -364,22 +461,30 @@ var Systems = map[string]System{
 		ID: SystemCreatiVision,
 	},
 	SystemDreamcast: {
-		ID: SystemDreamcast,
+		ID:    SystemDreamcast,
+		Slugs: []string{"segadreamcast", "dc"},
 	},
 	SystemFDS: {
 		ID:      SystemFDS,
 		Aliases: []string{"FamicomDiskSystem"},
+		Slugs:   []string{"nintendofds", "famicomdisk"},
 	},
 	SystemGamate: {
-		ID: SystemGamate,
+		ID:    SystemGamate,
+		Slugs: []string{"bitcorpgamate"},
 	},
 	SystemGameboy: {
 		ID:      SystemGameboy,
 		Aliases: []string{"GB"},
+		Slugs: []string{
+			"nintendogameboy", "dmg", "pocketgameboy", "gameboyoriginal",
+			"gameboypocket", "gameboylight", "gbpocket", "gblight",
+		},
 	},
 	SystemGameboyColor: {
 		ID:        SystemGameboyColor,
 		Aliases:   []string{"GBC"},
+		Slugs:     []string{"nintendogbc", "gameboycolour", "cgb"},
 		Fallbacks: []string{SystemGameboy},
 	},
 	SystemGameboy2P: {
@@ -387,21 +492,26 @@ var Systems = map[string]System{
 		ID: SystemGameboy2P,
 	},
 	SystemGameCube: {
-		ID: SystemGameCube,
+		ID:    SystemGameCube,
+		Slugs: []string{"nintendogamecube", "gc", "ngc", "gcn", "dolphin"},
 	},
 	SystemGameGear: {
 		ID:      SystemGameGear,
 		Aliases: []string{"GG"},
+		Slugs:   []string{"segagamegear"},
 	},
 	SystemGameNWatch: {
-		ID: SystemGameNWatch,
+		ID:    SystemGameNWatch,
+		Slugs: []string{"gameandwatch", "gnw", "nintendogamewatch"},
 	},
 	SystemGameCom: {
-		ID: SystemGameCom,
+		ID:    SystemGameCom,
+		Slugs: []string{"tigerelectronicsgamecom", "tigergamecom"},
 	},
 	SystemGBA: {
 		ID:      SystemGBA,
 		Aliases: []string{"GameboyAdvance"},
+		Slugs:   []string{"nintendogba", "advancesp", "gbasp", "gbamicro"},
 	},
 	SystemGBA2P: {
 		ID: SystemGBA2P,
@@ -409,6 +519,7 @@ var Systems = map[string]System{
 	SystemGenesis: {
 		ID:      SystemGenesis,
 		Aliases: []string{"MegaDrive"},
+		Slugs:   []string{"segagenesis", "segamegadrive", "md", "gen", "smd"},
 	},
 	SystemGenesisMSU: {
 		ID:        SystemGenesisMSU,
@@ -416,47 +527,62 @@ var Systems = map[string]System{
 		Fallbacks: []string{SystemGenesis},
 	},
 	SystemIntellivision: {
-		ID: SystemIntellivision,
+		ID:    SystemIntellivision,
+		Slugs: []string{"mattelintellivision", "intv"},
 	},
 	SystemJaguar: {
-		ID: SystemJaguar,
+		ID:    SystemJaguar,
+		Slugs: []string{"atarijaguar", "jag"},
 	},
 	SystemJaguarCD: {
 		ID:        SystemJaguarCD,
+		Slugs:     []string{"atarijaguarcd", "jagcd"},
 		Fallbacks: []string{SystemJaguar},
 	},
 	SystemMasterSystem: {
 		ID:      SystemMasterSystem,
 		Aliases: []string{"SMS"},
+		Slugs:   []string{"segamastersystem", "mk3", "markiii", "segamark3"},
 	},
 	SystemMegaCD: {
 		ID:        SystemMegaCD,
 		Aliases:   []string{"SegaCD"},
+		Slugs:     []string{"mcd", "scd", "megadrivecd", "genesiscd"},
 		Fallbacks: []string{SystemGenesis},
 	},
 	SystemMegaDuck: {
-		ID: SystemMegaDuck,
+		ID:    SystemMegaDuck,
+		Slugs: []string{"creatronic", "cougar"},
 	},
 	SystemNDS: {
 		ID:      SystemNDS,
 		Aliases: []string{"NintendoDS"},
+		Slugs:   []string{"ndsl", "ndsi", "dsi", "dslite", "dsixl"},
 	},
 	SystemNeoGeo: {
-		ID: SystemNeoGeo,
+		ID:    SystemNeoGeo,
+		Slugs: []string{"snk", "snkneogeo", "aes", "mvs", "neogeoaes", "neogeomvs"},
 	},
 	SystemNeoGeoCD: {
 		ID:        SystemNeoGeoCD,
+		Slugs:     []string{"snkneocd", "ngcd", "neocd", "neogeocdz"},
 		Fallbacks: []string{SystemNeoGeo},
 	},
 	SystemNeoGeoPocket: {
-		ID: SystemNeoGeoPocket,
+		ID:    SystemNeoGeoPocket,
+		Slugs: []string{"ngp", "snkngp", "neopocket", "neogeop"},
 	},
 	SystemNeoGeoPocketColor: {
 		ID:        SystemNeoGeoPocketColor,
+		Slugs:     []string{"ngpc", "snkngpc", "neopocketcolor", "neogeopocketcolour"},
 		Fallbacks: []string{SystemNeoGeoPocket},
 	},
 	SystemNES: {
 		ID: SystemNES,
+		Slugs: []string{
+			"nintendoentertainmentsystem", "famicom", "fc", "familycomputer",
+			"nintendinho", "fami", "nintendoaes",
+		},
 	},
 	SystemNESMusic: {
 		ID:        SystemNESMusic,
@@ -465,56 +591,71 @@ var Systems = map[string]System{
 	SystemNintendo64: {
 		ID:      SystemNintendo64,
 		Aliases: []string{"N64"},
+		Slugs:   []string{"nintendon64", "ultra64", "nintendo64dd", "n64dd"},
 	},
 	SystemOdyssey2: {
-		ID: SystemOdyssey2,
+		ID:    SystemOdyssey2,
+		Slugs: []string{"odyssey", "magnavoxodyssey2", "videopac", "o2"},
 	},
 	SystemOuya: {
-		ID: SystemOuya,
+		ID:    SystemOuya,
+		Slugs: []string{"ouyaconsole"},
 	},
 	SystemPCFX: {
-		ID: SystemPCFX,
+		ID:    SystemPCFX,
+		Slugs: []string{"necpcfx"},
 	},
 	SystemPocketChallengeV2: {
-		ID: SystemPocketChallengeV2,
+		ID:    SystemPocketChallengeV2,
+		Slugs: []string{"pcv2", "pocketchallenge"},
 	},
 	SystemPokemonMini: {
-		ID: SystemPokemonMini,
+		ID:    SystemPokemonMini,
+		Slugs: []string{"pokemini", "nintendopokemonmini"},
 	},
 	SystemPSX: {
 		ID:      SystemPSX,
 		Aliases: []string{"Playstation", "PS1"},
+		Slugs:   []string{"sonyplaystation", "playstation1", "psone", "playstationone"},
 	},
 	SystemPS2: {
 		ID:      SystemPS2,
 		Aliases: []string{"Playstation2"},
+		Slugs:   []string{"sonyps2", "playstationii", "psii"},
 	},
 	SystemPS3: {
 		ID:      SystemPS3,
 		Aliases: []string{"Playstation3"},
+		Slugs:   []string{"sonyps3", "playstationiii", "psiii"},
 	},
 	SystemPS4: {
 		ID:      SystemPS4,
 		Aliases: []string{"Playstation4"},
+		Slugs:   []string{"sonyps4", "ps4pro", "playstationiv", "psiv", "ps4slim"},
 	},
 	SystemPS5: {
 		ID:      SystemPS5,
 		Aliases: []string{"Playstation5"},
+		Slugs:   []string{"sonyps5", "playstationv", "psv", "ps5digital"},
 	},
 	SystemPSP: {
 		ID:      SystemPSP,
 		Aliases: []string{"PlaystationPortable"},
+		Slugs:   []string{"sonypsp", "pspgo", "pspp", "psp1000", "psp2000", "psp3000"},
 	},
 	SystemSega32X: {
 		ID:      SystemSega32X,
 		Aliases: []string{"S32X", "32X"},
+		Slugs:   []string{"genesismars", "superx32", "megadrive32x", "genesis32x", "mars"},
 	},
 	SystemSeriesXS: {
 		ID:      SystemSeriesXS,
 		Aliases: []string{"SeriesX", "SeriesS"},
+		Slugs:   []string{"xboxseriesx", "xboxseriess", "xsx", "xss"},
 	},
 	SystemSG1000: {
 		ID:        SystemSG1000,
+		Slugs:     []string{"segasg1000"},
 		Fallbacks: []string{SystemColecoVision},
 	},
 	SystemSuperGameboy: {
@@ -523,14 +664,17 @@ var Systems = map[string]System{
 		Fallbacks: []string{SystemGameboy},
 	},
 	SystemSuperVision: {
-		ID: SystemSuperVision,
+		ID:    SystemSuperVision,
+		Slugs: []string{"watara"},
 	},
 	SystemSaturn: {
-		ID: SystemSaturn,
+		ID:    SystemSaturn,
+		Slugs: []string{"segasaturn", "sat", "hisaturn", "vsaturn"},
 	},
 	SystemSNES: {
 		ID:      SystemSNES,
 		Aliases: []string{"SuperNintendo"},
+		Slugs:   []string{"superfamicom", "sfc", "supercomboy", "supernes", "superfam", "snesclassic"},
 	},
 	SystemSNESMSU1: {
 		ID:        SystemSNESMSU1,
@@ -547,80 +691,101 @@ var Systems = map[string]System{
 	},
 	SystemSuperGrafx: {
 		ID:        SystemSuperGrafx,
+		Slugs:     []string{"sgx", "necsupergrafx"},
 		Fallbacks: []string{SystemTurboGrafx16},
 	},
 	SystemSwitch: {
 		ID:      SystemSwitch,
 		Aliases: []string{"NintendoSwitch"},
+		Slugs:   []string{"ns", "switchlite", "switcholed", "nx"},
 	},
 	SystemTurboGrafx16: {
 		ID:        SystemTurboGrafx16,
 		Aliases:   []string{"TGFX16", "PCEngine"},
+		Slugs:     []string{"pce", "tg16", "necpcengine", "necturbografx16", "turbografx", "pcenginehucard", "tgx"},
 		Fallbacks: []string{SystemSuperGrafx},
 	},
 	SystemTurboGrafx16CD: {
 		ID:        SystemTurboGrafx16CD,
 		Aliases:   []string{"TGFX16-CD", "PCEngineCD"},
+		Slugs:     []string{"turbografxcd", "tg16cd", "pcecd", "cdrom2", "supercd"},
 		Fallbacks: []string{SystemTurboGrafx16},
 	},
 	SystemVC4000: {
-		ID: SystemVC4000,
+		ID:    SystemVC4000,
+		Slugs: []string{"interton", "intertonvc4000"},
 	},
 	SystemVectrex: {
-		ID: SystemVectrex,
+		ID:    SystemVectrex,
+		Slugs: []string{"smithengineeringvectrex", "gcevectrex"},
 	},
 	SystemVirtualBoy: {
-		ID: SystemVirtualBoy,
+		ID:    SystemVirtualBoy,
+		Slugs: []string{"nintendovirtualboy", "vb", "virtualboy3d"},
 	},
 	SystemVita: {
 		ID:      SystemVita,
 		Aliases: []string{"PSVita"},
+		Slugs:   []string{"playstationvita", "psvitaslim", "psvita1000", "psvita2000", "pstv", "playstationtv"},
 	},
 	SystemWii: {
 		ID:      SystemWii,
 		Aliases: []string{"NintendoWii"},
+		Slugs:   []string{"revolution"},
 	},
 	SystemWiiU: {
 		ID:      SystemWiiU,
 		Aliases: []string{"NintendoWiiU"},
 	},
 	SystemWonderSwan: {
-		ID: SystemWonderSwan,
+		ID:    SystemWonderSwan,
+		Slugs: []string{"ws", "bandaiwonderswan"},
 	},
 	SystemWonderSwanColor: {
 		ID:        SystemWonderSwanColor,
+		Slugs:     []string{"wsc", "bandaiwsc", "wonderswancolour"},
 		Fallbacks: []string{SystemWonderSwan},
 	},
 	SystemXbox: {
-		ID: SystemXbox,
+		ID:    SystemXbox,
+		Slugs: []string{"microsoftxbox", "xb", "xboxoriginal"},
 	},
 	SystemXbox360: {
-		ID: SystemXbox360,
+		ID:    SystemXbox360,
+		Slugs: []string{"microsoftxbox360", "x360", "360"},
 	},
 	SystemXboxOne: {
-		ID: SystemXboxOne,
+		ID:    SystemXboxOne,
+		Slugs: []string{"microsoftxboxone", "xbone", "xb1", "xone"},
 	},
 	SystemMultivision: {
-		ID: SystemMultivision,
+		ID:    SystemMultivision,
+		Slugs: []string{"vtech", "o2multivision"},
 	},
 	SystemVideopacPlus: {
-		ID: SystemVideopacPlus,
+		ID:    SystemVideopacPlus,
+		Slugs: []string{"odyssey3", "g7400"},
 	},
 	SystemNGage: {
 		ID:      SystemNGage,
 		Aliases: []string{"N-Gage"},
+		Slugs:   []string{"nokiangage"},
 	},
 	SystemSocrates: {
-		ID: SystemSocrates,
+		ID:    SystemSocrates,
+		Slugs: []string{"vtechsocrates", "socratesedusystem"},
 	},
 	SystemSuperACan: {
-		ID: SystemSuperACan,
+		ID:    SystemSuperACan,
+		Slugs: []string{"acan", "funtech"},
 	},
 	SystemSufami: {
-		ID: SystemSufami,
+		ID:    SystemSufami,
+		Slugs: []string{"sufamiturbo", "nintendosufami"},
 	},
 	SystemVSmile: {
-		ID: SystemVSmile,
+		ID:    SystemVSmile,
+		Slugs: []string{"vtechvsmile"},
 	},
 	// Computers
 	SystemAcornAtom: {
@@ -630,14 +795,17 @@ var Systems = map[string]System{
 		ID: SystemAcornElectron,
 	},
 	SystemArchimedes: {
-		ID: SystemArchimedes,
+		ID:    SystemArchimedes,
+		Slugs: []string{"acornarchimedes", "riscos"},
 	},
 	SystemAliceMC10: {
-		ID: SystemAliceMC10,
+		ID:    SystemAliceMC10,
+		Slugs: []string{"mc10"},
 	},
 	SystemAmiga: {
 		ID:        SystemAmiga,
 		Aliases:   []string{"Minimig"},
+		Slugs:     []string{"commodoreamiga"},
 		Fallbacks: []string{SystemAmiga500, SystemAmiga1200},
 	},
 	SystemAmiga500: {
@@ -651,7 +819,8 @@ var Systems = map[string]System{
 		Fallbacks: []string{SystemAmiga},
 	},
 	SystemAmstrad: {
-		ID: SystemAmstrad,
+		ID:    SystemAmstrad,
+		Slugs: []string{"amstradcpc", "cpc", "amstradcpc464"},
 	},
 	SystemAmstradPCW: {
 		ID:      SystemAmstradPCW,
@@ -660,10 +829,12 @@ var Systems = map[string]System{
 	SystemDOS: {
 		ID:        SystemDOS,
 		Aliases:   []string{"ao486", "MS-DOS"},
+		Slugs:     []string{"ibmpc", "pcdos", "microsoftdos", "ibmdos", "dosbox"},
 		Fallbacks: []string{SystemPC},
 	},
 	SystemApogee: {
-		ID: SystemApogee,
+		ID:    SystemApogee,
+		Slugs: []string{"apogeebk01", "bk01"},
 	},
 	SystemAppleI: {
 		ID:      SystemAppleI,
@@ -672,59 +843,77 @@ var Systems = map[string]System{
 	SystemAppleII: {
 		ID:      SystemAppleII,
 		Aliases: []string{"Apple-II"},
+		Slugs:   []string{"appleiiplus", "appleiie", "appleiic"},
 	},
 	SystemAquarius: {
-		ID: SystemAquarius,
+		ID:    SystemAquarius,
+		Slugs: []string{"mattelaquarius"},
 	},
 	SystemAtari800: {
 		ID: SystemAtari800,
+		Slugs: []string{
+			"atari400", "atari800xl", "atari130xe",
+			"atari8bit", "atari600xl", "atarihomecomputer",
+		},
 	},
 	SystemBBCMicro: {
-		ID: SystemBBCMicro,
+		ID:    SystemBBCMicro,
+		Slugs: []string{"acornbbc", "bbcmaster"},
 	},
 	SystemBK0011M: {
-		ID: SystemBK0011M,
+		ID:    SystemBK0011M,
+		Slugs: []string{"bk11", "bk0010", "electronika"},
 	},
 	SystemC16: {
-		ID: SystemC16,
+		ID:    SystemC16,
+		Slugs: []string{"commodorecommodore16", "plus4"},
 	},
 	SystemC64: {
-		ID: SystemC64,
+		ID:    SystemC64,
+		Slugs: []string{"commodore64", "cbm64", "vic64", "vc64"},
 	},
 	SystemCasioPV2000: {
 		ID:      SystemCasioPV2000,
 		Aliases: []string{"Casio_PV-2000"},
 	},
 	SystemCoCo2: {
-		ID: SystemCoCo2,
+		ID:    SystemCoCo2,
+		Slugs: []string{"trs80coco", "colorcomputer", "coco"},
 	},
 	SystemEDSAC: {
-		ID: SystemEDSAC,
+		ID:    SystemEDSAC,
+		Slugs: []string{"cambridgeedsac"},
 	},
 	SystemGalaksija: {
 		ID: SystemGalaksija,
 	},
 	SystemInteract: {
-		ID: SystemInteract,
+		ID:    SystemInteract,
+		Slugs: []string{"interactmodel1", "victor"},
 	},
 	SystemJupiter: {
-		ID: SystemJupiter,
+		ID:    SystemJupiter,
+		Slugs: []string{"jupiterace", "cantab"},
 	},
 	SystemLaser: {
 		ID:      SystemLaser,
 		Aliases: []string{"Laser310"},
 	},
 	SystemLynx48: {
-		ID: SystemLynx48,
+		ID:    SystemLynx48,
+		Slugs: []string{"camberlynx", "camber"},
 	},
 	SystemMacPlus: {
-		ID: SystemMacPlus,
+		ID:    SystemMacPlus,
+		Slugs: []string{"macintosh", "applemacintosh"},
 	},
 	SystemMacOS: {
-		ID: SystemMacOS,
+		ID:    SystemMacOS,
+		Slugs: []string{"applemac", "osx"},
 	},
 	SystemMSX: {
 		ID:        SystemMSX,
+		Slugs:     []string{"microsoftmsx"},
 		Fallbacks: []string{SystemMSX1, SystemMSX2},
 	},
 	SystemMSX1: {
@@ -740,41 +929,51 @@ var Systems = map[string]System{
 		Fallbacks: []string{SystemMSX2, SystemMSX},
 	},
 	SystemMultiComp: {
-		ID: SystemMultiComp,
+		ID:    SystemMultiComp,
+		Slugs: []string{"multicomputer"},
 	},
 	SystemOrao: {
-		ID: SystemOrao,
+		ID:    SystemOrao,
+		Slugs: []string{"oraocomputer"},
 	},
 	SystemOric: {
-		ID: SystemOric,
+		ID:    SystemOric,
+		Slugs: []string{"oric1", "oricatmos", "tangerine"},
 	},
 	SystemPC: {
 		ID:        SystemPC,
 		Fallbacks: []string{SystemDOS, SystemWindows},
 	},
 	SystemPCXT: {
-		ID: SystemPCXT,
+		ID:    SystemPCXT,
+		Slugs: []string{"ibmpcxt"},
 	},
 	SystemPDP1: {
-		ID: SystemPDP1,
+		ID:    SystemPDP1,
+		Slugs: []string{"decpdp1"},
 	},
 	SystemPET2001: {
-		ID: SystemPET2001,
+		ID:    SystemPET2001,
+		Slugs: []string{"commodorepet", "cbm"},
 	},
 	SystemPMD85: {
-		ID: SystemPMD85,
+		ID:    SystemPMD85,
+		Slugs: []string{"pmd", "tesla"},
 	},
 	SystemQL: {
-		ID: SystemQL,
+		ID:    SystemQL,
+		Slugs: []string{"sinclairql"},
 	},
 	SystemRX78: {
-		ID: SystemRX78,
+		ID:    SystemRX78,
+		Slugs: []string{"gundamrx78", "bandairx78"},
 	},
 	SystemSAMCoupe: {
 		ID: SystemSAMCoupe,
 	},
 	SystemScummVM: {
-		ID: SystemScummVM,
+		ID:    SystemScummVM,
+		Slugs: []string{"scumm"},
 	},
 	SystemSordM5: {
 		ID:      SystemSordM5,
@@ -785,206 +984,271 @@ var Systems = map[string]System{
 		Aliases: []string{"SPMX"},
 	},
 	SystemSVI328: {
-		ID: SystemSVI328,
+		ID:    SystemSVI328,
+		Slugs: []string{"svi", "spectravideo328"},
 	},
 	SystemTatungEinstein: {
-		ID: SystemTatungEinstein,
+		ID:    SystemTatungEinstein,
+		Slugs: []string{"einstein"},
 	},
 	SystemTI994A: {
 		ID:      SystemTI994A,
 		Aliases: []string{"TI-99_4A"},
 	},
 	SystemTomyTutor: {
-		ID: SystemTomyTutor,
+		ID:    SystemTomyTutor,
+		Slugs: []string{"tomy", "pyuutajr"},
 	},
 	SystemTRS80: {
-		ID: SystemTRS80,
+		ID:    SystemTRS80,
+		Slugs: []string{"tandy", "radioshacktrs80"},
 	},
 	SystemTSConf: {
-		ID: SystemTSConf,
+		ID:    SystemTSConf,
+		Slugs: []string{"tsc", "tslab"},
 	},
 	SystemUK101: {
-		ID: SystemUK101,
+		ID:    SystemUK101,
+		Slugs: []string{"compukit", "ohio"},
 	},
 	SystemVector06C: {
 		ID:      SystemVector06C,
 		Aliases: []string{"Vector06"},
 	},
 	SystemVIC20: {
-		ID: SystemVIC20,
+		ID:    SystemVIC20,
+		Slugs: []string{"commodorevic20", "vc20"},
 	},
 	SystemWindows: {
 		ID:        SystemWindows,
 		Aliases:   []string{"Win32", "Win16"},
+		Slugs:     []string{"microsoftwindows", "win", "win95", "win98", "winxp", "win7", "win10", "win11"},
 		Fallbacks: []string{SystemPC},
 	},
 	SystemX68000: {
-		ID: SystemX68000,
+		ID:    SystemX68000,
+		Slugs: []string{"sharpx68000", "x68k"},
 	},
 	SystemZX81: {
-		ID: SystemZX81,
+		ID:    SystemZX81,
+		Slugs: []string{"sinclairzx81", "timex1000"},
 	},
 	SystemZXSpectrum: {
 		ID:      SystemZXSpectrum,
 		Aliases: []string{"Spectrum"},
+		Slugs: []string{
+			"sinclairspectrum", "speccy", "zx", "sinclair",
+			"spectrum48k", "spectrum128k", "spectrumplus",
+		},
 	},
 	SystemZXNext: {
-		ID: SystemZXNext,
+		ID:    SystemZXNext,
+		Slugs: []string{"zxspectrumnext", "spectrumnext"},
 	},
 	// Other
 	SystemAndroid: {
-		ID: SystemAndroid,
+		ID:    SystemAndroid,
+		Slugs: []string{"androidgame", "androidgames"},
 	},
 	SystemArcade: {
 		ID:      SystemArcade,
 		Aliases: []string{"MAME"},
+		Slugs:   []string{"arcademachine", "arcadegame", "arcadegames", "coinop"},
 	},
 	SystemAtomiswave: {
-		ID: SystemAtomiswave,
+		ID:    SystemAtomiswave,
+		Slugs: []string{"sammy", "segaatomiswave"},
 	},
 	SystemArduboy: {
-		ID: SystemArduboy,
+		ID:    SystemArduboy,
+		Slugs: []string{"arduino", "miniarcade"},
 	},
 	SystemChip8: {
-		ID: SystemChip8,
+		ID:    SystemChip8,
+		Slugs: []string{"cosmacvip", "superchip"},
 	},
 	SystemDAPHNE: {
 		ID:      SystemDAPHNE,
 		Aliases: []string{"LaserDisc"},
+		Slugs:   []string{"daphnelaserdisc"},
 	},
 	SystemGroovy: {
-		ID: SystemGroovy,
+		ID:    SystemGroovy,
+		Slugs: []string{"groovymister", "groovymame"},
 	},
 	SystemPlugNPlay: {
-		ID: SystemPlugNPlay,
+		ID:    SystemPlugNPlay,
+		Slugs: []string{"plugandplay", "tvgame", "tvgames"},
 	},
 	SystemIOS: {
-		ID: SystemIOS,
+		ID:    SystemIOS,
+		Slugs: []string{"iphone", "ipad", "applegame", "applegames"},
 	},
 	SystemModel3: {
-		ID: SystemModel3,
+		ID:    SystemModel3,
+		Slugs: []string{"segamodel3"},
 	},
 	SystemNAOMI: {
-		ID: SystemNAOMI,
+		ID:    SystemNAOMI,
+		Slugs: []string{"seganaomi"},
 	},
 	SystemNAOMI2: {
-		ID: SystemNAOMI2,
+		ID:    SystemNAOMI2,
+		Slugs: []string{"seganaomi2"},
 	},
 	SystemVideo: {
-		ID: SystemVideo,
+		ID:    SystemVideo,
+		Slugs: []string{"videos", "videofile"},
 	},
 	SystemAudio: {
-		ID: SystemAudio,
+		ID:    SystemAudio,
+		Slugs: []string{"audiofile"},
 	},
 	SystemMovie: {
-		ID: SystemMovie,
+		ID:    SystemMovie,
+		Slugs: []string{"movies", "film", "cinema"},
 	},
 	SystemTV: {
-		ID: SystemTV,
+		ID:    SystemTV,
+		Slugs: []string{"television", "tvchannel"},
 	},
 	SystemTVShow: {
-		ID: SystemTVShow,
+		ID:    SystemTVShow,
+		Slugs: []string{"tvshows", "tvseries"},
 	},
 	SystemMusic: {
-		ID: SystemMusic,
+		ID:    SystemMusic,
+		Slugs: []string{"musicfile", "song", "songs"},
 	},
 	SystemMusicArtist: {
-		ID: SystemMusicArtist,
+		ID:    SystemMusicArtist,
+		Slugs: []string{"musician", "musicians", "band", "bands"},
 	},
 	SystemMusicAlbum: {
-		ID: SystemMusicAlbum,
+		ID:    SystemMusicAlbum,
+		Slugs: []string{"lp", "album", "albums"},
 	},
 	SystemImage: {
-		ID: SystemImage,
+		ID:    SystemImage,
+		Slugs: []string{"picture", "pictures", "photo", "photos", "images"},
 	},
 	SystemJ2ME: {
-		ID: SystemJ2ME,
+		ID:    SystemJ2ME,
+		Slugs: []string{"javame", "javamobile", "mobilephone"},
 	},
 	SystemCPS1: {
-		ID: SystemCPS1,
+		ID:    SystemCPS1,
+		Slugs: []string{"cpsystem1", "capcomsystem1", "capcomplay1"},
 	},
 	SystemCPS2: {
-		ID: SystemCPS2,
+		ID:    SystemCPS2,
+		Slugs: []string{"cpsystem2", "capcomsystem2", "capcomplay2"},
 	},
 	SystemCPS3: {
-		ID: SystemCPS3,
+		ID:    SystemCPS3,
+		Slugs: []string{"cpsystem3", "capcomsystem3", "capcomplay3"},
 	},
 	SystemAtariST: {
-		ID: SystemAtariST,
+		ID:    SystemAtariST,
+		Slugs: []string{"atariste", "ataritt", "atarifalcon"},
 	},
 	SystemColecoAdam: {
-		ID: SystemColecoAdam,
+		ID:    SystemColecoAdam,
+		Slugs: []string{"adam"},
 	},
 	SystemFM7: {
-		ID: SystemFM7,
+		ID:    SystemFM7,
+		Slugs: []string{"fujitsufm7", "fm77"},
 	},
 	SystemFMTowns: {
-		ID: SystemFMTowns,
+		ID:    SystemFMTowns,
+		Slugs: []string{"fujitsufmtowns"},
 	},
 	SystemGamePocket: {
-		ID: SystemGamePocket,
+		ID:    SystemGamePocket,
+		Slugs: []string{"gpcomputer"},
 	},
 	SystemGameMaster: {
-		ID: SystemGameMaster,
+		ID:    SystemGameMaster,
+		Slugs: []string{"gmcomputer", "hartung"},
 	},
 	SystemGP32: {
-		ID: SystemGP32,
+		ID:    SystemGP32,
+		Slugs: []string{"gamepark", "gp32handheld"},
 	},
 	SystemPico8: {
-		ID: SystemPico8,
+		ID:    SystemPico8,
+		Slugs: []string{"lexaloffle"},
 	},
 	SystemTIC80: {
 		ID: SystemTIC80,
 	},
 	SystemPC88: {
-		ID: SystemPC88,
+		ID:    SystemPC88,
+		Slugs: []string{"necpc88", "pc8801"},
 	},
 	SystemPC98: {
-		ID: SystemPC98,
+		ID:    SystemPC98,
+		Slugs: []string{"necpc98", "pc9801"},
 	},
 	SystemX1: {
-		ID: SystemX1,
+		ID:    SystemX1,
+		Slugs: []string{"sharpx1"},
 	},
 	SystemCommanderX16: {
-		ID: SystemCommanderX16,
+		ID:    SystemCommanderX16,
+		Slugs: []string{"x16", "cx16"},
 	},
 	SystemSpectravideo: {
-		ID: SystemSpectravideo,
+		ID:    SystemSpectravideo,
+		Slugs: []string{"sv318"},
 	},
 	SystemThomson: {
-		ID: SystemThomson,
+		ID:    SystemThomson,
+		Slugs: []string{"thomsonto7", "mo5", "to8"},
 	},
 	SystemDICE: {
-		ID: SystemDICE,
+		ID:    SystemDICE,
+		Slugs: []string{"segadice"},
 	},
 	SystemSinge: {
-		ID: SystemSinge,
+		ID:    SystemSinge,
+		Slugs: []string{"singelaserdisc"},
 	},
 	SystemModel1: {
-		ID: SystemModel1,
+		ID:    SystemModel1,
+		Slugs: []string{"segamodel1"},
 	},
 	SystemModel2: {
-		ID: SystemModel2,
+		ID:    SystemModel2,
+		Slugs: []string{"segamodel2"},
 	},
 	SystemNamco2X6: {
-		ID: SystemNamco2X6,
+		ID:    SystemNamco2X6,
+		Slugs: []string{"namcosystem2", "system2"},
 	},
 	SystemNamco22: {
-		ID: SystemNamco22,
+		ID:    SystemNamco22,
+		Slugs: []string{"namcosystem22", "system22"},
 	},
 	SystemTriforce: {
-		ID: SystemTriforce,
+		ID:    SystemTriforce,
+		Slugs: []string{"nintendotriforce", "namcotriforce", "segatriforce"},
 	},
 	SystemLindbergh: {
-		ID: SystemLindbergh,
+		ID:    SystemLindbergh,
+		Slugs: []string{"segalindbergh"},
 	},
 	SystemChihiro: {
-		ID: SystemChihiro,
+		ID:    SystemChihiro,
+		Slugs: []string{"segachihiro"},
 	},
 	SystemGaelco: {
-		ID: SystemGaelco,
+		ID:    SystemGaelco,
+		Slugs: []string{"gaelcoarcade"},
 	},
 	SystemHikaru: {
-		ID: SystemHikaru,
+		ID:    SystemHikaru,
+		Slugs: []string{"segahikaru"},
 	},
 }
