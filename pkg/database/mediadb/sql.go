@@ -269,6 +269,7 @@ func sqlTruncate(ctx context.Context, db *sql.DB) error {
 	delete from Tags;
 	delete from TagTypes;
 	delete from Systems;
+	delete from SlugResolutionCache;
 	`
 	_, err = db.ExecContext(ctx, sqlStmt)
 	if err != nil {
@@ -333,6 +334,15 @@ func sqlTruncateSystems(ctx context.Context, db *sql.DB, systemIDs []string) err
 	if err != nil {
 		// Log warning but don't fail the operation - cache invalidation is not critical
 		log.Warn().Err(err).Msg("failed to invalidate system tags cache during system truncation")
+	}
+
+	// Invalidate slug resolution cache for the affected systems
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	slugCacheDeleteStmt := fmt.Sprintf("DELETE FROM SlugResolutionCache WHERE SystemID IN (%s)", placeholders)
+	_, err = db.ExecContext(ctx, slugCacheDeleteStmt, args...)
+	if err != nil {
+		// Log warning but don't fail the operation - cache invalidation is not critical
+		log.Warn().Err(err).Msg("failed to invalidate slug resolution cache during system truncation")
 	}
 
 	return nil
@@ -1775,6 +1785,102 @@ func sqlPopulateSystemTagsCache(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("failed to populate system tags cache: %w", err)
 	}
 
+	return nil
+}
+
+// sqlPopulateSystemTagsCacheForSystems - Populates cache for specific systems only
+// Unlike the full version, this selectively updates only the requested systems
+func sqlPopulateSystemTagsCacheForSystems(
+	ctx context.Context, db *sql.DB, systems []systemdefs.System,
+) error {
+	if len(systems) == 0 {
+		return nil // No-op for empty systems list
+	}
+
+	// Step 1: Get DBIDs for requested systems
+	systemDBIDs := make([]int64, 0, len(systems))
+	getDBIDStmt, err := db.PrepareContext(ctx, "SELECT DBID FROM Systems WHERE SystemID = ?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare system DBID lookup: %w", err)
+	}
+	defer func() {
+		if closeErr := getDBIDStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close system DBID lookup statement")
+		}
+	}()
+
+	for _, system := range systems {
+		var dbid int64
+		if scanErr := getDBIDStmt.QueryRowContext(ctx, system.ID).Scan(&dbid); scanErr != nil {
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				log.Debug().Str("system_id", system.ID).Msg("system not found in database, skipping cache population")
+				continue
+			}
+			return fmt.Errorf("failed to get DBID for system %s: %w", system.ID, scanErr)
+		}
+		systemDBIDs = append(systemDBIDs, dbid)
+	}
+
+	if len(systemDBIDs) == 0 {
+		return nil // No systems found in database
+	}
+
+	// Step 2: Delete cache entries for these systems
+	placeholders := prepareVariadic("?", ",", len(systemDBIDs))
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	deleteSQL := fmt.Sprintf("DELETE FROM SystemTagsCache WHERE SystemDBID IN (%s)", placeholders)
+	deleteStmt, err := db.PrepareContext(ctx, deleteSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare selective cache clear statement: %w", err)
+	}
+	defer func() {
+		if closeErr := deleteStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close selective cache clear statement")
+		}
+	}()
+
+	args := make([]any, len(systemDBIDs))
+	for i, id := range systemDBIDs {
+		args[i] = id
+	}
+
+	if _, execErr := deleteStmt.ExecContext(ctx, args...); execErr != nil {
+		return fmt.Errorf("failed to clear cache for specific systems: %w", execErr)
+	}
+
+	// Step 3: Populate cache for these systems only
+	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	populateSQL := fmt.Sprintf(`
+		INSERT INTO SystemTagsCache (SystemDBID, TagDBID, TagType, Tag)
+		SELECT DISTINCT
+			s.DBID as SystemDBID,
+			t.DBID as TagDBID,
+			tt.Type as TagType,
+			t.Tag as Tag
+		FROM Systems s
+		JOIN MediaTitles mtl ON s.DBID = mtl.SystemDBID
+		JOIN Media m ON mtl.DBID = m.MediaTitleDBID
+		JOIN MediaTags mt ON m.DBID = mt.MediaDBID
+		JOIN Tags t ON mt.TagDBID = t.DBID
+		JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+		WHERE s.DBID IN (%s)
+		ORDER BY s.DBID, tt.Type, t.Tag`, placeholders)
+
+	populateStmt, err := db.PrepareContext(ctx, populateSQL)
+	if err != nil {
+		return fmt.Errorf("failed to prepare selective cache populate statement: %w", err)
+	}
+	defer func() {
+		if closeErr := populateStmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close selective cache populate statement")
+		}
+	}()
+
+	if _, execErr := populateStmt.ExecContext(ctx, args...); execErr != nil {
+		return fmt.Errorf("failed to populate cache for specific systems: %w", execErr)
+	}
+
+	log.Debug().Int("system_count", len(systems)).Msg("populated system tags cache for specific systems")
 	return nil
 }
 

@@ -193,13 +193,15 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		// Genre hierarchy uses 1-2 levels: "genre" or "genre:subgenre"
 		// Examples: "action", "action:platformer", "sports:wrestling"
 		// Action
-		TagGameGenreAction, TagGameGenreActionPlatformer, TagGameGenreActionMaze, TagGameGenreActionBlockbreaker,
-		TagGameGenreActionRunAndGun, TagGameGenreActionHackAndSlash, TagGameGenreActionMetroidvania, TagGameGenreActionRoguelite,
+		TagGameGenreAction, TagGameGenreActionPlatformer, TagGameGenreActionMaze,
+		TagGameGenreActionBlockbreaker, TagGameGenreActionRunAndGun, TagGameGenreActionHackAndSlash,
+		TagGameGenreActionMetroidvania, TagGameGenreActionRoguelite,
 		// Adventure
 		TagGameGenreAdventure, TagGameGenreAdventurePointClick, TagGameGenreAdventureVisualNovel,
 		TagGameGenreAdventureSurvivalHorror, TagGameGenreAdventureText,
 		// Board games - digital versions of classic board/card games
-		TagGameGenreBoard, TagGameGenreBoardCards, TagGameGenreBoardHanafuda, TagGameGenreBoardChess, TagGameGenreBoardShougi,
+		TagGameGenreBoard, TagGameGenreBoardCards, TagGameGenreBoardHanafuda,
+		TagGameGenreBoardChess, TagGameGenreBoardShougi,
 		TagGameGenreBoardGo, TagGameGenreBoardMahjong, TagGameGenreBoardReversi, TagGameGenreBoardOthello,
 		TagGameGenreBoardBackgammon, TagGameGenreBoardParty, TagGameGenreBoardJankenpon,
 
@@ -241,19 +243,23 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagGameGenreShmupIsometric,  // Isometric
 		TagGameGenreShmupDanmaku,    // Bullet hell
 		// Shooting
-		TagGameGenreShooting, TagGameGenreShootingGallery, TagGameGenreShootingRail, TagGameGenreShootingFPS, TagGameGenreShootingTPS,
+		TagGameGenreShooting, TagGameGenreShootingGallery, TagGameGenreShootingRail,
+		TagGameGenreShootingFPS, TagGameGenreShootingTPS,
 		// Puzzle
 		TagGameGenrePuzzle, TagGameGenrePuzzleDrop, TagGameGenrePuzzleMind,
 		// Simulation
-		TagGameGenreSim, TagGameGenreSimStrategy, TagGameGenreSimCardgame, TagGameGenreSimFlight, TagGameGenreSimTrain,
-		TagGameGenreSimDate, TagGameGenreSimOtome, TagGameGenreSimLife, TagGameGenreSimFarm, TagGameGenreSimPet,
-		TagGameGenreSimFishing, TagGameGenreSimGod, TagGameGenreSimDerby, TagGameGenreSimBuilding, TagGameGenreSimCooking,
+		TagGameGenreSim, TagGameGenreSimStrategy, TagGameGenreSimCardgame,
+		TagGameGenreSimFlight, TagGameGenreSimTrain, TagGameGenreSimDate, TagGameGenreSimOtome,
+		TagGameGenreSimLife, TagGameGenreSimFarm, TagGameGenreSimPet, TagGameGenreSimFishing,
+		TagGameGenreSimGod, TagGameGenreSimDerby, TagGameGenreSimBuilding, TagGameGenreSimCooking,
 		// Sports
-		TagGameGenreSports, TagGameGenreSportsSoccer, TagGameGenreSportsBasketball, TagGameGenreSportsBaseball,
-		TagGameGenreSportsVolleyball, TagGameGenreSportsRugby, TagGameGenreSportsFootball, TagGameGenreSportsDodgeball,
-		TagGameGenreSportsHockey, TagGameGenreSportsSkiing, TagGameGenreSportsSkateboarding, TagGameGenreSportsSnowboarding,
-		TagGameGenreSportsTennis, TagGameGenreSportsPingpong, TagGameGenreSportsPaddle, TagGameGenreSportsSquash,
-		TagGameGenreSportsBadminton, TagGameGenreSportsFlyingdisc, TagGameGenreSportsCycling, TagGameGenreSportsFormula1,
+		TagGameGenreSports, TagGameGenreSportsSoccer, TagGameGenreSportsBasketball,
+		TagGameGenreSportsBaseball, TagGameGenreSportsVolleyball, TagGameGenreSportsRugby,
+		TagGameGenreSportsFootball, TagGameGenreSportsDodgeball, TagGameGenreSportsHockey,
+		TagGameGenreSportsSkiing, TagGameGenreSportsSkateboarding, TagGameGenreSportsSnowboarding,
+		TagGameGenreSportsTennis, TagGameGenreSportsPingpong, TagGameGenreSportsPaddle,
+		TagGameGenreSportsSquash, TagGameGenreSportsBadminton, TagGameGenreSportsFlyingdisc,
+		TagGameGenreSportsCycling, TagGameGenreSportsFormula1,
 		TagGameGenreSportsRally, TagGameGenreSportsNascar, TagGameGenreSportsMotoGP, TagGameGenreSportsMotocross,
 		TagGameGenreSportsKarting, TagGameGenreSportsJetski, TagGameGenreSportsGolf, TagGameGenreSportsCricket,
 		TagGameGenreSportsBoxing, TagGameGenreSportsKickboxing, TagGameGenreSportsWrestling, TagGameGenreSportsSumo,

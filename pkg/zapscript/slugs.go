@@ -112,14 +112,37 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	gamesdb := env.Database.MediaDB
 	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, system.ID)
 
+	// Check slug resolution cache first
+	ctx := context.Background()
+	cachedMediaID, cachedStrategy, cacheHit := gamesdb.GetCachedSlugResolution(
+		ctx, system.ID, slug, tagFilters)
+	if cacheHit {
+		log.Info().Msgf("slug resolution cache hit (strategy: %s)", cachedStrategy)
+		// Retrieve full result from cached Media DBID
+		result, cacheErr := gamesdb.GetMediaByDBID(ctx, cachedMediaID)
+		if cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
+		}
+		if cacheErr == nil {
+			log.Info().Msgf("resolved from cache: %s (%s)", result.Name, result.Path)
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, launch(result.Path)
+		}
+	}
+
+	// Track which strategy succeeds for cache storage
+	var resolvedStrategy string
+
 	// Strategy 0: Exact match
-	results, err := gamesdb.SearchMediaBySlug(context.Background(), system.ID, slug, tagFilters)
+	results, err := gamesdb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
+		resolvedStrategy = "exact_match"
 		log.Debug().
-			Str("strategy", "exact_match").
+			Str("strategy", resolvedStrategy).
 			Str("query", slug).
 			Int("result_count", len(results)).
 			Msg("match found via exact match strategy")
@@ -160,10 +183,11 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 					}
 				}
 
+				resolvedStrategy = "prefix_match"
 				log.Info().Msgf("found %d prefix matches, selected best: '%s' (score=%d)",
 					len(validCandidates), validCandidates[bestIdx].Slug, bestScore)
 				log.Debug().
-					Str("strategy", "prefix_match").
+					Str("strategy", resolvedStrategy).
 					Str("query", slug).
 					Str("match", prefixResults[bestIdx].Name).
 					Int("score", bestScore).
@@ -211,10 +235,11 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 						}
 					}
 
+					resolvedStrategy = "token_match"
 					log.Info().Msgf("found %d token matches, selected best: '%s' (score=%.2f)",
 						len(tokenCandidates), tokenCandidates[bestIdx].result.Name, bestScore)
 					log.Debug().
-						Str("strategy", "token_match").
+						Str("strategy", resolvedStrategy).
 						Str("query", slug).
 						Str("match", tokenCandidates[bestIdx].result.Name).
 						Float64("score", bestScore).
@@ -238,8 +263,9 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
 			}
 			if len(results) > 0 {
+				resolvedStrategy = "main_title_only"
 				log.Debug().
-					Str("strategy", "main_title_only").
+					Str("strategy", resolvedStrategy).
 					Str("query", slug).
 					Str("main_title_slug", matchInfo.MainTitleSlug).
 					Int("result_count", len(results)).
@@ -270,20 +296,22 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 					log.Warn().Err(err).Msgf(
 						"secondary title-only prefix search failed for '%s'", secondarySlug)
 				} else if len(results) > 0 {
+					resolvedStrategy = "secondary_title_prefix"
 					log.Info().Msgf("found %d results using secondary title-only prefix: '%s'",
 						len(results), secondarySlug)
 					log.Debug().
-						Str("strategy", "secondary_title_prefix").
+						Str("strategy", resolvedStrategy).
 						Str("query", slug).
 						Str("secondary_slug", secondarySlug).
 						Int("result_count", len(results)).
 						Msg("match found via secondary title prefix strategy")
 				}
 			} else {
+				resolvedStrategy = "secondary_title_exact"
 				log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
 					len(results), secondarySlug)
 				log.Debug().
-					Str("strategy", "secondary_title_exact").
+					Str("strategy", resolvedStrategy).
 					Str("query", slug).
 					Str("secondary_slug", secondarySlug).
 					Int("result_count", len(results)).
@@ -312,10 +340,11 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 					results, err = gamesdb.SearchMediaBySlug(
 						context.Background(), system.ID, match.Slug, tagFilters)
 					if err == nil && len(results) > 0 {
+						resolvedStrategy = "jarowinkler_fuzzy"
 						log.Info().Msgf("found match via fuzzy search: '%s' (similarity=%.2f)",
 							match.Slug, match.Similarity)
 						log.Debug().
-							Str("strategy", "jarowinkler_fuzzy").
+							Str("strategy", resolvedStrategy).
 							Str("query", slug).
 							Str("match", match.Slug).
 							Float64("similarity", float64(match.Similarity)).
@@ -351,9 +380,10 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 			}
 
 			if len(results) > 0 {
+				resolvedStrategy = "progressive_trim"
 				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
 				log.Debug().
-					Str("strategy", "progressive_trim").
+					Str("strategy", resolvedStrategy).
 					Str("query", slug).
 					Str("trim_slug", candidate.Slug).
 					Bool("exact", candidate.IsExactMatch).
@@ -372,6 +402,15 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	// If multiple results, apply intelligent selection
 	selectedResult := selectBestResult(results, tagFilters, env.Cfg)
 	log.Info().Msgf("selected result: %s (%s)", selectedResult.Name, selectedResult.Path)
+
+	// Cache the successful resolution (best effort - don't fail if caching fails)
+	if resolvedStrategy != "" {
+		if cacheErr := gamesdb.SetCachedSlugResolution(
+			ctx, system.ID, slug, tagFilters, selectedResult.MediaID, resolvedStrategy,
+		); cacheErr != nil {
+			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
+		}
+	}
 
 	return platforms.CmdResult{
 		MediaChanged: true,

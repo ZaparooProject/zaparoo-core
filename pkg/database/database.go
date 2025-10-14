@@ -239,6 +239,17 @@ type MediaDBI interface {
 
 	InvalidateCountCache() error
 
+	// Slug resolution cache methods
+	GetCachedSlugResolution(
+		ctx context.Context, systemID, slug string, tagFilters []TagFilter,
+	) (int64, string, bool)
+	SetCachedSlugResolution(
+		ctx context.Context, systemID, slug string, tagFilters []TagFilter, mediaDBID int64, strategy string,
+	) error
+	InvalidateSlugCache(ctx context.Context) error
+	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
+	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
+
 	SetIndexingStatus(status string) error
 	GetIndexingStatus() (string, error)
 	SetLastIndexedSystem(systemID string) error

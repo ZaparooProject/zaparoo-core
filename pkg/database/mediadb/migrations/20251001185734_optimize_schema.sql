@@ -137,10 +137,28 @@ CREATE TABLE MediaCountCache (
     LastUpdated INTEGER NOT NULL
 );
 
+-- 4.3 SlugResolutionCache: Cached successful slug resolutions to avoid expensive fuzzy matching
+CREATE TABLE SlugResolutionCache (
+    CacheKey TEXT PRIMARY KEY NOT NULL,
+    SystemID TEXT NOT NULL,
+    Slug TEXT NOT NULL,
+    TagFilters TEXT NOT NULL,  -- JSON-serialized tag filters (sorted for consistency)
+    MediaDBID INTEGER NOT NULL,
+    Strategy TEXT NOT NULL,    -- Which strategy found the match (for debugging/analytics)
+    LastUpdated INTEGER NOT NULL,
+    FOREIGN KEY (MediaDBID) REFERENCES Media(DBID) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_slug_cache_system ON SlugResolutionCache(SystemID);
+CREATE INDEX idx_slug_cache_media ON SlugResolutionCache(MediaDBID);
+
 -- +goose Down
 -- Restore original schema without optimizations
 
 -- Drop cache tables
+DROP INDEX IF EXISTS idx_slug_cache_media;
+DROP INDEX IF EXISTS idx_slug_cache_system;
+DROP TABLE IF EXISTS SlugResolutionCache;
 DROP TABLE IF EXISTS MediaCountCache;
 DROP INDEX IF EXISTS idx_systemtagscache_type_tag;
 DROP TABLE IF EXISTS SystemTagsCache;

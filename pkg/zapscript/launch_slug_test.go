@@ -124,6 +124,11 @@ func TestCmdSlug(t *testing.T) {
 			}
 
 			if !tt.shouldError {
+				// Mock cache miss
+				mockMediaDB.On("GetCachedSlugResolution",
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
+					Return(int64(0), "", false)
+
 				expectedResults := []database.SearchResultWithCursor{
 					{
 						SystemID: tt.expectedSystem,
@@ -134,6 +139,10 @@ func TestCmdSlug(t *testing.T) {
 				mockMediaDB.On("SearchMediaBySlug",
 					context.Background(), tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
 					Return(expectedResults, nil)
+				mockMediaDB.On("SetCachedSlugResolution",
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil),
+					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+					Return(nil).Maybe()
 				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			}
 
@@ -185,6 +194,11 @@ func TestCmdSlugWithTags(t *testing.T) {
 		Cmd:      cmd,
 	}
 
+	// Mock cache miss
+	mockMediaDB.On("GetCachedSlugResolution",
+		mock.Anything, expectedSystem, expectedSlug, expectedTags).
+		Return(int64(0), "", false)
+
 	expectedResults := []database.SearchResultWithCursor{
 		{
 			SystemID: expectedSystem,
@@ -194,6 +208,10 @@ func TestCmdSlugWithTags(t *testing.T) {
 	}
 	mockMediaDB.On("SearchMediaBySlug", context.Background(), expectedSystem, expectedSlug, expectedTags).
 		Return(expectedResults, nil)
+	mockMediaDB.On("SetCachedSlugResolution",
+		mock.Anything, expectedSystem, expectedSlug, expectedTags,
+		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+		Return(nil).Maybe()
 	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	result, err := cmdSlug(mockPlatform, env)
@@ -303,6 +321,11 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 				Cmd:      cmd,
 			}
 
+			// Mock cache miss
+			mockMediaDB.On("GetCachedSlugResolution",
+				mock.Anything, tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+				Return(int64(0), "", false)
+
 			mockMediaDB.On("SearchMediaBySlug",
 				context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
 				Return(tt.initialResults, nil).Once()
@@ -332,6 +355,10 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 			}
 
 			if !tt.shouldError {
+				mockMediaDB.On("SetCachedSlugResolution",
+					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
+					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+					Return(nil).Maybe()
 				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			}
 
@@ -423,6 +450,11 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 				Cmd:      cmd,
 			}
 
+			// Mock cache miss
+			mockMediaDB.On("GetCachedSlugResolution",
+				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return(int64(0), "", false)
+
 			mockMediaDB.On("SearchMediaBySlug",
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return([]database.SearchResultWithCursor{}, nil).Once()
@@ -431,6 +463,10 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return(tt.prefixResults, nil).Once()
 
+			mockMediaDB.On("SetCachedSlugResolution",
+				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil),
+				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+				Return(nil).Maybe()
 			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			result, err := cmdSlug(mockPlatform, env)
@@ -510,6 +546,11 @@ func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 				Cmd:      cmd,
 			}
 
+			// Mock cache miss
+			mockMediaDB.On("GetCachedSlugResolution",
+				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil)).
+				Return(int64(0), "", false)
+
 			// All earlier strategies fail
 			mockMediaDB.On("SearchMediaBySlug",
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
@@ -543,6 +584,10 @@ func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
 				Return([]database.SearchResultWithCursor{}, nil).Maybe()
 
+			mockMediaDB.On("SetCachedSlugResolution",
+				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
+				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+				Return(nil).Maybe()
 			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			result, err := cmdSlug(mockPlatform, env)

@@ -29,39 +29,39 @@ import (
 // TestFindFuzzyMatches_PreFilter tests that the length difference pre-filter works correctly.
 func TestFindFuzzyMatches_PreFilter(t *testing.T) {
 	tests := []struct {
-		name           string
-		query          string
-		candidates     []string
-		maxDistance    int
-		minSimilarity  float32
-		expectedSlugs  []string
-		reason         string
+		name          string
+		query         string
+		reason        string
+		candidates    []string
+		expectedSlugs []string
+		maxDistance   int
+		minSimilarity float32
 	}{
 		{
 			name:          "filters out candidates exceeding maxDistance",
-			query:         "mario",      // 5 chars
-			candidates:    []string{"mari", "marios", "marioxyz"},  // 4, 6, 8 chars
+			query:         "mario",                                // 5 chars
+			candidates:    []string{"mari", "marios", "marioxyz"}, // 4, 6, 8 chars
 			maxDistance:   2,
-			minSimilarity: 0.70,  // low threshold to ensure pre-filter is what blocks marioxyz
-			expectedSlugs: []string{"marios", "mari"},  // "marioxyz" filtered (diff=3), sorted by similarity
+			minSimilarity: 0.70,                       // low threshold to ensure pre-filter is what blocks marioxyz
+			expectedSlugs: []string{"marios", "mari"}, // "marioxyz" filtered (diff=3), sorted by similarity
 			reason:        "marioxyz has length diff of 3, exceeds maxDistance=2",
 		},
 		{
 			name:          "maxDistance=0 only allows same length",
 			query:         "zelda",
-			candidates:    []string{"zelda", "zelad", "zeldas"},  // 5, 5, 6 chars
+			candidates:    []string{"zelda", "zelad", "zeldas"}, // 5, 5, 6 chars
 			maxDistance:   0,
 			minSimilarity: 0.70,
-			expectedSlugs: []string{"zelad"},  // only same length (zelda is exact and skipped)
+			expectedSlugs: []string{"zelad"}, // only same length (zelda is exact and skipped)
 			reason:        "maxDistance=0 requires exact same length",
 		},
 		{
 			name:          "maxDistance=5 allows wider range",
-			query:         "sonic",  // 5 chars
-			candidates:    []string{"son", "sonics", "sonicmania"},  // 3, 6, 10 chars
+			query:         "sonic",                                 // 5 chars
+			candidates:    []string{"son", "sonics", "sonicmania"}, // 3, 6, 10 chars
 			maxDistance:   5,
 			minSimilarity: 0.70,
-			expectedSlugs: []string{"sonics", "son", "sonicmania"},  // sorted by similarity
+			expectedSlugs: []string{"sonics", "son", "sonicmania"}, // sorted by similarity
 			reason:        "maxDistance=5 allows lengths 0-10 (diff up to 5)",
 		},
 	}
@@ -85,19 +85,19 @@ func TestFindFuzzyMatches_SimilarityThreshold(t *testing.T) {
 	tests := []struct {
 		name          string
 		query         string
+		reason        string
 		candidates    []string
 		maxDistance   int
 		minSimilarity float32
 		expectMatches bool
-		reason        string
 	}{
 		{
 			name:          "high threshold filters out dissimilar candidates",
 			query:         "mario",
-			candidates:    []string{"maria"},  // similar but may not reach 0.95
+			candidates:    []string{"maria"}, // similar but may not reach 0.95
 			maxDistance:   2,
 			minSimilarity: 0.95,
-			expectMatches: false,  // "maria" unlikely to reach 0.95 similarity
+			expectMatches: false, // "maria" unlikely to reach 0.95 similarity
 			reason:        "maria similarity to mario is below 0.95",
 		},
 		{
@@ -106,13 +106,13 @@ func TestFindFuzzyMatches_SimilarityThreshold(t *testing.T) {
 			candidates:    []string{"maria"},
 			maxDistance:   2,
 			minSimilarity: 0.70,
-			expectMatches: true,  // "maria" should exceed 0.70 similarity
+			expectMatches: true, // "maria" should exceed 0.70 similarity
 			reason:        "maria similarity to mario exceeds 0.70",
 		},
 		{
 			name:          "production threshold 0.85",
 			query:         "zelda",
-			candidates:    []string{"zelad"},  // common typo
+			candidates:    []string{"zelad"}, // common typo
 			maxDistance:   2,
 			minSimilarity: 0.85,
 			expectMatches: true,
@@ -151,7 +151,7 @@ func TestFindFuzzyMatches_ExactMatchSkipped(t *testing.T) {
 			name:          "exact match excluded from results",
 			query:         "mario",
 			candidates:    []string{"mario", "marios", "maria"},
-			expectedSlugs: []string{"marios", "maria"},  // "mario" exact match excluded
+			expectedSlugs: []string{"marios", "maria"}, // "mario" exact match excluded
 		},
 		{
 			name:          "no exact match in candidates",
@@ -163,7 +163,7 @@ func TestFindFuzzyMatches_ExactMatchSkipped(t *testing.T) {
 			name:          "only exact match candidate",
 			query:         "zelda",
 			candidates:    []string{"zelda"},
-			expectedSlugs: nil,  // nil or empty, exact match excluded
+			expectedSlugs: nil, // nil or empty, exact match excluded
 		},
 	}
 
@@ -186,9 +186,9 @@ func TestFindFuzzyMatches_Sorting(t *testing.T) {
 	t.Run("results sorted by similarity descending", func(t *testing.T) {
 		query := "mario"
 		candidates := []string{
-			"maria",   // medium similarity
-			"marios",  // high similarity
-			"mar",     // low similarity
+			"maria",  // medium similarity
+			"marios", // high similarity
+			"mar",    // low similarity
 		}
 
 		matches := FindFuzzyMatches(query, candidates, 3, 0.60)
@@ -196,7 +196,7 @@ func TestFindFuzzyMatches_Sorting(t *testing.T) {
 		require.NotEmpty(t, matches, "expected matches")
 
 		// Verify descending order
-		for i := 0; i < len(matches)-1; i++ {
+		for i := range len(matches) - 1 {
 			assert.GreaterOrEqual(t, matches[i].Similarity, matches[i+1].Similarity,
 				"match %d (%q: %.3f) should have higher similarity than match %d (%q: %.3f)",
 				i, matches[i].Slug, matches[i].Similarity,
@@ -212,13 +212,13 @@ func TestFindFuzzyMatches_Sorting(t *testing.T) {
 	t.Run("exact similarity values maintain stable order", func(t *testing.T) {
 		// When similarities are equal, order should be stable (same as input)
 		query := "test"
-		candidates := []string{"tess", "tent"}  // May have similar scores
+		candidates := []string{"tess", "tent"} // May have similar scores
 
 		matches := FindFuzzyMatches(query, candidates, 2, 0.70)
 
 		// Verify sorting didn't panic and produced valid results
 		require.NotEmpty(t, matches)
-		for i := 0; i < len(matches)-1; i++ {
+		for i := range len(matches) - 1 {
 			assert.GreaterOrEqual(t, matches[i].Similarity, matches[i+1].Similarity)
 		}
 	})
@@ -229,11 +229,11 @@ func TestFindFuzzyMatches_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name          string
 		query         string
+		reason        string
 		candidates    []string
 		maxDistance   int
 		minSimilarity float32
 		expectEmpty   bool
-		reason        string
 	}{
 		{
 			name:          "empty candidates list",
@@ -268,7 +268,7 @@ func TestFindFuzzyMatches_EdgeCases(t *testing.T) {
 			candidates:    []string{"a", "b", "ab"},
 			maxDistance:   2,
 			minSimilarity: 0.85,
-			expectEmpty:   true,  // "a" exact match skipped, others unlikely to match
+			expectEmpty:   true, // "a" exact match skipped, others unlikely to match
 			reason:        "single char query edge case",
 		},
 		{
@@ -277,13 +277,13 @@ func TestFindFuzzyMatches_EdgeCases(t *testing.T) {
 			candidates:    []string{"supercalifragilisticexpialidocious", "supercalifragilistic"},
 			maxDistance:   20,
 			minSimilarity: 0.85,
-			expectEmpty:   false,  // "supercalifragilistic" matches (high similarity, within length)
+			expectEmpty:   false, // "supercalifragilistic" matches (high similarity, within length)
 			reason:        "very long strings handled correctly",
 		},
 		{
 			name:          "all candidates filtered by pre-filter",
 			query:         "abc",
-			candidates:    []string{"abcdefghij"},  // length diff = 7
+			candidates:    []string{"abcdefghij"}, // length diff = 7
 			maxDistance:   2,
 			minSimilarity: 0.70,
 			expectEmpty:   true,
@@ -316,21 +316,21 @@ func TestFindFuzzyMatches_EdgeCases(t *testing.T) {
 // TestFindFuzzyMatches_ProductionScenarios tests realistic scenarios with production values.
 func TestFindFuzzyMatches_ProductionScenarios(t *testing.T) {
 	const (
-		maxDistance   = 2     // production value
-		minSimilarity = 0.85  // production value
+		maxDistance   = 2    // production value
+		minSimilarity = 0.85 // production value
 	)
 
 	tests := []struct {
-		name           string
-		query          string
-		candidates     []string
-		expectedFirst  string
-		reason         string
+		name          string
+		query         string
+		expectedFirst string
+		reason        string
+		candidates    []string
 	}{
 		{
 			name:          "common typo - transposed letters",
 			query:         "zelad",
-			candidates:    []string{"zelda"},  // without zeland to avoid confusion
+			candidates:    []string{"zelda"}, // without zeland to avoid confusion
 			expectedFirst: "zelda",
 			reason:        "transposed letters should match original",
 		},
@@ -388,23 +388,23 @@ func TestFindFuzzyMatches_CJK(t *testing.T) {
 	tests := []struct {
 		name        string
 		query       string
+		reason      string
 		candidates  []string
 		maxDistance int
 		wantMatch   bool
-		reason      string
 	}{
 		{
 			name:        "Japanese katakana exact",
 			query:       "ドラゴンクエスト",
 			candidates:  []string{"ドラゴンクエスト"},
 			maxDistance: 2,
-			wantMatch:   false,  // exact match is skipped
+			wantMatch:   false, // exact match is skipped
 			reason:      "exact CJK match should be skipped",
 		},
 		{
 			name:        "Japanese katakana small variation",
-			query:       "ドラゴンクエスト7",  // with number
-			candidates:  []string{"ドラゴンクエスト8"},  // different number (1 byte diff)
+			query:       "ドラゴンクエスト7",           // with number
+			candidates:  []string{"ドラゴンクエスト8"}, // different number (1 byte diff)
 			maxDistance: 2,
 			wantMatch:   true,
 			reason:      "should handle small CJK variations within length filter",
@@ -412,23 +412,25 @@ func TestFindFuzzyMatches_CJK(t *testing.T) {
 		{
 			name:        "mixed Latin and CJK small difference",
 			query:       "mario1マリオ",
-			candidates:  []string{"mario2マリオ"},  // 1 byte different
+			candidates:  []string{"mario2マリオ"}, // 1 byte different
 			maxDistance: 2,
 			wantMatch:   true,
 			reason:      "should handle mixed scripts with small differences",
 		},
 		{
-			name:        "Chinese characters",
-			query:       "超级马里奥",
-			candidates:  []string{"超级马力奥"},  // 1 char different (里→力)
+			name: "Chinese characters",
+			//nolint:gosmopolitan // Testing CJK character handling
+			query: "超级马里奥",
+			//nolint:gosmopolitan // Testing CJK character handling
+			candidates:  []string{"超级马力奥"}, // 1 char different (里→力)
 			maxDistance: 2,
 			wantMatch:   true,
 			reason:      "should handle Chinese character variations within length filter",
 		},
 		{
 			name:        "CJK length difference exceeds filter",
-			query:       "ドラゴン",  // 12 bytes
-			candidates:  []string{"ドラゴンクエスト"},  // 24 bytes (diff=12)
+			query:       "ドラゴン",               // 12 bytes
+			candidates:  []string{"ドラゴンクエスト"}, // 24 bytes (diff=12)
 			maxDistance: 2,
 			wantMatch:   false,
 			reason:      "CJK strings with large byte-length differences filtered out",
@@ -470,7 +472,7 @@ func TestFindFuzzyMatches_MultipleSimilarCandidates(t *testing.T) {
 		assert.NotEmpty(t, matches, "expected multiple matches")
 
 		// Verify sorting
-		for i := 0; i < len(matches)-1; i++ {
+		for i := range len(matches) - 1 {
 			assert.GreaterOrEqual(t, matches[i].Similarity, matches[i+1].Similarity)
 		}
 

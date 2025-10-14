@@ -1266,6 +1266,61 @@ func (m *MockMediaDBI) InvalidateCountCache() error {
 	return nil
 }
 
+// Slug resolution cache methods
+func (m *MockMediaDBI) GetCachedSlugResolution(
+	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter,
+) (mediaDBID int64, strategy string, found bool) {
+	args := m.Called(ctx, systemID, slug, tagFilters)
+	if mediaID, ok := args.Get(0).(int64); ok {
+		if strat, ok := args.Get(1).(string); ok {
+			strategy = strat
+		}
+		hit := args.Bool(2)
+		return mediaID, strategy, hit
+	}
+	return 0, "", false
+}
+
+func (m *MockMediaDBI) SetCachedSlugResolution(
+	ctx context.Context, systemID, slug string, tagFilters []database.TagFilter, mediaDBID int64, strategy string,
+) error {
+	args := m.Called(ctx, systemID, slug, tagFilters, mediaDBID, strategy)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) InvalidateSlugCache(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error {
+	args := m.Called(ctx, systemIDs)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockMediaDBI) GetMediaByDBID(ctx context.Context, mediaDBID int64) (database.SearchResultWithCursor, error) {
+	args := m.Called(ctx, mediaDBID)
+	if result, ok := args.Get(0).(database.SearchResultWithCursor); ok {
+		if err := args.Error(1); err != nil {
+			return result, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return database.SearchResultWithCursor{}, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return database.SearchResultWithCursor{}, nil
+}
+
 func (m *MockMediaDBI) RandomGameWithQuery(query *database.MediaQuery) (database.SearchResult, error) {
 	args := m.Called(query)
 	if result, ok := args.Get(0).(database.SearchResult); ok {
