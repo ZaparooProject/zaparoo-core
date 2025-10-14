@@ -104,6 +104,7 @@ CREATE INDEX media_system_path_idx ON Media(SystemDBID, Path);  -- Supports dupl
 -- Tags indexes
 CREATE INDEX tags_tag_idx ON Tags(Tag);
 CREATE INDEX tags_tagtype_idx ON Tags(TypeDBID);
+CREATE INDEX tags_type_tag_idx ON Tags(TypeDBID, Tag);
 
 -- MediaTags indexes (reverse index for tag filtering)
 CREATE INDEX mediatags_tag_media_idx ON MediaTags(TagDBID, MediaDBID);
@@ -162,6 +163,9 @@ DROP TABLE IF EXISTS SlugResolutionCache;
 DROP TABLE IF EXISTS MediaCountCache;
 DROP INDEX IF EXISTS idx_systemtagscache_type_tag;
 DROP TABLE IF EXISTS SystemTagsCache;
+
+-- Drop composite indexes
+DROP INDEX IF EXISTS tags_type_tag_idx;
 
 -- Restore MediaTitles without foreign keys
 CREATE TABLE MediaTitles_old (

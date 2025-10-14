@@ -1376,22 +1376,21 @@ func sqlSearchMediaWithFilters(
 	}
 
 	// Add tag filtering condition - requires type:value format (AND logic)
-	// Using EXISTS clauses for optimal index usage (one per tag)
+	// Using INTERSECT pattern for optimal performance when filtering by multiple tags
+	// This builds the filtered MediaDBID set first, then joins to get media details
 	tagFilterCondition := ""
+	tagFilterArgs := make([]any, 0)
 	if len(tags) > 0 {
-		var existsClauses []string
+		var intersectClauses []string
 		for _, tagFilter := range tags {
-			existsClauses = append(existsClauses, `
-				AND EXISTS (
-					SELECT 1 FROM MediaTags
-					JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-					JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-					WHERE MediaTags.MediaDBID = Media.DBID
-					AND TagTypes.Type = ? AND Tags.Tag = ?
-				)`)
-			args = append(args, tagFilter.Type, tagFilter.Value)
+			intersectClauses = append(intersectClauses, `
+				SELECT MediaDBID FROM MediaTags
+				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+				JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+				WHERE TagTypes.Type = ? AND Tags.Tag = ?`)
+			tagFilterArgs = append(tagFilterArgs, tagFilter.Type, tagFilter.Value)
 		}
-		tagFilterCondition = strings.Join(existsClauses, "")
+		tagFilterCondition = " AND Media.DBID IN (" + strings.Join(intersectClauses, " INTERSECT ") + ")"
 	}
 
 	// Add letter filtering condition
@@ -1441,7 +1440,8 @@ func sqlSearchMediaWithFilters(
 		letterFilterCondition +
 		` LIMIT ?`
 
-	mediaArgs := append([]any(nil), args...) // Copy args
+	mediaArgs := append([]any(nil), args...)        // Copy args
+	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
 	mediaArgs = append(mediaArgs, limit)
 
 	mediaStmt, err := db.PrepareContext(ctx, mediaQuery)
