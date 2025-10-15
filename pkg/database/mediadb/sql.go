@@ -1375,22 +1375,10 @@ func sqlSearchMediaWithFilters(
 		args = append(args, *cursor)
 	}
 
-	// Add tag filtering condition - requires type:value format (AND logic)
-	// Using INTERSECT pattern for optimal performance when filtering by multiple tags
-	// This builds the filtered MediaDBID set first, then joins to get media details
+	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
 	tagFilterCondition := ""
-	tagFilterArgs := make([]any, 0)
-	if len(tags) > 0 {
-		var intersectClauses []string
-		for _, tagFilter := range tags {
-			intersectClauses = append(intersectClauses, `
-				SELECT MediaDBID FROM MediaTags
-				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-				JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-				WHERE TagTypes.Type = ? AND Tags.Tag = ?`)
-			tagFilterArgs = append(tagFilterArgs, tagFilter.Type, tagFilter.Value)
-		}
-		tagFilterCondition = " AND Media.DBID IN (" + strings.Join(intersectClauses, " INTERSECT ") + ")"
+	if len(tagFilterClauses) > 0 {
+		tagFilterCondition = " AND " + strings.Join(tagFilterClauses, " AND ")
 	}
 
 	// Add letter filtering condition
@@ -2169,30 +2157,9 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 		}
 	}
 
-	// Tag filtering - requires type:value format (AND logic)
-	if len(query.Tags) > 0 {
-		// Build tag filter conditions for AND logic - media must have ALL specified tags
-		var tagConditions []string
-		for range query.Tags {
-			tagConditions = append(tagConditions, "(TagTypes.Type = ? AND Tags.Tag = ?)")
-		}
-
-		whereConditions = append(whereConditions,
-			fmt.Sprintf(`Media.DBID IN (
-				SELECT MediaDBID FROM MediaTags
-				JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-				JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-				WHERE %s
-				GROUP BY MediaDBID
-				HAVING COUNT(DISTINCT Tags.DBID) = ?
-			)`, strings.Join(tagConditions, " OR ")))
-
-		// Add arguments in the same order as conditions, plus the count for HAVING clause
-		for _, tagFilter := range query.Tags {
-			args = append(args, tagFilter.Type, tagFilter.Value)
-		}
-		args = append(args, len(query.Tags)) // HAVING COUNT = number of tags (AND logic)
-	}
+	tagClauses, tagArgs := BuildTagFilterSQL(query.Tags)
+	whereConditions = append(whereConditions, tagClauses...)
+	args = append(args, tagArgs...)
 
 	if len(whereConditions) > 0 {
 		whereClause = "WHERE " + strings.Join(whereConditions, " AND ")
@@ -2645,22 +2612,9 @@ func sqlSearchMediaBySlug(
 		"MediaTitles.Slug = ?",
 	}
 
-	// Add tag filtering condition - requires type:value format (AND logic)
-	// Using EXISTS clauses for optimal index usage (one per tag)
-	if len(tags) > 0 {
-		for _, tagFilter := range tags {
-			existsCondition := `
-				EXISTS (
-					SELECT 1 FROM MediaTags
-					JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-					JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-					WHERE MediaTags.MediaDBID = Media.DBID
-					AND TagTypes.Type = ? AND Tags.Tag = ?
-				)`
-			whereConditions = append(whereConditions, existsCondition)
-			args = append(args, tagFilter.Type, tagFilter.Value)
-		}
-	}
+	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions = append(whereConditions, tagClauses...)
+	args = append(args, tagArgs...)
 
 	//nolint:gosec // Safe: all user input goes through parameterized queries
 	stmt, err := db.PrepareContext(ctx, `
@@ -2803,20 +2757,9 @@ func sqlSearchMediaBySlugPrefix(
 		"MediaTitles.Slug LIKE ?",
 	}
 
-	if len(tags) > 0 {
-		for _, tagFilter := range tags {
-			existsCondition := `
-				EXISTS (
-					SELECT 1 FROM MediaTags
-					JOIN Tags ON MediaTags.TagDBID = Tags.DBID
-					JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-					WHERE MediaTags.MediaDBID = Media.DBID
-					AND TagTypes.Type = ? AND Tags.Tag = ?
-				)`
-			whereConditions = append(whereConditions, existsCondition)
-			args = append(args, tagFilter.Type, tagFilter.Value)
-		}
-	}
+	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions = append(whereConditions, tagClauses...)
+	args = append(args, tagArgs...)
 
 	//nolint:gosec // Safe: all user input goes through parameterized queries
 	stmt, err := db.PrepareContext(ctx, `

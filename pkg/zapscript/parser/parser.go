@@ -136,7 +136,11 @@ func isInputMacroCmd(name string) bool {
 	}
 }
 
-// isValidTag validates tag format: [+|-|~]type:value[:subtype...]
+// isValidTag performs a basic syntactic check to aid the parser in distinguishing
+// tags from game names in the @slug syntax. It is not the canonical tag parser.
+// For full parsing, validation, and normalization, see database/filters.ParseTagFilters.
+//
+// Format: [+|-|~]type:value[:subtype...]
 // where type can contain: alphanumeric (a-z, A-Z, 0-9) and hyphens (-)
 // and value can contain: alphanumeric (a-z, A-Z, 0-9), hyphens (-), colons (:), and periods (.)
 // Must have at least one colon to separate type from value

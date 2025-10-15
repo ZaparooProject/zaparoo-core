@@ -35,9 +35,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
@@ -74,64 +74,6 @@ func decodeCursor(cursor string) (*int64, error) {
 	}
 
 	return &data.LastID, nil
-}
-
-const (
-	maxTagsCount = 50
-	maxTagLength = 128
-)
-
-// parseAndValidateTagFilters converts raw tag strings to validated TagFilter structs
-func parseAndValidateTagFilters(tagSlice []string) ([]database.TagFilter, error) {
-	if len(tagSlice) > maxTagsCount {
-		return nil, fmt.Errorf("exceeded maximum number of tags: %d (max: %d)", len(tagSlice), maxTagsCount)
-	}
-
-	// Use map for deduplication of normalized tags
-	normalizedFilters := make(map[string]database.TagFilter)
-
-	for _, tagStr := range tagSlice {
-		trimmedTag := strings.TrimSpace(tagStr)
-		if trimmedTag == "" {
-			continue
-		}
-
-		if len(trimmedTag) > maxTagLength {
-			return nil, fmt.Errorf("tag too long: %q (max: %d characters)", trimmedTag, maxTagLength)
-		}
-
-		// Validate type:value format
-		parts := strings.SplitN(trimmedTag, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid tag format for %q: must be in 'type:value' format", trimmedTag)
-		}
-
-		tagType := strings.TrimSpace(parts[0])
-		tagValue := strings.TrimSpace(parts[1])
-		if tagType == "" || tagValue == "" {
-			return nil, fmt.Errorf("invalid tag %q: type and value cannot be empty", trimmedTag)
-		}
-
-		// Apply full normalization
-		filter := database.TagFilter{
-			Type:  tags.NormalizeTag(tagType),
-			Value: tags.NormalizeTag(tagValue),
-		}
-
-		// Deduplicate by normalized key
-		key := filter.Type + ":" + filter.Value
-		if _, seen := normalizedFilters[key]; !seen {
-			normalizedFilters[key] = filter
-		}
-	}
-
-	// Convert map to slice
-	result := make([]database.TagFilter, 0, len(normalizedFilters))
-	for _, filter := range normalizedFilters {
-		result = append(result, filter)
-	}
-
-	return result, nil
 }
 
 type indexingStatusVals struct {
@@ -487,11 +429,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	letter := params.Letter
 
 	// Validate and parse tags parameter - requires type:value format
+	// Supports operator prefixes: "+" (AND), "-" (NOT), "~" (OR)
 	var tagFilters []database.TagFilter
 	if tagParams != nil && len(*tagParams) > 0 {
-		tagFilters, err = parseAndValidateTagFilters(*tagParams)
-		if err != nil {
-			return nil, err
+		var parseErr error
+		tagFilters, parseErr = filters.ParseTagFilters(*tagParams)
+		if parseErr != nil {
+			return nil, fmt.Errorf("failed to parse tag filters: %w", parseErr)
 		}
 	}
 
@@ -525,7 +469,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
-	filters := database.SearchFilters{
+	searchFilters := database.SearchFilters{
 		Systems: systems,
 		Query:   query,
 		Tags:    tagFilters, // Will be empty if no tags provided
@@ -534,7 +478,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		Limit:   limit,
 	}
 
-	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &filters)
+	searchResults, err = env.Database.MediaDB.SearchMediaWithFilters(ctx, &searchFilters)
 	if err != nil {
 		return nil, fmt.Errorf("error searching media with filters: %w", err)
 	}

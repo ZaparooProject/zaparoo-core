@@ -28,8 +28,8 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
@@ -37,46 +37,18 @@ import (
 )
 
 // parseTagsAdvArg parses comma-delimited tags from advanced args
-// Format: "type:value,type2:value2" -> [{Type:"type", Value:"value"}, {Type:"type2", Value:"value2"}]
+// Format: "type:value,-type2:value2,~type3:value3"
+// Operators: "-" = NOT, "~" = OR, none = AND (default)
+// Uses shared parser from pkg/database/filters
 func parseTagsAdvArg(tagsStr string) []database.TagFilter {
 	if tagsStr == "" {
 		return nil
 	}
 
 	parts := strings.Split(tagsStr, ",")
-	tagFilters := make([]database.TagFilter, 0, len(parts))
-
-	for _, part := range parts {
-		tag := strings.TrimSpace(part)
-		if tag == "" {
-			continue
-		}
-
-		// Check if tag contains type:value format
-		if strings.Contains(tag, ":") {
-			typValue := strings.SplitN(tag, ":", 2)
-			if len(typValue) == 2 {
-				tagType := strings.TrimSpace(typValue[0])
-				tagValue := strings.TrimSpace(typValue[1])
-				if tagType != "" && tagValue != "" {
-					// Normalize the tag filter for consistent querying
-					normalizedFilter := database.TagFilter{
-						Type:  tags.NormalizeTag(tagType),
-						Value: tags.NormalizeTag(tagValue),
-					}
-					tagFilters = append(tagFilters, normalizedFilter)
-				} else {
-					log.Warn().Str("tag", tag).Msg("Ignoring tag with empty type or value")
-				}
-			} else {
-				log.Warn().Str("tag", tag).Msg("Ignoring malformed tag; expected 'type:value' format")
-			}
-		} else {
-			log.Warn().Str("tag", tag).Msg("Ignoring malformed tag; expected 'type:value' format")
-		}
-	}
-
-	if len(tagFilters) == 0 {
+	tagFilters, err := filters.ParseTagFilters(parts)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to parse tag filters")
 		return nil
 	}
 
@@ -531,14 +503,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
-		filters := database.SearchFilters{
+		searchFilters := database.SearchFilters{
 			Systems: systemdefs.AllSystems(),
 			Query:   query,
 			Tags:    tagFilters,
 			Limit:   1,
 		}
 		// TODO: context should come from service state
-		res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &filters)
+		res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
 		if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search all systems for '%s': %w", query, searchErr)
 		}
@@ -576,14 +548,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	filters := database.SearchFilters{
+	searchFilters := database.SearchFilters{
 		Systems: systems,
 		Query:   query,
 		Tags:    tagFilters,
 		Limit:   1,
 	}
 	// TODO: context should come from service state
-	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &filters)
+	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
 	if searchErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", query, searchErr)
 	}

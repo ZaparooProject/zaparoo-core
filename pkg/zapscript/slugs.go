@@ -499,7 +499,8 @@ func filterByTags(
 	return filtered
 }
 
-// hasAllTags checks if a result has all the specified tags
+// hasAllTags checks if a result matches the specified tag filters
+// Respects operator logic: AND (must have), NOT (must not have), OR (at least one)
 func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) bool {
 	if len(tagFilters) == 0 {
 		return true
@@ -511,9 +512,33 @@ func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.T
 		resultTags[tag.Type] = tag.Tag
 	}
 
-	// Check if all required tags are present
-	for _, requiredTag := range tagFilters {
+	// Group filters by operator using shared logic
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
+
+	// Check AND filters: must have ALL
+	for _, requiredTag := range andFilters {
 		if value, exists := resultTags[requiredTag.Type]; !exists || value != requiredTag.Value {
+			return false
+		}
+	}
+
+	// Check NOT filters: must NOT have ANY
+	for _, excludedTag := range notFilters {
+		if value, exists := resultTags[excludedTag.Type]; exists && value == excludedTag.Value {
+			return false // Has a tag that should be excluded
+		}
+	}
+
+	// Check OR filters: must have AT LEAST ONE
+	if len(orFilters) > 0 {
+		hasAtLeastOne := false
+		for _, orTag := range orFilters {
+			if value, exists := resultTags[orTag.Type]; exists && value == orTag.Value {
+				hasAtLeastOne = true
+				break
+			}
+		}
+		if !hasAtLeastOne {
 			return false
 		}
 	}

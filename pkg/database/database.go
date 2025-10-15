@@ -112,10 +112,38 @@ type TagInfo struct {
 	Type string `json:"type"`
 }
 
+// TagOperator represents the logical operator for tag filtering
+type TagOperator string
+
+// Tag filter operator constants
+const (
+	TagOperatorAND TagOperator = "AND" // Default: must have tag
+	TagOperatorNOT TagOperator = "NOT" // Must not have tag (-)
+	TagOperatorOR  TagOperator = "OR"  // At least one OR tag must match (~)
+)
+
 // TagFilter represents a tag type/value filter for queries
 type TagFilter struct {
-	Type  string // Tag type (e.g., "lang", "year", "players")
-	Value string // Tag value (e.g., "en", "1991", "2")
+	Type     string      // Tag type (e.g., "lang", "year", "players")
+	Value    string      // Tag value (e.g., "en", "1991", "2")
+	Operator TagOperator // Operator: AND (default), NOT (-), OR (~)
+}
+
+// GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
+// Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
+// to use the same grouping logic.
+func GroupTagFiltersByOperator(filters []TagFilter) (and, not, or []TagFilter) {
+	for _, f := range filters {
+		switch f.Operator {
+		case TagOperatorNOT:
+			not = append(not, f)
+		case TagOperatorOR:
+			or = append(or, f)
+		default: // AND is the default
+			and = append(and, f)
+		}
+	}
+	return and, not, or
 }
 
 type SearchResultWithCursor struct {

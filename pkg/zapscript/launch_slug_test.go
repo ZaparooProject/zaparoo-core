@@ -177,8 +177,8 @@ func TestCmdSlugWithTags(t *testing.T) {
 	expectedSystem := "SNES"
 	expectedSlug := "supermarioworld"
 	expectedTags := []database.TagFilter{
-		{Type: "region", Value: "usa"},
-		{Type: "type", Value: "game"},
+		{Type: "region", Value: "usa", Operator: database.TagOperatorAND},
+		{Type: "type", Value: "game", Operator: database.TagOperatorAND},
 	}
 
 	cmd := parser.Command{
@@ -1297,4 +1297,451 @@ func TestConfigDefaults(t *testing.T) {
 
 	assert.Equal(t, []string{"us", "world"}, regions)
 	assert.Equal(t, []string{"en"}, langs)
+}
+
+// TestCmdSlugCacheBehavior tests cache hit/miss scenarios
+func TestCmdSlugCacheBehavior(t *testing.T) {
+	t.Run("Cache hit - should not search database", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		systemID := "SNES"
+		slug := "supermarioworld"
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		// Mock cache hit - should return cached values
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, systemID, slug, []database.TagFilter(nil)).
+			Return(int64(123), "/cached/path.smc", true)
+
+		// When cache hits, GetMediaByDBID is called to fetch full media details
+		mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(123)).
+			Return(database.Media{Path: "/cached/path.smc"}, nil)
+
+		// Platform launch should be called with cached path
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		// SearchMediaBySlug should NOT be called when cache hits
+		result, err := cmdSlug(mockPlatform, env)
+
+		require.NoError(t, err)
+		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		mockMediaDB.AssertExpectations(t)
+		mockPlatform.AssertExpectations(t)
+
+		// Verify SearchMediaBySlug was NOT called
+		mockMediaDB.AssertNotCalled(t, "SearchMediaBySlug")
+	})
+
+	t.Run("Cache miss - should search and update cache", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		systemID := "SNES"
+		slug := "supermarioworld"
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		// Mock cache miss
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, systemID, slug, []database.TagFilter(nil)).
+			Return(int64(0), "", false)
+
+		expectedResults := []database.SearchResultWithCursor{
+			{
+				MediaID:  123,
+				SystemID: systemID,
+				Name:     "Super Mario World",
+				Path:     "/test/smw.smc",
+			},
+		}
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), systemID, slug, []database.TagFilter(nil)).
+			Return(expectedResults, nil)
+
+		// Should update cache after successful search
+		mockMediaDB.On("SetCachedSlugResolution",
+			mock.Anything, systemID, slug, []database.TagFilter(nil),
+			int64(123), mock.AnythingOfType("string")). // strategy string
+			Return(nil).Once()
+
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		result, err := cmdSlug(mockPlatform, env)
+
+		require.NoError(t, err)
+		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		mockMediaDB.AssertExpectations(t)
+		mockPlatform.AssertExpectations(t)
+	})
+
+	t.Run("Cache with different tag filters", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		systemID := "SNES"
+		slug := "supermarioworld"
+		tags1 := []database.TagFilter{{Type: "region", Value: "usa", Operator: database.TagOperatorAND}}
+		tags2 := []database.TagFilter{{Type: "region", Value: "jp", Operator: database.TagOperatorAND}}
+
+		// First call with USA tag
+		cmd1 := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{"tags": "region:usa"},
+		}
+
+		env1 := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd1,
+		}
+
+		// Cache miss for USA version
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, systemID, slug, tags1).
+			Return(int64(0), "", false).Once()
+
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), systemID, slug, tags1).
+			Return([]database.SearchResultWithCursor{
+				{MediaID: 100, SystemID: systemID, Path: "/usa.smc"},
+			}, nil).Once()
+
+		mockMediaDB.On("SetCachedSlugResolution",
+			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
+			Return(nil).Once()
+
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		_, err := cmdSlug(mockPlatform, env1)
+		require.NoError(t, err)
+
+		// Second call with different tags should not use same cache
+		cmd2 := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{"tags": "region:jp"},
+		}
+
+		env2 := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd2,
+		}
+
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, systemID, slug, tags2).
+			Return(int64(0), "", false).Once()
+
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), systemID, slug, tags2).
+			Return([]database.SearchResultWithCursor{
+				{MediaID: 200, SystemID: systemID, Path: "/jp.smc"},
+			}, nil).Once()
+
+		mockMediaDB.On("SetCachedSlugResolution",
+			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
+			Return(nil).Once()
+
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+
+		_, err = cmdSlug(mockPlatform, env2)
+		require.NoError(t, err)
+
+		mockMediaDB.AssertExpectations(t)
+		mockPlatform.AssertExpectations(t)
+	})
+}
+
+// TestCmdSlugErrorHandling tests error scenarios
+func TestCmdSlugErrorHandling(t *testing.T) {
+	t.Run("Database search error", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil)).
+			Return(int64(0), "", false)
+
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), "SNES", "supermarioworld", []database.TagFilter(nil)).
+			Return([]database.SearchResultWithCursor{}, assert.AnError)
+
+		_, err := cmdSlug(mockPlatform, env)
+
+		require.Error(t, err)
+		mockMediaDB.AssertExpectations(t)
+	})
+
+	t.Run("Platform launch error", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil)).
+			Return(int64(0), "", false)
+
+		expectedResults := []database.SearchResultWithCursor{
+			{MediaID: 123, SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
+		}
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), "SNES", "supermarioworld", []database.TagFilter(nil)).
+			Return(expectedResults, nil)
+
+		// Cache will be set before platform launch attempt
+		mockMediaDB.On("SetCachedSlugResolution",
+			mock.Anything, "SNES", "supermarioworld", []database.TagFilter(nil),
+			int64(123), mock.AnythingOfType("string")).
+			Return(nil).Maybe()
+
+		// Platform launch fails
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).
+			Return(assert.AnError)
+
+		_, err := cmdSlug(mockPlatform, env)
+
+		require.Error(t, err)
+		mockMediaDB.AssertExpectations(t)
+		mockPlatform.AssertExpectations(t)
+	})
+
+	t.Run("Invalid tag filter format", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/Super Mario World"},
+			AdvArgs: map[string]string{"tags": "invalid_format"},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		// Cache check happens before tag parsing
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
+			Return(int64(0), "", false).Maybe()
+
+		// Tag parsing fails but code continues with search anyway
+		// Also subtitle fallback will kick in
+		mockMediaDB.On("SearchMediaBySlug",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+		mockMediaDB.On("SearchMediaBySlugPrefix",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+		mockMediaDB.On("GetAllSlugsForSystem",
+			mock.Anything, "SNES").
+			Return([]string{}, nil).Maybe()
+
+		_, err := cmdSlug(mockPlatform, env)
+
+		// Tag parsing logs a warning but doesn't fail the command, so no error expected from invalid format
+		// The command will fail because no results are found
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no results found")
+	})
+
+	t.Run("No results found", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/NonexistentGame12345"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, "SNES", "nonexistentgame12345", []database.TagFilter(nil)).
+			Return(int64(0), "", false)
+
+		// All search strategies return empty
+		mockMediaDB.On("SearchMediaBySlug",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+
+		mockMediaDB.On("SearchMediaBySlugPrefix",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+
+		mockMediaDB.On("GetAllSlugsForSystem",
+			mock.Anything, "SNES").
+			Return([]string{"mario", "zelda", "metroid"}, nil).Maybe()
+
+		_, err := cmdSlug(mockPlatform, env)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no results found")
+		mockMediaDB.AssertExpectations(t)
+	})
+}
+
+// TestCmdSlugPerformance tests performance-related scenarios
+func TestCmdSlugPerformance(t *testing.T) {
+	t.Run("Large result set filtering", func(t *testing.T) {
+		mockMediaDB := helpers.NewMockMediaDBI()
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlaylistController := playlists.PlaylistController{}
+		mockConfig := &config.Instance{}
+
+		db := &database.Database{
+			MediaDB: mockMediaDB,
+		}
+
+		cmd := parser.Command{
+			Name:    "launch.slug",
+			Args:    []string{"snes/mario"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Playlist: mockPlaylistController,
+			Cfg:      mockConfig,
+			Database: db,
+			Cmd:      cmd,
+		}
+
+		// Create 100 results to test filtering performance
+		results := make([]database.SearchResultWithCursor, 100)
+		for i := range results {
+			results[i] = database.SearchResultWithCursor{
+				MediaID:  int64(i),
+				SystemID: "SNES",
+				Name:     "Mario Game",
+				Path:     "/test/mario" + string(rune(i)) + ".smc",
+				Tags: []database.TagInfo{
+					{Type: "region", Tag: "usa"},
+				},
+			}
+		}
+
+		mockMediaDB.On("GetCachedSlugResolution",
+			mock.Anything, "SNES", "mario", []database.TagFilter(nil)).
+			Return(int64(0), "", false)
+
+		mockMediaDB.On("SearchMediaBySlug",
+			context.Background(), "SNES", "mario", []database.TagFilter(nil)).
+			Return(results, nil)
+
+		mockMediaDB.On("SetCachedSlugResolution",
+			mock.Anything, "SNES", "mario", []database.TagFilter(nil),
+			mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
+			Return(nil).Maybe()
+
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		result, err := cmdSlug(mockPlatform, env)
+
+		require.NoError(t, err)
+		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		mockMediaDB.AssertExpectations(t)
+		mockPlatform.AssertExpectations(t)
+	})
 }
