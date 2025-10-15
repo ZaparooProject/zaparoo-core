@@ -31,7 +31,7 @@ import (
 
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
-// 9-Stage Normalization Pipeline:
+// 10-Stage Normalization Pipeline:
 //   Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
 //   Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
 //            "Sonic™" → "Sonic", "Pokémon" → "Pokemon"
@@ -39,11 +39,13 @@ import (
 //            Strip leading articles from both main and secondary titles
 //            "Zelda: The Minish Cap" → "Zelda Minish Cap"
 //   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
-//   Stage 5: Symbol and Separator Normalization - "&"→"and", ":"→space, etc.
+//   Stage 5: Symbol and Separator Normalization - "&"→"and", "+"→"plus", "vs"→"versus", etc.
+//            "Mario vs DK" → "Mario versus DK", "Bros."→"Brothers", "Dr."→"Doctor"
 //   Stage 6: Metadata Stripping - "(USA) [!]" removed
 //   Stage 7: Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
-//   Stage 8: Roman Numeral Conversion - "VII" → "7"
-//   Stage 9: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
+//   Stage 8: Ordinal Number Normalization - "1st"→"1", "2nd"→"2", "3rd"→"3"
+//   Stage 9: Roman Numeral Conversion - "VII" → "7"
+//   Stage 10: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)
@@ -58,6 +60,7 @@ var (
 			`バージョン|エディション|ヴァージョン)$`,
 	)
 	versionSuffixRegex          = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
+	ordinalSuffixRegex          = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
 	nonAlphanumRegex            = regexp.MustCompile(`[^a-z0-9]+`)
 	nonAlphanumKeepUnicodeRegex = regexp.MustCompile(
 		`[^a-z0-9` +
@@ -147,6 +150,50 @@ func NormalizeWidth(s string) string {
 	return s
 }
 
+// NormalizePunctuation normalizes Unicode punctuation variants to their ASCII equivalents.
+// This ensures consistent behavior across all pipeline stages, particularly for:
+//   - Conjunction detection (" 'n' " patterns in Stage 5)
+//   - Separator normalization (dash handling in Stage 5)
+//   - Abbreviation expansion (word boundary detection in Stage 5)
+//
+// Normalized characters:
+//   - Curly quotes: ' ' " " → ' "
+//   - Prime marks: ′ ″ → ' "
+//   - Grave/acute: ` ´ → '
+//   - Dashes: – — ― − → -
+//   - Ellipsis: … → ...
+//
+// Examples:
+//   - "Link's Awakening" → "Link's Awakening" (curly apostrophe → straight)
+//   - "Super–Bros." → "Super-Bros." (en dash → hyphen, enables "Bros" expansion)
+//   - "Rock 'n' Roll" → "Rock 'n' Roll" (curly quotes → straight, enables conjunction)
+//
+// This is part of Stage 1 of the normalization pipeline (character-level normalization).
+// Must be called BEFORE Stage 2 (NFKC) and Stage 5 (symbol/separator processing).
+func NormalizePunctuation(s string) string {
+	// Quote and apostrophe variants
+	s = strings.ReplaceAll(s, "\u2018", "'")  // Left single quotation mark
+	s = strings.ReplaceAll(s, "\u2019", "'")  // Right single quotation mark
+	s = strings.ReplaceAll(s, "\u201C", "\"") // Left double quotation mark
+	s = strings.ReplaceAll(s, "\u201D", "\"") // Right double quotation mark
+	s = strings.ReplaceAll(s, "\u2032", "'")  // Prime (minute mark)
+	s = strings.ReplaceAll(s, "\u2033", "\"") // Double prime (second mark)
+	s = strings.ReplaceAll(s, "`", "'")       // Grave accent (often used as quote)
+	s = strings.ReplaceAll(s, "\u00B4", "'")  // Acute accent (often used as apostrophe)
+
+	// Dash variants
+	s = strings.ReplaceAll(s, "\u2013", "-") // En dash
+	s = strings.ReplaceAll(s, "\u2014", "-") // Em dash
+	s = strings.ReplaceAll(s, "\u2015", "-") // Horizontal bar
+	s = strings.ReplaceAll(s, "\u2212", "-") // Minus sign
+	s = strings.ReplaceAll(s, "\u2012", "-") // Figure dash
+
+	// Ellipsis
+	s = strings.ReplaceAll(s, "\u2026", "...") // Horizontal ellipsis
+
+	return s
+}
+
 // NormalizeUnicode performs Unicode normalization with symbol removal and script-aware processing.
 // This combines several operations:
 //   - Removes Unicode symbols (trademark ™, copyright ©, currency $€¥)
@@ -206,8 +253,8 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	// Stage 9: Final Slugification (Multi-Script Aware)
-	// Note: s is already lowercase from Stage 8 (ConvertRomanNumerals)
+	// Stage 10: Final Slugification (Multi-Script Aware)
+	// Note: s is already lowercase from Stage 9 (ConvertRomanNumerals)
 
 	// Create both ASCII-only and Unicode-preserving versions
 	// Note: Even for ASCII strings, we need both slugs for proper script detection logic
@@ -351,7 +398,10 @@ func StripMetadataBrackets(s string) string {
 }
 
 // StripEditionAndVersionSuffixes removes edition/version words and version numbers from game titles.
-// Only strips standalone words ("version", "edition") and their multi-language equivalents.
+// Only strips standalone words ("version", "edition") and their multi-language equivalents when
+// the title has 3 or more words (Latin scripts only). This prevents collisions between "Game" and
+// "Game Edition". CJK and other non-Latin scripts always strip regardless of word count since
+// word boundaries are not space-delimited.
 // Does NOT strip semantic edition markers like "Special", "Ultimate", "Remastered" - these
 // represent different products and users may want to target them specifically.
 //
@@ -363,35 +413,55 @@ func StripMetadataBrackets(s string) string {
 //   - Japanese: バージョン (version), エディション (edition), ヴァージョン (version alt.)
 //
 // Examples:
-//   - "Pokemon Red Version" → "Pokemon Red"
-//   - "Game Edition" → "Game"
-//   - "Title v1.2" → "Title"
-//   - "Spiel Ausgabe" (German) → "Spiel"
-//   - "Game Special Edition" → "Game Special" (Special kept, Edition stripped)
+//   - "Pokemon Red Version" → "Pokemon Red" (3 words, stripped)
+//   - "Game Edition" → "Game Edition" (2 words, preserved)
+//   - "Super Mario Edition" → "Super Mario" (3 words, stripped)
+//   - "ドラゴンクエストバージョン" → "ドラゴンクエスト" (CJK always stripped)
+//   - "Game Special Edition" → "Game Special" (3 words, Edition stripped, Special kept)
 func StripEditionAndVersionSuffixes(s string) string {
+	// Detect script - CJK/non-Latin scripts always strip regardless of word count
+	script := detectScript(s)
+	isCJKOrNonLatin := needsUnicodeSlug(script)
+
 	// Edition suffix words (version, edition, etc.) are detected and tagged in filename_parser.go
 	// as edition:version or edition:edition tags before being stripped here.
-	s = editionSuffixRegex.ReplaceAllString(s, "")
-	s = strings.TrimSpace(s)
+	// For Latin scripts, only strip if title has 3+ words
+	if !isCJKOrNonLatin {
+		wordCount := len(strings.Fields(s))
+		if wordCount > 2 {
+			s = editionSuffixRegex.ReplaceAllString(s, "")
+			s = strings.TrimSpace(s)
+		}
+	} else {
+		s = editionSuffixRegex.ReplaceAllString(s, "")
+		s = strings.TrimSpace(s)
+	}
+
 	// Version numbers (v1.0, v2.3, etc.) are detected and tagged in filename_parser.go
 	// as rev:X-Y tags before being stripped here.
 	s = versionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
+
 	return s
 }
 
 // NormalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
 // Handles conjunctions: "&", " + ", " 'n' " variants → "and"
+// Handles plus symbol: "+" → "plus"
 // Handles separators: ":", "_", "-" → space
 //
 // Examples:
 //   - "Sonic & Knuckles" → "Sonic and Knuckles"
 //   - "Rock + Roll Racing" → "Rock and Roll Racing"
+//   - "Game+" → "Game plus"
 //   - "Zelda:Link" → "Zelda Link"
 //   - "Super_Mario_Bros" → "Super Mario Bros"
 //
 // This is Stage 5 of the normalization pipeline.
 func NormalizeSymbolsAndSeparators(s string) string {
+	// Conjunction normalization
+	// Note: We handle "&" and "+" which may have surrounding spaces
+	s = strings.ReplaceAll(s, " & ", " and ")
 	s = strings.ReplaceAll(s, "&", " and ")
 	s = strings.ReplaceAll(s, " + ", " and ")
 	s = strings.ReplaceAll(s, " 'n' ", " and ")
@@ -399,7 +469,11 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	s = strings.ReplaceAll(s, " n' ", " and ")
 	s = strings.ReplaceAll(s, " n ", " and ")
 
-	return strings.Map(func(r rune) rune {
+	// Plus symbol normalization (for titles like "Game+" or "Mario Kart 8+")
+	s = strings.ReplaceAll(s, "+", " plus ")
+
+	// Separator normalization
+	s = strings.Map(func(r rune) rune {
 		switch r {
 		case ':', '_', '-':
 			return ' '
@@ -407,6 +481,84 @@ func NormalizeSymbolsAndSeparators(s string) string {
 			return r
 		}
 	}, s)
+
+	return s
+}
+
+// ExpandCommonAbbreviations expands common abbreviations found in game titles.
+// Uses word boundaries to avoid false matches (e.g., "versus" won't become "versuersus").
+// Handles two types of abbreviations:
+//  1. Period-required: Only expand when period is present (e.g., "feat." but not "feat")
+//  2. Flexible: Expand with or without period (e.g., "vs" or "vs.")
+//
+// Expanded abbreviations:
+//   - vs/vs. → versus
+//   - bros/bros. → brothers
+//   - dr/dr. → doctor
+//   - mr/mr. → mister
+//   - vol/vol. → volume
+//   - pt/pt. → part
+//   - ft/ft. → featuring
+//   - feat. → featuring (period required; "feat" alone is not expanded)
+//
+// Examples:
+//   - "Mario vs Donkey Kong" → "Mario versus Donkey Kong"
+//   - "Super Mario Bros." → "Super Mario Brothers"
+//   - "Dr. Mario" → "Doctor Mario"
+//   - "Game Vol. 2" → "Game volume 2"
+//   - "Song feat. Artist" → "Song featuring Artist"
+//   - "A great feat" → "A great feat" (not expanded)
+func ExpandCommonAbbreviations(s string) string {
+	// Abbreviations that REQUIRE a period (checked first, before stripping)
+	periodRequired := map[string]string{
+		"feat.": "featuring", // "feat" alone is a real word (achievement)
+		"no.":   "number",    // "no" alone is a word
+	}
+
+	// Abbreviations that work with OR without period
+	withOrWithoutPeriod := map[string]string{
+		"vs":   "versus",    // Strong evidence: fighting games, crossovers
+		"bros": "brothers",  // Strong evidence: Super Mario Bros/Brothers
+		"dr":   "doctor",    // Moderate evidence: Dr. Mario / Doctor Mario
+		"mr":   "mister",    // Similar pattern to dr
+		"vol":  "volume",    // Serialized content: Vol. 2 / Volume 2
+		"pt":   "part",      // Episodic titles: Pt. 2 / Part 2
+		"ft":   "featuring", // Music: ft. Artist / featuring Artist
+		"jr":   "junior",    // Common in game titles: Donkey Kong Jr. / Junior
+		"sr":   "senior",    // Less common but follows same pattern as jr
+	}
+
+	words := strings.Fields(s)
+	for i, word := range words {
+		lowerWord := strings.ToLower(word)
+
+		// First check: period-required abbreviations (before stripping period)
+		if expansion, found := periodRequired[lowerWord]; found {
+			words[i] = expansion
+			continue
+		}
+
+		// Second check: strip period and check general abbreviations
+		lowerWord = strings.TrimSuffix(lowerWord, ".")
+		if expansion, found := withOrWithoutPeriod[lowerWord]; found {
+			words[i] = expansion
+		}
+	}
+
+	return strings.Join(words, " ")
+}
+
+// NormalizeOrdinals removes ordinal suffixes from numbers.
+// This allows "2nd" and "II" to both normalize to "2" for consistent matching.
+//
+// Examples:
+//   - "Street Fighter 2nd Impact" → "Street Fighter 2 Impact"
+//   - "21st Century" → "21 Century"
+//   - "3rd Strike" → "3 Strike"
+//
+// This is Stage 8 of the normalization pipeline (after edition stripping, before roman numerals).
+func NormalizeOrdinals(s string) string {
+	return ordinalSuffixRegex.ReplaceAllString(s, "$1")
 }
 
 // ConvertRomanNumerals converts Roman numerals (II-XIX) to Arabic numbers.
@@ -417,7 +569,7 @@ func NormalizeSymbolsAndSeparators(s string) string {
 //   - "Street Fighter II" → "Street Fighter 2"
 //   - "Mega Man X" → "Mega Man X" (unchanged)
 //
-// This is Stage 8 of the normalization pipeline.
+// This is Stage 9 of the normalization pipeline.
 func ConvertRomanNumerals(s string) string {
 	// Early exit: skip processing if no Roman numeral characters present
 	// Always lowercase before returning since this is the last stage of normalizeInternal
@@ -571,7 +723,7 @@ func isIPronoun(s string, iPos int) bool {
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
-// This function runs Stages 1-8 of SlugifyString but STOPS before Stage 9 (final alphanumeric collapse).
+// This function runs Stages 1-9 of SlugifyString but STOPS before Stage 10 (final alphanumeric collapse).
 //
 // The result preserves spaces between words, enabling word-level operations like:
 //   - Token-based similarity matching
@@ -607,7 +759,7 @@ func NormalizeToWords(input string) []string {
 	return strings.Fields(s)
 }
 
-// normalizeInternal performs Stages 1-8 of the slug normalization pipeline.
+// normalizeInternal performs Stages 1-9 of the slug normalization pipeline.
 // This function is shared by both SlugifyString and NormalizeToWords to eliminate
 // code duplication and ensure consistent normalization behavior.
 //
@@ -617,13 +769,14 @@ func NormalizeToWords(input string) []string {
 //	Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
 //	Stage 3: Secondary Title Decomposition and Article Stripping
 //	Stage 4: Trailing Article Normalization
-//	Stage 5: Symbol and Separator Normalization
+//	Stage 5: Symbol and Separator Normalization (includes abbreviation expansion)
 //	Stage 6: Metadata Stripping
 //	Stage 7: Edition/Version Suffix Stripping
-//	Stage 8: Roman Numeral Conversion (includes lowercasing)
+//	Stage 8: Ordinal Number Normalization (1st→1, 2nd→2, etc.)
+//	Stage 9: Roman Numeral Conversion (includes lowercasing)
 //
 // Returns the normalized string with preserved spaces and lowercase text.
-// The final Stage 9 (character filtering) is applied separately by the calling function.
+// The final Stage 10 (character filtering) is applied separately by the calling function.
 func normalizeInternal(input string) string {
 	s := strings.TrimSpace(input)
 	if s == "" {
@@ -631,8 +784,12 @@ func normalizeInternal(input string) string {
 	}
 
 	if !isASCII(s) {
-		// Stage 1: Width Normalization (skip for ASCII-only strings)
+		// Stage 1a: Width Normalization (skip for ASCII-only strings)
 		s = NormalizeWidth(s)
+
+		// Stage 1b: Punctuation Normalization (must happen before Stage 2 and Stage 5)
+		// This ensures curly quotes/dashes normalize before conjunction/separator detection
+		s = NormalizePunctuation(s)
 
 		// Stage 2: Unicode Normalization (skip for ASCII-only strings)
 		s = NormalizeUnicode(s)
@@ -644,8 +801,9 @@ func normalizeInternal(input string) string {
 	// Stage 4: Trailing Article Removal
 	s = StripTrailingArticle(s)
 
-	// Stage 5: Symbol and Separator Normalization
+	// Stage 5: Symbol and Separator Normalization (includes abbreviation expansion)
 	s = NormalizeSymbolsAndSeparators(s)
+	s = ExpandCommonAbbreviations(s)
 
 	// Stage 6: Metadata Stripping
 	s = StripMetadataBrackets(s)
@@ -654,7 +812,10 @@ func normalizeInternal(input string) string {
 	// Stage 7: Edition/Version Suffix Stripping
 	s = StripEditionAndVersionSuffixes(s)
 
-	// Stage 8: Roman Numeral Conversion
+	// Stage 8: Ordinal Number Normalization
+	s = NormalizeOrdinals(s)
+
+	// Stage 9: Roman Numeral Conversion
 	s = ConvertRomanNumerals(s)
 
 	return strings.TrimSpace(s)

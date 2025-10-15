@@ -151,7 +151,7 @@ func TestSlugifyString_CJKPreservation(t *testing.T) {
 		{
 			name:     "Latin with metadata",
 			input:    "Super Mario Bros (USA) [!]",
-			expected: "supermariobros",
+			expected: "supermariobrothers",
 		},
 		{
 			name:     "Latin with Roman numerals",
@@ -228,13 +228,13 @@ func TestSlugifyString_MixedLanguageMatchingCompatibility(t *testing.T) {
 		{
 			name:        "CJK suffix concatenated for dual searchability",
 			input:       "Super Mario Bros スーパーマリオ",
-			expected:    "supermariobrosスーパーマリオ",
+			expected:    "supermariobrothersスーパーマリオ",
 			description: "Both Latin and CJK portions preserved - searchable by either",
 		},
 		{
 			name:        "CJK prefix concatenated (order preserved)",
 			input:       "スーパーマリオ Super Mario Bros",
-			expected:    "スーパーマリオsupermariobros",
+			expected:    "スーパーマリオsupermariobrothers",
 			description: "Order preserved - both parts searchable",
 		},
 		{

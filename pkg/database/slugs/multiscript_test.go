@@ -56,7 +56,7 @@ func TestSlugifyString_Cyrillic(t *testing.T) {
 		{
 			name:     "Mixed Cyrillic and Latin",
 			input:    "Super Тетрис Bros",
-			expected: "superтетрисbros",
+			expected: "superтетрисbrothers",
 		},
 	}
 

@@ -94,7 +94,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				// MediaTitle insert fails with non-UNIQUE error
 				mockDB.On("InsertMediaTitle", database.MediaTitle{
 					DBID:       int64(1),
-					Slug:       "supermariobros",
+					Slug:       "supermariobrothers",
 					Name:       "Super Mario Bros",
 					SystemDBID: int64(1),
 				}).Return(database.MediaTitle{}, assert.AnError).Once()
@@ -118,14 +118,14 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				}
 				mockDB.On("InsertMediaTitle", database.MediaTitle{
 					DBID:       int64(1),
-					Slug:       "supermariobros",
+					Slug:       "supermariobrothers",
 					Name:       "Super Mario Bros",
 					SystemDBID: int64(1),
 				}).Return(database.MediaTitle{}, constraintErr).Once()
 
 				// Lookup of existing title fails
 				mockDB.On("FindMediaTitle", database.MediaTitle{
-					Slug:       "supermariobros",
+					Slug:       "supermariobrothers",
 					SystemDBID: int64(1),
 				}).Return(database.MediaTitle{}, assert.AnError).Once()
 			},
@@ -144,7 +144,7 @@ func TestAddMediaPath_ErrorPropagation_Regression(t *testing.T) {
 				// MediaTitle insert succeeds
 				mockDB.On("InsertMediaTitle", database.MediaTitle{
 					DBID:       int64(1),
-					Slug:       "supermariobros",
+					Slug:       "supermariobrothers",
 					Name:       "Super Mario Bros",
 					SystemDBID: int64(1),
 				}).Return(database.MediaTitle{DBID: 1}, nil).Once()
@@ -240,7 +240,7 @@ func TestAddMediaPath_SuccessfulRecovery_Regression(t *testing.T) {
 	// MediaTitle insert succeeds with recovered system ID
 	mockDB.On("InsertMediaTitle", database.MediaTitle{
 		DBID:       int64(1),
-		Slug:       "supermariobros", // Slugified version (dashes removed)
+		Slug:       "supermariobrothers", // Slugified version (dashes removed)
 		Name:       "Super Mario Bros",
 		SystemDBID: int64(5), // Using recovered system ID
 	}).Return(database.MediaTitle{DBID: 1}, nil).Once()

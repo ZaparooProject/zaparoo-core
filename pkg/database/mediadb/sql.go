@@ -2605,7 +2605,9 @@ func sqlSearchMediaBySlug(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
-	args = append(args, systemID, slug)
+	// Slugify the input slug to match how slugs are stored in the database
+	slugified := slugs.SlugifyString(slug)
+	args = append(args, systemID, slugified)
 
 	whereConditions := []string{
 		"Systems.SystemID = ?",
@@ -2750,7 +2752,9 @@ func sqlSearchMediaBySlugPrefix(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
-	args = append(args, systemID, slugPrefix+"%")
+	// Slugify the input slug prefix to match how slugs are stored in the database
+	slugified := slugs.SlugifyString(slugPrefix)
+	args = append(args, systemID, slugified+"%")
 
 	whereConditions := []string{
 		"Systems.SystemID = ?",

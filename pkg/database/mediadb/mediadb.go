@@ -603,25 +603,6 @@ func (db *MediaDB) SearchMediaPathExact(systems []systemdefs.System, query strin
 	return sqlSearchMediaPathExact(db.ctx, db.sql, systems, query)
 }
 
-// SearchMediaPathWords returns indexed names that include every word in a query (case-insensitive).
-func (db *MediaDB) SearchMediaPathWords(systems []systemdefs.System, query string) ([]database.SearchResult, error) {
-	if db.sql == nil {
-		return make([]database.SearchResult, 0), ErrNullSQL
-	}
-	qWords := strings.Fields(strings.ToLower(query))
-	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, qWords)
-}
-
-func (db *MediaDB) SearchMediaPathWordsWithCursor(
-	ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
-) ([]database.SearchResultWithCursor, error) {
-	if db.sql == nil {
-		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
-	}
-	qWords := strings.Fields(strings.ToLower(query))
-	return sqlSearchMediaPathPartsWithCursor(ctx, db.sql, systems, qWords, cursor, limit)
-}
-
 func (db *MediaDB) SearchMediaWithFilters(
 	ctx context.Context,
 	filters *database.SearchFilters,

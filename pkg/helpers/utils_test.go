@@ -969,12 +969,12 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "path_with_spaces",
 			input:    "/games/Super Mario Bros.sfc",
-			expected: "supermariobros",
+			expected: "supermariobrothers",
 		},
 		{
 			name:     "path_with_parentheses",
 			input:    "/roms/Mario Bros (USA).nes",
-			expected: "mariobros",
+			expected: "mariobrothers",
 		},
 		{
 			name:     "path_with_brackets",

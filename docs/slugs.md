@@ -22,7 +22,7 @@ The system is built around **two primary workflows** supported by shared normali
 ### Shared Libraries
 
 - **Slug Normalizer** (`pkg/database/slugs/`) - Canonical slug generation and normalization
-  - `slugify.go` - Core 9-stage normalization pipeline
+  - `slugify.go` - Core 10-stage normalization pipeline
   - `scripts.go` - Script detection (CJK, Cyrillic, Arabic, etc.)
   - `normalization.go` - Script-specific normalization rules
 - **Matcher** (`pkg/database/matcher/`) - Resolution-specific matching algorithms
@@ -46,7 +46,7 @@ The system is built around **two primary workflows** supported by shared normali
 
 **Output:** Normalized slug string (e.g., `"legendofzeldaocarinaoftime"`)
 
-### Normalization Pipeline
+### 10-Stage Normalization Pipeline
 
 #### Stage 1: Width Normalization
 
@@ -199,9 +199,23 @@ Removes standalone edition/version words and version numbers. **Does NOT strip s
 - `"Spiel Ausgabe"` (German) → `"Spiel"` (German edition word stripped)
 - `"Game Special Edition"` → `"Game Special"` (Special kept, Edition stripped)
 - `"Final Fantasy vVII"` → `"Final Fantasy"` (version number stripped)
-- `"Street Fighter II Champion Edition"` → `"Street Fighter 2 Champion"` (Edition stripped, Roman numeral converted in Stage 8)
+- `"Street Fighter II Champion Edition"` → `"Street Fighter 2 Champion"` (Edition stripped, Roman numeral converted in Stage 9)
 
-#### Stage 8: Roman Numeral Conversion
+#### Stage 8: Ordinal Number Normalization
+
+**Pattern (via `normalizeOrdinals()`):**
+
+- `\b(\d+)(?:st|nd|rd|th)\b` → `"$1"`
+
+Removes ordinal suffixes from numbers. This allows "2nd" and "II" to both normalize to "2" for consistent matching.
+
+**Examples:**
+
+- `"Street Fighter 2nd Impact"` → `"Street Fighter 2 Impact"`
+- `"21st Century"` → `"21 Century"`
+- `"3rd Strike"` → `"3 Strike"`
+
+#### Stage 9: Roman Numeral Conversion
 
 **Patterns (via `convertRomanNumerals()`):**
 
@@ -235,7 +249,7 @@ Converts Roman numerals (II-XIX) to Arabic numbers:
 
 **Note:** Order matters - longer numerals must be matched first to avoid partial replacements. X is intentionally excluded to preserve game titles like "Mega Man X" and "MegaRace X".
 
-#### Stage 9: Final Slugification (CJK-Aware)
+#### Stage 10: Final Slugification (CJK-Aware)
 
 **Patterns:**
 
@@ -280,46 +294,49 @@ Running slugification multiple times produces the same result. This holds true f
 #### Example 1: Latin Title with Metadata
 
 ```
-Input:    "The Legend of Zelda: The Minish Cap (USA) [!]"
-Stage 1:  "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
-Stage 2:  "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
-Stage 3:  "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
-Stage 4:  "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
-Stage 5:  "Legend of Zelda Minish Cap (USA) [!]" (no symbols/separators to normalize)
-Stage 6:  "Legend of Zelda Minish Cap" (removed "(USA) [!]")
-Stage 7:  "Legend of Zelda Minish Cap" (no edition suffix)
-Stage 8:  "Legend of Zelda Minish Cap" (no Roman numerals)
-Stage 9:  "legendofzeldaminishcap" (ASCII slug - no CJK detected)
+Input:     "The Legend of Zelda: The Minish Cap (USA) [!]"
+Stage 1:   "The Legend of Zelda: The Minish Cap (USA) [!]" (no fullwidth chars)
+Stage 2:   "The Legend of Zelda: The Minish Cap (USA) [!]" (unicode normalized)
+Stage 3:   "Legend of Zelda Minish Cap (USA) [!]" (split on ":", stripped "The" from both parts)
+Stage 4:   "Legend of Zelda Minish Cap (USA) [!]" (no trailing article)
+Stage 5:   "Legend of Zelda Minish Cap (USA) [!]" (no symbols/separators to normalize)
+Stage 6:   "Legend of Zelda Minish Cap" (removed "(USA) [!]")
+Stage 7:   "Legend of Zelda Minish Cap" (no edition suffix)
+Stage 8:   "Legend of Zelda Minish Cap" (no ordinal numbers)
+Stage 9:   "Legend of Zelda Minish Cap" (no Roman numerals)
+Stage 10:  "legendofzeldaminishcap" (ASCII slug - no CJK detected)
 ```
 
 #### Example 2: Pure CJK Title
 
 ```
-Input:    "ドラゴンクエストVII (Japan)"
-Stage 1:  "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
-Stage 2:  "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
-Stage 3:  "ドラゴンクエストVII (Japan)" (no secondary title)
-Stage 4:  "ドラゴンクエストVII (Japan)" (no trailing article)
-Stage 5:  "ドラゴンクエストVII (Japan)" (no symbols/separators to normalize)
-Stage 6:  "ドラゴンクエストVII" (removed "(Japan)")
-Stage 7:  "ドラゴンクエストVII" (no edition suffix)
-Stage 8:  "ドラゴンクエスト7" (VII → 7)
-Stage 9:  "ドラゴンクエスト7" (Unicode slug - CJK detected)
+Input:     "ドラゴンクエストVII (Japan)"
+Stage 1:   "ドラゴンクエストVII (Japan)" (halfwidth katakana normalized to fullwidth)
+Stage 2:   "ドラゴンクエストVII (Japan)" (NFC applied, NFKC skipped for CJK)
+Stage 3:   "ドラゴンクエストVII (Japan)" (no secondary title)
+Stage 4:   "ドラゴンクエストVII (Japan)" (no trailing article)
+Stage 5:   "ドラゴンクエストVII (Japan)" (no symbols/separators to normalize)
+Stage 6:   "ドラゴンクエストVII" (removed "(Japan)")
+Stage 7:   "ドラゴンクエストVII" (no edition suffix)
+Stage 8:   "ドラゴンクエストVII" (no ordinal numbers)
+Stage 9:   "ドラゴンクエスト7" (VII → 7)
+Stage 10:  "ドラゴンクエスト7" (Unicode slug - CJK detected)
 ```
 
 #### Example 3: Mixed Latin + CJK Title
 
 ```
-Input:    "Street Fighter ストリートファイター (USA)"
-Stage 1:  "Street Fighter ストリートファイター (USA)" (width normalized)
-Stage 2:  "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
-Stage 3:  "Street Fighter ストリートファイター (USA)" (no secondary title)
-Stage 4:  "Street Fighter ストリートファイター (USA)" (no trailing article)
-Stage 5:  "Street Fighter ストリートファイター (USA)" (no symbols/separators to normalize)
-Stage 6:  "Street Fighter ストリートファイター" (removed "(USA)")
-Stage 7:  "Street Fighter ストリートファイター" (no edition suffix)
-Stage 8:  "Street Fighter ストリートファイター" (no Roman numerals)
-Stage 9:  "streetfighterストリートファイター" (Unicode slug - contains both Latin + CJK!)
+Input:     "Street Fighter ストリートファイター (USA)"
+Stage 1:   "Street Fighter ストリートファイター (USA)" (width normalized)
+Stage 2:   "Street Fighter ストリートファイター (USA)" (NFKC for Latin, NFC for CJK)
+Stage 3:   "Street Fighter ストリートファイター (USA)" (no secondary title)
+Stage 4:   "Street Fighter ストリートファイター (USA)" (no trailing article)
+Stage 5:   "Street Fighter ストリートファイター (USA)" (no symbols/separators to normalize)
+Stage 6:   "Street Fighter ストリートファイター" (removed "(USA)")
+Stage 7:   "Street Fighter ストリートファイター" (no edition suffix)
+Stage 8:   "Street Fighter ストリートファイター" (no ordinal numbers)
+Stage 9:   "Street Fighter ストリートファイター" (no Roman numerals)
+Stage 10:  "streetfighterストリートファイター" (Unicode slug - contains both Latin + CJK!)
 ```
 
 ---

@@ -146,7 +146,7 @@ func TestSlugifyString_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Mixed emoji and Latin",
 			input:    "Super 🎮 Mario Bros",
-			expected: "supermariobros",
+			expected: "supermariobrothers",
 		},
 		{
 			name:     "Mathematical symbols",

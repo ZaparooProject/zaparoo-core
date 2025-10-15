@@ -293,73 +293,6 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	assert.Empty(t, results)
 }
 
-func TestMediaDB_SearchMediaPathWords_Integration(t *testing.T) {
-	t.Parallel()
-	mediaDB, cleanup := setupTempMediaDB(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// Insert test data
-	err := mediaDB.BeginTransaction()
-	require.NoError(t, err)
-
-	nesSystem, err := systemdefs.GetSystem("NES")
-	require.NoError(t, err)
-
-	system := database.System{
-		SystemID: nesSystem.ID,
-		Name:     "NES",
-	}
-	insertedSystem, err := mediaDB.InsertSystem(system)
-	require.NoError(t, err)
-
-	testGames := []struct {
-		name string
-		path string
-	}{
-		{"Super Mario Bros", "/roms/nes/Super Mario Bros.nes"},
-		{"Super Mario Bros 2", "/roms/nes/Super Mario Bros 2.nes"},
-		{"Mario is Missing", "/roms/nes/Mario is Missing.nes"},
-	}
-
-	for _, game := range testGames {
-		title := database.MediaTitle{
-			SystemDBID: insertedSystem.DBID,
-			Slug:       slugs.SlugifyString(game.name),
-			Name:       game.name,
-		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
-		require.NoError(t, titleErr)
-
-		media := database.Media{
-			SystemDBID:     insertedSystem.DBID,
-			MediaTitleDBID: insertedTitle.DBID,
-			Path:           game.path,
-		}
-
-		_, mediaErr := mediaDB.InsertMedia(media)
-		require.NoError(t, mediaErr)
-	}
-
-	err = mediaDB.CommitTransaction()
-	require.NoError(t, err)
-
-	// Test word search - should find all games with both "mario" and "bros"
-	results, err := mediaDB.SearchMediaPathWords([]systemdefs.System{*nesSystem}, "mario bros")
-	require.NoError(t, err)
-	assert.Len(t, results, 2)
-
-	// Test word search with cursor
-	var cursor *int64
-	resultsWithCursor, err := mediaDB.SearchMediaPathWordsWithCursor(
-		ctx, []systemdefs.System{*nesSystem}, "mario", cursor, 2,
-	)
-	require.NoError(t, err)
-	assert.Len(t, resultsWithCursor, 2)
-	assert.Positive(t, resultsWithCursor[0].MediaID)
-}
-
 func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
@@ -967,24 +900,24 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	assert.Len(t, results, 1) // Only Super Mario World matches USA AND platform
 
 	// Test 6: Slug search across different systems
-	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "supermariobros", nil)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "supermariobrothers", nil)
 	require.NoError(t, err)
 	assert.Len(t, results, 1) // Only Super Mario Bros (exact match, not Super Mario Bros 2)
 
 	// Test 7: Slug search with dots in name (Dr. Mario)
-	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "drmario", nil)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "Dr. Mario", nil)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Dr. Mario", results[0].Name)
 
 	// Test 8: Slug search with dots and special characters (Ms. Pac-Man)
-	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "mspacman", nil)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "Ms. Pac-Man", nil)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Ms. Pac-Man", results[0].Name)
 
 	// Test 9: Slug search with complex title (Zelda)
-	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "legendofzeldalinktothepast", nil)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "SNES", "The Legend of Zelda Link to the Past", nil)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "The Legend of Zelda: A Link to the Past", results[0].Name)
@@ -1001,7 +934,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 
 	// Test 12: Verify tags are populated in results
 	tags = []database.TagFilter{{Type: "genre", Value: "puzzle"}}
-	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "drmario", tags)
+	results, err = mediaDB.SearchMediaBySlug(ctx, "NES", "Doctor Mario", tags)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Len(t, results[0].Tags, 2) // region:usa and genre:puzzle

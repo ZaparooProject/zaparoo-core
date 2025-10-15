@@ -287,10 +287,6 @@ type MediaDBI interface {
 	TruncateSystems(systemIDs []string) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
-	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
-	SearchMediaPathWordsWithCursor(
-		ctx context.Context, systems []systemdefs.System, query string, cursor *int64, limit int,
-	) ([]SearchResultWithCursor, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []TagFilter,

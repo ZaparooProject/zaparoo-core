@@ -721,7 +721,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			path:                "/roms/nes/playlists/favorites/01. Super Mario Bros (USA).nes",
 			stripLeadingNumbers: true,
 			expectedTitle:       "Super Mario Bros",
-			expectedSlug:        "supermariobros",
+			expectedSlug:        "supermariobrothers",
 		},
 		{
 			name:                "numbered playlist - strips leading number with dash",
@@ -745,7 +745,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			path:                "/roms/nes/01. Super Mario Bros (USA).nes",
 			stripLeadingNumbers: false,
 			expectedTitle:       "01. Super Mario Bros",
-			expectedSlug:        "01supermariobros",
+			expectedSlug:        "01supermariobrothers",
 		},
 
 		// Games that naturally start with numbers (always preserved regardless of context)
@@ -771,7 +771,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			path:                "/roms/snes/7th Saga (USA).snes",
 			stripLeadingNumbers: true,
 			expectedTitle:       "7th Saga",
-			expectedSlug:        "7thsaga",
+			expectedSlug:        "7saga",
 		},
 
 		// Leading article with numbered playlist
@@ -799,7 +799,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			path:                "/roms/nes/01 - Super Mario Bros (USA) (Rev 1) [!].nes",
 			stripLeadingNumbers: true,
 			expectedTitle:       "Super Mario Bros",
-			expectedSlug:        "supermariobros",
+			expectedSlug:        "supermariobrothers",
 		},
 		{
 			name:                "edition suffix removed with slug generation",
