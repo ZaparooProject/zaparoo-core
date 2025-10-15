@@ -77,7 +77,7 @@ var (
 
 // romanNumeralReplacementTable defines pattern-to-number mappings for roman numeral conversion.
 // - X is intentionally omitted to avoid avoid games like "Mega Man X" being converted.
-// - I is handled as a special case in ConvertRomanNumerals.
+// - I is handled as a special case in ConvertRomanNumerals with pronoun disambiguation.
 // This is basically a best effort approach to cover common misspellings but not need to have
 // some exhausting full roman numeral parser.
 var romanNumeralReplacementTable = []struct{ pattern, replacement string }{
@@ -98,6 +98,23 @@ var romanNumeralReplacementTable = []struct{ pattern, replacement string }{
 	{"V", "5"},
 	{"III", "3"},
 	{"II", "2"},
+}
+
+// iPronounVerbs is a map of common verbs that appear adjacent to the pronoun "I".
+// Used for bidirectional disambiguation between English pronoun "I" and Roman numeral "I".
+// These verbs can appear either before ("am I", "can I") or after ("I want", "I die") the pronoun.
+// Performance: O(1) map lookup, only checked when standalone "I" is encountered.
+var iPronounVerbs = map[string]bool{
+	// Auxiliary/modal verbs (can appear on either side of "I")
+	"AM": true, "WAS": true, "WILL": true, "CAN": true, "COULD": true,
+	"SHOULD": true, "WOULD": true, "MAY": true, "MIGHT": true, "MUST": true,
+	"HAVE": true, "HAD": true, "DO": true, "DID": true,
+
+	// Common action verbs in game titles (typically follow "I")
+	"WANT": true, "WANNA": true, "NEED": true, "LOVE": true, "LIKE": true,
+	"KNOW": true, "THINK": true, "SEE": true, "GOT": true, "GOTTA": true,
+	"DIE": true, "LIVE": true, "PLAY": true, "KILL": true,
+	"KEEP": true, "BECAME": true, "BECOME": true, "DREAM": true,
 }
 
 // isASCII checks if a string contains only ASCII characters (bytes < 128).
@@ -445,11 +462,18 @@ func ConvertRomanNumerals(s string) string {
 			}
 		}
 
-		// Special case for single "I" - only match at word boundary
+		// Special case for single "I" - disambiguate pronoun vs numeral
 		if !matched && upperS[i] == 'I' {
 			endIdx := i + 1
 			if endIdx == len(upperS) || !isWordChar(rune(upperS[endIdx])) {
-				result.WriteString("1")
+				// At word boundary - check if it's a pronoun or numeral
+				if isIPronoun(upperS, i) {
+					// It's a pronoun (e.g., "When I Die", "Where Am I?") - keep as "i"
+					result.WriteByte('I')
+				} else {
+					// It's a numeral (e.g., "Final Fantasy I", "Part I") - convert to "1"
+					result.WriteString("1")
+				}
 				i++
 				matched = true
 			}
@@ -469,6 +493,81 @@ func ConvertRomanNumerals(s string) string {
 func isWordChar(r rune) bool {
 	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
 		(r >= '0' && r <= '9') || r == '_' || unicode.IsLetter(r)
+}
+
+// isIPronoun determines if a standalone "I" should be treated as a pronoun rather than
+// a Roman numeral using bidirectional linguistic pattern matching.
+//
+// Pronoun indicators:
+//   - Followed by verbs: "I want", "I can", "I die"
+//   - Preceded by verbs: "am I", "can I", "should I"
+//   - Followed by punctuation: "Where am I?", "Can I!"
+//
+// Numeral indicators (default):
+//   - End of title: "Final Fantasy I", "Part I"
+//   - Followed by non-verb: "Game I:", "Chapter I -"
+//   - No verb context: "Puzzle I"
+//
+// Performance: Only called when standalone "I" at word boundary is encountered.
+// Uses O(1) map lookup and simple character checks. Zero allocations in hot path.
+func isIPronoun(s string, iPos int) bool {
+	// ==================== Check Following Context ====================
+	// Skip whitespace after "I"
+	pos := iPos + 1
+	for pos < len(s) && s[pos] == ' ' {
+		pos++
+	}
+
+	if pos < len(s) {
+		nextChar := rune(s[pos])
+
+		// Punctuation check: "Where Am I?" or "Can I!" → pronoun
+		if nextChar == '?' || nextChar == '!' {
+			return true
+		}
+
+		// Extract the following word
+		wordStart := pos
+		for pos < len(s) && isWordChar(rune(s[pos])) {
+			pos++
+		}
+
+		// Verb check: "I want", "I die" → pronoun
+		if pos > wordStart {
+			followingWord := s[wordStart:pos]
+			if iPronounVerbs[followingWord] {
+				return true
+			}
+		}
+	}
+
+	// ==================== Check Preceding Context ====================
+	// Skip whitespace before "I"
+	pos = iPos - 1
+	for pos >= 0 && s[pos] == ' ' {
+		pos--
+	}
+
+	// No preceding word (start of string) → assume numeral
+	if pos < 0 {
+		return false
+	}
+
+	// Extract the preceding word
+	// pos is currently at the last character of the previous word
+	wordEnd := pos + 1
+	for pos >= 0 && isWordChar(rune(s[pos])) {
+		pos--
+	}
+	wordStart := pos + 1
+
+	// Verb check: "am I", "can I", "should I" → pronoun
+	if wordEnd > wordStart {
+		precedingWord := s[wordStart:wordEnd]
+		return iPronounVerbs[precedingWord]
+	}
+
+	return false
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.

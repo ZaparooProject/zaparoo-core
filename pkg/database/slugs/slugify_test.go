@@ -2049,14 +2049,14 @@ func TestConvertRomanNumerals_EdgeCases(t *testing.T) {
 			expected: "   ",
 		},
 		{
-			name:     "single_i_at_start",
+			name:     "single_i_pronoun_at_start",
 			input:    "I am",
-			expected: "1 am",
+			expected: "i am", // Pronoun: followed by verb "am"
 		},
 		{
-			name:     "single_i_at_end",
+			name:     "single_i_numeral_at_end",
 			input:    "Part I",
-			expected: "part 1",
+			expected: "part 1", // Numeral: at end of title
 		},
 
 		// Real-world game titles
@@ -2082,6 +2082,184 @@ func TestConvertRomanNumerals_EdgeCases(t *testing.T) {
 			t.Parallel()
 			result := ConvertRomanNumerals(tt.input)
 			assert.Equal(t, tt.expected, result, "ConvertRomanNumerals failed for input: %q", tt.input)
+		})
+	}
+}
+
+// TestConvertRomanNumerals_IPronounDisambiguation tests the disambiguation logic
+// that distinguishes between the English pronoun "I" and Roman numeral "I".
+// This uses linguistic patterns: pronouns are followed by verbs or sentence punctuation,
+// while numerals appear as identifiers at the end of titles.
+func TestConvertRomanNumerals_IPronounDisambiguation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Pronoun cases: "I" followed by verbs
+		{
+			name:     "pronoun_i_want",
+			input:    "I Want To Be The Guy",
+			expected: "i want to be the guy",
+		},
+		{
+			name:     "pronoun_i_wanna",
+			input:    "I Wanna Be The Guy",
+			expected: "i wanna be the guy",
+		},
+		{
+			name:     "pronoun_when_i_die",
+			input:    "When I Die",
+			expected: "when i die",
+		},
+		{
+			name:     "pronoun_can_i_keep",
+			input:    "Can I Keep Him",
+			expected: "can i keep him",
+		},
+		{
+			name:     "pronoun_if_i_could",
+			input:    "If I Could Fly",
+			expected: "if i could fly",
+		},
+		{
+			name:     "pronoun_i_am",
+			input:    "I Am Alive",
+			expected: "i am alive",
+		},
+		{
+			name:     "pronoun_i_have",
+			input:    "I Have No Mouth",
+			expected: "i have no mouth",
+		},
+		{
+			name:     "pronoun_i_know",
+			input:    "I Know What You Did",
+			expected: "i know what you did",
+		},
+		{
+			name:     "pronoun_i_see",
+			input:    "I See You",
+			expected: "i see you",
+		},
+		{
+			name:     "pronoun_i_will",
+			input:    "I Will Survive",
+			expected: "i will survive",
+		},
+
+		// Pronoun cases: "I" followed by sentence punctuation
+		{
+			name:     "pronoun_question_where_am_i",
+			input:    "Where Am I?",
+			expected: "where am i?",
+		},
+		{
+			name:     "pronoun_question_who_am_i",
+			input:    "Who Am I?",
+			expected: "who am i?",
+		},
+		{
+			name:     "pronoun_exclamation_can_i",
+			input:    "Can I!",
+			expected: "can i!",
+		},
+		{
+			name:     "pronoun_question_am_i",
+			input:    "Am I Dreaming?",
+			expected: "am i dreaming?",
+		},
+
+		// Numeral cases: "I" at end of title
+		{
+			name:     "numeral_final_fantasy_i",
+			input:    "Final Fantasy I",
+			expected: "final fantasy 1",
+		},
+		{
+			name:     "numeral_dragon_quest_i",
+			input:    "Dragon Quest I",
+			expected: "dragon quest 1",
+		},
+		{
+			name:     "numeral_phantasy_star_i",
+			input:    "Phantasy Star I",
+			expected: "phantasy star 1",
+		},
+		{
+			name:     "numeral_part_i",
+			input:    "Part I",
+			expected: "part 1",
+		},
+		{
+			name:     "numeral_chapter_i",
+			input:    "Chapter I",
+			expected: "chapter 1",
+		},
+		{
+			name:     "numeral_volume_i",
+			input:    "Volume I",
+			expected: "volume 1",
+		},
+
+		// Numeral cases: "I" followed by colon (subtitle)
+		{
+			name:     "numeral_game_i_subtitle",
+			input:    "Game I: The Beginning",
+			expected: "game 1: the beginning",
+		},
+		{
+			name:     "numeral_saga_i_subtitle",
+			input:    "Saga I: Origins",
+			expected: "saga 1: origins",
+		},
+
+		// Numeral cases: "I" followed by period
+		{
+			name:     "numeral_part_i_period",
+			input:    "Part I.",
+			expected: "part 1.",
+		},
+
+		// Edge cases: now correctly handled by checking word BEFORE "I"
+		{
+			name:     "edge_where_am_i_no_question",
+			input:    "Where Am I",
+			expected: "where am i", // Pronoun: "I" preceded by verb "am"
+		},
+		{
+			name:     "edge_who_am_i_no_question",
+			input:    "Who Am I",
+			expected: "who am i", // Pronoun: "I" preceded by verb "am"
+		},
+
+		// Mixed cases in full game titles
+		{
+			name:     "mixed_title_with_pronoun",
+			input:    "The Story of How I Became a Hero",
+			expected: "the story of how i became a hero",
+		},
+		{
+			name:     "mixed_title_with_numeral",
+			input:    "The Legend Series I",
+			expected: "the legend series 1",
+		},
+
+		// Multiple I's in one title
+		{
+			name:     "multiple_i_mixed",
+			input:    "When I Play Game I",
+			expected: "when i play game 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ConvertRomanNumerals(tt.input)
+			assert.Equal(t, tt.expected, result, "I pronoun/numeral disambiguation failed for input: %q", tt.input)
 		})
 	}
 }

@@ -33,11 +33,11 @@ import (
 )
 
 type DATEntry struct {
-	DATFile     string
-	SystemID    string
+	DATFile      string
+	SystemID     string
 	OriginalName string
-	Slug        string
-	Key         string // "SystemID/slug"
+	Slug         string
+	Key          string // "SystemID/slug"
 }
 
 func TestSlugConflicts_AllDATs(t *testing.T) {
@@ -96,11 +96,11 @@ func TestSlugConflicts_AllDATs(t *testing.T) {
 			key := fmt.Sprintf("%s/%s", systemID, slug)
 
 			entry := DATEntry{
-				DATFile:     filepath.Base(path),
-				SystemID:    systemID,
+				DATFile:      filepath.Base(path),
+				SystemID:     systemID,
 				OriginalName: originalName,
-				Slug:        slug,
-				Key:         key,
+				Slug:         slug,
+				Key:          key,
 			}
 
 			indexMap[key] = append(indexMap[key], entry)
@@ -304,16 +304,16 @@ func reportFalseCollisions(t *testing.T, conflicts map[string][]DATEntry) {
 
 	// Collision categories
 	type collision struct {
-		key              string
-		systemID         string
-		titleA           string
-		titleB           string
+		key               string
+		systemID          string
+		titleA            string
+		titleB            string
 		intermediateSlugA string
 		intermediateSlugB string
 	}
 
-	var genuineCollisions []collision      // Different intermediate slugs -> TRUE BUG
-	var expectedCollisions int             // Same intermediate slug -> version/edition stripping working
+	var genuineCollisions []collision // Different intermediate slugs -> TRUE BUG
+	var expectedCollisions int        // Same intermediate slug -> version/edition stripping working
 
 	for key, entries := range conflicts {
 		// Extract system ID from key
@@ -336,10 +336,10 @@ func reportFalseCollisions(t *testing.T, conflicts map[string][]DATEntry) {
 					// GENUINE COLLISION: Different titles (after bracket removal)
 					// are mapping to the same final slug. This is a bug!
 					genuineCollisions = append(genuineCollisions, collision{
-						key:              key,
-						systemID:         systemID,
-						titleA:           entries[i].OriginalName,
-						titleB:           entries[j].OriginalName,
+						key:               key,
+						systemID:          systemID,
+						titleA:            entries[i].OriginalName,
+						titleB:            entries[j].OriginalName,
 						intermediateSlugA: intermediateA,
 						intermediateSlugB: intermediateB,
 					})
@@ -649,11 +649,11 @@ func isProperSubset(setA, setB []string) bool {
 
 // UnmappedTagInfo tracks information about an unmapped tag
 type UnmappedTagInfo struct {
-	Tag        string            // The normalized tag value
-	Count      int               // Number of times this tag appears
-	Systems    map[string]int    // System ID -> count of occurrences in that system
-	Examples   []string          // Example filenames containing this tag (max 5)
-	DATFiles   map[string]bool   // DAT files where this tag appears
+	Tag      string          // The normalized tag value
+	Count    int             // Number of times this tag appears
+	Systems  map[string]int  // System ID -> count of occurrences in that system
+	Examples []string        // Example filenames containing this tag (max 5)
+	DATFiles map[string]bool // DAT files where this tag appears
 }
 
 // TestUnmappedTags_AllDATs analyzes all DAT files to identify tags that are not mapped
@@ -842,8 +842,8 @@ func TestUnmappedTags_AllDATs(t *testing.T) {
 	t.Logf("\n=== UNMAPPED TAGS BY SYSTEM ===\n")
 
 	type systemStat struct {
-		systemID    string
-		uniqueTags  int
+		systemID   string
+		uniqueTags int
 	}
 	systemStats := make([]systemStat, 0, len(systemUnmappedCounts))
 	for systemID, tagSet := range systemUnmappedCounts {
@@ -861,4 +861,462 @@ func TestUnmappedTags_AllDATs(t *testing.T) {
 	t.Logf("\n=== SUMMARY ===")
 	t.Logf("Found %d unique unmapped tags across all systems.", len(unmappedTags))
 	t.Logf("Consider adding mappings for the most common tags to improve tag coverage.")
+}
+
+// IType represents the classification of how "I" was handled in slugification
+type IType int
+
+const (
+	ITypeCorrectPronoun IType = iota // Pronoun kept as "i" - correct
+	ITypeCorrectNumeral              // Numeral converted to "1" - correct
+	ITypeFalsePositive               // Pronoun converted to "1" - WRONG
+	ITypeFalseNegative               // Numeral kept as "i" - WRONG
+	ITypeAmbiguous                   // Cannot determine - needs manual review
+	ITypeNoConversion                // "I" was not in word position or no "I" found
+)
+
+// ITitleAnalysis contains analysis of a single title with "I"
+type ITitleAnalysis struct {
+	OriginalTitle string
+	Slug          string
+	SystemID      string
+	DATFile       string
+	Type          IType
+	WasConverted  bool   // Was "I" converted to "1" in slug?
+	Reason        string // Why was it classified this way
+}
+
+// TestRomanNumeralI_AllDATs analyzes all 450,000+ game titles to validate
+// the Roman numeral "I" vs pronoun "I" disambiguation logic
+func TestRomanNumeralI_AllDATs(t *testing.T) {
+	datsDir := filepath.Join("dats")
+
+	if _, err := os.Stat(datsDir); os.IsNotExist(err) {
+		t.Skipf("DATs directory not found: %s", datsDir)
+	}
+
+	// Track all titles containing "I"
+	var analyses []ITitleAnalysis
+	totalTitles := 0
+	titlesWithI := 0
+	processedDATs := 0
+	skippedDATs := 0
+
+	// Walk through all DAT files
+	err := filepath.Walk(datsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() || !strings.HasSuffix(path, ".dat") {
+			return nil
+		}
+
+		// Parse DAT file
+		dat, err := ParseDATFile(path)
+		if err != nil {
+			t.Logf("Skipping %s: %v", filepath.Base(path), err)
+			skippedDATs++
+			return nil
+		}
+
+		// Match system ID
+		systemID, err := MatchSystemID(dat.Header.Name)
+		if err != nil {
+			t.Logf("No system match for %s (%s)", filepath.Base(path), dat.Header.Name)
+			skippedDATs++
+			return nil
+		}
+
+		processedDATs++
+		datFileName := filepath.Base(path)
+
+		// Process each game in the DAT
+		for _, game := range dat.Games {
+			originalName := game.Name
+			if originalName == "" {
+				originalName = game.Description
+			}
+
+			if strings.TrimSpace(originalName) == "" {
+				continue
+			}
+
+			totalTitles++
+
+			// Check if title contains "I" (case-insensitive)
+			if !strings.ContainsAny(strings.ToUpper(originalName), "I") {
+				continue
+			}
+
+			titlesWithI++
+
+			// Generate slug
+			slug := slugs.SlugifyString(originalName)
+
+			// Analyze the conversion
+			analysis := analyzeIConversion(originalName, slug, systemID, datFileName)
+			if analysis.Type != ITypeNoConversion {
+				analyses = append(analyses, analysis)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("Error walking DAT files: %v", err)
+	}
+
+	// Generate report
+	reportRomanNumeralResults(t, analyses, totalTitles, titlesWithI, processedDATs, skippedDATs)
+}
+
+// analyzeIConversion analyzes how "I" was handled in a title
+func analyzeIConversion(originalTitle, slug, systemID, datFile string) ITitleAnalysis {
+	analysis := ITitleAnalysis{
+		OriginalTitle: originalTitle,
+		Slug:          slug,
+		SystemID:      systemID,
+		DATFile:       datFile,
+		Type:          ITypeNoConversion,
+	}
+
+	upper := strings.ToUpper(originalTitle)
+
+	// Find positions of standalone "I" in the original title
+	// A standalone "I" is surrounded by non-word characters or at boundaries
+	iPositions := findStandaloneI(upper)
+	if len(iPositions) == 0 {
+		return analysis
+	}
+
+	// Check if "I" was converted to "1" in the slug
+	// We need to be careful here - if original had "1", we can't tell if conversion happened
+	original1Count := strings.Count(originalTitle, "1")
+	slug1Count := strings.Count(slug, "1")
+
+	// If slug has more "1"s than original, conversion likely happened
+	if slug1Count > original1Count {
+		analysis.WasConverted = true
+	}
+
+	// Classify based on patterns
+	for _, pos := range iPositions {
+		iType, reason := classifyI(upper, pos)
+
+		// If conversion happened and it's a pronoun pattern → false positive
+		if analysis.WasConverted && iType == ITypeCorrectPronoun {
+			analysis.Type = ITypeFalsePositive
+			analysis.Reason = reason + " but was converted to '1'"
+			return analysis
+		}
+
+		// If no conversion and it's a numeral pattern → false negative
+		if !analysis.WasConverted && iType == ITypeCorrectNumeral {
+			analysis.Type = ITypeFalseNegative
+			analysis.Reason = reason + " but was kept as 'i'"
+			return analysis
+		}
+
+		// If conversion matches expected behavior
+		if analysis.WasConverted && iType == ITypeCorrectNumeral {
+			analysis.Type = ITypeCorrectNumeral
+			analysis.Reason = reason
+			return analysis
+		}
+
+		// If no conversion matches expected behavior
+		if !analysis.WasConverted && iType == ITypeCorrectPronoun {
+			analysis.Type = ITypeCorrectPronoun
+			analysis.Reason = reason
+			return analysis
+		}
+
+		// Ambiguous
+		if iType == ITypeAmbiguous {
+			analysis.Type = ITypeAmbiguous
+			analysis.Reason = reason
+			return analysis
+		}
+	}
+
+	return analysis
+}
+
+// findStandaloneI finds all positions of standalone "I" in the string
+func findStandaloneI(s string) []int {
+	var positions []int
+	for i := 0; i < len(s); i++ {
+		if s[i] == 'I' {
+			// Check if it's at word boundary
+			beforeOK := i == 0 || !isWordCharByte(s[i-1])
+			afterOK := i == len(s)-1 || !isWordCharByte(s[i+1])
+			if beforeOK && afterOK {
+				positions = append(positions, i)
+			}
+		}
+	}
+	return positions
+}
+
+// isWordCharByte checks if a byte is a word character
+func isWordCharByte(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
+		(b >= '0' && b <= '9') || b == '_'
+}
+
+// classifyI determines if an "I" at position should be pronoun or numeral
+func classifyI(s string, pos int) (IType, string) {
+	// Known verb patterns (from our implementation)
+	verbs := map[string]bool{
+		"AM": true, "WAS": true, "WILL": true, "CAN": true, "COULD": true,
+		"SHOULD": true, "WOULD": true, "MAY": true, "MIGHT": true, "MUST": true,
+		"HAVE": true, "HAD": true, "DO": true, "DID": true,
+		"WANT": true, "WANNA": true, "NEED": true, "LOVE": true, "LIKE": true,
+		"KNOW": true, "THINK": true, "SEE": true, "GOT": true, "GOTTA": true,
+		"DIE": true, "LIVE": true, "PLAY": true, "KILL": true,
+		"KEEP": true, "BECAME": true, "BECOME": true, "DREAM": true,
+	}
+
+	// Check what follows "I"
+	if pos+1 < len(s) {
+		// Skip spaces
+		nextPos := pos + 1
+		for nextPos < len(s) && s[nextPos] == ' ' {
+			nextPos++
+		}
+
+		if nextPos < len(s) {
+			// Check for punctuation
+			if s[nextPos] == '?' || s[nextPos] == '!' {
+				return ITypeCorrectPronoun, "followed by question/exclamation mark"
+			}
+
+			// Extract next word
+			nextWord := extractNextWord(s, nextPos)
+			if verbs[nextWord] {
+				return ITypeCorrectPronoun, "followed by verb '" + strings.ToLower(nextWord) + "'"
+			}
+
+			// Check for colon/subtitle separator (numeral pattern)
+			if s[nextPos] == ':' || s[nextPos] == '-' || s[nextPos] == '.' {
+				return ITypeCorrectNumeral, "followed by separator '" + string(s[nextPos]) + "'"
+			}
+		}
+	}
+
+	// Check what precedes "I"
+	if pos > 0 {
+		// Skip spaces
+		prevPos := pos - 1
+		for prevPos >= 0 && s[prevPos] == ' ' {
+			prevPos--
+		}
+
+		if prevPos >= 0 {
+			// Extract previous word
+			prevWord := extractPrevWord(s, prevPos)
+			if verbs[prevWord] {
+				return ITypeCorrectPronoun, "preceded by verb '" + strings.ToLower(prevWord) + "'"
+			}
+		}
+	}
+
+	// Check for common numeral patterns
+	// "Part I", "Chapter I", "Volume I", "Saga I"
+	numeralKeywords := []string{"PART", "CHAPTER", "VOLUME", "SAGA", "EPISODE", "BOOK"}
+	for _, keyword := range numeralKeywords {
+		if strings.Contains(s, keyword+" I") {
+			return ITypeCorrectNumeral, "preceded by '" + strings.ToLower(keyword) + "'"
+		}
+	}
+
+	// If "I" is at the end of the title (after removing metadata) → likely numeral
+	trimmed := strings.TrimSpace(slugs.StripMetadataBrackets(s))
+	if strings.HasSuffix(trimmed, " I") || trimmed == "I" {
+		return ITypeCorrectNumeral, "at end of title"
+	}
+
+	// Otherwise, ambiguous
+	return ITypeAmbiguous, "no clear pronoun or numeral pattern"
+}
+
+// extractNextWord extracts the word starting at position pos
+func extractNextWord(s string, pos int) string {
+	if pos >= len(s) {
+		return ""
+	}
+	start := pos
+	for pos < len(s) && isWordCharByte(s[pos]) {
+		pos++
+	}
+	return s[start:pos]
+}
+
+// extractPrevWord extracts the word ending at position pos
+func extractPrevWord(s string, pos int) string {
+	if pos < 0 {
+		return ""
+	}
+	end := pos + 1
+	for pos >= 0 && isWordCharByte(s[pos]) {
+		pos--
+	}
+	return s[pos+1 : end]
+}
+
+// reportRomanNumeralResults generates the analysis report
+func reportRomanNumeralResults(t *testing.T, analyses []ITitleAnalysis, totalTitles, titlesWithI, processedDATs, skippedDATs int) {
+	t.Logf("\n=== ROMAN NUMERAL 'I' ANALYSIS (%d titles) ===\n", totalTitles)
+	t.Logf("Total DAT files processed: %d", processedDATs)
+	t.Logf("Total DAT files skipped: %d", skippedDATs)
+	t.Logf("Total titles analyzed: %d", totalTitles)
+	t.Logf("Titles containing 'I': %d (%.1f%%)\n", titlesWithI, float64(titlesWithI)/float64(totalTitles)*100)
+
+	// Count by type
+	counts := make(map[IType]int)
+	for _, analysis := range analyses {
+		counts[analysis.Type]++
+	}
+
+	converted := 0
+	kept := 0
+	for _, analysis := range analyses {
+		if analysis.WasConverted {
+			converted++
+		} else {
+			kept++
+		}
+	}
+
+	t.Logf("Converted to '1': %d (%.1f%%)", converted, float64(converted)/float64(len(analyses))*100)
+	t.Logf("Kept as 'i': %d (%.1f%%)\n", kept, float64(kept)/float64(len(analyses))*100)
+
+	t.Logf("=== CLASSIFICATION ===")
+	t.Logf("✅ Correctly Handled Pronouns: %d (%.1f%%)", counts[ITypeCorrectPronoun],
+		float64(counts[ITypeCorrectPronoun])/float64(len(analyses))*100)
+	t.Logf("✅ Correctly Handled Numerals: %d (%.1f%%)", counts[ITypeCorrectNumeral],
+		float64(counts[ITypeCorrectNumeral])/float64(len(analyses))*100)
+	t.Logf("🚨 Potential False Positives: %d (%.1f%% - pronouns → '1')", counts[ITypeFalsePositive],
+		float64(counts[ITypeFalsePositive])/float64(len(analyses))*100)
+	t.Logf("🚨 Potential False Negatives: %d (%.1f%% - numerals → 'i')", counts[ITypeFalseNegative],
+		float64(counts[ITypeFalseNegative])/float64(len(analyses))*100)
+	t.Logf("⚠️  Ambiguous Cases: %d (%.1f%%)\n", counts[ITypeAmbiguous],
+		float64(counts[ITypeAmbiguous])/float64(len(analyses))*100)
+
+	// Report false positives (HIGH PRIORITY)
+	if counts[ITypeFalsePositive] > 0 {
+		t.Logf("\n=== 🚨 FALSE POSITIVES (Pronouns → '1') ===\n")
+		falsePositives := filterByType(analyses, ITypeFalsePositive)
+		limit := 20
+		if len(falsePositives) < limit {
+			limit = len(falsePositives)
+		}
+		for i := 0; i < limit; i++ {
+			fp := falsePositives[i]
+			t.Logf("\n#%d: %q → %q", i+1, fp.OriginalTitle, fp.Slug)
+			t.Logf("    System: %s, DAT: %s", fp.SystemID, fp.DATFile)
+			t.Logf("    Reason: %s", fp.Reason)
+		}
+		if len(falsePositives) > limit {
+			t.Logf("\n... and %d more false positives (limit %d shown)", len(falsePositives)-limit, limit)
+		}
+	}
+
+	// Report false negatives
+	if counts[ITypeFalseNegative] > 0 {
+		t.Logf("\n=== 🚨 FALSE NEGATIVES (Numerals → 'i') ===\n")
+		falseNegatives := filterByType(analyses, ITypeFalseNegative)
+		limit := 20
+		if len(falseNegatives) < limit {
+			limit = len(falseNegatives)
+		}
+		for i := 0; i < limit; i++ {
+			fn := falseNegatives[i]
+			t.Logf("\n#%d: %q → %q", i+1, fn.OriginalTitle, fn.Slug)
+			t.Logf("    System: %s, DAT: %s", fn.SystemID, fn.DATFile)
+			t.Logf("    Reason: %s", fn.Reason)
+		}
+		if len(falseNegatives) > limit {
+			t.Logf("\n... and %d more false negatives (limit %d shown)", len(falseNegatives)-limit, limit)
+		}
+	}
+
+	// Report some examples of correct handling
+	t.Logf("\n=== ✅ EXAMPLES OF CORRECT HANDLING ===\n")
+
+	correctPronouns := filterByType(analyses, ITypeCorrectPronoun)
+	if len(correctPronouns) > 0 {
+		t.Logf("\nPronoun Examples (kept as 'i'):")
+		limit := 10
+		if len(correctPronouns) < limit {
+			limit = len(correctPronouns)
+		}
+		for i := 0; i < limit; i++ {
+			cp := correctPronouns[i]
+			t.Logf("  %q → %q (%s)", cp.OriginalTitle, cp.Slug, cp.Reason)
+		}
+	}
+
+	correctNumerals := filterByType(analyses, ITypeCorrectNumeral)
+	if len(correctNumerals) > 0 {
+		t.Logf("\nNumeral Examples (converted to '1'):")
+		limit := 10
+		if len(correctNumerals) < limit {
+			limit = len(correctNumerals)
+		}
+		for i := 0; i < limit; i++ {
+			cn := correctNumerals[i]
+			t.Logf("  %q → %q (%s)", cn.OriginalTitle, cn.Slug, cn.Reason)
+		}
+	}
+
+	// Report ambiguous cases
+	if counts[ITypeAmbiguous] > 0 {
+		t.Logf("\n=== ⚠️  AMBIGUOUS CASES (Manual Review Needed) ===\n")
+		ambiguous := filterByType(analyses, ITypeAmbiguous)
+		limit := 20
+		if len(ambiguous) < limit {
+			limit = len(ambiguous)
+		}
+		for i := 0; i < limit; i++ {
+			amb := ambiguous[i]
+			convStr := "kept as 'i'"
+			if amb.WasConverted {
+				convStr = "converted to '1'"
+			}
+			t.Logf("\n#%d: %q → %q (%s)", i+1, amb.OriginalTitle, amb.Slug, convStr)
+			t.Logf("    System: %s, DAT: %s", amb.SystemID, amb.DATFile)
+			t.Logf("    Reason: %s", amb.Reason)
+		}
+		if len(ambiguous) > limit {
+			t.Logf("\n... and %d more ambiguous cases (limit %d shown)", len(ambiguous)-limit, limit)
+		}
+	}
+
+	// Final summary
+	successRate := float64(counts[ITypeCorrectPronoun]+counts[ITypeCorrectNumeral]) / float64(len(analyses)) * 100
+	t.Logf("\n=== SUMMARY ===")
+	t.Logf("Overall success rate: %.1f%% (%d/%d correctly classified)",
+		successRate, counts[ITypeCorrectPronoun]+counts[ITypeCorrectNumeral], len(analyses))
+
+	if counts[ITypeFalsePositive] == 0 && counts[ITypeFalseNegative] == 0 {
+		t.Logf("✅ No errors found! All 'I' disambiguations are correct.")
+	} else {
+		errorRate := float64(counts[ITypeFalsePositive]+counts[ITypeFalseNegative]) / float64(len(analyses)) * 100
+		t.Logf("⚠️  Error rate: %.1f%% (%d false positives + %d false negatives)",
+			errorRate, counts[ITypeFalsePositive], counts[ITypeFalseNegative])
+	}
+}
+
+// filterByType filters analyses by type
+func filterByType(analyses []ITitleAnalysis, targetType IType) []ITitleAnalysis {
+	var filtered []ITitleAnalysis
+	for _, analysis := range analyses {
+		if analysis.Type == targetType {
+			filtered = append(filtered, analysis)
+		}
+	}
+	return filtered
 }
