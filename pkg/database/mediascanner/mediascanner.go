@@ -607,11 +607,8 @@ func NewNamesIndex(
 		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
 		if getMaxErr != nil || maxTagTypeID == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
-			// Temporarily disable batch inserts for SeedCanonicalTags
-			// This function relies on immediate error feedback for UNIQUE constraint handling
-			fdb.MediaDB.EnableBatchInserts(false)
+			// SeedCanonicalTags runs in its own non-batch transaction for safety.
 			err = SeedCanonicalTags(db, &scanState)
-			fdb.MediaDB.EnableBatchInserts(true) // Re-enable for main indexing
 			if err != nil {
 				return 0, fmt.Errorf("failed to seed known tags: %w", err)
 			}
@@ -805,7 +802,7 @@ func NewNamesIndex(
 
 			// Start transaction if needed (at start of system OR after mid-system commit)
 			if !batchStarted {
-				if beginErr := db.BeginTransaction(); beginErr != nil {
+				if beginErr := db.BeginTransaction(true); beginErr != nil {
 					return 0, fmt.Errorf("failed to begin new transaction: %w", beginErr)
 				}
 				batchStarted = true
@@ -935,7 +932,7 @@ func NewNamesIndex(
 
 					// Start transaction if needed (at start OR after mid-system commit)
 					if !batchStarted {
-						if beginErr := db.BeginTransaction(); beginErr != nil {
+						if beginErr := db.BeginTransaction(true); beginErr != nil {
 							return 0, fmt.Errorf("failed to begin new transaction for custom scanner: %w", beginErr)
 						}
 						batchStarted = true
@@ -1032,7 +1029,7 @@ func NewNamesIndex(
 
 					// Start transaction if needed (at start OR after mid-system commit)
 					if !batchStarted {
-						if beginErr := db.BeginTransaction(); beginErr != nil {
+						if beginErr := db.BeginTransaction(true); beginErr != nil {
 							return 0, fmt.Errorf("failed to begin new transaction for 'any' scanner: %w", beginErr)
 						}
 						batchStarted = true

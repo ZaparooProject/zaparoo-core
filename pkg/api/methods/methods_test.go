@@ -602,7 +602,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			mockMediaDB.On("InsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
 
 			// Mock transaction methods
-			mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+			mockMediaDB.On("BeginTransaction", mock.Anything).Return(nil).Maybe()
 			mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()

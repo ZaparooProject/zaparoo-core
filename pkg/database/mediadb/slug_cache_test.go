@@ -34,7 +34,7 @@ import (
 func createTestMedia(t *testing.T, mediaDB *MediaDB, systemID, slug, name, path string) int64 {
 	t.Helper()
 
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	system, err := systemdefs.GetSystem(systemID)
@@ -193,7 +193,7 @@ func TestSlugCache_SetAndGet_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Create actual media record for FK constraint
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -550,7 +550,7 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert test data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -637,7 +637,7 @@ func TestGetMediaByDBID_NoTags_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert test data without tags
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -702,7 +702,7 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert test data
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")

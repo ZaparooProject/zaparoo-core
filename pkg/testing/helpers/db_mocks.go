@@ -335,8 +335,8 @@ func (m *MockMediaDBI) GetDBPath() string {
 }
 
 // MediaDBI specific methods - Transaction handling
-func (m *MockMediaDBI) BeginTransaction() error {
-	args := m.Called()
+func (m *MockMediaDBI) BeginTransaction(batchEnabled bool) error {
+	args := m.Called(batchEnabled)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)
 	}

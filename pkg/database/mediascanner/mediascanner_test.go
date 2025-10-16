@@ -282,7 +282,7 @@ func TestSeedCanonicalTags_DatabaseError(t *testing.T) {
 				TagIDs:        make(map[string]int),
 			}
 
-			mockDB.On("BeginTransaction").Return(nil).Once()
+			mockDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Once()
 			mockDB.On("RollbackTransaction").Return(nil).Maybe()
 
 			// Set up mocks based on which operation should fail
@@ -369,7 +369,7 @@ func TestNewNamesIndex_SuccessfulResume(t *testing.T) {
 
 	// Mock basic database operations - no Truncate() for successful resume
 	// With batching, we may have fewer transactions than systems
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -463,7 +463,7 @@ func TestNewNamesIndex_ResumeSystemNotFound(t *testing.T) {
 
 	// Mock basic database operations - no special fallback in this scenario
 	// With batching, we may have fewer transactions than systems
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -553,7 +553,7 @@ func TestNewNamesIndex_FailedIndexingRecovery(t *testing.T) {
 	// Mock basic database operations - fallback to fresh start
 	mockMediaDB.On("Truncate").Return(nil).Maybe()
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Maybe()
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -710,7 +710,7 @@ func TestSmartTruncationLogic_PartialSystems(t *testing.T) {
 	// Will use TruncateSystems since not all systems
 	mockMediaDB.On("TruncateSystems", mock.AnythingOfType("[]string")).Return(nil).Once()
 	// Transaction calls for file processing only
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -796,7 +796,7 @@ func TestSmartTruncationLogic_SelectiveIndexing(t *testing.T) {
 	// Mock basic database operations - expect selective TruncateSystems()
 	mockMediaDB.On("TruncateSystems", []string{"nes"}).Return(nil).Once() // Should use selective truncate
 	// Transaction calls for file processing only
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -880,7 +880,7 @@ func TestSelectiveIndexing_ResumeWithDifferentSystems(t *testing.T) {
 	// Uses selective truncate since not indexing all systems
 	mockMediaDB.On("TruncateSystems", []string{"nes", "snes"}).Return(nil).Once()
 	// Transaction calls for file processing only
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -980,7 +980,7 @@ func TestSelectiveIndexing_EmptySystemsList(t *testing.T) {
 	mockMediaDB.On("TruncateSystems", []string{}).Return(nil).Once()
 	mockMediaDB.On("TruncateSystems", []string(nil)).Return(nil).Maybe()
 	// Transaction calls for file processing only
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)
@@ -1050,7 +1050,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 	mockMediaDB := &testhelpers.MockMediaDBI{}
 
 	// Mock basic database operations
-	mockMediaDB.On("BeginTransaction").Return(nil).Maybe()
+	mockMediaDB.On("BeginTransaction", mock.AnythingOfType("bool")).Return(nil).Maybe()
 	mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
 	mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
 	mockMediaDB.On("UpdateLastGenerated").Return(nil)

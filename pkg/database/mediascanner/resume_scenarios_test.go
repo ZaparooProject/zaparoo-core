@@ -74,7 +74,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add systems and media
@@ -168,7 +168,7 @@ func TestEndToEndResumeScenarios(t *testing.T) {
 		originalMediaIndex := resumeState.MediaIndex
 
 		// Now add more data (simulating resume)
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add one more system with games

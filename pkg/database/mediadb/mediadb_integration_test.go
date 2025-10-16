@@ -87,7 +87,7 @@ func TestMediaDB_TransactionCycle_Integration(t *testing.T) {
 
 	// Test that transaction BEGIN/COMMIT cycle works correctly with PRAGMA optimizations
 	// This is a regression test for the double-BEGIN issue
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err, "BeginTransaction should succeed")
 
 	// Insert some test data within transaction
@@ -118,7 +118,7 @@ func TestMediaDB_MultipleTransactionCycles_Integration(t *testing.T) {
 	// Test multiple transaction cycles work correctly
 	// This ensures PRAGMA restoration works properly
 	for i := range 3 {
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err, "BeginTransaction cycle %d should succeed", i)
 
 		systemDef := systemdefs.AllSystems()[i]
@@ -229,7 +229,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data with transaction for better performance
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Create a test system
@@ -299,7 +299,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -362,7 +362,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert test data
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -426,7 +426,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data for multiple systems
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -532,7 +532,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now start transaction for other inserts
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	system := database.System{
@@ -630,7 +630,7 @@ func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Begin transaction
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Insert test data
@@ -657,7 +657,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Insert test data
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -732,7 +732,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert test data with transaction for better performance
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Create test systems
@@ -970,7 +970,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Setup initial data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -1059,7 +1059,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert initial data in transaction
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	system := database.System{
@@ -1097,7 +1097,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	assert.True(t, found, "cache should exist before transaction")
 
 	// Start new transaction and insert more data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Insert should NOT invalidate cache during transaction
@@ -1131,7 +1131,7 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 	ctx := context.Background()
 
 	// Setup multiple systems
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -1224,7 +1224,7 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup data
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")

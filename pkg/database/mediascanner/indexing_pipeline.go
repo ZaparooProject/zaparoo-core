@@ -93,28 +93,9 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.SystemsIndex-- // Rollback index increment on failure
-
-			// Only attempt recovery for UNIQUE constraint violations
-			// Other errors (connection issues, etc.) should fail fast
-			var sqliteErr sqlite3.Error
-			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-				return 0, 0, fmt.Errorf("error inserting system %s: %w", systemID, err)
-			}
-
-			log.Trace().Err(err).Msgf("system already exists: %s", systemID)
-
-			// Try to get existing system ID from database when constraint violated
-			existingSystem, getErr := db.FindSystemBySystemID(systemID)
-			if getErr != nil || existingSystem.DBID == 0 {
-				// If we can't get the system, we must fail properly
-				return 0, 0, fmt.Errorf("failed to get existing system %s after insert failed: %w", systemID, getErr)
-			}
-			systemIndex = int(existingSystem.DBID)
-			ss.SystemIDs[systemID] = systemIndex // Update cache with existing ID
-			log.Trace().Msgf("using existing system %s with DBID %d", systemID, systemIndex)
-		} else {
-			ss.SystemIDs[systemID] = systemIndex // Only update cache on success
+			return 0, 0, fmt.Errorf("error inserting system %s: %w", systemID, err)
 		}
+		ss.SystemIDs[systemID] = systemIndex
 	} else {
 		systemIndex = foundSystemIndex
 	}
@@ -131,30 +112,9 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.TitlesIndex-- // Rollback index increment on failure
-
-			// Handle UNIQUE constraint violations gracefully - data may already exist from previous batches
-			var sqliteErr sqlite3.Error
-			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-				return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
-			}
-			log.Debug().Err(err).Msgf("media title already exists: %s", pf.Title)
-			// Recover by finding the existing title's DBID
-			existingTitle, getErr := db.FindMediaTitle(database.MediaTitle{
-				Slug: pf.Slug, SystemDBID: int64(systemIndex),
-			})
-			if getErr != nil || existingTitle.DBID == 0 {
-				return 0, 0, fmt.Errorf(
-					"failed to get existing media title %s after insert failed: %w",
-					pf.Title,
-					getErr,
-				)
-			}
-			titleIndex = int(existingTitle.DBID)
-			ss.TitleIDs[titleKey] = titleIndex // Update cache with correct ID
-			log.Debug().Msgf("using existing media title %s with DBID %d", pf.Title, titleIndex)
-		} else {
-			ss.TitleIDs[titleKey] = titleIndex // Only update cache on success
+			return 0, 0, fmt.Errorf("error inserting media title %s: %w", pf.Title, err)
 		}
+		ss.TitleIDs[titleKey] = titleIndex
 	} else {
 		titleIndex = foundTitleIndex
 	}
@@ -171,34 +131,9 @@ func AddMediaPath(
 		})
 		if err != nil {
 			ss.MediaIndex-- // Rollback index increment on failure
-
-			// Handle UNIQUE constraint violations gracefully - data may already exist from previous batches
-			var sqliteErr sqlite3.Error
-			if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-				log.Debug().Err(err).Msgf("media already exists: %s", pf.Path)
-
-				// Recover by finding the existing media's DBID using only the UNIQUE constraint fields
-				// (SystemDBID, Path) to ensure we find the right row
-				existingMedia, getErr := db.FindMedia(database.Media{
-					Path:       pf.Path,
-					SystemDBID: int64(systemIndex),
-				})
-				if getErr != nil || existingMedia.DBID == 0 {
-					return 0, 0, fmt.Errorf(
-						"failed to get existing media %s after insert failed: %w",
-						pf.Path,
-						getErr,
-					)
-				}
-				mediaIndex = int(existingMedia.DBID)
-				ss.MediaIDs[mediaKey] = mediaIndex // Update cache with correct ID
-				log.Debug().Msgf("using existing media %s with DBID %d", pf.Path, mediaIndex)
-			} else {
-				log.Error().Err(err).Msgf("error inserting media: %s", pf.Path)
-			}
-		} else {
-			ss.MediaIDs[mediaKey] = mediaIndex // Only update cache on success
+			return 0, 0, fmt.Errorf("error inserting media %s: %w", pf.Path, err)
 		}
+		ss.MediaIDs[mediaKey] = mediaIndex
 	} else {
 		mediaIndex = foundMediaIndex
 	}
@@ -235,25 +170,9 @@ func AddMediaPath(
 			})
 			if err != nil {
 				ss.TagsIndex-- // Rollback index increment on failure
-
-				// Handle UNIQUE constraint violations gracefully - find existing tag and add to map
-				var sqliteErr sqlite3.Error
-				if errors.As(err, &sqliteErr) && sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique {
-					log.Debug().Err(err).Msgf("tag extension already exists: %s", extWithoutDot)
-
-					// Look up existing tag and add it to the map to prevent repeated insertion attempts
-					existingTag, getErr := db.FindTag(database.Tag{Tag: extWithoutDot})
-					if getErr != nil || existingTag.DBID == 0 {
-						log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", extWithoutDot)
-					} else {
-						ss.TagIDs[extensionKey] = int(existingTag.DBID)
-						log.Debug().Msgf("using existing tag %s with DBID %d", extWithoutDot, existingTag.DBID)
-					}
-				} else {
-					log.Error().Err(err).Msgf("error inserting tag extension: %s", extWithoutDot)
-				}
+				log.Error().Err(err).Msgf("error inserting tag extension: %s", extWithoutDot)
 			} else {
-				ss.TagIDs[extensionKey] = tagIndex // Only update cache on success
+				ss.TagIDs[extensionKey] = tagIndex
 			}
 		}
 
@@ -314,27 +233,10 @@ func AddMediaPath(
 			})
 			if insertErr != nil {
 				ss.TagsIndex-- // Rollback index increment on failure
-
-				// Handle UNIQUE constraint violations gracefully - find existing tag and add to map
-				var sqliteErr sqlite3.Error
-				if !errors.As(insertErr, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-					log.Error().Err(insertErr).Msgf("error inserting revision tag: %s", revValue)
-					continue
-				}
-				log.Debug().Err(insertErr).Msgf("revision tag already exists: %s", revValue)
-
-				// Look up existing tag and add it to the map
-				existingTag, getErr := db.FindTag(database.Tag{Tag: revValue})
-				if getErr != nil || existingTag.DBID == 0 {
-					log.Error().Err(getErr).Msgf("Failed to get existing tag %s after insert failed", revValue)
-					continue
-				}
-				tagIndex = int(existingTag.DBID)
-				ss.TagIDs[tagStr] = tagIndex
-				log.Debug().Msgf("using existing revision tag %s with DBID %d", revValue, existingTag.DBID)
-			} else {
-				ss.TagIDs[tagStr] = tagIndex // Only update cache on success
+				log.Error().Err(insertErr).Msgf("error inserting revision tag: %s", revValue)
+				continue
 			}
+			ss.TagIDs[tagStr] = tagIndex
 		}
 
 		if tagIndex == 0 {
@@ -379,8 +281,14 @@ func getTagsFromFileName(filename string) []string {
 // SeedCanonicalTags seeds the database with canonical GameDataBase-style hierarchical tags.
 // Tags follow the format: category:subcategory:value (e.g., "genre:sports:wrestling", "players:2:vs")
 // Tag definitions are in tags.go for centralized management.
+//
+// NOTE: This function ALWAYS uses non-batch mode (prepared statements) because the canonical
+// tag dataset contains many entries and using batch mode with fail-fast behavior would cause issues.
+// Prepared statements handle this better.
 func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
-	if err := db.BeginTransaction(); err != nil {
+	// Always use non-batch mode for seeding canonical tags
+	// This prevents issues with the large dataset and provides better error handling
+	if err := db.BeginTransaction(false); err != nil {
 		return fmt.Errorf("failed to begin transaction for seeding tags: %w", err)
 	}
 
@@ -402,25 +310,9 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback index increment on failure
-
-		// Handle UNIQUE constraint violations gracefully - data may already exist
-		var sqliteErr sqlite3.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag type unknown: %w", err)
-		}
-		log.Debug().Msg("tag type 'unknown' already exists, continuing")
-		// Try to get the existing tag type to update our index
-		existingTagType, getErr := db.FindTagType(database.TagType{Type: "unknown"})
-		if getErr == nil && existingTagType.DBID > 0 {
-			// Update index only if this existing tag has a higher DBID
-			if int(existingTagType.DBID) > ss.TagTypesIndex {
-				ss.TagTypesIndex = int(existingTagType.DBID)
-			}
-			ss.TagTypeIDs["unknown"] = int(existingTagType.DBID)
-		}
-	} else {
-		ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
+		return fmt.Errorf("error inserting tag type unknown: %w", err)
 	}
+	ss.TagTypeIDs["unknown"] = ss.TagTypesIndex
 
 	ss.TagsIndex++
 	_, err = db.InsertTag(database.Tag{
@@ -430,27 +322,10 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 	})
 	if err != nil {
 		ss.TagsIndex-- // Rollback index increment on failure
-
-		// Handle UNIQUE constraint violations gracefully
-		var sqliteErr sqlite3.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag unknown: %w", err)
-		}
-		log.Debug().Msg("tag 'unknown' already exists, continuing")
-		// Try to get the existing tag to update our index
-		existingTag, getErr := db.FindTag(database.Tag{Tag: "unknown"})
-		if getErr == nil && existingTag.DBID > 0 {
-			// Update index only if this existing tag has a higher DBID
-			if int(existingTag.DBID) > ss.TagsIndex {
-				ss.TagsIndex = int(existingTag.DBID)
-			}
-			// Use composite key for consistency
-			ss.TagIDs["unknown:unknown"] = int(existingTag.DBID)
-		}
-	} else {
-		// Use composite key for consistency
-		ss.TagIDs["unknown:unknown"] = ss.TagsIndex
+		return fmt.Errorf("error inserting tag unknown: %w", err)
 	}
+	// Use composite key for consistency
+	ss.TagIDs["unknown:unknown"] = ss.TagsIndex
 
 	ss.TagTypesIndex++
 	_, err = db.InsertTagType(database.TagType{
@@ -459,28 +334,18 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 	})
 	if err != nil {
 		ss.TagTypesIndex-- // Rollback index increment on failure
-
-		// Handle UNIQUE constraint violations gracefully
-		var sqliteErr sqlite3.Error
-		if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-			return fmt.Errorf("error inserting tag type extension: %w", err)
-		}
-		log.Debug().Msg("tag type 'extension' already exists, continuing")
-		// Try to get the existing tag type to update our index
-		existingTagType, getErr := db.FindTagType(database.TagType{Type: "extension"})
-		if getErr == nil && existingTagType.DBID > 0 {
-			// Update index only if this existing tag has a higher DBID
-			if int(existingTagType.DBID) > ss.TagTypesIndex {
-				ss.TagTypesIndex = int(existingTagType.DBID)
-			}
-			ss.TagTypeIDs["extension"] = int(existingTagType.DBID)
-		}
-	} else {
-		ss.TagTypeIDs["extension"] = ss.TagTypesIndex
+		return fmt.Errorf("error inserting tag type extension: %w", err)
 	}
+	ss.TagTypeIDs["extension"] = ss.TagTypesIndex
 
 	// Seed canonical tag types and values
 	for typeStr, tagValues := range typeMatches {
+		// Skip if we've already inserted this tag type (e.g., "extension" or "unknown")
+		if _, exists := ss.TagTypeIDs[typeStr]; exists {
+			// Tag type already inserted, skip it
+			continue
+		}
+
 		ss.TagTypesIndex++
 		_, err := db.InsertTagType(database.TagType{
 			DBID: int64(ss.TagTypesIndex),
@@ -488,29 +353,20 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 		})
 		if err != nil {
 			ss.TagTypesIndex-- // Rollback index increment on failure
-
-			// Handle UNIQUE constraint violations gracefully
-			var sqliteErr sqlite3.Error
-			if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-				return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
-			}
-			log.Debug().Msgf("tag type '%s' already exists, continuing", typeStr)
-			// Try to get the existing tag type to update our index
-			existingTagType, getErr := db.FindTagType(database.TagType{Type: typeStr})
-			if getErr == nil && existingTagType.DBID > 0 {
-				// Update index only if this existing tag has a higher DBID
-				if int(existingTagType.DBID) > ss.TagTypesIndex {
-					ss.TagTypesIndex = int(existingTagType.DBID)
-				}
-				ss.TagTypeIDs[typeStr] = int(existingTagType.DBID)
-			}
-		} else {
-			ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
+			return fmt.Errorf("error inserting tag type %s: %w", typeStr, err)
 		}
+		ss.TagTypeIDs[typeStr] = ss.TagTypesIndex
 
 		for _, tag := range tagValues {
-			ss.TagsIndex++
 			tagValue := strings.ToLower(tag)
+			compositeKey := typeStr + ":" + tagValue
+
+			// Skip if we've already inserted this tag
+			if _, exists := ss.TagIDs[compositeKey]; exists {
+				continue
+			}
+
+			ss.TagsIndex++
 			_, err := db.InsertTag(database.Tag{
 				DBID:     int64(ss.TagsIndex),
 				Tag:      tagValue,
@@ -518,29 +374,10 @@ func SeedCanonicalTags(db database.MediaDBI, ss *database.ScanState) error {
 			})
 			if err != nil {
 				ss.TagsIndex-- // Rollback index increment on failure
-
-				// Handle UNIQUE constraint violations gracefully
-				var sqliteErr sqlite3.Error
-				if !errors.As(err, &sqliteErr) || sqliteErr.ExtendedCode != sqlite3.ErrConstraintUnique {
-					return fmt.Errorf("error inserting tag %s: %w", tag, err)
-				}
-				log.Debug().Msgf("tag '%s' already exists, continuing", tag)
-				// Try to get the existing tag to update our index
-				existingTag, getErr := db.FindTag(database.Tag{Tag: tagValue})
-				if getErr == nil && existingTag.DBID > 0 {
-					// Update index only if this existing tag has a higher DBID
-					if int(existingTag.DBID) > ss.TagsIndex {
-						ss.TagsIndex = int(existingTag.DBID)
-					}
-					// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
-					compositeKey := typeStr + ":" + tagValue
-					ss.TagIDs[compositeKey] = int(existingTag.DBID)
-				}
-			} else {
-				// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
-				compositeKey := typeStr + ":" + tagValue
-				ss.TagIDs[compositeKey] = ss.TagsIndex
+				return fmt.Errorf("error inserting tag %s: %w", tag, err)
 			}
+			// Use composite key "type:value" to avoid collisions (e.g., disc:1 vs rev:1)
+			ss.TagIDs[compositeKey] = ss.TagsIndex
 		}
 	}
 

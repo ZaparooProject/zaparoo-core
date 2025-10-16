@@ -251,7 +251,7 @@ type UserDBI interface {
 
 type MediaDBI interface {
 	GenericDBI
-	BeginTransaction() error
+	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
 	RollbackTransaction() error
 	Exists() bool
@@ -285,10 +285,6 @@ type MediaDBI interface {
 	SetIndexingSystems(systemIDs []string) error
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
-
-	// Batch insert control methods
-	EnableBatchInserts(enable bool)
-	SetBatchSize(size int)
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)

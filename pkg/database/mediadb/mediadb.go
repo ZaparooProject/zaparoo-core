@@ -91,7 +91,6 @@ type MediaDB struct {
 	sqlMu                 sync.RWMutex
 	isOptimizing          atomic.Bool
 	inTransaction         bool
-	enableBatchInserts    bool
 }
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
@@ -141,32 +140,17 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
 	dbPath := filepath.Join(helpers.DataDir(pl), config.MediaDbFile)
 	db := &MediaDB{
-		sql:                nil,
-		pl:                 pl,
-		dbPath:             dbPath,
-		ctx:                ctx,
-		clock:              clockwork.NewRealClock(),
-		analyzeRetryDelay:  10 * time.Second,
-		vacuumRetryDelay:   30 * time.Second,
-		enableBatchInserts: false, // Disabled by default for backward compatibility
-		batchSize:          5000,  // Default batch size when enabled
+		sql:               nil,
+		pl:                pl,
+		dbPath:            dbPath,
+		ctx:               ctx,
+		clock:             clockwork.NewRealClock(),
+		analyzeRetryDelay: 10 * time.Second,
+		vacuumRetryDelay:  30 * time.Second,
+		batchSize:         5000, // Default batch size for batch mode transactions
 	}
 	err := db.Open()
 	return db, err
-}
-
-// EnableBatchInserts enables or disables multi-row bulk insert optimization.
-// This should be called before BeginTransaction for the setting to take effect.
-func (db *MediaDB) EnableBatchInserts(enable bool) {
-	db.enableBatchInserts = enable
-}
-
-// SetBatchSize sets the batch size for multi-row inserts.
-// Only used when batch inserts are enabled.
-func (db *MediaDB) SetBatchSize(size int) {
-	if size > 0 {
-		db.batchSize = size
-	}
 }
 
 func (db *MediaDB) Open() error {
@@ -385,6 +369,7 @@ func (db *MediaDB) SetSQLForTesting(ctx context.Context, sqlDB *sql.DB, platform
 	db.clock = clockwork.NewRealClock()
 	db.analyzeRetryDelay = 10 * time.Second
 	db.vacuumRetryDelay = 30 * time.Second
+	db.batchSize = 5000 // Default batch size for testing
 
 	// Initialize the database schema
 	if err := db.Allocate(); err != nil {
@@ -527,7 +512,7 @@ func (db *MediaDB) rollbackAndLogError() {
 	db.inTransaction = false
 }
 
-func (db *MediaDB) BeginTransaction() error {
+func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 	db.sqlMu.Lock()
 	defer db.sqlMu.Unlock()
 
@@ -548,42 +533,52 @@ func (db *MediaDB) BeginTransaction() error {
 	db.tx = tx
 
 	// Use batch inserters if enabled, otherwise use prepared statements
-	if db.enableBatchInserts {
-		// Initialize batch inserters for multi-row bulk inserts
-		// IMPORTANT: Column order must match the regular INSERT statements including DBID
-		// Systems does NOT use INSERT OR IGNORE - duplicates are handled by error recovery
-		// in AddMediaPath which needs to detect UNIQUE constraint violations to fetch existing DBIDs
-		if db.batchInsertSystem, err = NewBatchInserter(db.ctx, tx, "Systems",
-			[]string{"DBID", "SystemID", "Name"}, db.batchSize); err != nil {
+	if batchEnabled {
+		// Initialize batch inserters for multi-row bulk inserts.
+		// IMPORTANT: Column order must match the regular INSERT statements including DBID.
+		//
+		// LBYL Pattern (Look Before You Leap):
+		// - Application logic prevents duplicate attempts via in-memory scanState maps (primary defense)
+		// - Database UNIQUE constraints provide final protection and fail-fast behavior
+		// - NO INSERT OR IGNORE on tables with PKs used as FKs (would corrupt in-memory state)
+		// - ONLY MediaTags uses INSERT OR IGNORE (link table, no dependent FKs on its PK)
+		//
+		// Why not INSERT OR IGNORE?
+		// - Application pre-generates DBIDs from in-memory counters
+		// - If INSERT OR IGNORE silently fails, the invalid DBID stays in scanState maps
+		// - This corrupt DBID is then used as FK in child tables → FK constraint violations
+		// - Better to fail fast with UNIQUE constraint error than continue with bad state
+		if db.batchInsertSystem, err = NewBatchInserterWithOptions(db.ctx, tx, "Systems",
+			[]string{"DBID", "SystemID", "Name"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for systems: %w", err)
 		}
 
-		if db.batchInsertMediaTitle, err = NewBatchInserter(db.ctx, tx, "MediaTitles",
-			[]string{"DBID", "SystemDBID", "Slug", "Name"}, db.batchSize); err != nil {
+		if db.batchInsertMediaTitle, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTitles",
+			[]string{"DBID", "SystemDBID", "Slug", "Name"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
 		}
 
-		if db.batchInsertMedia, err = NewBatchInserter(db.ctx, tx, "Media",
-			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path"}, db.batchSize); err != nil {
+		if db.batchInsertMedia, err = NewBatchInserterWithOptions(db.ctx, tx, "Media",
+			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media: %w", err)
 		}
 
 		if db.batchInsertTag, err = NewBatchInserterWithOptions(db.ctx, tx, "Tags",
-			[]string{"DBID", "TypeDBID", "Tag"}, db.batchSize, true); err != nil {
+			[]string{"DBID", "TypeDBID", "Tag"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tags: %w", err)
 		}
 
 		if db.batchInsertTagType, err = NewBatchInserterWithOptions(db.ctx, tx, "TagTypes",
-			[]string{"DBID", "Type"}, db.batchSize, true); err != nil {
+			[]string{"DBID", "Type"}, db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for tag types: %w", err)
 		}
 
-		// MediaTags uses INSERT OR IGNORE to handle duplicates gracefully
+		// MediaTags uses INSERT OR IGNORE - it's a link table with no dependent foreign keys
 		if db.batchInsertMediaTag, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTags",
 			[]string{"MediaDBID", "TagDBID"}, db.batchSize, true); err != nil {
 			db.rollbackAndLogError()
@@ -591,13 +586,18 @@ func (db *MediaDB) BeginTransaction() error {
 		}
 
 		// Set up foreign key dependencies to ensure proper flush order
-		// MediaTitles depends on Systems
+		// IMPORTANT: When adding a new batch inserter, you MUST declare its dependencies here.
+		// Failure to do so will result in foreign key constraint violations at runtime.
+		// The validation below only checks for cycles, not for missing dependencies.
+		//
+		// Current dependency graph:
+		// - MediaTitles depends on Systems
 		db.batchInsertMediaTitle.SetDependencies(db.batchInsertSystem)
-		// Tags depends on TagTypes
+		// - Tags depends on TagTypes
 		db.batchInsertTag.SetDependencies(db.batchInsertTagType)
-		// Media depends on MediaTitles (and transitively on Systems)
+		// - Media depends on MediaTitles (and transitively on Systems)
 		db.batchInsertMedia.SetDependencies(db.batchInsertMediaTitle)
-		// MediaTags depends on both Media and Tags
+		// - MediaTags depends on both Media and Tags
 		db.batchInsertMediaTag.SetDependencies(db.batchInsertMedia, db.batchInsertTag)
 	} else {
 		// Prepare statements for batch operations - clean up on any error
@@ -632,8 +632,73 @@ func (db *MediaDB) BeginTransaction() error {
 		}
 	}
 
+	// Validate batch inserter dependencies if batch mode is enabled
+	if batchEnabled {
+		if err := db.validateInserterDependencies(); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("invalid batch inserter dependencies: %w", err)
+		}
+	}
+
 	// Set transaction flag to prevent excessive cache invalidations during batch operations
 	db.inTransaction = true
+
+	return nil
+}
+
+// validateInserterDependencies performs cycle detection on batch inserter dependencies.
+// Returns an error if a cycle is detected in the dependency graph.
+func (db *MediaDB) validateInserterDependencies() error {
+	// Collect all batch inserters
+	inserters := []*BatchInserter{
+		db.batchInsertSystem,
+		db.batchInsertMediaTitle,
+		db.batchInsertMedia,
+		db.batchInsertTag,
+		db.batchInsertTagType,
+		db.batchInsertMediaTag,
+	}
+
+	// Filter out nil inserters
+	var validInserters []*BatchInserter
+	for _, inserter := range inserters {
+		if inserter != nil {
+			validInserters = append(validInserters, inserter)
+		}
+	}
+
+	// Perform DFS from each inserter to detect cycles
+	visited := make(map[*BatchInserter]bool)
+	visiting := make(map[*BatchInserter]bool)
+
+	var dfs func(*BatchInserter) error
+	dfs = func(node *BatchInserter) error {
+		if visiting[node] {
+			// Back edge detected - cycle found
+			return fmt.Errorf("dependency cycle detected involving table %s", node.tableName)
+		}
+		if visited[node] {
+			// Already processed this node
+			return nil
+		}
+
+		visiting[node] = true
+		for _, dep := range node.dependencies {
+			if err := dfs(dep); err != nil {
+				return err
+			}
+		}
+		visiting[node] = false
+		visited[node] = true
+		return nil
+	}
+
+	// Run DFS from each node
+	for _, inserter := range validInserters {
+		if err := dfs(inserter); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -646,8 +711,9 @@ func (db *MediaDB) CommitTransaction() error {
 		return nil // No active transaction
 	}
 
-	// Flush all batch inserters before committing
-	if db.enableBatchInserts {
+	// Flush all batch inserters before committing (if any were created)
+	// Check if batch inserters exist rather than relying on a mode flag
+	if db.batchInsertSystem != nil {
 		db.closeAllBatchInserters()
 	} else {
 		// Clean up prepared statements

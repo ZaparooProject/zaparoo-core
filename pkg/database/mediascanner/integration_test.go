@@ -66,7 +66,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add systems and media
@@ -160,7 +160,7 @@ func TestResumeWithRealDatabase(t *testing.T) {
 		originalMediaIndex := resumeState.MediaIndex
 
 		// Now add more data (simulating resume)
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add one more system with games
@@ -213,7 +213,7 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add a few systems
@@ -245,7 +245,7 @@ func TestUniqueConstraintHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		// Now continue indexing - this should not cause constraint violations
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add more entries - these should not conflict
@@ -312,7 +312,7 @@ func TestDatabaseStateConsistency(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add specific test data
@@ -386,7 +386,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		err := SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add media for all systems
@@ -440,7 +440,7 @@ func TestSelectiveIndexingPreservesTagTypes(t *testing.T) {
 		require.NoError(t, err)
 
 		// Re-add Amiga media - this should NOT crash with "Extension TagType not found"
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		amigaEntries := batch.Entries["Amiga"]
@@ -508,7 +508,7 @@ func TestReindexSameSystemTwice(t *testing.T) {
 		}
 
 		// Begin transaction for media insertion
-		if beginErr := mediaDB.BeginTransaction(); beginErr != nil {
+		if beginErr := mediaDB.BeginTransaction(false); beginErr != nil {
 			return fmt.Errorf("failed to begin transaction: %w", beginErr)
 		}
 
@@ -912,7 +912,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			err = mediaDB.BeginTransaction()
+			err = mediaDB.BeginTransaction(false)
 			require.NoError(t, err)
 
 			titleIndex, mediaIndex, addErr := AddMediaPath(

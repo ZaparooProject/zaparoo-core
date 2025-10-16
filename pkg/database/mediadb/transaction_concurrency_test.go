@@ -49,7 +49,7 @@ func TestMediaDB_ConcurrentTransactionAttempts_OnlyOneSucceeds(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			err := mediaDB.BeginTransaction()
+			err := mediaDB.BeginTransaction(false)
 			switch {
 			case err == nil:
 				successCount.Add(1)
@@ -84,11 +84,11 @@ func TestMediaDB_TransactionAlreadyInProgress_ErrorMessage(t *testing.T) {
 	defer cleanup()
 
 	// Begin first transaction
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Attempt to begin second transaction
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.Error(t, err)
 	assert.Equal(t, "transaction already in progress", err.Error())
 
@@ -105,7 +105,7 @@ func TestMediaDB_TransactionLifecycle_CanRestartAfterCommit(t *testing.T) {
 	defer cleanup()
 
 	// First transaction cycle
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err, "first BeginTransaction should succeed")
 
 	system := database.System{
@@ -120,7 +120,7 @@ func TestMediaDB_TransactionLifecycle_CanRestartAfterCommit(t *testing.T) {
 	require.NoError(t, err, "first CommitTransaction should succeed")
 
 	// Second transaction cycle should work
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err, "second BeginTransaction should succeed after commit")
 
 	system2 := database.System{
@@ -152,7 +152,7 @@ func TestMediaDB_TransactionLifecycle_CanRestartAfterRollback(t *testing.T) {
 	defer cleanup()
 
 	// First transaction - will be rolled back
-	err := mediaDB.BeginTransaction()
+	err := mediaDB.BeginTransaction(false)
 	require.NoError(t, err, "first BeginTransaction should succeed")
 
 	system := database.System{
@@ -171,7 +171,7 @@ func TestMediaDB_TransactionLifecycle_CanRestartAfterRollback(t *testing.T) {
 	require.Error(t, err)
 
 	// Second transaction should work after rollback
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err, "second BeginTransaction should succeed after rollback")
 
 	system2 := database.System{
@@ -233,7 +233,7 @@ func TestMediaDB_ConcurrentTransactionStressTest(t *testing.T) {
 				case <-done:
 					return
 				default:
-					err := mediaDB.BeginTransaction()
+					err := mediaDB.BeginTransaction(false)
 					if err == nil {
 						// Successfully got transaction
 						system := database.System{

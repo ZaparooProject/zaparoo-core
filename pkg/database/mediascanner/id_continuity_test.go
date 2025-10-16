@@ -71,7 +71,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add initial batch of games
@@ -132,7 +132,7 @@ func TestIDContinuityAfterResume(t *testing.T) {
 			"Resume state should match Phase 1 max media ID")
 
 		// Now continue indexing with more systems
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		generator := testdata.NewTestDataGenerator(2000)
@@ -222,7 +222,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Create some systems and titles using the normal flow first
@@ -247,7 +247,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 		// leaving gaps in the actual DBID values
 
 		// First add two more systems/titles normally
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		entry3 := generator.GenerateMediaEntry("Genesis")
@@ -313,7 +313,7 @@ func TestIDContinuityWithGaps(t *testing.T) {
 			"Should use max ID (%d), not count", phase1MaxTitleID)
 
 		// Add new data - should get next sequential ID after the highest
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		generator := testdata.NewTestDataGenerator(3000)
@@ -384,7 +384,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Create some initial data normally
@@ -439,7 +439,7 @@ func TestIDContinuityWithLargeNumbers(t *testing.T) {
 		assert.Equal(t, int(finalMaxTitleID), resumeState.TitlesIndex, "Should handle large title ID")
 
 		// Add new data
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		generator := testdata.NewTestDataGenerator(4000)
@@ -489,7 +489,7 @@ func TestConcurrentIDGeneration(t *testing.T) {
 		err = SeedCanonicalTags(mediaDB, scanState)
 		require.NoError(t, err)
 
-		err := mediaDB.BeginTransaction()
+		err := mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		// Add multiple entries in sequence

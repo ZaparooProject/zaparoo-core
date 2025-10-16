@@ -107,12 +107,12 @@ func TestDatabaseMockUsage(t *testing.T) {
 		mockMediaDB := &helpers.MockMediaDBI{}
 
 		// Set up transaction expectations
-		mockMediaDB.On("BeginTransaction").Return(nil)
+		mockMediaDB.On("BeginTransaction", false).Return(nil)
 		mockMediaDB.On("InsertSystem", fixtures.Systems.Atari2600).Return(fixtures.Systems.Atari2600, nil)
 		mockMediaDB.On("CommitTransaction").Return(nil)
 
 		// Test transaction workflow
-		err := mockMediaDB.BeginTransaction()
+		err := mockMediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		system, err := mockMediaDB.InsertSystem(fixtures.Systems.Atari2600)

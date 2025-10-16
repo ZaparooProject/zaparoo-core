@@ -84,7 +84,7 @@ func TestWALCheckpointing(t *testing.T) {
 	t.Logf("Cache size setting: %d", cacheSize)
 
 	// Begin transaction and insert test data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	// Insert test system
@@ -127,7 +127,7 @@ func TestWALCheckpointing(t *testing.T) {
 
 	// Test multiple transactions to verify checkpointing works repeatedly
 	for i := range 3 {
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		media := database.Media{
@@ -213,7 +213,7 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 
 	start := time.Now()
 
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	for i := range numInserts {
@@ -292,7 +292,7 @@ func TestWALSizeManagement(t *testing.T) {
 	const insertsPerTransaction = 100
 
 	for tx := range numTransactions {
-		err = mediaDB.BeginTransaction()
+		err = mediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		for i := range insertsPerTransaction {

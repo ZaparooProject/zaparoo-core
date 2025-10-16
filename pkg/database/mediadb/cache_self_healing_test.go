@@ -43,7 +43,7 @@ func TestGetSystemTagsCached_AutoPopulate_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Setup test data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -120,7 +120,7 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// Setup test data for multiple systems
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -257,7 +257,7 @@ func TestPopulateSystemTagsCacheForSystems_UpdateExisting_Integration(t *testing
 	require.NoError(t, err)
 
 	// Setup initial data
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")
@@ -357,7 +357,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 	require.NoError(t, err)
 
 	// Setup test data for multiple systems
-	err = mediaDB.BeginTransaction()
+	err = mediaDB.BeginTransaction(false)
 	require.NoError(t, err)
 
 	nesSystem, err := systemdefs.GetSystem("NES")

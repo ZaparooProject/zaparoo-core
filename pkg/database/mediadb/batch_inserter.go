@@ -94,10 +94,8 @@ func (b *BatchInserter) SetDependencies(deps ...*BatchInserter) {
 	b.dependencies = deps
 }
 
-// Add appends a row to the current batch
-// Note: Auto-flush removed to prevent FK constraint failures when parent batches
-// have fewer items than child batches (due to deduplication). Flushing now happens
-// only at transaction commit in proper dependency order.
+// Add appends a row to the current batch and auto-flushes when the batch size is reached.
+// Dependency ordering ensures parent tables are flushed before children, preventing FK violations.
 func (b *BatchInserter) Add(values ...any) error {
 	if len(values) != b.columnCount {
 		return fmt.Errorf(
@@ -112,7 +110,11 @@ func (b *BatchInserter) Add(values ...any) error {
 	b.buffer = append(b.buffer, values...)
 	b.currentCount++
 
-	// No auto-flush - let transaction commit handle flushing in dependency order
+	// Auto-flush when batch size is reached
+	// The dependency system ensures correct flush ordering to maintain FK integrity
+	if b.currentCount >= b.batchSize {
+		return b.Flush()
+	}
 	return nil
 }
 
@@ -161,13 +163,8 @@ func (b *BatchInserter) Flush() error {
 	// Execute batch insert
 	_, err = stmt.ExecContext(b.ctx, b.buffer[:b.currentCount*b.columnCount]...)
 	if err != nil {
-		// Log the error and fall back to single-row inserts for this batch
-		log.Error().Err(err).
-			Str("table", b.tableName).
-			Int("row_count", b.currentCount).
-			Bool("or_ignore", b.orIgnore).
-			Msg("BATCH INSERT FAILED - falling back to single-row inserts")
-		return b.flushSingleRow()
+		// Fail fast - batch insert errors indicate data integrity issues that should be surfaced immediately
+		return fmt.Errorf("batch insert failed for table %s: %w", b.tableName, err)
 	}
 
 	// Reset buffer
@@ -276,7 +273,8 @@ func (b *BatchInserter) flushSingleRow() error {
 				Str("table", b.tableName).
 				Int("row", i).
 				Msg("failed to insert row in fallback mode")
-			// Continue attempting remaining rows
+			// Fail fast on any error to prevent silent data inconsistencies.
+			return fmt.Errorf("unrecoverable error during single-row fallback on row %d: %w", i, err)
 		}
 	}
 
