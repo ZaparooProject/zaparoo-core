@@ -286,6 +286,10 @@ type MediaDBI interface {
 	GetIndexingSystems() ([]string, error)
 	TruncateSystems(systemIDs []string) error
 
+	// Batch insert control methods
+	EnableBatchInserts(enable bool)
+	SetBatchSize(size int)
+
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
 	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
 	SearchMediaBySlug(

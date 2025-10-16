@@ -66,24 +66,32 @@ func getSqliteConnParams() string {
 }
 
 type MediaDB struct {
-	clock                clockwork.Clock
-	ctx                  context.Context
-	pl                   platforms.Platform
-	stmtInsertMediaTitle *sql.Stmt
-	stmtInsertMediaTag   *sql.Stmt
-	stmtInsertMedia      *sql.Stmt
-	tx                   *sql.Tx
-	stmtInsertSystem     *sql.Stmt
-	sql                  *sql.DB
-	stmtInsertTag        *sql.Stmt
-	stmtInsertTagType    *sql.Stmt
-	dbPath               string
-	backgroundOps        sync.WaitGroup
-	analyzeRetryDelay    time.Duration
-	vacuumRetryDelay     time.Duration
-	sqlMu                sync.RWMutex
-	isOptimizing         atomic.Bool
-	inTransaction        bool
+	clock                 clockwork.Clock
+	ctx                   context.Context
+	pl                    platforms.Platform
+	batchInsertSystem     *BatchInserter
+	batchInsertMediaTitle *BatchInserter
+	stmtInsertMedia       *sql.Stmt
+	tx                    *sql.Tx
+	stmtInsertSystem      *sql.Stmt
+	sql                   *sql.DB
+	stmtInsertTag         *sql.Stmt
+	stmtInsertTagType     *sql.Stmt
+	batchInsertMediaTag   *BatchInserter
+	batchInsertTagType    *BatchInserter
+	batchInsertTag        *BatchInserter
+	batchInsertMedia      *BatchInserter
+	stmtInsertMediaTag    *sql.Stmt
+	stmtInsertMediaTitle  *sql.Stmt
+	dbPath                string
+	backgroundOps         sync.WaitGroup
+	vacuumRetryDelay      time.Duration
+	analyzeRetryDelay     time.Duration
+	batchSize             int
+	sqlMu                 sync.RWMutex
+	isOptimizing          atomic.Bool
+	inTransaction         bool
+	enableBatchInserts    bool
 }
 
 // invalidationScope describes what data was changed to determine cache invalidation scope
@@ -133,16 +141,32 @@ func (db *MediaDB) invalidateCaches(scope invalidationScope) {
 func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
 	dbPath := filepath.Join(helpers.DataDir(pl), config.MediaDbFile)
 	db := &MediaDB{
-		sql:               nil,
-		pl:                pl,
-		dbPath:            dbPath,
-		ctx:               ctx,
-		clock:             clockwork.NewRealClock(),
-		analyzeRetryDelay: 10 * time.Second,
-		vacuumRetryDelay:  30 * time.Second,
+		sql:                nil,
+		pl:                 pl,
+		dbPath:             dbPath,
+		ctx:                ctx,
+		clock:              clockwork.NewRealClock(),
+		analyzeRetryDelay:  10 * time.Second,
+		vacuumRetryDelay:   30 * time.Second,
+		enableBatchInserts: false, // Disabled by default for backward compatibility
+		batchSize:          5000,  // Default batch size when enabled
 	}
 	err := db.Open()
 	return db, err
+}
+
+// EnableBatchInserts enables or disables multi-row bulk insert optimization.
+// This should be called before BeginTransaction for the setting to take effect.
+func (db *MediaDB) EnableBatchInserts(enable bool) {
+	db.enableBatchInserts = enable
+}
+
+// SetBatchSize sets the batch size for multi-row inserts.
+// Only used when batch inserts are enabled.
+func (db *MediaDB) SetBatchSize(size int) {
+	if size > 0 {
+		db.batchSize = size
+	}
 }
 
 func (db *MediaDB) Open() error {
@@ -419,6 +443,46 @@ func (db *MediaDB) closeAllPreparedStatements() {
 	}
 }
 
+// closeAllBatchInserters closes all batch inserters and sets them to nil
+func (db *MediaDB) closeAllBatchInserters() {
+	if db.batchInsertSystem != nil {
+		if closeErr := db.batchInsertSystem.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertSystem")
+		}
+		db.batchInsertSystem = nil
+	}
+	if db.batchInsertMediaTitle != nil {
+		if closeErr := db.batchInsertMediaTitle.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTitle")
+		}
+		db.batchInsertMediaTitle = nil
+	}
+	if db.batchInsertMedia != nil {
+		if closeErr := db.batchInsertMedia.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMedia")
+		}
+		db.batchInsertMedia = nil
+	}
+	if db.batchInsertTag != nil {
+		if closeErr := db.batchInsertTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTag")
+		}
+		db.batchInsertTag = nil
+	}
+	if db.batchInsertTagType != nil {
+		if closeErr := db.batchInsertTagType.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertTagType")
+		}
+		db.batchInsertTagType = nil
+	}
+	if db.batchInsertMediaTag != nil {
+		if closeErr := db.batchInsertMediaTag.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close batch inserter: batchInsertMediaTag")
+		}
+		db.batchInsertMediaTag = nil
+	}
+}
+
 // RollbackTransaction rolls back the current transaction and cleans up resources
 func (db *MediaDB) RollbackTransaction() error {
 	db.sqlMu.Lock()
@@ -428,8 +492,9 @@ func (db *MediaDB) RollbackTransaction() error {
 		return nil // No active transaction
 	}
 
-	// Clean up prepared statements first
+	// Clean up prepared statements and batch inserters first
 	db.closeAllPreparedStatements()
+	db.closeAllBatchInserters()
 
 	// Rollback the transaction
 	err := db.tx.Rollback()
@@ -450,8 +515,9 @@ func (db *MediaDB) rollbackAndLogError() {
 		return
 	}
 
-	// Clean up prepared statements first
+	// Clean up prepared statements and batch inserters first
 	db.closeAllPreparedStatements()
+	db.closeAllBatchInserters()
 
 	// Rollback the transaction
 	if rbErr := db.tx.Rollback(); rbErr != nil {
@@ -481,35 +547,89 @@ func (db *MediaDB) BeginTransaction() error {
 	}
 	db.tx = tx
 
-	// Prepare statements for batch operations - clean up on any error
-	if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, insertSystemSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert system statement: %w", err)
-	}
+	// Use batch inserters if enabled, otherwise use prepared statements
+	if db.enableBatchInserts {
+		// Initialize batch inserters for multi-row bulk inserts
+		// IMPORTANT: Column order must match the regular INSERT statements including DBID
+		// Systems does NOT use INSERT OR IGNORE - duplicates are handled by error recovery
+		// in AddMediaPath which needs to detect UNIQUE constraint violations to fetch existing DBIDs
+		if db.batchInsertSystem, err = NewBatchInserter(db.ctx, tx, "Systems",
+			[]string{"DBID", "SystemID", "Name"}, db.batchSize); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for systems: %w", err)
+		}
 
-	if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, insertMediaTitleSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert media title statement: %w", err)
-	}
+		if db.batchInsertMediaTitle, err = NewBatchInserter(db.ctx, tx, "MediaTitles",
+			[]string{"DBID", "SystemDBID", "Slug", "Name"}, db.batchSize); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
+		}
 
-	if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, insertMediaSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert media statement: %w", err)
-	}
+		if db.batchInsertMedia, err = NewBatchInserter(db.ctx, tx, "Media",
+			[]string{"DBID", "MediaTitleDBID", "SystemDBID", "Path"}, db.batchSize); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for media: %w", err)
+		}
 
-	if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, insertTagSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert tag statement: %w", err)
-	}
+		if db.batchInsertTag, err = NewBatchInserterWithOptions(db.ctx, tx, "Tags",
+			[]string{"DBID", "TypeDBID", "Tag"}, db.batchSize, true); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for tags: %w", err)
+		}
 
-	if db.stmtInsertTagType, err = tx.PrepareContext(db.ctx, insertTagTypeSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert tag type statement: %w", err)
-	}
+		if db.batchInsertTagType, err = NewBatchInserterWithOptions(db.ctx, tx, "TagTypes",
+			[]string{"DBID", "Type"}, db.batchSize, true); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for tag types: %w", err)
+		}
 
-	if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, insertMediaTagSQL); err != nil {
-		db.rollbackAndLogError()
-		return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
+		// MediaTags uses INSERT OR IGNORE to handle duplicates gracefully
+		if db.batchInsertMediaTag, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTags",
+			[]string{"MediaDBID", "TagDBID"}, db.batchSize, true); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to create batch inserter for media tags: %w", err)
+		}
+
+		// Set up foreign key dependencies to ensure proper flush order
+		// MediaTitles depends on Systems
+		db.batchInsertMediaTitle.SetDependencies(db.batchInsertSystem)
+		// Tags depends on TagTypes
+		db.batchInsertTag.SetDependencies(db.batchInsertTagType)
+		// Media depends on MediaTitles (and transitively on Systems)
+		db.batchInsertMedia.SetDependencies(db.batchInsertMediaTitle)
+		// MediaTags depends on both Media and Tags
+		db.batchInsertMediaTag.SetDependencies(db.batchInsertMedia, db.batchInsertTag)
+	} else {
+		// Prepare statements for batch operations - clean up on any error
+		if db.stmtInsertSystem, err = tx.PrepareContext(db.ctx, insertSystemSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert system statement: %w", err)
+		}
+
+		if db.stmtInsertMediaTitle, err = tx.PrepareContext(db.ctx, insertMediaTitleSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert media title statement: %w", err)
+		}
+
+		if db.stmtInsertMedia, err = tx.PrepareContext(db.ctx, insertMediaSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert media statement: %w", err)
+		}
+
+		if db.stmtInsertTag, err = tx.PrepareContext(db.ctx, insertTagSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert tag statement: %w", err)
+		}
+
+		if db.stmtInsertTagType, err = tx.PrepareContext(db.ctx, insertTagTypeSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert tag type statement: %w", err)
+		}
+
+		if db.stmtInsertMediaTag, err = tx.PrepareContext(db.ctx, insertMediaTagSQL); err != nil {
+			db.rollbackAndLogError()
+			return fmt.Errorf("failed to prepare insert media tag statement: %w", err)
+		}
 	}
 
 	// Set transaction flag to prevent excessive cache invalidations during batch operations
@@ -526,8 +646,13 @@ func (db *MediaDB) CommitTransaction() error {
 		return nil // No active transaction
 	}
 
-	// Always clean up prepared statements first
-	db.closeAllPreparedStatements()
+	// Flush all batch inserters before committing
+	if db.enableBatchInserts {
+		db.closeAllBatchInserters()
+	} else {
+		// Clean up prepared statements
+		db.closeAllPreparedStatements()
+	}
 
 	// Commit the transaction
 	err := db.tx.Commit()
@@ -1024,9 +1149,20 @@ func (db *MediaDB) FindSystemBySystemID(systemID string) (database.System, error
 }
 
 func (db *MediaDB) InsertSystem(row database.System) (database.System, error) {
-	// Use prepared statement if in transaction, otherwise fall back to original method
 	var result database.System
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertSystem != nil {
+		err = db.batchInsertSystem.Add(row.DBID, row.SystemID, row.Name)
+		if err != nil {
+			return row, fmt.Errorf("failed to add system to batch: %w", err)
+		}
+		// Return row as-is (DBID is already set by caller)
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertSystem != nil {
 		result, err = db.insertSystemWithPreparedStmt(row)
 	} else {
@@ -1054,9 +1190,20 @@ func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle,
 }
 
 func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
-	// Use prepared statement if in transaction, otherwise fall back to original method
 	var result database.MediaTitle
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertMediaTitle != nil {
+		err = db.batchInsertMediaTitle.Add(row.DBID, row.SystemDBID, row.Slug, row.Name)
+		if err != nil {
+			return row, fmt.Errorf("failed to add media title to batch: %w", err)
+		}
+		// Return row as-is (DBID is already set by caller)
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertMediaTitle != nil {
 		result, err = db.insertMediaTitleWithPreparedStmt(row)
 	} else {
@@ -1084,9 +1231,20 @@ func (db *MediaDB) FindMedia(row database.Media) (database.Media, error) {
 }
 
 func (db *MediaDB) InsertMedia(row database.Media) (database.Media, error) {
-	// Use prepared statement if in transaction, otherwise fall back to original method
 	var result database.Media
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertMedia != nil {
+		err = db.batchInsertMedia.Add(row.DBID, row.MediaTitleDBID, row.SystemDBID, row.Path)
+		if err != nil {
+			return row, fmt.Errorf("failed to add media to batch: %w", err)
+		}
+		// Return row as-is (DBID is already set by caller)
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertMedia != nil {
 		result, err = db.insertMediaWithPreparedStmt(row)
 	} else {
@@ -1117,6 +1275,18 @@ func (db *MediaDB) FindTagType(row database.TagType) (database.TagType, error) {
 func (db *MediaDB) InsertTagType(row database.TagType) (database.TagType, error) {
 	var result database.TagType
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertTagType != nil {
+		err = db.batchInsertTagType.Add(row.DBID, row.Type)
+		if err != nil {
+			return row, fmt.Errorf("failed to add tag type to batch: %w", err)
+		}
+		// Return row as-is (DBID is already set by caller)
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertTagType != nil {
 		result, err = db.insertTagTypeWithPreparedStmt(row)
 	} else {
@@ -1144,9 +1314,20 @@ func (db *MediaDB) FindTag(row database.Tag) (database.Tag, error) {
 }
 
 func (db *MediaDB) InsertTag(row database.Tag) (database.Tag, error) {
-	// Use prepared statement if in transaction, otherwise fall back to original method
 	var result database.Tag
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertTag != nil {
+		err = db.batchInsertTag.Add(row.DBID, row.TypeDBID, row.Tag)
+		if err != nil {
+			return row, fmt.Errorf("failed to add tag to batch: %w", err)
+		}
+		// Return row as-is (DBID is already set by caller)
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertTag != nil {
 		result, err = db.insertTagWithPreparedStmt(row)
 	} else {
@@ -1174,9 +1355,20 @@ func (db *MediaDB) FindMediaTag(row database.MediaTag) (database.MediaTag, error
 }
 
 func (db *MediaDB) InsertMediaTag(row database.MediaTag) (database.MediaTag, error) {
-	// Use prepared statement if in transaction, otherwise fall back to original method
 	var result database.MediaTag
 	var err error
+
+	// Use batch inserter if available
+	if db.batchInsertMediaTag != nil {
+		err = db.batchInsertMediaTag.Add(row.MediaDBID, row.TagDBID)
+		if err != nil {
+			return row, fmt.Errorf("failed to add media tag to batch: %w", err)
+		}
+		// Note: DBID not available in batch mode, caller must handle differently
+		return row, nil
+	}
+
+	// Use prepared statement if in transaction, otherwise fall back to original method
 	if db.stmtInsertMediaTag != nil {
 		result, err = db.insertMediaTagWithPreparedStmt(row)
 	} else {

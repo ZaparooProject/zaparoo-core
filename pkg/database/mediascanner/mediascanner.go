@@ -607,7 +607,11 @@ func NewNamesIndex(
 		maxTagTypeID, getMaxErr := db.GetMaxTagTypeID()
 		if getMaxErr != nil || maxTagTypeID == 0 {
 			log.Info().Msg("seeding known tags for fresh indexing")
+			// Temporarily disable batch inserts for SeedCanonicalTags
+			// This function relies on immediate error feedback for UNIQUE constraint handling
+			fdb.MediaDB.EnableBatchInserts(false)
 			err = SeedCanonicalTags(db, &scanState)
+			fdb.MediaDB.EnableBatchInserts(true) // Re-enable for main indexing
 			if err != nil {
 				return 0, fmt.Errorf("failed to seed known tags: %w", err)
 			}

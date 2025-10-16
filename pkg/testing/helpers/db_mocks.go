@@ -954,6 +954,15 @@ func (m *MockMediaDBI) TruncateSystems(systemIDs []string) error {
 	return nil
 }
 
+// Batch insert control methods
+func (m *MockMediaDBI) EnableBatchInserts(enable bool) {
+	m.Called(enable)
+}
+
+func (m *MockMediaDBI) SetBatchSize(size int) {
+	m.Called(size)
+}
+
 // GetMax*ID methods for resume functionality
 func (m *MockMediaDBI) GetMaxSystemID() (int64, error) {
 	args := m.Called()

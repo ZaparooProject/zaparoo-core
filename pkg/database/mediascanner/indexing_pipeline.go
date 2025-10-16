@@ -47,20 +47,28 @@ type PathFragmentKey struct {
 // Batching should be able to run with an assumed IDs
 // database.ScanState and DB transactions allow accumulation
 
+// FlushScanStateMaps clears the in-memory maps for titles and media to free memory
+// between transaction commits during batch indexing.
+//
+// IMPORTANT: SystemIDs, TagIDs, and TagTypeIDs are NOT cleared because:
+//   - They are global entities reused across all batches/systems
+//   - There are relatively few of them (~100-200 systems, ~40 tag types)
+//   - Clearing SystemIDs causes duplicate insert attempts with batch inserts enabled
+//   - Preserving them prevents UNIQUE constraint violations on subsequent inserts
 func FlushScanStateMaps(ss *database.ScanState) {
 	// Clear maps by deleting all keys instead of reallocating
 	// This reuses the underlying memory allocation
-	for k := range ss.SystemIDs {
-		delete(ss.SystemIDs, k)
-	}
+
+	// SystemIDs preserved - DO NOT clear (causes UNIQUE constraint violations with batch inserts)
+	// TagIDs preserved - reused across systems
+	// TagTypeIDs preserved - reused across systems
+
 	for k := range ss.TitleIDs {
 		delete(ss.TitleIDs, k)
 	}
 	for k := range ss.MediaIDs {
 		delete(ss.MediaIDs, k)
 	}
-	// Note: TagIDs and TagTypeIDs are preserved across batches for performance
-	// since tags are typically reused across different systems
 }
 
 func AddMediaPath(

@@ -128,6 +128,9 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		return db, fmt.Errorf("error migrating mediadb: %w", err)
 	}
 
+	mediaDB.EnableBatchInserts(true)
+	log.Info().Msg("enabled batch inserts for media database")
+
 	db.MediaDB = mediaDB
 
 	userDB, err := userdb.OpenUserDB(ctx, pl)
