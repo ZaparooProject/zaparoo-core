@@ -31,21 +31,24 @@ import (
 
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
-// 10-Stage Normalization Pipeline:
+// 13-Stage Normalization Pipeline:
 //   Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
-//   Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
+//   Stage 2: Punctuation Normalization - Curly quotes, dashes → standard ASCII forms
+//   Stage 3: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
 //            "Sonic™" → "Sonic", "Pokémon" → "Pokemon"
-//   Stage 3: Secondary Title Decomposition - Split on ":", " - ", or "'s "
+//   Stage 4: Metadata Stripping - "(USA) [!]" removed
+//   Stage 5: Secondary Title Decomposition - Split on ":", " - ", or "'s "
 //            Strip leading articles from both main and secondary titles
 //            "Zelda: The Minish Cap" → "Zelda Minish Cap"
-//   Stage 4: Trailing Article Normalization - "Legend, The" → "Legend"
-//   Stage 5: Symbol and Separator Normalization - "&"→"and", "+"→"plus", "vs"→"versus", etc.
+//   Stage 6: Trailing Article Normalization - "Legend, The" → "Legend"
+//   Stage 7: Symbol and Separator Normalization - "&"→"and", "+"→"plus", "vs"→"versus", etc.
 //            "Mario vs DK" → "Mario versus DK", "Bros."→"Brothers", "Dr."→"Doctor"
-//   Stage 6: Metadata Stripping - "(USA) [!]" removed
-//   Stage 7: Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
-//   Stage 8: Ordinal Number Normalization - "1st"→"1", "2nd"→"2", "3rd"→"3"
-//   Stage 9: Roman Numeral Conversion - "VII" → "7"
-//   Stage 10: Final Slugification - Lowercase, alphanumeric (preserves CJK when detected)
+//   Stage 8: Edition/Version Suffix Stripping - "Game Deluxe Edition" → "Game"
+//   Stage 9: Abbreviation Expansion - "Bros" → "Brothers", "Dr" → "Doctor"
+//   Stage 10: Period Conversion - All periods → spaces (after abbreviations expanded)
+//   Stage 11: Number Word Expansion - "one" → "1", "two" → "2"
+//   Stage 12: Ordinal Number Normalization - "1st"→"1", "2nd"→"2", "3rd"→"3"
+//   Stage 13: Roman Numeral Conversion - "VII" → "7"
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)
@@ -143,9 +146,9 @@ func NormalizeWidth(s string) string {
 
 // NormalizePunctuation normalizes Unicode punctuation variants to their ASCII equivalents.
 // This ensures consistent behavior across all pipeline stages, particularly for:
-//   - Conjunction detection (" 'n' " patterns in Stage 5)
-//   - Separator normalization (dash handling in Stage 5)
-//   - Abbreviation expansion (word boundary detection in Stage 5)
+//   - Conjunction detection (" 'n' " patterns in Stage 7)
+//   - Separator normalization (dash handling in Stage 7)
+//   - Abbreviation expansion (word boundary detection in Stage 9)
 //
 // Normalized characters:
 //   - Curly quotes: ' ' " " → ' "
@@ -159,8 +162,8 @@ func NormalizeWidth(s string) string {
 //   - "Super–Bros." → "Super-Bros." (en dash → hyphen, enables "Bros" expansion)
 //   - "Rock 'n' Roll" → "Rock 'n' Roll" (curly quotes → straight, enables conjunction)
 //
-// This is part of Stage 1 of the normalization pipeline (character-level normalization).
-// Must be called BEFORE Stage 2 (NFKC) and Stage 5 (symbol/separator processing).
+// This is Stage 2 of the normalization pipeline (character-level normalization).
+// Must be called BEFORE Stage 3 (Unicode normalization) and Stage 7 (symbol/separator processing).
 func NormalizePunctuation(s string) string {
 	// Quote and apostrophe variants
 	s = strings.ReplaceAll(s, "\u2018", "'")  // Left single quotation mark
@@ -198,7 +201,7 @@ func NormalizePunctuation(s string) string {
 //   - Ligatures: "ﬁnal" → "final"
 //   - CJK preserved: "ドラゴンクエスト" → "ドラゴンクエスト"
 //
-// This is Stage 2 of the normalization pipeline.
+// This is Stage 3 of the normalization pipeline.
 // Returns the input unchanged if normalization fails or if input is pure ASCII.
 func NormalizeUnicode(s string) string {
 	// Skip Unicode processing for pure ASCII strings (optimization)
@@ -229,7 +232,7 @@ func NormalizeUnicode(s string) string {
 //   - "Mega Man, The" → "Mega Man"
 //   - "Story, the:" → "Story:" (case insensitive)
 //
-// This is Stage 4 of the normalization pipeline.
+// This is Stage 6 of the normalization pipeline.
 func StripTrailingArticle(s string) string {
 	if trailingArticleRegex.MatchString(s) {
 		s = trailingArticleRegex.ReplaceAllString(s, "$1")
@@ -244,8 +247,8 @@ func SlugifyString(input string) string {
 		return ""
 	}
 
-	// Stage 10: Final Slugification (Multi-Script Aware)
-	// Note: s is already lowercase from Stage 9 (ConvertRomanNumerals)
+	// Stage 14: Final Slugification (Multi-Script Aware)
+	// Note: s is already lowercase from Stage 13 (ConvertRomanNumerals)
 
 	// Create both ASCII-only and Unicode-preserving versions
 	// Note: Even for ASCII strings, we need both slugs for proper script detection logic
@@ -397,7 +400,7 @@ func StripMetadataBrackets(s string) string {
 //   - English: version, edition
 //   - German: ausgabe (edition)
 //   - Italian: versione, edizione
-//   - Portuguese: versao, edicao (after diacritic normalization in Stage 2)
+//   - Portuguese: versao, edicao (after diacritic normalization in Stage 3)
 //   - Japanese: バージョン (version), エディション (edition), ヴァージョン (version alt.)
 //
 // Examples:
@@ -406,6 +409,8 @@ func StripMetadataBrackets(s string) string {
 //   - "Super Mario Edition" → "Super Mario"
 //   - "ドラゴンクエストバージョン" → "ドラゴンクエスト" (CJK)
 //   - "Game Special Edition" → "Game Special" (Edition stripped, Special kept)
+//
+// This is Stage 8 of the normalization pipeline.
 func StripEditionAndVersionSuffixes(s string) string {
 	// Strip edition/version suffix words regardless of word count
 	s = editionSuffixRegex.ReplaceAllString(s, "")
@@ -432,7 +437,7 @@ func StripEditionAndVersionSuffixes(s string) string {
 //   - "Super_Mario_Bros" → "Super Mario Bros"
 //   - "Game/Part\One" → "Game Part One"
 //
-// This is Stage 3 of the normalization pipeline.
+// This is Stage 7 of the normalization pipeline.
 func NormalizeSymbolsAndSeparators(s string) string {
 	// Conjunction normalization
 	// Note: We handle "&" and "+" which may have surrounding spaces
@@ -473,6 +478,8 @@ func NormalizeSymbolsAndSeparators(s string) string {
 //   - "St. Louis Blues" → "Saint Louis Blues"
 //   - "Song feat. Artist" → "Song featuring Artist"
 //   - "A great feat" → "A great feat" (not expanded)
+//
+// This is Stage 9 of the normalization pipeline.
 func ExpandAbbreviations(s string) string {
 	// Abbreviations that REQUIRE a period (checked first, before stripping)
 	periodRequired := map[string]string{
@@ -523,6 +530,8 @@ func ExpandAbbreviations(s string) string {
 //   - "Game One" → "Game 1"
 //   - "Part Two" → "Part 2"
 //   - "Street Fighter Two" → "Street Fighter 2"
+//
+// This is Stage 11 of the normalization pipeline.
 func ExpandNumberWords(s string) string {
 	words := strings.Fields(s)
 	for i, word := range words {
@@ -552,7 +561,7 @@ func ExpandNumberWords(s string) string {
 //   - "21st Century" → "21 Century"
 //   - "3rd Strike" → "3 Strike"
 //
-// This is Stage 8 of the normalization pipeline (after edition stripping, before roman numerals).
+// This is Stage 12 of the normalization pipeline (after number expansion, before roman numerals).
 func NormalizeOrdinals(s string) string {
 	return ordinalSuffixRegex.ReplaceAllString(s, "$1")
 }
@@ -565,7 +574,7 @@ func NormalizeOrdinals(s string) string {
 //   - "Street Fighter II" → "Street Fighter 2"
 //   - "Mega Man X" → "Mega Man X" (unchanged)
 //
-// This is Stage 9 of the normalization pipeline.
+// This is Stage 13 of the normalization pipeline.
 func ConvertRomanNumerals(s string) string {
 	// Early exit: skip processing if no Roman numeral characters present
 	// Always lowercase before returning since this is the last stage of normalizeInternal
@@ -627,7 +636,8 @@ func isWordChar(r rune) bool {
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
-// This function runs Stages 1-9 of SlugifyString but STOPS before Stage 10 (final alphanumeric collapse).
+// This function runs Stages 1-13 of the normalization pipeline (all stages from normalizeInternal)
+// but STOPS before Stage 14 (final character filtering in SlugifyString).
 //
 // The result preserves spaces between words, enabling word-level operations like:
 //   - Token-based similarity matching
@@ -663,95 +673,89 @@ func NormalizeToWords(input string) []string {
 	return strings.Fields(s)
 }
 
-// normalizeInternal performs Stages 1-9 of the slug normalization pipeline.
+// normalizeInternal performs Stages 1-13 of the slug normalization pipeline.
 // This function is shared by both SlugifyString and NormalizeToWords to eliminate
 // code duplication and ensure consistent normalization behavior.
 //
-// Reorganized Pipeline (6 Phases):
+// 13-Stage Normalization Pipeline (execution order):
 //
-//	PHASE 1: CHARACTER NORMALIZATION
-//	  Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
-//	  Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
-//	  Stage 3: Punctuation Normalization - Curly quotes, dashes to standard forms
+//	Stage 1: Width Normalization - Fullwidth↔Halfwidth conversion
+//	Stage 2: Punctuation Normalization - Curly quotes, dashes → ASCII forms
+//	Stage 3: Unicode Normalization - Symbols, diacritics removed; script-aware processing
+//	Stage 4: Metadata Stripping - Removes brackets like (USA), [!], etc.
+//	Stage 5: Secondary Title Decomposition - Splits on ":", " - ", "'s " and strips leading articles
+//	Stage 6: Trailing Article Removal - Removes patterns like ", The" at end
+//	Stage 7: Symbol/Separator Normalization - "&"→"and", "+"→"plus", etc.; separators→spaces
+//	Stage 8: Edition/Version Suffix Stripping - Removes "Edition", "Version", etc.
+//	Stage 9: Abbreviation Expansion - "Bros"→"Brothers", "Dr"→"Doctor", etc.
+//	Stage 10: Period Conversion - All periods → spaces (safe after abbreviation expansion)
+//	Stage 11: Number Word Expansion - "one"→"1", "two"→"2", etc.
+//	Stage 12: Ordinal Normalization - "1st"→"1", "2nd"→"2", "3rd"→"3"
+//	Stage 13: Roman Numeral Conversion - "VII"→"7", "II"→"2", etc. (includes lowercasing)
 //
-//	PHASE 2: STRUCTURAL CLEANUP (remove noise, detect structure)
-//	  Stage 4: Metadata Stripping - Remove brackets (USA), [!], etc.
-//	  Stage 5: Edition/Version Suffix Stripping - "Game Edition" → "Game"
-//	  Stage 6: Secondary Title Decomposition - Split on :, -, 's and strip articles
-//	  Stage 7: Trailing Article Removal - "Legend, The" → "Legend"
-//
-//	PHASE 3: SEMANTIC EXPANSION (preserves punctuation for abbreviation detection)
-//	  Stage 8: Expand Abbreviations - Bros. → Brothers, Dr. → Doctor (needs periods)
-//	  Stage 9: Normalize Conjunctions - & → and (already in NormalizeSymbolsAndSeparators)
-//
-//	PHASE 4: SEPARATOR NORMALIZATION (destroy all punctuation)
-//	  Stage 10: Normalize Symbols and Separators - & + conjunctions, : _ - / \ , ; separators
-//	  Stage 11: Convert Periods to Space - Now safe, abbreviations already expanded
-//
-//	PHASE 5: NUMBER NORMALIZATION (clean word boundaries)
-//	  Stage 12: Expand Number Words - one → 1, two → 2 (all separators now spaces)
-//	  Stage 13: Normalize Ordinals - 1st → 1, 2nd → 2
-//	  Stage 14: Convert Roman Numerals - VII → 7 (includes lowercasing)
+// Note: Stages are ordered for correctness, not logical grouping. For example, separators
+// are normalized (Stage 7) before edition stripping (Stage 8) to ensure regex matching works
+// correctly when separators are converted to spaces.
 //
 // Returns the normalized string with preserved spaces and lowercase text.
-// The final Stage 15 (character filtering) is applied separately by the calling function.
+// Final character filtering (Stage 14 in SlugifyString) is applied separately by calling function.
 func normalizeInternal(input string) string {
 	s := strings.TrimSpace(input)
 	if s == "" {
 		return ""
 	}
 
-	// PHASE 1: CHARACTER NORMALIZATION
+	// CHARACTER NORMALIZATION (Stages 1-3)
+	// Note: Stages 1-3 are skipped for ASCII-only strings (optimization)
 	if !isASCII(s) {
-		// Stage 1: Width Normalization (skip for ASCII-only strings)
+		// Stage 1: Width Normalization
 		s = NormalizeWidth(s)
 
-		// Stage 3: Punctuation Normalization (must happen before Phase 2)
-		// This ensures curly quotes/dashes normalize before conjunction/separator detection
+		// Stage 2: Punctuation Normalization (must happen before Stage 3)
+		// This ensures curly quotes/dashes normalize before unicode processing
 		s = NormalizePunctuation(s)
 
-		// Stage 2: Unicode Normalization (skip for ASCII-only strings)
+		// Stage 3: Unicode Normalization
 		s = NormalizeUnicode(s)
 	}
 
-	// PHASE 2: STRUCTURAL CLEANUP
-	// Stage 4: Metadata Stripping (before other text processing)
+	// STRUCTURAL CLEANUP (Stages 4-6)
+	// Stage 4: Metadata Stripping
 	s = StripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
-	// Stage 6: Secondary Title Decomposition and Article Stripping
+	// Stage 5: Secondary Title Decomposition and Article Stripping
 	s = splitAndStripArticles(s)
 
-	// Stage 7: Trailing Article Removal
+	// Stage 6: Trailing Article Removal
 	s = StripTrailingArticle(s)
 
-	// PHASE 3: SEMANTIC EXPANSION (must happen BEFORE period conversion)
-	// PHASE 4: SEPARATOR NORMALIZATION
-	// Stage 10: Normalize Symbols and Separators (: _ - / \ , ; but NOT .)
+	// SEPARATOR & ABBREVIATION NORMALIZATION (Stages 7-9)
+	// Stage 7: Normalize Symbols and Separators (: _ - / \ , ; but NOT .)
 	// This must happen BEFORE abbreviation expansion so "Bros-" becomes "Bros "
 	s = NormalizeSymbolsAndSeparators(s)
 
-	// Stage 5: Edition/Version Suffix Stripping (after separators normalized)
+	// Stage 8: Edition/Version Suffix Stripping (after separators normalized)
 	// This must happen AFTER separator normalization so "Subtitle-Edition" becomes "Subtitle Edition"
 	// and the regex can match the space before "Edition"
 	s = StripEditionAndVersionSuffixes(s)
 
-	// Stage 8: Expand Abbreviations (now runs after separators converted to spaces)
+	// Stage 9: Expand Abbreviations (now runs after separators converted to spaces)
 	// This allows "Bros-" → "Bros " → "brothers"
 	// Periods are still intact for period-required abbreviations like "feat."
 	s = ExpandAbbreviations(s)
 
-	// Stage 11: Convert Periods to Space (now safe, abbreviations already expanded)
+	// PERIOD & NUMBER NORMALIZATION (Stages 10-13)
+	// Stage 10: Convert Periods to Space (now safe, abbreviations already expanded)
 	s = strings.ReplaceAll(s, ".", " ")
 
-	// PHASE 5: NUMBER NORMALIZATION (clean word boundaries now)
-	// Stage 12: Expand Number Words (all separators now spaces, so word boundaries are clean)
+	// Stage 11: Expand Number Words
 	s = ExpandNumberWords(s)
 
-	// Stage 13: Ordinal Number Normalization
+	// Stage 12: Ordinal Number Normalization
 	s = NormalizeOrdinals(s)
 
-	// Stage 14: Roman Numeral Conversion (includes lowercasing)
+	// Stage 13: Roman Numeral Conversion (includes lowercasing)
 	s = ConvertRomanNumerals(s)
 
 	return strings.TrimSpace(s)
