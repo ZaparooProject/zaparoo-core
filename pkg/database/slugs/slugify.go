@@ -79,8 +79,7 @@ var (
 )
 
 // romanNumeralReplacementTable defines pattern-to-number mappings for roman numeral conversion.
-// - X is intentionally omitted to avoid avoid games like "Mega Man X" being converted.
-// - I is handled as a special case in ConvertRomanNumerals with pronoun disambiguation.
+// - X is intentionally omitted to avoid games like "Mega Man X" being converted to "Mega Man 10".
 // This is basically a best effort approach to cover common misspellings but not need to have
 // some exhausting full roman numeral parser.
 var romanNumeralReplacementTable = []struct{ pattern, replacement string }{
@@ -101,23 +100,15 @@ var romanNumeralReplacementTable = []struct{ pattern, replacement string }{
 	{"V", "5"},
 	{"III", "3"},
 	{"II", "2"},
+	{"I", "1"},
 }
 
-// iPronounVerbs is a map of common verbs that appear adjacent to the pronoun "I".
-// Used for bidirectional disambiguation between English pronoun "I" and Roman numeral "I".
-// These verbs can appear either before ("am I", "can I") or after ("I want", "I die") the pronoun.
-// Performance: O(1) map lookup, only checked when standalone "I" is encountered.
-var iPronounVerbs = map[string]bool{
-	// Auxiliary/modal verbs (can appear on either side of "I")
-	"AM": true, "WAS": true, "WILL": true, "CAN": true, "COULD": true,
-	"SHOULD": true, "WOULD": true, "MAY": true, "MIGHT": true, "MUST": true,
-	"HAVE": true, "HAD": true, "DO": true, "DID": true,
-
-	// Common action verbs in game titles (typically follow "I")
-	"WANT": true, "WANNA": true, "NEED": true, "LOVE": true, "LIKE": true,
-	"KNOW": true, "THINK": true, "SEE": true, "GOT": true, "GOTTA": true,
-	"DIE": true, "LIVE": true, "PLAY": true, "KILL": true,
-	"KEEP": true, "BECAME": true, "BECOME": true, "DREAM": true,
+// Number words (1-20)
+var numberWords = map[string]string{
+	"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+	"six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+	"eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15",
+	"sixteen": "16", "seventeen": "17", "eighteen": "18", "nineteen": "19", "twenty": "20",
 }
 
 // isASCII checks if a string contains only ASCII characters (bytes < 128).
@@ -398,10 +389,7 @@ func StripMetadataBrackets(s string) string {
 }
 
 // StripEditionAndVersionSuffixes removes edition/version words and version numbers from game titles.
-// Only strips standalone words ("version", "edition") and their multi-language equivalents when
-// the title has 3 or more words (Latin scripts only). This prevents collisions between "Game" and
-// "Game Edition". CJK and other non-Latin scripts always strip regardless of word count since
-// word boundaries are not space-delimited.
+// Strips standalone words ("version", "edition") and their multi-language equivalents from all titles.
 // Does NOT strip semantic edition markers like "Special", "Ultimate", "Remastered" - these
 // represent different products and users may want to target them specifically.
 //
@@ -413,32 +401,17 @@ func StripMetadataBrackets(s string) string {
 //   - Japanese: バージョン (version), エディション (edition), ヴァージョン (version alt.)
 //
 // Examples:
-//   - "Pokemon Red Version" → "Pokemon Red" (3 words, stripped)
-//   - "Game Edition" → "Game Edition" (2 words, preserved)
-//   - "Super Mario Edition" → "Super Mario" (3 words, stripped)
-//   - "ドラゴンクエストバージョン" → "ドラゴンクエスト" (CJK always stripped)
-//   - "Game Special Edition" → "Game Special" (3 words, Edition stripped, Special kept)
+//   - "Pokemon Red Version" → "Pokemon Red"
+//   - "Game Edition" → "Game"
+//   - "Super Mario Edition" → "Super Mario"
+//   - "ドラゴンクエストバージョン" → "ドラゴンクエスト" (CJK)
+//   - "Game Special Edition" → "Game Special" (Edition stripped, Special kept)
 func StripEditionAndVersionSuffixes(s string) string {
-	// Detect script - CJK/non-Latin scripts always strip regardless of word count
-	script := detectScript(s)
-	isCJKOrNonLatin := needsUnicodeSlug(script)
+	// Strip edition/version suffix words regardless of word count
+	s = editionSuffixRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
 
-	// Edition suffix words (version, edition, etc.) are detected and tagged in filename_parser.go
-	// as edition:version or edition:edition tags before being stripped here.
-	// For Latin scripts, only strip if title has 3+ words
-	if !isCJKOrNonLatin {
-		wordCount := len(strings.Fields(s))
-		if wordCount > 2 {
-			s = editionSuffixRegex.ReplaceAllString(s, "")
-			s = strings.TrimSpace(s)
-		}
-	} else {
-		s = editionSuffixRegex.ReplaceAllString(s, "")
-		s = strings.TrimSpace(s)
-	}
-
-	// Version numbers (v1.0, v2.3, etc.) are detected and tagged in filename_parser.go
-	// as rev:X-Y tags before being stripped here.
+	// Version numbers (v1.0, v2.3, etc.)
 	s = versionSuffixRegex.ReplaceAllString(s, "")
 	s = strings.TrimSpace(s)
 
@@ -448,7 +421,8 @@ func StripEditionAndVersionSuffixes(s string) string {
 // NormalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
 // Handles conjunctions: "&", " + ", " 'n' " variants → "and"
 // Handles plus symbol: "+" → "plus"
-// Handles separators: ":", "_", "-" → space
+// Handles separators: ":", "_", "-", "/", "\", ",", ";" → space
+// NOTE: Period "." is NOT converted here; it's handled after abbreviation expansion
 //
 // Examples:
 //   - "Sonic & Knuckles" → "Sonic and Knuckles"
@@ -456,8 +430,9 @@ func StripEditionAndVersionSuffixes(s string) string {
 //   - "Game+" → "Game plus"
 //   - "Zelda:Link" → "Zelda Link"
 //   - "Super_Mario_Bros" → "Super Mario Bros"
+//   - "Game/Part\One" → "Game Part One"
 //
-// This is Stage 5 of the normalization pipeline.
+// This is Stage 3 of the normalization pipeline.
 func NormalizeSymbolsAndSeparators(s string) string {
 	// Conjunction normalization
 	// Note: We handle "&" and "+" which may have surrounding spaces
@@ -472,10 +447,10 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	// Plus symbol normalization (for titles like "Game+" or "Mario Kart 8+")
 	s = strings.ReplaceAll(s, "+", " plus ")
 
-	// Separator normalization
+	// Separator normalization (excluding period, which is handled after abbreviation expansion)
 	s = strings.Map(func(r rune) rune {
 		switch r {
-		case ':', '_', '-':
+		case ':', '_', '-', '/', '\\', ',', ';':
 			return ' '
 		default:
 			return r
@@ -485,34 +460,25 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	return s
 }
 
-// ExpandCommonAbbreviations expands common abbreviations found in game titles.
+// ExpandAbbreviations expands common abbreviations found in game titles.
 // Uses word boundaries to avoid false matches (e.g., "versus" won't become "versuersus").
 // Handles two types of abbreviations:
 //  1. Period-required: Only expand when period is present (e.g., "feat." but not "feat")
 //  2. Flexible: Expand with or without period (e.g., "vs" or "vs.")
 //
-// Expanded abbreviations:
-//   - vs/vs. → versus
-//   - bros/bros. → brothers
-//   - dr/dr. → doctor
-//   - mr/mr. → mister
-//   - vol/vol. → volume
-//   - pt/pt. → part
-//   - ft/ft. → featuring
-//   - feat. → featuring (period required; "feat" alone is not expanded)
-//
 // Examples:
 //   - "Mario vs Donkey Kong" → "Mario versus Donkey Kong"
 //   - "Super Mario Bros." → "Super Mario Brothers"
 //   - "Dr. Mario" → "Doctor Mario"
-//   - "Game Vol. 2" → "Game volume 2"
+//   - "St. Louis Blues" → "Saint Louis Blues"
 //   - "Song feat. Artist" → "Song featuring Artist"
 //   - "A great feat" → "A great feat" (not expanded)
-func ExpandCommonAbbreviations(s string) string {
+func ExpandAbbreviations(s string) string {
 	// Abbreviations that REQUIRE a period (checked first, before stripping)
 	periodRequired := map[string]string{
 		"feat.": "featuring", // "feat" alone is a real word (achievement)
 		"no.":   "number",    // "no" alone is a word
+		"st.":   "saint",     // "st" usually means "street"
 	}
 
 	// Abbreviations that work with OR without period
@@ -541,6 +507,36 @@ func ExpandCommonAbbreviations(s string) string {
 		// Second check: strip period and check general abbreviations
 		lowerWord = strings.TrimSuffix(lowerWord, ".")
 		if expansion, found := withOrWithoutPeriod[lowerWord]; found {
+			words[i] = expansion
+		}
+	}
+
+	return strings.Join(words, " ")
+}
+
+// ExpandNumberWords expands number words (one, two, three, etc.) to their numeric forms.
+// Handles words 1-20 in both forms:
+//   - "one" or "one." → "1"
+//   - "twenty" or "twenty." → "20"
+//
+// Examples:
+//   - "Game One" → "Game 1"
+//   - "Part Two" → "Part 2"
+//   - "Street Fighter Two" → "Street Fighter 2"
+func ExpandNumberWords(s string) string {
+	words := strings.Fields(s)
+	for i, word := range words {
+		lowerWord := strings.ToLower(word)
+
+		// Check number words (before period stripping)
+		if expansion, found := numberWords[lowerWord]; found {
+			words[i] = expansion
+			continue
+		}
+
+		// Strip period and check again (e.g., "two." → "2")
+		lowerWord = strings.TrimSuffix(lowerWord, ".")
+		if expansion, found := numberWords[lowerWord]; found {
 			words[i] = expansion
 		}
 	}
@@ -614,23 +610,6 @@ func ConvertRomanNumerals(s string) string {
 			}
 		}
 
-		// Special case for single "I" - disambiguate pronoun vs numeral
-		if !matched && upperS[i] == 'I' {
-			endIdx := i + 1
-			if endIdx == len(upperS) || !isWordChar(rune(upperS[endIdx])) {
-				// At word boundary - check if it's a pronoun or numeral
-				if isIPronoun(upperS, i) {
-					// It's a pronoun (e.g., "When I Die", "Where Am I?") - keep as "i"
-					result.WriteByte('I')
-				} else {
-					// It's a numeral (e.g., "Final Fantasy I", "Part I") - convert to "1"
-					result.WriteString("1")
-				}
-				i++
-				matched = true
-			}
-		}
-
 		if !matched {
 			result.WriteByte(upperS[i])
 			i++
@@ -645,81 +624,6 @@ func ConvertRomanNumerals(s string) string {
 func isWordChar(r rune) bool {
 	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
 		(r >= '0' && r <= '9') || r == '_' || unicode.IsLetter(r)
-}
-
-// isIPronoun determines if a standalone "I" should be treated as a pronoun rather than
-// a Roman numeral using bidirectional linguistic pattern matching.
-//
-// Pronoun indicators:
-//   - Followed by verbs: "I want", "I can", "I die"
-//   - Preceded by verbs: "am I", "can I", "should I"
-//   - Followed by punctuation: "Where am I?", "Can I!"
-//
-// Numeral indicators (default):
-//   - End of title: "Final Fantasy I", "Part I"
-//   - Followed by non-verb: "Game I:", "Chapter I -"
-//   - No verb context: "Puzzle I"
-//
-// Performance: Only called when standalone "I" at word boundary is encountered.
-// Uses O(1) map lookup and simple character checks. Zero allocations in hot path.
-func isIPronoun(s string, iPos int) bool {
-	// ==================== Check Following Context ====================
-	// Skip whitespace after "I"
-	pos := iPos + 1
-	for pos < len(s) && s[pos] == ' ' {
-		pos++
-	}
-
-	if pos < len(s) {
-		nextChar := rune(s[pos])
-
-		// Punctuation check: "Where Am I?" or "Can I!" → pronoun
-		if nextChar == '?' || nextChar == '!' {
-			return true
-		}
-
-		// Extract the following word
-		wordStart := pos
-		for pos < len(s) && isWordChar(rune(s[pos])) {
-			pos++
-		}
-
-		// Verb check: "I want", "I die" → pronoun
-		if pos > wordStart {
-			followingWord := s[wordStart:pos]
-			if iPronounVerbs[followingWord] {
-				return true
-			}
-		}
-	}
-
-	// ==================== Check Preceding Context ====================
-	// Skip whitespace before "I"
-	pos = iPos - 1
-	for pos >= 0 && s[pos] == ' ' {
-		pos--
-	}
-
-	// No preceding word (start of string) → assume numeral
-	if pos < 0 {
-		return false
-	}
-
-	// Extract the preceding word
-	// pos is currently at the last character of the previous word
-	wordEnd := pos + 1
-	for pos >= 0 && isWordChar(rune(s[pos])) {
-		pos--
-	}
-	wordStart := pos + 1
-
-	// Verb check: "am I", "can I", "should I" → pronoun
-	if wordEnd > wordStart {
-		precedingWord := s[wordStart:wordEnd]
-		return iPronounVerbs[precedingWord]
-	}
-
-	return false
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
@@ -763,31 +667,46 @@ func NormalizeToWords(input string) []string {
 // This function is shared by both SlugifyString and NormalizeToWords to eliminate
 // code duplication and ensure consistent normalization behavior.
 //
-// Stages performed:
+// Reorganized Pipeline (6 Phases):
 //
-//	Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
-//	Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
-//	Stage 3: Secondary Title Decomposition and Article Stripping
-//	Stage 4: Trailing Article Normalization
-//	Stage 5: Symbol and Separator Normalization (includes abbreviation expansion)
-//	Stage 6: Metadata Stripping
-//	Stage 7: Edition/Version Suffix Stripping
-//	Stage 8: Ordinal Number Normalization (1st→1, 2nd→2, etc.)
-//	Stage 9: Roman Numeral Conversion (includes lowercasing)
+//	PHASE 1: CHARACTER NORMALIZATION
+//	  Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
+//	  Stage 2: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
+//	  Stage 3: Punctuation Normalization - Curly quotes, dashes to standard forms
+//
+//	PHASE 2: STRUCTURAL CLEANUP (remove noise, detect structure)
+//	  Stage 4: Metadata Stripping - Remove brackets (USA), [!], etc.
+//	  Stage 5: Edition/Version Suffix Stripping - "Game Edition" → "Game"
+//	  Stage 6: Secondary Title Decomposition - Split on :, -, 's and strip articles
+//	  Stage 7: Trailing Article Removal - "Legend, The" → "Legend"
+//
+//	PHASE 3: SEMANTIC EXPANSION (preserves punctuation for abbreviation detection)
+//	  Stage 8: Expand Abbreviations - Bros. → Brothers, Dr. → Doctor (needs periods)
+//	  Stage 9: Normalize Conjunctions - & → and (already in NormalizeSymbolsAndSeparators)
+//
+//	PHASE 4: SEPARATOR NORMALIZATION (destroy all punctuation)
+//	  Stage 10: Normalize Symbols and Separators - & + conjunctions, : _ - / \ , ; separators
+//	  Stage 11: Convert Periods to Space - Now safe, abbreviations already expanded
+//
+//	PHASE 5: NUMBER NORMALIZATION (clean word boundaries)
+//	  Stage 12: Expand Number Words - one → 1, two → 2 (all separators now spaces)
+//	  Stage 13: Normalize Ordinals - 1st → 1, 2nd → 2
+//	  Stage 14: Convert Roman Numerals - VII → 7 (includes lowercasing)
 //
 // Returns the normalized string with preserved spaces and lowercase text.
-// The final Stage 10 (character filtering) is applied separately by the calling function.
+// The final Stage 15 (character filtering) is applied separately by the calling function.
 func normalizeInternal(input string) string {
 	s := strings.TrimSpace(input)
 	if s == "" {
 		return ""
 	}
 
+	// PHASE 1: CHARACTER NORMALIZATION
 	if !isASCII(s) {
-		// Stage 1a: Width Normalization (skip for ASCII-only strings)
+		// Stage 1: Width Normalization (skip for ASCII-only strings)
 		s = NormalizeWidth(s)
 
-		// Stage 1b: Punctuation Normalization (must happen before Stage 2 and Stage 5)
+		// Stage 3: Punctuation Normalization (must happen before Phase 2)
 		// This ensures curly quotes/dashes normalize before conjunction/separator detection
 		s = NormalizePunctuation(s)
 
@@ -795,27 +714,44 @@ func normalizeInternal(input string) string {
 		s = NormalizeUnicode(s)
 	}
 
-	// Stage 3: Secondary Title Decomposition and Article Stripping
-	s = splitAndStripArticles(s)
-
-	// Stage 4: Trailing Article Removal
-	s = StripTrailingArticle(s)
-
-	// Stage 5: Symbol and Separator Normalization (includes abbreviation expansion)
-	s = NormalizeSymbolsAndSeparators(s)
-	s = ExpandCommonAbbreviations(s)
-
-	// Stage 6: Metadata Stripping
+	// PHASE 2: STRUCTURAL CLEANUP
+	// Stage 4: Metadata Stripping (before other text processing)
 	s = StripMetadataBrackets(s)
 	s = strings.TrimSpace(s)
 
-	// Stage 7: Edition/Version Suffix Stripping
+	// Stage 6: Secondary Title Decomposition and Article Stripping
+	s = splitAndStripArticles(s)
+
+	// Stage 7: Trailing Article Removal
+	s = StripTrailingArticle(s)
+
+	// PHASE 3: SEMANTIC EXPANSION (must happen BEFORE period conversion)
+	// PHASE 4: SEPARATOR NORMALIZATION
+	// Stage 10: Normalize Symbols and Separators (: _ - / \ , ; but NOT .)
+	// This must happen BEFORE abbreviation expansion so "Bros-" becomes "Bros "
+	s = NormalizeSymbolsAndSeparators(s)
+
+	// Stage 5: Edition/Version Suffix Stripping (after separators normalized)
+	// This must happen AFTER separator normalization so "Subtitle-Edition" becomes "Subtitle Edition"
+	// and the regex can match the space before "Edition"
 	s = StripEditionAndVersionSuffixes(s)
 
-	// Stage 8: Ordinal Number Normalization
+	// Stage 8: Expand Abbreviations (now runs after separators converted to spaces)
+	// This allows "Bros-" → "Bros " → "brothers"
+	// Periods are still intact for period-required abbreviations like "feat."
+	s = ExpandAbbreviations(s)
+
+	// Stage 11: Convert Periods to Space (now safe, abbreviations already expanded)
+	s = strings.ReplaceAll(s, ".", " ")
+
+	// PHASE 5: NUMBER NORMALIZATION (clean word boundaries now)
+	// Stage 12: Expand Number Words (all separators now spaces, so word boundaries are clean)
+	s = ExpandNumberWords(s)
+
+	// Stage 13: Ordinal Number Normalization
 	s = NormalizeOrdinals(s)
 
-	// Stage 9: Roman Numeral Conversion
+	// Stage 14: Roman Numeral Conversion (includes lowercasing)
 	s = ConvertRomanNumerals(s)
 
 	return strings.TrimSpace(s)

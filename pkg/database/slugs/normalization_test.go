@@ -170,10 +170,10 @@ func TestNormalizeOrdinals(t *testing.T) {
 	}
 }
 
-// TestExpandCommonAbbreviations tests abbreviation expansion functionality.
+// TestExpandAbbreviations tests abbreviation expansion functionality.
 // This ensures "vs" → "versus", "bros" → "brothers", "dr" → "doctor", "vol" → "volume",
 // "pt" → "part", "ft" → "featuring", and "feat." → "featuring" (period required).
-func TestExpandCommonAbbreviations(t *testing.T) {
+func TestExpandAbbreviations(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -357,8 +357,8 @@ func TestExpandCommonAbbreviations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := ExpandCommonAbbreviations(tt.input)
-			assert.Equal(t, tt.expected, result, "ExpandCommonAbbreviations failed")
+			result := ExpandAbbreviations(tt.input)
+			assert.Equal(t, tt.expected, result, "ExpandAbbreviations failed")
 		})
 	}
 }
