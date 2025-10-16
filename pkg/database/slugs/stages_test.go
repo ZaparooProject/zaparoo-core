@@ -20,6 +20,7 @@
 package slugs
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -169,7 +170,7 @@ func TestNormalizeUnicode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := NormalizeUnicode(tt.input)
+			result := NormalizeUnicode(tt.input, nil)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -267,17 +268,38 @@ func TestStageIdempotence(t *testing.T) {
 			expected: "ABCDEF",
 		},
 		{
-			name:     "NormalizeUnicode idempotent",
-			stageFn:  NormalizeUnicode,
-			input:    "Pokémon™",
-			expected: "Pokemon",
-		},
-		{
 			name:     "StripTrailingArticle idempotent",
 			stageFn:  StripTrailingArticle,
 			input:    "Legend, The",
 			expected: "Legend",
 		},
+	}
+
+	// Test NormalizeUnicode separately since it has a different signature with optional context
+	unicodeTests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "NormalizeUnicode idempotent",
+			input:    "Pokémon™",
+			expected: "Pokemon",
+		},
+	}
+
+	// Test NormalizeUnicode idempotence
+	for _, tt := range unicodeTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Apply once
+			result1 := NormalizeUnicode(tt.input, nil)
+			assert.Equal(t, tt.expected, result1)
+
+			// Apply again to verify idempotence
+			result2 := NormalizeUnicode(result1, nil)
+			assert.Equal(t, result1, result2, "Stage should be idempotent: f(f(x)) == f(x)")
+		})
 	}
 
 	for _, tt := range tests {
@@ -321,7 +343,7 @@ func TestStageComposition(t *testing.T) {
 			// Apply stages in sequence
 			result := tt.input
 			result = NormalizeWidth(result)
-			result = NormalizeUnicode(result)
+			result = NormalizeUnicode(result, nil)
 			result = StripTrailingArticle(result)
 
 			assert.Equal(t, tt.expected, result)
@@ -336,14 +358,14 @@ func TestStageEdgeCases(t *testing.T) {
 	t.Run("empty strings", func(t *testing.T) {
 		t.Parallel()
 		assert.Empty(t, NormalizeWidth(""))
-		assert.Empty(t, NormalizeUnicode(""))
+		assert.Empty(t, NormalizeUnicode("", nil))
 		assert.Empty(t, StripTrailingArticle(""))
 	})
 
 	t.Run("whitespace only", func(t *testing.T) {
 		t.Parallel()
 		assert.Equal(t, " ", NormalizeWidth(" "))
-		assert.Equal(t, " ", NormalizeUnicode(" "))
+		assert.Equal(t, " ", NormalizeUnicode(" ", nil))
 		assert.Equal(t, "   ", StripTrailingArticle("   ")) // No match, returns as-is
 	})
 
@@ -357,9 +379,422 @@ func TestStageEdgeCases(t *testing.T) {
 	t.Run("special unicode ranges", func(t *testing.T) {
 		t.Parallel()
 		// Emoji (should be handled gracefully)
-		assert.NotEmpty(t, NormalizeUnicode("Game 🎮"))
+		assert.NotEmpty(t, NormalizeUnicode("Game 🎮", nil))
 
 		// Zero-width characters
-		assert.NotEmpty(t, NormalizeUnicode("Game\u200bTitle")) // Zero-width space
+		assert.NotEmpty(t, NormalizeUnicode("Game\u200bTitle", nil)) // Zero-width space
 	})
+}
+
+// TestNormalizeUnicodeWithContext tests NormalizeUnicode with real pipelineContext
+func TestNormalizeUnicodeWithContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		setupContext        func() *pipelineContext
+		expectedASCII       *bool
+		name                string
+		input               string
+		expectedResult      string
+		expectedScript      ScriptType
+		expectedScriptCache bool
+	}{
+		{
+			name:  "ASCII string with empty context",
+			input: "Super Mario Bros",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "Super Mario Bros",
+			expectedASCII:       nil,         // Context not modified for ASCII fast path
+			expectedScript:      ScriptLatin, // ASCII defaults to Latin
+			expectedScriptCache: false,
+		},
+		{
+			name:  "ASCII string with pre-cached ASCII=true",
+			input: "Super Mario Bros",
+			setupContext: func() *pipelineContext {
+				isASCII := true
+				return &pipelineContext{isASCII: &isASCII}
+			},
+			expectedResult:      "Super Mario Bros",
+			expectedASCII:       boolPtr(true),
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: false,
+		},
+		{
+			name:  "Latin with diacritics - caches script detection",
+			input: "Pokémon",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "Pokemon",
+			expectedASCII:       nil,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "CJK text - caches script detection",
+			input: "ドラゴンクエスト",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "ドラゴンクエスト",
+			expectedASCII:       nil,
+			expectedScript:      ScriptCJK,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "Cyrillic text - caches script detection",
+			input: "Тетрис",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "Тетрис",
+			expectedASCII:       nil,
+			expectedScript:      ScriptCyrillic,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "Arabic text - caches script detection",
+			input: "العاب",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "العاب",
+			expectedASCII:       nil,
+			expectedScript:      ScriptArabic,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "Hebrew text - caches script detection",
+			input: "משחק",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "משחק",
+			expectedASCII:       nil,
+			expectedScript:      ScriptHebrew,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "Mixed Latin/CJK - caches script detection",
+			input: "Pokémon ポケモン",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "Pokémon ポケモン",
+			expectedASCII:       nil,
+			expectedScript:      ScriptCJK,
+			expectedScriptCache: true,
+		},
+		{
+			name:  "Symbol removal with script caching",
+			input: "Game™©®",
+			setupContext: func() *pipelineContext {
+				return &pipelineContext{}
+			},
+			expectedResult:      "Game",
+			expectedASCII:       nil,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := tt.setupContext()
+			result := NormalizeUnicode(tt.input, ctx)
+
+			assert.Equal(t, tt.expectedResult, result, "Result mismatch")
+
+			if tt.expectedASCII != nil {
+				assert.NotNil(t, ctx.isASCII, "Context should have isASCII set")
+				assert.Equal(t, *tt.expectedASCII, *ctx.isASCII, "ASCII cache mismatch")
+			}
+
+			if tt.expectedScriptCache {
+				assert.True(t, ctx.scriptCached, "Script should be cached")
+				assert.Equal(t, tt.expectedScript, ctx.script, "Cached script type mismatch")
+			} else {
+				assert.False(t, ctx.scriptCached, "Script should not be cached")
+			}
+		})
+	}
+}
+
+// TestNormalizeInternalContextCaching tests that normalizeInternal properly creates and populates context
+func TestNormalizeInternalContextCaching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		input               string
+		expectedNormalized  string
+		expectedScript      ScriptType
+		expectedASCII       bool
+		expectedScriptCache bool
+	}{
+		{
+			name:                "ASCII string - caches ASCII check",
+			input:               "Super Mario Bros",
+			expectedNormalized:  "super mario brothers",
+			expectedASCII:       true,
+			expectedScript:      ScriptLatin, // ASCII defaults to Latin
+			expectedScriptCache: false,       // ASCII fast path skips script detection
+		},
+		{
+			name:                "Latin with diacritics - caches both",
+			input:               "Pokémon",
+			expectedNormalized:  "pokemon",
+			expectedASCII:       false,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: true,
+		},
+		{
+			name:                "CJK text - caches both",
+			input:               "ドラゴンクエスト VII",
+			expectedNormalized:  "ドラゴンクエスト 7",
+			expectedASCII:       false,
+			expectedScript:      ScriptCJK,
+			expectedScriptCache: true,
+		},
+		{
+			name:                "Mixed text - caches both",
+			input:               "Final Fantasy VII",
+			expectedNormalized:  "final fantasy 7",
+			expectedASCII:       true,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: false,
+		},
+		{
+			name:                "Fullwidth text - caches both",
+			input:               "ＦＩＮＡＬ ＦＡＮＴＡＳＹ",
+			expectedNormalized:  "final fantasy",
+			expectedASCII:       false,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: false, // After width normalization, becomes ASCII
+		},
+		{
+			name:                "Complex game title with abbreviations",
+			input:               "Street Fighter II: The World Warrior",
+			expectedNormalized:  "street fighter 2 world warrior",
+			expectedASCII:       true,
+			expectedScript:      ScriptLatin,
+			expectedScriptCache: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, ctx := normalizeInternal(tt.input)
+
+			assert.Equal(t, tt.expectedNormalized, result, "Normalized result mismatch")
+			assert.NotNil(t, ctx, "Context should not be nil")
+			assert.NotNil(t, ctx.isASCII, "Context should have isASCII set")
+			assert.Equal(t, tt.expectedASCII, *ctx.isASCII, "ASCII cache mismatch")
+
+			if tt.expectedScriptCache {
+				assert.True(t, ctx.scriptCached, "Script should be cached")
+				assert.Equal(t, tt.expectedScript, ctx.script, "Cached script type mismatch")
+			} else {
+				assert.Equal(t, tt.expectedScriptCache, ctx.scriptCached, "Script cache flag mismatch")
+			}
+		})
+	}
+}
+
+// TestSlugifyStringContextReuse tests that SlugifyString properly reuses cached context
+func TestSlugifyStringContextReuse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		input          string
+		expectedSlug   string
+		expectedScript ScriptType
+	}{
+		{
+			name:           "ASCII game title",
+			input:          "Super Mario Bros",
+			expectedSlug:   "supermariobrothers",
+			expectedScript: ScriptLatin,
+		},
+		{
+			name:           "Latin with diacritics",
+			input:          "Pokémon Red",
+			expectedSlug:   "pokemonred",
+			expectedScript: ScriptLatin,
+		},
+		{
+			name:           "CJK game title",
+			input:          "ドラゴンクエストVII",
+			expectedSlug:   "ドラゴンクエスト7",
+			expectedScript: ScriptCJK,
+		},
+		{
+			name:           "Mixed Latin/CJK",
+			input:          "Pokémon ポケモン",
+			expectedSlug:   "pokémonポケモン",
+			expectedScript: ScriptCJK,
+		},
+		{
+			name:           "Roman numerals in ASCII",
+			input:          "Final Fantasy VII",
+			expectedSlug:   "finalfantasy7",
+			expectedScript: ScriptLatin,
+		},
+		{
+			name:           "Roman numerals in CJK",
+			input:          "ドラゴンクエストVII",
+			expectedSlug:   "ドラゴンクエスト7",
+			expectedScript: ScriptCJK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SlugifyString(tt.input)
+			assert.Equal(t, tt.expectedSlug, result, "Slugified result mismatch")
+
+			// Verify the internal context was used correctly by checking
+			// that the result matches what we'd expect from the script type
+			normalized, ctx := normalizeInternal(tt.input)
+			assert.NotNil(t, ctx, "Context should be created")
+
+			// For non-ASCII inputs, script should be cached
+			if ctx.isASCII != nil && !*ctx.isASCII {
+				if ctx.scriptCached {
+					assert.Equal(t, tt.expectedScript, ctx.script, "Script detection mismatch")
+				}
+			}
+
+			// Verify that using the context produces the same result
+			script := detectScript(normalized)
+			if needsUnicodeSlug(script) {
+				// Should preserve Unicode in slug (without spaces)
+				expectedContent := strings.ReplaceAll(normalized, " ", "")
+				assert.Equal(t, expectedContent, result, "Unicode slug should match normalized form without spaces")
+			}
+		})
+	}
+}
+
+// TestContextNilVsPopulated verifies that passing nil context vs populated context produces same results
+func TestContextNilVsPopulated(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"Super Mario Bros",
+		"Pokémon",
+		"ドラゴンクエスト",
+		"Street Fighter II",
+		"Final Fantasy VII: Advent Children",
+		"Café Münchën",
+		"Game™©®",
+		"Тетрис",
+		"العاب",
+		"משחק",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
+			// Test with nil context
+			resultNil := NormalizeUnicode(input, nil)
+
+			// Test with empty context
+			ctxEmpty := &pipelineContext{}
+			resultEmpty := NormalizeUnicode(input, ctxEmpty)
+
+			// Test with pre-populated ASCII context
+			isASCII := isASCII(input)
+			ctxPrePopulated := &pipelineContext{isASCII: &isASCII}
+			resultPrePopulated := NormalizeUnicode(input, ctxPrePopulated)
+
+			// All should produce the same result
+			assert.Equal(t, resultNil, resultEmpty, "nil vs empty context should produce same result")
+			assert.Equal(t, resultNil, resultPrePopulated, "nil vs pre-populated context should produce same result")
+		})
+	}
+}
+
+// TestExpandWordsAndNumbersWithContext tests the combined word expansion function
+func TestExpandWordsAndNumbersWithContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "abbreviation expansion",
+			input:    "Street Fighter vs. Marvel",
+			expected: "Street Fighter versus Marvel",
+		},
+		{
+			name:     "number word expansion",
+			input:    "Final Fantasy seven",
+			expected: "Final Fantasy 7",
+		},
+		{
+			name:     "period to space conversion",
+			input:    "Game.Title.Here",
+			expected: "Game Title Here",
+		},
+		{
+			name:     "combined abbreviation and number",
+			input:    "Super Mario Bros. three",
+			expected: "Super Mario brothers 3",
+		},
+		{
+			name:     "period-required abbreviation",
+			input:    "feat. Artist",
+			expected: "featuring Artist",
+		},
+		{
+			name:     "multiple periods with numbers",
+			input:    "one.two.three",
+			expected: "1 2 3",
+		},
+		{
+			name:     "abbreviations without periods",
+			input:    "dr jekyll vs mr hyde",
+			expected: "doctor jekyll versus mister hyde",
+		},
+		{
+			name:     "number words with periods",
+			input:    "one. two. three.",
+			expected: "1 2 3",
+		},
+		{
+			name:     "no changes needed",
+			input:    "Simple Title",
+			expected: "Simple Title",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := &pipelineContext{}
+			result := expandWordsAndNumbersWithContext(ctx, tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// boolPtr is a helper to create bool pointers for test assertions
+func boolPtr(b bool) *bool {
+	return &b
 }

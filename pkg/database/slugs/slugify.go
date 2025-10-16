@@ -57,6 +57,15 @@ import (
 //   SlugifyString("The Legend of Zelda: Ocarina of Time (USA) [!]")
 //   → "legendofzeldaocarinaoftime"
 
+// pipelineContext caches computed values across normalization stages to reduce redundant work.
+// This enables optimizations like avoiding multiple ASCII checks, script detection caching,
+// and combining word-level processing into a single pass.
+type pipelineContext struct {
+	isASCII      *bool
+	script       ScriptType
+	scriptCached bool
+}
+
 var (
 	editionSuffixRegex = regexp.MustCompile(
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
@@ -67,6 +76,7 @@ var (
 	nonAlphanumRegex            = regexp.MustCompile(`[^a-z0-9]+`)
 	nonAlphanumKeepUnicodeRegex = regexp.MustCompile(
 		`[^a-z0-9` +
+			`\p{Latin}` + // Latin script including diacritics (é, ñ, etc.)
 			`\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{30FC}\x{30FB}\x{3005}` +
 			`\p{Cyrillic}` +
 			`\p{Greek}` +
@@ -80,6 +90,26 @@ var (
 	)
 	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 )
+
+// periodRequiredAbbreviations maps period-required abbreviations to their expansions
+var periodRequiredAbbreviations = map[string]string{
+	"feat.": "featuring", // "feat" alone is a real word (achievement)
+	"no.":   "number",    // "no" alone is a word
+	"st.":   "saint",     // "st" usually means "street"
+}
+
+// withOrWithoutPeriodAbbreviations maps flexible abbreviations to their expansions
+var withOrWithoutPeriodAbbreviations = map[string]string{
+	"vs":   "versus",    // Strong evidence: fighting games, crossovers
+	"bros": "brothers",  // Strong evidence: Super Mario Bros/Brothers
+	"dr":   "doctor",    // Moderate evidence: Dr. Mario / Doctor Mario
+	"mr":   "mister",    // Similar pattern to dr
+	"vol":  "volume",    // Serialized content: Vol. 2 / Volume 2
+	"pt":   "part",      // Episodic titles: Pt. 2 / Part 2
+	"ft":   "featuring", // Music: ft. Artist / featuring Artist
+	"jr":   "junior",    // Common in game titles: Donkey Kong Jr. / Junior
+	"sr":   "senior",    // Less common but follows same pattern as jr
+}
 
 // romanNumeralReplacementTable defines pattern-to-number mappings for roman numeral conversion.
 // - X is intentionally omitted to avoid games like "Mega Man X" being converted to "Mega Man 10".
@@ -203,7 +233,16 @@ func NormalizePunctuation(s string) string {
 //
 // This is Stage 3 of the normalization pipeline.
 // Returns the input unchanged if normalization fails or if input is pure ASCII.
-func NormalizeUnicode(s string) string {
+//
+// The optional ctx parameter enables caching optimizations during pipeline processing.
+// When ctx is nil, caching is skipped (useful for standalone calls or tests).
+// When ctx is provided, ASCII check and script detection results are cached for reuse.
+func NormalizeUnicode(s string, ctx *pipelineContext) string {
+	// Check if already marked as ASCII in context (avoids redundant check)
+	if ctx != nil && ctx.isASCII != nil && *ctx.isASCII {
+		return s
+	}
+
 	// Skip Unicode processing for pure ASCII strings (optimization)
 	if isASCII(s) {
 		return s
@@ -218,8 +257,12 @@ func NormalizeUnicode(s string) string {
 		s = cleaned
 	}
 
-	// Apply script-specific normalization
+	// Apply script-specific normalization and optionally cache the result
 	script := detectScript(s)
+	if ctx != nil {
+		ctx.script = script
+		ctx.scriptCached = true
+	}
 	return normalizeByScript(s, script)
 }
 
@@ -242,7 +285,8 @@ func StripTrailingArticle(s string) string {
 }
 
 func SlugifyString(input string) string {
-	s := normalizeInternal(input)
+	// Use context-aware normalization to cache script detection and avoid redundant work
+	s, ctx := normalizeInternal(input)
 	if s == "" {
 		return ""
 	}
@@ -265,7 +309,15 @@ func SlugifyString(input string) string {
 	// The Unicode slug already contains both parts concatenated, so mixed-language
 	// titles remain searchable by either their Latin OR non-Latin portions without
 	// requiring schema changes or alternate slug columns.
-	script := detectScript(s)
+
+	// Reuse cached script detection if available; otherwise detect now
+	var script ScriptType
+	if ctx.scriptCached {
+		script = ctx.script
+	} else {
+		script = detectScript(s)
+	}
+
 	if needsUnicodeSlug(script) {
 		return strings.TrimSpace(unicodeSlug)
 	}
@@ -465,6 +517,90 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	return s
 }
 
+// checkAbbreviation checks if a word (in lowercase) matches a known abbreviation.
+// Returns (expansion, found).
+func checkAbbreviation(lowerWord string) (string, bool) {
+	// First check: period-required abbreviations (before stripping period)
+	if expansion, found := periodRequiredAbbreviations[lowerWord]; found {
+		return expansion, true
+	}
+
+	// Second check: strip period and check general abbreviations
+	lowerWord = strings.TrimSuffix(lowerWord, ".")
+	if expansion, found := withOrWithoutPeriodAbbreviations[lowerWord]; found {
+		return expansion, true
+	}
+
+	return "", false
+}
+
+// checkNumberWord checks if a word (in lowercase) matches a known number word.
+// Returns (expansion, found).
+func checkNumberWord(lowerWord string) (string, bool) {
+	// Check number words (before period stripping)
+	if expansion, found := numberWords[lowerWord]; found {
+		return expansion, true
+	}
+
+	// Strip period and check again (e.g., "two." → "2")
+	lowerWord = strings.TrimSuffix(lowerWord, ".")
+	if expansion, found := numberWords[lowerWord]; found {
+		return expansion, true
+	}
+
+	return "", false
+}
+
+// expandWordsAndNumbersWithContext combines Stages 9-11 into a single word-processing pass:
+// - Stage 9: Abbreviation expansion
+// - Stage 10: Period conversion to spaces (applied to entire string)
+// - Stage 11: Number word expansion
+//
+// This optimization reduces string splitting overhead by processing words in a single pass
+// instead of three separate strings.Fields() → join cycles.
+func expandWordsAndNumbersWithContext(_ *pipelineContext, s string) string {
+	words := strings.Fields(s)
+
+	for i, word := range words {
+		lowerWord := strings.ToLower(word)
+
+		// Stage 9: Check abbreviations
+		if expansion, found := checkAbbreviation(lowerWord); found {
+			words[i] = expansion
+			continue
+		}
+
+		// Stage 11: Check number words
+		if expansion, found := checkNumberWord(lowerWord); found {
+			words[i] = expansion
+			continue
+		}
+
+		// For words that aren't abbreviations or number words, keep as-is
+		// (periods will be handled in the next phase)
+		words[i] = word
+	}
+
+	// Join words
+	result := strings.Join(words, " ")
+
+	// Stage 10: Convert all periods to spaces
+	result = strings.ReplaceAll(result, ".", " ")
+
+	// Re-split and re-process to handle number words that may have been created by period removal
+	// Example: "one.two.three" → "one two three" → ["one", "two", "three"] → ["1", "2", "3"]
+	words = strings.Fields(result)
+	for i, word := range words {
+		lowerWord := strings.ToLower(word)
+		// Check if this word is now a number word (after period removal)
+		if expansion, found := checkNumberWord(lowerWord); found {
+			words[i] = expansion
+		}
+	}
+
+	return strings.Join(words, " ")
+}
+
 // ExpandAbbreviations expands common abbreviations found in game titles.
 // Uses word boundaries to avoid false matches (e.g., "versus" won't become "versuersus").
 // Handles two types of abbreviations:
@@ -481,43 +617,13 @@ func NormalizeSymbolsAndSeparators(s string) string {
 //
 // This is Stage 9 of the normalization pipeline.
 func ExpandAbbreviations(s string) string {
-	// Abbreviations that REQUIRE a period (checked first, before stripping)
-	periodRequired := map[string]string{
-		"feat.": "featuring", // "feat" alone is a real word (achievement)
-		"no.":   "number",    // "no" alone is a word
-		"st.":   "saint",     // "st" usually means "street"
-	}
-
-	// Abbreviations that work with OR without period
-	withOrWithoutPeriod := map[string]string{
-		"vs":   "versus",    // Strong evidence: fighting games, crossovers
-		"bros": "brothers",  // Strong evidence: Super Mario Bros/Brothers
-		"dr":   "doctor",    // Moderate evidence: Dr. Mario / Doctor Mario
-		"mr":   "mister",    // Similar pattern to dr
-		"vol":  "volume",    // Serialized content: Vol. 2 / Volume 2
-		"pt":   "part",      // Episodic titles: Pt. 2 / Part 2
-		"ft":   "featuring", // Music: ft. Artist / featuring Artist
-		"jr":   "junior",    // Common in game titles: Donkey Kong Jr. / Junior
-		"sr":   "senior",    // Less common but follows same pattern as jr
-	}
-
 	words := strings.Fields(s)
 	for i, word := range words {
 		lowerWord := strings.ToLower(word)
-
-		// First check: period-required abbreviations (before stripping period)
-		if expansion, found := periodRequired[lowerWord]; found {
-			words[i] = expansion
-			continue
-		}
-
-		// Second check: strip period and check general abbreviations
-		lowerWord = strings.TrimSuffix(lowerWord, ".")
-		if expansion, found := withOrWithoutPeriod[lowerWord]; found {
+		if expansion, found := checkAbbreviation(lowerWord); found {
 			words[i] = expansion
 		}
 	}
-
 	return strings.Join(words, " ")
 }
 
@@ -536,20 +642,10 @@ func ExpandNumberWords(s string) string {
 	words := strings.Fields(s)
 	for i, word := range words {
 		lowerWord := strings.ToLower(word)
-
-		// Check number words (before period stripping)
-		if expansion, found := numberWords[lowerWord]; found {
-			words[i] = expansion
-			continue
-		}
-
-		// Strip period and check again (e.g., "two." → "2")
-		lowerWord = strings.TrimSuffix(lowerWord, ".")
-		if expansion, found := numberWords[lowerWord]; found {
+		if expansion, found := checkNumberWord(lowerWord); found {
 			words[i] = expansion
 		}
 	}
-
 	return strings.Join(words, " ")
 }
 
@@ -575,6 +671,9 @@ func NormalizeOrdinals(s string) string {
 //   - "Mega Man X" → "Mega Man X" (unchanged)
 //
 // This is Stage 13 of the normalization pipeline.
+//
+// Optimization: Performs case-insensitive matching without full-string case conversions,
+// converting to lowercase directly during output.
 func ConvertRomanNumerals(s string) string {
 	// Early exit: skip processing if no Roman numeral characters present
 	// Always lowercase before returning since this is the last stage of normalizeInternal
@@ -582,33 +681,34 @@ func ConvertRomanNumerals(s string) string {
 		return strings.ToLower(s)
 	}
 
-	upperS := strings.ToUpper(s)
-
 	var result strings.Builder
-	result.Grow(len(upperS))
+	result.Grow(len(s))
 
-	// Manual scan to replace roman numerals only at word boundaries
-	// A word boundary is: start of string or previous char is not a word char (letter/digit/_)
-	// and end of string or next char is not a word char
+	// Convert to rune slice to handle UTF-8 properly (e.g., CJK characters)
+	runeSlice := []rune(s)
+
+	// Manual scan to replace roman numerals only at Latin word boundaries.
+	// We use isLatinWordCharForRoman which only considers ASCII letters/digits as word chars,
+	// allowing Roman numerals to convert even when adjacent to CJK text.
 	i := 0
-	for i < len(upperS) {
+	for i < len(runeSlice) {
 		// Check if we're at a potential roman numeral start
-		// Word boundary: start of string or previous char is not a word character
-		atWordBoundary := i == 0 || !isWordChar(rune(upperS[i-1]))
+		// Word boundary: start of string or previous char is not a Latin word character
+		atWordBoundary := i == 0 || !isLatinWordCharForRoman(runeSlice[i-1])
 
 		if !atWordBoundary {
-			result.WriteByte(upperS[i])
+			result.WriteRune(unicode.ToLower(runeSlice[i]))
 			i++
 			continue
 		}
 
-		// Try to match roman numerals
+		// Try to match roman numerals (case-insensitive)
 		matched := false
 		for _, num := range romanNumeralReplacementTable {
-			if i+len(num.pattern) <= len(upperS) && upperS[i:i+len(num.pattern)] == num.pattern {
+			if matchesRomanNumeralPattern(runeSlice, i, num.pattern) {
 				// Check word boundary after numeral
 				endIdx := i + len(num.pattern)
-				atEnd := endIdx == len(upperS) || !isWordChar(rune(upperS[endIdx]))
+				atEnd := endIdx == len(runeSlice) || !isLatinWordCharForRoman(runeSlice[endIdx])
 
 				if atEnd {
 					result.WriteString(num.replacement)
@@ -620,19 +720,37 @@ func ConvertRomanNumerals(s string) string {
 		}
 
 		if !matched {
-			result.WriteByte(upperS[i])
+			result.WriteRune(unicode.ToLower(runeSlice[i]))
 			i++
 		}
 	}
 
-	return strings.ToLower(result.String())
+	return result.String()
 }
 
-// isWordChar checks if a rune is a word character (letter, digit, or underscore)
-// This matches regex \w behavior for word boundaries
-func isWordChar(r rune) bool {
+// matchesRomanNumeralPattern performs a case-insensitive comparison of rune slice
+// elements at the given position against a Roman numeral pattern string.
+func matchesRomanNumeralPattern(runeSlice []rune, pos int, pattern string) bool {
+	patternRunes := []rune(pattern)
+	if pos+len(patternRunes) > len(runeSlice) {
+		return false
+	}
+	// Case-insensitive comparison
+	for i, p := range patternRunes {
+		if unicode.ToUpper(runeSlice[pos+i]) != unicode.ToUpper(p) {
+			return false
+		}
+	}
+	return true
+}
+
+// isLatinWordCharForRoman checks if a rune is a Latin word character for Roman numeral boundary detection.
+// Only ASCII letters, digits, and underscore are considered word chars for Roman numerals.
+// CJK and other scripts are NOT considered word chars, allowing Roman numerals to be converted
+// even when adjacent to non-Latin text (e.g., "ドラゴンクエストVII" → "ドラゴンクエスト7").
+func isLatinWordCharForRoman(r rune) bool {
 	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
-		(r >= '0' && r <= '9') || r == '_' || unicode.IsLetter(r)
+		(r >= '0' && r <= '9') || r == '_'
 }
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
@@ -654,7 +772,7 @@ func isWordChar(r rune) bool {
 // Note: For database queries and slug matching, use SlugifyString() instead.
 // This function is for scoring and ranking operations only.
 func NormalizeToWords(input string) []string {
-	s := normalizeInternal(input)
+	s, _ := normalizeInternal(input) // Ignore context, we don't need it here
 	if s == "" {
 		return []string{}
 	}
@@ -673,9 +791,13 @@ func NormalizeToWords(input string) []string {
 	return strings.Fields(s)
 }
 
-// normalizeInternal performs Stages 1-13 of the slug normalization pipeline.
-// This function is shared by both SlugifyString and NormalizeToWords to eliminate
-// code duplication and ensure consistent normalization behavior.
+// normalizeInternal performs Stages 1-13 of the slug normalization pipeline
+// and returns both the normalized string and a context containing cached optimization data.
+// This function enables optimizations across stages by caching computed values like
+// ASCII checks, script detection, and word arrays.
+//
+// The returned context can be reused in the final stage (SlugifyString) to avoid
+// redundant work like re-detecting the script type or re-checking for ASCII.
 //
 // 13-Stage Normalization Pipeline (execution order):
 //
@@ -697,17 +819,22 @@ func NormalizeToWords(input string) []string {
 // are normalized (Stage 7) before edition stripping (Stage 8) to ensure regex matching works
 // correctly when separators are converted to spaces.
 //
-// Returns the normalized string with preserved spaces and lowercase text.
+// Returns the normalized string with preserved spaces, lowercase text, and optimization context.
 // Final character filtering (Stage 14 in SlugifyString) is applied separately by calling function.
-func normalizeInternal(input string) string {
+func normalizeInternal(input string) (string, *pipelineContext) {
+	ctx := &pipelineContext{}
 	s := strings.TrimSpace(input)
 	if s == "" {
-		return ""
+		return "", ctx
 	}
+
+	// Check ASCII once and cache for later stages
+	isASCIIVal := isASCII(s)
+	ctx.isASCII = &isASCIIVal
 
 	// CHARACTER NORMALIZATION (Stages 1-3)
 	// Note: Stages 1-3 are skipped for ASCII-only strings (optimization)
-	if !isASCII(s) {
+	if !isASCIIVal {
 		// Stage 1: Width Normalization
 		s = NormalizeWidth(s)
 
@@ -715,8 +842,8 @@ func normalizeInternal(input string) string {
 		// This ensures curly quotes/dashes normalize before unicode processing
 		s = NormalizePunctuation(s)
 
-		// Stage 3: Unicode Normalization
-		s = NormalizeUnicode(s)
+		// Stage 3: Unicode Normalization (pass context for caching)
+		s = NormalizeUnicode(s, ctx)
 	}
 
 	// STRUCTURAL CLEANUP (Stages 4-6)
@@ -740,17 +867,9 @@ func normalizeInternal(input string) string {
 	// and the regex can match the space before "Edition"
 	s = StripEditionAndVersionSuffixes(s)
 
-	// Stage 9: Expand Abbreviations (now runs after separators converted to spaces)
-	// This allows "Bros-" → "Bros " → "brothers"
-	// Periods are still intact for period-required abbreviations like "feat."
-	s = ExpandAbbreviations(s)
-
-	// PERIOD & NUMBER NORMALIZATION (Stages 10-13)
-	// Stage 10: Convert Periods to Space (now safe, abbreviations already expanded)
-	s = strings.ReplaceAll(s, ".", " ")
-
-	// Stage 11: Expand Number Words
-	s = ExpandNumberWords(s)
+	// Stage 9-11: Combined word-level processing (Abbreviation + Period + Number expansion)
+	// This replaces three separate string.Fields() cycles with a single pass
+	s = expandWordsAndNumbersWithContext(ctx, s)
 
 	// Stage 12: Ordinal Number Normalization
 	s = NormalizeOrdinals(s)
@@ -758,5 +877,5 @@ func normalizeInternal(input string) string {
 	// Stage 13: Roman Numeral Conversion (includes lowercasing)
 	s = ConvertRomanNumerals(s)
 
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(s), ctx
 }
