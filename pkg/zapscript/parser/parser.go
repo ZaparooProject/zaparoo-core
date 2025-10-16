@@ -67,16 +67,13 @@ const (
 	SymInputMacroExtEnd    = '}'
 	SymExpressionStart     = '['
 	SymExpressionEnd       = ']'
-	SymSlugStart           = '@'
-	SymSystemSep           = ':'
-	SymSlugSep             = '/'
-	SymTagSep              = ';'
+	SymMediaTitleStart     = '@'
+	SymMediaTitleSep       = '/'
 	SymTagAnd              = '+'
 	SymTagNot              = '-'
 	SymTagOr               = '~'
 	TokExpStart            = "\uE000"
 	TokExprEnd             = "\uE001"
-	TokSystemSep           = "::"
 )
 
 const (
@@ -107,11 +104,9 @@ type PostArgPart struct {
 	Type  PostArgPartType
 }
 
-type slugParseResult struct {
+type mediaTitleParseResult struct {
 	advArgs    map[string]string
-	slugArg    string
 	rawContent string
-	tags       []string
 	valid      bool
 }
 
@@ -134,75 +129,6 @@ func isInputMacroCmd(name string) bool {
 	default:
 		return false
 	}
-}
-
-// isValidTag performs a basic syntactic check to aid the parser in distinguishing
-// tags from game names in the @slug syntax. It is not the canonical tag parser.
-// For full parsing, validation, and normalization, see database/filters.ParseTagFilters.
-//
-// Format: [+|-|~]type:value[:subtype...]
-// where type can contain: alphanumeric (a-z, A-Z, 0-9) and hyphens (-)
-// and value can contain: alphanumeric (a-z, A-Z, 0-9), hyphens (-), colons (:), and periods (.)
-// Must have at least one colon to separate type from value
-func isValidTag(tag string) bool {
-	// Must contain at least one character
-	if tag == "" {
-		return false
-	}
-
-	// Strip optional prefix (+, -, ~)
-	stripped := tag
-	if tag[0] == SymTagAnd || tag[0] == SymTagNot || tag[0] == SymTagOr {
-		if len(tag) < 2 {
-			return false
-		}
-		stripped = tag[1:]
-	}
-
-	// Must contain at least one colon
-	colonIdx := strings.IndexRune(stripped, SymSystemSep)
-	if colonIdx == -1 {
-		return false
-	}
-
-	// Split into type and rest (value can contain more colons for subtypes)
-	tagType := stripped[:colonIdx]
-	tagValue := stripped[colonIdx+1:]
-
-	// Type must not be empty and must be alphanumeric + hyphen
-	if tagType == "" {
-		return false
-	}
-	for _, ch := range tagType {
-		if !isValidTagChar(ch, true) {
-			return false
-		}
-	}
-
-	// Value must not be empty and must be alphanumeric + hyphen + colon (for subtypes) + period
-	if tagValue == "" {
-		return false
-	}
-	for _, ch := range tagValue {
-		if !isValidTagChar(ch, false) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// isValidTagChar checks if a character is valid for tag type (isType=true) or value (isType=false)
-func isValidTagChar(ch rune, isType bool) bool {
-	// Alphanumeric and hyphen allowed in both
-	if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == SymTagNot {
-		return true
-	}
-	// Colon and period only allowed in values
-	if !isType && (ch == SymSystemSep || ch == '.') {
-		return true
-	}
-	return false
 }
 
 var eof = rune(0)
@@ -738,16 +664,12 @@ argsLoop:
 	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseSlugSyntax() (*slugParseResult, error) {
-	result := &slugParseResult{
-		tags:    make([]string, 0, 3),
+func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) {
+	result := &mediaTitleParseResult{
 		advArgs: make(map[string]string),
 	}
-	currentPart := ""
-	allContent := ""   // Accumulate everything for fallback
-	inSlugPart := true // true = parsing slug (system::game), false = parsing tags
+	rawContent := ""
 
-slugLoop: //nolint:gocritic // Label is required for break/continue from nested conditionals
 	for {
 		ch, readErr := sr.read()
 		if readErr != nil {
@@ -755,25 +677,21 @@ slugLoop: //nolint:gocritic // Label is required for break/continue from nested 
 		}
 
 		if ch == eof {
-			break slugLoop
+			break
 		}
-
-		// Accumulate raw content for fallback
-		allContent += string(ch)
 
 		// Check for escape sequences
 		if ch == SymEscapeSeq {
 			next, escapeErr := sr.parseEscapeSeq()
 			if escapeErr != nil {
 				return nil, escapeErr
-			} else if next == "" {
-				currentPart += string(SymEscapeSeq)
-				allContent += string(SymEscapeSeq)
-				continue slugLoop
 			}
-			currentPart += next
-			allContent += next
-			continue slugLoop
+			if next == "" {
+				rawContent += string(SymEscapeSeq)
+			} else {
+				rawContent += next
+			}
+			continue
 		}
 
 		// Check for end of command
@@ -781,101 +699,38 @@ slugLoop: //nolint:gocritic // Label is required for break/continue from nested 
 		if checkErr != nil {
 			return nil, checkErr
 		} else if eoc {
-			break slugLoop
-		}
-
-		// Check for tag separator (;)
-		if ch == SymTagSep {
-			if inSlugPart {
-				// First semicolon: transition from slug to tags
-				result.slugArg = strings.TrimSpace(currentPart)
-				currentPart = ""
-				inSlugPart = false
-			} else {
-				// Save current tag and start next tag
-				trimmed := strings.TrimSpace(currentPart)
-				if trimmed != "" {
-					result.tags = append(result.tags, trimmed)
-				}
-				currentPart = ""
-			}
-			continue slugLoop
+			break
 		}
 
 		// Check for advanced args start (?)
 		if ch == SymAdvArgStart {
-			// Save what we have so far
-			if inSlugPart {
-				result.slugArg = strings.TrimSpace(currentPart)
-				inSlugPart = false // Mark that we've saved the slug
-			} else {
-				trimmed := strings.TrimSpace(currentPart)
-				if trimmed != "" {
-					result.tags = append(result.tags, trimmed)
-				}
-			}
-			currentPart = "" // Reset to avoid double-adding
-
 			// Parse advanced args (? already consumed)
 			parsedAdvArgs, buf, err := sr.parseAdvArgs()
 			if errors.Is(err, ErrInvalidAdvArgName) {
-				// Fallback: treat as part of argument
-				currentPart += string(SymAdvArgStart) + buf
-				allContent += buf
-				continue slugLoop
+				// Fallback: treat as part of content
+				rawContent += string(SymAdvArgStart) + buf
+				continue
 			} else if err != nil {
 				return nil, err
 			}
 
 			result.advArgs = parsedAdvArgs
-			allContent += buf
-			break slugLoop
+			break
 		}
 
-		// Add character to current part (already added to allContent above)
-		currentPart += string(ch)
+		rawContent += string(ch)
 	}
 
-	// Save final part
-	if inSlugPart {
-		result.slugArg = strings.TrimSpace(currentPart)
-	} else {
-		trimmed := strings.TrimSpace(currentPart)
-		if trimmed != "" {
-			result.tags = append(result.tags, trimmed)
-		}
-	}
+	result.rawContent = strings.TrimSpace(rawContent)
 
-	// Validate: must contain :: separator
-	if !strings.Contains(result.slugArg, TokSystemSep) {
-		// Not valid slug format, return raw content for auto-launch fallback
-		result.rawContent = allContent
+	// Validate: must contain at least one / separator for system/title format
+	if !strings.Contains(result.rawContent, string(SymMediaTitleSep)) {
+		// Not valid media title format, return for auto-launch fallback
 		result.valid = false
 		return result, nil
 	}
 
-	// Validate first tag: must be valid format
-	if len(result.tags) > 0 && !isValidTag(result.tags[0]) {
-		// First tag is invalid, treat it as part of slug (including the ;)
-		result.slugArg = result.slugArg + string(SymTagSep) + result.tags[0]
-		result.tags = result.tags[1:]
-	}
-
-	// Filter out subsequent invalid tags
-	validTags := make([]string, 0, len(result.tags))
-	for _, tag := range result.tags {
-		if isValidTag(tag) {
-			validTags = append(validTags, tag)
-		}
-		// else skip invalid tags
-	}
-	result.tags = validTags
-
-	// Convert only the first :: to / for internal slug format (syntactic sugar)
-	// After the first ::, any additional :: are part of the game name
-	result.slugArg = strings.Replace(result.slugArg, TokSystemSep, string(SymSlugSep), 1)
 	result.valid = true
-
 	return result, nil
 }
 
@@ -997,36 +852,29 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 		case sr.pos == 1 && ch == SymJSONStart:
 			// reserve starting { as json script for later
 			return Script{}, ErrInvalidJSON
-		case ch == SymSlugStart:
-			// Slug syntax sugar: @SystemID::Game Name;tag:one;tag:two
-			result, err := sr.parseSlugSyntax()
+		case ch == SymMediaTitleStart:
+			// Media title syntax: @System Name/Game Title (optional tags)?advArgs
+			result, err := sr.parseMediaTitleSyntax()
 			if err != nil {
 				return script, parseErr(err)
 			}
 
-			// If not valid slug format (no :: found), treat as auto-launch
+			// If not valid media title format (no / found), treat as auto-launch
 			if !result.valid {
-				if autoErr := parseAutoLaunchCmd(string(SymSlugStart) + result.rawContent); autoErr != nil {
+				if autoErr := parseAutoLaunchCmd(string(SymMediaTitleStart) + result.rawContent); autoErr != nil {
 					return script, parseErr(autoErr)
 				}
 				continue
 			}
 
-			// Build launch.slug command
+			// Build launch.slug command with raw content
+			// The command layer will handle system lookup and tag extraction
 			cmd := Command{
 				Name: models.ZapScriptCmdLaunchSlug,
-				Args: []string{result.slugArg},
+				Args: []string{result.rawContent},
 			}
 
-			// Combine tags into advanced args if present
-			if len(result.tags) > 0 {
-				if result.advArgs == nil {
-					result.advArgs = make(map[string]string)
-				}
-				// Combine all tags into comma-separated string (internal format)
-				result.advArgs[AdvArgKeyTags] = strings.Join(result.tags, string(SymArgSep))
-			}
-
+			// Only set AdvArgs if there are any
 			if len(result.advArgs) > 0 {
 				cmd.AdvArgs = result.advArgs
 			}
