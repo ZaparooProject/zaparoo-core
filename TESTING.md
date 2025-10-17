@@ -1,6 +1,6 @@
 # Testing Guide for Zaparoo Core
 
-This guide provides comprehensive documentation for Test-Driven Development (TDD) practices in the Zaparoo Core project. It covers the testing infrastructure, patterns, and best practices to help developers write effective tests.
+This guide provides comprehensive documentation for testing practices in the Zaparoo Core project. It covers the testing infrastructure, patterns, and best practices to help developers write effective tests with comprehensive coverage.
 
 ## Table of Contents
 
@@ -29,7 +29,8 @@ Zaparoo Core uses a comprehensive testing infrastructure built around:
 
 ### Testing Philosophy
 
-- **Unit Tests First**: Fast, isolated tests using mocks
+- **Comprehensive Coverage**: All new features and bug fixes require tests
+- **Fast, Isolated Tests**: Use mocks for external dependencies
 - **No Hardware Dependencies**: All hardware interactions are mocked
 - **Behavior Testing**: Focus on what the code does, not how it does it
 - **Fast Feedback**: Tests should complete in under 5 seconds
