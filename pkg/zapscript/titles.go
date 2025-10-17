@@ -825,8 +825,8 @@ func mightBeTitle(input string) bool {
 		return false
 	}
 
-	// Reject obvious wildcard patterns which should go to search instead (but allow Q*bert)
-	if strings.HasPrefix(game, "*") || strings.HasSuffix(game, "*") {
+	// Reject wildcard patterns which should go to search instead
+	if strings.Contains(game, "*") {
 		return false
 	}
 
@@ -839,7 +839,8 @@ func mightBeTitle(input string) bool {
 }
 
 // isValidTitleFormat checks if the input string is valid title format for cmdTitle.
-// This is a strict validation used after routing to cmdTitle.
+// This is a lenient validation - just ensures basic SystemID/GameName format.
+// The command itself handles all parsing complexity.
 func isValidTitleFormat(input string) bool {
 	// Must contain at least one slash
 	if !strings.Contains(input, "/") {
@@ -856,16 +857,6 @@ func isValidTitleFormat(input string) bool {
 
 	// Both parts must be non-empty
 	if system == "" || game == "" {
-		return false
-	}
-
-	// Reject wildcard patterns (but allow Q*bert)
-	if strings.HasPrefix(game, "*") || strings.HasSuffix(game, "*") {
-		return false
-	}
-
-	// Game part should not contain backslashes (Windows file path indicator)
-	if strings.Contains(game, "\\") {
 		return false
 	}
 
