@@ -169,8 +169,8 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 	tests := []struct {
 		name              string
 		input             string
-		expectedTags      []database.TagFilter
 		expectedRemaining string
+		expectedTags      []database.TagFilter
 	}{
 		{
 			name:              "no canonical tags",
@@ -238,13 +238,14 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 			tagFilters, remaining := extractCanonicalTagsFromParens(tt.input)
 
 			assert.Equal(t, tt.expectedRemaining, remaining, "remaining string mismatch")
-			assert.Equal(t, len(tt.expectedTags), len(tagFilters), "number of extracted tags mismatch")
+			assert.Len(t, tagFilters, len(tt.expectedTags), "number of extracted tags mismatch")
 
 			if len(tt.expectedTags) > 0 {
 				for i, expectedTag := range tt.expectedTags {
 					assert.Equal(t, expectedTag.Type, tagFilters[i].Type, "tag type mismatch at index %d", i)
 					assert.Equal(t, expectedTag.Value, tagFilters[i].Value, "tag value mismatch at index %d", i)
-					assert.Equal(t, expectedTag.Operator, tagFilters[i].Operator, "tag operator mismatch at index %d", i)
+					assert.Equal(t, expectedTag.Operator, tagFilters[i].Operator,
+						"tag operator mismatch at index %d", i)
 				}
 			}
 		})

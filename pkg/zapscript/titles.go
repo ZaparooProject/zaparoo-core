@@ -77,7 +77,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 
 	systemID, gameName := ps[0], ps[1]
 	if systemID == "" || gameName == "" {
-		return platforms.CmdResult{}, fmt.Errorf("invalid title format: %s (both SystemID and GameName required)", query)
+		return platforms.CmdResult{}, fmt.Errorf(
+			"invalid title format: %s (both SystemID and GameName required)", query)
 	}
 
 	// Validate system ID
