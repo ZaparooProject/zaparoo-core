@@ -528,7 +528,7 @@ func DoLaunch(
 		SystemID:   launcher.SystemID,
 		SystemName: systemMeta.Name,
 		Name:       GetPathInfo(path).Name,
-		Path:       pl.NormalizePath(cfg, path),
+		Path:       path,
 	})
 
 	return nil

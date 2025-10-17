@@ -302,7 +302,8 @@ func BuildSearchMedia(cfg *config.Instance, pages *tview.Pages, app *tview.Appli
 
 		mediaList.Clear()
 		mediaList.SetCurrentItem(0)
-		for _, result := range results.Results {
+		for i := range results.Results {
+			result := &results.Results[i]
 			mediaList.AddItem(result.Name, result.System.Name, 0, func() {
 				writeTag(result.Path)
 			})

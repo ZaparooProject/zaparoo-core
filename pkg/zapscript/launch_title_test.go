@@ -1241,9 +1241,9 @@ func TestSelectBestResult(t *testing.T) {
 
 func TestHasAllTags(t *testing.T) {
 	tests := []struct {
+		result     database.SearchResultWithCursor
 		name       string
 		tagFilters []database.TagFilter
-		result     database.SearchResultWithCursor
 		expected   bool
 	}{
 		{
@@ -1305,8 +1305,8 @@ func TestHasAllTags(t *testing.T) {
 
 func TestIsVariant(t *testing.T) {
 	tests := []struct {
-		name     string
 		result   database.SearchResultWithCursor
+		name     string
 		expected bool
 	}{
 		{
@@ -1356,8 +1356,8 @@ func TestIsVariant(t *testing.T) {
 
 func TestIsRerelease(t *testing.T) {
 	tests := []struct {
-		name     string
 		result   database.SearchResultWithCursor
+		name     string
 		expected bool
 	}{
 		{

@@ -147,6 +147,7 @@ func GroupTagFiltersByOperator(filters []TagFilter) (and, not, or []TagFilter) {
 }
 
 type SearchResultWithCursor struct {
+	Year     *string
 	SystemID string
 	Name     string
 	Path     string
@@ -295,6 +296,7 @@ type MediaDBI interface {
 		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
 	GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error)
+	GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
 	PopulateSystemTagsCache(ctx context.Context) error

@@ -375,10 +375,27 @@ func sqlSearchMediaWithFilters(
 			return results, fmt.Errorf("tags rows iteration error: %w", err)
 		}
 
-		// Merge tags into results
+		// Merge tags into results and extract year tag
 		for i := range results {
 			if tags, exists := tagsMap[results[i].MediaID]; exists {
 				results[i].Tags = tags
+				// Extract 4-digit year tag for launch command generation
+				for _, tag := range tags {
+					if tag.Type == "year" && len(tag.Tag) == 4 {
+						// Validate it's actually 4 digits
+						isYear := true
+						for _, ch := range tag.Tag {
+							if ch < '0' || ch > '9' {
+								isYear = false
+								break
+							}
+						}
+						if isYear {
+							results[i].Year = &tag.Tag
+							break
+						}
+					}
+				}
 			}
 		}
 	}

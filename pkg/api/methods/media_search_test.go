@@ -137,9 +137,6 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 		}),
 	).Return(expectedResults, nil)
 
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario.nes").Return("/games/mario.nes")
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/super-mario.sfc").Return("/games/super-mario.sfc")
-
 	// Create request without cursor (initial request)
 	query := "mario"
 	params := models.SearchParams{
@@ -225,10 +222,6 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 				len(filters.Systems) > 0 // Should have systems
 		}),
 	).Return(expectedResults, nil)
-
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario.nes").Return("/games/mario.nes")
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/super-mario.sfc").Return("/games/super-mario.sfc")
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/mario64.n64").Return("/games/mario64.n64")
 
 	// Create request with cursor
 	cursorStr, err := encodeCursor(50)
@@ -480,9 +473,6 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 		}),
 	).Return(expectedResults, nil)
 
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/game1.nes").Return("/games/game1.nes")
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/game2.sfc").Return("/games/game2.sfc")
-
 	// Create request with fully blank parameters
 	params := models.SearchParams{
 		// No Query, Systems, or Tags
@@ -548,9 +538,6 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 				len(filters.Systems) > 0 // Should have all systems
 		}),
 	).Return(expectedResults, nil)
-
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/rpg1.nes").Return("/games/rpg1.nes")
-	mockPlatform.On("NormalizePath", mock.Anything, "/games/rpg2.sfc").Return("/games/rpg2.sfc")
 
 	// Create request with tags only (no query or systems)
 	tags := []string{"genre:RPG"}

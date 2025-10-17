@@ -509,11 +509,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			resultSystem.Name = metadata.Name
 		}
 
+		// Build launch command in memory using data from query
+		launchCommand := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
+		if result.Year != nil && *result.Year != "" {
+			launchCommand = fmt.Sprintf("%s (year:%s)", launchCommand, *result.Year)
+		}
+
 		results = append(results, models.SearchResultMedia{
-			System: resultSystem,
-			Name:   result.Name,
-			Path:   env.Platform.NormalizePath(env.Config, result.Path),
-			Tags:   result.Tags,
+			System:        resultSystem,
+			Name:          result.Name,
+			Path:          result.Path,
+			LaunchCommand: launchCommand,
+			Tags:          result.Tags,
 		})
 	}
 
@@ -606,7 +613,7 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 			SystemID:   system.ID,
 			SystemName: system.Name,
 			Name:       activeMedia.Name,
-			Path:       env.Platform.NormalizePath(env.Config, activeMedia.Path),
+			Path:       activeMedia.Path,
 		})
 	}
 
@@ -698,7 +705,7 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 		SystemID:   system.ID,
 		SystemName: systemMeta.Name,
 		Name:       params.MediaName,
-		Path:       env.Platform.NormalizePath(env.Config, params.MediaPath),
+		Path:       params.MediaPath,
 	}
 
 	env.State.SetActiveMedia(&activeMedia)

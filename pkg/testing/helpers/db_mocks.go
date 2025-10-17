@@ -473,6 +473,11 @@ func (m *MockMediaDBI) GetAllSlugsForSystem(ctx context.Context, systemID string
 	return nil, nil
 }
 
+func (m *MockMediaDBI) GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error) {
+	args := m.Called(ctx, systemID, path)
+	return args.String(0), args.Error(1)
+}
+
 func (m *MockMediaDBI) GetTags(
 	ctx context.Context,
 	systems []systemdefs.System,
@@ -1416,6 +1421,9 @@ func NewMockMediaDBI() *MockMediaDBI {
 	// Set default expectation for InvalidateSystemTagsCache to return success
 	// This is called during media inserts and should succeed by default
 	mockMediaDB.On("InvalidateSystemTagsCache", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// Set default expectation for GetLaunchCommandForMedia to return empty string
+	// This is called during media search and should succeed by default
+	mockMediaDB.On("GetLaunchCommandForMedia", mock.Anything, mock.Anything, mock.Anything).Return("", nil).Maybe()
 	return mockMediaDB
 }
 

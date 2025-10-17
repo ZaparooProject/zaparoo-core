@@ -22,6 +22,7 @@ package mediadb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -238,4 +239,63 @@ func sqlGetMediaWithFullPathExcluding(
 		media = append(media, m)
 	}
 	return media, rows.Err()
+}
+
+// sqlGetLaunchCommandForMedia generates a title-based launch command for media at the given path.
+// Returns a command in the format: @systemID/titleName or @systemID/titleName (year:XXXX)
+func sqlGetLaunchCommandForMedia(
+	ctx context.Context,
+	db *sql.DB,
+	systemID string,
+	path string,
+) (string, error) {
+	query := `
+		SELECT
+			mt.Name,
+			(
+				SELECT t.Tag
+				FROM MediaTags mtags
+				INNER JOIN Tags t ON mtags.TagDBID = t.DBID
+				INNER JOIN TagTypes tt ON t.TypeDBID = tt.DBID
+				WHERE mtags.MediaDBID = m.DBID
+				  AND tt.Type = 'year'
+				  AND t.Tag GLOB '[0-9][0-9][0-9][0-9]'
+				LIMIT 1
+			) as Year
+		FROM Media m
+		INNER JOIN MediaTitles mt ON m.MediaTitleDBID = mt.DBID
+		INNER JOIN Systems s ON mt.SystemDBID = s.DBID
+		WHERE s.SystemID = ? AND m.Path = ?
+		LIMIT 1
+	`
+
+	stmt, err := db.PrepareContext(ctx, query)
+	if err != nil {
+		return "", fmt.Errorf("failed to prepare get launch command statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	var titleName string
+	var year sql.NullString
+
+	err = stmt.QueryRowContext(ctx, systemID, path).Scan(&titleName, &year)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// No media title found, return empty string
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to query launch command: %w", err)
+	}
+
+	// Build the launch command
+	launchCmd := fmt.Sprintf("@%s/%s", systemID, titleName)
+	if year.Valid && year.String != "" {
+		launchCmd = fmt.Sprintf("%s (year:%s)", launchCmd, year.String)
+	}
+
+	return launchCmd, nil
 }

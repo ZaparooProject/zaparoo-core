@@ -201,10 +201,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
-	return mister.NormalizePath(cfg, p, path)
-}
-
 func LaunchMenu() error {
 	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)

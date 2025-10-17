@@ -196,10 +196,6 @@ type Platform interface {
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
 	RootDirs(*config.Instance) []string
-	// NormalizePath convert a path to a normalized form for the platform, the
-	// shortest possible path that can interpreted and launched by Core. For
-	// writing to tokens.
-	NormalizePath(*config.Instance, string) string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
 	StopActiveLauncher() error

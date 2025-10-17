@@ -42,7 +42,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -220,11 +219,6 @@ func Start(
 
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
-
-	// Build path prefix cache for fast normalization after launcher cache is ready
-	if misterPlatform, ok := pl.(*mister.Platform); ok {
-		misterPlatform.BuildPathPrefixCache(cfg)
-	}
 
 	log.Info().Msg("checking for interrupted media indexing")
 	go checkAndResumeIndexing(pl, cfg, db, st)

@@ -1660,3 +1660,15 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 func (db *MediaDB) WaitForBackgroundOperations() {
 	db.backgroundOps.Wait()
 }
+
+// GetLaunchCommandForMedia generates a title-based launch command for the given media.
+func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+
+	if db.sql == nil {
+		return "", ErrNullSQL
+	}
+
+	return sqlGetLaunchCommandForMedia(ctx, db.sql, systemID, path)
+}
