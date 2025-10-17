@@ -41,7 +41,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super Mario World`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario World"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario World"}},
 				},
 			},
 		},
@@ -50,7 +50,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@Sega Genesis/Sonic the Hedgehog`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"Sega Genesis/Sonic the Hedgehog"}},
+					{Name: "launch.title", Args: []string{"Sega Genesis/Sonic the Hedgehog"}},
 				},
 			},
 		},
@@ -59,7 +59,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@arcade/Ms. Pac-Man`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"arcade/Ms. Pac-Man"}},
+					{Name: "launch.title", Args: []string{"arcade/Ms. Pac-Man"}},
 				},
 			},
 		},
@@ -68,7 +68,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@genesis/Sonic & Knuckles`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"genesis/Sonic & Knuckles"}},
+					{Name: "launch.title", Args: []string{"genesis/Sonic & Knuckles"}},
 				},
 			},
 		},
@@ -77,7 +77,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@ps1/WCW/nWo Thunder`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"ps1/WCW/nWo Thunder"}},
+					{Name: "launch.title", Args: []string{"ps1/WCW/nWo Thunder"}},
 				},
 			},
 		},
@@ -88,7 +88,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super Mario World (USA)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario World (USA)"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario World (USA)"}},
 				},
 			},
 		},
@@ -97,7 +97,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super Mario World (USA) (Rev 1)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario World (USA) (Rev 1)"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario World (USA) (Rev 1)"}},
 				},
 			},
 		},
@@ -106,7 +106,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game (year:1994)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game (year:1994)"}},
+					{Name: "launch.title", Args: []string{"snes/Game (year:1994)"}},
 				},
 			},
 		},
@@ -115,7 +115,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game (region:us) (year:1994) (lang:en)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game (region:us) (year:1994) (lang:en)"}},
+					{Name: "launch.title", Args: []string{"snes/Game (region:us) (year:1994) (lang:en)"}},
 				},
 			},
 		},
@@ -124,7 +124,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super Mario World (USA) (year:1991) (Rev A)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario World (USA) (year:1991) (Rev A)"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario World (USA) (year:1991) (Rev A)"}},
 				},
 			},
 		},
@@ -133,7 +133,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game (-unfinished:beta) (+region:us)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game (-unfinished:beta) (+region:us)"}},
+					{Name: "launch.title", Args: []string{"snes/Game (-unfinished:beta) (+region:us)"}},
 				},
 			},
 		},
@@ -145,7 +145,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
-						Name:    "launch.slug",
+						Name:    "launch.title",
 						Args:    []string{"snes/Super Mario World"},
 						AdvArgs: map[string]string{"launcher": "custom"},
 					},
@@ -158,7 +158,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
-						Name: "launch.slug",
+						Name: "launch.title",
 						Args: []string{"snes/Game"},
 						AdvArgs: map[string]string{
 							"launcher": "custom",
@@ -174,7 +174,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
-						Name:    "launch.slug",
+						Name:    "launch.title",
 						Args:    []string{"snes/Game (USA) (year:1994)"},
 						AdvArgs: map[string]string{"launcher": "custom"},
 					},
@@ -188,7 +188,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game^/Name`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game/Name"}},
+					{Name: "launch.title", Args: []string{"snes/Game/Name"}},
 				},
 			},
 		},
@@ -197,7 +197,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super^ Mario`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario"}},
 				},
 			},
 		},
@@ -206,7 +206,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/What^?`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/What?"}},
+					{Name: "launch.title", Args: []string{"snes/What?"}},
 				},
 			},
 		},
@@ -215,7 +215,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game^(2^)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game(2)"}},
+					{Name: "launch.title", Args: []string{"snes/Game(2)"}},
 				},
 			},
 		},
@@ -226,7 +226,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Super Mario World||**delay:1000`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Super Mario World"}},
+					{Name: "launch.title", Args: []string{"snes/Super Mario World"}},
 					{Name: "delay", Args: []string{"1000"}},
 				},
 			},
@@ -236,7 +236,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game (USA)||**delay:500`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game (USA)"}},
+					{Name: "launch.title", Args: []string{"snes/Game (USA)"}},
 					{Name: "delay", Args: []string{"500"}},
 				},
 			},
@@ -248,7 +248,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game Name  `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game Name"}},
+					{Name: "launch.title", Args: []string{"snes/Game Name"}},
 				},
 			},
 		},
@@ -257,7 +257,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/ Game Name`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/ Game Name"}},
+					{Name: "launch.title", Args: []string{"snes/ Game Name"}},
 				},
 			},
 		},
@@ -266,7 +266,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game ( USA ) ( Rev 1 )`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game ( USA ) ( Rev 1 )"}},
+					{Name: "launch.title", Args: []string{"snes/Game ( USA ) ( Rev 1 )"}},
 				},
 			},
 		},
@@ -315,7 +315,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@/Game Name`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"/Game Name"}},
+					{Name: "launch.title", Args: []string{"/Game Name"}},
 				},
 			},
 		},
@@ -324,7 +324,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/"}},
+					{Name: "launch.title", Args: []string{"snes/"}},
 				},
 			},
 		},
@@ -333,7 +333,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@/`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"/"}},
+					{Name: "launch.title", Args: []string{"/"}},
 				},
 			},
 		},
@@ -342,7 +342,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes///Game`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes///Game"}},
+					{Name: "launch.title", Args: []string{"snes///Game"}},
 				},
 			},
 		},
@@ -351,16 +351,16 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@sfc/ドラゴンクエストVII`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"sfc/ドラゴンクエストVII"}},
+					{Name: "launch.title", Args: []string{"sfc/ドラゴンクエストVII"}},
 				},
 			},
 		},
 		{
 			name:  "unicode in system and title",
-			input: `@スーパーファミコン/ゼルダの伝説`,
+			input: `@スーパーファミコン/ゼルダの伝説`, //nolint:gosmopolitan // Japanese test
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"スーパーファミコン/ゼルダの伝説"}},
+					{Name: "launch.title", Args: []string{"スーパーファミコン/ゼルダの伝説"}}, //nolint:gosmopolitan // Japanese test
 				},
 			},
 		},
@@ -369,7 +369,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@3do/Road Rash`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"3do/Road Rash"}},
+					{Name: "launch.title", Args: []string{"3do/Road Rash"}},
 				},
 			},
 		},
@@ -378,7 +378,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@sega-cd/Sonic CD`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"sega-cd/Sonic CD"}},
+					{Name: "launch.title", Args: []string{"sega-cd/Sonic CD"}},
 				},
 			},
 		},
@@ -390,7 +390,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			want: parser.Script{
 				Cmds: []parser.Command{
 					{
-						Name: "launch.slug",
+						Name: "launch.title",
 						Args: []string{"Sega Genesis/Sonic & Knuckles (USA) (Rev A) (year:1994)"},
 						AdvArgs: map[string]string{
 							"launcher": "custom",
@@ -405,7 +405,10 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@ps1/Final Fantasy VII (USA) (Disc 1) (Rev 1) (year:1997) (lang:en)`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"ps1/Final Fantasy VII (USA) (Disc 1) (Rev 1) (year:1997) (lang:en)"}},
+					{
+						Name: "launch.title",
+						Args: []string{"ps1/Final Fantasy VII (USA) (Disc 1) (Rev 1) (year:1997) (lang:en)"},
+					},
 				},
 			},
 		},
@@ -414,7 +417,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 			input: `@snes/Game (Prototype (Beta))`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch.slug", Args: []string{"snes/Game (Prototype (Beta))"}},
+					{Name: "launch.title", Args: []string{"snes/Game (Prototype (Beta))"}},
 				},
 			},
 		},

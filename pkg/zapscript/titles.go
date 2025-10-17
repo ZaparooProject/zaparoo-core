@@ -23,10 +23,12 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -34,6 +36,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
+
+// reMultiSpace normalizes multiple consecutive spaces to a single space
+var reMultiSpace = regexp.MustCompile(`\s+`)
 
 const (
 	// Fuzzy matching thresholds
@@ -45,10 +50,10 @@ const (
 	minSecondaryTitleSlugLength = 4
 )
 
-// cmdSlug implements the launch.slug command for slug-based game launching
+// cmdTitle implements the launch.title command for media title-based game launching
 //
 //nolint:gocritic // single-use parameter in command handler
-func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
+func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	if len(env.Cmd.Args) != 1 {
 		return platforms.CmdResult{}, ErrArgCount
 	}
@@ -58,21 +63,21 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	// Validate slug format
-	if !isValidSlugFormat(query) {
+	// Validate title format
+	if !isValidTitleFormat(query) {
 		return platforms.CmdResult{}, fmt.Errorf(
-			"invalid slug format: %s (expected SystemID/GameName)", query)
+			"invalid title format: %s (expected SystemID/GameName)", query)
 	}
 
 	// Parse SystemID/GameName format
 	ps := strings.SplitN(query, "/", 2)
 	if len(ps) < 2 {
-		return platforms.CmdResult{}, fmt.Errorf("invalid slug format: %s (expected SystemID/GameName)", query)
+		return platforms.CmdResult{}, fmt.Errorf("invalid title format: %s (expected SystemID/GameName)", query)
 	}
 
 	systemID, gameName := ps[0], ps[1]
 	if systemID == "" || gameName == "" {
-		return platforms.CmdResult{}, fmt.Errorf("invalid slug format: %s (both SystemID and GameName required)", query)
+		return platforms.CmdResult{}, fmt.Errorf("invalid title format: %s (both SystemID and GameName required)", query)
 	}
 
 	// Validate system ID
@@ -100,10 +105,38 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 		return platforms.CmdResult{}, err
 	}
 
-	// Parse tags from advanced args
-	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	// Two-stage tag extraction:
+	// 1. Extract explicit canonical tags with operators from parentheses: (-unfinished:beta) (+region:us)
+	// 2. Extract filename metadata tags from remaining parentheses: (USA) (1996) (Rev A)
 
-	// Slugify the game name
+	// Stage 1: Extract canonical tags with operators (e.g., "(-unfinished:beta) (+region:us)")
+	canonicalTagFilters, remainingTitle := extractCanonicalTagsFromParens(gameName)
+
+	// Stage 2: Extract filename metadata tags from remaining string (e.g., "(USA) (1996)")
+	filenameTags := tags.ParseFilenameToCanonicalTags(remainingTitle)
+
+	// Convert filename tags to tag filters (always AND operator)
+	filenameTagFilters := make([]database.TagFilter, 0, len(filenameTags))
+	for _, tag := range filenameTags {
+		filenameTagFilters = append(filenameTagFilters, database.TagFilter{
+			Type:     string(tag.Type),
+			Value:    string(tag.Value),
+			Operator: database.TagOperatorAND,
+		})
+	}
+
+	// Merge canonical tags, filename tags, and advanced args tags
+	// Priority: advanced args > canonical tags > filename tags
+	combinedTags := mergeTagFilters(filenameTagFilters, canonicalTagFilters)
+
+	// Parse tags from advanced args
+	advArgsTagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
+	// Final merge: advanced args take precedence over all extracted tags
+	tagFilters := mergeTagFilters(combinedTags, advArgsTagFilters)
+
+	// Slugify the game name (SlugifyString handles metadata stripping in Stage 4)
+	// e.g., "Sonic Spinball (USA) (year:1994)" → "sonicspinball"
 	slug := slugs.SlugifyString(gameName)
 	if slug == "" {
 		return platforms.CmdResult{}, fmt.Errorf("game name slugified to empty string: %s", gameName)
@@ -396,7 +429,7 @@ func cmdSlug(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, 
 	}
 
 	if len(results) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("no results found for slug: %s/%s", system.ID, gameName)
+		return platforms.CmdResult{}, fmt.Errorf("no results found for title: %s/%s", system.ID, gameName)
 	}
 
 	// If multiple results, apply intelligent selection
@@ -739,9 +772,9 @@ func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) d
 	return best
 }
 
-// mightBeSlug checks if input might be a slug format for routing purposes in cmdLaunch.
+// mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
 // This is a lenient check that allows characters that will be normalized during slugification.
-func mightBeSlug(input string) bool {
+func mightBeTitle(input string) bool {
 	// Must contain at least one slash
 	if !strings.Contains(input, "/") {
 		return false
@@ -773,9 +806,9 @@ func mightBeSlug(input string) bool {
 	return true
 }
 
-// isValidSlugFormat checks if the input string is valid slug format for cmdSlug.
-// This is a strict validation used after routing to cmdSlug.
-func isValidSlugFormat(input string) bool {
+// isValidTitleFormat checks if the input string is valid title format for cmdTitle.
+// This is a strict validation used after routing to cmdTitle.
+func isValidTitleFormat(input string) bool {
 	// Must contain at least one slash
 	if !strings.Contains(input, "/") {
 		return false
@@ -805,4 +838,94 @@ func isValidSlugFormat(input string) bool {
 	}
 
 	return true
+}
+
+// extractCanonicalTagsFromParens extracts explicit canonical tag syntax from parentheses.
+// Matches format: (operator?type:value) where operator is -, +, or ~ (optional, defaults to AND)
+// Examples: (-unfinished:beta), (+region:us), (year:1994), (~lang:en)
+//
+// This is used to support operator-based tag filtering in media titles, separate from
+// filename metadata tags which don't support operators.
+//
+// Returns the extracted tag filters and the input string with matched tags removed.
+func extractCanonicalTagsFromParens(input string) (tagFilters []database.TagFilter, remaining string) {
+	// Regex to match canonical tag syntax in parentheses: (operator?type:value)
+	// - ([+~-]?) - optional operator prefix (+, ~, or -). Note: - is last to avoid being interpreted as range
+	// - ([a-zA-Z][a-zA-Z0-9_-]*) - tag type (starts with letter, can contain letters/numbers/hyphens/underscores)
+	// - : - separator
+	// - ([^)]+) - tag value (anything except closing paren)
+	reCanonicalTag := regexp.MustCompile(`\(([+~-]?)([a-zA-Z][a-zA-Z0-9_-]*):([^)]+)\)`)
+
+	var extractedTags []database.TagFilter
+	remaining = input
+
+	// Find all matches
+	matches := reCanonicalTag.FindAllStringSubmatch(input, -1)
+
+	for _, match := range matches {
+		fullMatch := match[0] // "(+region:us)"
+		operator := match[1]  // "+"
+		tagType := match[2]   // "region"
+		tagValue := match[3]  // "us"
+
+		// Construct tag string with operator for parsing
+		tagStr := operator + tagType + ":" + tagValue
+
+		// Parse using existing filter parser (handles normalization and validation)
+		parsedFilters, err := filters.ParseTagFilters([]string{tagStr})
+		if err != nil {
+			log.Warn().Err(err).Str("tag", tagStr).Msg("failed to parse canonical tag from parentheses")
+			continue
+		}
+
+		if len(parsedFilters) > 0 {
+			extractedTags = append(extractedTags, parsedFilters[0])
+			// Remove this tag from the string
+			remaining = strings.Replace(remaining, fullMatch, "", 1)
+		}
+	}
+
+	// Clean up extra spaces left by removed tags
+	remaining = strings.TrimSpace(remaining)
+	remaining = reMultiSpace.ReplaceAllString(remaining, " ")
+
+	tagFilters = extractedTags
+	return tagFilters, remaining
+}
+
+// mergeTagFilters merges extracted tags with advanced args tags.
+// Advanced args tags take precedence - if the same tag type exists in both,
+// the advanced args value is used.
+// Returns nil if the result would be empty.
+func mergeTagFilters(extracted, advArgs []database.TagFilter) []database.TagFilter {
+	if len(advArgs) == 0 && len(extracted) == 0 {
+		return nil
+	}
+
+	if len(advArgs) == 0 {
+		return extracted
+	}
+
+	if len(extracted) == 0 {
+		return advArgs
+	}
+
+	// Create a map of advanced args tags by type for quick lookup
+	advArgsMap := make(map[string]database.TagFilter)
+	for _, tag := range advArgs {
+		advArgsMap[tag.Type] = tag
+	}
+
+	// Start with advanced args tags (they take precedence)
+	result := make([]database.TagFilter, 0, len(extracted)+len(advArgs))
+	result = append(result, advArgs...)
+
+	// Add extracted tags that don't conflict with advanced args
+	for _, tag := range extracted {
+		if _, exists := advArgsMap[tag.Type]; !exists {
+			result = append(result, tag)
+		}
+	}
+
+	return result
 }

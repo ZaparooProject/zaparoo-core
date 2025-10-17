@@ -371,10 +371,10 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
-	// check for slug launch format: SystemID/Game Name
-	if mightBeSlug(path) {
-		log.Debug().Msgf("detected possible slug format, forwarding to cmdSlug: %s", path)
-		return cmdSlug(pl, env)
+	// check for title launch format: SystemID/Game Name
+	if mightBeTitle(path) {
+		log.Debug().Msgf("detected possible title format, forwarding to cmdTitle: %s", path)
+		return cmdTitle(pl, env)
 	}
 
 	// attempt to parse the <system>/<path> format

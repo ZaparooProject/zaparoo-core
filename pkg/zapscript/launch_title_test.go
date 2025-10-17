@@ -37,7 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCmdSlug(t *testing.T) {
+func TestCmdTitle(t *testing.T) {
 	tests := []struct {
 		name           string
 		input          string
@@ -111,7 +111,7 @@ func TestCmdSlug(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name:    "launch.slug",
+				Name:    "launch.title",
 				Args:    []string{tt.input},
 				AdvArgs: map[string]string{},
 			}
@@ -146,11 +146,11 @@ func TestCmdSlug(t *testing.T) {
 				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			}
 
-			result, err := cmdSlug(mockPlatform, env)
+			result, err := cmdTitle(mockPlatform, env)
 
 			if tt.shouldError {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid slug format")
+				assert.Contains(t, err.Error(), "invalid title format")
 			} else {
 				require.NoError(t, err)
 				mockMediaDB.AssertExpectations(t)
@@ -163,7 +163,95 @@ func TestCmdSlug(t *testing.T) {
 	}
 }
 
-func TestCmdSlugWithTags(t *testing.T) {
+func TestExtractCanonicalTagsFromParens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		input             string
+		expectedTags      []database.TagFilter
+		expectedRemaining string
+	}{
+		{
+			name:              "no canonical tags",
+			input:             "Super Mario (USA) (1996)",
+			expectedTags:      nil,
+			expectedRemaining: "Super Mario (USA) (1996)",
+		},
+		{
+			name:  "single canonical tag with AND operator",
+			input: "Game (region:us)",
+			expectedTags: []database.TagFilter{
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+			},
+			expectedRemaining: "Game",
+		},
+		{
+			name:  "single canonical tag with NOT operator",
+			input: "Game (-unfinished:beta)",
+			expectedTags: []database.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+			},
+			expectedRemaining: "Game",
+		},
+		{
+			name:  "single canonical tag with OR operator",
+			input: "Game (~lang:en)",
+			expectedTags: []database.TagFilter{
+				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			},
+			expectedRemaining: "Game",
+		},
+		{
+			name:  "multiple canonical tags with operators",
+			input: "Game (-unfinished:beta) (+region:us) (~lang:en)",
+			expectedTags: []database.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+				{Type: "region", Value: "us", Operator: database.TagOperatorAND},
+				{Type: "lang", Value: "en", Operator: database.TagOperatorOR},
+			},
+			expectedRemaining: "Game",
+		},
+		{
+			name:  "canonical tags mixed with filename metadata",
+			input: "Game (-unfinished:beta) (USA) (year:1996)",
+			expectedTags: []database.TagFilter{
+				{Type: "unfinished", Value: "beta", Operator: database.TagOperatorNOT},
+				{Type: "year", Value: "1996", Operator: database.TagOperatorAND},
+			},
+			expectedRemaining: "Game (USA)",
+		},
+		{
+			name:  "canonical tag without operator defaults to AND",
+			input: "Game (year:1996)",
+			expectedTags: []database.TagFilter{
+				{Type: "year", Value: "1996", Operator: database.TagOperatorAND},
+			},
+			expectedRemaining: "Game",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tagFilters, remaining := extractCanonicalTagsFromParens(tt.input)
+
+			assert.Equal(t, tt.expectedRemaining, remaining, "remaining string mismatch")
+			assert.Equal(t, len(tt.expectedTags), len(tagFilters), "number of extracted tags mismatch")
+
+			if len(tt.expectedTags) > 0 {
+				for i, expectedTag := range tt.expectedTags {
+					assert.Equal(t, expectedTag.Type, tagFilters[i].Type, "tag type mismatch at index %d", i)
+					assert.Equal(t, expectedTag.Value, tagFilters[i].Value, "tag value mismatch at index %d", i)
+					assert.Equal(t, expectedTag.Operator, tagFilters[i].Operator, "tag operator mismatch at index %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestCmdTitleWithTags(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
 	mockPlaylistController := playlists.PlaylistController{}
@@ -182,7 +270,7 @@ func TestCmdSlugWithTags(t *testing.T) {
 	}
 
 	cmd := parser.Command{
-		Name:    "launch.slug",
+		Name:    "launch.title",
 		Args:    []string{input},
 		AdvArgs: map[string]string{"tags": "region:usa,type:game"},
 	}
@@ -214,7 +302,7 @@ func TestCmdSlugWithTags(t *testing.T) {
 		Return(nil).Maybe()
 	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	result, err := cmdSlug(mockPlatform, env)
+	result, err := cmdTitle(mockPlatform, env)
 
 	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
@@ -222,7 +310,7 @@ func TestCmdSlugWithTags(t *testing.T) {
 	assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
 }
 
-func TestCmdSlugWithSubtitleFallback(t *testing.T) {
+func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 	tests := []struct {
 		name               string
 		input              string
@@ -309,7 +397,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name:    "launch.slug",
+				Name:    "launch.title",
 				Args:    []string{tt.input},
 				AdvArgs: map[string]string{},
 			}
@@ -362,7 +450,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			}
 
-			result, err := cmdSlug(mockPlatform, env)
+			result, err := cmdTitle(mockPlatform, env)
 
 			if tt.shouldError {
 				require.Error(t, err)
@@ -377,7 +465,7 @@ func TestCmdSlugWithSubtitleFallback(t *testing.T) {
 	}
 }
 
-func TestCmdSlugTokenMatching(t *testing.T) {
+func TestCmdTitleTokenMatching(t *testing.T) {
 	tests := []struct {
 		name           string
 		input          string
@@ -438,7 +526,7 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name:    "launch.slug",
+				Name:    "launch.title",
 				Args:    []string{tt.input},
 				AdvArgs: map[string]string{},
 			}
@@ -469,7 +557,7 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 				Return(nil).Maybe()
 			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-			result, err := cmdSlug(mockPlatform, env)
+			result, err := cmdTitle(mockPlatform, env)
 
 			require.NoError(t, err)
 			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
@@ -479,7 +567,7 @@ func TestCmdSlugTokenMatching(t *testing.T) {
 	}
 }
 
-func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
+func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 	tests := []struct {
 		name          string
 		input         string
@@ -534,7 +622,7 @@ func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name:    "launch.slug",
+				Name:    "launch.title",
 				Args:    []string{tt.input},
 				AdvArgs: map[string]string{},
 			}
@@ -590,7 +678,7 @@ func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 				Return(nil).Maybe()
 			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-			result, err := cmdSlug(mockPlatform, env)
+			result, err := cmdTitle(mockPlatform, env)
 
 			require.NoError(t, err)
 			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
@@ -600,7 +688,7 @@ func TestCmdSlugJaroWinklerFuzzy(t *testing.T) {
 	}
 }
 
-func TestCmdSlugEdgeCases(t *testing.T) {
+func TestCmdTitleEdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string
 		errorMsg    string
@@ -629,13 +717,13 @@ func TestCmdSlugEdgeCases(t *testing.T) {
 			name:        "only system no game",
 			args:        []string{"snes/"},
 			shouldError: true,
-			errorMsg:    "invalid slug format",
+			errorMsg:    "invalid title format",
 		},
 		{
 			name:        "only game no system",
 			args:        []string{"/mario"},
 			shouldError: true,
-			errorMsg:    "invalid slug format",
+			errorMsg:    "invalid title format",
 		},
 	}
 
@@ -651,7 +739,7 @@ func TestCmdSlugEdgeCases(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name:    "launch.slug",
+				Name:    "launch.title",
 				Args:    tt.args,
 				AdvArgs: map[string]string{},
 			}
@@ -663,7 +751,7 @@ func TestCmdSlugEdgeCases(t *testing.T) {
 				Cmd:      cmd,
 			}
 
-			_, err := cmdSlug(mockPlatform, env)
+			_, err := cmdTitle(mockPlatform, env)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errorMsg)
@@ -671,7 +759,7 @@ func TestCmdSlugEdgeCases(t *testing.T) {
 	}
 }
 
-func TestMightBeSlug(t *testing.T) {
+func TestMightBeTitle(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -746,7 +834,7 @@ func TestMightBeSlug(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := mightBeSlug(tt.input)
+			result := mightBeTitle(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1299,8 +1387,8 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, []string{"en"}, langs)
 }
 
-// TestCmdSlugCacheBehavior tests cache hit/miss scenarios
-func TestCmdSlugCacheBehavior(t *testing.T) {
+// TestCmdTitleCacheBehavior tests cache hit/miss scenarios
+func TestCmdTitleCacheBehavior(t *testing.T) {
 	t.Run("Cache hit - should not search database", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
 		mockPlatform := mocks.NewMockPlatform()
@@ -1315,7 +1403,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 		slug := "supermarioworld"
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{},
 		}
@@ -1340,7 +1428,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		// SearchMediaBySlug should NOT be called when cache hits
-		result, err := cmdSlug(mockPlatform, env)
+		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
 		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
@@ -1365,7 +1453,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 		slug := "supermarioworld"
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{},
 		}
@@ -1402,7 +1490,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		result, err := cmdSlug(mockPlatform, env)
+		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
 		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
@@ -1427,7 +1515,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 
 		// First call with USA tag
 		cmd1 := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{"tags": "region:usa"},
 		}
@@ -1456,12 +1544,12 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-		_, err := cmdSlug(mockPlatform, env1)
+		_, err := cmdTitle(mockPlatform, env1)
 		require.NoError(t, err)
 
 		// Second call with different tags should not use same cache
 		cmd2 := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{"tags": "region:jp"},
 		}
@@ -1489,7 +1577,7 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-		_, err = cmdSlug(mockPlatform, env2)
+		_, err = cmdTitle(mockPlatform, env2)
 		require.NoError(t, err)
 
 		mockMediaDB.AssertExpectations(t)
@@ -1497,8 +1585,8 @@ func TestCmdSlugCacheBehavior(t *testing.T) {
 	})
 }
 
-// TestCmdSlugErrorHandling tests error scenarios
-func TestCmdSlugErrorHandling(t *testing.T) {
+// TestCmdTitleErrorHandling tests error scenarios
+func TestCmdTitleErrorHandling(t *testing.T) {
 	t.Run("Database search error", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
 		mockPlatform := mocks.NewMockPlatform()
@@ -1510,7 +1598,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 		}
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{},
 		}
@@ -1530,7 +1618,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 			context.Background(), "SNES", "supermarioworld", []database.TagFilter(nil)).
 			Return([]database.SearchResultWithCursor{}, assert.AnError)
 
-		_, err := cmdSlug(mockPlatform, env)
+		_, err := cmdTitle(mockPlatform, env)
 
 		require.Error(t, err)
 		mockMediaDB.AssertExpectations(t)
@@ -1547,7 +1635,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 		}
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{},
 		}
@@ -1580,7 +1668,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).
 			Return(assert.AnError)
 
-		_, err := cmdSlug(mockPlatform, env)
+		_, err := cmdTitle(mockPlatform, env)
 
 		require.Error(t, err)
 		mockMediaDB.AssertExpectations(t)
@@ -1598,7 +1686,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 		}
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
 			AdvArgs: map[string]string{"tags": "invalid_format"},
 		}
@@ -1627,7 +1715,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 			mock.Anything, "SNES").
 			Return([]string{}, nil).Maybe()
 
-		_, err := cmdSlug(mockPlatform, env)
+		_, err := cmdTitle(mockPlatform, env)
 
 		// Tag parsing logs a warning but doesn't fail the command, so no error expected from invalid format
 		// The command will fail because no results are found
@@ -1646,7 +1734,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 		}
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/NonexistentGame12345"},
 			AdvArgs: map[string]string{},
 		}
@@ -1675,7 +1763,7 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 			mock.Anything, "SNES").
 			Return([]string{"mario", "zelda", "metroid"}, nil).Maybe()
 
-		_, err := cmdSlug(mockPlatform, env)
+		_, err := cmdTitle(mockPlatform, env)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no results found")
@@ -1683,8 +1771,8 @@ func TestCmdSlugErrorHandling(t *testing.T) {
 	})
 }
 
-// TestCmdSlugPerformance tests performance-related scenarios
-func TestCmdSlugPerformance(t *testing.T) {
+// TestCmdTitlePerformance tests performance-related scenarios
+func TestCmdTitlePerformance(t *testing.T) {
 	t.Run("Large result set filtering", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
 		mockPlatform := mocks.NewMockPlatform()
@@ -1696,7 +1784,7 @@ func TestCmdSlugPerformance(t *testing.T) {
 		}
 
 		cmd := parser.Command{
-			Name:    "launch.slug",
+			Name:    "launch.title",
 			Args:    []string{"snes/mario"},
 			AdvArgs: map[string]string{},
 		}
@@ -1737,7 +1825,7 @@ func TestCmdSlugPerformance(t *testing.T) {
 
 		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		result, err := cmdSlug(mockPlatform, env)
+		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
 		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)

@@ -867,10 +867,10 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 				continue
 			}
 
-			// Build launch.slug command with raw content
+			// Build launch.title command with raw content
 			// The command layer will handle system lookup and tag extraction
 			cmd := Command{
-				Name: models.ZapScriptCmdLaunchSlug,
+				Name: models.ZapScriptCmdLaunchTitle,
 				Args: []string{result.rawContent},
 			}
 

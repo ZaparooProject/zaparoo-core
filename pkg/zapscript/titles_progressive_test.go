@@ -1,4 +1,4 @@
-//go:build slugs_integration
+//go:build titles_integration
 
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
