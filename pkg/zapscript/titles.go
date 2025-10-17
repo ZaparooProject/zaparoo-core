@@ -125,15 +125,15 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		})
 	}
 
-	// Merge canonical tags, filename tags, and advanced args tags
-	// Priority: advanced args > canonical tags > filename tags
-	combinedTags := mergeTagFilters(filenameTagFilters, canonicalTagFilters)
+	// Keep auto-extracted tags separate for fallback strategy
+	autoExtractedTags := mergeTagFilters(filenameTagFilters, canonicalTagFilters)
 
-	// Parse tags from advanced args
+	// Parse tags from advanced args (these are explicit user requirements)
 	advArgsTagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
 
-	// Final merge: advanced args take precedence over all extracted tags
-	tagFilters := mergeTagFilters(combinedTags, advArgsTagFilters)
+	// Merge all tags for initial search attempt
+	// Priority: advanced args > canonical tags > filename tags
+	tagFilters := mergeTagFilters(autoExtractedTags, advArgsTagFilters)
 
 	// Slugify the game name (SlugifyString handles metadata stripping in Stage 4)
 	// e.g., "Sonic Spinball (USA) (year:1994)" → "sonicspinball"
@@ -428,11 +428,42 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 	}
 
+	// Fallback strategy: If no results with auto-extracted tags, retry without them
+	if len(results) == 0 && len(autoExtractedTags) > 0 {
+		log.Info().Msgf("no results found with auto-extracted tags, retrying without them")
+
+		// Retry with only explicit user tags (from advArgs)
+		fallbackTags := advArgsTagFilters
+
+		// Re-run exact match strategy without auto-extracted tags
+		results, err = gamesdb.SearchMediaBySlug(ctx, system.ID, slug, fallbackTags)
+		if err == nil && len(results) > 0 {
+			resolvedStrategy = "exact_match_no_auto_tags"
+			log.Info().Msgf("found %d results without auto-extracted tags", len(results))
+		}
+
+		// If still no results, try prefix match without auto-extracted tags
+		if len(results) == 0 {
+			prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(ctx, system.ID, slug, fallbackTags)
+			if prefixErr == nil && len(prefixResults) > 0 {
+				results = prefixResults
+				resolvedStrategy = "prefix_match_no_auto_tags"
+				log.Info().Msgf("found %d prefix matches without auto-extracted tags", len(results))
+			}
+		}
+
+		// If we found results without auto-extracted tags, use ALL tags for selection preferences
+		if len(results) > 0 {
+			log.Info().Msg("fallback successful: found results by ignoring auto-extracted tag filters")
+		}
+	}
+
 	if len(results) == 0 {
 		return platforms.CmdResult{}, fmt.Errorf("no results found for title: %s/%s", system.ID, gameName)
 	}
 
-	// If multiple results, apply intelligent selection
+	// If multiple results, apply intelligent selection using ALL tags as preferences
+	// This includes both user-provided and auto-extracted tags
 	selectedResult := selectBestResult(results, tagFilters, env.Cfg)
 	log.Info().Msgf("selected result: %s (%s)", selectedResult.Name, selectedResult.Path)
 
