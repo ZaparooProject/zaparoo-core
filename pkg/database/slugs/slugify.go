@@ -31,7 +31,7 @@ import (
 
 // SlugifyString converts a game title to a normalized slug for cross-platform matching.
 //
-// 13-Stage Normalization Pipeline:
+// 14-Stage Normalization Pipeline:
 //   Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
 //   Stage 2: Punctuation Normalization - Curly quotes, dashes → standard ASCII forms
 //   Stage 3: Unicode Normalization - Symbol removal, NFKC/NFC, diacritic removal
@@ -49,6 +49,7 @@ import (
 //   Stage 11: Number Word Expansion - "one" → "1", "two" → "2"
 //   Stage 12: Ordinal Number Normalization - "1st"→"1", "2nd"→"2", "3rd"→"3"
 //   Stage 13: Roman Numeral Conversion - "VII" → "7"
+//   Stage 14: Final Slugification - Multi-script aware character filtering
 //
 // This function is deterministic and idempotent:
 //   SlugifyString(SlugifyString(x)) == SlugifyString(x)

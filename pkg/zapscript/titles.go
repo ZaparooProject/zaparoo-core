@@ -168,21 +168,21 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// Track which strategy succeeds for cache storage
 	var resolvedStrategy string
 
-	// Strategy 0: Exact match
+	// Strategy 1: Exact match
 	results, err := gamesdb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
-		resolvedStrategy = "exact_match"
+		resolvedStrategy = "strategy_1_exact_match"
 		log.Debug().
 			Str("strategy", resolvedStrategy).
 			Str("query", slug).
 			Int("result_count", len(results)).
-			Msg("match found via exact match strategy")
+			Msg("match found via strategy 1 (exact match)")
 	}
 
-	// Fallback 1: Prefix search on full normalized title with edition-aware ranking
+	// Strategy 2: Prefix search on full normalized title with edition-aware ranking
 	if len(results) == 0 {
 		log.Info().Msgf("no exact match for '%s', trying prefix search with ranking", slug)
 		prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(context.Background(), system.ID, slug, tagFilters)
@@ -217,7 +217,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					}
 				}
 
-				resolvedStrategy = "prefix_match"
+				resolvedStrategy = "strategy_2_prefix_match"
 				log.Info().Msgf("found %d prefix matches, selected best: '%s' (score=%d)",
 					len(validCandidates), validCandidates[bestIdx].Slug, bestScore)
 				log.Debug().
@@ -226,10 +226,10 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					Str("match", prefixResults[bestIdx].Name).
 					Int("score", bestScore).
 					Int("result_count", len(validCandidates)).
-					Msg("match found via prefix match strategy")
+					Msg("match found via strategy 2 (prefix match)")
 				results = []database.SearchResultWithCursor{prefixResults[bestIdx]}
 			} else if len(prefixResults) > 0 {
-				// Strategy 1.5: Token-based similarity matching (word-order independent)
+				// Strategy 3: Token-based similarity matching (word-order independent)
 				// If word sequence validation filtered out all candidates, try token matching
 				log.Info().Msgf(
 					"no valid prefix candidates, trying token-based matching on %d results",
@@ -269,7 +269,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 						}
 					}
 
-					resolvedStrategy = "token_match"
+					resolvedStrategy = "strategy_3_token_match"
 					log.Info().Msgf("found %d token matches, selected best: '%s' (score=%.2f)",
 						len(tokenCandidates), tokenCandidates[bestIdx].result.Name, bestScore)
 					log.Debug().
@@ -278,14 +278,14 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 						Str("match", tokenCandidates[bestIdx].result.Name).
 						Float64("score", bestScore).
 						Int("result_count", len(tokenCandidates)).
-						Msg("match found via token-based matching strategy")
+						Msg("match found via strategy 3 (token-based similarity)")
 					results = []database.SearchResultWithCursor{tokenCandidates[bestIdx].result}
 				}
 			}
 		}
 	}
 
-	// Strategy 2: Secondary title-dropping main title search
+	// Strategy 4: Main title-only search (drops secondary title)
 	if len(results) == 0 {
 		matchInfo := matcher.GenerateMatchInfo(gameName)
 		if matchInfo.HasSecondaryTitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
@@ -297,18 +297,18 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
 			}
 			if len(results) > 0 {
-				resolvedStrategy = "main_title_only"
+				resolvedStrategy = "strategy_4_main_title_only"
 				log.Debug().
 					Str("strategy", resolvedStrategy).
 					Str("query", slug).
 					Str("main_title_slug", matchInfo.MainTitleSlug).
 					Int("result_count", len(results)).
-					Msg("match found via main title only strategy")
+					Msg("match found via strategy 4 (main title only)")
 			}
 		}
 	}
 
-	// Fallback 3: Secondary title-only literal search
+	// Strategy 5: Secondary title-only exact match
 	if len(results) == 0 {
 		matchInfo := matcher.GenerateMatchInfo(gameName)
 		if matchInfo.HasSecondaryTitle &&
@@ -324,13 +324,14 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			}
 
 			if len(results) == 0 {
+				// Strategy 6: Secondary title-only prefix match
 				results, err = gamesdb.SearchMediaBySlugPrefix(
 					context.Background(), system.ID, secondarySlug, tagFilters)
 				if err != nil {
 					log.Warn().Err(err).Msgf(
 						"secondary title-only prefix search failed for '%s'", secondarySlug)
 				} else if len(results) > 0 {
-					resolvedStrategy = "secondary_title_prefix"
+					resolvedStrategy = "strategy_6_secondary_title_prefix"
 					log.Info().Msgf("found %d results using secondary title-only prefix: '%s'",
 						len(results), secondarySlug)
 					log.Debug().
@@ -338,10 +339,10 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 						Str("query", slug).
 						Str("secondary_slug", secondarySlug).
 						Int("result_count", len(results)).
-						Msg("match found via secondary title prefix strategy")
+						Msg("match found via strategy 6 (secondary title prefix)")
 				}
 			} else {
-				resolvedStrategy = "secondary_title_exact"
+				resolvedStrategy = "strategy_5_secondary_title_exact"
 				log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
 					len(results), secondarySlug)
 				log.Debug().
@@ -349,12 +350,12 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					Str("query", slug).
 					Str("secondary_slug", secondarySlug).
 					Int("result_count", len(results)).
-					Msg("match found via secondary title exact strategy")
+					Msg("match found via strategy 5 (secondary title exact)")
 			}
 		}
 	}
 
-	// Strategy 4: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
+	// Strategy 7: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
 	if len(results) == 0 && len(slug) >= minSlugLengthForFuzzy {
 		log.Info().Msgf("no results yet, trying fuzzy matching for '%s'", slug)
 
@@ -374,7 +375,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					results, err = gamesdb.SearchMediaBySlug(
 						context.Background(), system.ID, match.Slug, tagFilters)
 					if err == nil && len(results) > 0 {
-						resolvedStrategy = "jarowinkler_fuzzy"
+						resolvedStrategy = "strategy_7_jarowinkler_fuzzy"
 						log.Info().Msgf("found match via fuzzy search: '%s' (similarity=%.2f)",
 							match.Slug, match.Similarity)
 						log.Debug().
@@ -383,7 +384,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 							Str("match", match.Slug).
 							Float64("similarity", float64(match.Similarity)).
 							Int("result_count", len(results)).
-							Msg("match found via Jaro-Winkler fuzzy matching")
+							Msg("match found via strategy 7 (Jaro-Winkler fuzzy)")
 						break
 					}
 				}
@@ -391,7 +392,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 	}
 
-	// Strategy 5: Progressive trim candidates (last resort)
+	// Strategy 8: Progressive trim candidates (last resort)
 	// Aggressively removes words from the end - handles overly-verbose queries
 	if len(results) == 0 {
 		log.Info().Msgf("all strategies failed, trying progressive truncation as last resort")
@@ -414,7 +415,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			}
 
 			if len(results) > 0 {
-				resolvedStrategy = "progressive_trim"
+				resolvedStrategy = "strategy_8_progressive_trim"
 				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
 				log.Debug().
 					Str("strategy", resolvedStrategy).
@@ -423,7 +424,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 					Bool("exact", candidate.IsExactMatch).
 					Bool("prefix", candidate.IsPrefixMatch).
 					Int("result_count", len(results)).
-					Msg("match found via progressive trim strategy")
+					Msg("match found via strategy 8 (progressive trim)")
 				break
 			}
 		}
@@ -439,7 +440,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		// Re-run exact match strategy without auto-extracted tags
 		results, err = gamesdb.SearchMediaBySlug(ctx, system.ID, slug, fallbackTags)
 		if err == nil && len(results) > 0 {
-			resolvedStrategy = "exact_match_no_auto_tags"
+			resolvedStrategy = "strategy_1_exact_match_no_auto_tags"
 			log.Info().Msgf("found %d results without auto-extracted tags", len(results))
 		}
 
@@ -448,7 +449,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(ctx, system.ID, slug, fallbackTags)
 			if prefixErr == nil && len(prefixResults) > 0 {
 				results = prefixResults
-				resolvedStrategy = "prefix_match_no_auto_tags"
+				resolvedStrategy = "strategy_2_prefix_match_no_auto_tags"
 				log.Info().Msgf("found %d prefix matches without auto-extracted tags", len(results))
 			}
 		}

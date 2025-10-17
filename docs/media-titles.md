@@ -57,7 +57,7 @@ Matches user-provided game titles against the indexed database using progressive
 
 **Input:** `SystemID/GameName` format from user (e.g., `nes/Super Mario Bros`)
 **Output:** Best matching media entry to launch
-**Entry Point:** `pkg/zapscript/slugs.go` → `cmdSlug()`
+**Entry Point:** `pkg/zapscript/titles.go` → `cmdTitle()`
 
 ### 3. Shared Libraries
 
@@ -65,9 +65,9 @@ Both workflows use common normalization code:
 
 - **Slug Normalizer** (`pkg/database/slugs/slugify.go`)
 
-  - Core 13-stage normalization pipeline
+  - Core 14-stage normalization pipeline (Stages 1-13 + final slugification)
   - Script detection and script-specific processing
-  - Multi-script support (Latin, CJK, Cyrillic, Greek, Arabic, Hebrew, Indic, etc.)
+  - Multi-script support (Latin, CJK, Cyrillic, Greek, Arabic, Hebrew, Indic, Thai, Burmese, Khmer, Lao, Amharic)
 
 - **Matcher Utilities** (`pkg/database/matcher/`)
 
@@ -100,9 +100,9 @@ func SlugifyString(input string) string
 - **Idempotent:** `SlugifyString(SlugifyString(x)) == SlugifyString(x)`
 - **Multi-script aware:** Preserves non-Latin scripts while normalizing Latin text
 
-### 13-Stage Processing Pipeline
+### 14-Stage Processing Pipeline
 
-The pipeline executes stages in a specific order to ensure correctness. Stages are numbered by execution order, not logical grouping.
+The pipeline executes stages in a specific order to ensure correctness. Stages 1-13 are performed by `normalizeInternal()`, followed by Stage 14 (final slugification) in `SlugifyString()`. Stages are numbered by execution order, not logical grouping.
 
 #### Stage 1: Width Normalization
 
@@ -511,7 +511,7 @@ Donkey Kong.nes
    - If `stripLeadingNumbers = true`: Remove `^\d+[.\s\-]+` pattern
    - Strip everything after first bracket: `^([^(\[{<]*)`
    - Normalize separators: `_` → space, `&` → `and`
-5. **Slugify title:** Call `slugs.SlugifyString(title)` (13-stage pipeline)
+5. **Slugify title:** Call `slugs.SlugifyString(title)` (14-stage pipeline)
 6. **Handle empty slugs:** If slug is empty, use lowercase filename as fallback
 7. **Extract tags:** Call `tags.ParseFilenameToCanonicalTags()` (if enabled)
 8. **Cache result:** Store `PathFragments` for future lookups
@@ -651,7 +651,7 @@ TagTypes (DBID, Type)
 
 The resolution workflow takes a user-provided game title and finds the best matching media entry using progressive fallback strategies.
 
-**Entry Point:** `pkg/zapscript/slugs.go` → `cmdSlug()`
+**Entry Point:** `pkg/zapscript/titles.go` → `cmdTitle()`
 
 **Input Format:** `SystemID/GameName` (e.g., `nes/Super Mario Bros`, `sfc/ドラゴンクエスト`)
 
@@ -808,7 +808,7 @@ When a query contains a secondary title (delimited by `:`, `-`, or `'s `), searc
 - `"Legend of Zelda: Link's Awakening"` → main: `"legendofzelda"`, secondary: `"linksawakening"`
 - Search for: `"legendofzelda"` (exact match)
 
-#### Strategy 5: Secondary Title-Only Search
+#### Strategy 5: Secondary Title Exact Match
 
 **Requirements:**
 
@@ -819,15 +819,33 @@ When a query contains a secondary title (delimited by `:`, `-`, or `'s `), searc
 
 1. Extract secondary title slug using `GenerateMatchInfo()`
 2. Try exact match on secondary title slug
-3. If no match, try prefix match on secondary title slug
 
 **Examples:**
 
 - Query: `"Legend of Zelda: Ocarina of Time"`
 - Secondary slug: `"ocarinaoftime"`
-- Searches for games matching just `"ocarinaoftime"` (both exact and prefix)
+- Searches for games matching exactly `"ocarinaoftime"`
 
-#### Strategy 6: Jaro-Winkler Fuzzy Matching
+#### Strategy 6: Secondary Title Prefix Match
+
+**Requirements:**
+
+- Must have a secondary title (detected by `GenerateMatchInfo()`)
+- Secondary title slug must be ≥4 characters
+- Strategy 5 (exact match) found no results
+
+**Process:**
+
+1. Extract secondary title slug using `GenerateMatchInfo()`
+2. Try prefix match on secondary title slug
+
+**Examples:**
+
+- Query: `"Legend of Zelda: Ocarina"`
+- Secondary slug: `"ocarina"`
+- Searches for games starting with `"ocarina"`
+
+#### Strategy 7: Jaro-Winkler Fuzzy Matching
 
 **Function:** `FindFuzzyMatches()` in `pkg/database/matcher/fuzzy.go`
 
@@ -857,7 +875,7 @@ Handles typos and spelling variations using Jaro-Winkler similarity.
 - `"mraio"` → `"mario"` (similarity: 0.940)
 - `"colour"` vs `"color"` (similarity: 0.967)
 
-#### Strategy 7: Progressive Trim Candidates (Last Resort)
+#### Strategy 8: Progressive Trim Candidates (Last Resort)
 
 **Function:** `GenerateProgressiveTrimCandidates(title)`
 
@@ -956,14 +974,18 @@ The slug system provides comprehensive support for non-Latin scripts, preserving
 
 ### Supported Scripts
 
+- **Latin:** English, French, Spanish, etc. (default/fallback)
 - **CJK:** Chinese (Hanzi), Japanese (Hiragana, Katakana, Kanji), Korean (Hangul)
-- **Cyrillic:** Russian, Ukrainian, Serbian, etc.
+- **Cyrillic:** Russian, Ukrainian, Bulgarian, Serbian, etc.
 - **Greek:** Ancient and Modern Greek
+- **Indic:** Devanagari, Bengali, Tamil, Telugu, Kannada, Malayalam, Gurmukhi, Gujarati, Oriya, Sinhala
 - **Arabic:** Arabic, Persian, Urdu
 - **Hebrew:** Hebrew
-- **Indic:** Devanagari, Bengali, Tamil, Telugu, Kannada, Malayalam, Gurmukhi, Gujarati, Oriya, Sinhala
-- **Southeast Asian:** Thai, Myanmar, Khmer, Lao
-- **African:** Ethiopic (Ge'ez)
+- **Thai:** Thai (requires n-gram matching for no word boundaries)
+- **Burmese:** Burmese/Myanmar (requires n-gram matching)
+- **Khmer:** Khmer/Cambodian (requires n-gram matching)
+- **Lao:** Lao (requires n-gram matching)
+- **Amharic:** Amharic/Ethiopic (Ge'ez)
 
 ### Script Detection
 
@@ -981,15 +1003,18 @@ The slug system provides comprehensive support for non-Latin scripts, preserving
 type ScriptType int
 
 const (
-    ScriptLatin ScriptType = iota
-    ScriptCJK
-    ScriptCyrillic
-    ScriptGreek
-    ScriptArabic
-    ScriptHebrew
-    ScriptIndic
-    ScriptSEAsian
-    ScriptEthiopic
+    ScriptLatin    ScriptType = iota // Latin alphabet (English, French, Spanish, etc.)
+    ScriptCJK                        // Chinese, Japanese, Korean
+    ScriptCyrillic                   // Russian, Ukrainian, Bulgarian, Serbian, etc.
+    ScriptGreek                      // Greek
+    ScriptIndic                      // Devanagari, Bengali, Tamil, Telugu, etc.
+    ScriptArabic                     // Arabic, Urdu, Persian/Farsi
+    ScriptHebrew                     // Hebrew
+    ScriptThai                       // Thai (requires n-gram matching)
+    ScriptBurmese                    // Burmese/Myanmar (requires n-gram matching)
+    ScriptKhmer                      // Khmer/Cambodian (requires n-gram matching)
+    ScriptLao                        // Lao (requires n-gram matching)
+    ScriptAmharic                    // Amharic/Ethiopic
 )
 ```
 
@@ -1177,7 +1202,7 @@ NormalizeToWords("The Legend of Zelda: Ocarina of Time (USA)")
 4. Database indexes on `(SystemDBID, Slug)` are critical for resolution performance
 5. Cache slugified values - slugification is deterministic but regex-heavy
 6. Test edge cases: Unicode, possessives, Roman numerals, special characters, CJK text, mixed-language titles
-7. Magic numbers are named constants - see `pkg/database/matcher/scoring.go` and `pkg/zapscript/slugs.go`
+7. Magic numbers are named constants - see `pkg/database/matcher/scoring.go` and `pkg/zapscript/titles.go`
 8. All normalization uses deterministic, idempotent operations
 
 ### Idempotency Guarantee
@@ -1194,7 +1219,7 @@ Running slugification multiple times produces the same result. This holds for bo
 
 | Function                              | Location                               | Purpose                                                 |
 | ------------------------------------- | -------------------------------------- | ------------------------------------------------------- |
-| `SlugifyString()`                     | `pkg/database/slugs/slugify.go`        | Core 13-stage normalization + final slugification       |
+| `SlugifyString()`                     | `pkg/database/slugs/slugify.go`        | Core 14-stage normalization (Stages 1-13 + slugification) |
 | `NormalizeToWords()`                  | `pkg/database/slugs/slugify.go`        | Normalize to word arrays (stops before final filtering) |
 | `StripLeadingArticle()`               | `pkg/database/slugs/slugify.go`        | Remove leading articles ("The", "A", "An")              |
 | `SplitTitle()`                        | `pkg/database/slugs/slugify.go`        | Split on delimiters (`:`, `-`, `'s `)                   |
