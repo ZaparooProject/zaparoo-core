@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
@@ -357,13 +358,50 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 
 	// Strategy 7: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
 	if len(results) == 0 && len(slug) >= minSlugLengthForFuzzy {
-		log.Info().Msgf("no results yet, trying fuzzy matching for '%s'", slug)
+		log.Info().Msgf("no results yet, trying fuzzy matching with pre-filter for '%s'", slug)
 
-		allSlugs, fetchErr := gamesdb.GetAllSlugsForSystem(context.Background(), system.ID)
+		// Generate metadata for the query to build pre-filter parameters
+		// This uses the exact same slugification and tokenization as the indexed data
+		metadata := mediadb.GenerateSlugWithMetadata(gameName)
+
+		// Build pre-filter query with tolerance thresholds from the plan:
+		// ±3 characters for edit distance, ±1 word for token count
+		minLength := metadata.SlugLength - 3
+		if minLength < 0 {
+			minLength = 0
+		}
+		maxLength := metadata.SlugLength + 3
+		minWordCount := metadata.SlugWordCount - 1
+		if minWordCount < 1 {
+			minWordCount = 1
+		}
+		maxWordCount := metadata.SlugWordCount + 1
+
+		log.Debug().
+			Int("slug_length", metadata.SlugLength).
+			Int("slug_word_count", metadata.SlugWordCount).
+			Int("min_length", minLength).
+			Int("max_length", maxLength).
+			Int("min_word_count", minWordCount).
+			Int("max_word_count", maxWordCount).
+			Msg("using pre-filter for fuzzy matching")
+
+		// Fetch pre-filtered candidates using indexed columns
+		candidateTitles, fetchErr := gamesdb.GetTitlesWithPreFilter(
+			context.Background(), system.ID, minLength, maxLength, minWordCount, maxWordCount)
 		if fetchErr != nil {
-			log.Warn().Err(fetchErr).Msg("failed to fetch all slugs for fuzzy matching")
-		} else if len(allSlugs) > 0 {
-			fuzzyMatches := matcher.FindFuzzyMatches(slug, allSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
+			log.Warn().Err(fetchErr).Msg("failed to fetch pre-filtered candidates for fuzzy matching")
+		} else if len(candidateTitles) > 0 {
+			log.Info().Msgf("pre-filter reduced candidate set to %d titles (from full system)", len(candidateTitles))
+
+			// Extract slugs from MediaTitle objects
+			candidateSlugs := make([]string, 0, len(candidateTitles))
+			for _, title := range candidateTitles {
+				candidateSlugs = append(candidateSlugs, title.Slug)
+			}
+
+			fuzzyMatches := matcher.FindFuzzyMatches(
+				slug, candidateSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
 
 			if len(fuzzyMatches) > 0 {
 				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")
@@ -384,7 +422,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 							Str("match", match.Slug).
 							Float64("similarity", float64(match.Similarity)).
 							Int("result_count", len(results)).
-							Msg("match found via strategy 7 (Jaro-Winkler fuzzy)")
+							Msg("match found via strategy 7 (Jaro-Winkler fuzzy with pre-filter)")
 						break
 					}
 				}

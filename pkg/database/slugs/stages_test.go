@@ -673,7 +673,7 @@ func TestSlugifyStringContextReuse(t *testing.T) {
 			}
 
 			// Verify that using the context produces the same result
-			script := detectScript(normalized)
+			script := DetectScript(normalized)
 			if needsUnicodeSlug(script) {
 				// Should preserve Unicode in slug (without spaces)
 				expectedContent := strings.ReplaceAll(normalized, " ", "")

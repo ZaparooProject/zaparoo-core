@@ -92,6 +92,14 @@ var (
 	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
 )
 
+// SlugifyResult contains the slug and tokens generated during slugification.
+// This ensures metadata is computed from the EXACT tokens used during slug generation,
+// not from re-tokenization.
+type SlugifyResult struct {
+	Slug   string
+	Tokens []string
+}
+
 // periodRequiredAbbreviations maps period-required abbreviations to their expansions
 var periodRequiredAbbreviations = map[string]string{
 	"feat.": "featuring", // "feat" alone is a real word (achievement)
@@ -259,7 +267,7 @@ func NormalizeUnicode(s string, ctx *pipelineContext) string {
 	}
 
 	// Apply script-specific normalization and optionally cache the result
-	script := detectScript(s)
+	script := DetectScript(s)
 	if ctx != nil {
 		ctx.script = script
 		ctx.scriptCached = true
@@ -285,46 +293,79 @@ func StripTrailingArticle(s string) string {
 	return s
 }
 
-func SlugifyString(input string) string {
-	// Use context-aware normalization to cache script detection and avoid redundant work
+// tokenizeNormalized extracts word tokens from a normalized string (after Stage 13).
+// Shared by both NormalizeToWords and SlugifyWithTokens to ensure consistency.
+func tokenizeNormalized(s string) []string {
+	// Preserve letters, numbers, and spaces for word splitting
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == ' ' {
+			return unicode.ToLower(r)
+		}
+		return ' '
+	}, s)
+
+	return strings.Fields(s)
+}
+
+// SlugifyWithTokens performs 14-stage normalization and returns both slug and tokens.
+// This is the core implementation - it returns tokens extracted DURING slug generation
+// to ensure metadata is computed from the EXACT same tokenization that produces the slug.
+//
+// Use this function when you need both the slug and token-based metadata (e.g., word count).
+// For simple slug generation, use SlugifyString() instead.
+//
+// Example:
+//
+//	result := SlugifyWithTokens("The Legend of Zelda: Ocarina of Time (USA)")
+//	result.Slug   → "legendofzeldaocarinaoftime"
+//	result.Tokens → []string{"legend", "of", "zelda", "ocarina", "of", "time"}
+func SlugifyWithTokens(input string) SlugifyResult {
+	// Run Stages 1-13 of normalization (via existing normalizeInternal)
 	s, ctx := normalizeInternal(input)
 	if s == "" {
-		return ""
+		return SlugifyResult{Slug: "", Tokens: []string{}}
 	}
 
-	// Stage 14: Final Slugification (Multi-Script Aware)
-	// Note: s is already lowercase from Stage 13 (ConvertRomanNumerals)
+	// Extract tokens using shared tokenization logic
+	tokens := tokenizeNormalized(s)
 
-	// Create both ASCII-only and Unicode-preserving versions
-	// Note: Even for ASCII strings, we need both slugs for proper script detection logic
+	// Stage 14: Apply final character filtering to create slug
+	// This is the existing Stage 14 logic from SlugifyString()
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
 	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
 
-	// For any title containing non-Latin characters, use the Unicode slug which preserves
-	// both Latin and non-Latin portions. This enables matching on either part:
-	//   - "ドラゴンクエストIII" → "ドラゴンクエスト3" (pure CJK)
-	//   - "Street Fighter ストリート" → "streetfighterストリート" (mixed: searchable by either part)
-	//   - "Тетрис" → "тетрис" (Cyrillic preserved)
-	//   - "Super Mario Bros" → "supermariobros" (pure Latin, ASCII)
-	//
-	// The Unicode slug already contains both parts concatenated, so mixed-language
-	// titles remain searchable by either their Latin OR non-Latin portions without
-	// requiring schema changes or alternate slug columns.
-
-	// Reuse cached script detection if available; otherwise detect now
+	var slug string
 	var script ScriptType
 	if ctx.scriptCached {
 		script = ctx.script
 	} else {
-		script = detectScript(s)
+		script = DetectScript(s)
 	}
 
 	if needsUnicodeSlug(script) {
-		return strings.TrimSpace(unicodeSlug)
+		slug = strings.TrimSpace(unicodeSlug)
+	} else {
+		slug = strings.TrimSpace(asciiSlug)
 	}
 
-	// For pure Latin titles, return the clean ASCII slug
-	return strings.TrimSpace(asciiSlug)
+	return SlugifyResult{
+		Slug:   slug,
+		Tokens: tokens,
+	}
+}
+
+// SlugifyString converts a game title to a normalized slug for cross-platform matching.
+// This is a convenience wrapper around SlugifyWithTokens that only returns the slug.
+//
+// For the full 14-stage normalization pipeline documentation, see SlugifyWithTokens.
+//
+// Example:
+//
+//	SlugifyString("The Legend of Zelda: Ocarina of Time (USA) [!]")
+//	→ "legendofzeldaocarinaoftime"
+func SlugifyString(input string) string {
+	result := SlugifyWithTokens(input)
+	return result.Slug
 }
 
 // SplitTitle splits a title into main and secondary parts based on delimiter priority.
@@ -773,23 +814,12 @@ func isLatinWordCharForRoman(r rune) bool {
 // Note: For database queries and slug matching, use SlugifyString() instead.
 // This function is for scoring and ranking operations only.
 func NormalizeToWords(input string) []string {
-	s, _ := normalizeInternal(input) // Ignore context, we don't need it here
+	s, _ := normalizeInternal(input)
 	if s == "" {
 		return []string{}
 	}
 
-	// Final cleanup: preserve letters, numbers, and spaces for word splitting.
-	// Unlike SlugifyString, we preserve spaces here to enable Fields() to work.
-	// Using unicode.IsLetter and unicode.IsNumber makes this robust for CJK text.
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == ' ' {
-			return unicode.ToLower(r)
-		}
-		// Replace non-preserved characters with space to ensure word boundaries
-		return ' '
-	}, s)
-
-	return strings.Fields(s)
+	return tokenizeNormalized(s)
 }
 
 // normalizeInternal performs Stages 1-13 of the slug normalization pipeline

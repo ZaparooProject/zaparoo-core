@@ -459,9 +459,11 @@ func (m *MockMediaDBI) SearchMediaBySlugPrefix(
 	return nil, nil
 }
 
-func (m *MockMediaDBI) GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error) {
-	args := m.Called(ctx, systemID)
-	if results, ok := args.Get(0).([]string); ok {
+func (m *MockMediaDBI) GetTitlesWithPreFilter(
+	ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
+) ([]database.MediaTitle, error) {
+	args := m.Called(ctx, systemID, minLength, maxLength, minWordCount, maxWordCount)
+	if results, ok := args.Get(0).([]database.MediaTitle); ok {
 		if err := args.Error(1); err != nil {
 			return results, fmt.Errorf("mock operation failed: %w", err)
 		}

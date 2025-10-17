@@ -38,9 +38,9 @@ const (
 	ScriptAmharic                    // Amharic/Ethiopic
 )
 
-// detectScript identifies the primary writing system used in a string.
+// DetectScript identifies the primary writing system used in a string.
 // Returns the first matching script type, or ScriptLatin as the default.
-func detectScript(s string) ScriptType {
+func DetectScript(s string) ScriptType {
 	// Fast path: Check if pure ASCII
 	hasNonASCII := false
 	for _, r := range s {
@@ -158,24 +158,20 @@ func needsNGramMatching(script ScriptType) bool {
 // IsThai returns true if the string contains Thai characters.
 // This is a convenience function for the resolution workflow.
 func IsThai(s string) bool {
-	return detectScript(s) == ScriptThai
+	return DetectScript(s) == ScriptThai
 }
 
 // IsBurmese returns true if the string contains Burmese characters.
 func IsBurmese(s string) bool {
-	return detectScript(s) == ScriptBurmese
+	return DetectScript(s) == ScriptBurmese
 }
 
 // IsKhmer returns true if the string contains Khmer characters.
 func IsKhmer(s string) bool {
-	return detectScript(s) == ScriptKhmer
+	return DetectScript(s) == ScriptKhmer
 }
 
 // IsLao returns true if the string contains Lao characters.
 func IsLao(s string) bool {
-	return detectScript(s) == ScriptLao
-}
-
-func requiresNGramMatching(s string) bool {
-	return needsNGramMatching(detectScript(s))
+	return DetectScript(s) == ScriptLao
 }

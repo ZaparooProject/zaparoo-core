@@ -555,7 +555,8 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertMediaTitle, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTitles",
-			[]string{"DBID", "SystemDBID", "Slug", "Name"}, db.batchSize, false); err != nil {
+			[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount"},
+			db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
 		}
@@ -848,11 +849,28 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
 }
 
-func (db *MediaDB) GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error) {
+// GetTitlesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
+// This dramatically reduces the candidate set for fuzzy matching by using indexed pre-filter columns.
+// Uses the composite index idx_media_prefilter (SlugLength, SlugWordCount) for efficient range queries.
+func (db *MediaDB) GetTitlesWithPreFilter(
+	ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
+) ([]database.MediaTitle, error) {
 	if db.sql == nil {
-		return make([]string, 0), ErrNullSQL
+		return make([]database.MediaTitle, 0), ErrNullSQL
 	}
-	return sqlGetAllSlugsForSystem(ctx, db.sql, systemID)
+
+	// Look up system DBID
+	system, err := db.FindSystemBySystemID(systemID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find system '%s': %w", systemID, err)
+	}
+
+	return sqlGetCandidatesWithPreFilter(ctx, db.sql, system.DBID, PreFilterQuery{
+		MinLength:    minLength,
+		MaxLength:    maxLength,
+		MinWordCount: minWordCount,
+		MaxWordCount: maxWordCount,
+	})
 }
 
 func (db *MediaDB) GetTags(ctx context.Context, systems []systemdefs.System) ([]database.TagInfo, error) {
@@ -1261,7 +1279,8 @@ func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitl
 
 	// Use batch inserter if available
 	if db.batchInsertMediaTitle != nil {
-		err = db.batchInsertMediaTitle.Add(row.DBID, row.SystemDBID, row.Slug, row.Name)
+		err = db.batchInsertMediaTitle.Add(
+			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount)
 		if err != nil {
 			return row, fmt.Errorf("failed to add media title to batch: %w", err)
 		}

@@ -324,6 +324,90 @@ func TestBatchInserter_OrIgnoreDuplicates(t *testing.T) {
 	assert.Equal(t, "System 1", name, "First insert should be kept when duplicate is ignored")
 }
 
+// TestBatchInserter_MediaTitlesWithMetadataColumns tests that the batch inserter
+// correctly handles all MediaTitles columns including SlugLength and SlugWordCount.
+// This test catches schema mismatches between batch inserter column lists and actual SQL.
+func TestBatchInserter_MediaTitlesWithMetadataColumns(t *testing.T) {
+	t.Parallel()
+
+	// Setup in-memory database
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
+	// Create MediaTitles table with all production columns including metadata
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE MediaTitles (
+			DBID INTEGER PRIMARY KEY,
+			SystemDBID INTEGER NOT NULL,
+			Slug TEXT NOT NULL,
+			Name TEXT NOT NULL,
+			SlugLength INTEGER DEFAULT 0,
+			SlugWordCount INTEGER DEFAULT 0
+		)`)
+	require.NoError(t, err)
+
+	// Begin transaction
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	// Create batch inserter with ALL 6 columns (this is what production code must match)
+	bi, err := NewBatchInserter(ctx, tx, "MediaTitles",
+		[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount"}, 10)
+	require.NoError(t, err)
+
+	// Test data with explicit metadata values
+	testTitles := []struct {
+		slug          string
+		name          string
+		dbid          int64
+		systemDBID    int64
+		slugLength    int
+		slugWordCount int
+	}{
+		{dbid: 1, systemDBID: 100, slug: "supermetroid", name: "Super Metroid", slugLength: 12, slugWordCount: 2},
+		{dbid: 2, systemDBID: 100, slug: "chronomtrigger", name: "Chrono Trigger", slugLength: 14, slugWordCount: 2},
+		{dbid: 3, systemDBID: 200, slug: "dragonquestv", name: "Dragon Quest V", slugLength: 12, slugWordCount: 3},
+		{dbid: 4, systemDBID: 200, slug: "finalfantasyvi", name: "Final Fantasy VI", slugLength: 14, slugWordCount: 3},
+	}
+
+	// Add all test titles to batch
+	for _, tt := range testTitles {
+		err = bi.Add(tt.dbid, tt.systemDBID, tt.slug, tt.name, tt.slugLength, tt.slugWordCount)
+		require.NoError(t, err, "Should accept 6 values matching the column count")
+	}
+
+	// Flush and commit
+	err = bi.Close()
+	require.NoError(t, err)
+	err = tx.Commit()
+	require.NoError(t, err)
+
+	// Verify all rows were inserted
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM MediaTitles").Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, len(testTitles), count)
+
+	// Verify metadata columns were correctly inserted (not default values)
+	for _, tt := range testTitles {
+		var slug, name string
+		var slugLength, slugWordCount int
+		err = db.QueryRowContext(ctx,
+			"SELECT Slug, Name, SlugLength, SlugWordCount FROM MediaTitles WHERE DBID = ?",
+			tt.dbid).Scan(&slug, &name, &slugLength, &slugWordCount)
+		require.NoError(t, err)
+		assert.Equal(t, tt.slug, slug, "Slug should match for DBID %d", tt.dbid)
+		assert.Equal(t, tt.name, name, "Name should match for DBID %d", tt.dbid)
+		assert.Equal(t, tt.slugLength, slugLength,
+			"SlugLength should be %d (not 0) for DBID %d", tt.slugLength, tt.dbid)
+		assert.Equal(t, tt.slugWordCount, slugWordCount,
+			"SlugWordCount should be %d (not 0) for DBID %d", tt.slugWordCount, tt.dbid)
+	}
+}
+
 // TestBatchInserter_SQLiteVariableLimitWithForeignKeys tests the production scenario
 // where Systems -> MediaTitles -> Media have foreign key dependencies and MediaTitles
 // exceeds the SQLite variable limit. This ensures chunking works correctly with FK constraints.
@@ -350,6 +434,8 @@ func TestBatchInserter_SQLiteVariableLimitWithForeignKeys(t *testing.T) {
 			SystemDBID INTEGER NOT NULL,
 			Slug TEXT NOT NULL,
 			Name TEXT NOT NULL,
+			SlugLength INTEGER DEFAULT 0,
+			SlugWordCount INTEGER DEFAULT 0,
 			FOREIGN KEY(SystemDBID) REFERENCES Systems(DBID)
 		)`)
 	require.NoError(t, err)
@@ -366,7 +452,7 @@ func TestBatchInserter_SQLiteVariableLimitWithForeignKeys(t *testing.T) {
 	require.NoError(t, err)
 
 	titleBI, err := NewBatchInserter(ctx, tx, "MediaTitles",
-		[]string{"DBID", "SystemDBID", "Slug", "Name"}, titleRows)
+		[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount"}, titleRows)
 	require.NoError(t, err)
 
 	// Set up FK dependency: MediaTitles depends on Systems
@@ -381,7 +467,10 @@ func TestBatchInserter_SQLiteVariableLimitWithForeignKeys(t *testing.T) {
 	// Add many media titles (will exceed SQLite variable limit)
 	for i := 1; i <= titleRows; i++ {
 		systemDBID := int64((i % systemRows) + 1) // Distribute across systems
-		err = titleBI.Add(int64(i), systemDBID, fmt.Sprintf("slug_%d", i), fmt.Sprintf("Title %d", i))
+		slugLen := 10 + (i % 20)                  // Variable slug lengths
+		wordCount := 2 + (i % 5)                  // Variable word counts
+		err = titleBI.Add(int64(i), systemDBID, fmt.Sprintf("slug_%d", i), fmt.Sprintf("Title %d", i),
+			slugLen, wordCount)
 		require.NoError(t, err)
 	}
 

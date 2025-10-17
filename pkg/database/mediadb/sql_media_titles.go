@@ -30,7 +30,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const insertMediaTitleSQL = `INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name) VALUES (?, ?, ?, ?)`
+const insertMediaTitleSQL = `
+	INSERT INTO MediaTitles (DBID, SystemDBID, Slug, Name, SlugLength, SlugWordCount)
+	VALUES (?, ?, ?, ?, ?, ?)
+`
 
 func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitle) (database.MediaTitle, error) {
 	var row database.MediaTitle
@@ -39,7 +42,7 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 	if title.DBID != 0 {
 		stmt, err := db.PrepareContext(ctx, `
             select
-            DBID, SystemDBID, Slug, Name
+            DBID, SystemDBID, Slug, Name, SlugLength, SlugWordCount
             from MediaTitles
             where DBID = ?
             limit 1;
@@ -57,6 +60,8 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 			&row.SystemDBID,
 			&row.Slug,
 			&row.Name,
+			&row.SlugLength,
+			&row.SlugWordCount,
 		)
 		if err != nil {
 			return row, fmt.Errorf("failed to scan media title row by DBID: %w", err)
@@ -68,7 +73,7 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 	if title.SystemDBID != 0 && title.Slug != "" {
 		stmt, err := db.PrepareContext(ctx, `
             select
-            DBID, SystemDBID, Slug, Name
+            DBID, SystemDBID, Slug, Name, SlugLength, SlugWordCount
             from MediaTitles
             where SystemDBID = ? and Slug = ?
             limit 1;
@@ -86,6 +91,8 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 			&row.SystemDBID,
 			&row.Slug,
 			&row.Name,
+			&row.SlugLength,
+			&row.SlugWordCount,
 		)
 		if err != nil {
 			return row, fmt.Errorf("failed to scan media title row by system+slug: %w", err)
@@ -97,7 +104,7 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 	if title.Slug != "" {
 		stmt, err := db.PrepareContext(ctx, `
             select
-            DBID, SystemDBID, Slug, Name
+            DBID, SystemDBID, Slug, Name, SlugLength, SlugWordCount
             from MediaTitles
             where Slug = ?
             limit 1;
@@ -115,6 +122,8 @@ func sqlFindMediaTitle(ctx context.Context, db *sql.DB, title database.MediaTitl
 			&row.SystemDBID,
 			&row.Slug,
 			&row.Name,
+			&row.SlugLength,
+			&row.SlugWordCount,
 		)
 		if err != nil {
 			return row, fmt.Errorf("failed to scan media title row by slug: %w", err)
@@ -133,7 +142,7 @@ func sqlInsertMediaTitleWithPreparedStmt(
 		dbID = row.DBID
 	}
 
-	res, err := stmt.ExecContext(ctx, dbID, row.SystemDBID, row.Slug, row.Name)
+	res, err := stmt.ExecContext(ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute prepared insert media title statement: %w", err)
 	}
@@ -163,7 +172,7 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitl
 		}
 	}()
 
-	res, err := stmt.ExecContext(ctx, dbID, row.SystemDBID, row.Slug, row.Name)
+	res, err := stmt.ExecContext(ctx, dbID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount)
 	if err != nil {
 		return row, fmt.Errorf("failed to execute insert media title statement: %w", err)
 	}
@@ -178,7 +187,9 @@ func sqlInsertMediaTitle(ctx context.Context, db *sql.DB, row database.MediaTitl
 }
 
 func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitle, error) {
-	rows, err := db.QueryContext(ctx, "SELECT DBID, Slug, Name, SystemDBID FROM MediaTitles ORDER BY DBID")
+	rows, err := db.QueryContext(ctx,
+		`SELECT DBID, Slug, Name, SystemDBID, SlugLength, SlugWordCount
+		 FROM MediaTitles ORDER BY DBID`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query media titles: %w", err)
 	}
@@ -191,7 +202,10 @@ func sqlGetAllMediaTitles(ctx context.Context, db *sql.DB) ([]database.MediaTitl
 	titles := make([]database.MediaTitle, 0)
 	for rows.Next() {
 		var title database.MediaTitle
-		if err := rows.Scan(&title.DBID, &title.Slug, &title.Name, &title.SystemDBID); err != nil {
+		if err := rows.Scan(
+			&title.DBID, &title.Slug, &title.Name,
+			&title.SystemDBID, &title.SlugLength, &title.SlugWordCount,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan media title: %w", err)
 		}
 		titles = append(titles, title)
@@ -278,16 +292,35 @@ func sqlGetTitlesWithSystemsExcluding(
 	return titles, rows.Err()
 }
 
-func sqlGetAllSlugsForSystem(ctx context.Context, db *sql.DB, systemID string) ([]string, error) {
-	stmt, err := db.PrepareContext(ctx, `
-		SELECT DISTINCT MediaTitles.Slug
+// PreFilterQuery represents pre-filter parameters for efficient fuzzy matching candidate reduction.
+type PreFilterQuery struct {
+	MinLength    int
+	MaxLength    int
+	MinWordCount int
+	MaxWordCount int
+}
+
+// sqlGetCandidatesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
+// This dramatically reduces the candidate set before applying expensive fuzzy matching algorithms.
+//
+// Uses the composite index idx_media_prefilter (SlugLength, SlugWordCount) for efficient range queries.
+func sqlGetCandidatesWithPreFilter(
+	ctx context.Context,
+	db *sql.DB,
+	systemDBID int64,
+	query PreFilterQuery,
+) ([]database.MediaTitle, error) {
+	sqlQuery := `
+		SELECT DBID, SystemDBID, Slug, Name, SlugLength, SlugWordCount
 		FROM MediaTitles
-		JOIN Systems ON MediaTitles.SystemDBID = Systems.DBID
-		WHERE Systems.SystemID = ?
-		ORDER BY MediaTitles.Slug
-	`)
+		WHERE SystemDBID = ?
+		  AND SlugLength BETWEEN ? AND ?
+		  AND SlugWordCount BETWEEN ? AND ?
+	`
+
+	stmt, err := db.PrepareContext(ctx, sqlQuery)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare get all slugs statement: %w", err)
+		return nil, fmt.Errorf("failed to prepare get candidates with pre-filter statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -295,28 +328,39 @@ func sqlGetAllSlugsForSystem(ctx context.Context, db *sql.DB, systemID string) (
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx, systemID)
+	rows, err := stmt.QueryContext(ctx,
+		systemDBID,
+		query.MinLength, query.MaxLength,
+		query.MinWordCount, query.MaxWordCount,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute get all slugs query: %w", err)
+		return nil, fmt.Errorf("failed to execute get candidates with pre-filter query: %w", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+			log.Warn().Err(closeErr).Msg("failed to close rows")
 		}
 	}()
 
-	slugList := make([]string, 0, 100)
+	titles := make([]database.MediaTitle, 0)
 	for rows.Next() {
-		var slug string
-		if scanErr := rows.Scan(&slug); scanErr != nil {
-			return nil, fmt.Errorf("failed to scan slug: %w", scanErr)
+		var title database.MediaTitle
+		if err := rows.Scan(
+			&title.DBID,
+			&title.SystemDBID,
+			&title.Slug,
+			&title.Name,
+			&title.SlugLength,
+			&title.SlugWordCount,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan media title with pre-filter: %w", err)
 		}
-		slugList = append(slugList, slug)
+		titles = append(titles, title)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating slugs: %w", err)
+		return nil, fmt.Errorf("error iterating pre-filtered titles: %w", err)
 	}
 
-	return slugList, nil
+	return titles, nil
 }

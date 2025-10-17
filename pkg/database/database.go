@@ -71,10 +71,12 @@ type System struct {
 }
 
 type MediaTitle struct {
-	Slug       string
-	Name       string
-	DBID       int64
-	SystemDBID int64
+	Slug          string
+	Name          string
+	DBID          int64
+	SystemDBID    int64
+	SlugLength    int
+	SlugWordCount int
 }
 
 type Media struct {
@@ -295,7 +297,9 @@ type MediaDBI interface {
 	SearchMediaBySlugPrefix(
 		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
-	GetAllSlugsForSystem(ctx context.Context, systemID string) ([]string, error)
+	GetTitlesWithPreFilter(
+		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
+	) ([]MediaTitle, error)
 	GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error)
 	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
 	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)

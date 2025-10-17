@@ -150,9 +150,6 @@ func TestCmdTitle(t *testing.T) {
 				mockMediaDB.On("SearchMediaBySlugPrefix",
 					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
 					Return([]database.SearchResultWithCursor{}, nil).Maybe()
-				mockMediaDB.On("GetAllSlugsForSystem",
-					mock.Anything, tt.expectedSystem).
-					Return([]string{}, nil).Maybe()
 			}
 
 			result, err := cmdTitle(mockPlatform, env)
@@ -449,9 +446,10 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 						mockMediaDB.On("SearchMediaBySlugPrefix",
 							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
 							Return([]database.SearchResultWithCursor{}, nil).Maybe()
-						mockMediaDB.On("GetAllSlugsForSystem",
-							mock.Anything, tt.systemID).
-							Return([]string{}, nil).Maybe()
+						mockMediaDB.On("GetTitlesWithPreFilter",
+							mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+							mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+							Return([]database.MediaTitle{}, nil).Maybe()
 					}
 				}
 			}
@@ -661,10 +659,17 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return([]database.SearchResultWithCursor{}, nil).Once()
 
-			// Fuzzy matching returns all slugs
-			mockMediaDB.On("GetAllSlugsForSystem",
-				context.Background(), tt.systemID).
-				Return(tt.allSlugs, nil).Once()
+			// Fuzzy matching uses pre-filter to get candidate titles
+			candidateTitles := make([]database.MediaTitle, len(tt.allSlugs))
+			for i, slug := range tt.allSlugs {
+				candidateTitles[i] = database.MediaTitle{
+					Slug: slug,
+				}
+			}
+			mockMediaDB.On("GetTitlesWithPreFilter",
+				mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+				mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+				Return(candidateTitles, nil).Once()
 
 			// Fuzzy match succeeds (MUST come before .Maybe() to take precedence)
 			expectedResults := []database.SearchResultWithCursor{
@@ -685,6 +690,10 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			mockMediaDB.On("SearchMediaBySlugPrefix",
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
 				Return([]database.SearchResultWithCursor{}, nil).Maybe()
+			mockMediaDB.On("GetTitlesWithPreFilter",
+				mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+				mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+				Return([]database.MediaTitle{}, nil).Maybe()
 
 			mockMediaDB.On("SetCachedSlugResolution",
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
@@ -1241,9 +1250,9 @@ func TestSelectBestResult(t *testing.T) {
 
 func TestHasAllTags(t *testing.T) {
 	tests := []struct {
-		result     database.SearchResultWithCursor
 		name       string
 		tagFilters []database.TagFilter
+		result     database.SearchResultWithCursor
 		expected   bool
 	}{
 		{
@@ -1305,8 +1314,8 @@ func TestHasAllTags(t *testing.T) {
 
 func TestIsVariant(t *testing.T) {
 	tests := []struct {
-		result   database.SearchResultWithCursor
 		name     string
+		result   database.SearchResultWithCursor
 		expected bool
 	}{
 		{
@@ -1356,8 +1365,8 @@ func TestIsVariant(t *testing.T) {
 
 func TestIsRerelease(t *testing.T) {
 	tests := []struct {
-		result   database.SearchResultWithCursor
 		name     string
+		result   database.SearchResultWithCursor
 		expected bool
 	}{
 		{
@@ -1725,9 +1734,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		mockMediaDB.On("SearchMediaBySlugPrefix",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
-		mockMediaDB.On("GetAllSlugsForSystem",
-			mock.Anything, "SNES").
-			Return([]string{}, nil).Maybe()
+		mockMediaDB.On("GetTitlesWithPreFilter",
+			mock.Anything, "SNES", mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+			mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+			Return([]database.MediaTitle{}, nil).Maybe()
 
 		_, err := cmdTitle(mockPlatform, env)
 
@@ -1773,9 +1783,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
 
-		mockMediaDB.On("GetAllSlugsForSystem",
-			mock.Anything, "SNES").
-			Return([]string{"mario", "zelda", "metroid"}, nil).Maybe()
+		mockMediaDB.On("GetTitlesWithPreFilter",
+			mock.Anything, "SNES", mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+			mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+			Return([]database.MediaTitle{}, nil).Maybe()
 
 		_, err := cmdTitle(mockPlatform, env)
 
