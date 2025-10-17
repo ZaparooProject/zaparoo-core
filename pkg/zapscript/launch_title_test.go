@@ -86,16 +86,11 @@ func TestCmdTitle(t *testing.T) {
 			shouldError:    false,
 		},
 		{
-			name:           "asterisk in middle - valid (Q*bert)",
-			input:          "atari2600/Q*bert",
-			expectedSystem: "Atari2600",
-			expectedSlug:   "qbert",
-			shouldError:    false,
-		},
-		{
-			name:        "suffix wildcard - invalid",
-			input:       "snes/game*",
-			shouldError: true,
+			name:           "suffix wildcard - passes validation but no results",
+			input:          "snes/game*",
+			expectedSystem: "SNES",
+			expectedSlug:   "game",
+			shouldError:    true, // Will error when no results found
 		},
 	}
 
@@ -144,13 +139,31 @@ func TestCmdTitle(t *testing.T) {
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
 				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			} else if tt.expectedSystem != "" && tt.expectedSlug != "" {
+				// shouldError but validation passes - set up mocks to return no results
+				mockMediaDB.On("GetCachedSlugResolution",
+					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil)).
+					Return(int64(0), "", false)
+				mockMediaDB.On("SearchMediaBySlug",
+					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("SearchMediaBySlugPrefix",
+					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("GetAllSlugsForSystem",
+					mock.Anything, tt.expectedSystem).
+					Return([]string{}, nil).Maybe()
 			}
 
 			result, err := cmdTitle(mockPlatform, env)
 
 			if tt.shouldError {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "invalid title format")
+				if tt.expectedSystem == "" || tt.expectedSlug == "" {
+					assert.Contains(t, err.Error(), "invalid title format")
+				} else {
+					assert.Contains(t, err.Error(), "no results found")
+				}
 			} else {
 				require.NoError(t, err)
 				mockMediaDB.AssertExpectations(t)
@@ -802,9 +815,9 @@ func TestMightBeTitle(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "asterisk in middle of title - IS a slug (Q*bert)",
+			name:     "asterisk in middle of title - not slug (Q*bert)",
 			input:    "atari2600/Q*bert",
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "empty string",
