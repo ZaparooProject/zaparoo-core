@@ -22,33 +22,15 @@ package zapscript
 import (
 	"context"
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
-)
-
-// reMultiSpace normalizes multiple consecutive spaces to a single space
-var reMultiSpace = regexp.MustCompile(`\s+`)
-
-const (
-	// Fuzzy matching thresholds
-	minSlugLengthForFuzzy   = 5
-	fuzzyMatchMaxLengthDiff = 2
-	fuzzyMatchMinSimilarity = 0.85
-
-	// Secondary title minimum length for search
-	minSecondaryTitleSlugLength = 4
 )
 
 // cmdTitle implements the launch.title command for media title-based game launching
@@ -65,21 +47,10 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}
 
 	// Validate title format
-	if !isValidTitleFormat(query) {
+	valid, systemID, gameName := isValidTitleFormat(query)
+	if !valid {
 		return platforms.CmdResult{}, fmt.Errorf(
 			"invalid title format: %s (expected SystemID/GameName)", query)
-	}
-
-	// Parse SystemID/GameName format
-	ps := strings.SplitN(query, "/", 2)
-	if len(ps) < 2 {
-		return platforms.CmdResult{}, fmt.Errorf("invalid title format: %s (expected SystemID/GameName)", query)
-	}
-
-	systemID, gameName := ps[0], ps[1]
-	if systemID == "" || gameName == "" {
-		return platforms.CmdResult{}, fmt.Errorf(
-			"invalid title format: %s (both SystemID and GameName required)", query)
 	}
 
 	// Validate system ID
@@ -112,7 +83,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// 2. Extract filename metadata tags from remaining parentheses: (USA) (1996) (Rev A)
 
 	// Stage 1: Extract canonical tags with operators (e.g., "(-unfinished:beta) (+region:us)")
-	canonicalTagFilters, remainingTitle := extractCanonicalTagsFromParens(gameName)
+	canonicalTagFilters, remainingTitle := titles.ExtractCanonicalTagsFromParens(gameName)
 
 	// Stage 2: Extract filename metadata tags from remaining string (e.g., "(USA) (1996)")
 	filenameTags := tags.ParseFilenameToCanonicalTags(remainingTitle)
@@ -128,14 +99,14 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}
 
 	// Keep auto-extracted tags separate for fallback strategy
-	autoExtractedTags := mergeTagFilters(filenameTagFilters, canonicalTagFilters)
+	autoExtractedTags := titles.MergeTagFilters(filenameTagFilters, canonicalTagFilters)
 
 	// Parse tags from advanced args (these are explicit user requirements)
 	advArgsTagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
 
 	// Merge all tags for initial search attempt
 	// Priority: advanced args > canonical tags > filename tags
-	tagFilters := mergeTagFilters(autoExtractedTags, advArgsTagFilters)
+	tagFilters := titles.MergeTagFilters(autoExtractedTags, advArgsTagFilters)
 
 	// Slugify the game name (SlugifyString handles metadata stripping in Stage 4)
 	// e.g., "Sonic Spinball (USA) (year:1994)" → "sonicspinball"
@@ -144,17 +115,18 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("game name slugified to empty string: %s", gameName)
 	}
 
-	gamesdb := env.Database.MediaDB
+	mediadb := env.Database.MediaDB
 	log.Info().Msgf("searching for slug '%s' in system '%s'", slug, system.ID)
 
+	ctx := context.Background() // TODO: use proper context from env when available
+
 	// Check slug resolution cache first
-	ctx := context.Background()
-	cachedMediaID, cachedStrategy, cacheHit := gamesdb.GetCachedSlugResolution(
+	cachedMediaID, cachedStrategy, cacheHit := mediadb.GetCachedSlugResolution(
 		ctx, system.ID, slug, tagFilters)
 	if cacheHit {
 		log.Info().Msgf("slug resolution cache hit (strategy: %s)", cachedStrategy)
 		// Retrieve full result from cached Media DBID
-		result, cacheErr := gamesdb.GetMediaByDBID(ctx, cachedMediaID)
+		result, cacheErr := mediadb.GetMediaByDBID(ctx, cachedMediaID)
 		if cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to retrieve cached media, falling back to full resolution")
 		}
@@ -166,333 +138,80 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 	}
 
+	// Generate match info once for secondary/main title strategies
+	matchInfo := titles.GenerateMatchInfo(gameName)
+
 	// Track which strategy succeeds for cache storage
 	var resolvedStrategy string
 
 	// Strategy 1: Exact match
-	results, err := gamesdb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
+	results, err := mediadb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
-		resolvedStrategy = "strategy_1_exact_match"
+		resolvedStrategy = titles.StrategyExactMatch
 		log.Debug().
 			Str("strategy", resolvedStrategy).
 			Str("query", slug).
 			Int("result_count", len(results)).
-			Msg("match found via strategy 1 (exact match)")
+			Msg("match found via exact match strategy")
 	}
 
-	// Strategy 2: Prefix search on full normalized title with edition-aware ranking
+	// Strategy 2: Secondary title-only exact match (only if has secondary title)
+	if len(results) == 0 && matchInfo.HasSecondaryTitle {
+		var strategyErr error
+		results, resolvedStrategy, strategyErr = titles.TrySecondaryTitleExact(
+			ctx, mediadb, system.ID, slug, matchInfo, tagFilters)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("secondary title exact match failed: %w", strategyErr)
+		}
+	}
+
+	// Strategy 3: Advanced fuzzy matching with single prefilter
+	// Uses a single prefilter query, then tries three algorithms in sequence:
+	// 1. Token signature (word-order independent)
+	// 2. Jaro-Winkler (typo tolerance, prefix matching)
+	// 3. Damerau-Levenshtein tie-breaking (transposition handling)
 	if len(results) == 0 {
-		log.Info().Msgf("no exact match for '%s', trying prefix search with ranking", slug)
-		prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(context.Background(), system.ID, slug, tagFilters)
-		if prefixErr != nil {
-			log.Warn().Err(prefixErr).Msg("prefix search failed")
-		} else if len(prefixResults) > 0 {
-			queryWords := slugs.NormalizeToWords(gameName)
-			var validCandidates []matcher.PrefixMatchCandidate
-
-			for _, result := range prefixResults {
-				candidateWords := slugs.NormalizeToWords(result.Name)
-
-				if len(queryWords) >= 2 && !matcher.StartsWithWordSequence(candidateWords, queryWords) {
-					continue
-				}
-
-				candidateSlug := slugs.SlugifyString(result.Name)
-				score := matcher.ScorePrefixCandidate(slug, candidateSlug)
-				validCandidates = append(validCandidates, matcher.PrefixMatchCandidate{
-					Slug:  candidateSlug,
-					Score: score,
-				})
-			}
-
-			if len(validCandidates) > 0 {
-				bestScore := validCandidates[0].Score
-				bestIdx := 0
-				for i := 1; i < len(validCandidates); i++ {
-					if validCandidates[i].Score > bestScore {
-						bestScore = validCandidates[i].Score
-						bestIdx = i
-					}
-				}
-
-				resolvedStrategy = "strategy_2_prefix_match"
-				log.Info().Msgf("found %d prefix matches, selected best: '%s' (score=%d)",
-					len(validCandidates), validCandidates[bestIdx].Slug, bestScore)
-				log.Debug().
-					Str("strategy", resolvedStrategy).
-					Str("query", slug).
-					Str("match", prefixResults[bestIdx].Name).
-					Int("score", bestScore).
-					Int("result_count", len(validCandidates)).
-					Msg("match found via strategy 2 (prefix match)")
-				results = []database.SearchResultWithCursor{prefixResults[bestIdx]}
-			} else if len(prefixResults) > 0 {
-				// Strategy 3: Token-based similarity matching (word-order independent)
-				// If word sequence validation filtered out all candidates, try token matching
-				log.Info().Msgf(
-					"no valid prefix candidates, trying token-based matching on %d results",
-					len(prefixResults),
-				)
-
-				type tokenMatchCandidate struct {
-					result database.SearchResultWithCursor
-					score  float64
-				}
-				var tokenCandidates []tokenMatchCandidate
-
-				for _, result := range prefixResults {
-					tokenScore := matcher.ScoreTokenMatch(gameName, result.Name)
-					setScore := matcher.ScoreTokenSetRatio(gameName, result.Name)
-
-					bestScore := tokenScore
-					if setScore > bestScore {
-						bestScore = setScore
-					}
-
-					if bestScore > matcher.TokenMatchMinScore {
-						tokenCandidates = append(tokenCandidates, tokenMatchCandidate{
-							result: result,
-							score:  bestScore,
-						})
-					}
-				}
-
-				if len(tokenCandidates) > 0 {
-					bestScore := tokenCandidates[0].score
-					bestIdx := 0
-					for i := 1; i < len(tokenCandidates); i++ {
-						if tokenCandidates[i].score > bestScore {
-							bestScore = tokenCandidates[i].score
-							bestIdx = i
-						}
-					}
-
-					resolvedStrategy = "strategy_3_token_match"
-					log.Info().Msgf("found %d token matches, selected best: '%s' (score=%.2f)",
-						len(tokenCandidates), tokenCandidates[bestIdx].result.Name, bestScore)
-					log.Debug().
-						Str("strategy", resolvedStrategy).
-						Str("query", slug).
-						Str("match", tokenCandidates[bestIdx].result.Name).
-						Float64("score", bestScore).
-						Int("result_count", len(tokenCandidates)).
-						Msg("match found via strategy 3 (token-based similarity)")
-					results = []database.SearchResultWithCursor{tokenCandidates[bestIdx].result}
-				}
-			}
+		var strategyErr error
+		results, resolvedStrategy, strategyErr = titles.TryAdvancedFuzzyMatching(
+			ctx, mediadb, system.ID, gameName, slug, tagFilters)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("advanced fuzzy matching failed: %w", strategyErr)
 		}
 	}
 
-	// Strategy 4: Main title-only search (drops secondary title)
+	// Strategy 4: Main title-only search (drops secondary title, only if has secondary title)
+	if len(results) == 0 && matchInfo.HasSecondaryTitle {
+		var strategyErr error
+		results, resolvedStrategy, strategyErr = titles.TryMainTitleOnly(
+			ctx, mediadb, system.ID, slug, matchInfo, tagFilters)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("main title only search failed: %w", strategyErr)
+		}
+	}
+
+	// Strategy 5: Progressive trim candidates (last resort)
+	// Handles overly-verbose queries by progressively trimming words from the end
+	// Uses a single IN query for all candidates (max depth: 3)
 	if len(results) == 0 {
-		matchInfo := matcher.GenerateMatchInfo(gameName)
-		if matchInfo.HasSecondaryTitle && matchInfo.MainTitleSlug != "" && matchInfo.MainTitleSlug != slug {
-			log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
-			results, err = gamesdb.SearchMediaBySlug(
-				context.Background(), system.ID, matchInfo.MainTitleSlug, tagFilters)
-			if err != nil {
-				return platforms.CmdResult{},
-					fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
-			}
-			if len(results) > 0 {
-				resolvedStrategy = "strategy_4_main_title_only"
-				log.Debug().
-					Str("strategy", resolvedStrategy).
-					Str("query", slug).
-					Str("main_title_slug", matchInfo.MainTitleSlug).
-					Int("result_count", len(results)).
-					Msg("match found via strategy 4 (main title only)")
-			}
-		}
-	}
-
-	// Strategy 5: Secondary title-only exact match
-	if len(results) == 0 {
-		matchInfo := matcher.GenerateMatchInfo(gameName)
-		if matchInfo.HasSecondaryTitle &&
-			matchInfo.SecondaryTitleSlug != "" &&
-			len(matchInfo.SecondaryTitleSlug) >= minSecondaryTitleSlugLength {
-			secondarySlug := matchInfo.SecondaryTitleSlug
-			log.Info().Msgf("no results, trying secondary title-only search: '%s'", secondarySlug)
-
-			results, err = gamesdb.SearchMediaBySlug(
-				context.Background(), system.ID, secondarySlug, tagFilters)
-			if err != nil {
-				log.Warn().Err(err).Msgf("secondary title-only exact search failed for '%s'", secondarySlug)
-			}
-
-			if len(results) == 0 {
-				// Strategy 6: Secondary title-only prefix match
-				results, err = gamesdb.SearchMediaBySlugPrefix(
-					context.Background(), system.ID, secondarySlug, tagFilters)
-				if err != nil {
-					log.Warn().Err(err).Msgf(
-						"secondary title-only prefix search failed for '%s'", secondarySlug)
-				} else if len(results) > 0 {
-					resolvedStrategy = "strategy_6_secondary_title_prefix"
-					log.Info().Msgf("found %d results using secondary title-only prefix: '%s'",
-						len(results), secondarySlug)
-					log.Debug().
-						Str("strategy", resolvedStrategy).
-						Str("query", slug).
-						Str("secondary_slug", secondarySlug).
-						Int("result_count", len(results)).
-						Msg("match found via strategy 6 (secondary title prefix)")
-				}
-			} else {
-				resolvedStrategy = "strategy_5_secondary_title_exact"
-				log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
-					len(results), secondarySlug)
-				log.Debug().
-					Str("strategy", resolvedStrategy).
-					Str("query", slug).
-					Str("secondary_slug", secondarySlug).
-					Int("result_count", len(results)).
-					Msg("match found via strategy 5 (secondary title exact)")
-			}
-		}
-	}
-
-	// Strategy 7: Jaro-Winkler fuzzy matching (typo tolerance, US/UK spelling)
-	if len(results) == 0 && len(slug) >= minSlugLengthForFuzzy {
-		log.Info().Msgf("no results yet, trying fuzzy matching with pre-filter for '%s'", slug)
-
-		// Generate metadata for the query to build pre-filter parameters
-		// This uses the exact same slugification and tokenization as the indexed data
-		metadata := mediadb.GenerateSlugWithMetadata(gameName)
-
-		// Build pre-filter query with tolerance thresholds from the plan:
-		// ±3 characters for edit distance, ±1 word for token count
-		minLength := metadata.SlugLength - 3
-		if minLength < 0 {
-			minLength = 0
-		}
-		maxLength := metadata.SlugLength + 3
-		minWordCount := metadata.SlugWordCount - 1
-		if minWordCount < 1 {
-			minWordCount = 1
-		}
-		maxWordCount := metadata.SlugWordCount + 1
-
-		log.Debug().
-			Int("slug_length", metadata.SlugLength).
-			Int("slug_word_count", metadata.SlugWordCount).
-			Int("min_length", minLength).
-			Int("max_length", maxLength).
-			Int("min_word_count", minWordCount).
-			Int("max_word_count", maxWordCount).
-			Msg("using pre-filter for fuzzy matching")
-
-		// Fetch pre-filtered candidates using indexed columns
-		candidateTitles, fetchErr := gamesdb.GetTitlesWithPreFilter(
-			context.Background(), system.ID, minLength, maxLength, minWordCount, maxWordCount)
-		if fetchErr != nil {
-			log.Warn().Err(fetchErr).Msg("failed to fetch pre-filtered candidates for fuzzy matching")
-		} else if len(candidateTitles) > 0 {
-			log.Info().Msgf("pre-filter reduced candidate set to %d titles (from full system)", len(candidateTitles))
-
-			// Extract slugs from MediaTitle objects
-			candidateSlugs := make([]string, 0, len(candidateTitles))
-			for _, title := range candidateTitles {
-				candidateSlugs = append(candidateSlugs, title.Slug)
-			}
-
-			fuzzyMatches := matcher.FindFuzzyMatches(
-				slug, candidateSlugs, fuzzyMatchMaxLengthDiff, fuzzyMatchMinSimilarity)
-
-			if len(fuzzyMatches) > 0 {
-				log.Debug().Int("count", len(fuzzyMatches)).Msg("found fuzzy match candidates")
-				for _, match := range fuzzyMatches {
-					log.Debug().
-						Str("slug", match.Slug).
-						Float32("similarity", match.Similarity).
-						Msg("attempting fuzzy match")
-					results, err = gamesdb.SearchMediaBySlug(
-						context.Background(), system.ID, match.Slug, tagFilters)
-					if err == nil && len(results) > 0 {
-						resolvedStrategy = "strategy_7_jarowinkler_fuzzy"
-						log.Info().Msgf("found match via fuzzy search: '%s' (similarity=%.2f)",
-							match.Slug, match.Similarity)
-						log.Debug().
-							Str("strategy", resolvedStrategy).
-							Str("query", slug).
-							Str("match", match.Slug).
-							Float64("similarity", float64(match.Similarity)).
-							Int("result_count", len(results)).
-							Msg("match found via strategy 7 (Jaro-Winkler fuzzy with pre-filter)")
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Strategy 8: Progressive trim candidates (last resort)
-	// Aggressively removes words from the end - handles overly-verbose queries
-	if len(results) == 0 {
-		log.Info().Msgf("all strategies failed, trying progressive truncation as last resort")
-		candidates := matcher.GenerateProgressiveTrimCandidates(gameName)
-		for _, candidate := range candidates {
-			log.Info().Msgf("trying progressive trim candidate: '%s' (exact=%v, prefix=%v)",
-				candidate.Slug, candidate.IsExactMatch, candidate.IsPrefixMatch)
-
-			if candidate.IsExactMatch {
-				results, err = gamesdb.SearchMediaBySlug(
-					context.Background(), system.ID, candidate.Slug, tagFilters)
-			} else if candidate.IsPrefixMatch {
-				results, err = gamesdb.SearchMediaBySlugPrefix(
-					context.Background(), system.ID, candidate.Slug, tagFilters)
-			}
-
-			if err != nil {
-				log.Warn().Err(err).Msgf("failed to search with candidate '%s'", candidate.Slug)
-				continue
-			}
-
-			if len(results) > 0 {
-				resolvedStrategy = "strategy_8_progressive_trim"
-				log.Info().Msgf("found %d results using progressive trim: '%s'", len(results), candidate.Slug)
-				log.Debug().
-					Str("strategy", resolvedStrategy).
-					Str("query", slug).
-					Str("trim_slug", candidate.Slug).
-					Bool("exact", candidate.IsExactMatch).
-					Bool("prefix", candidate.IsPrefixMatch).
-					Int("result_count", len(results)).
-					Msg("match found via strategy 8 (progressive trim)")
-				break
-			}
+		var strategyErr error
+		results, resolvedStrategy, strategyErr = titles.TryProgressiveTrim(
+			ctx, mediadb, system.ID, gameName, slug, tagFilters)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("progressive trim strategy failed: %w", strategyErr)
 		}
 	}
 
 	// Fallback strategy: If no results with auto-extracted tags, retry without them
-	if len(results) == 0 && len(autoExtractedTags) > 0 {
-		log.Info().Msgf("no results found with auto-extracted tags, retrying without them")
-
-		// Retry with only explicit user tags (from advArgs)
-		fallbackTags := advArgsTagFilters
-
-		// Re-run exact match strategy without auto-extracted tags
-		results, err = gamesdb.SearchMediaBySlug(ctx, system.ID, slug, fallbackTags)
-		if err == nil && len(results) > 0 {
-			resolvedStrategy = "strategy_1_exact_match_no_auto_tags"
-			log.Info().Msgf("found %d results without auto-extracted tags", len(results))
+	if len(results) == 0 {
+		var strategyErr error
+		results, resolvedStrategy, strategyErr = titles.TryWithoutAutoTags(
+			ctx, mediadb, system.ID, slug, autoExtractedTags, advArgsTagFilters)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("fallback without auto-tags failed: %w", strategyErr)
 		}
-
-		// If still no results, try prefix match without auto-extracted tags
-		if len(results) == 0 {
-			prefixResults, prefixErr := gamesdb.SearchMediaBySlugPrefix(ctx, system.ID, slug, fallbackTags)
-			if prefixErr == nil && len(prefixResults) > 0 {
-				results = prefixResults
-				resolvedStrategy = "strategy_2_prefix_match_no_auto_tags"
-				log.Info().Msgf("found %d prefix matches without auto-extracted tags", len(results))
-			}
-		}
-
-		// If we found results without auto-extracted tags, use ALL tags for selection preferences
 		if len(results) > 0 {
 			log.Info().Msg("fallback successful: found results by ignoring auto-extracted tag filters")
 		}
@@ -504,12 +223,12 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 
 	// If multiple results, apply intelligent selection using ALL tags as preferences
 	// This includes both user-provided and auto-extracted tags
-	selectedResult := selectBestResult(results, tagFilters, env.Cfg)
+	selectedResult := titles.SelectBestResult(results, tagFilters, env.Cfg)
 	log.Info().Msgf("selected result: %s (%s)", selectedResult.Name, selectedResult.Path)
 
 	// Cache the successful resolution (best effort - don't fail if caching fails)
 	if resolvedStrategy != "" {
-		if cacheErr := gamesdb.SetCachedSlugResolution(
+		if cacheErr := mediadb.SetCachedSlugResolution(
 			ctx, system.ID, slug, tagFilters, selectedResult.MediaID, resolvedStrategy,
 		); cacheErr != nil {
 			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
@@ -521,346 +240,11 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}, launch(selectedResult.Path)
 }
 
-// selectBestResult implements intelligent selection when multiple media match a slug
-func selectBestResult(
-	results []database.SearchResultWithCursor, tagFilters []database.TagFilter, cfg *config.Instance,
-) database.SearchResultWithCursor {
-	if len(results) == 1 {
-		return results[0]
-	}
-
-	log.Info().Msgf("multiple results found (%d), picking best match", len(results))
-
-	// Priority 1: If user provided specific tags, filter by those first
-	if len(tagFilters) > 0 {
-		filtered := filterByTags(results, tagFilters)
-		if len(filtered) == 1 {
-			log.Info().Msg("selected result based on user-specified tags")
-			return filtered[0]
-		}
-		if len(filtered) > 0 {
-			results = filtered
-		}
-	}
-
-	// Priority 2: Prefer main game over variants (exclude demos, betas, prototypes, hacks)
-	mainGames := filterOutVariants(results)
-	if len(mainGames) == 1 {
-		log.Info().Msg("selected main game (filtered out variants)")
-		return mainGames[0]
-	}
-	if len(mainGames) > 0 {
-		results = mainGames
-	}
-
-	// Priority 3: Prefer original releases (exclude re-releases, reboxed)
-	originals := filterOutRereleases(results)
-	if len(originals) == 1 {
-		log.Info().Msg("selected original release (filtered out re-releases)")
-		return originals[0]
-	}
-	if len(originals) > 0 {
-		results = originals
-	}
-
-	// Priority 4: Prefer configured regions
-	preferredRegions := filterByPreferredRegions(results, cfg.DefaultRegions())
-	if len(preferredRegions) == 1 {
-		log.Info().Msg("selected preferred region")
-		return preferredRegions[0]
-	}
-	if len(preferredRegions) > 0 {
-		results = preferredRegions
-	}
-
-	// Priority 5: Prefer configured languages
-	preferredLanguages := filterByPreferredLanguages(results, cfg.DefaultLangs())
-	if len(preferredLanguages) == 1 {
-		log.Info().Msg("selected preferred language")
-		return preferredLanguages[0]
-	}
-	if len(preferredLanguages) > 0 {
-		results = preferredLanguages
-	}
-
-	// Priority 6: If still multiple, pick the first alphabetically by filename
-	log.Info().Msg("multiple results remain, selecting first alphabetically by filename")
-	return selectAlphabeticallyByFilename(results)
-}
-
-// filterByTags filters results that match all specified tags
-func filterByTags(
-	results []database.SearchResultWithCursor, tagFilters []database.TagFilter,
-) []database.SearchResultWithCursor {
-	var filtered []database.SearchResultWithCursor
-
-	for _, result := range results {
-		if hasAllTags(&result, tagFilters) {
-			filtered = append(filtered, result)
-		}
-	}
-
-	return filtered
-}
-
-// hasAllTags checks if a result matches the specified tag filters
-// Respects operator logic: AND (must have), NOT (must not have), OR (at least one)
-func hasAllTags(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) bool {
-	if len(tagFilters) == 0 {
-		return true
-	}
-
-	// Create a map of result's tags for fast lookup
-	resultTags := make(map[string]string) // type -> value
-	for _, tag := range result.Tags {
-		resultTags[tag.Type] = tag.Tag
-	}
-
-	// Group filters by operator using shared logic
-	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
-
-	// Check AND filters: must have ALL
-	for _, requiredTag := range andFilters {
-		if value, exists := resultTags[requiredTag.Type]; !exists || value != requiredTag.Value {
-			return false
-		}
-	}
-
-	// Check NOT filters: must NOT have ANY
-	for _, excludedTag := range notFilters {
-		if value, exists := resultTags[excludedTag.Type]; exists && value == excludedTag.Value {
-			return false // Has a tag that should be excluded
-		}
-	}
-
-	// Check OR filters: must have AT LEAST ONE
-	if len(orFilters) > 0 {
-		hasAtLeastOne := false
-		for _, orTag := range orFilters {
-			if value, exists := resultTags[orTag.Type]; exists && value == orTag.Value {
-				hasAtLeastOne = true
-				break
-			}
-		}
-		if !hasAtLeastOne {
-			return false
-		}
-	}
-
-	return true
-}
-
-// filterOutVariants removes demos, betas, prototypes, hacks, and other variants
-func filterOutVariants(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
-	var filtered []database.SearchResultWithCursor
-
-	for _, result := range results {
-		if !isVariant(&result) {
-			filtered = append(filtered, result)
-		}
-	}
-
-	return filtered
-}
-
-// isVariant checks if a result is a variant (demo, beta, prototype, hack, etc.)
-func isVariant(result *database.SearchResultWithCursor) bool {
-	for _, tag := range result.Tags {
-		switch tag.Type {
-		case string(tags.TagTypeUnfinished):
-			// Exclude demos, betas, prototypes, samples, previews, prereleases
-			if strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedDemo)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedBeta)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedProto)) ||
-				strings.HasPrefix(tag.Tag, string(tags.TagUnfinishedAlpha)) ||
-				tag.Tag == string(tags.TagUnfinishedSample) ||
-				tag.Tag == string(tags.TagUnfinishedPreview) ||
-				tag.Tag == string(tags.TagUnfinishedPrerelease) {
-				return true
-			}
-		case string(tags.TagTypeUnlicensed):
-			// Exclude hacks, translations, bootlegs
-			if tag.Tag == string(tags.TagUnlicensedHack) ||
-				tag.Tag == string(tags.TagUnlicensedTranslation) ||
-				tag.Tag == string(tags.TagUnlicensedBootleg) ||
-				tag.Tag == string(tags.TagUnlicensedClone) {
-				return true
-			}
-		case string(tags.TagTypeDump):
-			// Exclude bad dumps
-			if tag.Tag == string(tags.TagDumpBad) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// filterOutRereleases removes re-releases and reboxed versions
-func filterOutRereleases(results []database.SearchResultWithCursor) []database.SearchResultWithCursor {
-	var filtered []database.SearchResultWithCursor
-
-	for _, result := range results {
-		if !isRerelease(&result) {
-			filtered = append(filtered, result)
-		}
-	}
-
-	return filtered
-}
-
-// isRerelease checks if a result is a re-release
-func isRerelease(result *database.SearchResultWithCursor) bool {
-	for _, tag := range result.Tags {
-		switch tag.Type {
-		case string(tags.TagTypeRerelease), string(tags.TagTypeReboxed):
-			return true
-		}
-	}
-	return false
-}
-
-// filterByPreferredRegions prefers configured regions over others
-func filterByPreferredRegions(
-	results []database.SearchResultWithCursor, preferredRegions []string,
-) []database.SearchResultWithCursor {
-	var preferred []database.SearchResultWithCursor
-	var untagged []database.SearchResultWithCursor
-	var others []database.SearchResultWithCursor
-
-	for _, result := range results {
-		regionMatch := getRegionMatch(&result, preferredRegions)
-		switch regionMatch {
-		case tagMatchPreferred:
-			preferred = append(preferred, result)
-		case tagMatchUntagged:
-			untagged = append(untagged, result)
-		case tagMatchOther:
-			others = append(others, result)
-		}
-	}
-
-	if len(preferred) > 0 {
-		return preferred
-	}
-	if len(untagged) > 0 {
-		return untagged
-	}
-	return others
-}
-
-type tagMatch int
-
-const (
-	tagMatchPreferred tagMatch = iota
-	tagMatchUntagged
-	tagMatchOther
-)
-
-// getRegionMatch checks if a result matches preferred regions
-func getRegionMatch(result *database.SearchResultWithCursor, preferredRegions []string) tagMatch {
-	hasRegionTag := false
-	for _, tag := range result.Tags {
-		if tag.Type == string(tags.TagTypeRegion) {
-			hasRegionTag = true
-			for _, preferred := range preferredRegions {
-				if tag.Tag == preferred {
-					return tagMatchPreferred
-				}
-			}
-		}
-	}
-	if !hasRegionTag {
-		return tagMatchUntagged
-	}
-	return tagMatchOther
-}
-
-// filterByPreferredLanguages prefers configured languages over others
-func filterByPreferredLanguages(
-	results []database.SearchResultWithCursor, preferredLangs []string,
-) []database.SearchResultWithCursor {
-	var preferred []database.SearchResultWithCursor
-	var untagged []database.SearchResultWithCursor
-	var others []database.SearchResultWithCursor
-
-	for _, result := range results {
-		langMatch := getLanguageMatch(&result, preferredLangs)
-		switch langMatch {
-		case tagMatchPreferred:
-			preferred = append(preferred, result)
-		case tagMatchUntagged:
-			untagged = append(untagged, result)
-		case tagMatchOther:
-			others = append(others, result)
-		}
-	}
-
-	if len(preferred) > 0 {
-		return preferred
-	}
-	if len(untagged) > 0 {
-		return untagged
-	}
-	return others
-}
-
-// getLanguageMatch checks if a result matches preferred languages
-func getLanguageMatch(result *database.SearchResultWithCursor, preferredLangs []string) tagMatch {
-	hasLangTag := false
-	for _, tag := range result.Tags {
-		if tag.Type == string(tags.TagTypeLang) {
-			hasLangTag = true
-			for _, preferred := range preferredLangs {
-				if tag.Tag == preferred {
-					return tagMatchPreferred
-				}
-			}
-		}
-	}
-	if !hasLangTag {
-		return tagMatchUntagged
-	}
-	return tagMatchOther
-}
-
-// selectAlphabeticallyByFilename selects the first result alphabetically by filename
-func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) database.SearchResultWithCursor {
-	if len(results) == 0 {
-		return database.SearchResultWithCursor{}
-	}
-
-	best := results[0]
-	bestFilename := filepath.Base(best.Path)
-
-	for _, result := range results[1:] {
-		resultFilename := filepath.Base(result.Path)
-		if resultFilename < bestFilename {
-			best = result
-			bestFilename = resultFilename
-		}
-	}
-	return best
-}
-
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
-// This is a lenient check that allows characters that will be normalized during slugification.
+// It already assumes things like file extensions have been ruled out.
 func mightBeTitle(input string) bool {
-	// Must contain at least one slash
-	if !strings.Contains(input, "/") {
-		return false
-	}
-
-	// Split into system and game parts (only on first slash)
-	parts := strings.SplitN(input, "/", 2)
-	if len(parts) != 2 {
-		return false
-	}
-
-	system, game := parts[0], parts[1]
-
-	// Both parts must be non-empty
-	if system == "" || game == "" {
+	valid, _, game := isValidTitleFormat(input)
+	if !valid {
 		return false
 	}
 
@@ -880,114 +264,24 @@ func mightBeTitle(input string) bool {
 // isValidTitleFormat checks if the input string is valid title format for cmdTitle.
 // This is a lenient validation - just ensures basic SystemID/GameName format.
 // The command itself handles all parsing complexity.
-func isValidTitleFormat(input string) bool {
+func isValidTitleFormat(input string) (valid bool, systemID, gameName string) {
 	// Must contain at least one slash
 	if !strings.Contains(input, "/") {
-		return false
+		return false, "", ""
 	}
 
 	// Split into system and game parts (only on first slash)
 	parts := strings.SplitN(input, "/", 2)
 	if len(parts) != 2 {
-		return false
+		return false, "", ""
 	}
 
 	system, game := parts[0], parts[1]
 
 	// Both parts must be non-empty
 	if system == "" || game == "" {
-		return false
+		return false, "", ""
 	}
 
-	return true
-}
-
-// extractCanonicalTagsFromParens extracts explicit canonical tag syntax from parentheses.
-// Matches format: (operator?type:value) where operator is -, +, or ~ (optional, defaults to AND)
-// Examples: (-unfinished:beta), (+region:us), (year:1994), (~lang:en)
-//
-// This is used to support operator-based tag filtering in media titles, separate from
-// filename metadata tags which don't support operators.
-//
-// Returns the extracted tag filters and the input string with matched tags removed.
-func extractCanonicalTagsFromParens(input string) (tagFilters []database.TagFilter, remaining string) {
-	// Regex to match canonical tag syntax in parentheses: (operator?type:value)
-	// - ([+~-]?) - optional operator prefix (+, ~, or -). Note: - is last to avoid being interpreted as range
-	// - ([a-zA-Z][a-zA-Z0-9_-]*) - tag type (starts with letter, can contain letters/numbers/hyphens/underscores)
-	// - : - separator
-	// - ([^)]+) - tag value (anything except closing paren)
-	reCanonicalTag := regexp.MustCompile(`\(([+~-]?)([a-zA-Z][a-zA-Z0-9_-]*):([^)]+)\)`)
-
-	var extractedTags []database.TagFilter
-	remaining = input
-
-	// Find all matches
-	matches := reCanonicalTag.FindAllStringSubmatch(input, -1)
-
-	for _, match := range matches {
-		fullMatch := match[0] // "(+region:us)"
-		operator := match[1]  // "+"
-		tagType := match[2]   // "region"
-		tagValue := match[3]  // "us"
-
-		// Construct tag string with operator for parsing
-		tagStr := operator + tagType + ":" + tagValue
-
-		// Parse using existing filter parser (handles normalization and validation)
-		parsedFilters, err := filters.ParseTagFilters([]string{tagStr})
-		if err != nil {
-			log.Warn().Err(err).Str("tag", tagStr).Msg("failed to parse canonical tag from parentheses")
-			continue
-		}
-
-		if len(parsedFilters) > 0 {
-			extractedTags = append(extractedTags, parsedFilters[0])
-			// Remove this tag from the string
-			remaining = strings.Replace(remaining, fullMatch, "", 1)
-		}
-	}
-
-	// Clean up extra spaces left by removed tags
-	remaining = strings.TrimSpace(remaining)
-	remaining = reMultiSpace.ReplaceAllString(remaining, " ")
-
-	tagFilters = extractedTags
-	return tagFilters, remaining
-}
-
-// mergeTagFilters merges extracted tags with advanced args tags.
-// Advanced args tags take precedence - if the same tag type exists in both,
-// the advanced args value is used.
-// Returns nil if the result would be empty.
-func mergeTagFilters(extracted, advArgs []database.TagFilter) []database.TagFilter {
-	if len(advArgs) == 0 && len(extracted) == 0 {
-		return nil
-	}
-
-	if len(advArgs) == 0 {
-		return extracted
-	}
-
-	if len(extracted) == 0 {
-		return advArgs
-	}
-
-	// Create a map of advanced args tags by type for quick lookup
-	advArgsMap := make(map[string]database.TagFilter)
-	for _, tag := range advArgs {
-		advArgsMap[tag.Type] = tag
-	}
-
-	// Start with advanced args tags (they take precedence)
-	result := make([]database.TagFilter, 0, len(extracted)+len(advArgs))
-	result = append(result, advArgs...)
-
-	// Add extracted tags that don't conflict with advanced args
-	for _, tag := range extracted {
-		if _, exists := advArgsMap[tag.Type]; !exists {
-			result = append(result, tag)
-		}
-	}
-
-	return result
+	return true, system, game
 }

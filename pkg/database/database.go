@@ -297,6 +297,9 @@ type MediaDBI interface {
 	SearchMediaBySlugPrefix(
 		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
+	SearchMediaBySlugIn(
+		ctx context.Context, systemID string, slugs []string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
 	GetTitlesWithPreFilter(
 		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
 	) ([]MediaTitle, error)

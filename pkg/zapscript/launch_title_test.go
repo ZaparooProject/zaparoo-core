@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
+	titleshelper "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -245,7 +246,7 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tagFilters, remaining := extractCanonicalTagsFromParens(tt.input)
+			tagFilters, remaining := titleshelper.ExtractCanonicalTagsFromParens(tt.input)
 
 			assert.Equal(t, tt.expectedRemaining, remaining, "remaining string mismatch")
 			assert.Len(t, tagFilters, len(tt.expectedTags), "number of extracted tags mismatch")
@@ -338,10 +339,10 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			input:              "snes/zelda: ocarina",
 			systemID:           "SNES",
 			initialSearchSlug:  "zeldaocarina",
-			fallbackSearchSlug: "zelda",
+			fallbackSearchSlug: "ocarina", // Secondary title is now tried in Strategy 2
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults: []database.SearchResultWithCursor{
-				{SystemID: "snes", Name: "The Legend of Zelda", Path: "/test/zelda.smc"},
+				{SystemID: "snes", Name: "Zelda: Ocarina of Time", Path: "/test/zelda-ocarina.smc"},
 			},
 			expectFallback: true,
 			shouldError:    false,
@@ -351,23 +352,23 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			input:              "genesis/sonic: the hedgehog",
 			systemID:           "Genesis",
 			initialSearchSlug:  "sonichedgehog",
-			fallbackSearchSlug: "sonic",
+			fallbackSearchSlug: "hedgehog", // Secondary title is now tried in Strategy 2
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults: []database.SearchResultWithCursor{
-				{SystemID: "genesis", Name: "Sonic", Path: "/test/sonic.bin"},
+				{SystemID: "genesis", Name: "Sonic the Hedgehog", Path: "/test/sonic.bin"},
 			},
 			expectFallback: true,
 			shouldError:    false,
 		},
 		{
 			name:               "subtitle fallback with dash separator",
-			input:              "ps1/final fantasy - 7",
+			input:              "ps1/final fantasy - remake",
 			systemID:           "PSX",
-			initialSearchSlug:  "finalfantasy7",
-			fallbackSearchSlug: "finalfantasy",
+			initialSearchSlug:  "finalfantasyremake",
+			fallbackSearchSlug: "remake", // Secondary title is now tried in Strategy 2
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults: []database.SearchResultWithCursor{
-				{SystemID: "ps1", Name: "Final Fantasy VII", Path: "/test/ff7.bin"},
+				{SystemID: "ps1", Name: "Final Fantasy VII Remake", Path: "/test/ff7remake.bin"},
 			},
 			expectFallback: true,
 			shouldError:    false,
@@ -388,7 +389,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			input:              "snes/nonexistent: game",
 			systemID:           "SNES",
 			initialSearchSlug:  "nonexistentgame",
-			fallbackSearchSlug: "nonexistent",
+			fallbackSearchSlug: "game", // Secondary title is now tried in Strategy 2
 			initialResults:     []database.SearchResultWithCursor{},
 			fallbackResults:    []database.SearchResultWithCursor{},
 			expectFallback:     true,
@@ -429,28 +430,28 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
 				Return(tt.initialResults, nil).Once()
 
-			if len(tt.initialResults) == 0 {
-				mockMediaDB.On("SearchMediaBySlugPrefix",
-					context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
-					Return([]database.SearchResultWithCursor{}, nil).Once()
+			if len(tt.initialResults) == 0 && tt.expectFallback {
+				// Strategy 2: Secondary title-only search (for titles with subtitles)
+				mockMediaDB.On("SearchMediaBySlug",
+					context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
+					Return(tt.fallbackResults, nil).Once()
 
-				if tt.expectFallback {
+				if len(tt.fallbackResults) == 0 {
+					// When fallback also fails, the remaining strategies will be attempted
+					// Allow flexible mocking for remaining strategies (3, 4, 5)
 					mockMediaDB.On("SearchMediaBySlug",
-						context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
-						Return(tt.fallbackResults, nil).Once()
-
-					if len(tt.fallbackResults) == 0 {
-						mockMediaDB.On("SearchMediaBySlug",
-							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
-							Return([]database.SearchResultWithCursor{}, nil).Maybe()
-						mockMediaDB.On("SearchMediaBySlugPrefix",
-							mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
-							Return([]database.SearchResultWithCursor{}, nil).Maybe()
-						mockMediaDB.On("GetTitlesWithPreFilter",
-							mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
-							mock.AnythingOfType("int"), mock.AnythingOfType("int")).
-							Return([]database.MediaTitle{}, nil).Maybe()
-					}
+						mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+						Return([]database.SearchResultWithCursor{}, nil).Maybe()
+					mockMediaDB.On("SearchMediaBySlugPrefix",
+						mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+						Return([]database.SearchResultWithCursor{}, nil).Maybe()
+					mockMediaDB.On("SearchMediaBySlugIn",
+						mock.Anything, tt.systemID, mock.Anything, mock.Anything).
+						Return([]database.SearchResultWithCursor{}, nil).Maybe()
+					mockMediaDB.On("GetTitlesWithPreFilter",
+						mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+						mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+						Return([]database.MediaTitle{}, nil).Maybe()
 				}
 			}
 
@@ -477,107 +478,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 	}
 }
 
-func TestCmdTitleTokenMatching(t *testing.T) {
-	tests := []struct {
-		name           string
-		input          string
-		systemID       string
-		slug           string
-		expectedMatch  string
-		prefixResults  []database.SearchResultWithCursor
-		shouldUseToken bool
-	}{
-		{
-			name:     "word order variation - awakening link matches links awakening",
-			input:    "gbc/awakening link",
-			systemID: "GameboyColor",
-			slug:     "awakeninglink",
-			prefixResults: []database.SearchResultWithCursor{
-				{
-					SystemID: "GameboyColor",
-					Name:     "The Legend of Zelda: Link's Awakening DX",
-					Path:     "/test/zelda-dx.gbc",
-				},
-			},
-			expectedMatch:  "The Legend of Zelda: Link's Awakening DX",
-			shouldUseToken: true,
-		},
-		{
-			name:     "reversed words - mario super matches super mario",
-			input:    "snes/mario super world",
-			systemID: "SNES",
-			slug:     "mariosuperworld",
-			prefixResults: []database.SearchResultWithCursor{
-				{SystemID: "SNES", Name: "Super Mario World", Path: "/test/smw.smc"},
-			},
-			expectedMatch:  "Super Mario World",
-			shouldUseToken: true,
-		},
-		{
-			name:     "partial word order - turtles ninja matches ninja turtles",
-			input:    "nes/turtles ninja",
-			systemID: "NES",
-			slug:     "turtlesninja",
-			prefixResults: []database.SearchResultWithCursor{
-				{SystemID: "NES", Name: "Teenage Mutant Ninja Turtles", Path: "/test/tmnt.nes"},
-			},
-			expectedMatch:  "Teenage Mutant Ninja Turtles",
-			shouldUseToken: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockMediaDB := helpers.NewMockMediaDBI()
-			mockPlatform := mocks.NewMockPlatform()
-			mockPlaylistController := playlists.PlaylistController{}
-			mockConfig := &config.Instance{}
-
-			db := &database.Database{
-				MediaDB: mockMediaDB,
-			}
-
-			cmd := parser.Command{
-				Name:    "launch.title",
-				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
-			}
-
-			env := platforms.CmdEnv{
-				Playlist: mockPlaylistController,
-				Cfg:      mockConfig,
-				Database: db,
-				Cmd:      cmd,
-			}
-
-			// Mock cache miss
-			mockMediaDB.On("GetCachedSlugResolution",
-				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil)).
-				Return(int64(0), "", false)
-
-			mockMediaDB.On("SearchMediaBySlug",
-				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
-				Return([]database.SearchResultWithCursor{}, nil).Once()
-
-			mockMediaDB.On("SearchMediaBySlugPrefix",
-				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
-				Return(tt.prefixResults, nil).Once()
-
-			mockMediaDB.On("SetCachedSlugResolution",
-				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil),
-				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
-				Return(nil).Maybe()
-			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-			result, err := cmdTitle(mockPlatform, env)
-
-			require.NoError(t, err)
-			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
-			mockMediaDB.AssertExpectations(t)
-			mockPlatform.AssertExpectations(t)
-		})
-	}
-}
+// TestCmdTitleTokenMatching was removed because it tested Strategy 3 (Token Similarity)
+// which has been removed from the codebase for performance reasons.
+// Token-based word order matching is no longer supported.
 
 func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 	tests := []struct {
@@ -651,15 +554,13 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				mock.Anything, tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return(int64(0), "", false)
 
-			// All earlier strategies fail
+			// Strategy 1 (exact match) fails
 			mockMediaDB.On("SearchMediaBySlug",
 				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
 				Return([]database.SearchResultWithCursor{}, nil).Once()
-			mockMediaDB.On("SearchMediaBySlugPrefix",
-				context.Background(), tt.systemID, tt.slug, []database.TagFilter(nil)).
-				Return([]database.SearchResultWithCursor{}, nil).Once()
 
-			// Fuzzy matching uses pre-filter to get candidate titles
+			// Strategies 2-4 don't apply (no secondary title in these test queries)
+			// Strategy 5 (Jaro-Winkler fuzzy) uses pre-filter to get candidate titles
 			candidateTitles := make([]database.MediaTitle, len(tt.allSlugs))
 			for i, slug := range tt.allSlugs {
 				candidateTitles[i] = database.MediaTitle{
@@ -689,6 +590,9 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				Return([]database.SearchResultWithCursor{}, nil).Maybe()
 			mockMediaDB.On("SearchMediaBySlugPrefix",
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+				Return([]database.SearchResultWithCursor{}, nil).Maybe()
+			mockMediaDB.On("SearchMediaBySlugIn",
+				mock.Anything, tt.systemID, mock.Anything, mock.Anything).
 				Return([]database.SearchResultWithCursor{}, nil).Maybe()
 			mockMediaDB.On("GetTitlesWithPreFilter",
 				mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
@@ -971,7 +875,7 @@ func TestFilterByPreferredRegions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filtered := filterByPreferredRegions(tt.results, tt.preferredRegions)
+			filtered := titleshelper.FilterByPreferredRegions(tt.results, tt.preferredRegions)
 			assert.Len(t, filtered, tt.expectedCount)
 			if len(tt.expectedPaths) > 0 {
 				paths := make([]string, len(filtered))
@@ -1056,7 +960,7 @@ func TestFilterByPreferredLanguages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filtered := filterByPreferredLanguages(tt.results, tt.preferredLangs)
+			filtered := titleshelper.FilterByPreferredLanguages(tt.results, tt.preferredLangs)
 			assert.Len(t, filtered, tt.expectedCount)
 			if len(tt.expectedPaths) > 0 {
 				paths := make([]string, len(filtered))
@@ -1134,7 +1038,7 @@ func TestFilterOutVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filtered := filterOutVariants(tt.results)
+			filtered := titleshelper.FilterOutVariants(tt.results)
 			assert.Len(t, filtered, tt.expectedCount, tt.description)
 		})
 	}
@@ -1178,7 +1082,7 @@ func TestFilterOutRereleases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filtered := filterOutRereleases(tt.results)
+			filtered := titleshelper.FilterOutRereleases(tt.results)
 			assert.Len(t, filtered, tt.expectedCount, tt.description)
 		})
 	}
@@ -1242,7 +1146,7 @@ func TestSelectBestResult(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockConfig := &config.Instance{}
-			result := selectBestResult(tt.results, tt.tagFilters, mockConfig)
+			result := titleshelper.SelectBestResult(tt.results, tt.tagFilters, mockConfig)
 			assert.Equal(t, tt.expectedName, result.Name, tt.description)
 		})
 	}
@@ -1306,7 +1210,7 @@ func TestHasAllTags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := hasAllTags(&tt.result, tt.tagFilters)
+			result := titleshelper.HasAllTags(&tt.result, tt.tagFilters)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1357,7 +1261,7 @@ func TestIsVariant(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isVariant(&tt.result)
+			result := titleshelper.IsVariant(&tt.result)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1394,7 +1298,7 @@ func TestIsRerelease(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isRerelease(&tt.result)
+			result := titleshelper.IsRerelease(&tt.result)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1734,6 +1638,9 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		mockMediaDB.On("SearchMediaBySlugPrefix",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+		mockMediaDB.On("SearchMediaBySlugIn",
+			mock.Anything, "SNES", mock.Anything, mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
 		mockMediaDB.On("GetTitlesWithPreFilter",
 			mock.Anything, "SNES", mock.AnythingOfType("int"), mock.AnythingOfType("int"),
 			mock.AnythingOfType("int"), mock.AnythingOfType("int")).
@@ -1781,6 +1688,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 		mockMediaDB.On("SearchMediaBySlugPrefix",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+
+		mockMediaDB.On("SearchMediaBySlugIn",
+			mock.Anything, "SNES", mock.Anything, mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
 
 		mockMediaDB.On("GetTitlesWithPreFilter",

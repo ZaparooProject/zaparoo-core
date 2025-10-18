@@ -21,7 +21,9 @@ package matcher
 
 import (
 	"sort"
+	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/hbollon/go-edlib"
 	"github.com/rs/zerolog/log"
 )
@@ -83,4 +85,92 @@ func FindFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 	})
 
 	return matches
+}
+
+// GenerateTokenSignature creates a normalized, sorted token signature for word-order independent matching.
+// Uses the same tokenization pipeline as slugification to ensure consistency.
+//
+// Example:
+//
+//	GenerateTokenSignature("Super Mario World") → "mario_super_world"
+//	GenerateTokenSignature("Mario World Super") → "mario_super_world"
+func GenerateTokenSignature(slug string) string {
+	// Use the same token splitting as slugs to ensure consistency
+	tokens := slugs.NormalizeToWords(slug)
+
+	// Sort alphabetically for order-independent matching
+	sort.Strings(tokens)
+
+	// Join with underscore delimiter
+	return strings.Join(tokens, "_")
+}
+
+// FindTokenSignatureMatches finds candidates where the token signature matches or starts with the query signature.
+// This enables word-order independent matching: "mario super" matches "Super Mario World".
+//
+// candidateSlugs should be the raw slugs (not token signatures) - signatures are computed on-the-fly.
+func FindTokenSignatureMatches(querySlug string, candidateSlugs []string) []string {
+	querySignature := GenerateTokenSignature(querySlug)
+
+	var matches []string
+	for _, candidateSlug := range candidateSlugs {
+		candidateSignature := GenerateTokenSignature(candidateSlug)
+
+		// Prefix match allows partial queries: "mario world" matches "mario_super_world"
+		if strings.HasPrefix(candidateSignature, querySignature) {
+			matches = append(matches, candidateSlug)
+		}
+	}
+
+	return matches
+}
+
+// ApplyDamerauLevenshteinTieBreaker refines fuzzy matches using Damerau-Levenshtein distance
+// to handle transposition errors (e.g., "crono tigger" → "Chrono Trigger").
+//
+// It takes the top N candidates from Jaro-Winkler and re-ranks them by edit distance.
+// This two-stage approach is more accurate than either algorithm alone while remaining fast.
+func ApplyDamerauLevenshteinTieBreaker(query string, matches []FuzzyMatch, topN int) []FuzzyMatch {
+	if len(matches) == 0 {
+		return matches
+	}
+
+	// Only apply tie-breaking if we have multiple candidates
+	if len(matches) == 1 {
+		return matches
+	}
+
+	// Limit to top N candidates to keep performance fast
+	candidates := matches
+	if len(matches) > topN {
+		candidates = matches[:topN]
+	}
+
+	type dlScore struct {
+		match    FuzzyMatch
+		distance int
+	}
+
+	// Calculate Damerau-Levenshtein distance for top candidates
+	scored := make([]dlScore, len(candidates))
+	for i, candidate := range candidates {
+		dist := edlib.DamerauLevenshteinDistance(query, candidate.Slug)
+		scored[i] = dlScore{
+			match:    candidate,
+			distance: dist,
+		}
+	}
+
+	// Sort by distance (lower is better)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].distance < scored[j].distance
+	})
+
+	// Return re-ranked matches
+	result := make([]FuzzyMatch, len(scored))
+	for i, s := range scored {
+		result[i] = s.match
+	}
+
+	return result
 }

@@ -27,7 +27,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	slugsutil "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -413,7 +413,7 @@ func sqlSearchMediaBySlug(
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
 	// Slugify the input slug to match how slugs are stored in the database
-	slugified := slugs.SlugifyString(slug)
+	slugified := slugsutil.SlugifyString(slug)
 	args = append(args, systemID, slugified)
 
 	whereConditions := []string{
@@ -560,7 +560,7 @@ func sqlSearchMediaBySlugPrefix(
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
 	// Slugify the input slug prefix to match how slugs are stored in the database
-	slugified := slugs.SlugifyString(slugPrefix)
+	slugified := slugsutil.SlugifyString(slugPrefix)
 	args = append(args, systemID, slugified+"%")
 
 	whereConditions := []string{
@@ -683,6 +683,173 @@ func sqlSearchMediaBySlugPrefix(
 			return results, fmt.Errorf("tags rows iteration error: %w", err)
 		}
 
+		for i := range results {
+			if tags, exists := tagsMap[results[i].MediaID]; exists {
+				results[i].Tags = tags
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func sqlSearchMediaBySlugIn(
+	ctx context.Context,
+	db *sql.DB,
+	systemID string,
+	slugList []string,
+	tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	results := make([]database.SearchResultWithCursor, 0, 10)
+
+	// Handle empty slugs slice
+	if len(slugList) == 0 {
+		return results, nil
+	}
+
+	// Slugify all input slugs to match how slugs are stored in the database
+	slugified := make([]string, 0, len(slugList))
+	for _, slug := range slugList {
+		s := slugsutil.SlugifyString(slug)
+		if s != "" {
+			slugified = append(slugified, s)
+		}
+	}
+
+	if len(slugified) == 0 {
+		return results, nil
+	}
+
+	args := make([]any, 0, 1+len(slugified)+len(tags)*2)
+	args = append(args, systemID)
+	for _, slug := range slugified {
+		args = append(args, slug)
+	}
+
+	whereConditions := []string{
+		"Systems.SystemID = ?",
+		"MediaTitles.Slug IN (" + prepareVariadic("?", ",", len(slugified)) + ")",
+	}
+
+	tagClauses, tagArgs := BuildTagFilterSQL(tags)
+	whereConditions = append(whereConditions, tagClauses...)
+	args = append(args, tagArgs...)
+
+	//nolint:gosec // Safe: all user input goes through parameterized queries
+	stmt, err := db.PrepareContext(ctx, `
+		SELECT
+			DISTINCT
+			Systems.SystemID,
+			MediaTitles.Name,
+			Media.Path,
+			Media.DBID as MediaID
+		FROM Systems
+		INNER JOIN MediaTitles ON Systems.DBID = MediaTitles.SystemDBID
+		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
+		WHERE `+strings.Join(whereConditions, " AND ")+`
+		ORDER BY MediaTitles.Name
+		LIMIT 50
+	`)
+	if err != nil {
+		return results, fmt.Errorf("failed to prepare media by slug IN search statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return results, fmt.Errorf("failed to execute media by slug IN search query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		result := database.SearchResultWithCursor{}
+		if scanErr := rows.Scan(
+			&result.SystemID,
+			&result.Name,
+			&result.Path,
+			&result.MediaID,
+		); scanErr != nil {
+			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
+		}
+		results = append(results, result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return results, err
+	}
+
+	// If we have results, fetch tags for each result
+	if len(results) > 0 {
+		mediaIDs := make([]int64, len(results))
+		for i, result := range results {
+			mediaIDs[i] = result.MediaID
+		}
+
+		//nolint:gosec // Safe: all user input goes through parameterized queries
+		tagsStmt, err := db.PrepareContext(ctx, `
+			SELECT
+				MediaDBID,
+				Tags.Tag,
+				TagTypes.Type
+			FROM MediaTags
+			INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+			INNER JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
+			WHERE MediaDBID IN (`+prepareVariadic("?", ",", len(mediaIDs))+`)
+			ORDER BY MediaDBID, TagTypes.Type, Tags.Tag
+		`)
+		if err != nil {
+			return results, fmt.Errorf("failed to prepare tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsStmt.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags statement")
+			}
+		}()
+
+		tagsArgs := make([]any, len(mediaIDs))
+		for i, id := range mediaIDs {
+			tagsArgs[i] = id
+		}
+
+		tagsRows, err := tagsStmt.QueryContext(ctx, tagsArgs...)
+		if err != nil {
+			return results, fmt.Errorf("failed to execute tags query: %w", err)
+		}
+		defer func() {
+			if closeErr := tagsRows.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Msg("failed to close tags rows")
+			}
+		}()
+
+		// Create a map of MediaID -> Tags for fast lookup
+		tagsMap := make(map[int64][]database.TagInfo)
+		for tagsRows.Next() {
+			var mediaID int64
+			var tag, tagType string
+			if scanErr := tagsRows.Scan(&mediaID, &tag, &tagType); scanErr != nil {
+				return results, fmt.Errorf("failed to scan tags result: %w", scanErr)
+			}
+
+			// Append tag to the slice for this media ID
+			tagInfo := database.TagInfo{
+				Tag:  tag,
+				Type: tagType,
+			}
+			tagsMap[mediaID] = append(tagsMap[mediaID], tagInfo)
+		}
+		if err = tagsRows.Err(); err != nil {
+			return results, fmt.Errorf("tags rows iteration error: %w", err)
+		}
+
+		// Merge tags into results
 		for i := range results {
 			if tags, exists := tagsMap[results[i].MediaID]; exists {
 				results[i].Tags = tags

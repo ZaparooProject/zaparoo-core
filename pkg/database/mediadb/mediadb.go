@@ -849,6 +849,17 @@ func (db *MediaDB) SearchMediaBySlugPrefix(
 	return sqlSearchMediaBySlugPrefix(ctx, db.sql, systemID, slugPrefix, tags)
 }
 
+// SearchMediaBySlugIn searches for media items matching any of the provided slugs using an IN clause.
+// This is optimized for searching multiple slug candidates in a single query.
+func (db *MediaDB) SearchMediaBySlugIn(
+	ctx context.Context, systemID string, slugList []string, tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	return sqlSearchMediaBySlugIn(ctx, db.sql, systemID, slugList, tags)
+}
+
 // GetTitlesWithPreFilter retrieves media titles filtered by slug length and word count ranges.
 // This dramatically reduces the candidate set for fuzzy matching by using indexed pre-filter columns.
 // Uses the composite index idx_media_prefilter (SlugLength, SlugWordCount) for efficient range queries.
