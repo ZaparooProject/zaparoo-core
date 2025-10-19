@@ -394,7 +394,7 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 			mockDB := helpers.NewMockMediaDBI()
 			tt.setupMock(mockDB)
 
-			results, strategy, err := TryAdvancedFuzzyMatching(
+			result, err := TryAdvancedFuzzyMatching(
 				context.Background(),
 				mockDB,
 				tt.systemID,
@@ -407,8 +407,8 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Len(t, results, tt.expectedCount)
-				assert.Equal(t, tt.expectedStrategy, strategy)
+				assert.Len(t, result.Results, tt.expectedCount)
+				assert.Equal(t, tt.expectedStrategy, result.Strategy)
 			}
 
 			mockDB.AssertExpectations(t)

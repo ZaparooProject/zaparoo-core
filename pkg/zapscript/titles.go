@@ -89,8 +89,12 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	filenameTags := tags.ParseFilenameToCanonicalTags(remainingTitle)
 
 	// Convert filename tags to tag filters (always AND operator)
+	// Skip inferred tags (e.g., "Edition" from plain text) - only use tags from brackets
 	filenameTagFilters := make([]database.TagFilter, 0, len(filenameTags))
 	for _, tag := range filenameTags {
+		if tag.Source == tags.TagSourceInferred {
+			continue // Skip inferred tags - don't use as search filters
+		}
 		filenameTagFilters = append(filenameTagFilters, database.TagFilter{
 			Type:     string(tag.Type),
 			Value:    string(tag.Value),
@@ -134,6 +138,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			log.Info().Msgf("resolved from cache: %s (%s)", result.Name, result.Path)
 			return platforms.CmdResult{
 				MediaChanged: true,
+				Strategy:     cachedStrategy,
 			}, launch(result.Path)
 		}
 	}
@@ -141,103 +146,212 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// Generate match info once for secondary/main title strategies
 	matchInfo := titles.GenerateMatchInfo(gameName)
 
-	// Track which strategy succeeds for cache storage
-	var resolvedStrategy string
+	// Track the best candidate found across all strategies
+	type candidate struct {
+		strategy   string
+		result     database.SearchResultWithCursor
+		confidence float64
+	}
+	var bestCandidate *candidate
+	var results []database.SearchResultWithCursor
 
-	// Strategy 1: Exact match
-	results, err := mediadb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
+	// Strategy 1: Exact match WITH tags (fast path for perfect matches)
+	results, err = mediadb.SearchMediaBySlug(ctx, system.ID, slug, tagFilters)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
-		resolvedStrategy = titles.StrategyExactMatch
+		const matchQuality = 1.0 // Exact slug match
+		selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
 		log.Debug().
-			Str("strategy", resolvedStrategy).
+			Str("strategy", titles.StrategyExactMatch).
 			Str("query", slug).
 			Int("result_count", len(results)).
+			Float64("confidence", confidence).
 			Msg("match found via exact match strategy")
-	}
 
-	// Strategy 2: Secondary title-only exact match (only if has secondary title)
-	if len(results) == 0 && matchInfo.HasSecondaryTitle {
-		var strategyErr error
-		results, resolvedStrategy, strategyErr = titles.TrySecondaryTitleExact(
-			ctx, mediadb, system.ID, slug, matchInfo, tagFilters)
-		if strategyErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("secondary title exact match failed: %w", strategyErr)
+		// High confidence match - return immediately (only early exit case)
+		if confidence >= titles.ConfidenceHigh {
+			log.Info().Msgf("high confidence match (%.2f), launching immediately", confidence)
+			if cacheErr := mediadb.SetCachedSlugResolution(
+				ctx, system.ID, slug, tagFilters, selectedResult.MediaID, titles.StrategyExactMatch,
+			); cacheErr != nil {
+				log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
+			}
+			return platforms.CmdResult{
+				MediaChanged: true,
+				Strategy:     titles.StrategyExactMatch,
+			}, launch(selectedResult.Path)
+		}
+
+		// Track as best candidate (only if valid result with non-zero confidence)
+		if confidence > 0.0 {
+			bestCandidate = &candidate{
+				result:     selectedResult,
+				confidence: confidence,
+				strategy:   titles.StrategyExactMatch,
+			}
+			log.Info().Msgf("found candidate via exact match (confidence: %.2f)", confidence)
 		}
 	}
 
-	// Strategy 3: Advanced fuzzy matching with single prefilter
+	// Strategy 2: Exact match WITHOUT tags (catches tag mismatches quickly)
+	// Tags become soft preferences for result selection
+	if bestCandidate == nil {
+		log.Info().Msg("no results with tags, trying exact match without tag filters")
+		results, err = mediadb.SearchMediaBySlug(ctx, system.ID, slug, nil)
+		if err != nil {
+			return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s' without tags: %w", slug, err)
+		}
+		if len(results) > 0 {
+			const matchQuality = 1.0 // Exact slug match
+			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			log.Debug().
+				Str("strategy", titles.StrategyExactMatch).
+				Str("query", slug).
+				Int("result_count", len(results)).
+				Float64("confidence", confidence).
+				Msg("match found via exact match without tags")
+
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   titles.StrategyExactMatch,
+				}
+				log.Info().Msgf("found candidate via exact match without tags (confidence: %.2f)", confidence)
+			}
+		}
+	}
+
+	// Strategy 3: Secondary title-only exact match (only if has secondary title)
+	if bestCandidate == nil && matchInfo.HasSecondaryTitle {
+		var strategyErr error
+		var resolvedStrategy string
+		results, resolvedStrategy, strategyErr = titles.TrySecondaryTitleExact(
+			ctx, mediadb, system.ID, slug, matchInfo, nil)
+		if strategyErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("secondary title exact match failed: %w", strategyErr)
+		}
+		if len(results) > 0 {
+			const matchQuality = 0.92 // Exact match on secondary title (slightly lower than full match)
+			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   resolvedStrategy,
+				}
+				log.Info().Msgf("found candidate via secondary title (confidence: %.2f)", confidence)
+			}
+		}
+	}
+
+	// Strategy 4: Advanced fuzzy matching with single prefilter
 	// Uses a single prefilter query, then tries three algorithms in sequence:
 	// 1. Token signature (word-order independent)
 	// 2. Jaro-Winkler (typo tolerance, prefix matching)
 	// 3. Damerau-Levenshtein tie-breaking (transposition handling)
-	if len(results) == 0 {
-		var strategyErr error
-		results, resolvedStrategy, strategyErr = titles.TryAdvancedFuzzyMatching(
-			ctx, mediadb, system.ID, gameName, slug, tagFilters)
+	if bestCandidate == nil {
+		fuzzyResult, strategyErr := titles.TryAdvancedFuzzyMatching(
+			ctx, mediadb, system.ID, gameName, slug, nil)
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("advanced fuzzy matching failed: %w", strategyErr)
 		}
+		if len(fuzzyResult.Results) > 0 {
+			matchQuality := fuzzyResult.Similarity // Use actual fuzzy match similarity score
+			selectedResult, confidence := titles.SelectBestResult(
+				fuzzyResult.Results, tagFilters, env.Cfg, matchQuality)
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   fuzzyResult.Strategy,
+				}
+				log.Info().Msgf("found candidate via fuzzy matching (similarity: %.2f, confidence: %.2f)",
+					fuzzyResult.Similarity, confidence)
+			}
+		}
 	}
 
-	// Strategy 4: Main title-only search (drops secondary title, only if has secondary title)
-	if len(results) == 0 && matchInfo.HasSecondaryTitle {
+	// Strategy 5: Main title-only search (drops secondary title, only if has secondary title)
+	if bestCandidate == nil && matchInfo.HasSecondaryTitle {
 		var strategyErr error
+		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TryMainTitleOnly(
-			ctx, mediadb, system.ID, slug, matchInfo, tagFilters)
+			ctx, mediadb, system.ID, slug, matchInfo, nil)
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("main title only search failed: %w", strategyErr)
 		}
+		if len(results) > 0 {
+			const matchQuality = 0.90 // Main title match (partial match)
+			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   resolvedStrategy,
+				}
+				log.Info().Msgf("found candidate via main title only (confidence: %.2f)", confidence)
+			}
+		}
 	}
 
-	// Strategy 5: Progressive trim candidates (last resort)
+	// Strategy 6: Progressive trim candidates (last resort)
 	// Handles overly-verbose queries by progressively trimming words from the end
 	// Uses a single IN query for all candidates (max depth: 3)
-	if len(results) == 0 {
+	if bestCandidate == nil {
 		var strategyErr error
+		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TryProgressiveTrim(
-			ctx, mediadb, system.ID, gameName, slug, tagFilters)
+			ctx, mediadb, system.ID, gameName, slug, nil)
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("progressive trim strategy failed: %w", strategyErr)
 		}
-	}
-
-	// Fallback strategy: If no results with auto-extracted tags, retry without them
-	if len(results) == 0 {
-		var strategyErr error
-		results, resolvedStrategy, strategyErr = titles.TryWithoutAutoTags(
-			ctx, mediadb, system.ID, slug, autoExtractedTags, advArgsTagFilters)
-		if strategyErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("fallback without auto-tags failed: %w", strategyErr)
-		}
 		if len(results) > 0 {
-			log.Info().Msg("fallback successful: found results by ignoring auto-extracted tag filters")
+			const matchQuality = 0.85 // Progressive trim (partial match, least confident)
+			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			if confidence > 0.0 {
+				bestCandidate = &candidate{
+					result:     selectedResult,
+					confidence: confidence,
+					strategy:   resolvedStrategy,
+				}
+				log.Info().Msgf("found candidate via progressive trim (confidence: %.2f)", confidence)
+			}
 		}
 	}
 
-	if len(results) == 0 {
+	// No results found
+	if bestCandidate == nil {
 		return platforms.CmdResult{}, fmt.Errorf("no results found for title: %s/%s", system.ID, gameName)
 	}
 
-	// If multiple results, apply intelligent selection using ALL tags as preferences
-	// This includes both user-provided and auto-extracted tags
-	selectedResult := titles.SelectBestResult(results, tagFilters, env.Cfg)
-	log.Info().Msgf("selected result: %s (%s)", selectedResult.Name, selectedResult.Path)
+	// Have results but confidence is too low
+	if bestCandidate.confidence < titles.ConfidenceMinimum {
+		return platforms.CmdResult{}, fmt.Errorf(
+			"found match for '%s/%s' but confidence too low (%.2f < %.2f): %s",
+			system.ID, gameName, bestCandidate.confidence, titles.ConfidenceMinimum, bestCandidate.result.Name)
+	}
+
+	// Launch with the best candidate found
+	if bestCandidate.confidence < titles.ConfidenceAcceptable {
+		log.Warn().Msgf("launching with low confidence (%.2f): %s", bestCandidate.confidence, bestCandidate.result.Name)
+	} else {
+		log.Info().Msgf("launching with confidence %.2f: %s", bestCandidate.confidence, bestCandidate.result.Name)
+	}
 
 	// Cache the successful resolution (best effort - don't fail if caching fails)
-	if resolvedStrategy != "" {
-		if cacheErr := mediadb.SetCachedSlugResolution(
-			ctx, system.ID, slug, tagFilters, selectedResult.MediaID, resolvedStrategy,
-		); cacheErr != nil {
-			log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
-		}
+	if cacheErr := mediadb.SetCachedSlugResolution(
+		ctx, system.ID, slug, tagFilters, bestCandidate.result.MediaID, bestCandidate.strategy,
+	); cacheErr != nil {
+		log.Warn().Err(cacheErr).Msg("failed to cache slug resolution")
 	}
 
 	return platforms.CmdResult{
 		MediaChanged: true,
-	}, launch(selectedResult.Path)
+		Strategy:     bestCandidate.strategy,
+	}, launch(bestCandidate.result.Path)
 }
 
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.

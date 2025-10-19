@@ -81,6 +81,9 @@ type CmdEnv struct {
 type CmdResult struct {
 	// Playlist is the result of the playlist change.
 	Playlist *playlists.Playlist
+	// Strategy indicates which matching strategy was used for title-based launches.
+	// Empty for non-title commands. Used for testing and debugging title resolution.
+	Strategy string
 	// NewCommands instructs the script runner to prepend these additional
 	// commands to the current script's remaining command list.
 	NewCommands []parser.Command

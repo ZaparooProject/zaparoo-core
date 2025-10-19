@@ -127,22 +127,22 @@ func TestAllTagMappingsValid(t *testing.T) {
 func TestCanonicalTagStringFormat(t *testing.T) {
 	tests := []struct {
 		name     string
-		tag      CanonicalTag
 		expected string
+		tag      CanonicalTag
 	}{
 		{
 			name:     "flat tag with no value",
-			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: ""},
+			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: "", Source: TagSourceBracketed},
 			expected: "gamegenre",
 		},
 		{
 			name:     "hierarchical tag with value",
-			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: "action:platformer"},
+			tag:      CanonicalTag{Type: TagTypeGameGenre, Value: "action:platformer", Source: TagSourceBracketed},
 			expected: "gamegenre:action:platformer",
 		},
 		{
 			name:     "simple tag with value",
-			tag:      CanonicalTag{Type: TagTypeRegion, Value: "us"},
+			tag:      CanonicalTag{Type: TagTypeRegion, Value: "us", Source: TagSourceBracketed},
 			expected: "region:us",
 		},
 	}

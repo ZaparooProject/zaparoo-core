@@ -29,6 +29,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// FuzzyMatchResult contains the results of a fuzzy matching strategy.
+type FuzzyMatchResult struct {
+	Strategy   string
+	Results    []database.SearchResultWithCursor
+	Similarity float64
+}
+
 // TryMainTitleOnly attempts main title-only search (drops secondary title).
 // Expects matchInfo to be pre-generated to avoid redundant computation.
 func TryMainTitleOnly(
@@ -116,9 +123,9 @@ func TryAdvancedFuzzyMatching(
 	gameName string,
 	slug string,
 	tagFilters []database.TagFilter,
-) ([]database.SearchResultWithCursor, string, error) {
+) (FuzzyMatchResult, error) {
 	if len(slug) < MinSlugLengthForFuzzy {
-		return nil, "", nil
+		return FuzzyMatchResult{}, nil
 	}
 
 	log.Info().Msgf("no results yet, trying advanced fuzzy matching for '%s'", slug)
@@ -154,24 +161,25 @@ func TryAdvancedFuzzyMatching(
 		ctx, systemID, minLength, maxLength, minWordCount, maxWordCount)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to fetch pre-filtered candidates")
-		return nil, "", nil
+		return FuzzyMatchResult{}, nil
 	}
 
 	if len(candidateTitles) == 0 {
-		return nil, "", nil
+		return FuzzyMatchResult{}, nil
 	}
 
 	log.Info().Msgf("pre-filter reduced candidate set to %d titles", len(candidateTitles))
 
-	// Extract slugs from MediaTitle objects
+	// Extract slugs from MediaTitle objects for fuzzy matching
 	candidateSlugs := make([]string, 0, len(candidateTitles))
 	for _, title := range candidateTitles {
 		candidateSlugs = append(candidateSlugs, title.Slug)
 	}
 
 	// Sub-strategy 3a: Token signature matching (word-order independent)
+	// Uses original game names (not slugs) to preserve word boundaries
 	log.Info().Msg("trying token signature matching")
-	tokenMatches := matcher.FindTokenSignatureMatches(slug, candidateSlugs)
+	tokenMatches := matcher.FindTokenSignatureMatches(gameName, candidateTitles)
 
 	if len(tokenMatches) > 0 {
 		log.Debug().Int("count", len(tokenMatches)).Msg("found token signature matches")
@@ -186,7 +194,11 @@ func TryAdvancedFuzzyMatching(
 					Str("match", matchSlug).
 					Int("result_count", len(results)).
 					Msg("match found via token signature strategy")
-				return results, StrategyTokenSignature, nil
+				return FuzzyMatchResult{
+					Results:    results,
+					Strategy:   StrategyTokenSignature,
+					Similarity: 1.0, // Token signature = exact match on all tokens
+				}, nil
 			}
 		}
 	}
@@ -222,12 +234,16 @@ func TryAdvancedFuzzyMatching(
 					Float64("similarity", float64(match.Similarity)).
 					Int("result_count", len(results)).
 					Msg("match found via Jaro-Winkler + Damerau-Levenshtein strategy")
-				return results, StrategyJaroWinklerDamerau, nil
+				return FuzzyMatchResult{
+					Results:    results,
+					Strategy:   StrategyJaroWinklerDamerau,
+					Similarity: float64(match.Similarity),
+				}, nil
 			}
 		}
 	}
 
-	return nil, "", nil
+	return FuzzyMatchResult{}, nil
 }
 
 // TryProgressiveTrim attempts Strategy 5: Progressive trim candidates (last resort).

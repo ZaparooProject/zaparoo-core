@@ -28,6 +28,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -104,11 +105,17 @@ func AddMediaPath(
 	if foundTitleIndex, ok := ss.TitleIDs[titleKey]; !ok {
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
+
+		// Generate slug metadata for fuzzy matching prefilter
+		metadata := mediadb.GenerateSlugWithMetadata(pf.Title)
+
 		_, err := db.InsertMediaTitle(database.MediaTitle{
-			DBID:       int64(titleIndex),
-			Slug:       pf.Slug,
-			Name:       pf.Title,
-			SystemDBID: int64(systemIndex),
+			DBID:          int64(titleIndex),
+			Slug:          pf.Slug,
+			Name:          pf.Title,
+			SystemDBID:    int64(systemIndex),
+			SlugLength:    metadata.SlugLength,
+			SlugWordCount: metadata.SlugWordCount,
 		})
 		if err != nil {
 			ss.TitlesIndex-- // Rollback index increment on failure

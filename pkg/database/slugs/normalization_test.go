@@ -768,20 +768,22 @@ func TestPunctuationNormalizationIntegration(t *testing.T) {
 		},
 
 		// Abbreviation expansion with fancy dashes
+		// NOTE: With hyphen preservation, these compound words don't get abbreviation expansion
+		// because "Super-Bros." is treated as a single word, not "Super" + "Bros."
 		{
 			name:     "super_bros_with_en_dash",
 			input:    "Super\u2013Bros.",
-			expected: "superbrothers",
+			expected: "superbros", // En-dash→hyphen, hyphen preserved as compound, no abbrev expansion
 		},
 		{
 			name:     "super_bros_with_em_dash",
 			input:    "Super\u2014Bros.",
-			expected: "superbrothers",
+			expected: "superbros", // Em-dash→hyphen, hyphen preserved as compound, no abbrev expansion
 		},
 		{
 			name:     "super_bros_with_hyphen",
 			input:    "Super-Bros.",
-			expected: "superbrothers",
+			expected: "superbros", // Hyphen preserved as compound word, no abbreviation expansion
 		},
 
 		// Link's Awakening with curly apostrophe

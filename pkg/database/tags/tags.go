@@ -42,10 +42,25 @@ type TagType string
 // TagValue represents a canonical tag value
 type TagValue string
 
+// TagSource indicates where a tag was extracted from during parsing
+type TagSource uint8
+
+const (
+	// TagSourceUnknown is the zero-value, indicating an uninitialized or indeterminate source
+	TagSourceUnknown TagSource = iota
+
+	// TagSourceBracketed indicates a tag extracted from brackets: (), {}, <>, or []
+	TagSourceBracketed
+
+	// TagSourceInferred indicates a tag inferred from patterns in plain text (e.g., "Edition", "T+Eng", "v1.0")
+	TagSourceInferred
+)
+
 // CanonicalTag represents a pre-split canonical tag for efficient processing
 type CanonicalTag struct {
-	Type  TagType
-	Value TagValue
+	Type   TagType
+	Value  TagValue
+	Source TagSource // Where the tag was extracted from during parsing
 }
 
 // String returns the full tag in "type:value" format

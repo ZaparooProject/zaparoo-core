@@ -29,13 +29,26 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// SelectBestResult implements intelligent selection when multiple media match a slug
+// SelectBestResult implements intelligent selection when multiple media match a slug.
+// Returns the best result and a confidence score (0.0-1.0) based on match quality and tag match quality.
+// matchQuality should be 1.0 for exact matches, or the similarity score (0.0-1.0) for fuzzy matches.
 func SelectBestResult(
-	results []database.SearchResultWithCursor, tagFilters []database.TagFilter, cfg *config.Instance,
-) database.SearchResultWithCursor {
+	results []database.SearchResultWithCursor,
+	tagFilters []database.TagFilter,
+	cfg *config.Instance,
+	matchQuality float64,
+) (result database.SearchResultWithCursor, confidence float64) {
 	if len(results) == 1 {
-		log.Info().Msg("single result, confidence: high")
-		return results[0]
+		// Check if the single result is a variant (and user didn't explicitly request it)
+		if IsVariant(&results[0]) && !hasVariantTagFilter(tagFilters) {
+			log.Info().Msg("single result is a variant (demo/beta/proto), excluding")
+			return database.SearchResultWithCursor{}, 0.0
+		}
+		tagConfidence := CalculateTagMatchConfidence(&results[0], tagFilters)
+		confidence = matchQuality * tagConfidence
+		log.Info().Msgf("single result, confidence: %.2f (match: %.2f, tags: %.2f)",
+			confidence, matchQuality, tagConfidence)
+		return results[0], confidence
 	}
 
 	initialCount := len(results)
@@ -45,8 +58,11 @@ func SelectBestResult(
 	if len(tagFilters) > 0 {
 		filtered := FilterByTags(results, tagFilters)
 		if len(filtered) == 1 {
-			log.Info().Msg("selected result based on user-specified tags, confidence: high")
-			return filtered[0]
+			tagConfidence := CalculateTagMatchConfidence(&filtered[0], tagFilters)
+			confidence = matchQuality * tagConfidence
+			log.Info().Msgf("selected result based on user-specified tags, confidence: %.2f (match: %.2f, tags: %.2f)",
+				confidence, matchQuality, tagConfidence)
+			return filtered[0], confidence
 		}
 		if len(filtered) > 0 {
 			log.Info().Msgf("tag filtering reduced candidates from %d to %d", len(results), len(filtered))
@@ -55,20 +71,33 @@ func SelectBestResult(
 	}
 
 	// Priority 2: Prefer main game over variants (exclude demos, betas, prototypes, hacks)
-	mainGames := FilterOutVariants(results)
-	if len(mainGames) == 1 {
-		log.Info().Msg("selected main game (filtered out variants), confidence: medium-high")
-		return mainGames[0]
-	}
-	if len(mainGames) > 0 {
-		results = mainGames
+	// But only if user didn't explicitly request a variant via tags
+	if !hasVariantTagFilter(tagFilters) {
+		mainGames := FilterOutVariants(results)
+		if len(mainGames) == 1 {
+			tagConfidence := CalculateTagMatchConfidence(&mainGames[0], tagFilters)
+			confidence = matchQuality * tagConfidence
+			log.Info().Msgf("selected main game (filtered out variants), confidence: %.2f (match: %.2f, tags: %.2f)",
+				confidence, matchQuality, tagConfidence)
+			return mainGames[0], confidence
+		}
+		if len(mainGames) > 0 {
+			results = mainGames
+		} else if len(results) > 0 {
+			// All results are variants - reject them
+			log.Info().Msgf("all %d results are variants (demo/beta/proto), excluding all", len(results))
+			return database.SearchResultWithCursor{}, 0.0
+		}
 	}
 
 	// Priority 3: Prefer original releases (exclude re-releases, reboxed)
 	originals := FilterOutRereleases(results)
 	if len(originals) == 1 {
-		log.Info().Msg("selected original release (filtered out re-releases), confidence: medium-high")
-		return originals[0]
+		tagConfidence := CalculateTagMatchConfidence(&originals[0], tagFilters)
+		confidence = matchQuality * tagConfidence
+		log.Info().Msgf("selected original release, confidence: %.2f (match: %.2f, tags: %.2f)",
+			confidence, matchQuality, tagConfidence)
+		return originals[0], confidence
 	}
 	if len(originals) > 0 {
 		results = originals
@@ -77,8 +106,11 @@ func SelectBestResult(
 	// Priority 4: Prefer configured regions
 	preferredRegions := FilterByPreferredRegions(results, cfg.DefaultRegions())
 	if len(preferredRegions) == 1 {
-		log.Info().Msg("selected preferred region, confidence: medium")
-		return preferredRegions[0]
+		tagConfidence := CalculateTagMatchConfidence(&preferredRegions[0], tagFilters)
+		confidence = matchQuality * tagConfidence
+		log.Info().Msgf("selected preferred region, confidence: %.2f (match: %.2f, tags: %.2f)",
+			confidence, matchQuality, tagConfidence)
+		return preferredRegions[0], confidence
 	}
 	if len(preferredRegions) > 0 {
 		results = preferredRegions
@@ -87,21 +119,24 @@ func SelectBestResult(
 	// Priority 5: Prefer configured languages
 	preferredLanguages := FilterByPreferredLanguages(results, cfg.DefaultLangs())
 	if len(preferredLanguages) == 1 {
-		log.Info().Msg("selected preferred language, confidence: medium")
-		return preferredLanguages[0]
+		tagConfidence := CalculateTagMatchConfidence(&preferredLanguages[0], tagFilters)
+		confidence = matchQuality * tagConfidence
+		log.Info().Msgf("selected preferred language, confidence: %.2f (match: %.2f, tags: %.2f)",
+			confidence, matchQuality, tagConfidence)
+		return preferredLanguages[0], confidence
 	}
 	if len(preferredLanguages) > 0 {
 		results = preferredLanguages
 	}
 
 	// Priority 6: If still multiple, pick the first alphabetically by filename
-	confidence := "low"
-	if len(results) <= 3 {
-		confidence = "medium-low"
-	}
-	log.Info().Msgf("multiple results remain (%d), selecting first alphabetically by filename, confidence: %s",
-		len(results), confidence)
-	return selectAlphabeticallyByFilename(results)
+	selected := selectAlphabeticallyByFilename(results)
+	tagConfidence := CalculateTagMatchConfidence(&selected, tagFilters)
+	confidence = matchQuality * tagConfidence
+	log.Info().Msgf(
+		"multiple results (%d), selecting alphabetically, confidence: %.2f (match: %.2f, tags: %.2f)",
+		len(results), confidence, matchQuality, tagConfidence)
+	return selected, confidence
 }
 
 // FilterByTags filters results that match all specified tags
@@ -205,6 +240,20 @@ func IsVariant(result *database.SearchResultWithCursor) bool {
 		case string(tags.TagTypeDump):
 			// Exclude bad dumps
 			if tag.Tag == string(tags.TagDumpBad) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasVariantTagFilter checks if the user explicitly requested a variant via tag filters
+func hasVariantTagFilter(tagFilters []database.TagFilter) bool {
+	for _, filter := range tagFilters {
+		// Only consider AND filters (not NOT filters)
+		if filter.Operator != database.TagOperatorNOT {
+			if filter.Type == string(tags.TagTypeUnfinished) ||
+				filter.Type == string(tags.TagTypeUnlicensed) {
 				return true
 			}
 		}
@@ -357,4 +406,95 @@ func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) d
 		}
 	}
 	return best
+}
+
+// CalculateTagMatchConfidence calculates a confidence score based on how well
+// a result's tags match the requested tag filters.
+// Returns a value between 0.0 and 1.0, where:
+// - 1.0 = perfect match (all tags match or no tags required)
+// - 0.7-0.9 = good match (most tags match)
+// - 0.5-0.7 = partial match (some tags match or no tags on result)
+// - <0.5 = poor match (few tags match or conflicts exist)
+func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFilters []database.TagFilter) float64 {
+	// No tag requirements = perfect match
+	if len(tagFilters) == 0 {
+		return 1.0
+	}
+
+	// Create a map of result's tags for fast lookup
+	resultTags := make(map[string]string) // type -> value
+	for _, tag := range result.Tags {
+		resultTags[tag.Type] = tag.Tag
+	}
+
+	// If result has no tags at all, give moderate confidence (0.65)
+	// This handles database entries with incomplete tag information
+	if len(resultTags) == 0 {
+		return 0.65
+	}
+
+	matched := 0
+	conflicts := 0
+
+	// Group filters by operator
+	andFilters, notFilters, orFilters := database.GroupTagFiltersByOperator(tagFilters)
+
+	// Check AND filters
+	for _, requiredTag := range andFilters {
+		if value, exists := resultTags[requiredTag.Type]; exists && value == requiredTag.Value {
+			matched++
+		} else if exists {
+			// Has a different value for this tag type (e.g., wants USA, has Japan)
+			conflicts++
+		}
+	}
+
+	// Check NOT filters
+	for _, excludedTag := range notFilters {
+		if value, exists := resultTags[excludedTag.Type]; exists && value == excludedTag.Value {
+			// Has a tag that should be excluded - major penalty
+			conflicts += 2
+		} else {
+			// Correctly doesn't have the excluded tag
+			matched++
+		}
+	}
+
+	// Check OR filters (need at least one match)
+	if len(orFilters) > 0 {
+		hasAtLeastOne := false
+		for _, orTag := range orFilters {
+			if value, exists := resultTags[orTag.Type]; exists && value == orTag.Value {
+				hasAtLeastOne = true
+				matched++
+				break
+			}
+		}
+		if !hasAtLeastOne {
+			conflicts++
+		}
+	}
+
+	totalFilters := len(andFilters) + len(notFilters)
+	if len(orFilters) > 0 {
+		totalFilters++ // OR group counts as one requirement
+	}
+
+	if totalFilters == 0 {
+		return 1.0
+	}
+
+	// Calculate confidence: matched ratio minus conflict penalty
+	matchRatio := float64(matched) / float64(totalFilters)
+	conflictPenalty := float64(conflicts) * 0.2
+
+	confidence := matchRatio - conflictPenalty
+	if confidence < 0.0 {
+		confidence = 0.0
+	}
+	if confidence > 1.0 {
+		confidence = 1.0
+	}
+
+	return confidence
 }

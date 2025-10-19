@@ -168,7 +168,10 @@ func TestCmdTitle(t *testing.T) {
 				if !tt.shouldError {
 					mockPlatform.AssertExpectations(t)
 				}
-				assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+				assert.Equal(t, platforms.CmdResult{
+					MediaChanged: true,
+					Strategy:     "strategy_exact_match",
+				}, result)
 			}
 		})
 	}
@@ -319,7 +322,10 @@ func TestCmdTitleWithTags(t *testing.T) {
 	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
-	assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+	assert.Equal(t, platforms.CmdResult{
+		MediaChanged: true,
+		Strategy:     "strategy_exact_match",
+	}, result)
 }
 
 func TestCmdTitleWithSubtitleFallback(t *testing.T) {
@@ -333,6 +339,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 		fallbackResults    []database.SearchResultWithCursor
 		expectFallback     bool
 		shouldError        bool
+		expectedStrategy   string
 	}{
 		{
 			name:               "subtitle fallback triggers when no initial results",
@@ -344,8 +351,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			fallbackResults: []database.SearchResultWithCursor{
 				{SystemID: "snes", Name: "Zelda: Ocarina of Time", Path: "/test/zelda-ocarina.smc"},
 			},
-			expectFallback: true,
-			shouldError:    false,
+			expectFallback:   true,
+			shouldError:      false,
+			expectedStrategy: "strategy_secondary_title_exact",
 		},
 		{
 			name:               "subtitle fallback with colon separator",
@@ -357,8 +365,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			fallbackResults: []database.SearchResultWithCursor{
 				{SystemID: "genesis", Name: "Sonic the Hedgehog", Path: "/test/sonic.bin"},
 			},
-			expectFallback: true,
-			shouldError:    false,
+			expectFallback:   true,
+			shouldError:      false,
+			expectedStrategy: "strategy_secondary_title_exact",
 		},
 		{
 			name:               "subtitle fallback with dash separator",
@@ -370,8 +379,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			fallbackResults: []database.SearchResultWithCursor{
 				{SystemID: "ps1", Name: "Final Fantasy VII Remake", Path: "/test/ff7remake.bin"},
 			},
-			expectFallback: true,
-			shouldError:    false,
+			expectFallback:   true,
+			shouldError:      false,
+			expectedStrategy: "strategy_secondary_title_exact",
 		},
 		{
 			name:              "no fallback when initial search succeeds",
@@ -381,8 +391,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			initialResults: []database.SearchResultWithCursor{
 				{SystemID: "n64", Name: "Super Mario 64", Path: "/test/mario64.z64"},
 			},
-			expectFallback: false,
-			shouldError:    false,
+			expectFallback:   false,
+			shouldError:      false,
+			expectedStrategy: "strategy_exact_match",
 		},
 		{
 			name:               "error when both searches fail",
@@ -431,7 +442,13 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				Return(tt.initialResults, nil).Once()
 
 			if len(tt.initialResults) == 0 && tt.expectFallback {
-				// Strategy 2: Secondary title-only search (for titles with subtitles)
+				// Strategy 2: Exact match without tags (same slug, different tag filter)
+				// This is the new strategy that tries without tag filters
+				mockMediaDB.On("SearchMediaBySlug",
+					context.Background(), tt.systemID, tt.initialSearchSlug, []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil).Once()
+
+				// Strategy 3: Secondary title-only search (for titles with subtitles)
 				mockMediaDB.On("SearchMediaBySlug",
 					context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
 					Return(tt.fallbackResults, nil).Once()
@@ -469,7 +486,10 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+				assert.Equal(t, platforms.CmdResult{
+					MediaChanged: true,
+					Strategy:     tt.expectedStrategy,
+				}, result)
 				mockPlatform.AssertExpectations(t)
 			}
 
@@ -608,7 +628,10 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			result, err := cmdTitle(mockPlatform, env)
 
 			require.NoError(t, err)
-			assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+			assert.Equal(t, platforms.CmdResult{
+				MediaChanged: true,
+				Strategy:     "strategy_jarowinkler_damerau",
+			}, result)
 			mockMediaDB.AssertExpectations(t)
 			mockPlatform.AssertExpectations(t)
 		})
@@ -1146,7 +1169,8 @@ func TestSelectBestResult(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockConfig := &config.Instance{}
-			result := titleshelper.SelectBestResult(tt.results, tt.tagFilters, mockConfig)
+			const matchQuality = 1.0 // Exact match for test purposes
+			result, _ := titleshelper.SelectBestResult(tt.results, tt.tagFilters, mockConfig, matchQuality)
 			assert.Equal(t, tt.expectedName, result.Name, tt.description)
 		})
 	}
@@ -1345,7 +1369,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		// Mock cache hit - should return cached values
 		mockMediaDB.On("GetCachedSlugResolution",
 			mock.Anything, systemID, slug, []database.TagFilter(nil)).
-			Return(int64(123), "/cached/path.smc", true)
+			Return(int64(123), "strategy_exact_match", true)
 
 		// When cache hits, GetMediaByDBID is called to fetch full media details
 		mockMediaDB.On("GetMediaByDBID", mock.Anything, int64(123)).
@@ -1358,7 +1382,10 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		assert.Equal(t, platforms.CmdResult{
+			MediaChanged: true,
+			Strategy:     "strategy_exact_match",
+		}, result)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 
@@ -1420,7 +1447,10 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		assert.Equal(t, platforms.CmdResult{
+			MediaChanged: true,
+			Strategy:     "strategy_exact_match",
+		}, result)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 	})
@@ -1764,7 +1794,10 @@ func TestCmdTitlePerformance(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{MediaChanged: true}, result)
+		assert.Equal(t, platforms.CmdResult{
+			MediaChanged: true,
+			Strategy:     "strategy_exact_match",
+		}, result)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 	})

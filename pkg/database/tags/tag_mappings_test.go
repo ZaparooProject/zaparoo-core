@@ -35,114 +35,114 @@ func TestMapFilenameTagToCanonical(t *testing.T) {
 			name:  "Region USA maps to region and language",
 			input: "usa",
 			expected: []CanonicalTag{
-				{TagTypeRegion, TagRegionUS},
-				{TagTypeLang, TagLangEN},
+				{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceUnknown},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Region Europe",
 			input: "europe",
 			expected: []CanonicalTag{
-				{TagTypeRegion, TagRegionEU},
+				{Type: TagTypeRegion, Value: TagRegionEU, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Region Japan with language",
 			input: "japan",
 			expected: []CanonicalTag{
-				{TagTypeRegion, TagRegionJP},
-				{TagTypeLang, TagLangJA},
+				{Type: TagTypeRegion, Value: TagRegionJP, Source: TagSourceUnknown},
+				{Type: TagTypeLang, Value: TagLangJA, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Language code",
 			input: "en",
 			expected: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Beta version",
 			input: "beta",
 			expected: []CanonicalTag{
-				{TagTypeUnfinished, TagUnfinishedBeta},
+				{Type: TagTypeUnfinished, Value: TagUnfinishedBeta, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Proto version",
 			input: "proto",
 			expected: []CanonicalTag{
-				{TagTypeUnfinished, TagUnfinishedProto},
+				{Type: TagTypeUnfinished, Value: TagUnfinishedProto, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Alpha version",
 			input: "alpha",
 			expected: []CanonicalTag{
-				{TagTypeUnfinished, TagUnfinishedAlpha},
+				{Type: TagTypeUnfinished, Value: TagUnfinishedAlpha, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Revision",
 			input: "rev-a",
 			expected: []CanonicalTag{
-				{TagTypeRev, TagRevA},
+				{Type: TagTypeRev, Value: TagRevA, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Version number",
 			input: "v1",
 			expected: []CanonicalTag{
-				{TagTypeRev, TagRev1},
+				{Type: TagTypeRev, Value: TagRev1, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Wildcard year (specific year unknown within 1980s)",
 			input: "198x",
 			expected: []CanonicalTag{
-				{TagTypeYear, TagYear198X},
+				{Type: TagTypeYear, Value: TagYear198X, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "NTSC video format",
 			input: "ntsc",
 			expected: []CanonicalTag{
-				{TagTypeVideo, TagVideoNTSC},
+				{Type: TagTypeVideo, Value: TagVideoNTSC, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "PAL video format",
 			input: "pal",
 			expected: []CanonicalTag{
-				{TagTypeVideo, TagVideoPAL},
+				{Type: TagTypeVideo, Value: TagVideoPAL, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Public Domain copyright",
 			input: "pd",
 			expected: []CanonicalTag{
-				{TagTypeCopyright, TagCopyrightPD},
+				{Type: TagTypeCopyright, Value: TagCopyrightPD, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Cracked dump",
 			input: "cr",
 			expected: []CanonicalTag{
-				{TagTypeDump, TagDumpCracked},
+				{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Verified dump",
 			input: "!",
 			expected: []CanonicalTag{
-				{TagTypeDump, TagDumpVerified},
+				{Type: TagTypeDump, Value: TagDumpVerified, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "TOSEC system Amiga 500",
 			input: "a500",
 			expected: []CanonicalTag{
-				{TagTypeCompatibility, TagCompatibilityAmigaA500},
+				{Type: TagTypeCompatibility, Value: TagCompatibilityAmigaA500, Source: TagSourceUnknown},
 			},
 		},
 		{
@@ -154,14 +154,14 @@ func TestMapFilenameTagToCanonical(t *testing.T) {
 			name:  "Demo",
 			input: "demo",
 			expected: []CanonicalTag{
-				{TagTypeUnfinished, TagUnfinishedDemo},
+				{Type: TagTypeUnfinished, Value: TagUnfinishedDemo, Source: TagSourceUnknown},
 			},
 		},
 		{
 			name:  "Demo kiosk",
 			input: "demo-kiosk",
 			expected: []CanonicalTag{
-				{TagTypeUnfinished, TagUnfinishedDemoKiosk},
+				{Type: TagTypeUnfinished, Value: TagUnfinishedDemoKiosk, Source: TagSourceUnknown},
 			},
 		},
 	}

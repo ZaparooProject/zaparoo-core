@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/hbollon/go-edlib"
 	"github.com/rs/zerolog/log"
@@ -90,35 +91,39 @@ func FindFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 // GenerateTokenSignature creates a normalized, sorted token signature for word-order independent matching.
 // Uses the same tokenization pipeline as slugification to ensure consistency.
 //
+// IMPORTANT: Requires input with word boundaries (e.g., "Super Mario World"), not slugs.
+// Slugs have already lost word boundary information and will produce incorrect signatures.
+//
 // Example:
 //
 //	GenerateTokenSignature("Super Mario World") → "mario_super_world"
 //	GenerateTokenSignature("Mario World Super") → "mario_super_world"
-func GenerateTokenSignature(slug string) string {
-	// Use the same token splitting as slugs to ensure consistency
-	tokens := slugs.NormalizeToWords(slug)
+func GenerateTokenSignature(gameName string) string {
+	// Slugify to get the normalized tokens (same pipeline as database indexing)
+	result := slugs.SlugifyWithTokens(gameName)
 
-	// Sort alphabetically for order-independent matching
-	sort.Strings(tokens)
+	// Sort tokens alphabetically for order-independent matching
+	sort.Strings(result.Tokens)
 
 	// Join with underscore delimiter
-	return strings.Join(tokens, "_")
+	return strings.Join(result.Tokens, "_")
 }
 
-// FindTokenSignatureMatches finds candidates where the token signature matches or starts with the query signature.
-// This enables word-order independent matching: "mario super" matches "Super Mario World".
+// FindTokenSignatureMatches finds candidates where the token signature exactly matches the query signature.
+// This enables word-order independent matching: "Crystal Space Quest" matches "Quest Space Crystal".
 //
-// candidateSlugs should be the raw slugs (not token signatures) - signatures are computed on-the-fly.
-func FindTokenSignatureMatches(querySlug string, candidateSlugs []string) []string {
-	querySignature := GenerateTokenSignature(querySlug)
+// The query and candidates must have word boundaries (e.g., "Super Mario World"), not slugs.
+// Returns the slugs of matched titles.
+func FindTokenSignatureMatches(queryName string, candidates []database.MediaTitle) []string {
+	querySignature := GenerateTokenSignature(queryName)
 
 	var matches []string
-	for _, candidateSlug := range candidateSlugs {
-		candidateSignature := GenerateTokenSignature(candidateSlug)
+	for _, candidate := range candidates {
+		candidateSignature := GenerateTokenSignature(candidate.Name)
 
-		// Prefix match allows partial queries: "mario world" matches "mario_super_world"
-		if strings.HasPrefix(candidateSignature, querySignature) {
-			matches = append(matches, candidateSlug)
+		// Exact match ensures all tokens match (order-independent)
+		if candidateSignature == querySignature {
+			matches = append(matches, candidate.Slug)
 		}
 	}
 

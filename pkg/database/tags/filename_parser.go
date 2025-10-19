@@ -186,9 +186,21 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	if indices := reDisc.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		// indices[0:2] = full match, indices[2:4] = first capture, indices[4:6] = second capture
 		tags = append(tags,
-			CanonicalTag{TagTypeMedia, TagValue("disc")},
-			CanonicalTag{TagTypeDisc, TagValue(remaining[indices[2]:indices[3]])},
-			CanonicalTag{TagTypeDiscTotal, TagValue(remaining[indices[4]:indices[5]])},
+			CanonicalTag{
+				Type:   TagTypeMedia,
+				Value:  TagValue("disc"),
+				Source: TagSourceBracketed,
+			},
+			CanonicalTag{
+				Type:   TagTypeDisc,
+				Value:  TagValue(remaining[indices[2]:indices[3]]),
+				Source: TagSourceBracketed,
+			},
+			CanonicalTag{
+				Type:   TagTypeDiscTotal,
+				Value:  TagValue(remaining[indices[4]:indices[5]]),
+				Source: TagSourceBracketed,
+			},
 		)
 		// Remove matched pattern
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
@@ -199,7 +211,11 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		revValue := strings.ToLower(remaining[indices[2]:indices[3]])
 		// Normalize periods to dashes (e.g., "1.2" → "1-2")
 		revValue = strings.ReplaceAll(revValue, ".", "-")
-		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(revValue)})
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeRev,
+			Value:  TagValue(revValue),
+			Source: TagSourceBracketed,
+		})
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
@@ -208,7 +224,11 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		versionValue := remaining[indices[2]:indices[3]]
 		// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
 		versionValue = strings.ReplaceAll(versionValue, ".", "-")
-		tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionValue)})
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeRev,
+			Value:  TagValue(versionValue),
+			Source: TagSourceBracketed,
+		})
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
@@ -216,7 +236,11 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	// Matches years 1970-2099 in parentheses
 	if indices := reYear.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		yearValue := remaining[indices[2]:indices[3]]
-		tags = append(tags, CanonicalTag{TagTypeYear, TagValue(yearValue)})
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeYear,
+			Value:  TagValue(yearValue),
+			Source: TagSourceBracketed,
+		})
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
@@ -255,27 +279,43 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			// Add translation tag based on +/- prefix
 			// T+ or T (no prefix) = current/generic translation (use base tag)
 			// T- = older/outdated translation (use :old hierarchical tag)
+			// Inferred from plain text (bracketless)
 			if plusMinus == "-" {
-				tags = append(tags, CanonicalTag{TagTypeUnlicensed, TagUnlicensedTranslationOld})
+				tags = append(tags, CanonicalTag{
+					Type:   TagTypeUnlicensed,
+					Value:  TagUnlicensedTranslationOld,
+					Source: TagSourceInferred,
+				})
 			} else {
 				// T+ and T both use the base translation tag
-				tags = append(tags, CanonicalTag{TagTypeUnlicensed, TagUnlicensedTranslation})
+				tags = append(tags, CanonicalTag{
+					Type:   TagTypeUnlicensed,
+					Value:  TagUnlicensedTranslation,
+					Source: TagSourceInferred,
+				})
 			}
 
 			// Add language tag (map to canonical language codes)
+			// Inferred from bracketless translation
 			langTags := mapFilenameTagToCanonical(langCode)
 			for _, lt := range langTags {
 				if lt.Type == TagTypeLang {
+					lt.Source = TagSourceInferred
 					tags = append(tags, lt)
 					break
 				}
 			}
 
 			// If version number present, add as revision tag
+			// Inferred from bracketless translation
 			if versionNum != "" {
 				// Normalize periods to dashes (e.g., "1.2" → "1-2")
 				versionNum = strings.ReplaceAll(versionNum, ".", "-")
-				tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionNum)})
+				tags = append(tags, CanonicalTag{
+					Type:   TagTypeRev,
+					Value:  TagValue(versionNum),
+					Source: TagSourceInferred,
+				})
 			}
 
 			// Replace the matched pattern with a space to preserve word boundaries
@@ -298,7 +338,12 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			versionValue := remaining[indices[2]:indices[3]]
 			// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
 			versionValue = strings.ReplaceAll(versionValue, ".", "-")
-			tags = append(tags, CanonicalTag{TagTypeRev, TagValue(versionValue)})
+			// Inferred from plain text (bracketless)
+			tags = append(tags, CanonicalTag{
+				Type:   TagTypeRev,
+				Value:  TagValue(versionValue),
+				Source: TagSourceInferred,
+			})
 			remaining = remaining[:indices[0]] + remaining[indices[1]:]
 		}
 	}
@@ -319,10 +364,19 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 			"ヴァージョン":   true,
 		}
 
+		// Inferred from plain text (not bracketed)
 		if versionWords[editionWord] {
-			tags = append(tags, CanonicalTag{TagTypeEdition, TagEditionVersion})
+			tags = append(tags, CanonicalTag{
+				Type:   TagTypeEdition,
+				Value:  TagEditionVersion,
+				Source: TagSourceInferred,
+			})
 		} else {
-			tags = append(tags, CanonicalTag{TagTypeEdition, TagEditionEdition})
+			tags = append(tags, CanonicalTag{
+				Type:   TagTypeEdition,
+				Value:  TagEditionEdition,
+				Source: TagSourceInferred,
+			})
 		}
 
 		// Don't remove the word from remaining - it's part of the title and will be
@@ -359,6 +413,7 @@ func parseMultiLanguageTag(tag string) []CanonicalTag {
 			mapped := mapFilenameTagToCanonical(normalized)
 			for _, ct := range mapped {
 				if ct.Type == TagTypeLang {
+					ct.Source = TagSourceBracketed
 					langs = append(langs, ct)
 				}
 			}
@@ -408,6 +463,7 @@ func parseMultiRegionTag(tag string) []CanonicalTag {
 		mapped := mapFilenameTagToCanonical(normalized)
 		for _, ct := range mapped {
 			if ct.Type == TagTypeRegion || ct.Type == TagTypeLang {
+				ct.Source = TagSourceBracketed
 				regions = append(regions, ct)
 			}
 		}
@@ -463,9 +519,9 @@ func mapBracketTag(tag string) []CanonicalTag {
 	// Special handling for dump markers with special characters (must come BEFORE normalization)
 	switch tag {
 	case "!":
-		return []CanonicalTag{{TagTypeDump, TagDumpVerified}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpVerified, Source: TagSourceBracketed}}
 	case "!p":
-		return []CanonicalTag{{TagTypeDump, TagDumpPending}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpPending, Source: TagSourceBracketed}}
 	}
 
 	// Normalize the tag for regular processing
@@ -475,30 +531,31 @@ func mapBracketTag(tag string) []CanonicalTag {
 	switch normalized {
 	case "tr":
 		// In brackets, "tr" is always "translated" (dump info)
-		return []CanonicalTag{{TagTypeDump, TagDumpTranslated}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpTranslated, Source: TagSourceBracketed}}
 	case "b":
-		return []CanonicalTag{{TagTypeDump, TagDumpBad}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpBad, Source: TagSourceBracketed}}
 	case "h":
-		return []CanonicalTag{{TagTypeDump, TagDumpHacked}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed}}
 	case "f":
-		return []CanonicalTag{{TagTypeDump, TagDumpFixed}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpFixed, Source: TagSourceBracketed}}
 	case "cr":
-		return []CanonicalTag{{TagTypeDump, TagDumpCracked}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpCracked, Source: TagSourceBracketed}}
 	case "t":
-		return []CanonicalTag{{TagTypeDump, TagDumpTrained}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagDumpTrained, Source: TagSourceBracketed}}
 	default:
 		// Try default mapping, filtering for dump-related tags only
 		mapped := mapFilenameTagToCanonical(normalized)
 		var dumpTags []CanonicalTag
 		for _, ct := range mapped {
 			if ct.Type == TagTypeDump || ct.Type == TagTypeUnlicensed {
+				ct.Source = TagSourceBracketed
 				dumpTags = append(dumpTags, ct)
 			}
 		}
 		if len(dumpTags) > 0 {
 			return dumpTags
 		}
-		return []CanonicalTag{{TagTypeDump, TagValue(normalized)}}
+		return []CanonicalTag{{Type: TagTypeDump, Value: TagValue(normalized), Source: TagSourceBracketed}}
 	}
 }
 
@@ -529,69 +586,76 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		// If we have German language, "Ch" is Switzerland (region)
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeLang && pt.Value == TagLangDE {
-				return []CanonicalTag{{TagTypeRegion, TagRegionCH}}
+				return []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionCH, Source: TagSourceBracketed}}
 			}
 		}
 		// If no region yet and early in sequence, prefer region
 		if !hasRegion && ctx.CurrentIndex < 2 {
-			return []CanonicalTag{{TagTypeRegion, TagRegionCH}}
+			return []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionCH, Source: TagSourceBracketed}}
 		}
 		// Otherwise, Chinese language
-		return []CanonicalTag{{TagTypeLang, TagLangZH}}
+		return []CanonicalTag{{Type: TagTypeLang, Value: TagLangZH, Source: TagSourceBracketed}}
 
 	case "tr":
 		// In parentheses, "tr" is Turkey (region) or Turkish (language)
 		// Never "translated" (that's only in brackets)
 		if !hasRegion && ctx.CurrentIndex < 2 {
-			return []CanonicalTag{{TagTypeRegion, TagRegionTR}}
+			return []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionTR, Source: TagSourceBracketed}}
 		}
 		if !hasLanguage {
-			return []CanonicalTag{{TagTypeLang, TagLangTR}}
+			return []CanonicalTag{{Type: TagTypeLang, Value: TagLangTR, Source: TagSourceBracketed}}
 		}
 		// Default to region if ambiguous
-		return []CanonicalTag{{TagTypeRegion, TagRegionTR}}
+		return []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionTR, Source: TagSourceBracketed}}
 
 	case "bs":
 		// "bs" in parentheses is almost always Bosnian language
 		// Broadcast Satellite would be "satellaview" or in special hardware context
-		return []CanonicalTag{{TagTypeLang, TagLangBS}}
+		return []CanonicalTag{{Type: TagTypeLang, Value: TagLangBS, Source: TagSourceBracketed}}
 
 	case "hi":
 		// In brackets, "hi" is "hacked intro"
 		if ctx.CurrentBracketType == BracketTypeSquare {
 			// Note: "hacked:intro" doesn't have a constant yet, keeping as raw string
-			return []CanonicalTag{{TagTypeDump, TagDumpHacked}, {TagTypeDump, "hacked:intro"}}
+			return []CanonicalTag{
+				{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed},
+				{Type: TagTypeDump, Value: "hacked:intro", Source: TagSourceBracketed},
+			}
 		}
 		// In parentheses, "hi" is Hindi language
-		return []CanonicalTag{{TagTypeLang, TagLangHI}}
+		return []CanonicalTag{{Type: TagTypeLang, Value: TagLangHI, Source: TagSourceBracketed}}
 
 	case "st":
 		// "st" could be Sufami Turbo (SNES peripheral cartridge adapter) but that's rare
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, TagAddonPeripheralSufami}}
+				return []CanonicalTag{{Type: TagTypeAddon, Value: TagAddonPeripheralSufami, Source: TagSourceBracketed}}
 			}
 		}
 		// Otherwise, fallback to map (might be unknown)
-		return mapFilenameTagToCanonical(tag)
+		return withSource(mapFilenameTagToCanonical(tag), TagSourceBracketed)
 
 	case "np":
 		// "np" could be Nintendo Power (SNES kiosk service) but uncommon
 		// Context: if SNES-related or hardware tags present
 		for _, pt := range ctx.ProcessedTags {
 			if pt.Type == TagTypeAddon || pt.Type == TagTypeCompatibility {
-				return []CanonicalTag{{TagTypeAddon, TagAddonOnlineNintendopower}}
+				return []CanonicalTag{{
+					Type:   TagTypeAddon,
+					Value:  TagAddonOnlineNintendopower,
+					Source: TagSourceBracketed,
+				}}
 			}
 		}
 		// Otherwise, fallback to map
-		return mapFilenameTagToCanonical(tag)
+		return withSource(mapFilenameTagToCanonical(tag), TagSourceBracketed)
 	}
 
 	// Try default mapping
 	mapped := mapFilenameTagToCanonical(tag)
 	if len(mapped) == 0 {
-		return []CanonicalTag{{TagTypeUnknown, TagValue(tag)}}
+		return []CanonicalTag{{Type: TagTypeUnknown, Value: TagValue(tag), Source: TagSourceBracketed}}
 	}
 
 	// If multiple mappings, check if they're complementary (like region+language)
@@ -615,7 +679,15 @@ func mapParenthesisTag(tag string, ctx *ParseContext) []CanonicalTag {
 		}
 	}
 
-	return mapped
+	return withSource(mapped, TagSourceBracketed)
+}
+
+// withSource sets the Source field on all tags in a slice and returns the modified slice
+func withSource(tags []CanonicalTag, source TagSource) []CanonicalTag {
+	for i := range tags {
+		tags[i].Source = source
+	}
+	return tags
 }
 
 // selectBestMapping chooses the most appropriate canonical tag when multiple options exist.
@@ -735,15 +807,23 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
 
-	// Step 1: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
+	// Step 1: Normalize filename separators (underscores and dashes used as space substitutes)
+	// Heuristic: If filename has no spaces AND contains 2+ separators, treat them as space substitutes
+	// This handles: "super-mario-bros.sfc", "legend_of_zelda.sfc", "mega-man-x.sfc"
+	// Preserves: "Spider-Man.sfc" (only 1 dash), "F-Zero.sfc" (only 1 dash)
+	// IMPORTANT: Do this BEFORE leading number stripping so "01_super_mario" → "01 super mario" → "super mario"
+	sepCount := strings.Count(title, "_") + strings.Count(title, "-")
+	if !strings.Contains(title, " ") && sepCount >= 2 {
+		title = strings.ReplaceAll(title, "_", " ")
+		title = strings.ReplaceAll(title, "-", " ")
+	}
+
+	// Step 2: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
 	// Only done when contextual detection confirms list-based numbering
 	if stripLeadingNumbers {
 		title = reLeadingNum.ReplaceAllString(title, "")
 		title = strings.TrimSpace(title)
 	}
-
-	// Step 2: Convert underscores to spaces (common filename artifact)
-	title = strings.ReplaceAll(title, "_", " ")
 
 	// Step 3: Remove all bracket content using shared function from slugs package
 	// This replaces the previous regex-based extraction with a more robust implementation

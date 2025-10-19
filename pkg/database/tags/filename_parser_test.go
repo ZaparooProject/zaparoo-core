@@ -150,9 +150,9 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "disc X of Y",
 			filename: "Final Fantasy VII (Disc 1 of 3)(USA).bin",
 			wantTags: []CanonicalTag{
-				{TagTypeMedia, TagMediaDisc},
-				{TagTypeDisc, TagDisc1},
-				{TagTypeDiscTotal, TagDiscTotal3},
+				{Type: TagTypeMedia, Value: TagMediaDisc, Source: TagSourceBracketed},
+				{Type: TagTypeDisc, Value: TagDisc1, Source: TagSourceBracketed},
+				{Type: TagTypeDiscTotal, Value: TagDiscTotal3, Source: TagSourceBracketed},
 			},
 			wantRemaining: "Final Fantasy VII (USA).bin",
 		},
@@ -160,9 +160,9 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "disc X of Y case insensitive",
 			filename: "Game (DISC 2 OF 2)(Europe).iso",
 			wantTags: []CanonicalTag{
-				{TagTypeMedia, TagMediaDisc},
-				{TagTypeDisc, TagDisc2},
-				{TagTypeDiscTotal, TagDiscTotal2},
+				{Type: TagTypeMedia, Value: TagMediaDisc, Source: TagSourceBracketed},
+				{Type: TagTypeDisc, Value: TagDisc2, Source: TagSourceBracketed},
+				{Type: TagTypeDiscTotal, Value: TagDiscTotal2, Source: TagSourceBracketed},
 			},
 			wantRemaining: "Game (Europe).iso",
 		},
@@ -170,7 +170,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "revision tag",
 			filename: "Sonic (Rev 1)(USA).md",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, TagRev1},
+				{Type: TagTypeRev, Value: TagRev1, Source: TagSourceBracketed},
 			},
 			wantRemaining: "Sonic (USA).md",
 		},
@@ -178,7 +178,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "revision tag with letter",
 			filename: "Game (Rev A)(Japan).sfc",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, TagRevA},
+				{Type: TagTypeRev, Value: TagRevA, Source: TagSourceBracketed},
 			},
 			wantRemaining: "Game (Japan).sfc",
 		},
@@ -186,7 +186,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "version tag",
 			filename: "Mario (v1.2)(USA).n64",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1-2"},
+				{Type: TagTypeRev, Value: "1-2", Source: TagSourceBracketed},
 			},
 			wantRemaining: "Mario (USA).n64",
 		},
@@ -194,7 +194,7 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "version tag with multiple dots",
 			filename: "Game (v1.2.3)(Europe).gba",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1-2-3"},
+				{Type: TagTypeRev, Value: "1-2-3", Source: TagSourceBracketed},
 			},
 			wantRemaining: "Game (Europe).gba",
 		},
@@ -208,10 +208,10 @@ func TestExtractSpecialPatterns(t *testing.T) {
 			name:     "multiple special patterns",
 			filename: "FF7 (Disc 1 of 3)(v1.1)(USA).bin",
 			wantTags: []CanonicalTag{
-				{TagTypeMedia, TagMediaDisc},
-				{TagTypeDisc, TagDisc1},
-				{TagTypeDiscTotal, TagDiscTotal3},
-				{TagTypeRev, "1-1"},
+				{Type: TagTypeMedia, Value: TagMediaDisc, Source: TagSourceBracketed},
+				{Type: TagTypeDisc, Value: TagDisc1, Source: TagSourceBracketed},
+				{Type: TagTypeDiscTotal, Value: TagDiscTotal3, Source: TagSourceBracketed},
+				{Type: TagTypeRev, Value: "1-1", Source: TagSourceBracketed},
 			},
 			wantRemaining: "FF7 (USA).bin",
 		},
@@ -238,44 +238,44 @@ func TestParseMultiLanguageTag(t *testing.T) {
 			name: "comma-separated three languages (No-Intro)",
 			tag:  "En,Fr,De",
 			wantTags: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
-				{TagTypeLang, TagLangFR},
-				{TagTypeLang, TagLangDE},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "comma-separated two languages",
 			tag:  "En,Fr",
 			wantTags: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
-				{TagTypeLang, TagLangFR},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "plus-separated two languages (TOSEC)",
 			tag:  "En+Fr",
 			wantTags: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
-				{TagTypeLang, TagLangFR},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "plus-separated three languages",
 			tag:  "En+De+Es",
 			wantTags: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
-				{TagTypeLang, TagLangDE},
-				{TagTypeLang, TagLangES},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangES, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "plus-separated four languages",
 			tag:  "En+Fr+De+It",
 			wantTags: []CanonicalTag{
-				{TagTypeLang, TagLangEN},
-				{TagTypeLang, TagLangFR},
-				{TagTypeLang, TagLangDE},
-				{TagTypeLang, TagLangIT},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangIT, Source: TagSourceBracketed},
 			},
 		},
 		{
@@ -322,35 +322,35 @@ func TestDisambiguateTag_BracketContext(t *testing.T) {
 			name: "tr in brackets is translated",
 			tag:  "tr",
 			wantTags: []CanonicalTag{
-				{TagTypeDump, TagDumpTranslated},
+				{Type: TagTypeDump, Value: TagDumpTranslated, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "verified dump",
 			tag:  "!",
 			wantTags: []CanonicalTag{
-				{TagTypeDump, TagDumpVerified},
+				{Type: TagTypeDump, Value: TagDumpVerified, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "bad dump",
 			tag:  "b",
 			wantTags: []CanonicalTag{
-				{TagTypeDump, TagDumpBad},
+				{Type: TagTypeDump, Value: TagDumpBad, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "hacked",
 			tag:  "h",
 			wantTags: []CanonicalTag{
-				{TagTypeDump, TagDumpHacked},
+				{Type: TagTypeDump, Value: TagDumpHacked, Source: TagSourceBracketed},
 			},
 		},
 		{
 			name: "fixed",
 			tag:  "f",
 			wantTags: []CanonicalTag{
-				{TagTypeDump, TagDumpFixed},
+				{Type: TagTypeDump, Value: TagDumpFixed, Source: TagSourceBracketed},
 			},
 		},
 	}
@@ -379,44 +379,44 @@ func TestDisambiguateTag_ParenthesesContext(t *testing.T) {
 		{
 			name:          "ch with German lang is Switzerland",
 			tag:           "ch",
-			processedTags: []CanonicalTag{{TagTypeLang, TagLangDE}},
+			processedTags: []CanonicalTag{{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed}},
 			position:      1,
-			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionCH}},
+			wantTags:      []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionCH, Source: TagSourceBracketed}},
 		},
 		{
 			name:          "ch without context is Chinese",
 			tag:           "ch",
 			processedTags: []CanonicalTag{},
 			position:      2,
-			wantTags:      []CanonicalTag{{TagTypeLang, TagLangZH}},
+			wantTags:      []CanonicalTag{{Type: TagTypeLang, Value: TagLangZH, Source: TagSourceBracketed}},
 		},
 		{
 			name:          "ch early position is region",
 			tag:           "ch",
 			processedTags: []CanonicalTag{},
 			position:      0,
-			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionCH}},
+			wantTags:      []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionCH, Source: TagSourceBracketed}},
 		},
 		{
 			name:          "tr early is region",
 			tag:           "tr",
 			processedTags: []CanonicalTag{},
 			position:      0,
-			wantTags:      []CanonicalTag{{TagTypeRegion, TagRegionTR}},
+			wantTags:      []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionTR, Source: TagSourceBracketed}},
 		},
 		{
 			name:          "tr with region already is language",
 			tag:           "tr",
-			processedTags: []CanonicalTag{{TagTypeRegion, TagRegionUS}},
+			processedTags: []CanonicalTag{{Type: TagTypeRegion, Value: TagRegionUS, Source: TagSourceBracketed}},
 			position:      1,
-			wantTags:      []CanonicalTag{{TagTypeLang, TagLangTR}},
+			wantTags:      []CanonicalTag{{Type: TagTypeLang, Value: TagLangTR, Source: TagSourceBracketed}},
 		},
 		{
 			name:          "bs is always Bosnian language",
 			tag:           "bs",
 			processedTags: []CanonicalTag{},
 			position:      0,
-			wantTags:      []CanonicalTag{{TagTypeLang, TagLangBS}},
+			wantTags:      []CanonicalTag{{Type: TagTypeLang, Value: TagLangBS, Source: TagSourceBracketed}},
 		},
 	}
 
@@ -574,8 +574,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Eng newer translation",
 			filename: "Final Fantasy V T+Eng.smc",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangEN},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceInferred},
 			},
 			wantRemaining: "Final Fantasy V smc",
 		},
@@ -583,8 +583,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T-Ger older translation",
 			filename: "Secret of Mana T-Ger.sfc",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslationOld},
-				{TagTypeLang, TagLangDE},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslationOld, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceInferred},
 			},
 			wantRemaining: "Secret of Mana sfc",
 		},
@@ -592,8 +592,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "TFre generic translation",
 			filename: "Chrono Trigger TFre.smc",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangFR},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceInferred},
 			},
 			wantRemaining: "Chrono Trigger smc",
 		},
@@ -601,9 +601,9 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Eng v1.0 with version",
 			filename: "Fire Emblem T+Eng v1.0.gba",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "1-0"},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceInferred},
+				{Type: TagTypeRev, Value: "1-0", Source: TagSourceInferred},
 			},
 			wantRemaining: "Fire Emblem gba",
 		},
@@ -611,9 +611,9 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Spa v2.1.3 with multi-part version",
 			filename: "Mother 3 T+Spa v2.1.3.gba",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangES},
-				{TagTypeRev, "2-1-3"},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangES, Source: TagSourceInferred},
+				{Type: TagTypeRev, Value: "2-1-3", Source: TagSourceInferred},
 			},
 			wantRemaining: "Mother 3 gba",
 		},
@@ -621,8 +621,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Ita Italian translation",
 			filename: "Pokemon Ruby T+Ita.gba",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangIT},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangIT, Source: TagSourceInferred},
 			},
 			wantRemaining: "Pokemon Ruby gba",
 		},
@@ -630,9 +630,9 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Rus Russian translation",
 			filename: "Zelda T+Rus v1.5.nes",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangRU},
-				{TagTypeRev, "1-5"},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangRU, Source: TagSourceInferred},
+				{Type: TagTypeRev, Value: "1-5", Source: TagSourceInferred},
 			},
 			wantRemaining: "Zelda nes",
 		},
@@ -640,8 +640,8 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "T+Por Portuguese translation",
 			filename: "Final Fantasy VI T+Por.smc",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangPT},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangPT, Source: TagSourceInferred},
 			},
 			wantRemaining: "Final Fantasy VI smc",
 		},
@@ -649,9 +649,9 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			name:     "translation with other tags",
 			filename: "Game (USA) T+Eng v2.0 [!].rom",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "2-0"},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceInferred},
+				{Type: TagTypeRev, Value: "2-0", Source: TagSourceInferred},
 			},
 			wantRemaining: "Game (USA) [!].rom",
 		},
@@ -695,7 +695,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "standalone v1.0",
 			filename: "Game Name v1.0.rom",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1-0"},
+				{Type: TagTypeRev, Value: "1-0", Source: TagSourceInferred},
 			},
 			wantRemaining: "Game Name .rom",
 		},
@@ -703,7 +703,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "standalone v2.1.3",
 			filename: "Another Game v2.1.3.bin",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "2-1-3"},
+				{Type: TagTypeRev, Value: "2-1-3", Source: TagSourceInferred},
 			},
 			wantRemaining: "Another Game .bin",
 		},
@@ -711,7 +711,7 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "v1 single digit",
 			filename: "Old Game v1.smc",
 			wantTags: []CanonicalTag{
-				{TagTypeRev, "1"},
+				{Type: TagTypeRev, Value: "1", Source: TagSourceInferred},
 			},
 			wantRemaining: "Old Game .smc",
 		},
@@ -719,9 +719,9 @@ func TestExtractSpecialPatterns_BracketlessVersion(t *testing.T) {
 			name:     "version not extracted if translation already has it",
 			filename: "Game T+Eng v1.0.rom",
 			wantTags: []CanonicalTag{
-				{TagTypeUnlicensed, TagUnlicensedTranslation},
-				{TagTypeLang, TagLangEN},
-				{TagTypeRev, "1-0"},
+				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceInferred},
+				{Type: TagTypeRev, Value: "1-0", Source: TagSourceInferred},
 			},
 			wantRemaining: "Game rom",
 		},
@@ -864,88 +864,88 @@ func TestExtractSpecialPatterns_EditionWords(t *testing.T) {
 		{
 			name:     "English version",
 			filename: "Game Version (USA).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "English edition",
 			filename: "Game Edition (USA).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		{
 			name:     "version before parentheses",
 			filename: "Deluxe Version (USA).bin",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "edition before brackets",
 			filename: "Ultimate Edition [!].iso",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// German
 		{
 			name:     "German ausgabe",
 			filename: "Spiel Ausgabe (Germany).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// Italian
 		{
 			name:     "Italian versione",
 			filename: "Gioco Versione (Italy).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "Italian edizione",
 			filename: "Gioco Edizione (Italy).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// Portuguese
 		{
 			name:     "Portuguese versao",
 			filename: "Jogo Versao (Brazil).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "Portuguese edicao",
 			filename: "Jogo Edicao (Brazil).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// Japanese
 		{
 			name:     "Japanese version (バージョン)",
 			filename: "ゲーム バージョン (Japan).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "Japanese version (ヴァージョン)",
 			filename: "ゲーム ヴァージョン (Japan).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "Japanese edition (エディション)",
 			filename: "ゲーム エディション (Japan).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// Case insensitivity
 		{
 			name:     "VERSION uppercase",
 			filename: "Game VERSION (USA).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "Edition mixed case",
 			filename: "Game EdItIoN (USA).rom",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// At end of filename
 		{
 			name:     "version at end",
 			filename: "Special Version",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionVersion}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionVersion, Source: TagSourceInferred}},
 		},
 		{
 			name:     "edition at end",
 			filename: "Limited Edition",
-			wantTags: []CanonicalTag{{TagTypeEdition, TagEditionEdition}},
+			wantTags: []CanonicalTag{{Type: TagTypeEdition, Value: TagEditionEdition, Source: TagSourceInferred}},
 		},
 		// No match
 		{

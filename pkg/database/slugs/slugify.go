@@ -295,16 +295,52 @@ func StripTrailingArticle(s string) string {
 
 // tokenizeNormalized extracts word tokens from a normalized string (after Stage 13).
 // Shared by both NormalizeToWords and SlugifyWithTokens to ensure consistency.
+//
+// Preserves apostrophes and hyphens that are part of words (possessives, contractions, compound words):
+//   - "Link's Awakening" → ["link's", "awakening"] (2 tokens, apostrophe preserved)
+//   - "Spider-Man" → ["spider-man"] (1 token, hyphen preserved)
+//   - "can't stop" → ["can't", "stop"] (2 tokens, apostrophe preserved)
+//
+// Note: Unicode variants (curly apostrophes \u2019, Unicode hyphens \u2010/\u2011) have already
+// been normalized to ASCII (' and -) by Stage 2 (NormalizePunctuation), so we only check ASCII forms.
+// Note: " - " (space-hyphen-space) is already handled in Stage 5 (SplitTitle) as a separator.
 func tokenizeNormalized(s string) []string {
-	// Preserve letters, numbers, and spaces for word splitting
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == ' ' {
+	// Convert to lowercase and preserve word-internal characters
+	result := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
 			return unicode.ToLower(r)
 		}
+		// Preserve apostrophes - part of possessives/contractions
+		// Unicode variants already normalized to ' in Stage 2
+		if r == '\'' {
+			return r
+		}
+		// Preserve hyphens - part of compound words (Spider-Man, X-Men)
+		// Unicode variants already normalized to - in Stage 2
+		if r == '-' {
+			return r
+		}
+		// Everything else becomes a space (word boundary)
 		return ' '
 	}, s)
 
-	return strings.Fields(s)
+	// Split on spaces to get tokens
+	// strings.Fields automatically handles multiple spaces and trims
+	tokens := strings.Fields(result)
+
+	// Clean up tokens: remove ONLY leading/trailing apostrophes and hyphens
+	// Keep them when they're internal to the word
+	cleaned := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		// Trim leading and trailing apostrophes and hyphens
+		// NOTE: strings.Trim only removes from edges, not internal characters
+		token = strings.Trim(token, "'- ")
+		if token != "" {
+			cleaned = append(cleaned, token)
+		}
+	}
+
+	return cleaned
 }
 
 // SlugifyWithTokens performs 14-stage normalization and returns both slug and tokens.
@@ -547,16 +583,40 @@ func NormalizeSymbolsAndSeparators(s string) string {
 	s = strings.ReplaceAll(s, "+", " plus ")
 
 	// Separator normalization (excluding period, which is handled after abbreviation expansion)
-	s = strings.Map(func(r rune) rune {
-		switch r {
-		case ':', '_', '-', '/', '\\', ',', ';':
-			return ' '
-		default:
-			return r
-		}
-	}, s)
+	// NOTE: Hyphens WITHOUT spaces around them are kept (for compound words like "Spider-Man")
+	// " - " (space-hyphen-space) was already handled by Stage 5 (SplitTitle)
+	// Process character by character to handle context-sensitive hyphen normalization
+	var result strings.Builder
+	result.Grow(len(s))
 
-	return s
+	inputRunes := []rune(s)
+	for i, r := range inputRunes {
+		switch r {
+		case ':', '_', '/', '\\', ',', ';':
+			// Always convert these to spaces
+			result.WriteRune(' ')
+		case '-':
+			// Note: Unicode hyphen variants (\u2010, \u2011) already normalized to - in Stage 2
+			// Keep hyphen if it's between letters/numbers (compound word like "Spider-Man")
+			// Convert to space if it's isolated or has spaces around it
+			prevIsAlnum := i > 0 &&
+				(unicode.IsLetter(inputRunes[i-1]) || unicode.IsNumber(inputRunes[i-1]))
+			nextIsAlnum := i < len(inputRunes)-1 &&
+				(unicode.IsLetter(inputRunes[i+1]) || unicode.IsNumber(inputRunes[i+1]))
+
+			if prevIsAlnum && nextIsAlnum {
+				// Keep hyphen for compound words: "Spider-Man", "F-Zero"
+				result.WriteRune(r)
+			} else {
+				// Convert to space for standalone or spaced hyphens
+				result.WriteRune(' ')
+			}
+		default:
+			result.WriteRune(r)
+		}
+	}
+
+	return result.String()
 }
 
 // checkAbbreviation checks if a word (in lowercase) matches a known abbreviation.
