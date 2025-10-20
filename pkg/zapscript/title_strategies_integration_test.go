@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 
@@ -149,7 +150,7 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 			Name:          name,
 			SlugLength:    metadata.SlugLength,
 			SlugWordCount: metadata.SlugWordCount,
-			SecondarySlug: metadata.SecondarySlug,
+			SecondarySlug: sql.NullString{String: metadata.SecondarySlug, Valid: metadata.SecondarySlug != ""},
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
@@ -1562,4 +1563,224 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			t.Logf("✓ %s: Strategy '%s' matched '%s'", tt.name, tt.expectedStrategy, tt.input)
 		})
 	}
+}
+
+// TestFuzzyMatching_NullSecondarySlug_RegressionTest is a regression test for the bug
+// where SecondarySlug was string instead of sql.NullString, causing all pre-filter
+// queries to fail when encountering NULL values. This broke fuzzy matching entirely.
+//
+// Bug symptoms:
+// - "SNES/Earthbond" (typo) failed to match "earthbound" despite 0.98 similarity
+// - "SNES/Zombies ate my neighbours" (British spelling) launched wrong game
+// - Pre-filter returned 0 candidates, forcing fallback to progressive trim
+//
+// Root cause: 100% of titles have NULL SecondarySlug (no secondary title), and
+// rows.Scan() failed with "converting NULL to string is unsupported".
+func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
+	t.Parallel()
+
+	// Create temp directory for test database
+	tempDir, err := os.MkdirTemp("", "zaparoo-test-fuzzy-null-*")
+	require.NoError(t, err)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
+
+	// Create mock platform
+	mockPlatformSetup := mocks.NewMockPlatform()
+	mockPlatformSetup.On("Settings").Return(platforms.Settings{
+		DataDir: tempDir,
+	})
+
+	ctx := context.Background()
+	mediaDB, err := mediadb.OpenMediaDB(ctx, mockPlatformSetup)
+	require.NoError(t, err)
+	defer func() {
+		_ = mediaDB.Close()
+	}()
+
+	// Seed system
+	snesSystem := database.System{SystemID: "SNES", Name: "Super Nintendo"}
+	insertedSNES, err := mediaDB.InsertSystem(snesSystem)
+	require.NoError(t, err)
+
+	// Seed tags
+	regionTagType, err := mediaDB.FindOrInsertTagType(database.TagType{Type: "region"})
+	require.NoError(t, err)
+	usaTag, err := mediaDB.FindOrInsertTag(database.Tag{TypeDBID: regionTagType.DBID, Tag: "us"})
+	require.NoError(t, err)
+
+	// Add EarthBound - simple title with NULL SecondarySlug
+	earthboundMetadata := mediadb.GenerateSlugWithMetadata("EarthBound")
+	earthboundTitle := database.MediaTitle{
+		SystemDBID:    insertedSNES.DBID,
+		Slug:          earthboundMetadata.Slug,
+		Name:          "EarthBound",
+		SlugLength:    earthboundMetadata.SlugLength,
+		SlugWordCount: earthboundMetadata.SlugWordCount,
+		SecondarySlug: sql.NullString{Valid: false}, // NULL - no secondary title
+	}
+	insertedEB, err := mediaDB.InsertMediaTitle(&earthboundTitle)
+	require.NoError(t, err)
+
+	ebMedia := database.Media{
+		SystemDBID:     insertedSNES.DBID,
+		MediaTitleDBID: insertedEB.DBID,
+		Path:           "/roms/snes/EarthBound (USA).sfc",
+	}
+	insertedEBMedia, err := mediaDB.InsertMedia(ebMedia)
+	require.NoError(t, err)
+
+	// Tag it
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedEBMedia.DBID,
+		TagDBID:   usaTag.DBID,
+	})
+	require.NoError(t, err)
+
+	// Add Zombies Ate My Neighbors - another simple title with NULL SecondarySlug
+	zombiesMetadata := mediadb.GenerateSlugWithMetadata("Zombies Ate My Neighbors")
+	zombiesTitle := database.MediaTitle{
+		SystemDBID:    insertedSNES.DBID,
+		Slug:          zombiesMetadata.Slug,
+		Name:          "Zombies Ate My Neighbors",
+		SlugLength:    zombiesMetadata.SlugLength,
+		SlugWordCount: zombiesMetadata.SlugWordCount,
+		SecondarySlug: sql.NullString{Valid: false}, // NULL - no secondary title
+	}
+	insertedZombies, err := mediaDB.InsertMediaTitle(&zombiesTitle)
+	require.NoError(t, err)
+
+	zombiesMedia := database.Media{
+		SystemDBID:     insertedSNES.DBID,
+		MediaTitleDBID: insertedZombies.DBID,
+		Path:           "/roms/snes/Zombies Ate My Neighbors (USA).sfc",
+	}
+	insertedZombiesMedia, err := mediaDB.InsertMedia(zombiesMedia)
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTag(database.MediaTag{
+		MediaDBID: insertedZombiesMedia.DBID,
+		TagDBID:   usaTag.DBID,
+	})
+	require.NoError(t, err)
+
+	// Also add "Zombies" (short title) to test progressive trim fallback
+	zombiesShortMetadata := mediadb.GenerateSlugWithMetadata("Zombies")
+	zombiesShortTitle := database.MediaTitle{
+		SystemDBID:    insertedSNES.DBID,
+		Slug:          zombiesShortMetadata.Slug,
+		Name:          "Zombies",
+		SlugLength:    zombiesShortMetadata.SlugLength,
+		SlugWordCount: zombiesShortMetadata.SlugWordCount,
+		SecondarySlug: sql.NullString{Valid: false}, // NULL
+	}
+	insertedZombiesShort, err := mediaDB.InsertMediaTitle(&zombiesShortTitle)
+	require.NoError(t, err)
+
+	zombiesShortMedia := database.Media{
+		SystemDBID:     insertedSNES.DBID,
+		MediaTitleDBID: insertedZombiesShort.DBID,
+		Path:           "/roms/snes/Zombies (Europe).sfc",
+	}
+	_, err = mediaDB.InsertMedia(zombiesShortMedia)
+	require.NoError(t, err)
+
+	// Setup config
+	cfg := &config.Instance{}
+
+	db := &database.Database{
+		MediaDB: mediaDB,
+	}
+
+	// Test 1: Fuzzy match "Earthbond" (typo) should match "EarthBound"
+	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold)
+	t.Run("typo_earthbond_matches_earthbound", func(t *testing.T) {
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		cmd := parser.Command{
+			Name:    "launch.title",
+			Args:    []string{"SNES/Earthbond"},
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Cmd:      cmd,
+			Cfg:      cfg,
+			Database: db,
+			Playlist: playlists.PlaylistController{},
+		}
+
+		result, err := cmdTitle(mockPlatform, env)
+		require.NoError(t, err, "should fuzzy match 'Earthbond' → 'EarthBound'")
+		assert.True(t, result.MediaChanged)
+		assert.Equal(t, titles.StrategyJaroWinklerDamerau, result.Strategy, "should use fuzzy matching strategy")
+		assert.GreaterOrEqual(t, result.Confidence, 0.90, "should have high confidence")
+
+		mockPlatform.AssertExpectations(t)
+	})
+
+	// Test 2: British spelling "neighbours" should match American "neighbors"
+	// Jaro-Winkler similarity: 0.99
+	t.Run("british_spelling_neighbours_matches_neighbors", func(t *testing.T) {
+		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+		cmd := parser.Command{
+			Name:    "launch.title",
+			Args:    []string{"SNES/Zombies ate my neighbours"}, // British spelling
+			AdvArgs: map[string]string{},
+		}
+
+		env := platforms.CmdEnv{
+			Cmd:      cmd,
+			Cfg:      cfg,
+			Database: db,
+			Playlist: playlists.PlaylistController{},
+		}
+
+		result, err := cmdTitle(mockPlatform, env)
+		require.NoError(t, err, "should fuzzy match 'neighbours' → 'neighbors'")
+		assert.True(t, result.MediaChanged)
+
+		// Should use fuzzy matching, NOT progressive trim (which would match "Zombies")
+		assert.Equal(t, titles.StrategyJaroWinklerDamerau, result.Strategy,
+			"should use fuzzy matching, not progressive trim")
+
+		assert.GreaterOrEqual(t, result.Confidence, 0.90, "should have high confidence")
+
+		mockPlatform.AssertExpectations(t)
+	})
+
+	// Test 3: Verify pre-filter actually returns candidates with NULL SecondarySlug
+	t.Run("prefilter_returns_candidates_with_null_secondary_slug", func(t *testing.T) {
+		// Query pre-filter for "earthbond" range
+		metadata := mediadb.GenerateSlugWithMetadata("Earthbond")
+
+		minLength := metadata.SlugLength - 3
+		if minLength < 0 {
+			minLength = 0
+		}
+		maxLength := metadata.SlugLength + 3
+		minWordCount := metadata.SlugWordCount - 1
+		if minWordCount < 1 {
+			minWordCount = 1
+		}
+		maxWordCount := metadata.SlugWordCount + 1
+
+		candidates, err := mediaDB.GetTitlesWithPreFilter(ctx, "SNES", minLength, maxLength, minWordCount, maxWordCount)
+		require.NoError(t, err, "pre-filter should not fail on NULL SecondarySlug")
+		assert.NotEmpty(t, candidates, "should return candidates")
+
+		// Verify EarthBound is in candidates
+		found := false
+		for _, c := range candidates {
+			if c.Slug == "earthbound" {
+				found = true
+				assert.False(t, c.SecondarySlug.Valid, "SecondarySlug should be NULL for simple titles")
+			}
+		}
+		assert.True(t, found, "EarthBound should be in pre-filter candidates")
+	})
 }

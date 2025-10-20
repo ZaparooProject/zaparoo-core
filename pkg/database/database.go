@@ -73,7 +73,7 @@ type System struct {
 type MediaTitle struct {
 	Slug          string
 	Name          string
-	SecondarySlug string
+	SecondarySlug sql.NullString
 	DBID          int64
 	SystemDBID    int64
 	SlugLength    int

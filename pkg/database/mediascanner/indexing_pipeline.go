@@ -21,6 +21,7 @@ package mediascanner
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -116,7 +117,7 @@ func AddMediaPath(
 			SystemDBID:    int64(systemIndex),
 			SlugLength:    metadata.SlugLength,
 			SlugWordCount: metadata.SlugWordCount,
-			SecondarySlug: metadata.SecondarySlug,
+			SecondarySlug: sql.NullString{String: metadata.SecondarySlug, Valid: metadata.SecondarySlug != ""},
 		})
 		if err != nil {
 			ss.TitlesIndex-- // Rollback index increment on failure
