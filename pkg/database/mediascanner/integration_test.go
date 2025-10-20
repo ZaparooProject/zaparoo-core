@@ -929,7 +929,7 @@ func TestSlugGenerationPipeline(t *testing.T) {
 			require.NotZero(t, mediaIndex, "mediaIndex should not be 0")
 
 			// Verify the title was created with correct name and slug
-			title, err := mediaDB.FindMediaTitle(database.MediaTitle{DBID: int64(titleIndex)})
+			title, err := mediaDB.FindMediaTitle(&database.MediaTitle{DBID: int64(titleIndex)})
 			require.NoError(t, err, "Should be able to retrieve title from database")
 			assert.Equal(t, tt.expectedTitle, title.Name, "Title name mismatch")
 			assert.Equal(t, tt.expectedSlug, title.Slug, "Slug mismatch")

@@ -378,12 +378,12 @@ func TestAddMediaPath_PopulatesSlugMetadata(t *testing.T) {
 
 			// CRITICAL: Mock title insertion and capture the actual title to verify metadata
 			var capturedTitle database.MediaTitle
-			mockDB.On("InsertMediaTitle", mock.AnythingOfType("database.MediaTitle")).
+			mockDB.On("InsertMediaTitle", mock.AnythingOfType("*database.MediaTitle")).
 				Run(func(args mock.Arguments) {
 					// Capture the actual title being inserted
-					title, ok := args.Get(0).(database.MediaTitle)
+					title, ok := args.Get(0).(*database.MediaTitle)
 					if ok {
-						capturedTitle = title
+						capturedTitle = *title
 					}
 				}).
 				Return(database.MediaTitle{DBID: int64(1)}, nil).Once()

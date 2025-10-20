@@ -73,6 +73,7 @@ type System struct {
 type MediaTitle struct {
 	Slug          string
 	Name          string
+	SecondarySlug string
 	DBID          int64
 	SystemDBID    int64
 	SlugLength    int
@@ -294,6 +295,9 @@ type MediaDBI interface {
 	SearchMediaBySlug(
 		ctx context.Context, systemID string, slug string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
+	SearchMediaBySecondarySlug(
+		ctx context.Context, systemID string, secondarySlug string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
 	SearchMediaBySlugPrefix(
 		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
 	) ([]SearchResultWithCursor, error)
@@ -321,9 +325,9 @@ type MediaDBI interface {
 	InsertSystem(row System) (System, error)
 	FindOrInsertSystem(row System) (System, error)
 
-	FindMediaTitle(row MediaTitle) (MediaTitle, error)
-	InsertMediaTitle(row MediaTitle) (MediaTitle, error)
-	FindOrInsertMediaTitle(row MediaTitle) (MediaTitle, error)
+	FindMediaTitle(row *MediaTitle) (MediaTitle, error)
+	InsertMediaTitle(row *MediaTitle) (MediaTitle, error)
+	FindOrInsertMediaTitle(row *MediaTitle) (MediaTitle, error)
 
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)

@@ -38,6 +38,13 @@ const (
 	ConfidenceAcceptable = 0.70 // Good match with most tags matching - acceptable to launch
 	ConfidenceMinimum    = 0.60 // Minimum confidence to launch - below this, error out
 
+	// Match quality scores (base confidence for each strategy, before tag matching adjustment)
+	MatchQualityExact           = 1.00 // Perfect slug match
+	MatchQualitySecondaryTitle  = 0.92 // Exact secondary title match
+	MatchQualityMainTitle       = 0.90 // Main title only match (partial match)
+	MatchQualityProgressiveTrim = 0.85 // Progressive word trimming (last resort)
+	// Note: Fuzzy match quality comes from similarity algorithm (0.85-1.0)
+
 	// Strategy identifiers (order-independent naming)
 	StrategyExactMatch            = "strategy_exact_match"
 	StrategyPrefixMatch           = "strategy_prefix_match"

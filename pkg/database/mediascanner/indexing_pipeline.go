@@ -109,13 +109,14 @@ func AddMediaPath(
 		// Generate slug metadata for fuzzy matching prefilter
 		metadata := mediadb.GenerateSlugWithMetadata(pf.Title)
 
-		_, err := db.InsertMediaTitle(database.MediaTitle{
+		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
 			Slug:          pf.Slug,
 			Name:          pf.Title,
 			SystemDBID:    int64(systemIndex),
 			SlugLength:    metadata.SlugLength,
 			SlugWordCount: metadata.SlugWordCount,
+			SecondarySlug: metadata.SecondarySlug,
 		})
 		if err != nil {
 			ss.TitlesIndex-- // Rollback index increment on failure

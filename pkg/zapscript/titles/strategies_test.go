@@ -45,19 +45,20 @@ func TestTryMainTitleOnly(t *testing.T) {
 		shouldError      bool
 	}{
 		{
-			name: "successful main title search",
+			name: "exact match: query has secondary, DB doesn't",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
-				MainTitleSlug:      "zelda",
-				SecondaryTitleSlug: "ocarinaoftime",
-				CanonicalSlug:      "zeldaocarinaoftime",
+				MainTitleSlug:      "somegame",
+				SecondaryTitleSlug: "thenextgen",
+				CanonicalSlug:      "somegamethenextgen",
 			},
-			slug:     "zeldaocarinaoftime",
-			systemID: "Nintendo64",
+			slug:     "somegamethenextgen",
+			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "Nintendo64", "zelda", []database.TagFilter(nil)).
+				// Searches with MainTitleSlug, not full slug
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
-						{SystemID: "Nintendo64", Name: "Zelda", Path: "/zelda.rom"},
+						{SystemID: "SNES", Name: "Some Game", Path: "/somegame.rom"},
 					}, nil)
 			},
 			expectedCount:    1,
@@ -65,36 +66,48 @@ func TestTryMainTitleOnly(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "no secondary title - returns nil",
+			name: "partial match: query simple, DB has secondary",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
-				MainTitleSlug:     "mario",
-				CanonicalSlug:     "mario",
+				MainTitleSlug:     "somegame",
+				CanonicalSlug:     "somegame",
 			},
-			slug:             "mario",
-			systemID:         "NES",
-			setupMock:        func(_ *helpers.MockMediaDBI) {},
-			expectedCount:    0,
-			expectedStrategy: "",
+			slug:     "somegame",
+			systemID: "SNES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "somegame", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "SNES", Name: "Some Game: The Next Gen", Path: "/somegame2.rom"},
+					}, nil)
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategyMainTitleOnly,
 			shouldError:      false,
 		},
 		{
-			name: "main title slug same as original - returns nil",
+			name: "prefer exact over partial matches",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
-				MainTitleSlug:      "zelda",
-				SecondaryTitleSlug: "",
-				CanonicalSlug:      "zelda",
+				MainTitleSlug:      "mario",
+				SecondaryTitleSlug: "bros",
+				CanonicalSlug:      "mariobros",
 			},
-			slug:             "zelda",
-			systemID:         "NES",
-			setupMock:        func(_ *helpers.MockMediaDBI) {},
-			expectedCount:    0,
-			expectedStrategy: "",
+			slug:     "mariobros",
+			systemID: "NES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "NES", Name: "Mario", Path: "/mario.rom"},                 // Exact match
+						{SystemID: "NES", Name: "Mario: Lost Levels", Path: "/mario2.rom"},   // Partial match
+						{SystemID: "NES", Name: "Mario: Super Show", Path: "/marioshow.rom"}, // Partial match
+					}, nil)
+			},
+			expectedCount:    1, // Should only return exact match
+			expectedStrategy: StrategyMainTitleOnly,
 			shouldError:      false,
 		},
 		{
-			name: "search returns no results",
+			name: "no results found",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
 				MainTitleSlug:      "nonexistent",
@@ -104,7 +117,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "nonexistentgame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -122,12 +135,34 @@ func TestTryMainTitleOnly(t *testing.T) {
 			slug:     "errortest",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "error", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "SNES", "error", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 			},
 			expectedCount:    0,
 			expectedStrategy: "",
 			shouldError:      true,
+		},
+		{
+			name: "no valid matches after filtering - DB has unrelated prefix",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "mario",
+				CanonicalSlug:     "mario",
+			},
+			slug:     "mario",
+			systemID: "NES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlugPrefix", mock.Anything, "NES", "mario", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						// This matches the prefix but is not a valid match:
+						// Query is simple "mario", DB is "MarioKart" which also has no secondary
+						// but CanonicalSlug is "mariokart" not "mario", so no match
+						{SystemID: "NES", Name: "MarioKart", Path: "/mariokart.rom"},
+					}, nil)
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
 		},
 	}
 
@@ -174,16 +209,17 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 		shouldError      bool
 	}{
 		{
-			name: "successful secondary title search",
+			name: "exact match: input has secondary, DB doesn't",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
-				MainTitleSlug:      "zelda",
+				MainTitleSlug:      "legendofzelda",
 				SecondaryTitleSlug: "ocarinaoftime",
-				CanonicalSlug:      "zeldaocarinaoftime",
+				CanonicalSlug:      "legendofzeldaocarinaoftime",
 			},
-			slug:     "zeldaocarinaoftime",
+			slug:     "legendofzeldaocarinaoftime",
 			systemID: "Nintendo64",
 			setupMock: func(m *helpers.MockMediaDBI) {
+				// Searches with SecondaryTitleSlug
 				m.On("SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{
 						{SystemID: "Nintendo64", Name: "Ocarina of Time", Path: "/oot.rom"},
@@ -194,17 +230,54 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "no secondary title - returns nil",
+			name: "partial match: input simple, DB has secondary",
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle: false,
-				MainTitleSlug:     "mario",
-				CanonicalSlug:     "mario",
+				MainTitleSlug:     "ocarinaoftime",
+				CanonicalSlug:     "ocarinaoftime",
 			},
-			slug:             "mario",
-			systemID:         "NES",
-			setupMock:        func(_ *helpers.MockMediaDBI) {},
-			expectedCount:    0,
-			expectedStrategy: "",
+			slug:     "ocarinaoftime",
+			systemID: "Nintendo64",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				// First tries exact match (SearchMediaBySlug)
+				m.On(
+					"SearchMediaBySlug", mock.Anything, "Nintendo64", "ocarinaoftime", []database.TagFilter(nil),
+				).Return([]database.SearchResultWithCursor{}, nil)
+				// Then tries partial match (SearchMediaBySecondarySlug)
+				m.On(
+					"SearchMediaBySecondarySlug",
+					mock.Anything,
+					"Nintendo64",
+					"ocarinaoftime",
+					[]database.TagFilter(nil),
+				).Return([]database.SearchResultWithCursor{
+					{SystemID: "Nintendo64", Name: "Legend of Zelda: Ocarina of Time", Path: "/zelda-oot.rom"},
+				}, nil)
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategySecondaryTitleExact,
+			shouldError:      false,
+		},
+		{
+			name: "prefer exact over partial matches",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle:  true,
+				MainTitleSlug:      "streetfighter",
+				SecondaryTitleSlug: "turbo",
+				CanonicalSlug:      "streetfighterturbo",
+			},
+			slug:     "streetfighterturbo",
+			systemID: "SNES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				// Exact match search finds simple "Turbo" game
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "turbo", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "SNES", Name: "Turbo", Path: "/turbo.rom"}, // Exact match
+					}, nil)
+				// Should not call SearchMediaBySecondarySlug since exact match was found
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategySecondaryTitleExact,
 			shouldError:      false,
 		},
 		{
@@ -215,25 +288,44 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				SecondaryTitleSlug: "ii", // Only 2 chars, min is 4
 				CanonicalSlug:      "gameii",
 			},
-			slug:             "gameii",
-			systemID:         "NES",
-			setupMock:        func(_ *helpers.MockMediaDBI) {},
+			slug:     "gameii",
+			systemID: "NES",
+			setupMock: func(_ *helpers.MockMediaDBI) {
+				// Should not call any search methods due to length check
+			},
 			expectedCount:    0,
 			expectedStrategy: "",
 			shouldError:      false,
 		},
 		{
-			name: "search returns no results - no error",
+			name: "input slug too short (no secondary) - returns nil",
 			matchInfo: GameMatchInfo{
-				HasSecondaryTitle:  true,
-				MainTitleSlug:      "game",
-				SecondaryTitleSlug: "nonexist",
-				CanonicalSlug:      "gamenonexist",
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "wwe",
+				CanonicalSlug:     "wwe",
 			},
-			slug:     "gamenonexist",
+			slug:     "wwe", // 3 chars, min is 4
+			systemID: "NES",
+			setupMock: func(_ *helpers.MockMediaDBI) {
+				// Should not call any search methods due to length check
+			},
+			expectedCount:    0,
+			expectedStrategy: "",
+			shouldError:      false,
+		},
+		{
+			name: "no results from either search",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "nonexistent",
+				CanonicalSlug:     "nonexistent",
+			},
+			slug:     "nonexistent",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "nonexist", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "nonexistent", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
@@ -241,17 +333,40 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			shouldError:      false,
 		},
 		{
-			name: "search returns error - logged but no error returned",
+			name: "exact search returns error - continues to partial",
 			matchInfo: GameMatchInfo{
-				HasSecondaryTitle:  true,
-				MainTitleSlug:      "game",
-				SecondaryTitleSlug: "error",
-				CanonicalSlug:      "gameerror",
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "testgame",
+				CanonicalSlug:     "testgame",
 			},
-			slug:     "gameerror",
+			slug:     "testgame",
 			systemID: "SNES",
 			setupMock: func(m *helpers.MockMediaDBI) {
-				m.On("SearchMediaBySlug", mock.Anything, "SNES", "error", []database.TagFilter(nil)).
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "testgame", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
+				// Should still try partial search
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "testgame", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{
+						{SystemID: "SNES", Name: "Some Game: Test Game", Path: "/test.rom"},
+					}, nil)
+			},
+			expectedCount:    1,
+			expectedStrategy: StrategySecondaryTitleExact,
+			shouldError:      false,
+		},
+		{
+			name: "partial search returns error - returns nil",
+			matchInfo: GameMatchInfo{
+				HasSecondaryTitle: false,
+				MainTitleSlug:     "errorgame",
+				CanonicalSlug:     "errorgame",
+			},
+			slug:     "errorgame",
+			systemID: "SNES",
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlug", mock.Anything, "SNES", "errorgame", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "SNES", "errorgame", []database.TagFilter(nil)).
 					Return([]database.SearchResultWithCursor{}, errors.New("database error"))
 			},
 			expectedCount:    0,

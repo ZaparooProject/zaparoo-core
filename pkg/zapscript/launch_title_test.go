@@ -151,6 +151,9 @@ func TestCmdTitle(t *testing.T) {
 				mockMediaDB.On("SearchMediaBySlugPrefix",
 					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
 					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("SearchMediaBySecondarySlug",
+					mock.Anything, tt.expectedSystem, mock.AnythingOfType("string"), mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
 			}
 
 			result, err := cmdTitle(mockPlatform, env)
@@ -335,11 +338,11 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 		systemID           string
 		initialSearchSlug  string
 		fallbackSearchSlug string
+		expectedStrategy   string
 		initialResults     []database.SearchResultWithCursor
 		fallbackResults    []database.SearchResultWithCursor
 		expectFallback     bool
 		shouldError        bool
-		expectedStrategy   string
 	}{
 		{
 			name:               "subtitle fallback triggers when no initial results",
@@ -449,27 +452,30 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 					Return([]database.SearchResultWithCursor{}, nil).Once()
 
 				// Strategy 3: Secondary title-only search (for titles with subtitles)
+				// Exact match: Search DB's Slug column with secondary title slug
 				mockMediaDB.On("SearchMediaBySlug",
 					context.Background(), tt.systemID, tt.fallbackSearchSlug, []database.TagFilter(nil)).
-					Return(tt.fallbackResults, nil).Once()
+					Return(tt.fallbackResults, nil).Maybe()
 
-				if len(tt.fallbackResults) == 0 {
-					// When fallback also fails, the remaining strategies will be attempted
-					// Allow flexible mocking for remaining strategies (3, 4, 5)
-					mockMediaDB.On("SearchMediaBySlug",
-						mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
-						Return([]database.SearchResultWithCursor{}, nil).Maybe()
-					mockMediaDB.On("SearchMediaBySlugPrefix",
-						mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
-						Return([]database.SearchResultWithCursor{}, nil).Maybe()
-					mockMediaDB.On("SearchMediaBySlugIn",
-						mock.Anything, tt.systemID, mock.Anything, mock.Anything).
-						Return([]database.SearchResultWithCursor{}, nil).Maybe()
-					mockMediaDB.On("GetTitlesWithPreFilter",
-						mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
-						mock.AnythingOfType("int"), mock.AnythingOfType("int")).
-						Return([]database.MediaTitle{}, nil).Maybe()
-				}
+				// Partial match: Search DB's SecondarySlug column with secondary title slug
+				mockMediaDB.On("SearchMediaBySecondarySlug",
+					mock.Anything, tt.systemID, tt.fallbackSearchSlug, mock.Anything).
+					Return(tt.fallbackResults, nil).Maybe()
+
+				// Allow flexible mocking for remaining strategies that may be attempted
+				mockMediaDB.On("SearchMediaBySlug",
+					mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("SearchMediaBySlugPrefix",
+					mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("SearchMediaBySlugIn",
+					mock.Anything, tt.systemID, mock.Anything, mock.Anything).
+					Return([]database.SearchResultWithCursor{}, nil).Maybe()
+				mockMediaDB.On("GetTitlesWithPreFilter",
+					mock.Anything, tt.systemID, mock.AnythingOfType("int"), mock.AnythingOfType("int"),
+					mock.AnythingOfType("int"), mock.AnythingOfType("int")).
+					Return([]database.MediaTitle{}, nil).Maybe()
 			}
 
 			if !tt.shouldError {
@@ -606,6 +612,9 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 
 			// Secondary title searches also fail (no ':' or '-' in query)
 			mockMediaDB.On("SearchMediaBySlug",
+				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
+				Return([]database.SearchResultWithCursor{}, nil).Maybe()
+			mockMediaDB.On("SearchMediaBySecondarySlug",
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), mock.Anything).
 				Return([]database.SearchResultWithCursor{}, nil).Maybe()
 			mockMediaDB.On("SearchMediaBySlugPrefix",
@@ -1665,6 +1674,9 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		mockMediaDB.On("SearchMediaBySlug",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+		mockMediaDB.On("SearchMediaBySecondarySlug",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
 		mockMediaDB.On("SearchMediaBySlugPrefix",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
@@ -1713,6 +1725,10 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 		// All search strategies return empty
 		mockMediaDB.On("SearchMediaBySlug",
+			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
+			Return([]database.SearchResultWithCursor{}, nil).Maybe()
+
+		mockMediaDB.On("SearchMediaBySecondarySlug",
 			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
 			Return([]database.SearchResultWithCursor{}, nil).Maybe()
 

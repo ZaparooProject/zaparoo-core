@@ -161,8 +161,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
-		const matchQuality = 1.0 // Exact slug match
-		selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+		selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, titles.MatchQualityExact)
 		log.Debug().
 			Str("strategy", titles.StrategyExactMatch).
 			Str("query", slug).
@@ -204,8 +203,9 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s' without tags: %w", slug, err)
 		}
 		if len(results) > 0 {
-			const matchQuality = 1.0 // Exact slug match
-			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			selectedResult, confidence := titles.SelectBestResult(
+				results, tagFilters, env.Cfg, titles.MatchQualityExact,
+			)
 			log.Debug().
 				Str("strategy", titles.StrategyExactMatch).
 				Str("query", slug).
@@ -224,8 +224,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 	}
 
-	// Strategy 3: Secondary title-only exact match (only if has secondary title)
-	if bestCandidate == nil && matchInfo.HasSecondaryTitle {
+	// Strategy 3: Secondary title match
+	if bestCandidate == nil {
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TrySecondaryTitleExact(
@@ -234,8 +234,9 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{}, fmt.Errorf("secondary title exact match failed: %w", strategyErr)
 		}
 		if len(results) > 0 {
-			const matchQuality = 0.92 // Exact match on secondary title (slightly lower than full match)
-			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			selectedResult, confidence := titles.SelectBestResult(
+				results, tagFilters, env.Cfg, titles.MatchQualitySecondaryTitle,
+			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
 					result:     selectedResult,
@@ -274,8 +275,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 	}
 
-	// Strategy 5: Main title-only search (drops secondary title, only if has secondary title)
-	if bestCandidate == nil && matchInfo.HasSecondaryTitle {
+	// Strategy 5: Main title search
+	if bestCandidate == nil {
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TryMainTitleOnly(
@@ -284,8 +285,9 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{}, fmt.Errorf("main title only search failed: %w", strategyErr)
 		}
 		if len(results) > 0 {
-			const matchQuality = 0.90 // Main title match (partial match)
-			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			selectedResult, confidence := titles.SelectBestResult(
+				results, tagFilters, env.Cfg, titles.MatchQualityMainTitle,
+			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
 					result:     selectedResult,
@@ -309,8 +311,9 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{}, fmt.Errorf("progressive trim strategy failed: %w", strategyErr)
 		}
 		if len(results) > 0 {
-			const matchQuality = 0.85 // Progressive trim (partial match, least confident)
-			selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, matchQuality)
+			selectedResult, confidence := titles.SelectBestResult(
+				results, tagFilters, env.Cfg, titles.MatchQualityProgressiveTrim,
+			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
 					result:     selectedResult,

@@ -755,7 +755,7 @@ func (db *MediaDB) insertSystemWithPreparedStmt(row database.System) (database.S
 	return sqlInsertSystemWithPreparedStmt(db.ctx, db.stmtInsertSystem, row)
 }
 
-func (db *MediaDB) insertMediaTitleWithPreparedStmt(row database.MediaTitle) (database.MediaTitle, error) {
+func (db *MediaDB) insertMediaTitleWithPreparedStmt(row *database.MediaTitle) (database.MediaTitle, error) {
 	return sqlInsertMediaTitleWithPreparedStmt(db.ctx, db.stmtInsertMediaTitle, row)
 }
 
@@ -838,6 +838,15 @@ func (db *MediaDB) SearchMediaBySlug(
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 	return sqlSearchMediaBySlug(ctx, db.sql, systemID, slug, tags)
+}
+
+func (db *MediaDB) SearchMediaBySecondarySlug(
+	ctx context.Context, systemID string, secondarySlug string, tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	if db.sql == nil {
+		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
+	}
+	return sqlSearchMediaBySecondarySlug(ctx, db.sql, systemID, secondarySlug, tags)
 }
 
 func (db *MediaDB) SearchMediaBySlugPrefix(
@@ -1280,11 +1289,11 @@ func (db *MediaDB) FindOrInsertSystem(row database.System) (database.System, err
 	return system, err
 }
 
-func (db *MediaDB) FindMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (db *MediaDB) FindMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	return sqlFindMediaTitle(db.ctx, db.sql, row)
 }
 
-func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	var result database.MediaTitle
 	var err error
 
@@ -1293,10 +1302,10 @@ func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitl
 		err = db.batchInsertMediaTitle.Add(
 			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount)
 		if err != nil {
-			return row, fmt.Errorf("failed to add media title to batch: %w", err)
+			return *row, fmt.Errorf("failed to add media title to batch: %w", err)
 		}
 		// Return row as-is (DBID is already set by caller)
-		return row, nil
+		return *row, nil
 	}
 
 	// Use prepared statement if in transaction, otherwise fall back to original method
@@ -1314,7 +1323,7 @@ func (db *MediaDB) InsertMediaTitle(row database.MediaTitle) (database.MediaTitl
 	return result, err
 }
 
-func (db *MediaDB) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (db *MediaDB) FindOrInsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	system, err := db.FindMediaTitle(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		system, err = db.InsertMediaTitle(row)

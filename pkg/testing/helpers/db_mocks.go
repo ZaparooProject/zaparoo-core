@@ -443,6 +443,22 @@ func (m *MockMediaDBI) SearchMediaBySlug(
 	return nil, nil
 }
 
+func (m *MockMediaDBI) SearchMediaBySecondarySlug(
+	ctx context.Context, systemID string, secondarySlug string, tags []database.TagFilter,
+) ([]database.SearchResultWithCursor, error) {
+	args := m.Called(ctx, systemID, secondarySlug, tags)
+	if results, ok := args.Get(0).([]database.SearchResultWithCursor); ok {
+		if err := args.Error(1); err != nil {
+			return results, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return results, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
 func (m *MockMediaDBI) SearchMediaBySlugPrefix(
 	ctx context.Context, systemID string, slugPrefix string, tags []database.TagFilter,
 ) ([]database.SearchResultWithCursor, error) {
@@ -669,7 +685,7 @@ func (m *MockMediaDBI) FindOrInsertSystem(row database.System) (database.System,
 }
 
 // MediaTitle CRUD methods
-func (m *MockMediaDBI) FindMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (m *MockMediaDBI) FindMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	args := m.Called(row)
 	if mediaTitle, ok := args.Get(0).(database.MediaTitle); ok {
 		if err := args.Error(1); err != nil {
@@ -683,7 +699,7 @@ func (m *MockMediaDBI) FindMediaTitle(row database.MediaTitle) (database.MediaTi
 	return database.MediaTitle{}, nil
 }
 
-func (m *MockMediaDBI) InsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (m *MockMediaDBI) InsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	m.trackDatabaseOperation() // Track if called outside transaction
 	args := m.Called(row)
 	if mediaTitle, ok := args.Get(0).(database.MediaTitle); ok {
@@ -698,7 +714,7 @@ func (m *MockMediaDBI) InsertMediaTitle(row database.MediaTitle) (database.Media
 	return database.MediaTitle{}, nil
 }
 
-func (m *MockMediaDBI) FindOrInsertMediaTitle(row database.MediaTitle) (database.MediaTitle, error) {
+func (m *MockMediaDBI) FindOrInsertMediaTitle(row *database.MediaTitle) (database.MediaTitle, error) {
 	args := m.Called(row)
 	if mediaTitle, ok := args.Get(0).(database.MediaTitle); ok {
 		if err := args.Error(1); err != nil {

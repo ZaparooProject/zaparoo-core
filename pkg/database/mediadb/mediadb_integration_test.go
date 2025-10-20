@@ -165,7 +165,7 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 		Name:       "Test Game",
 	}
 
-	insertedTitle, err := mediaDB.FindOrInsertMediaTitle(mediaTitle)
+	insertedTitle, err := mediaDB.FindOrInsertMediaTitle(&mediaTitle)
 	require.NoError(t, err)
 	assert.Positive(t, insertedTitle.DBID, "MediaTitle should have assigned DBID")
 	assert.Equal(t, mediaTitle.Name, insertedTitle.Name)
@@ -260,7 +260,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 			Slug:       slugs.SlugifyString(game.name),
 			Name:       game.name,
 		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
 
 		media := database.Media{
@@ -319,7 +319,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
 
 		media := database.Media{
@@ -380,7 +380,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Test Game"),
 		Name:       "Test Game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -447,7 +447,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 		Slug:       helpers.SlugifyPath("/roms/nes/game.nes"), // Must match the path's filename slug
 		Name:       "NES Game",
 	}
-	insertedNESTitle, err := mediaDB.InsertMediaTitle(nesTitle)
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
 	require.NoError(t, err)
 
 	nesMedia := database.Media{
@@ -471,7 +471,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 		Slug:       helpers.SlugifyPath("/roms/snes/game.sfc"), // Must match the path's filename slug
 		Name:       "SNES Game",
 	}
-	insertedSNESTitle, err := mediaDB.InsertMediaTitle(snesTitle)
+	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
 	require.NoError(t, err)
 
 	snesMedia := database.Media{
@@ -563,7 +563,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Super Mario Bros"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -676,7 +676,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
 
 		media := database.Media{
@@ -823,7 +823,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 			Slug:       slugs.SlugifyString(game.name),
 			Name:       game.name,
 		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
 
 		media := database.Media{
@@ -988,7 +988,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -1038,7 +1038,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	_, err = mediaDB.InsertMediaTitle(newTitle)
+	_, err = mediaDB.InsertMediaTitle(&newTitle)
 	require.NoError(t, err)
 
 	// Verify slug cache was invalidated (InsertMediaTitle uses AllSystems scope)
@@ -1074,7 +1074,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -1106,7 +1106,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	_, err = mediaDB.InsertMediaTitle(newTitle)
+	_, err = mediaDB.InsertMediaTitle(&newTitle)
 	require.NoError(t, err)
 
 	// Cache should still exist during transaction
@@ -1159,7 +1159,7 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedNESTitle, err := mediaDB.InsertMediaTitle(nesTitle)
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
 	require.NoError(t, err)
 
 	nesMedia := database.Media{
@@ -1175,7 +1175,7 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 		Slug:       slugs.SlugifyString("Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	insertedSNESTitle, err := mediaDB.InsertMediaTitle(snesTitle)
+	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
 	require.NoError(t, err)
 
 	snesMedia := database.Media{
@@ -1242,7 +1242,7 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{

@@ -64,7 +64,7 @@ func TestMediaDB_GetLaunchCommandForMedia_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Super Mario Bros."),
 		Name:       "Super Mario Bros.",
 	}
-	insertedMarioTitle, err := mediaDB.InsertMediaTitle(marioTitle)
+	insertedMarioTitle, err := mediaDB.InsertMediaTitle(&marioTitle)
 	require.NoError(t, err)
 
 	// Insert Media
@@ -98,7 +98,7 @@ func TestMediaDB_GetLaunchCommandForMedia_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("The Legend of Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	insertedZeldaTitle, err := mediaDB.InsertMediaTitle(zeldaTitle)
+	insertedZeldaTitle, err := mediaDB.InsertMediaTitle(&zeldaTitle)
 	require.NoError(t, err)
 
 	zeldaMedia := database.Media{

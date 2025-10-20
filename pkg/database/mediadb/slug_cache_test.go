@@ -53,7 +53,7 @@ func createTestMedia(t *testing.T, mediaDB *MediaDB, systemID, slug, name, path 
 		Slug:       slug,
 		Name:       name,
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -211,7 +211,7 @@ func TestSlugCache_SetAndGet_Integration(t *testing.T) {
 		Slug:       "supermariobros",
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -568,7 +568,7 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Super Mario Bros"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -655,7 +655,7 @@ func TestGetMediaByDBID_NoTags_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Test Game"),
 		Name:       "Test Game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -720,7 +720,7 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Test Game"),
 		Name:       "Test Game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{

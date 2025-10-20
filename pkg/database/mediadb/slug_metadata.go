@@ -30,6 +30,7 @@ import (
 // set before applying expensive string similarity algorithms.
 type SlugMetadata struct {
 	Slug          string
+	SecondarySlug string
 	SlugLength    int
 	SlugWordCount int
 }
@@ -41,21 +42,37 @@ type SlugMetadata struct {
 // normalization pipeline, not from re-tokenization. This ensures consistency
 // between the slug and its metadata.
 //
+// If the title contains a secondary title separator (: or -), the secondary slug
+// is also extracted and stored separately to enable efficient secondary title matching.
+//
 // Example:
 //
 //	metadata := GenerateSlugWithMetadata("The Legend of Zelda: Ocarina of Time")
 //	metadata.Slug         → "legendofzeldaocarinaoftime"
 //	metadata.SlugLength   → 26 (character count)
 //	metadata.SlugWordCount → 6 (token count: legend, of, zelda, ocarina, of, time)
+//	metadata.SecondarySlug → "ocarinaoftime" (secondary title after colon)
 func GenerateSlugWithMetadata(input string) SlugMetadata {
 	// Run slugification and get the tokens that were ACTUALLY used
 	result := slugs.SlugifyWithTokens(input)
 
-	return SlugMetadata{
+	// Extract secondary title if present (e.g., "Some Game: The Next Gen" → "The Next Gen")
+	cleaned := slugs.StripLeadingArticle(input)
+	_, secondaryTitle, hasSecondary := slugs.SplitTitle(cleaned)
+
+	metadata := SlugMetadata{
 		Slug:          result.Slug,
 		SlugLength:    utf8.RuneCountInString(result.Slug),
 		SlugWordCount: computeWordCount(result.Slug, result.Tokens),
 	}
+
+	// If there's a secondary title, slugify it and store separately
+	if hasSecondary && secondaryTitle != "" {
+		secondaryTitle = slugs.StripLeadingArticle(secondaryTitle)
+		metadata.SecondarySlug = slugs.SlugifyString(secondaryTitle)
+	}
+
+	return metadata
 }
 
 // computeWordCount returns token count for Latin, bigram count for CJK.

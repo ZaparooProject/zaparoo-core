@@ -22,6 +22,7 @@ package titles
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
@@ -36,7 +37,10 @@ type FuzzyMatchResult struct {
 	Similarity float64
 }
 
-// TryMainTitleOnly attempts main title-only search (drops secondary title).
+// TryMainTitleOnly attempts main title-only search when query and DB have mismatched secondary titles.
+// Handles two cases:
+// 1. Query has secondary title, DB doesn't: "Some Game: The Next Gen" → "Some Game" (exact match on main)
+// 2. Query lacks secondary title, DB has one: "Some Game" → "Some Game: The Next Gen" (partial match)
 // Expects matchInfo to be pre-generated to avoid redundant computation.
 func TryMainTitleOnly(
 	ctx context.Context,
@@ -46,31 +50,80 @@ func TryMainTitleOnly(
 	matchInfo GameMatchInfo,
 	tagFilters []database.TagFilter,
 ) ([]database.SearchResultWithCursor, string, error) {
-	// Safety check (should be pre-filtered by caller)
-	if !matchInfo.HasSecondaryTitle || matchInfo.MainTitleSlug == "" || matchInfo.MainTitleSlug == slug {
+	// Search using the main title slug (not the full slug)
+	mainSlug := matchInfo.MainTitleSlug
+	log.Info().Msgf("trying main title DB column prefix search: '%s' (from full slug: '%s')", mainSlug, slug)
+
+	// Prefix search returns all titles starting with the main title slug
+	results, err := gamesdb.SearchMediaBySlugPrefix(ctx, systemID, mainSlug, tagFilters)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to prefix search for main slug '%s': %w", mainSlug, err)
+	}
+
+	if len(results) == 0 {
 		return nil, "", nil
 	}
 
-	log.Info().Msgf("no results for '%s', trying main title only: '%s'", slug, matchInfo.MainTitleSlug)
-	results, err := gamesdb.SearchMediaBySlug(ctx, systemID, matchInfo.MainTitleSlug, tagFilters)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to search for main title slug '%s': %w", matchInfo.MainTitleSlug, err)
+	// Post-filter into two categories, preferring exact matches
+	var exactMatches []database.SearchResultWithCursor
+	var partialMatches []database.SearchResultWithCursor
+
+	for _, result := range results {
+		dbMatchInfo := GenerateMatchInfo(result.Name)
+
+		// Exact match: Query has secondary title, DB doesn't - DB's full slug matches query's main title
+		if dbMatchInfo.CanonicalSlug == mainSlug && !dbMatchInfo.HasSecondaryTitle {
+			exactMatches = append(exactMatches, result)
+			continue
+		}
+
+		// Partial match case 1: Query simple, DB has secondary - DB's main title starts with query's main
+		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, mainSlug) &&
+			!matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
+			partialMatches = append(partialMatches, result)
+			continue
+		}
+
+		// Partial match case 2: Delimiter priority conflict - query's full slug matches DB's main
+		// Handles cases like "Hero's Adventure" matching "Hero's Adventure: Crystal Temple"
+		// where different delimiters are present causing different split points
+		// Uses prefix to handle the delimiter mismatch, but only if query's full slug aligns with DB main
+		if strings.HasPrefix(dbMatchInfo.MainTitleSlug, slug) &&
+			matchInfo.HasSecondaryTitle && dbMatchInfo.HasSecondaryTitle {
+			partialMatches = append(partialMatches, result)
+		}
 	}
 
-	if len(results) > 0 {
+	// Prefer exact matches over partial matches
+	if len(exactMatches) > 0 {
+		log.Info().Msgf("found %d exact main title matches (filtered from %d): '%s'",
+			len(exactMatches), len(results), mainSlug)
 		log.Debug().
 			Str("strategy", StrategyMainTitleOnly).
-			Str("query", slug).
-			Str("main_title_slug", matchInfo.MainTitleSlug).
-			Int("result_count", len(results)).
-			Msg("match found via main title only strategy")
-		return results, StrategyMainTitleOnly, nil
+			Str("query", mainSlug).
+			Int("result_count", len(exactMatches)).
+			Msg("exact match found via main title only strategy")
+		return exactMatches, StrategyMainTitleOnly, nil
+	}
+
+	if len(partialMatches) > 0 {
+		log.Info().Msgf("found %d partial main title matches (filtered from %d): '%s'",
+			len(partialMatches), len(results), mainSlug)
+		log.Debug().
+			Str("strategy", StrategyMainTitleOnly).
+			Str("query", mainSlug).
+			Int("result_count", len(partialMatches)).
+			Msg("partial match found via main title only strategy")
+		return partialMatches, StrategyMainTitleOnly, nil
 	}
 
 	return nil, "", nil
 }
 
-// TrySecondaryTitleExact attempts secondary title-only exact match.
+// TrySecondaryTitleExact attempts secondary title-only matching when query and DB have mismatched secondary titles.
+// Handles two cases:
+// 1. Input has secondary title, DB doesn't: "Legend of Zelda: Ocarina of Time" → "Ocarina of Time" (exact match)
+// 2. Input lacks secondary title, DB has one: "Ocarina of Time" → "Legend of Zelda: Ocarina of Time" (partial match)
 // Expects matchInfo to be pre-generated to avoid redundant computation.
 func TrySecondaryTitleExact(
 	ctx context.Context,
@@ -80,32 +133,78 @@ func TrySecondaryTitleExact(
 	matchInfo GameMatchInfo,
 	tagFilters []database.TagFilter,
 ) ([]database.SearchResultWithCursor, string, error) {
-	// Safety check (should be pre-filtered by caller)
-	if !matchInfo.HasSecondaryTitle ||
-		matchInfo.SecondaryTitleSlug == "" ||
-		len(matchInfo.SecondaryTitleSlug) < MinSecondaryTitleSlugLength {
+	// Determine search slug: use secondary title slug if input has one, otherwise use full slug
+	var searchSlug string
+	if matchInfo.HasSecondaryTitle {
+		searchSlug = matchInfo.SecondaryTitleSlug
+	} else {
+		searchSlug = slug
+	}
+
+	// Skip if secondary slug is too short (reduces false positives)
+	if len(searchSlug) < MinSecondaryTitleSlugLength {
 		return nil, "", nil
 	}
 
-	secondarySlug := matchInfo.SecondaryTitleSlug
-	log.Info().Msgf("no results, trying secondary title-only search: '%s'", secondarySlug)
+	log.Info().Msgf("trying secondary title search: '%s' (from full slug: '%s')", searchSlug, slug)
 
-	results, err := gamesdb.SearchMediaBySlug(ctx, systemID, secondarySlug, tagFilters)
-	if err != nil {
-		log.Warn().Err(err).Msgf("secondary title-only exact search failed for '%s'", secondarySlug)
+	// Case 1 (Exact): Input has secondary, DB doesn't - search DB's Slug column
+	// Example: Input "Legend of Zelda: Ocarina of Time" (secondary="ocarinaoftime")
+	//          matches DB "Ocarina of Time" (slug="ocarinaoftime", no secondary)
+	exactResults, exactErr := gamesdb.SearchMediaBySlug(ctx, systemID, searchSlug, tagFilters)
+	if exactErr != nil {
+		log.Warn().Err(exactErr).Msgf("exact secondary title search failed for '%s'", searchSlug)
+	} else if len(exactResults) > 0 {
+		// Post-filter: only keep DB entries WITHOUT secondary title
+		var filtered []database.SearchResultWithCursor
+		for _, result := range exactResults {
+			dbMatchInfo := GenerateMatchInfo(result.Name)
+			if !dbMatchInfo.HasSecondaryTitle {
+				filtered = append(filtered, result)
+			}
+		}
+
+		if len(filtered) > 0 {
+			log.Info().Msgf("found %d exact secondary title matches (filtered from %d): '%s'",
+				len(filtered), len(exactResults), searchSlug)
+			log.Debug().
+				Str("strategy", StrategySecondaryTitleExact).
+				Str("query", searchSlug).
+				Int("result_count", len(filtered)).
+				Msg("exact match found via secondary title exact strategy")
+			return filtered, StrategySecondaryTitleExact, nil
+		}
+	}
+
+	// Case 2 (Partial): Input simple, DB has secondary - search DB's SecondarySlug column
+	// Example: Input "Ocarina of Time" (slug="ocarinaoftime")
+	//          matches DB "Legend of Zelda: Ocarina of Time" (secondary_slug="ocarinaoftime")
+	partialResults, partialErr := gamesdb.SearchMediaBySecondarySlug(ctx, systemID, searchSlug, tagFilters)
+	if partialErr != nil {
+		log.Warn().Err(partialErr).Msgf("partial secondary title search failed for '%s'", searchSlug)
 		return nil, "", nil
 	}
 
-	if len(results) > 0 {
-		log.Info().Msgf("found %d results using secondary title-only exact: '%s'",
-			len(results), secondarySlug)
-		log.Debug().
-			Str("strategy", StrategySecondaryTitleExact).
-			Str("query", slug).
-			Str("secondary_slug", secondarySlug).
-			Int("result_count", len(results)).
-			Msg("match found via secondary title exact strategy")
-		return results, StrategySecondaryTitleExact, nil
+	if len(partialResults) > 0 {
+		// Post-filter: only keep DB entries WITH secondary title
+		var filtered []database.SearchResultWithCursor
+		for _, result := range partialResults {
+			dbMatchInfo := GenerateMatchInfo(result.Name)
+			if dbMatchInfo.HasSecondaryTitle {
+				filtered = append(filtered, result)
+			}
+		}
+
+		if len(filtered) > 0 {
+			log.Info().Msgf("found %d partial secondary title matches (filtered from %d): '%s'",
+				len(filtered), len(partialResults), searchSlug)
+			log.Debug().
+				Str("strategy", StrategySecondaryTitleExact).
+				Str("query", searchSlug).
+				Int("result_count", len(filtered)).
+				Msg("partial match found via secondary title exact strategy")
+			return filtered, StrategySecondaryTitleExact, nil
+		}
 	}
 
 	return nil, "", nil

@@ -21,12 +21,13 @@ PRAGMA foreign_keys = ON;
 
 -- Step 2: Recreate tables with foreign keys and optimizations
 
--- 2.1 MediaTitles: Add CASCADE foreign key from Systems, add pre-filter columns
+-- 2.1 MediaTitles: Add CASCADE foreign key from Systems, add pre-filter columns, add SecondarySlug
 CREATE TABLE MediaTitles_new (
     DBID          INTEGER PRIMARY KEY,
     SystemDBID    integer not null,
     Slug          text    not null,
     Name          text    not null,
+    SecondarySlug text,
     SlugLength    integer default 0,
     SlugWordCount integer default 0,
     FOREIGN KEY (SystemDBID) REFERENCES Systems(DBID) ON DELETE CASCADE
@@ -98,6 +99,7 @@ ALTER TABLE SupportingMedia_new RENAME TO SupportingMedia;
 -- MediaTitles indexes
 CREATE INDEX mediatitles_slug_idx ON MediaTitles(Slug);
 CREATE INDEX mediatitles_system_slug_idx ON MediaTitles(SystemDBID, Slug);
+CREATE INDEX mediatitles_secondary_slug_idx ON MediaTitles(SecondarySlug);  -- Secondary title matching
 CREATE INDEX mediatitles_prefilter_idx ON MediaTitles(SlugLength, SlugWordCount);  -- Pre-filter for fuzzy matching
 
 -- Media indexes
@@ -169,6 +171,7 @@ DROP TABLE IF EXISTS SystemTagsCache;
 
 -- Drop composite indexes
 DROP INDEX IF EXISTS tags_type_tag_idx;
+DROP INDEX IF EXISTS mediatitles_secondary_slug_idx;
 DROP INDEX IF EXISTS mediatitles_prefilter_idx;
 
 -- Restore MediaTitles without foreign keys or pre-filter columns

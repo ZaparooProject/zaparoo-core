@@ -122,8 +122,9 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 			Name:          name,
 			SlugLength:    metadata.SlugLength,
 			SlugWordCount: metadata.SlugWordCount,
+			SecondarySlug: metadata.SecondarySlug,
 		}
-		insertedTitle, titleErr := mediaDB.InsertMediaTitle(title)
+		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
 		require.NoError(t, titleErr)
 
 		media := database.Media{
@@ -342,135 +343,272 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 		description      string
 		expectedError    bool
 	}{
-		// === Strategy 1: Exact match WITH tags (high confidence) ===
+		// ============================================================
+		// EXACT MATCH STRATEGY
+		// ============================================================
+
 		{
-			name:             "strategy1_exact_match_with_preferred_region",
+			name:             "exact_match_with_preferred_region",
 			input:            "SNES/Plumber Quest Adventures",
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Exact slug match selects USA region (preferred)",
 		},
-
-		// === Strategy 2: Exact match WITHOUT tags ===
 		{
-			name:             "strategy2_exact_match_no_tag_filter",
+			name:             "exact_match_no_tag_filter",
 			input:            "SNES/Time Paradox RPG",
 			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Exact match without explicit tags, uses default region preference",
 		},
-
-		// === Strategy 3: Secondary title exact match ===
 		{
-			name:             "strategy3_secondary_title_crystal",
+			name:             "exact_match_full_title_with_colon",
 			input:            "Nintendo64/Hero's Adventure: Crystal Temple",
 			expectedPath:     "/roms/n64/Hero Crystal (USA).z64",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Full title with colon matches via exact match (colon is stripped during slugification)",
 		},
 		{
-			name:             "strategy3_secondary_title_darkmoon",
+			name:             "exact_match_full_title_with_colon_darkmoon",
 			input:            "Nintendo64/Hero's Adventure: Dark Moon",
 			expectedPath:     "/roms/n64/Hero Dark Moon (USA).z64",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Full title with colon matches via exact match (colon is stripped during slugification)",
 		},
-
-		// === Strategy 4a: Token signature (word order independent) ===
 		{
-			name:             "strategy4a_token_word_order_independent",
+			name:             "exact_match_turbo_blaze",
 			input:            "Genesis/Turbo Blaze",
 			expectedPath:     "/roms/genesis/Turbo Blaze (USA).md",
 			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Exact match for 'Turbo Blaze' (not token signature since exact match comes first)",
+			description:      "Exact match for 'Turbo Blaze'",
 		},
 		{
-			name:             "strategy4a_token_word_order_pc",
+			name:             "exact_match_wars_robot",
 			input:            "PC/Wars Robot",
 			expectedPath:     "/games/pc/warsrobot/wr.exe",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Exact match for 'Wars Robot' (database has this exact title)",
 		},
-
-		// === Strategy 4b: Jaro-Winkler fuzzy matching ===
 		{
-			name:             "strategy4b_fuzzy_typo_missing_char",
+			name:             "exact_match_variant_excludes_demo",
+			input:            "SNES/Plumber Quest Adventures",
+			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Automatically excludes demo/beta variants",
+		},
+		{
+			name:             "exact_match_word_normalization",
+			input:            "Genesis/Turbo Blaze",
+			expectedPath:     "/roms/genesis/Turbo Blaze (USA).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Handles word normalization in slug matching",
+		},
+		{
+			name:             "exact_match_high_confidence_early_exit",
+			input:            "SNES/Dragon Warrior Chronicles",
+			expectedPath:     "/roms/snes/Dragon Warrior (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Exact slug match with perfect tag alignment triggers early exit at high confidence threshold",
+		},
+		{
+			name:             "exact_match_tie_break_with_region_preference",
+			input:            "Genesis/Storm Warrior",
+			expectedPath:     "/roms/genesis/Storm Warrior (USA).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "When multiple exact matches exist (USA and Europe), default region preference (USA) breaks the tie",
+		},
+		{
+			name:             "exact_match_full_title_with_dash",
+			input:            "Nintendo64/Adventure - Temple",
+			expectedPath:     "/roms/n64/Adventure Temple Alt (USA).z64",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Full title with dash 'Adventure - Temple' matches database entry (slug: adventuretemple)",
+		},
+		{
+			name:             "exact_match_adventure_temple",
+			input:            "Nintendo64/Adventure Temple",
+			expectedPath:     "/roms/n64/Adventure Temple Alt (USA).z64",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Exact match for 'Adventure Temple'",
+		},
+		{
+			name:             "exact_match_multiple_same_slug_tag_score_diff",
+			input:            "SNES/Time Paradox RPG",
+			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "When multiple exact slug matches exist (USA, Europe, no-region), tag scoring selects USA as highest preference",
+		},
+		{
+			name:             "exact_match_variant_inclusion_with_explicit_tag",
+			input:            "SNES/Plumber Quest Adventures",
+			expectedPath:     "/roms/snes/Plumber Quest Adventures (Demo).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Explicit tag (unfinished:demo) overrides default variant exclusion and finds demo game",
+			advArgs:          map[string]string{"tags": "unfinished:demo"},
+		},
+		{
+			name:             "exact_match_very_short_title_1_char",
+			input:            "NES/Q",
+			expectedPath:     "/roms/nes/Q (USA).nes",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Single character title should match correctly (tests minimum slug length handling)",
+		},
+		{
+			name:             "exact_match_very_long_title",
+			input:            "SNES/The Super Ultimate Mega Hyper Championship Tournament Edition Deluxe",
+			expectedPath:     "/roms/snes/Super Ultimate Long (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Very long title (50+ chars) should match correctly without truncation issues",
+		},
+		{
+			name:             "exact_match_unicode_accent_normalization",
+			input:            "SNES/Pokemon Stadium",
+			expectedPath:     "/roms/snes/Pokemon Stadium (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Query without accent 'Pokemon' matches database entry with accent 'Pokémon' via unicode normalization",
+		},
+		{
+			name:             "exact_match_multiple_colons_in_title",
+			input:            "Nintendo64/Adventure Game: Part 1: The Beginning",
+			expectedPath:     "/roms/n64/Adventure Part 1 (USA).z64",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Query with multiple colons matches exactly (colons stripped during slugification)",
+		},
+		{
+			name:             "exact_match_prefilter_extreme_length_diff",
+			input:            "Genesis/X",
+			expectedPath:     "/roms/genesis/X (USA).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Very short query (1 char) should not be excluded by fuzzy prefilter length constraints",
+		},
+
+		// ============================================================
+		// SECONDARY TITLE EXACT MATCH STRATEGY
+		// ============================================================
+
+		{
+			name:             "secondary_title_exact_match_crystal_temple",
+			input:            "Nintendo64/Crystal Temple",
+			expectedPath:     "/roms/n64/Hero Crystal (USA).z64",
+			expectedStrategy: titles.StrategySecondaryTitleExact,
+			description:      "Token 'Crystal Temple' matches DB entry 'Hero's Adventure: Crystal Temple' via SecondarySlug column",
+		},
+		{
+			name:             "secondary_title_exact_match_dark_moon",
+			input:            "Nintendo64/Dark Moon",
+			expectedPath:     "/roms/n64/Hero Dark Moon (USA).z64",
+			expectedStrategy: titles.StrategySecondaryTitleExact,
+			description:      "Token 'Dark Moon' matches DB entry 'Hero's Adventure: Dark Moon' via SecondarySlug column",
+		},
+
+		// ============================================================
+		// MAIN TITLE ONLY STRATEGY
+		// ============================================================
+
+		{
+			name:             "main_title_prefix_match",
+			input:            "Nintendo64/Hero's Adventure",
+			expectedPath:     "/roms/n64/Hero Crystal (USA).z64",
+			expectedStrategy: titles.StrategyMainTitleOnly,
+			description:      "Token 'Hero's Adventure' matches DB entries via prefix search and main title post-filter",
+		},
+
+		// ============================================================
+		// TOKEN SIGNATURE STRATEGY
+		// ============================================================
+
+		{
+			name:             "token_signature_3_word_match",
+			input:            "PC/Crystal Space Quest",
+			expectedPath:     "/games/pc/crystal_space_quest.exe",
+			expectedStrategy: titles.StrategyTokenSignature,
+			description:      "Token signature matches 3-word reversal: 'Crystal Space Quest' matches 'Quest Space Crystal'",
+		},
+
+		// ============================================================
+		// FUZZY MATCH STRATEGY (JARO-WINKLER)
+		// ============================================================
+
+		{
+			name:             "fuzzy_typo_missing_char",
 			input:            "NES/Buble",
 			expectedPath:     "/roms/nes/Bubble (USA).nes",
 			expectedStrategy: titles.StrategyJaroWinklerDamerau,
 			description:      "Fuzzy match corrects typo: buble -> bubble (missing 'b')",
 		},
 		{
-			name:             "strategy4b_fuzzy_typo_wrong_char",
+			name:             "fuzzy_typo_wrong_char",
 			input:            "Genesis/Turbu",
 			expectedPath:     "/roms/genesis/Turbo (USA).md",
 			expectedStrategy: titles.StrategyJaroWinklerDamerau,
 			description:      "Fuzzy match corrects typo: turbu -> turbo",
 		},
 		{
-			name:             "strategy4b_fuzzy_typo_transposed",
+			name:             "fuzzy_typo_transposed",
 			input:            "NES/Galxaia",
 			expectedPath:     "/roms/nes/Galaxia (USA).nes",
 			expectedStrategy: titles.StrategyJaroWinklerDamerau,
 			description:      "Fuzzy match corrects transposition: galxaia -> galaxia",
 		},
-
-		// === Strategy 5: Main title only (drops secondary) ===
 		{
-			name:             "strategy5_main_title_only",
-			input:            "Nintendo64/Adventure Temple",
-			expectedPath:     "/roms/n64/Adventure Temple Alt (USA).z64",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Exact match for 'Adventure Temple' (not main_title_only)",
-		},
-
-		// === Strategy 6: Progressive trim ===
-		{
-			name:             "strategy6_progressive_trim",
-			input:            "SNES/Hero's Sword Ancient Kingdom Extended Edition",
-			expectedPath:     "/roms/snes/Hero Sword AK (USA).sfc",
-			expectedStrategy: titles.StrategyProgressiveTrim,
-			description: "Progressive trim handles verbose query by removing 'Extended Edition' to match " +
-				"'Hero's Sword: Ancient Kingdom'",
-		},
-
-		// === Variant filtering ===
-		{
-			name:             "variant_excludes_demo",
-			input:            "SNES/Plumber Quest Adventures",
-			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Automatically excludes demo/beta variants",
-		},
-
-		// === Special characters ===
-		{
-			name:             "special_chars_word_normalization",
-			input:            "Genesis/Turbo Blaze",
-			expectedPath:     "/roms/genesis/Turbo Blaze (USA).md",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Handles word normalization in slug matching",
-		},
-
-		// === Strategy fallback ===
-		{
-			name:             "strategy_fallback_exact_to_secondary",
-			input:            "Nintendo64/Hero's Adventure Crystal Temple",
-			expectedPath:     "/roms/n64/Hero Crystal (USA).z64",
-			expectedStrategy: titles.StrategySecondaryTitleExact,
-			description:      "Fails exact match (missing colon separator) then succeeds via secondary title strategy",
-		},
-
-		// === Confidence scoring ===
-		{
-			name:             "confidence_fuzzy_match_with_typos",
+			name:             "fuzzy_match_with_multiple_typos",
 			input:            "NES/Vampir Hnt",
 			expectedPath:     "/roms/nes/Vampire Hunt (USA).nes",
 			expectedStrategy: titles.StrategyJaroWinklerDamerau,
 			description:      "Fuzzy matching handles multiple typos (vampir hnt -> vampire hunt)",
 		},
+		{
+			name:             "fuzzy_confidence_between_minimum_and_acceptable",
+			input:            "NES/Dragon Wrlck",
+			expectedPath:     "/roms/nes/Dragon Warlock (USA).nes",
+			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			description:      "Fuzzy match for 'Dragon Wrlck' finds 'Dragon Warlock' with confidence between 0.60-0.70, should launch with warning",
+		},
+		{
+			name:             "fuzzy_precedence_wins_over_trim",
+			input:            "Genesis/Turbo Chargd",
+			expectedPath:     "/roms/genesis/Turbo Charged (USA).md",
+			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			description:      "A fuzzy match on 'Turbo Chargd' finds 'Turbo Charged' and stops, demonstrating first-match-wins behavior",
+		},
+		{
+			name:             "fuzzy_ambiguous_tie_break",
+			input:            "NES/Dragon Warr",
+			expectedPath:     "/roms/nes/Dragon War (USA).nes",
+			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			description:      "Ambiguous typo 'Dragon Warr' could match 'Dragon War' or 'Dragon Warlock', tie-breaking selects best match",
+		},
 
-		// === Tag filtering ===
+		// ============================================================
+		// PROGRESSIVE TRIM STRATEGY
+		// ============================================================
+
+		{
+			name:             "progressive_trim_verbose_query",
+			input:            "SNES/Hero's Sword Ancient Kingdom Extended Edition",
+			expectedPath:     "/roms/snes/Hero Sword AK (USA).sfc",
+			expectedStrategy: titles.StrategyProgressiveTrim,
+			description:      "Progressive trim handles verbose query by removing 'Extended Edition' to match 'Hero's Sword: Ancient Kingdom'",
+		},
+		{
+			name:             "progressive_trim_prevents_overmatching",
+			input:            "Genesis/Turbo the Speedster and Friends",
+			expectedPath:     "/roms/genesis/Turbo Full (USA).md",
+			expectedStrategy: titles.StrategyProgressiveTrim,
+			description:      "Trims to 'Turbo the Speedster' (exact match), prevents over-trimming to ambiguous 'Turbo'",
+		},
+		{
+			name:             "progressive_trim_max_depth",
+			input:            "SNES/Fighter Game One Two Three Four Extra Words",
+			expectedPath:     "/roms/snes/Fighter 1234 (USA).sfc",
+			expectedStrategy: titles.StrategyProgressiveTrim,
+			description:      "Progressive trim at max depth (3 iterations) should find match after trimming to 'Fighter Game One Two Three Four'",
+		},
+
+		// ============================================================
+		// TAG FILTERING
+		// ============================================================
+
 		{
 			name:             "tag_filter_negative_operator",
 			input:            "SNES/Plumber Quest Adventures",
@@ -480,24 +618,67 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			advArgs:          map[string]string{"tags": "-region:us"},
 		},
 		{
-			name:             "tag_filter_advargs_explicit_preference",
+			name:             "tag_filter_explicit_preference",
 			input:            "SNES/Plumber Quest Adventures",
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "AdvArgs tags can specify explicit region preference (Europe instead of default USA)",
 			advArgs:          map[string]string{"tags": "region:eu"},
 		},
-
-		// === Cache behavior ===
 		{
-			name:          "cache_miss_on_different_tags",
-			input:         "NES/Galaxia",
-			expectedError: true,
-			description:   "Query with (-region:us) fails despite 'Galaxia (USA)' existing - cache keys include tags",
-			advArgs:       map[string]string{"tags": "-region:us"},
+			name:             "tag_filter_multiple_negative",
+			input:            "SNES/Plumber Quest Adventures",
+			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Multiple negative tags (-region:us, -region:jp) exclude both and select Europe",
+			advArgs:          map[string]string{"tags": "-region:us,-region:jp"},
+		},
+		{
+			name:             "tag_filter_advargs_overrides_filename",
+			input:            "SNES/Time Paradox RPG (Europe)",
+			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Explicit tag in advArgs (region:us) overrides different tag found in filename (europe)",
+			advArgs:          map[string]string{"tags": "region:us"},
+		},
+		{
+			name:             "tag_filter_empty_string_ignored",
+			input:            "SNES/Plumber Quest Adventures",
+			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Empty tags advArg should be ignored and use default behavior (USA preference)",
+			advArgs:          map[string]string{"tags": ""},
+		},
+		{
+			name:             "tag_filter_mixed_positive_negative_operators",
+			input:            "SNES/Plumber Quest Adventures",
+			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Mixed operators: positive (region:eu) and negative (-unfinished:demo) should both apply",
+			advArgs:          map[string]string{"tags": "region:eu,-unfinished:demo"},
+		},
+		{
+			name:             "tag_filter_lang_override_config",
+			input:            "SNES/RPG Quest",
+			expectedPath:     "/roms/snes/RPG Quest (EUR) (Fr).sfc",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Explicit lang tag in advArgs (lang:fr) overrides default config language preference (en)",
+			advArgs:          map[string]string{"tags": "lang:fr"},
+		},
+		{
+			name:             "tag_filter_explicit_override_config_preference",
+			input:            "Genesis/Space Shooter",
+			expectedPath:     "/roms/genesis/Space Shooter (JPN).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description:      "Explicit tag (region:jp) in advArgs overrides config region preference (eu)",
+			advArgs:          map[string]string{"tags": "region:jp"},
+			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionEU)}, nil),
 		},
 
-		// === Normalization ===
+		// ============================================================
+		// NORMALIZATION
+		// ============================================================
+
 		{
 			name:             "normalization_roman_numeral",
 			input:            "SNES/Mystic Quest 4",
@@ -512,325 +693,26 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Slugification handles leading article 'The' correctly",
 		},
-
-		// === Progressive trim ambiguity ===
-		{
-			name:             "progressive_trim_prevents_overmatching",
-			input:            "Genesis/Turbo the Speedster and Friends",
-			expectedPath:     "/roms/genesis/Turbo Full (USA).md",
-			expectedStrategy: titles.StrategyProgressiveTrim,
-			description: "Trims to 'Turbo the Speedster' (exact match), " +
-				"prevents over-trimming to ambiguous 'Turbo'",
-		},
-
-		// === Error case ===
-		{
-			name:          "error_nonexistent_game",
-			input:         "SNES/This Game Does Not Exist At All",
-			expectedError: true,
-			description:   "Returns error when no strategy finds a match",
-		},
-
-		// ============================================================
-		// PRIORITY 1: CRITICAL TEST CASES
-		// ============================================================
-
-		// === Confidence threshold: High confidence early exit (optimization) ===
-		{
-			name:             "confidence_high_early_exit_optimization",
-			input:            "SNES/Dragon Warrior Chronicles",
-			expectedPath:     "/roms/snes/Dragon Warrior (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Exact slug match with perfect tag alignment triggers early exit at " +
-				"ConfidenceHigh threshold (0.95), skipping all other strategies",
-		},
-
-		// === Confidence threshold: Below minimum (should error) ===
-		{
-			name:          "confidence_below_minimum_threshold",
-			input:         "NES/Myster Cstl",
-			expectedError: true,
-			description: "Fuzzy match for 'Myster Cstl' might find 'Mystery Castle' but " +
-				"confidence is below minimum threshold (0.60), so it should fail",
-		},
-
-		// === Confidence threshold: Warning range (between minimum and acceptable) ===
-		{
-			name:             "confidence_between_minimum_and_acceptable",
-			input:            "NES/Dragon Wrlck",
-			expectedPath:     "/roms/nes/Dragon Warlock (USA).nes",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
-			description: "Fuzzy match for 'Dragon Wrlck' finds 'Dragon Warlock' with " +
-				"confidence between 0.60-0.70, should launch with warning",
-		},
-
-		// === Strategy precedence: Fuzzy match prevents better later match ===
-		{
-			name:             "strategy_precedence_fuzzy_wins_over_trim",
-			input:            "Genesis/Turbo Chargd",
-			expectedPath:     "/roms/genesis/Turbo Charged (USA).md",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
-			description: "A fuzzy match on 'Turbo Chargd' finds 'Turbo Charged' and stops, " +
-				"demonstrating first-match-wins behavior",
-		},
-
-		// === Ambiguity: Tie-breaking with region preference ===
-		{
-			name:             "ambiguity_tie_break_with_region_preference",
-			input:            "Genesis/Storm Warrior",
-			expectedPath:     "/roms/genesis/Storm Warrior (USA).md",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "When multiple exact matches exist (USA and Europe), " +
-				"default region preference (USA) breaks the tie",
-		},
-
-		// === Input validation: Invalid system ID ===
-		{
-			name:          "error_invalid_system_id",
-			input:         "FakeSystem/Some Game",
-			expectedError: true,
-			description:   "Should return error when the specified system ID does not exist in systemdefs",
-		},
-
-		// === Input validation: Invalid format (no slash) ===
-		{
-			name:          "error_invalid_format_no_slash",
-			input:         "Plumber Quest Adventures",
-			expectedError: true,
-			description:   "Should return error for input lacking the 'System/Title' format",
-		},
-
-		// === Input validation: Slug normalizes to empty ===
-		{
-			name:          "error_slug_normalizes_to_empty",
-			input:         "SNES/!@#$%",
-			expectedError: true,
-			description:   "Should return error if the game title normalizes to an empty slug after slugification",
-		},
-
-		// ============================================================
-		// PRIORITY 2: IMPORTANT TEST CASES
-		// ============================================================
-
-		// === Tag filtering: Multiple negative filters ===
-		{
-			name:             "tag_filter_multiple_negative",
-			input:            "SNES/Plumber Quest Adventures",
-			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Multiple negative tags (-region:us, -region:jp) exclude both and select Europe",
-			advArgs:          map[string]string{"tags": "-region:us,-region:jp"},
-		},
-
-		// === Tag filtering: AdvArgs override filename tags ===
-		{
-			name:             "tag_filter_advArgs_overrides_filename",
-			input:            "SNES/Time Paradox RPG (Europe)",
-			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Explicit tag in advArgs (region:us) overrides " +
-				"different tag found in filename (europe)",
-			advArgs: map[string]string{"tags": "region:us"},
-		},
-
-		// === Normalization: Ampersand vs 'and' ===
 		{
 			name:             "normalization_ampersand_to_and",
 			input:            "SNES/Dungeons and Dragons",
 			expectedPath:     "/roms/snes/DnD (USA).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
-			description: "Slugification normalizes 'and' to match '&' in database: " +
-				"'Dungeons and Dragons' matches 'Dungeons & Dragons'",
-		},
-
-		// === Secondary title: Dash separator (alternative test) ===
-		// Note: The existing strategy5_main_title_only already tests dash separator
-		// This test verifies that a game with dash in the name can be matched by full slug
-		{
-			name:             "secondary_title_full_match_with_dash",
-			input:            "Nintendo64/Adventure - Temple",
-			expectedPath:     "/roms/n64/Adventure Temple Alt (USA).z64",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Full title with dash 'Adventure - Temple' matches database entry " +
-				"(slug: adventuretemple)",
-		},
-
-		// === Multiple exact matches: Tag scoring differentiates ===
-		{
-			name:             "multiple_exact_matches_tag_score_diff",
-			input:            "SNES/Time Paradox RPG",
-			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "When multiple exact slug matches exist (USA, Europe, no-region), " +
-				"tag scoring selects USA as highest preference",
-		},
-
-		// === NEW: 3-word token signature ===
-		{
-			name:             "token_signature_3_word_match",
-			input:            "PC/Crystal Space Quest",
-			expectedPath:     "/games/pc/crystal_space_quest.exe",
-			expectedStrategy: titles.StrategyTokenSignature,
-			description: "Token signature matches 3-word reversal: 'Crystal Space Quest' matches " +
-				"'Quest Space Crystal'",
-		},
-
-		// === NEW: Variant inclusion via explicit tag ===
-		{
-			name:             "variant_inclusion_with_explicit_tag",
-			input:            "SNES/Plumber Quest Adventures",
-			expectedPath:     "/roms/snes/Plumber Quest Adventures (Demo).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Explicit tag (unfinished:demo) overrides default variant exclusion and finds demo game",
-			advArgs:          map[string]string{"tags": "unfinished:demo"},
-		},
-
-		// === NEW: Secondary title extraction from query ===
-		{
-			name:             "secondary_title_extraction_from_query",
-			input:            "Nintendo64/SomePrimary: Adventure Temple",
-			expectedPath:     "/roms/n64/Adventure Temple Alt (USA).z64",
-			expectedStrategy: titles.StrategySecondaryTitleExact,
-			description: "Query 'SomePrimary: Adventure Temple' extracts secondary 'Adventure Temple' which " +
-				"matches DB entry 'Adventure - Temple' (slug: adventuretemple)",
-		},
-
-		// === NEW: Main title extracted from verbose query ===
-		{
-			name:             "main_title_drop_secondary_with_colon",
-			input:            "Nintendo64/Extreme Racer 64: Ultimate Edition",
-			expectedPath:     "/roms/n64/Racer64 (USA).z64",
-			expectedStrategy: titles.StrategyMainTitleOnly,
-			description: "Query 'Extreme Racer 64: Ultimate Edition' extracts main title 'Extreme Racer 64' " +
-				"to match DB entry (query long, DB short)",
-		},
-
-		// === NEW: Ambiguous fuzzy match tie-breaking ===
-		{
-			name:             "ambiguous_fuzzy_match_tie_break",
-			input:            "NES/Dragon Warr",
-			expectedPath:     "/roms/nes/Dragon War (USA).nes",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
-			description: "Ambiguous typo 'Dragon Warr' could match 'Dragon War' or 'Dragon Warlock', " +
-				"tie-breaking selects best match",
-		},
-
-		// === NEW: AdvArgs lang override config ===
-		{
-			name:             "advargs_lang_override_config",
-			input:            "SNES/RPG Quest",
-			expectedPath:     "/roms/snes/RPG Quest (EUR) (Fr).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Explicit lang tag in advArgs (lang:fr) overrides default config " +
-				"language preference (en)",
-			advArgs: map[string]string{"tags": "lang:fr"},
+			description:      "Slugification normalizes 'and' to match '&' in database: 'Dungeons and Dragons' matches 'Dungeons & Dragons'",
 		},
 
 		// ============================================================
-		// PRIORITY 3: EDGE CASE TEST CASES
+		// CONFIGURATION PREFERENCES
 		// ============================================================
 
-		// === Extreme length: Very short title (1 character) ===
-		{
-			name:             "edge_case_very_short_title_1_char",
-			input:            "NES/Q",
-			expectedPath:     "/roms/nes/Q (USA).nes",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Single character title should match correctly (tests minimum slug length handling)",
-		},
-
-		// === Extreme length: Very long title (50+ chars) ===
-		{
-			name:             "edge_case_very_long_title",
-			input:            "SNES/The Super Ultimate Mega Hyper Championship Tournament Edition Deluxe",
-			expectedPath:     "/roms/snes/Super Ultimate Long (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Very long title (50+ chars) should match correctly without truncation issues",
-		},
-
-		// === Unicode: Accented characters normalization ===
-		{
-			name:             "edge_case_unicode_accent_normalization",
-			input:            "SNES/Pokemon Stadium",
-			expectedPath:     "/roms/snes/Pokemon Stadium (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Query without accent 'Pokemon' matches database entry with accent 'Pokémon' " +
-				"via unicode normalization",
-		},
-
-		// === Secondary title: Multiple colons ===
-		{
-			name:             "edge_case_multiple_colons_in_title",
-			input:            "Nintendo64/Adventure Game: Part 1: The Beginning",
-			expectedPath:     "/roms/n64/Adventure Part 1 (USA).z64",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Query with multiple colons matches exactly (colons stripped during slugification)",
-		},
-
-		// === Prefilter: Extreme length difference (should not exclude) ===
-		{
-			name:             "edge_case_prefilter_extreme_length_diff",
-			input:            "Genesis/X",
-			expectedPath:     "/roms/genesis/X (USA).md",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Very short query (1 char) should not be excluded by fuzzy prefilter length constraints",
-		},
-
-		// === Tag filter: Empty tag string (should be ignored) ===
-		{
-			name:             "edge_case_empty_tag_filter_string",
-			input:            "SNES/Plumber Quest Adventures",
-			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description:      "Empty tags advArg should be ignored and use default behavior (USA preference)",
-			advArgs:          map[string]string{"tags": ""},
-		},
-
-		// === Tag filter: Mixed positive and negative operators ===
-		{
-			name:             "edge_case_mixed_tag_operators",
-			input:            "SNES/Plumber Quest Adventures",
-			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Mixed operators: positive (region:eu) and negative (-unfinished:demo) " +
-				"should both apply",
-			advArgs: map[string]string{"tags": "region:eu,-unfinished:demo"},
-		},
-
-		// === Progressive trim: Maximum depth (3 trims) ===
-		{
-			name:             "edge_case_progressive_trim_max_depth",
-			input:            "SNES/Fighter Game One Two Three Four Extra Words",
-			expectedPath:     "/roms/snes/Fighter 1234 (USA).sfc",
-			expectedStrategy: titles.StrategyProgressiveTrim,
-			description: "Progressive trim at max depth (3 iterations) should find match " +
-				"after trimming to 'Fighter Game One Two Three Four'",
-		},
-
-		// === Variant filtering: Prototype variant excluded by default ===
-		{
-			name:          "edge_case_variant_proto_excluded",
-			input:         "Genesis/Plumber Quest Adventures Ultimate Edition",
-			expectedError: true,
-			description: "Prototype variant should be excluded by default variant filtering " +
-				"(only (Proto) exists in DB)",
-		},
-
-		// ============================================================
-		// CONFIG PREFERENCE TESTS
-		// ============================================================
-
-		// === Region preference: Default (USA) ===
 		{
 			name:             "config_pref_default_region_usa",
 			input:            "Genesis/Space Shooter",
 			expectedPath:     "/roms/genesis/Space Shooter (USA).md",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "With no config (blank), defaults to USA region preference",
-			cfg:              nil, // Explicitly nil to use default blank config
+			cfg:              nil,
 		},
-
-		// === Region preference: Europe ===
 		{
 			name:             "config_pref_region_europe",
 			input:            "Genesis/Space Shooter",
@@ -839,40 +721,30 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			description:      "Config with europe preference selects European version of Space Shooter",
 			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionEU)}, nil),
 		},
-
-		// === Region preference: Japan ===
 		{
 			name:             "config_pref_region_japan",
 			input:            "Genesis/Space Shooter",
 			expectedPath:     "/roms/genesis/Space Shooter (JPN).md",
 			expectedStrategy: titles.StrategyExactMatch,
-			description: "Config with japan preference selects Japanese version of " +
-				"Space Shooter",
-			cfg: makeConfigWithPreferences(t, []string{string(tags.TagRegionJP)}, nil),
+			description:      "Config with japan preference selects Japanese version of Space Shooter",
+			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionJP)}, nil),
 		},
-
-		// === Region preference: Multiple regions (priority order) ===
 		{
 			name:             "config_pref_region_priority_europe_then_japan",
 			input:            "SNES/Plumber Quest Adventures",
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
-			description: "Config with [europe, japan] preference selects Europe " +
-				"(first available in priority list)",
-			cfg: makeConfigWithPreferences(t, []string{string(tags.TagRegionEU), string(tags.TagRegionJP)}, nil),
+			description:      "Config with [europe, japan] preference selects Europe (first available in priority list)",
+			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionEU), string(tags.TagRegionJP)}, nil),
 		},
-
-		// === Language preference: English (default) ===
 		{
 			name:             "config_pref_lang_english_default",
 			input:            "SNES/RPG Quest",
 			expectedPath:     "/roms/snes/RPG Quest (EUR) (En).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Default lang preference (en) selects English version when multiple exist",
-			cfg:              nil, // Use default
+			cfg:              nil,
 		},
-
-		// === Language preference: French ===
 		{
 			name:             "config_pref_lang_french",
 			input:            "SNES/RPG Quest",
@@ -881,8 +753,6 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			description:      "Config with fr language preference selects French version of RPG Quest",
 			cfg:              makeConfigWithPreferences(t, nil, []string{string(tags.TagLangFR)}),
 		},
-
-		// === Language preference: Japanese ===
 		{
 			name:             "config_pref_lang_japanese",
 			input:            "SNES/RPG Quest",
@@ -892,29 +762,57 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionJP)}, []string{string(tags.TagLangJA)}),
 		},
 
-		// === Precedence: Explicit tags override config preferences ===
+		// ============================================================
+		// ERROR CASES
+		// ============================================================
+
 		{
-			name:             "config_pref_explicit_tags_override_config",
-			input:            "Genesis/Space Shooter",
-			expectedPath:     "/roms/genesis/Space Shooter (JPN).md",
-			expectedStrategy: titles.StrategyExactMatch,
-			description: "Explicit tag (region:jp) in advArgs overrides config region " +
-				"preference (eu)",
-			advArgs: map[string]string{"tags": "region:jp"},
-			cfg:     makeConfigWithPreferences(t, []string{string(tags.TagRegionEU)}, nil),
+			name:          "error_nonexistent_game",
+			input:         "SNES/This Game Does Not Exist At All",
+			expectedError: true,
+			description:   "Returns error when no strategy finds a match",
+		},
+		{
+			name:          "error_confidence_below_minimum_threshold",
+			input:         "NES/Myster Cstl",
+			expectedError: true,
+			description:   "Fuzzy match for 'Myster Cstl' might find 'Mystery Castle' but confidence is below minimum threshold (0.60), so it should fail",
+		},
+		{
+			name:          "error_invalid_system_id",
+			input:         "FakeSystem/Some Game",
+			expectedError: true,
+			description:   "Should return error when the specified system ID does not exist in systemdefs",
+		},
+		{
+			name:          "error_invalid_format_no_slash",
+			input:         "Plumber Quest Adventures",
+			expectedError: true,
+			description:   "Should return error for input lacking the 'System/Title' format",
+		},
+		{
+			name:          "error_slug_normalizes_to_empty",
+			input:         "SNES/!@#$%",
+			expectedError: true,
+			description:   "Should return error if the game title normalizes to an empty slug after slugification",
+		},
+		{
+			name:          "error_cache_miss_on_different_tags",
+			input:         "NES/Galaxia",
+			expectedError: true,
+			description:   "Query with (-region:us) fails despite 'Galaxia (USA)' existing - cache keys include tags",
+			advArgs:       map[string]string{"tags": "-region:us"},
+		},
+		{
+			name:          "error_variant_proto_excluded",
+			input:         "Genesis/Plumber Quest Adventures Ultimate Edition",
+			expectedError: true,
+			description:   "Prototype variant should be excluded by default variant filtering (only (Proto) exists in DB)",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// TODO: Revisit secondary title matching strategy and fallback behavior
-			// This test has conflicting expectations - the query and DB entry produce different
-			// secondary titles due to different split delimiters ('s vs :), so fallback cannot work.
-			// Need to redesign the test data or clarify the intended behavior.
-			if tt.name == "strategy_fallback_exact_to_secondary" {
-				t.Skip("Skipping - test design needs revision for secondary title matching")
-			}
-
 			// Create mock platform for launch
 			mockPlatform := mocks.NewMockPlatform()
 			if !tt.expectedError {
@@ -970,4 +868,3 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 		})
 	}
 }
-

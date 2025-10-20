@@ -62,7 +62,7 @@ func TestGetSystemTagsCached_AutoPopulate_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -141,7 +141,7 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedNESTitle, err := mediaDB.InsertMediaTitle(nesTitle)
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
 	require.NoError(t, err)
 
 	nesMedia := database.Media{
@@ -192,7 +192,7 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 		Slug:       slugs.SlugifyString("Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	insertedSNESTitle, err := mediaDB.InsertMediaTitle(snesTitle)
+	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
 	require.NoError(t, err)
 
 	snesMedia := database.Media{
@@ -275,7 +275,7 @@ func TestPopulateSystemTagsCacheForSystems_UpdateExisting_Integration(t *testing
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	media := database.Media{
@@ -378,7 +378,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 		Slug:       slugs.SlugifyString("Mario"),
 		Name:       "Super Mario Bros",
 	}
-	insertedNESTitle, err := mediaDB.InsertMediaTitle(nesTitle)
+	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
 	require.NoError(t, err)
 
 	nesMedia := database.Media{
@@ -416,7 +416,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 		Slug:       slugs.SlugifyString("Zelda"),
 		Name:       "The Legend of Zelda",
 	}
-	insertedSNESTitle, err := mediaDB.InsertMediaTitle(snesTitle)
+	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
 	require.NoError(t, err)
 
 	snesMedia := database.Media{

@@ -102,7 +102,7 @@ func TestWALCheckpointing(t *testing.T) {
 		Name:       "Test Game",
 		Slug:       "test-game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 	t.Logf("Inserted title with DBID: %d", insertedTitle.DBID)
 
@@ -205,7 +205,7 @@ func TestTransactionPerformanceWithWAL(t *testing.T) {
 		Name:       "Test Game",
 		Slug:       "test-game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	// Measure performance of batch inserts (simulating media scanner behavior)
@@ -284,7 +284,7 @@ func TestWALSizeManagement(t *testing.T) {
 		Name:       "Test Game",
 		Slug:       "test-game",
 	}
-	insertedTitle, err := mediaDB.InsertMediaTitle(title)
+	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
 	require.NoError(t, err)
 
 	// Perform multiple transactions to generate WAL activity
