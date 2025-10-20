@@ -164,6 +164,20 @@ func TestMapFilenameTagToCanonical(t *testing.T) {
 				{Type: TagTypeUnfinished, Value: TagUnfinishedDemoKiosk, Source: TagSourceUnknown},
 			},
 		},
+		{
+			name:  "Roland MT-32 with dash",
+			input: "mt-32",
+			expected: []CanonicalTag{
+				{Type: TagTypeAddon, Value: TagAddonMidiMT32, Source: TagSourceUnknown},
+			},
+		},
+		{
+			name:  "Roland MT-32 without dash",
+			input: "mt32",
+			expected: []CanonicalTag{
+				{Type: TagTypeAddon, Value: TagAddonMidiMT32, Source: TagSourceUnknown},
+			},
+		},
 	}
 
 	for _, tt := range tests {

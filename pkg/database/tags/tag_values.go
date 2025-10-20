@@ -642,6 +642,7 @@ const (
 	TagAddonHealthBiosensor      TagValue = "health:biosensor"
 	TagAddonMidiMiracle          TagValue = "midi:miracle"
 	TagAddonMidiPianokeyboard    TagValue = "midi:pianokeyboard"
+	TagAddonMidiMT32             TagValue = "midi:mt32"
 	TagAddonRobGyro              TagValue = "rob:gyro"
 	TagAddonRobBlock             TagValue = "rob:block"
 	TagAddonPrinterPocketprinter TagValue = "printer:pocketprinter"

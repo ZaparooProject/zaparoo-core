@@ -35,6 +35,7 @@ var (
 	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
 	reYear               = regexp.MustCompile(`\((19[789]\d|20\d{2})\)`)
 	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+	reTransBracketed     = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
 	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
 	reEditionWord        = regexp.MustCompile(
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|バージョン|エディション|ヴァージョン)(\s*[\(\[{<]|\s*$)`,
@@ -172,6 +173,94 @@ type SpecialPattern struct {
 	Tags    []CanonicalTag
 }
 
+// buildTranslationTags constructs canonical tags from translation pattern components.
+// This is shared logic used by both bracketless and bracketed translation tag parsing.
+// plusMinus: "+", "-", or "" (empty)
+// langCode: 2 or 3 letter language code (will be normalized to 2-letter)
+// versionNum: optional version number like "1.0" or "2.1.3"
+// source: TagSourceInferred for bracketless, TagSourceBracketed for bracketed
+func buildTranslationTags(plusMinus, langCode, versionNum string, source TagSource) []CanonicalTag {
+	var tags []CanonicalTag
+
+	// Convert 3-letter to 2-letter if needed
+	if mappedLang, ok := langMap[langCode]; ok {
+		langCode = mappedLang
+	}
+
+	// Add translation tag based on +/- prefix
+	// T+ or T (no prefix) = current/generic translation
+	// T- = older/outdated translation
+	if plusMinus == "-" {
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeUnlicensed,
+			Value:  TagUnlicensedTranslationOld,
+			Source: source,
+		})
+	} else {
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeUnlicensed,
+			Value:  TagUnlicensedTranslation,
+			Source: source,
+		})
+	}
+
+	// Add language tag
+	langTags := mapFilenameTagToCanonical(langCode)
+	for _, lt := range langTags {
+		if lt.Type == TagTypeLang {
+			lt.Source = source
+			tags = append(tags, lt)
+			break
+		}
+	}
+
+	// Add revision tag if version number present
+	if versionNum != "" {
+		// Normalize periods to dashes (e.g., "1.2" → "1-2")
+		versionNum = strings.ReplaceAll(versionNum, ".", "-")
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeRev,
+			Value:  TagValue(versionNum),
+			Source: source,
+		})
+	}
+
+	return tags
+}
+
+// parseTranslationPattern parses translation tag patterns like "T+Eng", "T-Chi", "TChi v1.0".
+// Used for bracketed translation tags like [T+Chi(Big5)100_Kuyagi].
+// Returns the canonical tags (translation, language, optional revision) and whether it matched.
+func parseTranslationPattern(tag string, source TagSource, isBracketed bool) ([]CanonicalTag, bool) {
+	if !isBracketed {
+		// Bracketless tags are handled by extractSpecialPatterns
+		return nil, false
+	}
+
+	// For bracketed tags like [T+Chi] or [T+Chi(Big5)100_Kuyagi]
+	// Match pattern: ^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?
+	matches := reTransBracketed.FindStringSubmatch(tag)
+	if len(matches) == 0 {
+		return nil, false
+	}
+
+	plusMinus := matches[1]
+	langCode := strings.ToLower(matches[2])
+	versionNum := ""
+	if len(matches) > 3 && matches[3] != "" {
+		versionNum = matches[3]
+	}
+
+	// Validate: must have +/- prefix OR be exactly 3 letters
+	isValid := plusMinus != "" || len(langCode) == 3
+	if !isValid {
+		return nil, false
+	}
+
+	tags := buildTranslationTags(plusMinus, langCode, versionNum, source)
+	return tags, true
+}
+
 // extractSpecialPatterns handles special formats like "Disc X of Y", "Rev X", "v1.2"
 // These are extracted before general tag parsing to avoid ambiguity and improve performance.
 // Returns the canonical tags and the filename with special patterns removed.
@@ -271,52 +360,9 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		isValid := plusMinus != "" || len(langCode) == 3
 
 		if isValid {
-			// Convert 3-letter to 2-letter if needed
-			if mappedLang, ok := langMap[langCode]; ok {
-				langCode = mappedLang
-			}
-
-			// Add translation tag based on +/- prefix
-			// T+ or T (no prefix) = current/generic translation (use base tag)
-			// T- = older/outdated translation (use :old hierarchical tag)
-			// Inferred from plain text (bracketless)
-			if plusMinus == "-" {
-				tags = append(tags, CanonicalTag{
-					Type:   TagTypeUnlicensed,
-					Value:  TagUnlicensedTranslationOld,
-					Source: TagSourceInferred,
-				})
-			} else {
-				// T+ and T both use the base translation tag
-				tags = append(tags, CanonicalTag{
-					Type:   TagTypeUnlicensed,
-					Value:  TagUnlicensedTranslation,
-					Source: TagSourceInferred,
-				})
-			}
-
-			// Add language tag (map to canonical language codes)
-			// Inferred from bracketless translation
-			langTags := mapFilenameTagToCanonical(langCode)
-			for _, lt := range langTags {
-				if lt.Type == TagTypeLang {
-					lt.Source = TagSourceInferred
-					tags = append(tags, lt)
-					break
-				}
-			}
-
-			// If version number present, add as revision tag
-			// Inferred from bracketless translation
-			if versionNum != "" {
-				// Normalize periods to dashes (e.g., "1.2" → "1-2")
-				versionNum = strings.ReplaceAll(versionNum, ".", "-")
-				tags = append(tags, CanonicalTag{
-					Type:   TagTypeRev,
-					Value:  TagValue(versionNum),
-					Source: TagSourceInferred,
-				})
-			}
+			// Use shared tag building logic (inferred from plain text, not bracketed)
+			transTags := buildTranslationTags(plusMinus, langCode, versionNum, TagSourceInferred)
+			tags = append(tags, transTags...)
 
 			// Replace the matched pattern with a space to preserve word boundaries
 			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
@@ -516,6 +562,12 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 // These are always dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
 // NOTE: This function receives the raw tag (not normalized) to preserve special characters like !
 func mapBracketTag(tag string) []CanonicalTag {
+	// Check for translation patterns first (T+Eng, T-Chi, etc.)
+	// This must come before normalization to preserve the T+/T- prefix
+	if transTags, matched := parseTranslationPattern(tag, TagSourceBracketed, true); matched {
+		return transTags
+	}
+
 	// Special handling for dump markers with special characters (must come BEFORE normalization)
 	switch tag {
 	case "!":

@@ -367,7 +367,7 @@ var CanonicalTagDefinitions = map[TagType][]TagValue{
 		TagAddonMicFC, TagAddonMicN64, TagAddonMicVRS,
 		TagAddonDrawingGraphicboard, TagAddonDrawingIllustbooster, TagAddonDrawingOekakids,
 		TagAddonHealthCatalyst, TagAddonHealthBiosensor,
-		TagAddonMidiMiracle, TagAddonMidiPianokeyboard,
+		TagAddonMidiMiracle, TagAddonMidiPianokeyboard, TagAddonMidiMT32,
 		TagAddonRobGyro, TagAddonRobBlock,
 		TagAddonPrinterPocketprinter, TagAddonPrinterPrintbooster,
 		TagAddonBarcodeboy, TagAddonRSS, TagAddonPocketcamera, TagAddonCapturecassette,

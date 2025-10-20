@@ -804,6 +804,106 @@ func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
 	}
 }
 
+func TestParseBracketedTranslation_FullPipeline(t *testing.T) {
+	tests := []struct {
+		name         string
+		filename     string
+		wantContains []string
+	}{
+		{
+			name:     "[T+Chi] Chinese translation with Big5 encoding - real world bug",
+			filename: "Final Fantasy VI (J) [T+Chi(Big5)100_Kuyagi].smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:zh",
+			},
+		},
+		{
+			name:     "[T+Eng] English translation",
+			filename: "Final Fantasy V (J) [T+Eng].smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:en",
+			},
+		},
+		{
+			name:     "[T-Ger] Older German translation",
+			filename: "Secret of Mana (J) [T-Ger].sfc",
+			wantContains: []string{
+				"unlicensed:translation:old",
+				"lang:de",
+			},
+		},
+		{
+			name:     "[TFre] French translation without prefix",
+			filename: "Chrono Trigger (J) [TFre].smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:fr",
+			},
+		},
+		{
+			name:     "[T+Eng v1.0] Translation with version",
+			filename: "Fire Emblem (J) [T+Eng v1.0].gba",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:en",
+				"rev:1-0",
+			},
+		},
+		{
+			name:     "[T+Spa v2.1.3] Translation with multi-part version",
+			filename: "Mother 3 (J) [T+Spa v2.1.3].gba",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:es",
+				"rev:2-1-3",
+			},
+		},
+		{
+			name:     "[T+Rus_v1.5] Translation with underscore version",
+			filename: "Zelda (J) [T+Rus_v1.5].nes",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:ru",
+				"rev:1-5",
+			},
+		},
+		{
+			name:     "[T+Por] Portuguese translation",
+			filename: "Final Fantasy VI (J) [T+Por].smc",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:pt",
+			},
+		},
+		{
+			name:     "Multiple bracket tags with translation",
+			filename: "Game (USA) [T+Eng] [!].rom",
+			wantContains: []string{
+				"unlicensed:translation",
+				"lang:en",
+				"region:us",
+				"dump:verified",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+		})
+	}
+}
+
 func TestParseBracesAndAngles_FullPipeline(t *testing.T) {
 	tests := []struct {
 		name         string

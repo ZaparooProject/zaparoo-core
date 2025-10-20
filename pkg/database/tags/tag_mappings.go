@@ -414,6 +414,8 @@ var allTagMappings = map[string][]CanonicalTag{
 	"sega-net":       {{Type: TagTypeAddon, Value: TagAddonOnlineSeganet}},       // Sega-Net (full name)
 	"sachen":         {{Type: TagTypeUnlicensed, Value: TagUnlicensedSachen}},    // Sachen unlicensed (NES)
 	"rumble-version": {{Type: TagTypeAddon, Value: TagAddonControllerRumble}},    // Rumble Pak version
+	"mt-32":          {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 MIDI sound module
+	"mt32":           {{Type: TagTypeAddon, Value: TagAddonMidiMT32}},            // Roland MT-32 (no dash)
 
 	// ============================================================================
 	// MULTICART AND COMPILATION MAPPINGS
