@@ -285,13 +285,16 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 			matchInfo: GameMatchInfo{
 				HasSecondaryTitle:  true,
 				MainTitleSlug:      "game",
-				SecondaryTitleSlug: "ii", // Only 2 chars, min is 4
+				SecondaryTitleSlug: "ii", // Very short secondary title
 				CanonicalSlug:      "gameii",
 			},
 			slug:     "gameii",
 			systemID: "NES",
-			setupMock: func(_ *helpers.MockMediaDBI) {
-				// Should not call any search methods due to length check
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlug", mock.Anything, "NES", "ii", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "ii", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
 			expectedStrategy: "",
@@ -304,10 +307,13 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				MainTitleSlug:     "wwe",
 				CanonicalSlug:     "wwe",
 			},
-			slug:     "wwe", // 3 chars, min is 4
+			slug:     "wwe", // Very short slug
 			systemID: "NES",
-			setupMock: func(_ *helpers.MockMediaDBI) {
-				// Should not call any search methods due to length check
+			setupMock: func(m *helpers.MockMediaDBI) {
+				m.On("SearchMediaBySlug", mock.Anything, "NES", "wwe", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
+				m.On("SearchMediaBySecondarySlug", mock.Anything, "NES", "wwe", []database.TagFilter(nil)).
+					Return([]database.SearchResultWithCursor{}, nil)
 			},
 			expectedCount:    0,
 			expectedStrategy: "",

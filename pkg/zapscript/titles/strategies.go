@@ -141,11 +141,6 @@ func TrySecondaryTitleExact(
 		searchSlug = slug
 	}
 
-	// Skip if secondary slug is too short (reduces false positives)
-	if len(searchSlug) < MinSecondaryTitleSlugLength {
-		return nil, "", nil
-	}
-
 	log.Info().Msgf("trying secondary title search: '%s' (from full slug: '%s')", searchSlug, slug)
 
 	// Case 1 (Exact): Input has secondary, DB doesn't - search DB's Slug column

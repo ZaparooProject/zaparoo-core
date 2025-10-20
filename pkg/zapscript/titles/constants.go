@@ -30,9 +30,6 @@ const (
 	FuzzyMatchMaxLengthDiff = 2
 	FuzzyMatchMinSimilarity = 0.85
 
-	// Secondary title minimum length for search
-	MinSecondaryTitleSlugLength = 4
-
 	// Confidence thresholds for result selection
 	ConfidenceHigh       = 0.95 // Exact match with perfect/near-perfect tags - immediate return
 	ConfidenceAcceptable = 0.70 // Good match with most tags matching - acceptable to launch
