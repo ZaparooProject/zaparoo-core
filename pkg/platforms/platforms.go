@@ -87,6 +87,9 @@ type CmdResult struct {
 	// NewCommands instructs the script runner to prepend these additional
 	// commands to the current script's remaining command list.
 	NewCommands []parser.Command
+	// Confidence is a float from 0.0 to 1.0 indicating how confident the
+	// a launch command was in its media resolution.
+	Confidence float64
 	// MediaChanged is true if a command may have started or stopped running
 	// media, and could affect handling of the hold mode feature. This doesn't
 	// include playlist changes, which manage running media separately.

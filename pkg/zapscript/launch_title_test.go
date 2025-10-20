@@ -171,10 +171,9 @@ func TestCmdTitle(t *testing.T) {
 				if !tt.shouldError {
 					mockPlatform.AssertExpectations(t)
 				}
-				assert.Equal(t, platforms.CmdResult{
-					MediaChanged: true,
-					Strategy:     "strategy_exact_match",
-				}, result)
+				assert.True(t, result.MediaChanged)
+				assert.Equal(t, "strategy_exact_match", result.Strategy)
+				assert.Greater(t, result.Confidence, 0.0, "confidence should be set")
 			}
 		})
 	}
@@ -325,10 +324,9 @@ func TestCmdTitleWithTags(t *testing.T) {
 	require.NoError(t, err)
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
-	assert.Equal(t, platforms.CmdResult{
-		MediaChanged: true,
-		Strategy:     "strategy_exact_match",
-	}, result)
+	assert.True(t, result.MediaChanged)
+	assert.Equal(t, "strategy_exact_match", result.Strategy)
+	assert.Greater(t, result.Confidence, 0.0, "confidence should be set")
 }
 
 func TestCmdTitleWithSubtitleFallback(t *testing.T) {
@@ -492,10 +490,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, platforms.CmdResult{
-					MediaChanged: true,
-					Strategy:     tt.expectedStrategy,
-				}, result)
+				assert.True(t, result.MediaChanged)
+				assert.Equal(t, tt.expectedStrategy, result.Strategy)
+				assert.Greater(t, result.Confidence, 0.0, "confidence should be set")
 				mockPlatform.AssertExpectations(t)
 			}
 
@@ -637,10 +634,9 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			result, err := cmdTitle(mockPlatform, env)
 
 			require.NoError(t, err)
-			assert.Equal(t, platforms.CmdResult{
-				MediaChanged: true,
-				Strategy:     "strategy_jarowinkler_damerau",
-			}, result)
+			assert.True(t, result.MediaChanged)
+			assert.Equal(t, "strategy_jarowinkler_damerau", result.Strategy)
+			assert.Greater(t, result.Confidence, 0.0, "confidence should be set")
 			mockMediaDB.AssertExpectations(t)
 			mockPlatform.AssertExpectations(t)
 		})
@@ -1391,10 +1387,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{
-			MediaChanged: true,
-			Strategy:     "strategy_exact_match",
-		}, result)
+		assert.True(t, result.MediaChanged)
+		assert.Equal(t, "strategy_exact_match", result.Strategy)
+		assert.InDelta(t, 1.0, result.Confidence, 0.001)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 
@@ -1456,10 +1451,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{
-			MediaChanged: true,
-			Strategy:     "strategy_exact_match",
-		}, result)
+		assert.True(t, result.MediaChanged)
+		assert.Equal(t, "strategy_exact_match", result.Strategy)
+		assert.InDelta(t, 1.0, result.Confidence, 0.001)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 	})
@@ -1810,10 +1804,9 @@ func TestCmdTitlePerformance(t *testing.T) {
 		result, err := cmdTitle(mockPlatform, env)
 
 		require.NoError(t, err)
-		assert.Equal(t, platforms.CmdResult{
-			MediaChanged: true,
-			Strategy:     "strategy_exact_match",
-		}, result)
+		assert.True(t, result.MediaChanged)
+		assert.Equal(t, "strategy_exact_match", result.Strategy)
+		assert.InDelta(t, 1.0, result.Confidence, 0.001)
 		mockMediaDB.AssertExpectations(t)
 		mockPlatform.AssertExpectations(t)
 	})

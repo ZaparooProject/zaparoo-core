@@ -139,6 +139,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{
 				MediaChanged: true,
 				Strategy:     cachedStrategy,
+				Confidence:   1.0, // Cached results are trusted
 			}, launch(result.Path)
 		}
 	}
@@ -180,6 +181,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 			return platforms.CmdResult{
 				MediaChanged: true,
 				Strategy:     titles.StrategyExactMatch,
+				Confidence:   confidence,
 			}, launch(selectedResult.Path)
 		}
 
@@ -354,6 +356,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	return platforms.CmdResult{
 		MediaChanged: true,
 		Strategy:     bestCandidate.strategy,
+		Confidence:   bestCandidate.confidence,
 	}, launch(bestCandidate.result.Path)
 }
 

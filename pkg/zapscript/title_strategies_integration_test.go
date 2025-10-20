@@ -477,14 +477,15 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		advArgs          map[string]string
-		cfg              *config.Instance
-		name             string
-		input            string
-		expectedPath     string
-		expectedStrategy string
-		description      string
-		expectedError    bool
+		advArgs               map[string]string
+		cfg                   *config.Instance
+		name                  string
+		input                 string
+		expectedPath          string
+		expectedStrategy      string
+		description           string
+		expectedMinConfidence float64
+		expectedError         bool
 	}{
 		// ============================================================
 		// EXACT MATCH STRATEGY
@@ -980,32 +981,35 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 		// Tests fuzzy matching at specific confidence levels:
 		// - 0.90+: Very high confidence, silent launch
 		// - 0.70-0.90: Acceptable range, launch with warning
-		// - Near 0.70: Close to minimum, strong warning
-		// - < 0.70: Below minimum threshold, match fails
+		// - 0.60-0.70: Between minimum and acceptable, strong warning
+		// - < 0.60: Below minimum threshold, match fails
 		// ============================================================
 
 		{
-			name:             "confidence_very_high_single_char_typo",
-			input:            "NES/Thundar",
-			expectedPath:     "/roms/nes/Thunder (USA).nes",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			name:                  "confidence_very_high_single_char_typo",
+			input:                 "NES/Thundar",
+			expectedPath:          "/roms/nes/Thunder (USA).nes",
+			expectedStrategy:      titles.StrategyJaroWinklerDamerau,
+			expectedMinConfidence: 0.90, // Single char typo produces ~0.94 confidence
 			description: "Single character typo 'Thundar' → 'Thunder' produces very high confidence (0.90+), " +
 				"silent launch",
 		},
 		{
-			name:             "confidence_acceptable_range_moderate_typo",
-			input:            "NES/Stricker",
-			expectedPath:     "/roms/nes/Striker (USA).nes",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			name:                  "confidence_acceptable_range_moderate_typo",
+			input:                 "NES/Stricker",
+			expectedPath:          "/roms/nes/Striker (USA).nes",
+			expectedStrategy:      titles.StrategyJaroWinklerDamerau,
+			expectedMinConfidence: titles.ConfidenceAcceptable, // Should be >= 0.70
 			description: "Moderate typo 'Stricker' → 'Striker' produces acceptable confidence (0.70-0.90), " +
 				"should launch with warning",
 		},
 		{
-			name:             "confidence_near_minimum_multiple_typos",
-			input:            "NES/Phnix",
-			expectedPath:     "/roms/nes/Phoenix (USA).nes",
-			expectedStrategy: titles.StrategyJaroWinklerDamerau,
-			description: "Multiple typos 'Phnix' → 'Phoenix' produces near-minimum confidence (close to 0.70), " +
+			name:                  "confidence_near_minimum_multiple_typos",
+			input:                 "NES/Phnix",
+			expectedPath:          "/roms/nes/Phoenix (USA).nes",
+			expectedStrategy:      titles.StrategyJaroWinklerDamerau,
+			expectedMinConfidence: titles.ConfidenceMinimum, // Should be >= 0.60
+			description: "Multiple typos 'Phnix' → 'Phoenix' produces near-minimum confidence (close to 0.60), " +
 				"should launch with strong warning",
 		},
 		{
@@ -1447,8 +1451,23 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			name:          "negative_fuzzy_confidence_too_low",
 			input:         "NES/Xyz Abc",
 			expectedError: true,
-			description: "Fuzzy match confidence below minimum threshold (0.70), " +
+			description: "Fuzzy match confidence below minimum threshold (0.60), " +
 				"strategy returns no result",
+		},
+		{
+			name:          "negative_fuzzy_skipped_below_min_slug_length",
+			input:         "NES/Swrd",
+			expectedError: true,
+			description: "Fuzzy matching skipped for queries with slug length < 5 (MinSlugLengthForFuzzy), " +
+				"'Swrd' (4 chars) cannot fuzzy match 'Sword', all strategies fail",
+		},
+		{
+			name:             "fuzzy_allowed_at_min_slug_length_boundary",
+			input:            "NES/Sworb",
+			expectedPath:     "/roms/nes/Sword (USA).nes",
+			expectedStrategy: titles.StrategyJaroWinklerDamerau,
+			description: "Fuzzy matching allowed for queries with slug length >= 5 (MinSlugLengthForFuzzy), " +
+				"'Sworb' (5 chars) matches 'Sword' (5 chars) via fuzzy",
 		},
 		{
 			name:          "negative_progressive_trim_minimum_slug_length",
@@ -1529,6 +1548,13 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			// Verify the correct strategy was used
 			assert.Equal(t, tt.expectedStrategy, result.Strategy,
 				"Expected strategy %s but got %s for: %s", tt.expectedStrategy, result.Strategy, tt.description)
+
+			// Verify confidence score if specified
+			if tt.expectedMinConfidence > 0 {
+				assert.GreaterOrEqual(t, result.Confidence, tt.expectedMinConfidence,
+					"Expected confidence >= %.2f but got %.2f for: %s",
+					tt.expectedMinConfidence, result.Confidence, tt.description)
+			}
 
 			// Verify LaunchMedia was called
 			mockPlatform.AssertExpectations(t)
