@@ -10,41 +10,54 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 
 **Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
 
-## Do
+## Development Guidelines
+
+### Code Quality
 
 - **Use Go 1.24.5+** with Go modules enabled
 - **Write tests for all new features and bug fixes** (see TESTING.md) - high test coverage is required
 - **Use table-driven tests** with subtests for multiple scenarios
-- **Mock at interface boundaries** - all hardware interactions must be mocked
-- **Use zerolog** for all logging (never use standard `log` package)
-- **Use afero** for filesystem operations in testable code
+- **Handle all errors explicitly** - use golangci-lint's error handling checks
+- **Use explicit returns** in functions longer than 5 lines (avoid naked returns)
 - **Keep functions small** and focused on single responsibility
-- **Use file-scoped commands** for faster feedback (see Commands section below)
-- **Run `task lint-fix`** before committing to auto-fix linting issues
-- **Use `t.Parallel()`** in tests when safe to run concurrently
-- **Check errors** explicitly - use golangci-lint's error handling checks
+- **Keep diffs small and focused** - one concern per change
+- **Reference existing code patterns** before writing new code - consistency matters
+
+### Logging & Output
+
+- **Use zerolog for all logging** - standard `log` and `fmt.Println` are not allowed (enforced by depguard)
+- **Log at appropriate levels** - debug, info, warn, error
+
+### Testing
+
+- **Mock at interface boundaries** - all hardware interactions must be mocked
 - **Use existing mocks/fixtures** from `pkg/testing/` instead of creating new ones
-- **Follow the GPL-3.0-or-later license** header format on all new files
-- **Keep diffs small and focused** - avoid large refactors unless explicitly needed
+- **Write sqlmock tests** for all direct SQL operations
+- **Use `t.Parallel()`** in tests when safe to run concurrently
+- **Run file-scoped tests** for faster feedback (see Commands section below)
+
+### File Paths & Filesystem
+
+- **Use filepath.Join** for all file path construction - ensures cross-platform compatibility
+- **Use afero** for filesystem operations in testable code
 - **Use absolute imports** with full module path `github.com/ZaparooProject/zaparoo-core/v2`
-- **Default to small components** - prefer focused modules over monolithic files
+
+### Dependencies & State
+
+- **Discuss new dependencies** before adding them - keep the dependency tree lean
+- **Protect global state** with sync.RWMutex or atomic operations
 - **Use context** for cancellation and timeouts in long-running operations
 
-## Don't
+### Compatibility & Migration
 
-- **Do not use the standard `log` package** - use zerolog instead (enforced by depguard)
-- **Do not write tests that depend on hardware** - use mocks from `pkg/testing/mocks/`
-- **Do not make filesystem assumptions** - use afero for testability
-- **Do not skip error handling** - all errors must be handled or explicitly ignored
-- **Do not hard-code file paths** - use filepath.Join and handle cross-platform paths
-- **Do not add dependencies without discussion** - keep the dependency tree lean
-- **Do not use `fmt.Println` for logging** - use zerolog
-- **Do not break backward compatibility** in the config schema without migration
-- **Do not commit files without GPL license headers** - use the template from .golangci.yml
-- **Do not use naked returns** in functions longer than 5 lines
-- **Do not create global state** without using sync.RWMutex or atomic
-- **Do not use direct SQL** without sqlmock tests
-- **Do not guess at conventions** - look at existing code patterns first
+- **Maintain backward compatibility** in config schema - use migrations for breaking changes
+- **Plan migrations** before modifying database schemas (SchemaVersion)
+
+### Code Hygiene
+
+- **Follow GPL-3.0-or-later license** header format on all new files
+- **Run `task lint-fix`** before committing to auto-fix linting issues
+- **Default to small components** - prefer focused modules over monolithic files
 
 ## Commands
 
@@ -196,6 +209,97 @@ task test -- -run TestName          # Specific test
 task test -- ./pkg/service/...      # Specific package
 ```
 
+## Test File Organization
+
+### Philosophy
+
+Follow Go community best practices: **big files aren't necessarily bad**. The Go standard library has test files with 6,000+ lines, and Kubernetes has test files with 26,000+ lines. Organize tests by **what makes sense for the code**, not arbitrary file size limits.
+
+### When to Create Separate Test Files
+
+Create a new test file when:
+
+1. **Testing a distinct feature** - Separate test file for each major feature/component
+   - Example: `batch_inserter_test.go` tests batch insertion
+   - Example: `slug_cache_test.go` tests slug caching
+
+2. **Integration vs unit tests** - Keep integration tests in same file or use `_integration_test.go` suffix
+   - Example: `mediadb_integration_test.go` - full database integration tests
+   - Example: `sql_launch_command_test.go` - both unit tests (with mocks) and integration tests together
+
+3. **Distinct error scenarios** - Group related error/edge case tests
+   - Example: `concurrent_operations_test.go` - concurrency-specific tests
+   - Example: `transaction_concurrency_test.go` - transaction lifecycle tests
+
+4. **Regression tests** - Document specific bugs that were fixed
+   - Example: `column_mismatch_regression_test.go` - specific schema bug fixes
+
+### When to Consolidate Test Files
+
+Consolidate tests into a single file when:
+
+1. **Tiny related files** - Multiple small (<200 line) files testing the same component
+   - ❌ Before: `batch_inserter_test.go` (506 lines) + `batch_inserter_dependencies_test.go` (226 lines)
+   - ✅ After: `batch_inserter_test.go` (732 lines) - all batch inserter tests together
+
+2. **Unit + integration for same feature** - Combine if testing the same narrow functionality
+   - ❌ Before: `sql_launch_command_test.go` (256 lines) + `sql_launch_command_integration_test.go` (132 lines)
+   - ✅ After: `sql_launch_command_test.go` (388 lines) - unit tests with mocks + integration test
+
+3. **Artificial splits** - Files split just for file size reasons without clear feature boundaries
+
+### File Size Guidelines
+
+- **Small files (<200 lines)**: Fine, but consider if it should be merged with related tests
+- **Medium files (200-1,000 lines)**: Ideal range for most test files
+- **Large files (1,000-2,500 lines)**: Perfectly acceptable if testing a cohesive feature
+- **Very large files (2,500+ lines)**: OK if it makes sense (see Go stdlib), but consider if natural split points exist
+
+### Naming Conventions
+
+1. **Feature tests**: `{feature}_test.go`
+   - `batch_inserter_test.go`, `slug_cache_test.go`, `optimization_test.go`
+
+2. **Integration tests**: `{feature}_integration_test.go` or include in main test file
+   - `mediadb_integration_test.go` - large integration suite
+   - `sql_launch_command_test.go` - unit + integration together (preferred for smaller suites)
+
+3. **Regression tests**: `{issue}_regression_test.go` or descriptive name
+   - `column_mismatch_regression_test.go`
+   - `cache_self_healing_test.go`
+
+4. **Concurrency tests**: `{feature}_concurrency_test.go` or `concurrent_{feature}_test.go`
+   - `transaction_concurrency_test.go`
+   - `concurrent_operations_test.go`
+
+### Package Examples
+
+Good organization example (`pkg/database/mediadb/`):
+
+```
+mediadb/
+├── batch_inserter_test.go          (732 lines - all batch inserter tests)
+├── cache_self_healing_test.go      (499 lines - cache healing feature)
+├── concurrent_operations_test.go   (524 lines - optimization concurrency)
+├── mediadb_integration_test.go     (1,282 lines - main integration suite)
+├── optimization_test.go            (660 lines - background optimization)
+├── slug_cache_test.go              (752 lines - slug caching)
+├── sql_launch_command_test.go      (388 lines - unit + integration)
+├── sql_search_test.go              (672 lines - search operations)
+├── sql_test.go                     (1,165 lines - general SQL operations)
+└── ... (7 more focused test files)
+```
+
+### General Guidelines
+
+1. **Start with related tests together** - split only when there's a clear need
+2. **Keep related things close** - Tests for the same feature should be in the same file
+3. **Focus on cohesion over file size** - If it's testing one thing, keep it together
+4. **Look for natural boundaries** - Split only when there's a clear feature/concern separation
+5. **Consistency within a package** - Similar features should have similar test organization
+
+**Remember**: The goal is **easy to find, easy to understand** tests - not perfect file sizes.
+
 ## Code Style & Standards
 
 Following golangci-lint configuration in `.golangci.yml`:
@@ -216,20 +320,61 @@ Following golangci-lint configuration in `.golangci.yml`:
 
 ### Commit message format
 
-Zaparoo uses **lowercase, imperative, concise** commit messages:
+Zaparoo uses **Conventional Commits** format for automated semantic versioning:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Types** (determines version bump):
+- `feat:` - New feature (triggers **minor** version bump, e.g., 1.0.0 → 1.1.0)
+- `fix:` - Bug fix (triggers **patch** version bump, e.g., 1.0.0 → 1.0.1)
+- `docs:` - Documentation only changes (no version bump)
+- `style:` - Code style/formatting changes (no version bump)
+- `refactor:` - Code refactoring without behavior change (no version bump)
+- `perf:` - Performance improvement (triggers **patch** bump)
+- `test:` - Adding or updating tests (no version bump)
+- `build:` - Build system or dependency changes (no version bump)
+- `ci:` - CI/CD configuration changes (no version bump)
+- `chore:` - Other changes that don't modify src or test files (no version bump)
+
+**Breaking changes** (triggers **major** version bump, e.g., 1.0.0 → 2.0.0):
+- Add `!` after type/scope: `feat!:` or `fix(api)!:`
+- Or add `BREAKING CHANGE:` in footer
+
+**Examples**:
 
 ```bash
 # Good examples:
-git commit -m "fix token processing race condition"
-git commit -m "add support for new reader type"
-git commit -m "update docs for api endpoints"
-git commit -m "refactor platform launcher interface"
+git commit -m "feat: add support for new NFC reader type"
+git commit -m "fix: resolve token processing race condition"
+git commit -m "docs: update API endpoint documentation"
+git commit -m "refactor(database): improve batch inserter performance"
+git commit -m "feat(api)!: change websocket message format" # Breaking change
+git commit -m "fix: correct slug cache invalidation
+
+BREAKING CHANGE: slug cache now clears on all media updates"
 
 # Avoid:
-git commit -m "Fixed bug"  # Too vague
-git commit -m "feat: Add feature"  # No conventional commits format
-git commit -m "Updated things"  # Not descriptive
+git commit -m "Fixed bug"              # Missing type, too vague
+git commit -m "feat: Add feature"       # Not descriptive enough
+git commit -m "add reader support"      # Missing type prefix
+git commit -m "feat:add reader"         # Missing space after colon
 ```
+
+**Scopes** (optional but recommended):
+- `api`, `database`, `config`, `reader`, `platform`, `zapscript`, etc.
+- Use package name or feature area
+
+**Tips**:
+- Use lowercase for description (after colon)
+- Use imperative mood ("add" not "added", "fix" not "fixed")
+- Keep description under 72 characters
+- Reference issues in footer: `Fixes #123` or `Closes #456`
 
 Look at recent commits with `git log --oneline -20` to match the style.
 
@@ -254,7 +399,9 @@ golangci-lint run
 - [ ] Tests pass (`task test`)
 - [ ] Linting passes (`task lint-fix`)
 - [ ] License headers on new files
-- [ ] Commit message is lowercase, imperative, descriptive
+- [ ] Commit message follows Conventional Commits format
+- [ ] Commit type correctly indicates change (feat/fix/docs/etc)
+- [ ] Breaking changes marked with `!` or `BREAKING CHANGE:` footer
 - [ ] Diff is small and focused on one concern
 - [ ] No commented-out code or debug prints
 - [ ] Documentation updated if needed
@@ -284,13 +431,13 @@ golangci-lint run
 
 ## When Stuck
 
-- **Ask clarifying questions** - don't make assumptions about requirements
+- **Ask clarifying questions** - get requirements clear before coding
 - **Propose a plan first** - outline approach before implementing
 - **Reference existing patterns** - check similar code in the codebase
 - **Consult TESTING.md** - for testing questions
 - **Check pkg/testing/examples/** - for testing patterns
 - **Look at git history** - `git log -p filename` shows evolution
-- **Don't make large speculative changes** - keep scope focused
+- **Keep scope focused** - small, well-defined changes are easier to review
 
 ## API & Architecture Notes
 
@@ -313,7 +460,7 @@ golangci-lint run
 - Location: `~/.config/zaparoo/config.toml`
 - Format: TOML with schema versioning
 - Thread-safe: config.Instance uses sync.RWMutex
-- **Don't modify schema** without migration plan
+- **Plan migrations before schema changes** - maintain backward compatibility
 
 ### Platform Detection
 

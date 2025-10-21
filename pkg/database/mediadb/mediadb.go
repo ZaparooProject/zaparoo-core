@@ -555,7 +555,7 @@ func (db *MediaDB) BeginTransaction(batchEnabled bool) error {
 		}
 
 		if db.batchInsertMediaTitle, err = NewBatchInserterWithOptions(db.ctx, tx, "MediaTitles",
-			[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount"},
+			[]string{"DBID", "SystemDBID", "Slug", "Name", "SlugLength", "SlugWordCount", "SecondarySlug"},
 			db.batchSize, false); err != nil {
 			db.rollbackAndLogError()
 			return fmt.Errorf("failed to create batch inserter for media titles: %w", err)
@@ -1300,7 +1300,7 @@ func (db *MediaDB) InsertMediaTitle(row *database.MediaTitle) (database.MediaTit
 	// Use batch inserter if available
 	if db.batchInsertMediaTitle != nil {
 		err = db.batchInsertMediaTitle.Add(
-			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount)
+			row.DBID, row.SystemDBID, row.Slug, row.Name, row.SlugLength, row.SlugWordCount, row.SecondarySlug)
 		if err != nil {
 			return *row, fmt.Errorf("failed to add media title to batch: %w", err)
 		}
