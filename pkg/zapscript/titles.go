@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
@@ -77,6 +78,32 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
+
+	// Collect all launchers for this system to enable file type prioritization
+	// during result selection. If user specified an alt launcher explicitly,
+	// use only that one. Otherwise, get all launchers for the system.
+	var launchersForSystem []platforms.Launcher
+	if env.Cmd.AdvArgs["launcher"] != "" {
+		// User specified launcher explicitly via advanced args
+		// Find the specific launcher by ID
+		allLaunchers := pl.Launchers(env.Cfg)
+		for i := range allLaunchers {
+			if allLaunchers[i].ID == env.Cmd.AdvArgs["launcher"] {
+				launchersForSystem = []platforms.Launcher{allLaunchers[i]}
+				log.Debug().Msgf("using explicitly specified launcher: %s", allLaunchers[i].ID)
+				break
+			}
+		}
+		if len(launchersForSystem) == 0 {
+			log.Warn().Msgf("explicitly specified launcher not found: %s, using all system launchers",
+				env.Cmd.AdvArgs["launcher"])
+			launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
+		}
+	} else {
+		// Get all launchers for this system
+		launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
+	}
+	log.Debug().Msgf("using %d launcher(s) for file type prioritization", len(launchersForSystem))
 
 	// Two-stage tag extraction:
 	// 1. Extract explicit canonical tags with operators from parentheses: (-unfinished:beta) (+region:us)
@@ -162,7 +189,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("failed to search for slug '%s': %w", slug, err)
 	}
 	if len(results) > 0 {
-		selectedResult, confidence := titles.SelectBestResult(results, tagFilters, env.Cfg, titles.MatchQualityExact)
+		selectedResult, confidence := titles.SelectBestResult(
+			results, tagFilters, env.Cfg, titles.MatchQualityExact, launchersForSystem)
 		log.Debug().
 			Str("strategy", titles.StrategyExactMatch).
 			Str("query", slug).
@@ -206,7 +234,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 		if len(results) > 0 {
 			selectedResult, confidence := titles.SelectBestResult(
-				results, tagFilters, env.Cfg, titles.MatchQualityExact,
+				results, tagFilters, env.Cfg, titles.MatchQualityExact, launchersForSystem,
 			)
 			log.Debug().
 				Str("strategy", titles.StrategyExactMatch).
@@ -237,7 +265,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 		if len(results) > 0 {
 			selectedResult, confidence := titles.SelectBestResult(
-				results, tagFilters, env.Cfg, titles.MatchQualitySecondaryTitle,
+				results, tagFilters, env.Cfg, titles.MatchQualitySecondaryTitle, launchersForSystem,
 			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
@@ -264,7 +292,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		if len(fuzzyResult.Results) > 0 {
 			matchQuality := fuzzyResult.Similarity // Use actual fuzzy match similarity score
 			selectedResult, confidence := titles.SelectBestResult(
-				fuzzyResult.Results, tagFilters, env.Cfg, matchQuality)
+				fuzzyResult.Results, tagFilters, env.Cfg, matchQuality, launchersForSystem)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
 					result:     selectedResult,
@@ -288,7 +316,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 		if len(results) > 0 {
 			selectedResult, confidence := titles.SelectBestResult(
-				results, tagFilters, env.Cfg, titles.MatchQualityMainTitle,
+				results, tagFilters, env.Cfg, titles.MatchQualityMainTitle, launchersForSystem,
 			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{
@@ -314,7 +342,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		}
 		if len(results) > 0 {
 			selectedResult, confidence := titles.SelectBestResult(
-				results, tagFilters, env.Cfg, titles.MatchQualityProgressiveTrim,
+				results, tagFilters, env.Cfg, titles.MatchQualityProgressiveTrim, launchersForSystem,
 			)
 			if confidence > 0.0 {
 				bestCandidate = &candidate{

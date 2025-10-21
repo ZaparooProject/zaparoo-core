@@ -1175,7 +1175,9 @@ func TestSelectBestResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockConfig := &config.Instance{}
 			const matchQuality = 1.0 // Exact match for test purposes
-			result, _ := titleshelper.SelectBestResult(tt.results, tt.tagFilters, mockConfig, matchQuality)
+			emptyLaunchers := []platforms.Launcher{}
+			result, _ := titleshelper.SelectBestResult(
+				tt.results, tt.tagFilters, mockConfig, matchQuality, emptyLaunchers)
 			assert.Equal(t, tt.expectedName, result.Name, tt.description)
 		})
 	}

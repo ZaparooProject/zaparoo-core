@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -157,83 +158,6 @@ func TestGetLanguageMatch(t *testing.T) {
 
 			result := getLanguageMatch(&tt.result, tt.preferredLangs)
 			assert.Equal(t, tt.expectedMatch, result)
-		})
-	}
-}
-
-func TestSelectAlphabeticallyByFilename(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		expectedPath string
-		results      []database.SearchResultWithCursor
-	}{
-		{
-			name: "selects first alphabetically",
-			results: []database.SearchResultWithCursor{
-				{Path: "/games/zelda.rom"},
-				{Path: "/games/mario.rom"},
-				{Path: "/games/sonic.rom"},
-			},
-			expectedPath: "/games/mario.rom",
-		},
-		{
-			name: "handles leading numbers",
-			results: []database.SearchResultWithCursor{
-				{Path: "/games/9game.rom"},
-				{Path: "/games/1game.rom"},
-				{Path: "/games/5game.rom"},
-			},
-			expectedPath: "/games/1game.rom",
-		},
-		{
-			name: "case sensitive sorting",
-			results: []database.SearchResultWithCursor{
-				{Path: "/games/Zelda.rom"},
-				{Path: "/games/mario.rom"},
-				{Path: "/games/Sonic.rom"},
-			},
-			expectedPath: "/games/Sonic.rom", // Capital letters sort before lowercase
-		},
-		{
-			name: "single result",
-			results: []database.SearchResultWithCursor{
-				{Path: "/games/only.rom"},
-			},
-			expectedPath: "/games/only.rom",
-		},
-		{
-			name:         "empty results",
-			results:      []database.SearchResultWithCursor{},
-			expectedPath: "", // returns zero value
-		},
-		{
-			name: "same directory different files",
-			results: []database.SearchResultWithCursor{
-				{Path: "/games/z.rom"},
-				{Path: "/games/a.rom"},
-				{Path: "/games/m.rom"},
-			},
-			expectedPath: "/games/a.rom",
-		},
-		{
-			name: "different directories same filename",
-			results: []database.SearchResultWithCursor{
-				{Path: "/z/game.rom"},
-				{Path: "/a/game.rom"},
-				{Path: "/m/game.rom"},
-			},
-			expectedPath: "/z/game.rom", // Returns first when filenames are equal
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			result := selectAlphabeticallyByFilename(tt.results)
-			assert.Equal(t, tt.expectedPath, result.Path)
 		})
 	}
 }
@@ -571,6 +495,419 @@ func TestFilterByTagsMultipleResults(t *testing.T) {
 				}
 				assert.ElementsMatch(t, tt.expectedNames, names)
 			}
+		})
+	}
+}
+
+func TestCheckNumericSuffix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		filename      string
+		expectedScore int
+	}{
+		{
+			name:          "clean filename",
+			filename:      "game.zip",
+			expectedScore: 0,
+		},
+		{
+			name:          "OS duplicate (1)",
+			filename:      "game (1).zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "OS duplicate (2)",
+			filename:      "game (2).zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "OS duplicate (6) - higher numbers",
+			filename:      "game (6).zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "OS duplicate (10) - double digits",
+			filename:      "game (10).zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "OS duplicate (99) - large numbers",
+			filename:      "game (99).zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "manual copy",
+			filename:      "game - Copy.zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "lowercase copy",
+			filename:      "game copy.zip",
+			expectedScore: 1,
+		},
+		{
+			name:          "region tag not penalized",
+			filename:      "game (USA).zip",
+			expectedScore: 0, // Not a numeric duplicate
+		},
+		{
+			name:          "version number not penalized",
+			filename:      "game v1.0.zip",
+			expectedScore: 0,
+		},
+		{
+			name:          "year in parens gets penalized (acceptable trade-off)",
+			filename:      "game (1996).zip",
+			expectedScore: 1, // Years get caught by \d+ pattern, but this is rare and acceptable
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			score := checkNumericSuffix(tt.filename)
+			assert.Equal(t, tt.expectedScore, score)
+		})
+	}
+}
+
+func TestCalculateCharDensity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		filename      string
+		expectedScore int
+	}{
+		{
+			name:          "clean filename",
+			filename:      "game.zip",
+			expectedScore: 0,
+		},
+		{
+			name:          "consecutive underscores",
+			filename:      "game__v1.zip",
+			expectedScore: 1, // One __ occurrence
+		},
+		{
+			name:          "dots not penalized (valid abbreviations)",
+			filename:      "S.T.A.L.K.E.R..zip",
+			expectedScore: 0, // Dots are intentionally not counted
+		},
+		{
+			name:          "mixed separators",
+			filename:      "game-v1_final.zip",
+			expectedScore: 2, // Has both - and _
+		},
+		{
+			name:          "all messy",
+			filename:      "game__v1.0-final_release.zip",
+			expectedScore: 3, // __ (1) + mixed (2), dots not counted
+		},
+		{
+			name:          "extension dot not counted",
+			filename:      "game.zip",
+			expectedScore: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			score := calculateCharDensity(tt.filename)
+			assert.Equal(t, tt.expectedScore, score)
+		})
+	}
+}
+
+func TestTiebreakerScoreCompare(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		a        TiebreakerScore
+		b        TiebreakerScore
+		expected int // -1 if a better, 0 if equal, 1 if b better
+	}{
+		{
+			name:     "equal scores",
+			a:        TiebreakerScore{0, 2, 0, 10},
+			b:        TiebreakerScore{0, 2, 0, 10},
+			expected: 0,
+		},
+		{
+			name:     "a wins on numeric suffix",
+			a:        TiebreakerScore{0, 2, 0, 10},
+			b:        TiebreakerScore{1, 2, 0, 10},
+			expected: -1,
+		},
+		{
+			name:     "a wins on path depth",
+			a:        TiebreakerScore{0, 2, 0, 10},
+			b:        TiebreakerScore{0, 5, 0, 10},
+			expected: -1,
+		},
+		{
+			name:     "a wins on char density",
+			a:        TiebreakerScore{0, 2, 0, 10},
+			b:        TiebreakerScore{0, 2, 3, 10},
+			expected: -1,
+		},
+		{
+			name:     "a wins on name length",
+			a:        TiebreakerScore{0, 2, 0, 10},
+			b:        TiebreakerScore{0, 2, 0, 20},
+			expected: -1,
+		},
+		{
+			name:     "priority order - numeric suffix beats all",
+			a:        TiebreakerScore{0, 5, 5, 50}, // Clean suffix, worse everything else
+			b:        TiebreakerScore{1, 2, 0, 10}, // Has suffix, better everything else
+			expected: -1,                           // a still wins
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := tt.a.Compare(tt.b)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSelectByQualityScore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		expectedPath string
+		description  string
+		results      []database.SearchResultWithCursor
+	}{
+		{
+			name: "prefers original over duplicate",
+			results: []database.SearchResultWithCursor{
+				{Name: "Zelda", Path: "/games/zelda (1).zip"},
+				{Name: "Zelda", Path: "/games/zelda.zip"},
+			},
+			expectedPath: "/games/zelda.zip",
+			description:  "Original should beat OS duplicate marker",
+		},
+		{
+			name: "prefers shallower path",
+			results: []database.SearchResultWithCursor{
+				{Name: "Sonic", Path: "/games/backups/old/archive/sonic.rom"},
+				{Name: "Sonic", Path: "/games/sonic.rom"},
+			},
+			expectedPath: "/games/sonic.rom",
+			description:  "Shallower path indicates better curation",
+		},
+		{
+			name: "prefers cleaner filename",
+			results: []database.SearchResultWithCursor{
+				{Name: "Game", Path: "/games/game__v1.0-final_release.zip"},
+				{Name: "Game", Path: "/games/game.zip"},
+			},
+			expectedPath: "/games/game.zip",
+			description:  "Clean filename should beat messy one",
+		},
+		{
+			name: "prefers shorter name (all else equal)",
+			results: []database.SearchResultWithCursor{
+				{Name: "Mario", Path: "/games/mario-bros-super-deluxe.zip"},
+				{Name: "Mario", Path: "/games/mario.zip"},
+			},
+			expectedPath: "/games/mario.zip",
+			description:  "Shorter filename as final tie-breaker",
+		},
+		{
+			name: "complex real-world scenario",
+			results: []database.SearchResultWithCursor{
+				// Worst: deep path and duplicate marker
+				{Name: "Super Mario Bros", Path: "/backups/old/Super Mario Bros (1).zip"},
+				// Bad: copy marker
+				{Name: "Super Mario Bros", Path: "/games/Super Mario Bros - Copy.zip"},
+				// Best: no penalties, shallow path
+				{Name: "Super Mario Bros", Path: "/games/Super Mario Bros.zip"},
+				// Medium: deeper path but no other penalties
+				{Name: "Super Mario Bros", Path: "/roms/archive/Super Mario Bros.zip"},
+			},
+			expectedPath: "/games/Super Mario Bros.zip",
+			description:  "Best overall quality should win",
+		},
+		{
+			name: "single result",
+			results: []database.SearchResultWithCursor{
+				{Name: "Game", Path: "/games/game.zip"},
+			},
+			expectedPath: "/games/game.zip",
+			description:  "Single result returns itself",
+		},
+		{
+			name:         "empty results",
+			results:      []database.SearchResultWithCursor{},
+			expectedPath: "",
+			description:  "Empty returns zero value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := selectByQualityScore(tt.results)
+			assert.Equal(t, tt.expectedPath, result.Path, tt.description)
+		})
+	}
+}
+
+func TestFilterByFileTypePriority(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		description   string
+		results       []database.SearchResultWithCursor
+		launchers     []platforms.Launcher
+		expectedPaths []string
+	}{
+		{
+			name:        "single launcher - prefers first extension",
+			description: "Should select .mgl (position 0) over others",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game.vhd"},
+				{Name: "game", Path: "/games/game.mgl"},
+				{Name: "game", Path: "/games/game.img"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "dos",
+					Extensions: []string{".mgl", ".vhd", ".img"},
+				},
+			},
+			expectedPaths: []string{"/games/game.mgl"},
+		},
+		{
+			name:        "single launcher - multiple results with same extension",
+			description: "Should return all results with best extension",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game1.mgl"},
+				{Name: "game", Path: "/games/game2.mgl"},
+				{Name: "game", Path: "/games/game.vhd"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "dos",
+					Extensions: []string{".mgl", ".vhd"},
+				},
+			},
+			expectedPaths: []string{"/games/game1.mgl", "/games/game2.mgl"},
+		},
+		{
+			name:        "multiple launchers - best score across any launcher",
+			description: "Should select .chd (pos 0 in launcher2) and .iso (pos 0 in launcher1)",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game.chd"},
+				{Name: "game", Path: "/games/game.cue"},
+				{Name: "game", Path: "/games/game.iso"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "launcher1",
+					Extensions: []string{".iso", ".cue"},
+				},
+				{
+					ID:         "launcher2",
+					Extensions: []string{".chd", ".iso"},
+				},
+			},
+			expectedPaths: []string{"/games/game.chd", "/games/game.iso"},
+		},
+		{
+			name:        "extension not in any launcher - all have same score",
+			description: "Should return all results when none match launcher extensions",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game.zip"},
+				{Name: "game", Path: "/games/game.rar"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "dos",
+					Extensions: []string{".mgl", ".vhd"},
+				},
+			},
+			expectedPaths: []string{"/games/game.zip", "/games/game.rar"},
+		},
+		{
+			name:        "mixed - some match launcher, some don't",
+			description: "Should prefer .mgl (pos 0) and filter out unmatched extensions",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game.mgl"},
+				{Name: "game", Path: "/games/game.zip"}, // Not in launcher
+				{Name: "game", Path: "/games/game.vhd"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "dos",
+					Extensions: []string{".mgl", ".vhd"},
+				},
+			},
+			expectedPaths: []string{"/games/game.mgl"},
+		},
+		{
+			name:        "empty launchers - returns all results",
+			description: "Should return all results when launchers is empty",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game1.zip"},
+				{Name: "game", Path: "/games/game2.rom"},
+			},
+			launchers:     []platforms.Launcher{},
+			expectedPaths: []string{"/games/game1.zip", "/games/game2.rom"},
+		},
+		{
+			name:          "empty results - returns empty",
+			description:   "Should return empty slice when no results",
+			results:       []database.SearchResultWithCursor{},
+			launchers:     []platforms.Launcher{{ID: "test", Extensions: []string{".mgl"}}},
+			expectedPaths: []string{},
+		},
+		{
+			name:        "case insensitive extension matching",
+			description: "Should match extensions case-insensitively",
+			results: []database.SearchResultWithCursor{
+				{Name: "game", Path: "/games/game.MGL"},
+				{Name: "game", Path: "/games/game.VHD"},
+			},
+			launchers: []platforms.Launcher{
+				{
+					ID:         "dos",
+					Extensions: []string{".mgl", ".vhd"},
+				},
+			},
+			expectedPaths: []string{"/games/game.MGL"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			filtered := FilterByFileTypePriority(tt.results, tt.launchers)
+
+			// Extract paths from filtered results
+			var actualPaths []string
+			for _, r := range filtered {
+				actualPaths = append(actualPaths, r.Path)
+			}
+
+			// Sort both slices for comparison (order within same priority doesn't matter)
+			assert.ElementsMatch(t, tt.expectedPaths, actualPaths, tt.description)
 		})
 	}
 }

@@ -1008,7 +1008,7 @@ var Launchers = []platforms.Launcher{
 		ID:         systemdefs.SystemDOS,
 		SystemID:   systemdefs.SystemDOS,
 		Folders:    []string{"AO486", "/media/fat/_DOS Games"},
-		Extensions: []string{".img", ".ima", ".vhd", ".vfd", ".iso", ".cue", ".chd", ".mgl"},
+		Extensions: []string{".mgl", ".vhd", ".img", ".ima", ".vfd", ".iso", ".cue", ".chd"},
 		Launch:     launchDOS(),
 	},
 	{

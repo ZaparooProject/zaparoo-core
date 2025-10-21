@@ -203,7 +203,12 @@ Base confidence from strategy (0.85-1.0) is adjusted by tag matching:
 3. **Exclude re-releases** - Remove reboxed editions, re-releases
 4. **Preferred regions** - Match user's region config
 5. **Preferred languages** - Match user's language config
-6. **Alphabetical** - Final tiebreaker
+6. **File type priority** - Prefer file types based on launcher extension order (earlier = better)
+7. **Quality-based tie-breaking** - Select best file using:
+   - Numeric suffix penalty (avoids duplicates like "game (1).zip")
+   - Path depth (prefers files in organized folders over deep backups)
+   - Character density (cleaner filenames preferred)
+   - Filename length (shorter is simpler)
 
 ---
 

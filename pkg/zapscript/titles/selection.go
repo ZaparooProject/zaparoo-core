@@ -21,22 +21,26 @@ package titles
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
 // SelectBestResult implements intelligent selection when multiple media match a slug.
 // Returns the best result and a confidence score (0.0-1.0) based on match quality and tag match quality.
 // matchQuality should be 1.0 for exact matches, or the similarity score (0.0-1.0) for fuzzy matches.
+// launchers is used to prioritize file types based on launcher extension order (earlier = better).
 func SelectBestResult(
 	results []database.SearchResultWithCursor,
 	tagFilters []database.TagFilter,
 	cfg *config.Instance,
 	matchQuality float64,
+	launchers []platforms.Launcher,
 ) (result database.SearchResultWithCursor, confidence float64) {
 	if len(results) == 1 {
 		// Check if the single result is a variant (and user didn't explicitly request it)
@@ -129,12 +133,29 @@ func SelectBestResult(
 		results = preferredLanguages
 	}
 
-	// Priority 6: If still multiple, pick the first alphabetically by filename
-	selected := selectAlphabeticallyByFilename(results)
+	// Priority 6: Prefer file types by launcher extension priority
+	// Earlier position in launcher's Extensions array = higher priority
+	if len(launchers) > 0 {
+		preferredFiles := FilterByFileTypePriority(results, launchers)
+		if len(preferredFiles) == 1 {
+			tagConfidence := CalculateTagMatchConfidence(&preferredFiles[0], tagFilters)
+			confidence = matchQuality * tagConfidence
+			log.Info().Msgf("selected by file type priority, confidence: %.2f (match: %.2f, tags: %.2f)",
+				confidence, matchQuality, tagConfidence)
+			return preferredFiles[0], confidence
+		}
+		if len(preferredFiles) > 0 {
+			results = preferredFiles
+		}
+	}
+
+	// Priority 7: If still multiple, use quality-based tie-breaking heuristics
+	// Considers: numeric suffix penalty, path depth, char density, name length
+	selected := selectByQualityScore(results)
 	tagConfidence := CalculateTagMatchConfidence(&selected, tagFilters)
 	confidence = matchQuality * tagConfidence
 	log.Info().Msgf(
-		"multiple results (%d), selecting alphabetically, confidence: %.2f (match: %.2f, tags: %.2f)",
+		"multiple results (%d), selecting by quality score, confidence: %.2f (match: %.2f, tags: %.2f)",
 		len(results), confidence, matchQuality, tagConfidence)
 	return selected, confidence
 }
@@ -389,22 +410,147 @@ func getLanguageMatch(result *database.SearchResultWithCursor, preferredLangs []
 	return tagMatchOther
 }
 
-// selectAlphabeticallyByFilename selects the first result alphabetically by filename
-func selectAlphabeticallyByFilename(results []database.SearchResultWithCursor) database.SearchResultWithCursor {
+// TiebreakerScore represents a multi-component score for tie-breaking when all other
+// selection criteria are exhausted. Components are compared in order (first to last).
+// Lower values are preferred (better quality).
+type TiebreakerScore struct {
+	// NumericSuffix: Penalty for OS duplicate/copy markers like " (1)", " - Copy"
+	// 0 = clean filename, 1 = has duplicate marker
+	NumericSuffix int
+
+	// PathDepth: Number of directory separators in path
+	// Lower = more curated (files in root/organized folders)
+	PathDepth int
+
+	// CharDensity: Count of "messy" filename indicators (__, excessive dots, mixed separators)
+	// Lower = cleaner filename
+	CharDensity int
+
+	// NameLength: Length of filename
+	// Lower = simpler/cleaner name (after quality checks above)
+	NameLength int
+}
+
+// Compare compares two TiebreakerScores. Returns:
+// -1 if a is better (lower) than b
+// 0 if a equals b
+// 1 if a is worse (higher) than b
+func (a TiebreakerScore) Compare(b TiebreakerScore) int {
+	// Compare each component in priority order
+	if a.NumericSuffix < b.NumericSuffix {
+		return -1
+	}
+	if a.NumericSuffix > b.NumericSuffix {
+		return 1
+	}
+
+	if a.PathDepth < b.PathDepth {
+		return -1
+	}
+	if a.PathDepth > b.PathDepth {
+		return 1
+	}
+
+	if a.CharDensity < b.CharDensity {
+		return -1
+	}
+	if a.CharDensity > b.CharDensity {
+		return 1
+	}
+
+	if a.NameLength < b.NameLength {
+		return -1
+	}
+	if a.NameLength > b.NameLength {
+		return 1
+	}
+
+	return 0 // Equal
+}
+
+// CalculateTiebreakerScore computes a quality score for a search result based on
+// filename and path characteristics. Used as final tie-breaker when all other
+// selection criteria are exhausted.
+func CalculateTiebreakerScore(result *database.SearchResultWithCursor) TiebreakerScore {
+	filename := filepath.Base(result.Path)
+
+	return TiebreakerScore{
+		NumericSuffix: checkNumericSuffix(filename),
+		PathDepth:     strings.Count(result.Path, string(filepath.Separator)),
+		CharDensity:   calculateCharDensity(filename),
+		NameLength:    len(filename),
+	}
+}
+
+// Compile regex patterns once at package init time for efficiency
+var (
+	// Matches OS duplicate markers like " (1)", " (2)", " (99)", etc.
+	numericSuffixRegex = regexp.MustCompile(`\s+\(\d+\)$`)
+	// Matches copy indicators like " - Copy", " Copy", " - copy", " copy"
+	copyIndicatorRegex = regexp.MustCompile(`\s+(-\s+)?[Cc]opy$`)
+)
+
+// checkNumericSuffix detects OS duplicate/copy markers in filenames.
+// Returns 1 if found (penalty), 0 otherwise.
+func checkNumericSuffix(filename string) int {
+	// Remove extension for checking
+	nameWithoutExt := strings.TrimSuffix(filename, filepath.Ext(filename))
+
+	// Check for OS duplicate markers: " (1)", " (2)", etc.
+	if numericSuffixRegex.MatchString(nameWithoutExt) {
+		return 1 // Penalty
+	}
+
+	// Check for copy indicators: " - Copy", " Copy", " - copy", " copy"
+	if copyIndicatorRegex.MatchString(nameWithoutExt) {
+		return 1 // Penalty
+	}
+
+	return 0 // Clean
+}
+
+// calculateCharDensity measures "messiness" of a filename.
+// Higher values indicate messier filenames with excessive special characters.
+func calculateCharDensity(filename string) int {
+	density := 0
+
+	// Count consecutive underscores (__)
+	if strings.Contains(filename, "__") {
+		density += strings.Count(filename, "__")
+	}
+
+	// Note: We intentionally do NOT penalize dots, as many valid game titles
+	// use periods in abbreviations (e.g., "S.T.A.L.K.E.R.", "B.O.B.", "R.C. Pro-AM")
+
+	// Check for mixed separators (has both - and _)
+	hasDash := strings.Contains(filename, "-")
+	hasUnderscore := strings.Contains(filename, "_")
+	if hasDash && hasUnderscore {
+		density += 2 // Penalty for inconsistent naming
+	}
+
+	return density
+}
+
+// selectByQualityScore selects the best result using tie-breaker quality heuristics.
+// This replaces simple alphabetical sorting with intelligent quality-based selection.
+func selectByQualityScore(results []database.SearchResultWithCursor) database.SearchResultWithCursor {
 	if len(results) == 0 {
 		return database.SearchResultWithCursor{}
 	}
 
 	best := results[0]
-	bestFilename := filepath.Base(best.Path)
+	bestScore := CalculateTiebreakerScore(&best)
 
-	for _, result := range results[1:] {
-		resultFilename := filepath.Base(result.Path)
-		if resultFilename < bestFilename {
-			best = result
-			bestFilename = resultFilename
+	for i := range results[1:] {
+		result := &results[i+1]
+		score := CalculateTiebreakerScore(result)
+		if score.Compare(bestScore) < 0 {
+			best = *result
+			bestScore = score
 		}
 	}
+
 	return best
 }
 
@@ -497,4 +643,74 @@ func CalculateTagMatchConfidence(result *database.SearchResultWithCursor, tagFil
 	}
 
 	return confidence
+}
+
+// FilterByFileTypePriority scores results by launcher extension priority.
+// For each result, finds the position of its file extension in the launcher's Extensions array.
+// Lower position = higher priority (earlier in array = preferred file type).
+// Returns only results with the best (lowest) score.
+//
+// Example: Launcher.Extensions = [".mgl", ".vhd", ".img"]
+//   - result1.Path = "game.mgl" → score = 0 (best)
+//   - result2.Path = "game.vhd" → score = 1
+//   - Returns: [result1]
+//
+// When multiple launchers exist for a system, each result is scored against ALL launchers
+// and the best score across any launcher is used.
+func FilterByFileTypePriority(
+	results []database.SearchResultWithCursor,
+	launchers []platforms.Launcher,
+) []database.SearchResultWithCursor {
+	if len(launchers) == 0 {
+		return results
+	}
+
+	type scoredResult struct {
+		result database.SearchResultWithCursor
+		score  int
+	}
+
+	scored := make([]scoredResult, 0, len(results))
+	for _, result := range results {
+		ext := strings.ToLower(filepath.Ext(result.Path))
+		bestScore := 999999 // Default: no launcher match
+
+		// Find best score across all launchers for this system
+		for i := range launchers {
+			for j, launcherExt := range launchers[i].Extensions {
+				if strings.EqualFold(launcherExt, ext) {
+					if j < bestScore {
+						bestScore = j
+					}
+					break
+				}
+			}
+		}
+
+		scored = append(scored, scoredResult{result: result, score: bestScore})
+	}
+
+	// Find minimum score
+	minScore := 999999
+	for _, s := range scored {
+		if s.score < minScore {
+			minScore = s.score
+		}
+	}
+
+	// Return all results with minimum score
+	var best []database.SearchResultWithCursor
+	for _, s := range scored {
+		if s.score == minScore {
+			best = append(best, s.result)
+		}
+	}
+
+	log.Debug().
+		Int("input_count", len(results)).
+		Int("output_count", len(best)).
+		Int("best_score", minScore).
+		Msg("filtered by file type priority")
+
+	return best
 }
