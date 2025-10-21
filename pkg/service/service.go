@@ -287,14 +287,11 @@ func checkAndResumeIndexing(
 	systems := systemdefs.AllSystems()
 
 	// Resume using the proper function with full notification support
-	go func() {
-		err := methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
-		if err != nil {
-			log.Error().Err(err).Msg("error during auto-resume of media indexing")
-		} else {
-			log.Info().Msg("auto-resume completed successfully")
-		}
-	}()
+	// GenerateMediaDB spawns its own goroutine and returns immediately
+	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
+	}
 }
 
 // checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it

@@ -161,12 +161,22 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Wait for async operation to start and complete
-	time.Sleep(100 * time.Millisecond)
+	// Wait for async operation to complete with polling loop
+	var status string
+	maxWait := 2 * time.Second
+	pollInterval := 50 * time.Millisecond
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		var getStatusErr error
+		status, getStatusErr = db.MediaDB.GetIndexingStatus()
+		require.NoError(t, getStatusErr)
+		if status != mediadb.IndexingStatusPending {
+			break
+		}
+		time.Sleep(pollInterval)
+	}
 
 	// Verify that indexing resume was triggered (it will fail due to test database limitations)
-	status, err := db.MediaDB.GetIndexingStatus()
-	require.NoError(t, err)
 	// With the minimal test database setup, indexing fails at the DBConfig table step
 	// This is expected behavior - the test verifies that resume logic is triggered
 	// Note: Status could also be "running" if async operation hasn't completed yet
