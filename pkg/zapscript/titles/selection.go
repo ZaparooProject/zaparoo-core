@@ -473,10 +473,11 @@ func (a TiebreakerScore) Compare(b TiebreakerScore) int {
 // selection criteria are exhausted.
 func CalculateTiebreakerScore(result *database.SearchResultWithCursor) TiebreakerScore {
 	filename := filepath.Base(result.Path)
+	normalizedPath := filepath.ToSlash(result.Path)
 
 	return TiebreakerScore{
 		NumericSuffix: checkNumericSuffix(filename),
-		PathDepth:     strings.Count(result.Path, string(filepath.Separator)),
+		PathDepth:     strings.Count(normalizedPath, "/"),
 		CharDensity:   calculateCharDensity(filename),
 		NameLength:    len(filename),
 	}

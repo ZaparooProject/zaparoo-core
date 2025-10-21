@@ -701,7 +701,8 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 	if helpers.ReURI.MatchString(path) {
 		f.Path = path
 	} else {
-		f.Path = filepath.Clean(path)
+		// Clean and normalize to forward slashes for cross-platform consistency
+		f.Path = filepath.ToSlash(filepath.Clean(path))
 	}
 
 	fileBase := filepath.Base(f.Path)
