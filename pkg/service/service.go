@@ -283,8 +283,30 @@ func checkAndResumeIndexing(
 
 	log.Info().Msg("detected interrupted media indexing, automatically resuming")
 
-	// Get all systems for the resume operation
-	systems := systemdefs.AllSystems()
+	// Get the systems that were being indexed from the database
+	// If not available, fall back to all systems
+	var systems []systemdefs.System
+	storedSystemIDs, err := db.MediaDB.GetIndexingSystems()
+	if err != nil || len(storedSystemIDs) == 0 {
+		log.Debug().Msgf("no stored systems found (err=%v, len=%d), defaulting to all systems",
+			err, len(storedSystemIDs))
+		systems = systemdefs.AllSystems()
+	} else {
+		// Convert system IDs to System objects
+		systems = make([]systemdefs.System, 0, len(storedSystemIDs))
+		for _, systemID := range storedSystemIDs {
+			if system, exists := systemdefs.Systems[systemID]; exists {
+				systems = append(systems, system)
+			} else {
+				log.Warn().Msgf("stored system ID '%s' not found in system definitions, skipping", systemID)
+			}
+		}
+		// If we couldn't resolve any systems, fall back to all systems
+		if len(systems) == 0 {
+			log.Warn().Msg("could not resolve any stored systems, falling back to all systems")
+			systems = systemdefs.AllSystems()
+		}
+	}
 
 	// Resume using the proper function with full notification support
 	// GenerateMediaDB spawns its own goroutine and returns immediately

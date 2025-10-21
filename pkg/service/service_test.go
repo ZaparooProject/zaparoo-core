@@ -96,20 +96,21 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	st, _ := state.NewState(mockPlatform)
 
 	// Set up interrupted indexing state in real database
+	// Use a minimal system list to make the test fast
 	err = db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning)
 	require.NoError(t, err)
 	err = db.MediaDB.SetLastIndexedSystem("")
 	require.NoError(t, err)
-	err = db.MediaDB.SetIndexingSystems([]string{})
+	err = db.MediaDB.SetIndexingSystems([]string{"NES"})
 	require.NoError(t, err)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
 	// Wait for async operation to start and complete
-	// Poll for completion with timeout (tag seeding can take time)
+	// With minimal system list (just NES), this should complete quickly
 	var status string
-	maxWait := 2 * time.Second
+	maxWait := time.Second
 	pollInterval := 50 * time.Millisecond
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
@@ -151,19 +152,21 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	st, _ := state.NewState(mockPlatform)
 
 	// Set up interrupted indexing state in real database with "pending" status
+	// Use a minimal system list to make the test fast
 	err = db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusPending)
 	require.NoError(t, err)
 	err = db.MediaDB.SetLastIndexedSystem("")
 	require.NoError(t, err)
-	err = db.MediaDB.SetIndexingSystems([]string{})
+	err = db.MediaDB.SetIndexingSystems([]string{"NES"})
 	require.NoError(t, err)
 
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
 	// Wait for async operation to complete with polling loop
+	// With minimal system list (just NES), this should complete quickly
 	var status string
-	maxWait := 2 * time.Second
+	maxWait := time.Second
 	pollInterval := 50 * time.Millisecond
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
