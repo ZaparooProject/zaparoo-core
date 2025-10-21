@@ -20,11 +20,13 @@
 package mocks_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	mocklib "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,13 +55,13 @@ func TestMockKodiClient_GetAlbums(t *testing.T) {
 	expectedAlbums := []kodi.Album{
 		{Label: "Test Album", ID: 1, Artist: "Test Artist", Year: 2023},
 	}
-	mock.On("GetAlbums").Return(expectedAlbums, nil)
+	mock.On("GetAlbums", mocklib.Anything).Return(expectedAlbums, nil)
 
 	// Use mock as KodiClient interface - this will fail compilation if GetAlbums is missing
 	var client kodi.KodiClient = mock
 
 	// Execute
-	albums, err := client.GetAlbums()
+	albums, err := client.GetAlbums(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -77,13 +79,13 @@ func TestMockKodiClient_GetArtists(t *testing.T) {
 	expectedArtists := []kodi.Artist{
 		{Label: "Test Artist", ID: 1},
 	}
-	mock.On("GetArtists").Return(expectedArtists, nil)
+	mock.On("GetArtists", mocklib.Anything).Return(expectedArtists, nil)
 
 	// Use mock as KodiClient interface - this will fail compilation if GetArtists is missing
 	var client kodi.KodiClient = mock
 
 	// Execute
-	artists, err := client.GetArtists()
+	artists, err := client.GetArtists(context.Background())
 
 	// Verify
 	require.NoError(t, err)
@@ -101,13 +103,13 @@ func TestMockKodiClient_GetSongs(t *testing.T) {
 	expectedSongs := []kodi.Song{
 		{Label: "Test Song", ID: 1, AlbumID: 1, Artist: "Test Artist", Duration: 180},
 	}
-	mock.On("GetSongs").Return(expectedSongs, nil)
+	mock.On("GetSongs", mocklib.Anything).Return(expectedSongs, nil)
 
 	// Use mock as KodiClient interface - this will fail compilation if GetSongs is missing
 	var client kodi.KodiClient = mock
 
 	// Execute
-	songs, err := client.GetSongs()
+	songs, err := client.GetSongs(context.Background())
 
 	// Verify
 	require.NoError(t, err)

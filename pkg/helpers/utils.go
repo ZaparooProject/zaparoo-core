@@ -37,7 +37,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -99,6 +99,29 @@ func Contains[T comparable](xs []T, x T) bool {
 		}
 	}
 	return false
+}
+
+// EqualStringSlices compares two string slices for equality
+func EqualStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// Sort both slices for comparison
+	aCopy := make([]string, len(a))
+	copy(aCopy, a)
+	sort.Strings(aCopy)
+
+	bCopy := make([]string, len(b))
+	copy(bCopy, b)
+	sort.Strings(bCopy)
+
+	for i, v := range aCopy {
+		if v != bCopy[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // MapKeys returns a list of all keys in a map.
@@ -219,6 +242,18 @@ func RandomElem[T any](xs []T) (T, error) {
 	return item, nil
 }
 
+// RandomInt returns a random integer between 0 and maxVal-1 (inclusive).
+func RandomInt(maxVal int) (int, error) {
+	if maxVal <= 0 {
+		return 0, errors.New("maxVal must be positive")
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(maxVal)))
+	if err != nil {
+		return 0, fmt.Errorf("failed to generate random number: %w", err)
+	}
+	return int(n.Int64()), nil
+}
+
 func CopyFile(sourcePath, destPath string) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
@@ -289,15 +324,6 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
-var reSlug = regexp.MustCompile(`(\(.*\))|(\[.*])|[^a-z0-9A-Z]`)
-
-func SlugifyString(input string) string {
-	rep := reSlug.ReplaceAllStringFunc(input, func(_ string) string {
-		return ""
-	})
-	return strings.ToLower(rep)
-}
-
 // CreateVirtualPath creates a properly encoded virtual path for media
 // Example: "kodi-show", "123", "Some Hot/Cold" -> "kodi-show://123/Some%20Hot%2FCold"
 func CreateVirtualPath(scheme, id, name string) string {
@@ -312,7 +338,8 @@ type VirtualPathResult struct {
 }
 
 // ParseVirtualPathStr parses a virtual path and returns its components with string ID
-func ParseVirtualPathStr(virtualPath string) (result VirtualPathResult, err error) {
+func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
+	var result VirtualPathResult
 	if !strings.Contains(virtualPath, "://") {
 		return result, errors.New("not a virtual path")
 	}
@@ -369,16 +396,11 @@ func FilenameFromPath(p string) string {
 
 func SlugifyPath(filePath string) string {
 	fn := FilenameFromPath(filePath)
-	return SlugifyString(fn)
+	return slugs.SlugifyString(fn)
 }
 
 func HasSpace(s string) bool {
-	for i := range len(s) {
-		if s[i] == ' ' {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, " ")
 }
 
 func IsServiceRunning(cfg *config.Instance) bool {

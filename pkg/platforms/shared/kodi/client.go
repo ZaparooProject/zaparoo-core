@@ -82,7 +82,7 @@ func NewClientWithLauncherID(cfg *config.Instance, launcherID string) KodiClient
 
 // LaunchFile launches a local file or URL in Kodi
 func (c *Client) LaunchFile(path string) error {
-	_, err := c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err := c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			File: path,
 		},
@@ -103,7 +103,7 @@ func (c *Client) LaunchMovie(path string) error {
 		return fmt.Errorf("failed to parse movie ID %q: %w", pathID, err)
 	}
 
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			MovieID: movieID,
 		},
@@ -128,7 +128,7 @@ func (c *Client) LaunchTVEpisode(path string) error {
 		return fmt.Errorf("failed to parse episode ID %q: %w", id, err)
 	}
 
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			EpisodeID: intID,
 		},
@@ -141,13 +141,13 @@ func (c *Client) LaunchTVEpisode(path string) error {
 
 // Stop stops all active players in Kodi
 func (c *Client) Stop() error {
-	players, err := c.GetActivePlayers()
+	players, err := c.GetActivePlayers(context.Background())
 	if err != nil {
 		return err
 	}
 
 	for _, player := range players {
-		_, err := c.APIRequest(APIMethodPlayerStop, PlayerStopParams{
+		_, err := c.APIRequest(context.Background(), APIMethodPlayerStop, PlayerStopParams{
 			PlayerID: player.ID,
 		})
 		if err != nil {
@@ -159,8 +159,8 @@ func (c *Client) Stop() error {
 }
 
 // GetActivePlayers retrieves all active players in Kodi
-func (c *Client) GetActivePlayers() ([]Player, error) {
-	result, err := c.APIRequest(APIMethodPlayerGetActivePlayers, nil)
+func (c *Client) GetActivePlayers(ctx context.Context) ([]Player, error) {
+	result, err := c.APIRequest(ctx, APIMethodPlayerGetActivePlayers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +175,8 @@ func (c *Client) GetActivePlayers() ([]Player, error) {
 }
 
 // GetMovies retrieves all movies from Kodi's library
-func (c *Client) GetMovies() ([]Movie, error) {
-	result, err := c.APIRequest(APIMethodVideoLibraryGetMovies, nil)
+func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +191,8 @@ func (c *Client) GetMovies() ([]Movie, error) {
 }
 
 // GetTVShows retrieves all TV shows from Kodi's library
-func (c *Client) GetTVShows() ([]TVShow, error) {
-	result, err := c.APIRequest(APIMethodVideoLibraryGetTVShows, nil)
+func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -207,12 +207,12 @@ func (c *Client) GetTVShows() ([]TVShow, error) {
 }
 
 // GetEpisodes retrieves all episodes for a specific TV show from Kodi's library
-func (c *Client) GetEpisodes(tvShowID int) ([]Episode, error) {
+func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error) {
 	params := VideoLibraryGetEpisodesParams{
 		TVShowID: tvShowID,
 	}
 
-	result, err := c.APIRequest(APIMethodVideoLibraryGetEpisodes, params)
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetEpisodes, params)
 	if err != nil {
 		return nil, err
 	}
@@ -227,8 +227,8 @@ func (c *Client) GetEpisodes(tvShowID int) ([]Episode, error) {
 }
 
 // GetSongs retrieves all songs from Kodi's library
-func (c *Client) GetSongs() ([]Song, error) {
-	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, nil)
+func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -243,8 +243,8 @@ func (c *Client) GetSongs() ([]Song, error) {
 }
 
 // GetAlbums retrieves all albums from Kodi's library
-func (c *Client) GetAlbums() ([]Album, error) {
-	result, err := c.APIRequest(APIMethodAudioLibraryGetAlbums, nil)
+func (c *Client) GetAlbums(ctx context.Context) ([]Album, error) {
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetAlbums, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -259,8 +259,8 @@ func (c *Client) GetAlbums() ([]Album, error) {
 }
 
 // GetArtists retrieves all artists from Kodi's library
-func (c *Client) GetArtists() ([]Artist, error) {
-	result, err := c.APIRequest(APIMethodAudioLibraryGetArtists, nil)
+func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetArtists, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func (c *Client) LaunchSong(path string) error {
 		return fmt.Errorf("failed to parse song ID %q: %w", pathID, err)
 	}
 
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			SongID: songID,
 		},
@@ -306,7 +306,7 @@ func (c *Client) LaunchAlbum(path string) error {
 	}
 
 	// Step 1: Clear music playlist
-	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
 		PlaylistID: 0,
 	})
 	if err != nil {
@@ -321,7 +321,7 @@ func (c *Client) LaunchAlbum(path string) error {
 	}
 	params := AudioLibraryGetSongsParams{Filter: filter}
 
-	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, params)
+	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return err
 	}
@@ -341,7 +341,7 @@ func (c *Client) LaunchAlbum(path string) error {
 	}
 
 	// Step 3: Add to playlist
-	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
 		PlaylistID: 0,
 		Item:       albumSongs,
 	})
@@ -350,7 +350,7 @@ func (c *Client) LaunchAlbum(path string) error {
 	}
 
 	// Step 4: Start playback
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			PlaylistID: 0,
 		},
@@ -369,7 +369,7 @@ func (c *Client) LaunchArtist(path string) error {
 	}
 
 	// Step 1: Clear music playlist
-	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
 		PlaylistID: 0,
 	})
 	if err != nil {
@@ -384,7 +384,7 @@ func (c *Client) LaunchArtist(path string) error {
 	}
 	params := AudioLibraryGetSongsParams{Filter: filter}
 
-	result, err := c.APIRequest(APIMethodAudioLibraryGetSongs, params)
+	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return err
 	}
@@ -408,7 +408,7 @@ func (c *Client) LaunchArtist(path string) error {
 	}
 
 	// Step 3: Add songs to playlist
-	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
 		PlaylistID: 0,
 		Item:       artistSongs,
 	})
@@ -417,7 +417,7 @@ func (c *Client) LaunchArtist(path string) error {
 	}
 
 	// Step 4: Start playback
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			PlaylistID: 0,
 		},
@@ -437,7 +437,7 @@ func (c *Client) LaunchTVShow(path string) error {
 	}
 
 	// Step 1: Clear video playlist (playlistid=1)
-	_, err = c.APIRequest(APIMethodPlaylistClear, PlaylistClearParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
 		PlaylistID: 1,
 	})
 	if err != nil {
@@ -445,7 +445,7 @@ func (c *Client) LaunchTVShow(path string) error {
 	}
 
 	// Step 2: Get episodes for the show
-	episodes, err := c.GetEpisodes(showID)
+	episodes, err := c.GetEpisodes(context.Background(), showID)
 	if err != nil {
 		return err
 	}
@@ -460,7 +460,7 @@ func (c *Client) LaunchTVShow(path string) error {
 		episodeItems = append(episodeItems, PlaylistItemEpisodeID{EpisodeID: episode.ID})
 	}
 
-	_, err = c.APIRequest(APIMethodPlaylistAdd, PlaylistAddEpisodesParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddEpisodesParams{
 		PlaylistID: 1,
 		Item:       episodeItems,
 	})
@@ -469,7 +469,7 @@ func (c *Client) LaunchTVShow(path string) error {
 	}
 
 	// Step 4: Start playback
-	_, err = c.APIRequest(APIMethodPlayerOpen, PlayerOpenParams{
+	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
 			PlaylistID: 1,
 		},
@@ -488,7 +488,7 @@ func (c *Client) SetURL(url string) {
 }
 
 // APIRequest makes a raw JSON-RPC request to Kodi API
-func (c *Client) APIRequest(method APIMethod, params any) (json.RawMessage, error) {
+func (c *Client) APIRequest(ctx context.Context, method APIMethod, params any) (json.RawMessage, error) {
 	req := APIPayload{
 		JSONRPC: "2.0",
 		ID:      uuid.New().String(),
@@ -501,10 +501,10 @@ func (c *Client) APIRequest(method APIMethod, params any) (json.RawMessage, erro
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Use a reasonable timeout context for API requests
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Combine cancellation with timeout - whichever comes first wins
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	kodiReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
+	kodiReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.url, bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

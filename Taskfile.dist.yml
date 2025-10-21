@@ -41,8 +41,8 @@ tasks:
       CGO_ENABLED: 1
       GOARCH: "{{.BUILD_ARCH}}"
       GOOS: "{{.BUILD_OS}}"
-      CGO_LDFLAGS: '{{if not .NO_LIBNFC}}-lnfc -lusb{{end}}'
-      PLATFORM: '{{.PLATFORM}}'
+      CGO_LDFLAGS: "{{if not .NO_LIBNFC}}-lnfc -lusb{{end}}"
+      PLATFORM: "{{.PLATFORM}}"
       CC: "{{.CC}}"
       CXX: "{{.CXX}}"
     cmds:
@@ -62,7 +62,7 @@ tasks:
     vars:
       PLATFORM: '{{default "" .PLATFORM}}'
       ARCH: '{{default "" .ARCH}}'
-      TARGET_DIR: '{{if and .PLATFORM .ARCH}}_build/{{.PLATFORM}}_{{.ARCH}}{{else if .PLATFORM}}_build/{{.PLATFORM}}_*{{else}}_build{{end}}'
+      TARGET_DIR: "{{if and .PLATFORM .ARCH}}_build/{{.PLATFORM}}_{{.ARCH}}{{else if .PLATFORM}}_build/{{.PLATFORM}}_*{{else}}_build{{end}}"
     cmds:
       - '{{if eq OS "windows"}}powershell rm -Recurse -Force{{else}}rm -rf{{end}} {{.TARGET_DIR}}'
 
@@ -71,12 +71,7 @@ tasks:
     vars:
       TEST_ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - |
-        if command -v tdd-guard-go >/dev/null 2>&1; then
-          go test -json {{.TEST_ARGS}} 2>&1 | tdd-guard-go -project-root {{.ROOT_DIR}}
-        else
-          go test {{.TEST_ARGS}}
-        fi
+      - go test -race {{.TEST_ARGS}}
 
   lint:
     desc: Run golangci-lint

@@ -156,7 +156,7 @@ If a method fails, it will populate the `error` key in the response object with 
   "id": "4b5da056-a5d4-436b-b4e6-b96231e99969",
   "error": {
     "code": 1,
-    "message": "query or system is required"
+    "message": "invalid cursor: invalid base64"
   }
 }
 ```

@@ -107,12 +107,12 @@ func TestDatabaseMockUsage(t *testing.T) {
 		mockMediaDB := &helpers.MockMediaDBI{}
 
 		// Set up transaction expectations
-		mockMediaDB.On("BeginTransaction").Return(nil)
+		mockMediaDB.On("BeginTransaction", false).Return(nil)
 		mockMediaDB.On("InsertSystem", fixtures.Systems.Atari2600).Return(fixtures.Systems.Atari2600, nil)
 		mockMediaDB.On("CommitTransaction").Return(nil)
 
 		// Test transaction workflow
-		err := mockMediaDB.BeginTransaction()
+		err := mockMediaDB.BeginTransaction(false)
 		require.NoError(t, err)
 
 		system, err := mockMediaDB.InsertSystem(fixtures.Systems.Atari2600)
@@ -330,7 +330,8 @@ func TestIntegrationExample(t *testing.T) {
 
 		mockMediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(), "Pitfall").
 			Return(testResults, nil)
-		mockMediaDB.On("SystemIndexed", fixtures.GetTestSystemDefs()[0]).Return(true)
+		testSystems := fixtures.GetTestSystemDefs()
+		mockMediaDB.On("SystemIndexed", &testSystems[0]).Return(true)
 
 		// Set up sqlmock expectations for direct database access
 		helpers.ExpectMappingQuery(mock, testMapping.DBID, &testMapping)
@@ -343,13 +344,13 @@ func TestIntegrationExample(t *testing.T) {
 		assert.Equal(t, "zelda:*", mapping.Pattern)
 
 		// 2. Search for media in MediaDB
-		results, err := mockMediaDB.SearchMediaPathExact(fixtures.GetTestSystemDefs(), "Pitfall")
+		results, err := mockMediaDB.SearchMediaPathExact(testSystems, "Pitfall")
 		require.NoError(t, err)
 		assert.Len(t, results, 1)
 		assert.Equal(t, "Pitfall!", results[0].Name)
 
 		// 3. Check if system is indexed
-		isIndexed := mockMediaDB.SystemIndexed(fixtures.GetTestSystemDefs()[0])
+		isIndexed := mockMediaDB.SystemIndexed(&testSystems[0])
 		assert.True(t, isIndexed)
 
 		// 4. Add history entry

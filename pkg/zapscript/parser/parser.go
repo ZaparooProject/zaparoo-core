@@ -67,8 +67,18 @@ const (
 	SymInputMacroExtEnd    = '}'
 	SymExpressionStart     = '['
 	SymExpressionEnd       = ']'
+	SymMediaTitleStart     = '@'
+	SymMediaTitleSep       = '/'
+	SymTagAnd              = '+'
+	SymTagNot              = '-'
+	SymTagOr               = '~'
 	TokExpStart            = "\uE000"
 	TokExprEnd             = "\uE001"
+)
+
+const (
+	// Advanced arg key names
+	AdvArgKeyTags = "tags"
 )
 
 type Command struct {
@@ -92,6 +102,12 @@ const (
 type PostArgPart struct {
 	Value string
 	Type  PostArgPartType
+}
+
+type mediaTitleParseResult struct {
+	advArgs    map[string]string
+	rawContent string
+	valid      bool
 }
 
 func isCmdName(ch rune) bool {
@@ -450,7 +466,7 @@ func (sr *ScriptReader) parseInputMacroArg() (args []string, advArgs map[string]
 	return args, advArgs, nil
 }
 
-func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainder string, err error) {
+func (sr *ScriptReader) parseAdvArgs() (advArgs map[string]string, remainingStr string, err error) {
 	advArgs = make(map[string]string)
 	inValue := false
 	currentArg := ""
@@ -648,6 +664,76 @@ argsLoop:
 	return args, advArgs, nil
 }
 
+func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) {
+	result := &mediaTitleParseResult{
+		advArgs: make(map[string]string),
+	}
+	rawContent := ""
+
+	for {
+		ch, readErr := sr.read()
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		if ch == eof {
+			break
+		}
+
+		// Check for escape sequences
+		if ch == SymEscapeSeq {
+			next, escapeErr := sr.parseEscapeSeq()
+			if escapeErr != nil {
+				return nil, escapeErr
+			}
+			if next == "" {
+				rawContent += string(SymEscapeSeq)
+			} else {
+				rawContent += next
+			}
+			continue
+		}
+
+		// Check for end of command
+		eoc, checkErr := sr.checkEndOfCmd(ch)
+		if checkErr != nil {
+			return nil, checkErr
+		} else if eoc {
+			break
+		}
+
+		// Check for advanced args start (?)
+		if ch == SymAdvArgStart {
+			// Parse advanced args (? already consumed)
+			parsedAdvArgs, buf, err := sr.parseAdvArgs()
+			if errors.Is(err, ErrInvalidAdvArgName) {
+				// Fallback: treat as part of content
+				rawContent += string(SymAdvArgStart) + buf
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+
+			result.advArgs = parsedAdvArgs
+			break
+		}
+
+		rawContent += string(ch)
+	}
+
+	result.rawContent = strings.TrimSpace(rawContent)
+
+	// Validate: must contain at least one / separator for system/title format
+	if !strings.Contains(result.rawContent, string(SymMediaTitleSep)) {
+		// Not valid media title format, return for auto-launch fallback
+		result.valid = false
+		return result, nil
+	}
+
+	result.valid = true
+	return result, nil
+}
+
 func (sr *ScriptReader) parseCommand(onlyOneArg bool) (Command, string, error) {
 	cmd := Command{}
 	var buf []rune
@@ -766,6 +852,35 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 		case sr.pos == 1 && ch == SymJSONStart:
 			// reserve starting { as json script for later
 			return Script{}, ErrInvalidJSON
+		case ch == SymMediaTitleStart:
+			// Media title syntax: @System Name/Game Title (optional tags)?advArgs
+			result, err := sr.parseMediaTitleSyntax()
+			if err != nil {
+				return script, parseErr(err)
+			}
+
+			// If not valid media title format (no / found), treat as auto-launch
+			if !result.valid {
+				if autoErr := parseAutoLaunchCmd(string(SymMediaTitleStart) + result.rawContent); autoErr != nil {
+					return script, parseErr(autoErr)
+				}
+				continue
+			}
+
+			// Build launch.title command with raw content
+			// The command layer will handle system lookup and tag extraction
+			cmd := Command{
+				Name: models.ZapScriptCmdLaunchTitle,
+				Args: []string{result.rawContent},
+			}
+
+			// Only set AdvArgs if there are any
+			if len(result.advArgs) > 0 {
+				cmd.AdvArgs = result.advArgs
+			}
+
+			script.Cmds = append(script.Cmds, cmd)
+			continue
 		case ch == SymCmdStart:
 			next, err := sr.peek()
 			if err != nil {

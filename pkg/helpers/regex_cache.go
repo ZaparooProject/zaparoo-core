@@ -26,7 +26,24 @@ import (
 )
 
 // RegexCache provides thread-safe caching of compiled regular expressions
-// to avoid repeated compilation overhead during media scanning operations.
+// to avoid repeated compilation overhead for dynamic/runtime patterns.
+//
+// # When to Use
+//
+// Use CachedCompile for DYNAMIC patterns only:
+//   - Patterns from user configuration (config files, databases)
+//   - Patterns from external sources (CSV files, APIs)
+//   - Patterns that vary at runtime
+//
+// For STATIC patterns (constant strings), use package-level variables instead:
+//
+//	var myPattern = regexp.MustCompile(`pattern`)  // ✅ Static pattern
+//	re := helpers.CachedMustCompile(`pattern`)     // ❌ Don't use for static
+//
+// Package-level vars provide:
+//   - Zero runtime overhead (no map lookups)
+//   - Compile-time validation (errors caught at startup)
+//   - Better code organization (patterns visible at top of file)
 type RegexCache struct {
 	cache map[string]*regexp.Regexp
 	mu    sync.RWMutex
@@ -114,11 +131,25 @@ func (rc *RegexCache) Size() int {
 	return len(rc.cache)
 }
 
-// Convenience functions that use the global cache
+// Convenience functions that use the global cache for DYNAMIC patterns.
+//
+// IMPORTANT: Only use these for runtime/dynamic patterns (from config, database, user input).
+// For static constant patterns, use package-level vars instead:
+//
+//	var myPattern = regexp.MustCompile(`pattern`)  // ✅ For static patterns
+//
+// See package documentation for detailed guidance.
+
+// CachedMustCompile compiles and caches a dynamic regex pattern.
+// Panics if pattern is invalid. Only use for runtime patterns - for static patterns,
+// use package-level vars instead.
 func CachedMustCompile(pattern string) *regexp.Regexp {
 	return GlobalRegexCache.MustCompile(pattern)
 }
 
+// CachedCompile compiles and caches a dynamic regex pattern.
+// Returns error if pattern is invalid. Only use for runtime patterns - for static patterns,
+// use package-level vars instead.
 func CachedCompile(pattern string) (*regexp.Regexp, error) {
 	return GlobalRegexCache.Compile(pattern)
 }

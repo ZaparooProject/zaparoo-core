@@ -55,6 +55,7 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdLaunchSystem: cmdSystem,
 	models.ZapScriptCmdLaunchRandom: cmdRandom,
 	models.ZapScriptCmdLaunchSearch: cmdSearch,
+	models.ZapScriptCmdLaunchTitle:  cmdTitle,
 
 	models.ZapScriptCmdPlaylistPlay:     cmdPlaylistPlay,
 	models.ZapScriptCmdPlaylistStop:     cmdPlaylistStop,

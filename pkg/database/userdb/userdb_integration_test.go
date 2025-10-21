@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupTempUserDB(t *testing.T) (userDB *UserDB, cleanup func()) {
+func setupTempUserDB(t *testing.T) (db *UserDB, cleanup func()) {
 	// Create temp directory that the mock platform will use
 	tempDir, err := os.MkdirTemp("", "zaparoo-test-userdb-*")
 	require.NoError(t, err)
@@ -45,17 +45,17 @@ func setupTempUserDB(t *testing.T) (userDB *UserDB, cleanup func()) {
 
 	// Use OpenUserDB with context and the mock platform
 	ctx := context.Background()
-	userDB, err = OpenUserDB(ctx, mockPlatform)
+	db, err = OpenUserDB(ctx, mockPlatform)
 	require.NoError(t, err)
 
 	cleanup = func() {
-		if userDB != nil {
-			_ = userDB.Close()
+		if db != nil {
+			_ = db.Close()
 		}
 		_ = os.RemoveAll(tempDir)
 	}
 
-	return userDB, cleanup
+	return db, cleanup
 }
 
 func TestUserDB_OpenClose_Integration(t *testing.T) {

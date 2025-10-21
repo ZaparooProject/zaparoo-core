@@ -22,18 +22,32 @@ package models
 import (
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/google/uuid"
 )
 
 type SearchResultMedia struct {
-	System System `json:"system"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
+	System        System             `json:"system"`
+	Name          string             `json:"name"`
+	Path          string             `json:"path"`
+	LaunchCommand string             `json:"launchCommand"`
+	Tags          []database.TagInfo `json:"tags"`
+}
+
+type PaginationInfo struct {
+	NextCursor  *string `json:"nextCursor,omitempty"`
+	HasNextPage bool    `json:"hasNextPage"`
+	PageSize    int     `json:"pageSize"`
 }
 
 type SearchResults struct {
-	Results []SearchResultMedia `json:"results"`
-	Total   int                 `json:"total"`
+	Pagination *PaginationInfo     `json:"pagination,omitempty"`
+	Results    []SearchResultMedia `json:"results"`
+	Total      int                 `json:"total"`
+}
+
+type TagsResponse struct {
+	Tags []database.TagInfo `json:"tags"`
 }
 
 type SettingsResponse struct {
@@ -47,9 +61,11 @@ type SettingsResponse struct {
 }
 
 type System struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Category string `json:"category"`
+	ReleaseDate  *string `json:"releaseDate,omitempty"`
+	Manufacturer *string `json:"manufacturer,omitempty"`
+	ID           string  `json:"id,omitempty"`
+	Name         string  `json:"name,omitempty"`
+	Category     string  `json:"category,omitempty"`
 }
 
 type SystemsResponse struct {
@@ -97,8 +113,10 @@ type IndexingStatusResponse struct {
 	CurrentStep        *int    `json:"currentStep,omitempty"`
 	CurrentStepDisplay *string `json:"currentStepDisplay,omitempty"`
 	TotalFiles         *int    `json:"totalFiles,omitempty"`
+	TotalMedia         *int    `json:"totalMedia,omitempty"`
 	Exists             bool    `json:"exists"`
 	Indexing           bool    `json:"indexing"`
+	Optimizing         bool    `json:"optimizing"`
 }
 
 type ReaderResponse struct {

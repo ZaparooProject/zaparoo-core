@@ -43,9 +43,9 @@ type CsvMappingEntry struct {
 	Text      string `csv:"text"`
 }
 
-func LoadCsvMappings() (uids, texts map[string]string, err error) {
-	uids = make(map[string]string)
-	texts = make(map[string]string)
+func LoadCsvMappings() (uidMappings, textMappings map[string]string, err error) {
+	uids := make(map[string]string)
+	texts := make(map[string]string)
 
 	if _, statErr := os.Stat(config.LegacyMappingsPath); errors.Is(statErr, os.ErrNotExist) {
 		log.Debug().Msg("no legacy mappings file found, skipping processing")

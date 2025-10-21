@@ -42,18 +42,18 @@ import (
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
-	lastScan            *tokens.Token
-	activeMedia         func() *models.ActiveMedia
+	textMap             map[string]string
+	trackedProcess      *os.Process
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
-	textMap             map[string]string
+	lastScan            *tokens.Token
 	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
-	trackedProcess      *os.Process
-	gpd                 linuxinput.Gamepad
+	activeMedia         func() *models.ActiveMedia
 	kbd                 linuxinput.Keyboard
+	gpd                 linuxinput.Gamepad
 	lastLauncher        platforms.Launcher
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex
@@ -300,42 +300,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func NormalizePath(cfg *config.Instance, pl platforms.Platform, path string) string {
-	launchers := helpers.PathToLaunchers(cfg, pl, path)
-	if len(launchers) == 0 {
-		return path
-	}
-
-	// TODO: something smarter than first match
-	launcher := launchers[0]
-
-	lowerPath := strings.ToLower(path)
-	var match string
-	for _, parent := range pl.RootDirs(cfg) {
-		if strings.HasPrefix(lowerPath, strings.ToLower(parent)) {
-			match = path[len(parent):]
-			break
-		}
-	}
-
-	if match == "" {
-		return path
-	}
-
-	match = strings.Trim(match, "/")
-
-	parts := strings.Split(match, "/")
-	if len(parts) < 2 {
-		return path
-	}
-
-	return launcher.SystemID + "/" + strings.Join(parts[1:], "/")
-}
-
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
-	return NormalizePath(cfg, p, path)
-}
-
 func (p *Platform) StopActiveLauncher() error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
@@ -551,6 +515,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(systemdefs.SystemAmiga),
 		Scanner: func(
+			_ context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
@@ -591,8 +556,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 			for _, p := range fullPaths {
 				results = append(results, platforms.ScanResult{
-					Path: p,
-					Name: filepath.Base(p),
+					Path:  p,
+					Name:  filepath.Base(p),
+					NoExt: true,
 				})
 			}
 
@@ -616,6 +582,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(systemdefs.SystemNeoGeo),
 		Scanner: func(
+			_ context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
@@ -666,8 +633,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 					if altName, ok := names[id]; ok {
 						results = append(results, platforms.ScanResult{
-							Path: filepath.Join(sf.Path, f),
-							Name: altName,
+							Path:  filepath.Join(sf.Path, f),
+							Name:  altName,
+							NoExt: true,
 						})
 					}
 				}

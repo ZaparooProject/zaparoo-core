@@ -20,6 +20,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -70,16 +71,20 @@ type System struct {
 }
 
 type MediaTitle struct {
-	Slug       string
-	Name       string
-	DBID       int64
-	SystemDBID int64
+	Slug          string
+	Name          string
+	SecondarySlug sql.NullString
+	DBID          int64
+	SystemDBID    int64
+	SlugLength    int
+	SlugWordCount int
 }
 
 type Media struct {
 	Path           string
 	DBID           int64
 	MediaTitleDBID int64
+	SystemDBID     int64
 }
 
 type TagType struct {
@@ -105,25 +110,117 @@ type SearchResult struct {
 	Path     string
 }
 
+type TagInfo struct {
+	Tag  string `json:"tag"`
+	Type string `json:"type"`
+}
+
+// TagOperator represents the logical operator for tag filtering
+type TagOperator string
+
+// Tag filter operator constants
+const (
+	TagOperatorAND TagOperator = "AND" // Default: must have tag
+	TagOperatorNOT TagOperator = "NOT" // Must not have tag (-)
+	TagOperatorOR  TagOperator = "OR"  // At least one OR tag must match (~)
+)
+
+// TagFilter represents a tag type/value filter for queries
+type TagFilter struct {
+	Type     string      // Tag type (e.g., "lang", "year", "players")
+	Value    string      // Tag value (e.g., "en", "1991", "2")
+	Operator TagOperator // Operator: AND (default), NOT (-), OR (~)
+}
+
+// GroupTagFiltersByOperator groups tag filters by operator type for consistent processing.
+// Returns (andFilters, notFilters, orFilters) to enable both SQL generation and in-memory filtering
+// to use the same grouping logic.
+func GroupTagFiltersByOperator(filters []TagFilter) (and, not, or []TagFilter) {
+	for _, f := range filters {
+		switch f.Operator {
+		case TagOperatorNOT:
+			not = append(not, f)
+		case TagOperatorOR:
+			or = append(or, f)
+		default: // AND is the default
+			and = append(and, f)
+		}
+	}
+	return and, not, or
+}
+
+type SearchResultWithCursor struct {
+	Year     *string
+	SystemID string
+	Name     string
+	Path     string
+	Tags     []TagInfo
+	MediaID  int64
+}
+
+// TitleWithSystem represents a MediaTitle with its associated System information
+type TitleWithSystem struct {
+	Slug       string
+	Name       string
+	SystemID   string
+	DBID       int64
+	SystemDBID int64
+}
+
+// MediaWithFullPath represents a Media item with its associated title and system information
+type MediaWithFullPath struct {
+	Path           string
+	TitleSlug      string
+	SystemID       string
+	DBID           int64
+	MediaTitleDBID int64
+}
+
 type FileInfo struct {
 	SystemID string
 	Path     string
 	Name     string
 }
 
-type ScanState struct {
-	SystemIDs      map[string]int
-	TitleIDs       map[string]int
-	MediaIDs       map[string]int
-	TagTypeIDs     map[string]int
-	TagIDs         map[string]int
-	SystemsIndex   int
-	TitlesIndex    int
-	MediaIndex     int
-	TagTypesIndex  int
-	TagsIndex      int
-	MediaTagsIndex int
+// MediaQuery represents parameters for querying media counts used in random selection
+type MediaQuery struct {
+	PathGlob   string      `json:"pathGlob,omitempty"`
+	PathPrefix string      `json:"pathPrefix,omitempty"`
+	Systems    []string    `json:"systems,omitempty"`
+	Tags       []TagFilter `json:"tags,omitempty"`
 }
+
+// SearchFilters represents parameters for filtered media search
+type SearchFilters struct {
+	Cursor  *int64              `json:"cursor,omitempty"`
+	Letter  *string             `json:"letter,omitempty"`
+	Query   string              `json:"query"`
+	Systems []systemdefs.System `json:"systems,omitempty"`
+	Tags    []TagFilter         `json:"tags,omitempty"`
+	Limit   int                 `json:"limit"`
+}
+
+type ScanState struct {
+	SystemIDs     map[string]int
+	TitleIDs      map[string]int
+	MediaIDs      map[string]int
+	TagTypeIDs    map[string]int
+	TagIDs        map[string]int
+	SystemsIndex  int
+	TitlesIndex   int
+	MediaIndex    int
+	TagTypesIndex int
+	TagsIndex     int
+}
+
+// JournalMode represents SQLite journal mode
+type JournalMode string
+
+// Journal mode constants
+const (
+	JournalModeWAL    JournalMode = "WAL"
+	JournalModeDELETE JournalMode = "DELETE"
+)
 
 /*
  * Interfaces for external deps
@@ -158,29 +255,79 @@ type UserDBI interface {
 
 type MediaDBI interface {
 	GenericDBI
-	BeginTransaction() error
+	BeginTransaction(batchEnabled bool) error
 	CommitTransaction() error
 	RollbackTransaction() error
 	Exists() bool
 	UpdateLastGenerated() error
 	GetLastGenerated() (time.Time, error)
 
-	ReindexTables() error
+	SetOptimizationStatus(status string) error
+	GetOptimizationStatus() (string, error)
+	SetOptimizationStep(step string) error
+	GetOptimizationStep() (string, error)
+	RunBackgroundOptimization(statusCallback func(optimizing bool))
+	WaitForBackgroundOperations()
+
+	InvalidateCountCache() error
+
+	// Slug resolution cache methods
+	GetCachedSlugResolution(
+		ctx context.Context, systemID, slug string, tagFilters []TagFilter,
+	) (int64, string, bool)
+	SetCachedSlugResolution(
+		ctx context.Context, systemID, slug string, tagFilters []TagFilter, mediaDBID int64, strategy string,
+	) error
+	InvalidateSlugCache(ctx context.Context) error
+	InvalidateSlugCacheForSystems(ctx context.Context, systemIDs []string) error
+	GetMediaByDBID(ctx context.Context, mediaDBID int64) (SearchResultWithCursor, error)
+
+	SetIndexingStatus(status string) error
+	GetIndexingStatus() (string, error)
+	SetLastIndexedSystem(systemID string) error
+	GetLastIndexedSystem() (string, error)
+	SetIndexingSystems(systemIDs []string) error
+	GetIndexingSystems() ([]string, error)
+	TruncateSystems(systemIDs []string) error
 
 	SearchMediaPathExact(systems []systemdefs.System, query string) ([]SearchResult, error)
-	SearchMediaPathWords(systems []systemdefs.System, query string) ([]SearchResult, error)
+	SearchMediaWithFilters(ctx context.Context, filters *SearchFilters) ([]SearchResultWithCursor, error)
+	SearchMediaBySlug(
+		ctx context.Context, systemID string, slug string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
+	SearchMediaBySecondarySlug(
+		ctx context.Context, systemID string, secondarySlug string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
+	SearchMediaBySlugPrefix(
+		ctx context.Context, systemID string, slugPrefix string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
+	SearchMediaBySlugIn(
+		ctx context.Context, systemID string, slugs []string, tags []TagFilter,
+	) ([]SearchResultWithCursor, error)
+	GetTitlesWithPreFilter(
+		ctx context.Context, systemID string, minLength, maxLength, minWordCount, maxWordCount int,
+	) ([]MediaTitle, error)
+	GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error)
+	GetTags(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
+	GetAllUsedTags(ctx context.Context) ([]TagInfo, error)
+	PopulateSystemTagsCache(ctx context.Context) error
+	GetSystemTagsCached(ctx context.Context, systems []systemdefs.System) ([]TagInfo, error)
+	InvalidateSystemTagsCache(ctx context.Context, systems []systemdefs.System) error
 	SearchMediaPathGlob(systems []systemdefs.System, query string) ([]SearchResult, error)
 	IndexedSystems() ([]string, error)
-	SystemIndexed(system systemdefs.System) bool
+	SystemIndexed(system *systemdefs.System) bool
 	RandomGame(systems []systemdefs.System) (SearchResult, error)
+	RandomGameWithQuery(query *MediaQuery) (SearchResult, error)
+	GetTotalMediaCount() (int, error)
 
 	FindSystem(row System) (System, error)
+	FindSystemBySystemID(systemID string) (System, error)
 	InsertSystem(row System) (System, error)
 	FindOrInsertSystem(row System) (System, error)
 
-	FindMediaTitle(row MediaTitle) (MediaTitle, error)
-	InsertMediaTitle(row MediaTitle) (MediaTitle, error)
-	FindOrInsertMediaTitle(row MediaTitle) (MediaTitle, error)
+	FindMediaTitle(row *MediaTitle) (MediaTitle, error)
+	InsertMediaTitle(row *MediaTitle) (MediaTitle, error)
+	FindOrInsertMediaTitle(row *MediaTitle) (MediaTitle, error)
 
 	FindMedia(row Media) (Media, error)
 	InsertMedia(row Media) (Media, error)
@@ -197,4 +344,28 @@ type MediaDBI interface {
 	FindMediaTag(row MediaTag) (MediaTag, error)
 	InsertMediaTag(row MediaTag) (MediaTag, error)
 	FindOrInsertMediaTag(row MediaTag) (MediaTag, error)
+
+	// GetMax*ID methods for resume functionality
+	GetMaxSystemID() (int64, error)
+	GetMaxTitleID() (int64, error)
+	GetMaxMediaID() (int64, error)
+	GetMaxTagTypeID() (int64, error)
+	GetMaxTagID() (int64, error)
+	GetMaxMediaTagID() (int64, error)
+
+	// GetAll* methods for populating scan state maps
+	GetAllSystems() ([]System, error)
+	GetAllMediaTitles() ([]MediaTitle, error)
+	GetAllMedia() ([]Media, error)
+	GetAllTags() ([]Tag, error)
+	GetAllTagTypes() ([]TagType, error)
+
+	// Optimized JOIN query methods for populating scan state
+	GetTitlesWithSystems() ([]TitleWithSystem, error)
+	GetMediaWithFullPath() ([]MediaWithFullPath, error)
+
+	// Optimized JOIN query methods for selective indexing (excluding specified systems)
+	GetSystemsExcluding(excludeSystemIDs []string) ([]System, error)
+	GetTitlesWithSystemsExcluding(excludeSystemIDs []string) ([]TitleWithSystem, error)
+	GetMediaWithFullPathExcluding(excludeSystemIDs []string) ([]MediaWithFullPath, error)
 }

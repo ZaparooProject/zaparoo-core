@@ -216,6 +216,10 @@ None.
 
 Returns the current media database status and active media.
 
+The database status includes both indexing and optimization information:
+- **Indexing** takes priority over optimization in the response (if both are running, only indexing status is shown)
+- **Optimization** status and progress are shown when no indexing is in progress
+
 #### Parameters
 
 None.
@@ -233,10 +237,12 @@ None.
 | :----------------- | :----- | :------- | :----------------------------------------------- |
 | exists             | boolean| Yes      | True if the database exists.                     |
 | indexing           | boolean| Yes      | True if indexing is currently in progress.       |
+| optimizing         | boolean| Yes      | True if database optimization is currently in progress. |
 | totalSteps         | number | No       | Total number of indexing steps.                 |
 | currentStep        | number | No       | Current indexing step.                          |
-| currentStepDisplay | string | No       | Display name of the current indexing step.      |
+| currentStepDisplay | string | No       | Display name of the current indexing step or optimization step. |
 | totalFiles         | number | No       | Total number of files to index.                 |
+| totalMedia         | number | No       | Total number of media entries in the database. Only included when database exists and is not indexing. |
 
 ##### Active media object
 
@@ -261,7 +267,7 @@ None.
 }
 ```
 
-##### Response
+##### Response (Database Ready)
 
 ```json
 {
@@ -270,7 +276,28 @@ None.
   "result": {
     "database": {
       "exists": true,
-      "indexing": false
+      "indexing": false,
+      "optimizing": false,
+      "totalMedia": 1337
+    },
+    "active": []
+  }
+}
+```
+
+##### Response (Optimization in Progress)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "47f80537-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "database": {
+      "exists": true,
+      "indexing": false,
+      "optimizing": true,
+      "currentStepDisplay": "vacuum",
+      "totalMedia": 1337
     },
     "active": []
   }
@@ -281,22 +308,28 @@ None.
 
 Query the media database and return all matching indexed media.
 
+**Note:** This API now uses cursor-based pagination for all requests. The `total` field is deprecated and always returns -1. Use the `pagination` object to navigate through results. For subsequent pages, include the `nextCursor` value in the `cursor` parameter of your next request.
+
 #### Parameters
 
 An object:
 
 | Key        | Type     | Required | Description                                                                                                                    |
 | :--------- | :------- | :------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| query      | string   | Yes      | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. |
+| query      | string   | No       | Case-insensitive search by filename. By default, query is split by white space and results are found which contain every word. If omitted, all media is returned. |
 | systems    | string[] | No       | Case-sensitive list of system IDs to restrict search to. A missing key or empty list will search all systems.                  |
-| maxResults | number   | No       | Max number of results to return. Default is 250.                                                                               |
+| maxResults | number   | No       | Max number of results to return. Default is 100.                                                                               |
+| cursor     | string   | No       | Cursor for pagination. Omit for first page, use `nextCursor` from previous response for subsequent pages.                     |
+| tags       | string[] | No       | Filter results by tags. Maximum 50 tags, each up to 128 characters. Tags are case-sensitive and results must match all provided tags. Can be used without query or systems for tag-only searches. |
+| letter     | string   | No       | Filter results by first character of game name. Supports: A-Z (single letters), "0-9" (numbers), "#" (symbols). Case-insensitive. |
 
 #### Result
 
-| Key     | Type    | Required | Description                                        |
-| :------ | :------ | :------- | :------------------------------------------------- |
-| results | Media[] | Yes      | A list of all search results from the given query. |
-| total   | number  | Yes      | Total number of search results.                    |
+| Key        | Type                               | Required | Description                                                                     |
+| :--------- | :--------------------------------- | :------- | :------------------------------------------------------------------------------ |
+| results    | Media[]                            | Yes      | A list of all search results from the given query.                              |
+| total      | number                             | Yes      | **Deprecated:** Returns the count of results in the current response page. Use pagination info for navigation. |
+| pagination | [Pagination](#pagination-object)   | Yes      | Pagination information for cursor-based navigation.                             |
 
 ##### Media object
 
@@ -305,14 +338,32 @@ An object:
 | system | [System](#system-object) | Yes      | System which the media has been indexed under.                                                              |
 | name   | string                   | Yes      | A human-readable version of the result's filename without a file extension.                                 |
 | path   | string                   | Yes      | Path to the media file. If possible, this path will be compressed into the `<system>/<path>` launch format. |
+| tags   | [TagInfo](#taginfo-object)[] | Yes      | Array of tags associated with this media item.                                               |
 
 ##### System object
 
-| Key      | Type   | Required | Description                                           |
-| :------- | :----- | :------- | :---------------------------------------------------- |
-| id       | string | Yes      | Internal system ID for this system.                   |
-| name     | string | Yes      | Display name of the system.                           |
-| category | string | Yes      | Category of system. This field is not yet formalised. |
+| Key          | Type   | Required | Description                                                              |
+| :----------- | :----- | :------- | :----------------------------------------------------------------------- |
+| id           | string | No       | Internal system ID for this system.                                      |
+| name         | string | No       | Display name of the system.                                              |
+| category     | string | No       | Category of system (e.g., "Console", "Computer"). Not yet formalised.    |
+| releaseDate  | string | No       | Release date of the system in ISO 8601 format (YYYY-MM-DD).              |
+| manufacturer | string | No       | Manufacturer of the system (e.g., "Nintendo", "Sega").                   |
+
+##### Pagination object
+
+| Key         | Type    | Required | Description                                                                 |
+| :---------- | :------ | :------- | :-------------------------------------------------------------------------- |
+| nextCursor  | string  | No       | Cursor for the next page of results. `null` if no more pages available.    |
+| hasNextPage | boolean | Yes      | Whether there are more results available after the current page.           |
+| pageSize    | number  | Yes      | Number of results requested for this page (matches `maxResults` parameter). |
+
+##### TagInfo object
+
+| Key  | Type   | Required | Description                                           |
+| :--- | :----- | :------- | :---------------------------------------------------- |
+| tag  | string | Yes      | The tag name.                                         |
+| type | string | Yes      | The type/category of the tag (e.g., "genre", "year"). |
 
 #### Example
 
@@ -344,10 +395,153 @@ An object:
           "category": "Handheld",
           "id": "Gameboy",
           "name": "Gameboy"
-        }
+        },
+        "tags": [
+          {
+            "tag": "test",
+            "type": "category"
+          },
+          {
+            "tag": "homebrew",
+            "type": "category"
+          }
+        ]
       }
     ],
-    "total": 1
+    "total": 1,
+    "pagination": {
+      "nextCursor": null,
+      "hasNextPage": false,
+      "pageSize": 100
+    }
+  }
+}
+```
+
+##### Example with tag filtering
+
+###### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "method": "media.search",
+  "params": {
+    "query": "mario",
+    "tags": ["platformer", "nintendo"],
+    "maxResults": 10
+  }
+}
+```
+
+###### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "results": [
+      {
+        "name": "Super Mario Bros.",
+        "path": "NES/Super Mario Bros.nes",
+        "system": {
+          "category": "Console",
+          "id": "NES",
+          "name": "Nintendo Entertainment System"
+        },
+        "tags": [
+          {
+            "tag": "platformer",
+            "type": "genre"
+          },
+          {
+            "tag": "nintendo",
+            "type": "publisher"
+          },
+          {
+            "tag": "1985",
+            "type": "year"
+          }
+        ]
+      }
+    ],
+    "total": 1,
+    "pagination": {
+      "nextCursor": null,
+      "hasNextPage": false,
+      "pageSize": 10
+    }
+  }
+}
+```
+
+### media.tags
+
+Query the media database and return available tags for filtering.
+
+This method returns all available tags (with their types) for the specified systems. Use this to build dynamic filter UIs showing available tag options.
+
+#### Parameters
+
+| Key     | Type     | Required | Description                                                                                         |
+| :------ | :------- | :------- | :-------------------------------------------------------------------------------------------------- |
+| systems | string[] | No       | Case-sensitive list of system IDs to restrict tags to. A missing key or empty list will get all systems. |
+
+#### Result
+
+| Key  | Type                     | Required | Description                    |
+| :--- | :----------------------- | :------- | :----------------------------- |
+| tags | [TagInfo](#taginfo-object)[] | Yes      | Array of available tags.       |
+
+##### TagInfo object
+
+| Key  | Type   | Required | Description                           |
+| :--- | :----- | :------- | :------------------------------------ |
+| tag  | string | Yes      | The tag value.                        |
+| type | string | Yes      | The tag type (e.g., "genre", "year"). |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "method": "media.tags",
+  "params": {
+    "systems": ["NES", "SNES"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5d-11ef-9c7b-020304050607",
+  "result": {
+    "tags": [
+      {
+        "type": "genre",
+        "tag": "action"
+      },
+      {
+        "type": "genre",
+        "tag": "platformer"
+      },
+      {
+        "type": "series",
+        "tag": "Mario Bros"
+      },
+      {
+        "type": "series",
+        "tag": "Super Mario"
+      }
+    ]
   }
 }
 ```
@@ -368,13 +562,20 @@ Optionally, an object:
 
 An omitted or `null` value parameters key is also valid and will index every system.
 
+**Selective Indexing Behavior:**
+- When `systems` is provided with specific system IDs, only those systems will be reindexed
+- The server will validate all provided system IDs and return an error if any are invalid
+- If all systems are specified (equivalent to no restriction), a full database rebuild will be performed for optimal performance
+- Selective indexing cannot be performed while database optimization is running
+- Resume functionality will validate that the system configuration hasn't changed between indexing sessions
+
 #### Result
 
 Returns `null` on success once indexing is complete.
 
-#### Example
+#### Examples
 
-##### Request
+##### Full Index Request
 
 ```json
 {
@@ -391,6 +592,79 @@ Returns `null` on success once indexing is complete.
   "jsonrpc": "2.0",
   "id": "6f20e07c-7a5e-11ef-84bb-020304050607",
   "result": null
+}
+```
+
+##### Selective Index Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7f30e17d-7a5e-11ef-85cc-020304050607",
+  "method": "media.generate",
+  "params": {
+    "systems": ["NES", "SNES", "Genesis"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "7f30e17d-7a5e-11ef-85cc-020304050607",
+  "result": null
+}
+```
+
+### media.generate.cancel
+
+Cancel any currently running media database indexing operation.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type   | Required | Description                           |
+| :------ | :----- | :------- | :------------------------------------ |
+| message | string | Yes      | Status message about the cancellation. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "method": "media.generate.cancel"
+}
+```
+
+##### Response (Indexing was running)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "result": {
+    "message": "Media indexing cancelled successfully"
+  }
+}
+```
+
+##### Response (No indexing running)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "8f40e28e-7a5e-11ef-86dd-020304050607",
+  "result": {
+    "message": "No media indexing operation is currently running"
+  }
 }
 ```
 
@@ -510,14 +784,18 @@ See [System object](#system-object).
   "result": {
     "systems": [
       {
-        "category": "Handheld",
         "id": "GameboyColor",
-        "name": "Gameboy Color"
+        "name": "Gameboy Color",
+        "category": "Handheld",
+        "releaseDate": "1998-10-21",
+        "manufacturer": "Nintendo"
       },
       {
-        "category": "Computer",
         "id": "EDSAC",
-        "name": "EDSAC"
+        "name": "EDSAC",
+        "category": "Computer",
+        "releaseDate": "1949-05-06",
+        "manufacturer": "University of Cambridge"
       }
     ]
   }
@@ -658,6 +936,48 @@ Returns `null` on success.
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
   "result": null
+}
+```
+
+### settings.logs.download
+
+Download the current log file as base64-encoded content.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key      | Type   | Required | Description                                      |
+| :------- | :----- | :------- | :----------------------------------------------- |
+| filename | string | Yes      | Name of the log file.                            |
+| size     | number | Yes      | Size of the log file in bytes.                   |
+| content  | string | Yes      | Base64-encoded content of the log file.          |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f50e39f-7a5e-11ef-87ee-020304050607",
+  "method": "settings.logs.download"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "9f50e39f-7a5e-11ef-87ee-020304050607",
+  "result": {
+    "filename": "zaparoo.log",
+    "size": 1024,
+    "content": "MjAyNC0wOS0yNFQxNzowMDowMC4wMDBaIElORk8gU3RhcnRpbmcgWmFwYXJvby4uLg=="
+  }
 }
 ```
 
@@ -911,6 +1231,60 @@ Returns `null` on success.
 
 ## Readers
 
+### readers
+
+List all currently connected readers and their capabilities.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key     | Type                       | Required | Description                         |
+| :------ | :------------------------- | :------- | :---------------------------------- |
+| readers | [ReaderInfo](#reader-info-object)[] | Yes      | A list of all connected readers.    |
+
+##### Reader info object
+
+| Key          | Type     | Required | Description                                   |
+| :----------- | :------- | :------- | :-------------------------------------------- |
+| id           | string   | Yes      | Unique identifier for the reader.             |
+| info         | string   | Yes      | Human-readable information about the reader.  |
+| connected    | boolean  | Yes      | Whether the reader is currently connected.    |
+| capabilities | string[] | Yes      | List of capabilities supported by the reader. |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "method": "readers"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": {
+    "readers": [
+      {
+        "id": "pn532_1",
+        "info": "PN532 NFC Reader",
+        "connected": true,
+        "capabilities": ["read", "write"]
+      }
+    ]
+  }
+}
+```
+
 ### readers.write
 
 Attempt to write given text to the first available write-capable reader, if possible.
@@ -982,6 +1356,42 @@ Returns `null` on success.
 {
   "jsonrpc": "2.0",
   "id": "562c0b60-7ae8-11ef-87d7-020304050607",
+  "result": null
+}
+```
+
+## Launchers
+
+### launchers.refresh
+
+Refresh the internal launcher cache, forcing a reload of launcher configurations.
+
+#### Parameters
+
+None.
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "af60e4a0-7a5e-11ef-88ff-020304050607",
+  "method": "launchers.refresh"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "af60e4a0-7a5e-11ef-88ff-020304050607",
   "result": null
 }
 ```

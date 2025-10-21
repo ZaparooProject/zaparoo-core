@@ -116,10 +116,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (*Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
-}
-
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()

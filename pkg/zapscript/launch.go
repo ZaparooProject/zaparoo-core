@@ -20,19 +20,40 @@
 package zapscript
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
 	"github.com/rs/zerolog/log"
 )
+
+// parseTagsAdvArg parses comma-delimited tags from advanced args
+// Format: "type:value,-type2:value2,~type3:value3"
+// Operators: "-" = NOT, "~" = OR, none = AND (default)
+// Uses shared parser from pkg/database/filters
+func parseTagsAdvArg(tagsStr string) []database.TagFilter {
+	if tagsStr == "" {
+		return nil
+	}
+
+	parts := strings.Split(tagsStr, ",")
+	tagFilters, err := filters.ParseTagFilters(parts)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to parse tag filters")
+		return nil
+	}
+
+	return tagFilters
+}
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -80,10 +101,22 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, err
 	}
 
+	// Parse tags from advanced args
+	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
 	gamesdb := env.Database.MediaDB
 
 	if strings.EqualFold(query, "all") {
-		game, gameErr := gamesdb.RandomGame(systemdefs.AllSystems())
+		allSystems := systemdefs.AllSystems()
+		systemIDs := make([]string, len(allSystems))
+		for i, sys := range allSystems {
+			systemIDs[i] = sys.ID
+		}
+		mediaQuery := database.MediaQuery{
+			Systems: systemIDs,
+			Tags:    tagFilters,
+		}
+		game, gameErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if gameErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", gameErr)
 		}
@@ -98,32 +131,22 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, nil
 	}
 
-	// absolute path, try read dir and pick random file
-	// TODO: won't work for zips, switch to using gamesdb when it indexes paths
-	// TODO: doesn't filter on extensions
+	// absolute path, use database query to find random media with this path prefix
+	// this includes virtual paths and zips as options
 	if filepath.IsAbs(query) {
-		if _, statErr := os.Stat(query); statErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to stat path '%s': %w", query, statErr)
+		mediaQuery := database.MediaQuery{
+			PathPrefix: query,
+			Tags:       tagFilters,
+		}
+		searchResult, searchErr := gamesdb.RandomGameWithQuery(&mediaQuery)
+		if searchErr != nil {
+			return platforms.CmdResult{}, fmt.Errorf("failed to find random media for path '%s': %w", query, searchErr)
 		}
 
-		files, globErr := filepath.Glob(filepath.Join(query, "*"))
-		if globErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to glob files in '%s': %w", query, globErr)
-		}
-
-		if len(files) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no files found in: %s", query)
-		}
-
-		file, randomErr := helpers.RandomElem(files)
-		if randomErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to select random file: %w", randomErr)
-		}
-
-		if launchErr := launch(file); launchErr != nil {
+		if launchErr := launch(searchResult.Path); launchErr != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to launch file '%s': %w", file, launchErr)
+			}, fmt.Errorf("failed to launch file '%s': %w", searchResult.Path, launchErr)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -150,9 +173,17 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			systems = []systemdefs.System{*system}
 		}
 
-		// Handle the special case of /* pattern - use RandomGame directly
+		// Handle the special case of /* pattern - use RandomGameWithQuery
 		if query == "*" {
-			game, randomErr := gamesdb.RandomGame(systems)
+			systemIDs := make([]string, len(systems))
+			for i, sys := range systems {
+				systemIDs[i] = sys.ID
+			}
+			mediaQuery := database.MediaQuery{
+				Systems: systemIDs,
+				Tags:    tagFilters,
+			}
+			game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 			if randomErr != nil {
 				return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", randomErr)
 			}
@@ -167,20 +198,18 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			}, nil
 		}
 
-		query = strings.ToLower(query)
-
-		res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
-		if searchErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to search for games matching '%s': %w", query, searchErr)
+		systemIDs := make([]string, len(systems))
+		for i, sys := range systems {
+			systemIDs[i] = sys.ID
 		}
-
-		if len(res) == 0 {
-			return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
+		mediaQuery := database.MediaQuery{
+			Systems:  systemIDs,
+			PathGlob: query,
+			Tags:     tagFilters,
 		}
-
-		game, randomErr := helpers.RandomElem(res)
+		game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if randomErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to select random game: %w", randomErr)
+			return platforms.CmdResult{}, fmt.Errorf("failed to get random game matching '%s': %w", query, randomErr)
 		}
 
 		if launchErr := launch(game.Path); launchErr != nil {
@@ -206,7 +235,15 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	game, err := gamesdb.RandomGame(systems)
+	systemIDs := make([]string, len(systems))
+	for i, sys := range systems {
+		systemIDs[i] = sys.ID
+	}
+	mediaQuery := database.MediaQuery{
+		Systems: systemIDs,
+		Tags:    tagFilters,
+	}
+	game, err := gamesdb.RandomGameWithQuery(&mediaQuery)
 	if err != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to get random game: %w", err)
 	}
@@ -334,6 +371,12 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 	log.Debug().Err(findErr).Msgf("error finding file: %s", path)
 
+	// check for title launch format: SystemID/Game Name
+	if mightBeTitle(path) {
+		log.Debug().Msgf("detected possible title format, forwarding to cmdTitle: %s", path)
+		return cmdTitle(pl, env)
+	}
+
 	// attempt to parse the <system>/<path> format
 	ps := strings.SplitN(path, "/", 2)
 	if len(ps) < 2 {
@@ -450,6 +493,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, err
 	}
 
+	// Parse tags from advanced args
+	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+
 	query = strings.ToLower(query)
 	query = strings.TrimSpace(query)
 
@@ -457,7 +503,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	if !strings.Contains(query, "/") {
 		// search all systems
-		res, searchErr := gamesdb.SearchMediaPathGlob(systemdefs.AllSystems(), query)
+		searchFilters := database.SearchFilters{
+			Systems: systemdefs.AllSystems(),
+			Query:   query,
+			Tags:    tagFilters,
+			Limit:   1,
+		}
+		// TODO: context should come from service state
+		res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
 		if searchErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("failed to search all systems for '%s': %w", query, searchErr)
 		}
@@ -495,7 +548,14 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		systems = append(systems, *system)
 	}
 
-	res, searchErr := gamesdb.SearchMediaPathGlob(systems, query)
+	searchFilters := database.SearchFilters{
+		Systems: systems,
+		Query:   query,
+		Tags:    tagFilters,
+		Limit:   1,
+	}
+	// TODO: context should come from service state
+	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
 	if searchErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", query, searchErr)
 	}

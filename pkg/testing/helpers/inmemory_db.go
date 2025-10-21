@@ -22,8 +22,10 @@ package helpers
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -35,11 +37,16 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 
 	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
 
-	// Open in-memory SQLite database
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	// Create temporary directory for test database
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "userdb_test.db")
+
+	// Open SQLite database using temp file (persists across connection close/reopen)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatalf("Failed to open in-memory database: %v", err)
+		t.Fatalf("Failed to open test database: %v", err)
 	}
 
 	// Create UserDB instance and set the sql field directly
@@ -58,21 +65,27 @@ func NewInMemoryUserDB(t *testing.T) (db *userdb.UserDB, cleanup func()) {
 		}
 	}
 
-	return
+	return db, cleanup
 }
 
 func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 	t.Helper()
 
-	// Create in-memory SQLite database to fix the nil pointer
-	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	// Create temporary directory for test database
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "mediadb_test.db")
+
+	// Open SQLite database using temp file with foreign keys enabled
+	// This matches the production database configuration and ensures CASCADE deletes work
+	sqlDB, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=ON")
 	if err != nil {
-		t.Fatalf("Failed to open in-memory database: %v", err)
+		t.Fatalf("Failed to open test database: %v", err)
 	}
 
 	db = &mediadb.MediaDB{}
 	ctx := context.Background()
 	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform")
 	err = db.SetSQLForTesting(ctx, sqlDB, mockPlatform)
 	if err != nil {
 		if closeErr := sqlDB.Close(); closeErr != nil {
@@ -80,6 +93,7 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		}
 		t.Fatalf("Failed to set up MediaDB for testing: %v", err)
 	}
+	db.SetDBPathForTesting(dbPath)
 
 	cleanup = func() {
 		if err := db.Close(); err != nil {
@@ -87,5 +101,26 @@ func NewInMemoryMediaDB(t *testing.T) (db *mediadb.MediaDB, cleanup func()) {
 		}
 	}
 
-	return
+	return db, cleanup
+}
+
+// NewTestDatabase creates both MediaDB and UserDB for comprehensive testing.
+// Returns a Database wrapper and cleanup function that should be deferred.
+func NewTestDatabase(t *testing.T) (db *database.Database, cleanup func()) {
+	t.Helper()
+
+	mediaDB, mediaCleanup := NewInMemoryMediaDB(t)
+	userDB, userCleanup := NewInMemoryUserDB(t)
+
+	db = &database.Database{
+		MediaDB: mediaDB,
+		UserDB:  userDB,
+	}
+
+	cleanup = func() {
+		mediaCleanup()
+		userCleanup()
+	}
+
+	return db, cleanup
 }

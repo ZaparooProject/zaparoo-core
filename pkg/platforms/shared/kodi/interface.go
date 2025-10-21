@@ -19,7 +19,10 @@
 
 package kodi
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // KodiClient defines the interface for Kodi API operations.
 // This interface enables proper mocking and TDD for Kodi integration.
@@ -39,25 +42,25 @@ type KodiClient interface {
 	Stop() error
 
 	// GetActivePlayers retrieves all active players in Kodi
-	GetActivePlayers() ([]Player, error)
+	GetActivePlayers(ctx context.Context) ([]Player, error)
 
 	// GetMovies retrieves all movies from Kodi's library
-	GetMovies() ([]Movie, error)
+	GetMovies(ctx context.Context) ([]Movie, error)
 
 	// GetTVShows retrieves all TV shows from Kodi's library
-	GetTVShows() ([]TVShow, error)
+	GetTVShows(ctx context.Context) ([]TVShow, error)
 
 	// GetEpisodes retrieves all episodes for a specific TV show from Kodi's library
-	GetEpisodes(tvShowID int) ([]Episode, error)
+	GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error)
 
 	// GetSongs retrieves all songs from Kodi's library
-	GetSongs() ([]Song, error)
+	GetSongs(ctx context.Context) ([]Song, error)
 
 	// GetAlbums retrieves all albums from Kodi's library
-	GetAlbums() ([]Album, error)
+	GetAlbums(ctx context.Context) ([]Album, error)
 
 	// GetArtists retrieves all artists from Kodi's library
-	GetArtists() ([]Artist, error)
+	GetArtists(ctx context.Context) ([]Artist, error)
 
 	// LaunchSong launches a song by ID from Kodi's library
 	// Path format: "kodi-song://[id]/[name]"
@@ -82,5 +85,5 @@ type KodiClient interface {
 	SetURL(url string)
 
 	// APIRequest makes a raw JSON-RPC request to Kodi API
-	APIRequest(method APIMethod, params any) (json.RawMessage, error)
+	APIRequest(ctx context.Context, method APIMethod, params any) (json.RawMessage, error)
 }

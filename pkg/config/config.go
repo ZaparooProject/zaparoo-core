@@ -46,6 +46,7 @@ const (
 )
 
 type Values struct {
+	Media        Media     `toml:"media,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
@@ -60,6 +61,12 @@ type Values struct {
 
 type Audio struct {
 	ScanFeedback bool `toml:"scan_feedback,omitempty"`
+}
+
+type Media struct {
+	FilenameTags   *bool    `toml:"filename_tags,omitempty"`
+	DefaultRegions []string `toml:"default_regions,omitempty,multiline"`
+	DefaultLangs   []string `toml:"default_langs,omitempty,multiline"`
 }
 
 type ZapScript struct {
@@ -313,6 +320,43 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.ScanFeedback = enabled
+}
+
+func (c *Instance) FilenameTags() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Media.FilenameTags == nil {
+		return true
+	}
+	return *c.vals.Media.FilenameTags
+}
+
+func (c *Instance) SetFilenameTags(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Media.FilenameTags = &enabled
+}
+
+func (c *Instance) DefaultRegions() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.vals.Media.DefaultRegions) == 0 {
+		// TODO: raw strings for now to avoid import cycle
+		// TODO: should this auto-detect the locale?
+		return []string{"us", "world"}
+	}
+	return c.vals.Media.DefaultRegions
+}
+
+func (c *Instance) DefaultLangs() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.vals.Media.DefaultLangs) == 0 {
+		// TODO: raw strings for now to avoid import cycle
+		// TODO: should this auto-detect the locale?
+		return []string{"en"}
+	}
+	return c.vals.Media.DefaultLangs
 }
 
 func (c *Instance) DebugLogging() bool {

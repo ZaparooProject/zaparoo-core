@@ -152,22 +152,21 @@ func killWidgetIfRunning(pl platforms.Platform) (bool, error) {
 // used to make sure there aren't hanging processes running in the background
 // if a core gets loaded while it's open.
 func handleTimeout(_ *tview.Application, timeout int) (timer *time.Timer, actualTimeout int) {
-	var to int
 	switch {
 	case timeout == 0:
-		to = DefaultTimeout
+		actualTimeout = DefaultTimeout
 	case timeout < 0:
 		// no timeout
 		return nil, -1
 	default:
-		to = timeout
+		actualTimeout = timeout
 	}
 
-	timer = time.AfterFunc(time.Duration(to)*time.Second, func() {
+	timer = time.AfterFunc(time.Duration(actualTimeout)*time.Second, func() {
 		os.Exit(0)
 	})
 
-	return timer, to
+	return timer, actualTimeout
 }
 
 func NoticeUIBuilder(_ platforms.Platform, argsPath string, loader bool) (*tview.Application, error) {

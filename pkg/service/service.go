@@ -29,11 +29,14 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
@@ -217,6 +220,12 @@ func Start(
 	log.Info().Msg("initializing launcher cache")
 	helpers.GlobalLauncherCache.Initialize(pl, cfg)
 
+	log.Info().Msg("checking for interrupted media indexing")
+	go checkAndResumeIndexing(pl, cfg, db, st)
+
+	log.Info().Msg("checking for interrupted media optimization")
+	go checkAndResumeOptimization(db, st.Notifications)
+
 	log.Info().Msg("starting API service")
 	go api.Start(pl, cfg, st, itq, db, ns)
 
@@ -250,4 +259,84 @@ func Start(
 		close(itq)
 		return nil
 	}, nil
+}
+
+// checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it
+func checkAndResumeIndexing(
+	pl platforms.Platform,
+	cfg *config.Instance,
+	db *database.Database,
+	st *state.State,
+) {
+	// Check if indexing was interrupted
+	indexingStatus, err := db.MediaDB.GetIndexingStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get indexing status during startup check")
+		return
+	}
+
+	// Only resume if indexing was interrupted (running or pending states)
+	if indexingStatus != mediadb.IndexingStatusRunning && indexingStatus != mediadb.IndexingStatusPending {
+		log.Debug().Msgf("indexing status is '%s', no auto-resume needed", indexingStatus)
+		return
+	}
+
+	log.Info().Msg("detected interrupted media indexing, automatically resuming")
+
+	// Get the systems that were being indexed from the database
+	// If not available, fall back to all systems
+	var systems []systemdefs.System
+	storedSystemIDs, err := db.MediaDB.GetIndexingSystems()
+	if err != nil || len(storedSystemIDs) == 0 {
+		log.Debug().Msgf("no stored systems found (err=%v, len=%d), defaulting to all systems",
+			err, len(storedSystemIDs))
+		systems = systemdefs.AllSystems()
+	} else {
+		// Convert system IDs to System objects
+		systems = make([]systemdefs.System, 0, len(storedSystemIDs))
+		for _, systemID := range storedSystemIDs {
+			if system, exists := systemdefs.Systems[systemID]; exists {
+				systems = append(systems, system)
+			} else {
+				log.Warn().Msgf("stored system ID '%s' not found in system definitions, skipping", systemID)
+			}
+		}
+		// If we couldn't resolve any systems, fall back to all systems
+		if len(systems) == 0 {
+			log.Warn().Msg("could not resolve any stored systems, falling back to all systems")
+			systems = systemdefs.AllSystems()
+		}
+	}
+
+	// Resume using the proper function with full notification support
+	// GenerateMediaDB spawns its own goroutine and returns immediately
+	err = methods.GenerateMediaDB(st.GetContext(), pl, cfg, st.Notifications, systems, db)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to start auto-resume of media indexing")
+	}
+}
+
+// checkAndResumeOptimization checks if optimization was interrupted and automatically resumes it
+func checkAndResumeOptimization(db *database.Database, ns chan<- models.Notification) {
+	status, err := db.MediaDB.GetOptimizationStatus()
+	if err != nil {
+		log.Debug().Err(err).Msg("failed to get optimization status during startup check")
+		return
+	}
+
+	// Resume if optimization was interrupted or failed
+	if status == mediadb.IndexingStatusPending ||
+		status == mediadb.IndexingStatusRunning ||
+		status == mediadb.IndexingStatusFailed {
+		log.Info().Msgf("detected incomplete optimization (status: %s), automatically resuming", status)
+		go db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+				Exists:     true,
+				Indexing:   false,
+				Optimizing: optimizing,
+			})
+		})
+	} else {
+		log.Debug().Msgf("optimization status is '%s', no auto-resume needed", status)
+	}
 }

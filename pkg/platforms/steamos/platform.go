@@ -124,10 +124,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (*Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
-}
-
 func (p *Platform) StopActiveLauncher() error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
@@ -234,6 +230,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
+				_ context.Context,
 				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,

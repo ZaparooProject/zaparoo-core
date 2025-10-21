@@ -94,6 +94,29 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 	}
 }
 
+// logSafeRequest logs a request but avoids logging sensitive or large content
+func logSafeRequest(req models.RequestObject) {
+	if req.Method == models.MethodSettingsLogsDownload {
+		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
+	} else {
+		log.Debug().Interface("request", req).Msg("received request")
+	}
+}
+
+// logSafeResponse logs a response but truncates large content to prevent recursive logging issues
+func logSafeResponse(result any) {
+	if logResp, ok := result.(models.LogDownloadResponse); ok {
+		truncated := logResp
+		if len(truncated.Content) > 100 {
+			truncated.Content = truncated.Content[:100] + "... [truncated " +
+				strconv.Itoa(len(logResp.Content)-100) + " more chars]"
+		}
+		log.Debug().Interface("result", truncated).Msg("sending response")
+	} else {
+		log.Debug().Interface("result", result).Msg("sending response")
+	}
+}
+
 type MethodMap struct {
 	sync.Map
 }
@@ -102,7 +125,7 @@ func (m *MethodMap) Store(key, value any) {
 	m.Map.Store(key, value)
 }
 
-func (m *MethodMap) Load(key any) (value any, ok bool) {
+func (m *MethodMap) Load(key any) (any, bool) {
 	return m.Map.Load(key)
 }
 
@@ -167,12 +190,14 @@ func NewMethodMap() *MethodMap {
 		models.MethodTokens:  methods.HandleTokens,
 		models.MethodHistory: methods.HandleHistory,
 		// media
-		models.MethodMedia:             methods.HandleMedia,
-		models.MethodMediaGenerate:     methods.HandleGenerateMedia,
-		models.MethodMediaIndex:        methods.HandleGenerateMedia,
-		models.MethodMediaSearch:       methods.HandleMediaSearch,
-		models.MethodMediaActive:       methods.HandleActiveMedia,
-		models.MethodMediaActiveUpdate: methods.HandleUpdateActiveMedia,
+		models.MethodMedia:               methods.HandleMedia,
+		models.MethodMediaGenerate:       methods.HandleGenerateMedia,
+		models.MethodMediaGenerateCancel: methods.HandleMediaGenerateCancel,
+		models.MethodMediaIndex:          methods.HandleGenerateMedia,
+		models.MethodMediaSearch:         methods.HandleMediaSearch,
+		models.MethodMediaTags:           methods.HandleMediaTags,
+		models.MethodMediaActive:         methods.HandleActiveMedia,
+		models.MethodMediaActiveUpdate:   methods.HandleUpdateActiveMedia,
 		// settings
 		models.MethodSettings:             methods.HandleSettings,
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
@@ -215,7 +240,7 @@ func handleRequest(
 	env requests.RequestEnv,
 	req models.RequestObject,
 ) (any, *models.ErrorObject) {
-	log.Debug().Interface("request", req).Msg("received request")
+	logSafeRequest(req)
 
 	fn, ok := methodMap.GetMethod(req.Method)
 	if !ok {
@@ -243,7 +268,7 @@ func handleRequest(
 
 // sendWSResponse marshals a method result and sends it to the client.
 func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
-	log.Debug().Interface("result", result).Msg("sending response")
+	logSafeResponse(result)
 
 	resp := models.ResponseObject{
 		JSONRPC: "2.0",
@@ -554,6 +579,7 @@ func handleWSMessage(
 			Database:   db,
 			TokenQueue: inTokenQueue,
 			IsLocal:    clientIP.IsLoopback(),
+			ClientID:   session.Request.RemoteAddr,
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -601,6 +627,7 @@ func handlePostRequest(
 			Database:   db,
 			TokenQueue: inTokenQueue,
 			IsLocal:    clientIP.IsLoopback(),
+			ClientID:   r.RemoteAddr,
 		}
 
 		var respBody []byte

@@ -20,6 +20,7 @@
 package kodi
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -29,20 +30,22 @@ import (
 
 // ScanMovies scans movies from Kodi library using the provided client
 func ScanMovies(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	movies, err := client.GetMovies()
+	movies, err := client.GetMovies(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get movies: %w", err)
 	}
 
 	for _, movie := range movies {
 		results = append(results, platforms.ScanResult{
-			Name: movie.Label,
-			Path: helpers.CreateVirtualPath(SchemeKodiMovie, fmt.Sprintf("%d", movie.ID), movie.Label),
+			Name:  movie.Label,
+			Path:  helpers.CreateVirtualPath(SchemeKodiMovie, fmt.Sprintf("%d", movie.ID), movie.Label),
+			NoExt: true,
 		})
 	}
 
@@ -51,18 +54,19 @@ func ScanMovies(
 
 // ScanTV scans TV shows and episodes from Kodi library using the provided client
 func ScanTV(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	tvShows, err := client.GetTVShows()
+	tvShows, err := client.GetTVShows(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TV shows: %w", err)
 	}
 
 	for _, show := range tvShows {
-		episodes, err := client.GetEpisodes(show.ID)
+		episodes, err := client.GetEpisodes(ctx, show.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get episodes for show %d: %w", show.ID, err)
 		}
@@ -70,8 +74,9 @@ func ScanTV(
 		for _, ep := range episodes {
 			label := show.Label + " - " + ep.Label
 			results = append(results, platforms.ScanResult{
-				Name: label,
-				Path: helpers.CreateVirtualPath(SchemeKodiEpisode, fmt.Sprintf("%d", ep.ID), label),
+				Name:  label,
+				Path:  helpers.CreateVirtualPath(SchemeKodiEpisode, fmt.Sprintf("%d", ep.ID), label),
+				NoExt: true,
 			})
 		}
 	}
@@ -81,12 +86,13 @@ func ScanTV(
 
 // ScanSongs scans songs from Kodi library using the provided client
 func ScanSongs(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	songs, err := client.GetSongs()
+	songs, err := client.GetSongs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get songs: %w", err)
 	}
@@ -94,8 +100,9 @@ func ScanSongs(
 	for _, song := range songs {
 		name := song.Artist + " - " + song.Label
 		results = append(results, platforms.ScanResult{
-			Name: name,
-			Path: helpers.CreateVirtualPath(SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),
+			Name:  name,
+			Path:  helpers.CreateVirtualPath(SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),
+			NoExt: true,
 		})
 	}
 
@@ -104,12 +111,13 @@ func ScanSongs(
 
 // ScanAlbums scans albums from Kodi library using the provided client
 func ScanAlbums(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	albums, err := client.GetAlbums()
+	albums, err := client.GetAlbums(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get albums: %w", err)
 	}
@@ -120,8 +128,9 @@ func ScanAlbums(
 			name = fmt.Sprintf("%s (%d)", name, album.Year)
 		}
 		results = append(results, platforms.ScanResult{
-			Name: name,
-			Path: helpers.CreateVirtualPath(SchemeKodiAlbum, fmt.Sprintf("%d", album.ID), name),
+			Name:  name,
+			Path:  helpers.CreateVirtualPath(SchemeKodiAlbum, fmt.Sprintf("%d", album.ID), name),
+			NoExt: true,
 		})
 	}
 
@@ -130,12 +139,13 @@ func ScanAlbums(
 
 // ScanArtists scans artists from Kodi library using the provided client
 func ScanArtists(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	artists, err := client.GetArtists()
+	artists, err := client.GetArtists(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get artists: %w", err)
 	}
@@ -147,8 +157,9 @@ func ScanArtists(
 		}
 
 		results = append(results, platforms.ScanResult{
-			Name: artist.Label,
-			Path: helpers.CreateVirtualPath(SchemeKodiArtist, fmt.Sprintf("%d", artist.ID), artist.Label),
+			Name:  artist.Label,
+			Path:  helpers.CreateVirtualPath(SchemeKodiArtist, fmt.Sprintf("%d", artist.ID), artist.Label),
+			NoExt: true,
 		})
 	}
 
@@ -157,20 +168,22 @@ func ScanArtists(
 
 // ScanTVShows scans TV shows from Kodi library using the provided client
 func ScanTVShows(
+	ctx context.Context,
 	client KodiClient,
 	_ *config.Instance,
 	_ string,
 	results []platforms.ScanResult,
 ) ([]platforms.ScanResult, error) {
-	shows, err := client.GetTVShows()
+	shows, err := client.GetTVShows(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TV shows: %w", err)
 	}
 
 	for _, show := range shows {
 		results = append(results, platforms.ScanResult{
-			Name: show.Label,
-			Path: helpers.CreateVirtualPath(SchemeKodiShow, fmt.Sprintf("%d", show.ID), show.Label),
+			Name:  show.Label,
+			Path:  helpers.CreateVirtualPath(SchemeKodiShow, fmt.Sprintf("%d", show.ID), show.Label),
+			NoExt: true,
 		})
 	}
 

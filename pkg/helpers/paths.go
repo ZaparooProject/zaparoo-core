@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -51,13 +52,17 @@ func PathIsLauncher(
 
 	lp := strings.ToLower(path)
 
+	// Get base once for dot file check
+	base := filepath.Base(lp)
+
 	// ignore dot files
-	if strings.HasPrefix(filepath.Base(lp), ".") {
+	if base != "" && base[0] == '.' {
 		return false
 	}
 
 	// check uri scheme
 	for _, scheme := range l.Schemes {
+		// scheme is already lowercase in launcher definitions
 		if strings.HasPrefix(lp, scheme+":") {
 			return true
 		}
@@ -66,8 +71,10 @@ func PathIsLauncher(
 	// check for data dir media folder
 	inDataDir := false
 	if l.SystemID != "" {
-		zaparooMedia := filepath.Join(DataDir(pl), config.MediaDir, l.SystemID)
-		zaparooMedia = strings.ToLower(zaparooMedia)
+		// Cache DataDir result (now cached internally)
+		dataDir := DataDir(pl)
+		// Build zaparooMedia path once and lowercase it
+		zaparooMedia := strings.ToLower(filepath.Join(dataDir, config.MediaDir, l.SystemID))
 		if strings.HasPrefix(lp, zaparooMedia) {
 			inDataDir = true
 		}
@@ -78,9 +85,19 @@ func PathIsLauncher(
 		inRoot := false
 		isAbs := false
 
-		for _, root := range pl.RootDirs(cfg) {
+		// Get root dirs once and pre-lowercase
+		rootDirs := pl.RootDirs(cfg)
+
+		for _, root := range rootDirs {
+			lowerRoot := strings.ToLower(root)
+			if inRoot {
+				break
+			}
 			for _, folder := range l.Folders {
-				if strings.HasPrefix(lp, strings.ToLower(filepath.Join(root, folder))) {
+				// Build full path from pre-lowered parts to avoid repeated ToLower on the whole string
+				lowerFolder := strings.ToLower(folder)
+				fullPath := filepath.Join(lowerRoot, lowerFolder)
+				if strings.HasPrefix(lp, fullPath) {
 					inRoot = true
 					break
 				}
@@ -89,9 +106,13 @@ func PathIsLauncher(
 
 		if !inRoot {
 			for _, folder := range l.Folders {
-				if filepath.IsAbs(folder) && strings.HasPrefix(lp, strings.ToLower(folder)) {
-					isAbs = true
-					break
+				if filepath.IsAbs(folder) {
+					// Lowercase once per absolute folder
+					lowerFolder := strings.ToLower(folder)
+					if strings.HasPrefix(lp, lowerFolder) {
+						isAbs = true
+						break
+					}
 				}
 			}
 		}
@@ -101,14 +122,21 @@ func PathIsLauncher(
 		}
 	}
 
-	// check file extension
-	for _, ext := range l.Extensions {
-		if strings.HasSuffix(lp, strings.ToLower(ext)) {
-			return true
+	// check file extension (if declared)
+	if len(l.Extensions) > 0 {
+		for _, e := range l.Extensions {
+			if strings.HasSuffix(lp, strings.ToLower(e)) {
+				return true
+			}
 		}
+		// Extension didn't match - if there's a Test function, let it decide
+		if l.Test != nil {
+			return l.Test(cfg, lp)
+		}
+		return false
 	}
 
-	// finally, launcher's test func
+	// finally, launcher's test func (if no extensions were specified)
 	if l.Test != nil {
 		return l.Test(cfg, lp)
 	}
@@ -242,8 +270,9 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path: CreateVirtualPath("steam", appID, appName),
-				Name: appName,
+				Path:  CreateVirtualPath("steam", appID, appName),
+				Name:  appName,
+				NoExt: true,
 			})
 		}
 	}
@@ -297,8 +326,9 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path: CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
-				Name: shortcut.AppName,
+				Path:  CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Name:  shortcut.AppName,
+				NoExt: true,
 			})
 		}
 	}
@@ -498,40 +528,59 @@ func DoLaunch(
 		SystemID:   launcher.SystemID,
 		SystemName: systemMeta.Name,
 		Name:       GetPathInfo(path).Name,
-		Path:       pl.NormalizePath(cfg, path),
+		Path:       path,
 	})
 
 	return nil
 }
 
+// userDirCache caches the result of HasUserDir to avoid repeated filesystem checks
+var (
+	userDirCache       string
+	userDirCacheExists bool
+	userDirOnce        sync.Once
+)
+
 // HasUserDir checks if a "user" directory exists next to the Zaparoo binary
 // and returns true and the absolute path to it. This directory is used as a
 // parent for all platform directories if it exists, for a portable install.
+// The result is cached after the first call for better performance.
+// This function is safe for concurrent use.
 func HasUserDir() (string, bool) {
-	exeDir := ""
-	envExe := os.Getenv(config.AppEnv)
-	var err error
+	userDirOnce.Do(func() {
+		exeDir := ""
+		envExe := os.Getenv(config.AppEnv)
+		var err error
 
-	if envExe != "" {
-		exeDir = envExe
-	} else {
-		exeDir, err = os.Executable()
-		if err != nil {
-			return "", false
+		if envExe != "" {
+			exeDir = envExe
+		} else {
+			exeDir, err = os.Executable()
+			if err != nil {
+				userDirCacheExists = false
+				return
+			}
 		}
-	}
 
-	parent := filepath.Dir(exeDir)
-	userDir := filepath.Join(parent, config.UserDir)
+		parent := filepath.Dir(exeDir)
+		userDir := filepath.Join(parent, config.UserDir)
 
-	info, err := os.Stat(userDir)
-	if err != nil {
-		return "", false
-	}
-	if !info.IsDir() {
-		return "", false
-	}
-	return userDir, true
+		info, err := os.Stat(userDir)
+		if err != nil {
+			userDirCacheExists = false
+			return
+		}
+		if !info.IsDir() {
+			userDirCacheExists = false
+			return
+		}
+
+		// Cache the result
+		userDirCache = userDir
+		userDirCacheExists = true
+	})
+
+	return userDirCache, userDirCacheExists
 }
 
 func ConfigDir(pl platforms.Platform) string {

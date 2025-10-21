@@ -119,10 +119,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (*Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
-}
-
 func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
@@ -483,6 +479,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{"steam"},
 			Scanner: func(
+				_ context.Context,
 				cfg *config.Instance,
 				_ string,
 				results []platforms.ScanResult,
@@ -588,6 +585,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:      "LaunchBox",
 			Schemes: []string{"launchbox"},
 			Scanner: func(
+				_ context.Context,
 				cfg *config.Instance,
 				systemId string,
 				results []platforms.ScanResult,
@@ -637,8 +635,9 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
-						Path: helpers.CreateVirtualPath("launchbox", game.ID, game.Title),
-						Name: game.Title,
+						Path:  helpers.CreateVirtualPath("launchbox", game.ID, game.Title),
+						Name:  game.Title,
+						NoExt: true,
 					})
 				}
 

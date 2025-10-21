@@ -179,85 +179,6 @@ func TestTokensEqual(t *testing.T) {
 	}
 }
 
-func TestSlugifyString(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "normal_string",
-			input:    "Mario Bros",
-			expected: "mariobros",
-		},
-		{
-			name:     "with_parentheses",
-			input:    "Super Mario Bros (USA)",
-			expected: "supermariobros",
-		},
-		{
-			name:     "with_brackets",
-			input:    "Zelda [Link's Awakening]",
-			expected: "zelda",
-		},
-		{
-			name:     "with_special_chars",
-			input:    "Street Fighter II: Championship Edition!",
-			expected: "streetfighteriichampionshipedition",
-		},
-		{
-			name:     "numbers_preserved",
-			input:    "Final Fantasy VII (Disc 1)",
-			expected: "finalfantasyvii",
-		},
-		{
-			name:     "empty_string",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "only_special_chars",
-			input:    "!@#$%^&*()",
-			expected: "",
-		},
-		{
-			name:     "mixed_case_letters",
-			input:    "SuPeR mArIo BrOs",
-			expected: "supermariobros",
-		},
-		{
-			name:     "multiple_spaces",
-			input:    "Mario    Bros   3",
-			expected: "mariobros3",
-		},
-		{
-			name:     "nested_parentheses",
-			input:    "Game (Version (Final))",
-			expected: "game",
-		},
-		{
-			name:     "mixed_brackets_and_parens",
-			input:    "Game [USA] (Rev 1)",
-			expected: "game",
-		},
-		{
-			name:     "underscore_and_dash",
-			input:    "super_mario-bros",
-			expected: "supermariobros",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := SlugifyString(tt.input)
-			assert.Equal(t, tt.expected, result, "SlugifyString result mismatch")
-		})
-	}
-}
-
 func TestFilenameFromPath(t *testing.T) {
 	t.Parallel()
 
@@ -1048,12 +969,12 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "path_with_spaces",
 			input:    "/games/Super Mario Bros.sfc",
-			expected: "supermariobros",
+			expected: "supermariobrothers",
 		},
 		{
 			name:     "path_with_parentheses",
 			input:    "/roms/Mario Bros (USA).nes",
-			expected: "mariobros",
+			expected: "mariobrothers",
 		},
 		{
 			name:     "path_with_brackets",
@@ -1063,7 +984,7 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "windows_path",
 			input:    "C:\\Games\\Street Fighter II.rom",
-			expected: "streetfighterii", // Cross-platform: extracts actual filename
+			expected: "streetfighter2",
 		},
 		{
 			name:     "path_with_multiple_extensions",
@@ -1073,7 +994,7 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "path_with_special_chars",
 			input:    "/games/Final-Fantasy_VII!.iso",
-			expected: "finalfantasyvii",
+			expected: "finalfantasy7",
 		},
 		{
 			name:     "empty_path",
@@ -1565,6 +1486,74 @@ func TestFilenameFromPath_VirtualPaths(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := FilenameFromPath(tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestEqualStringSlices(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		a        []string
+		b        []string
+		expected bool
+	}{
+		{
+			name:     "equal_slices",
+			a:        []string{"apple", "banana", "cherry"},
+			b:        []string{"apple", "banana", "cherry"},
+			expected: true,
+		},
+		{
+			name:     "equal_slices_different_order",
+			a:        []string{"apple", "banana", "cherry"},
+			b:        []string{"cherry", "apple", "banana"},
+			expected: true,
+		},
+		{
+			name:     "different_length",
+			a:        []string{"apple", "banana"},
+			b:        []string{"apple", "banana", "cherry"},
+			expected: false,
+		},
+		{
+			name:     "different_content",
+			a:        []string{"apple", "banana"},
+			b:        []string{"apple", "orange"},
+			expected: false,
+		},
+		{
+			name:     "empty_slices",
+			a:        []string{},
+			b:        []string{},
+			expected: true,
+		},
+		{
+			name:     "one_empty_one_not",
+			a:        []string{"apple"},
+			b:        []string{},
+			expected: false,
+		},
+		{
+			name:     "nil_slices",
+			a:        nil,
+			b:        nil,
+			expected: true,
+		},
+		{
+			name:     "one_nil_one_empty",
+			a:        nil,
+			b:        []string{},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := EqualStringSlices(tt.a, tt.b)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

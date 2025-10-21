@@ -20,6 +20,7 @@
 package mocks
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -109,8 +110,8 @@ func (m *MockKodiClient) Stop() error {
 }
 
 // GetActivePlayers mocks retrieving all active players in Kodi
-func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, error) {
+	args := m.Called(ctx)
 	if players, ok := args.Get(0).([]kodi.Player); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
@@ -124,8 +125,8 @@ func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
 }
 
 // GetMovies mocks retrieving all movies from Kodi's library
-func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetMovies(ctx context.Context) ([]kodi.Movie, error) {
+	args := m.Called(ctx)
 	if movies, ok := args.Get(0).([]kodi.Movie); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetMovies error: %w", err)
@@ -139,8 +140,8 @@ func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
 }
 
 // GetTVShows mocks retrieving all TV shows from Kodi's library
-func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]kodi.TVShow, error) {
+	args := m.Called(ctx)
 	if shows, ok := args.Get(0).([]kodi.TVShow); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetTVShows error: %w", err)
@@ -154,8 +155,8 @@ func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
 }
 
 // GetEpisodes mocks retrieving all episodes for a specific TV show from Kodi's library
-func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
-	args := m.Called(tvShowID)
+func (m *MockKodiClient) GetEpisodes(ctx context.Context, tvShowID int) ([]kodi.Episode, error) {
+	args := m.Called(ctx, tvShowID)
 	if episodes, ok := args.Get(0).([]kodi.Episode); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
@@ -169,8 +170,8 @@ func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
 }
 
 // GetAlbums mocks retrieving all albums from Kodi's library
-func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetAlbums(ctx context.Context) ([]kodi.Album, error) {
+	args := m.Called(ctx)
 	if albums, ok := args.Get(0).([]kodi.Album); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetAlbums error: %w", err)
@@ -184,8 +185,8 @@ func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
 }
 
 // GetArtists mocks retrieving all artists from Kodi's library
-func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetArtists(ctx context.Context) ([]kodi.Artist, error) {
+	args := m.Called(ctx)
 	if artists, ok := args.Get(0).([]kodi.Artist); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetArtists error: %w", err)
@@ -199,8 +200,8 @@ func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
 }
 
 // GetSongs mocks retrieving all songs from Kodi's library
-func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetSongs(ctx context.Context) ([]kodi.Song, error) {
+	args := m.Called(ctx)
 	if songs, ok := args.Get(0).([]kodi.Song); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetSongs error: %w", err)
@@ -225,8 +226,8 @@ func (m *MockKodiClient) SetURL(url string) {
 }
 
 // APIRequest mocks making a raw JSON-RPC request to Kodi API
-func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.RawMessage, error) {
-	args := m.Called(method, params)
+func (m *MockKodiClient) APIRequest(ctx context.Context, method kodi.APIMethod, params any) (json.RawMessage, error) {
+	args := m.Called(ctx, method, params)
 	if result, ok := args.Get(0).(json.RawMessage); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock APIRequest error: %w", err)
@@ -247,10 +248,13 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("LaunchMovie", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("LaunchTVEpisode", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("Stop").Return(nil).Maybe()
-	m.On("GetActivePlayers").Return([]kodi.Player{}, nil).Maybe()
-	m.On("GetMovies").Return([]kodi.Movie{}, nil).Maybe()
-	m.On("GetTVShows").Return([]kodi.TVShow{}, nil).Maybe()
-	m.On("GetEpisodes", mock.AnythingOfType("int")).Return([]kodi.Episode{}, nil).Maybe()
+	m.On("GetActivePlayers", mock.Anything).Return([]kodi.Player{}, nil).Maybe()
+	m.On("GetMovies", mock.Anything).Return([]kodi.Movie{}, nil).Maybe()
+	m.On("GetTVShows", mock.Anything).Return([]kodi.TVShow{}, nil).Maybe()
+	m.On("GetEpisodes", mock.Anything, mock.AnythingOfType("int")).Return([]kodi.Episode{}, nil).Maybe()
+	m.On("GetSongs", mock.Anything).Return([]kodi.Song{}, nil).Maybe()
+	m.On("GetAlbums", mock.Anything).Return([]kodi.Album{}, nil).Maybe()
+	m.On("GetArtists", mock.Anything).Return([]kodi.Artist{}, nil).Maybe()
 	m.On("GetURL").Return("http://localhost:8080/jsonrpc").Maybe()
 	m.On("SetURL", mock.AnythingOfType("string")).Return().Maybe()
 }

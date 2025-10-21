@@ -47,7 +47,7 @@ func (*Reader) convertTagType(tagType pn533.TagType) string {
 	}
 }
 
-func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (text string, data []byte) {
+func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data []byte) {
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
 	tagOps := tagops.New(r.device)
 

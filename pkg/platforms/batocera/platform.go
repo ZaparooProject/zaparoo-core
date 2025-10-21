@@ -91,7 +91,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
-	cfg *config.Instance,
+	_ *config.Instance,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
@@ -144,7 +144,7 @@ func (p *Platform) StartPost(
 				SystemID:   systemID,
 				SystemName: systemMeta.Name,
 				Name:       gameResp.Name,
-				Path:       p.NormalizePath(cfg, gameResp.Path),
+				Path:       gameResp.Path,
 			}
 			running = true
 		}
@@ -195,41 +195,6 @@ func (*Platform) Settings() platforms.Settings {
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
 		ZipsAsDirs: false,
 	}
-}
-
-func (p *Platform) NormalizePath(cfg *config.Instance, path string) string {
-	originalPath := path
-	newPath := strings.ReplaceAll(path, "\\", "/")
-	lowerPath := strings.ToLower(newPath)
-
-	gotRoot := false
-	for _, rootDir := range p.RootDirs(cfg) {
-		rootDir = strings.ReplaceAll(rootDir, "\\", "/")
-		rootDir = strings.ToLower(rootDir)
-		if strings.HasPrefix(lowerPath, rootDir) {
-			gotRoot = true
-			newPath = path[len(rootDir):]
-			if newPath != "" && newPath[0] == '/' {
-				newPath = newPath[1:]
-			}
-			break
-		}
-	}
-	if !gotRoot {
-		return originalPath
-	}
-
-	parts := strings.Split(newPath, "/")
-	if len(parts) < 2 {
-		return originalPath
-	}
-
-	system, err := fromBatoceraSystem(parts[0])
-	if err != nil || system == "" {
-		return originalPath
-	}
-
-	return system + "/" + strings.Join(parts[1:], "/")
 }
 
 func (p *Platform) PlayAudio(path string) error {
@@ -409,6 +374,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // API launches don't return a process handle
 			},
 			Scanner: func(
+				ctx context.Context,
 				cfg *config.Instance,
 				systemID string,
 				_ []platforms.ScanResult,
@@ -421,7 +387,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				for _, batSysName := range batSysNames {
+					// Check for cancellation before processing each system
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					default:
+					}
+
 					for _, rootDir := range p.RootDirs(cfg) {
+						// Check for cancellation before processing each root directory
+						select {
+						case <-ctx.Done():
+							return nil, ctx.Err()
+						default:
+						}
+
 						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
 						gameList, err := esapi.ReadGameListXML(gameListPath)
 						if err != nil {

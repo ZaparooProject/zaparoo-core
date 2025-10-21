@@ -20,6 +20,7 @@
 package platforms
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -80,9 +81,15 @@ type CmdEnv struct {
 type CmdResult struct {
 	// Playlist is the result of the playlist change.
 	Playlist *playlists.Playlist
+	// Strategy indicates which matching strategy was used for title-based launches.
+	// Empty for non-title commands. Used for testing and debugging title resolution.
+	Strategy string
 	// NewCommands instructs the script runner to prepend these additional
 	// commands to the current script's remaining command list.
 	NewCommands []parser.Command
+	// Confidence is a float from 0.0 to 1.0 indicating how confident the
+	// a launch command was in its media resolution.
+	Confidence float64
 	// MediaChanged is true if a command may have started or stopped running
 	// media, and could affect handling of the hold mode feature. This doesn't
 	// include playlist changes, which manage running media separately.
@@ -103,6 +110,10 @@ type ScanResult struct {
 	// Name is the display name of the media, shown to the users and used for
 	// search queries.
 	Name string
+	// NoExt indicates this is a virtual path with no file extension.
+	// When true, filepath.Ext() extraction is skipped to avoid extracting
+	// garbage from paths like "/games/file.txt/Game (v1.0)" or "kodi://123/Dr. Strange".
+	NoExt bool
 }
 
 // Launcher defines how a platform launcher can launch media and what media it
@@ -118,7 +129,7 @@ type Launcher struct {
 	Kill func(*config.Instance) error
 	// Optional function to perform custom media scanning. Takes the list of
 	// results from the standard scan, if any, and returns the final list.
-	Scanner func(*config.Instance, string, []ScanResult) ([]ScanResult, error)
+	Scanner func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
 	// Unique ID of the launcher, visible to user.
 	ID string
 	// System associated with this launcher.
@@ -191,10 +202,6 @@ type Platform interface {
 	SupportedReaders(*config.Instance) []readers.Reader
 	// RootDirs returns a list of root folders to scan for media files.
 	RootDirs(*config.Instance) []string
-	// NormalizePath convert a path to a normalized form for the platform, the
-	// shortest possible path that can interpreted and launched by Core. For
-	// writing to tokens.
-	NormalizePath(*config.Instance, string) string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
 	StopActiveLauncher() error

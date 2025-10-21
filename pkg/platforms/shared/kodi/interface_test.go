@@ -20,6 +20,7 @@
 package kodi_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -67,8 +68,8 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
-func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, error) {
+	args := m.Called(ctx)
 	if players, ok := args.Get(0).([]kodi.Player); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
@@ -81,8 +82,8 @@ func (m *MockKodiClient) GetActivePlayers() ([]kodi.Player, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetMovies(ctx context.Context) ([]kodi.Movie, error) {
+	args := m.Called(ctx)
 	if movies, ok := args.Get(0).([]kodi.Movie); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetMovies error: %w", err)
@@ -95,8 +96,8 @@ func (m *MockKodiClient) GetMovies() ([]kodi.Movie, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetTVShows(ctx context.Context) ([]kodi.TVShow, error) {
+	args := m.Called(ctx)
 	if shows, ok := args.Get(0).([]kodi.TVShow); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetTVShows error: %w", err)
@@ -109,8 +110,8 @@ func (m *MockKodiClient) GetTVShows() ([]kodi.TVShow, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetEpisodes(tvShowID int) ([]kodi.Episode, error) {
-	args := m.Called(tvShowID)
+func (m *MockKodiClient) GetEpisodes(ctx context.Context, tvShowID int) ([]kodi.Episode, error) {
+	args := m.Called(ctx, tvShowID)
 	if episodes, ok := args.Get(0).([]kodi.Episode); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetEpisodes error: %w", err)
@@ -132,8 +133,8 @@ func (m *MockKodiClient) SetURL(url string) {
 	m.Called(url)
 }
 
-func (m *MockKodiClient) APIRequest(method kodi.APIMethod, params any) (json.RawMessage, error) {
-	args := m.Called(method, params)
+func (m *MockKodiClient) APIRequest(ctx context.Context, method kodi.APIMethod, params any) (json.RawMessage, error) {
+	args := m.Called(ctx, method, params)
 	if result, ok := args.Get(0).(json.RawMessage); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock APIRequest error: %w", err)
@@ -166,8 +167,8 @@ func (m *MockKodiClient) LaunchTVShow(path string) error {
 	return args.Error(0) //nolint:wrapcheck // Mock implementation, error wrapping not needed
 }
 
-func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetSongs(ctx context.Context) ([]kodi.Song, error) {
+	args := m.Called(ctx)
 	if songs, ok := args.Get(0).([]kodi.Song); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetSongs error: %w", err)
@@ -180,8 +181,8 @@ func (m *MockKodiClient) GetSongs() ([]kodi.Song, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetAlbums(ctx context.Context) ([]kodi.Album, error) {
+	args := m.Called(ctx)
 	if albums, ok := args.Get(0).([]kodi.Album); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetAlbums error: %w", err)
@@ -194,8 +195,8 @@ func (m *MockKodiClient) GetAlbums() ([]kodi.Album, error) {
 	return nil, nil
 }
 
-func (m *MockKodiClient) GetArtists() ([]kodi.Artist, error) {
-	args := m.Called()
+func (m *MockKodiClient) GetArtists(ctx context.Context) ([]kodi.Artist, error) {
+	args := m.Called(ctx)
 	if artists, ok := args.Get(0).([]kodi.Artist); ok {
 		if err := args.Error(1); err != nil {
 			return nil, fmt.Errorf("mock GetArtists error: %w", err)
@@ -304,13 +305,13 @@ func TestKodiClient_GetActivePlayers(t *testing.T) {
 		{ID: 1, Type: "video"},
 		{ID: 2, Type: "audio"},
 	}
-	mockClient.On("GetActivePlayers").Return(expectedPlayers, nil)
+	mockClient.On("GetActivePlayers", mock.Anything).Return(expectedPlayers, nil)
 
 	// Use as KodiClient interface
 	var client kodi.KodiClient = mockClient
 
 	// Test GetActivePlayers method exists and can be called
-	players, err := client.GetActivePlayers()
+	players, err := client.GetActivePlayers(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, players, 2)
 	assert.Equal(t, 1, players[0].ID)
@@ -332,13 +333,13 @@ func TestKodiClient_GetMovies(t *testing.T) {
 		{ID: 123, Label: "The Matrix", File: "/storage/movies/matrix.mkv"},
 		{ID: 456, Label: "Inception", File: "/storage/movies/inception.mp4"},
 	}
-	mockClient.On("GetMovies").Return(expectedMovies, nil)
+	mockClient.On("GetMovies", mock.Anything).Return(expectedMovies, nil)
 
 	// Use as KodiClient interface
 	var client kodi.KodiClient = mockClient
 
 	// Test GetMovies method exists and can be called
-	movies, err := client.GetMovies()
+	movies, err := client.GetMovies(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, movies, 2)
 	assert.Equal(t, 123, movies[0].ID)
@@ -362,13 +363,13 @@ func TestKodiClient_GetTVShows(t *testing.T) {
 		{ID: 789, Label: "Breaking Bad"},
 		{ID: 12, Label: "Better Call Saul"},
 	}
-	mockClient.On("GetTVShows").Return(expectedShows, nil)
+	mockClient.On("GetTVShows", mock.Anything).Return(expectedShows, nil)
 
 	// Use as KodiClient interface
 	var client kodi.KodiClient = mockClient
 
 	// Test GetTVShows method exists and can be called
-	shows, err := client.GetTVShows()
+	shows, err := client.GetTVShows(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, shows, 2)
 	assert.Equal(t, 789, shows[0].ID)
@@ -391,13 +392,13 @@ func TestKodiClient_GetEpisodes(t *testing.T) {
 		{ID: 101, Label: "Pilot", Season: 1, Episode: 1, TVShowID: tvShowID},
 		{ID: 102, Label: "Cat's in the Bag...", Season: 1, Episode: 2, TVShowID: tvShowID},
 	}
-	mockClient.On("GetEpisodes", tvShowID).Return(expectedEpisodes, nil)
+	mockClient.On("GetEpisodes", mock.Anything, tvShowID).Return(expectedEpisodes, nil)
 
 	// Use as KodiClient interface
 	var client kodi.KodiClient = mockClient
 
 	// Test GetEpisodes method exists and can be called
-	episodes, err := client.GetEpisodes(tvShowID)
+	episodes, err := client.GetEpisodes(context.Background(), tvShowID)
 	require.NoError(t, err)
 	assert.Len(t, episodes, 2)
 	assert.Equal(t, 101, episodes[0].ID)

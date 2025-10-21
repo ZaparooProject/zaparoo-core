@@ -20,11 +20,20 @@
 package methods
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -502,6 +511,146 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 			} else {
 				assert.NoError(t, err, "Expected no error for test case: %s", tt.name)
 			}
+		})
+	}
+}
+
+func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
+	tests := []struct {
+		name          string
+		params        string
+		errorContains string
+		wantError     bool
+	}{
+		{
+			name:      "no parameters - all systems",
+			params:    "",
+			wantError: false,
+		},
+		{
+			name:      "null systems parameter - all systems",
+			params:    `{"systems": null}`,
+			wantError: false,
+		},
+		{
+			name:      "empty systems array - all systems",
+			params:    `{"systems": []}`,
+			wantError: false,
+		},
+		{
+			name:      "single valid system",
+			params:    `{"systems": ["NES"]}`,
+			wantError: false,
+		},
+		{
+			name:      "multiple valid systems",
+			params:    `{"systems": ["NES", "SNES", "Genesis"]}`,
+			wantError: false,
+		},
+		{
+			name:          "invalid system ID",
+			params:        `{"systems": ["invalid_system"]}`,
+			wantError:     true,
+			errorContains: "invalid system ID invalid_system",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset indexing status to prevent race conditions between parallel tests
+			statusInstance.clear()
+
+			// Create mock environment
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform").Maybe()
+			mockPlatform.On("Settings").Return(platforms.Settings{}).Maybe()
+			mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/path"}).Maybe()
+
+			mockUserDB := &helpers.MockUserDBI{}
+			mockMediaDB := helpers.NewMockMediaDBI()
+
+			// Mock optimization status check
+			mockMediaDB.On("GetOptimizationStatus").Return("", nil)
+			mockMediaDB.On("SetOptimizationStatus", mock.Anything).Return(nil).Maybe()
+
+			// Mock additional methods that might be called
+			mockMediaDB.On("GetIndexingStatus").Return("", nil).Maybe()
+			mockMediaDB.On("SetIndexingStatus", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("SetIndexingSystems", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("GetIndexingSystems").Return([]string{}, nil).Maybe()
+			mockMediaDB.On("InvalidateCountCache").Return(nil).Maybe()
+			mockMediaDB.On("TruncateSystems", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("SetLastIndexedSystem", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("UnsafeGetSQLDb").Return((*sql.DB)(nil)).Maybe() // For WAL checkpoint
+
+			// Mock GetMax*ID methods for media indexing
+			mockMediaDB.On("GetMaxSystemID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTitleID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxMediaID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTagTypeID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxTagID").Return(int64(0), nil).Maybe()
+			mockMediaDB.On("GetMaxMediaTagID").Return(int64(0), nil).Maybe()
+
+			// Mock Find/Insert methods for media indexing
+			mockMediaDB.On("FindOrInsertSystem", mock.Anything).Return(database.System{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMediaTitle", mock.Anything).Return(database.MediaTitle{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMedia", mock.Anything).Return(database.Media{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("FindOrInsertMediaTag", mock.Anything).Return(database.MediaTag{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("InsertTagType", mock.Anything).Return(database.TagType{DBID: 1}, nil).Maybe()
+			mockMediaDB.On("InsertTag", mock.Anything).Return(database.Tag{DBID: 1}, nil).Maybe()
+
+			// Mock transaction methods
+			mockMediaDB.On("BeginTransaction", mock.Anything).Return(nil).Maybe()
+			mockMediaDB.On("CommitTransaction").Return(nil).Maybe()
+			mockMediaDB.On("RollbackTransaction").Return(nil).Maybe()
+			mockMediaDB.On("UpdateLastGenerated").Return(nil).Maybe()
+			mockMediaDB.On("Truncate").Return(nil).Maybe()
+			mockMediaDB.On("RunBackgroundOptimization", mock.Anything).Return(nil).Maybe()
+
+			// Mock total media count
+			mockMediaDB.On("GetTotalMediaCount").Return(0, nil).Maybe()
+
+			// Mock optimized JOIN methods for PopulateScanStateFromDB
+			mockMediaDB.On("GetAllSystems").Return([]database.System{}, nil).Maybe()
+			mockMediaDB.On("GetTitlesWithSystems").Return([]database.TitleWithSystem{}, nil).Maybe()
+			mockMediaDB.On("GetMediaWithFullPath").Return([]database.MediaWithFullPath{}, nil).Maybe()
+
+			db := &database.Database{
+				UserDB:  mockUserDB,
+				MediaDB: mockMediaDB,
+			}
+
+			cfg := &config.Instance{}
+			appState, _ := state.NewState(mockPlatform)
+
+			env := requests.RequestEnv{
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Database: db,
+				Params:   []byte(tt.params),
+			}
+
+			// Call the handler
+			result, err := HandleGenerateMedia(env)
+
+			// Verify error expectations
+			if tt.wantError {
+				require.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Nil(t, result)
+
+			// Verify mock expectations were met
+			mockMediaDB.AssertExpectations(t)
+			mockPlatform.AssertExpectations(t)
 		})
 	}
 }

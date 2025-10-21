@@ -121,10 +121,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (*Platform) NormalizePath(_ *config.Instance, path string) string {
-	return path
-}
-
 func (p *Platform) StopActiveLauncher() error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()

@@ -20,6 +20,7 @@
 package kodi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -70,7 +71,7 @@ func TestClient_APIRequest(t *testing.T) {
 		client.SetURL(server.URL + "/jsonrpc")
 
 		// This should fail until we implement APIRequest method
-		result, err := client.APIRequest(kodi.APIMethodPlayerGetActivePlayers, nil)
+		result, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
@@ -110,7 +111,7 @@ func TestClient_APIRequest(t *testing.T) {
 		client.SetURL(server.URL + "/jsonrpc")
 
 		// This should return an error
-		_, err := client.APIRequest(kodi.APIMethodPlayerGetActivePlayers, nil)
+		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Method not found")
 	})
@@ -121,7 +122,7 @@ func TestClient_APIRequest(t *testing.T) {
 		client.SetURL("http://invalid-url-that-does-not-exist.local/jsonrpc")
 
 		// This should return a connection error
-		_, err := client.APIRequest(kodi.APIMethodPlayerGetActivePlayers, nil)
+		_, err := client.APIRequest(context.Background(), kodi.APIMethodPlayerGetActivePlayers, nil)
 		require.Error(t, err)
 	})
 }

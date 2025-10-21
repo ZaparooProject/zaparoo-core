@@ -24,7 +24,10 @@ import "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 type SearchParams struct {
 	Systems    *[]string `json:"systems"`
 	MaxResults *int      `json:"maxResults"`
-	Query      string    `json:"query"`
+	Cursor     *string   `json:"cursor,omitempty"`
+	Tags       *[]string `json:"tags,omitempty"`
+	Letter     *string   `json:"letter,omitempty"`
+	Query      *string   `json:"query"`
 }
 
 type MediaIndexParams struct {

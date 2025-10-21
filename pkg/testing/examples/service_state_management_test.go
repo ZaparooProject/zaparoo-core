@@ -154,13 +154,14 @@ func TestApplicationStateTransitions(t *testing.T) {
 // TestConcurrentStateAccess demonstrates testing realistic concurrent scenarios
 func TestConcurrentStateAccess(t *testing.T) {
 	t.Parallel()
-	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
-	t.Cleanup(func() { st.StopService() })
 
 	// Test realistic scenario: multiple readers connecting while tokens are being processed
 	t.Run("Readers connecting during token processing", func(t *testing.T) {
 		t.Parallel()
+		mockPlatform := mocks.NewMockPlatform()
+		st, _ := state.NewState(mockPlatform)
+		t.Cleanup(func() { st.StopService() })
+
 		var wg sync.WaitGroup
 
 		// Goroutine 1: Connect readers
@@ -197,6 +198,10 @@ func TestConcurrentStateAccess(t *testing.T) {
 	// Test realistic scenario: playlist changes while reader status updates
 	t.Run("Playlist changes with reader updates", func(t *testing.T) {
 		t.Parallel()
+		mockPlatform := mocks.NewMockPlatform()
+		st, _ := state.NewState(mockPlatform)
+		t.Cleanup(func() { st.StopService() })
+
 		var wg sync.WaitGroup
 		playlists := fixtures.SamplePlaylists()
 
