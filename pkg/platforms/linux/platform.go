@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
@@ -69,6 +70,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		opticaldrive.NewReader(cfg),
+		mqtt.NewReader(cfg),
 	}
 
 	var enabled []readers.Reader

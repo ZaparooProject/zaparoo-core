@@ -513,7 +513,7 @@ func StripMetadataBrackets(s string) string {
 		default:
 			// Only write runes when we're not inside any brackets
 			if depth[0] == 0 && depth[1] == 0 && depth[2] == 0 && depth[3] == 0 {
-				result.WriteRune(r)
+				_, _ = result.WriteRune(r)
 			}
 		}
 	}
@@ -594,7 +594,7 @@ func NormalizeSymbolsAndSeparators(s string) string {
 		switch r {
 		case ':', '_', '/', '\\', ',', ';':
 			// Always convert these to spaces
-			result.WriteRune(' ')
+			_, _ = result.WriteRune(' ')
 		case '-':
 			// Note: Unicode hyphen variants (\u2010, \u2011) already normalized to - in Stage 2
 			// Keep hyphen if it's between letters/numbers (compound word like "Spider-Man")
@@ -606,13 +606,13 @@ func NormalizeSymbolsAndSeparators(s string) string {
 
 			if prevIsAlnum && nextIsAlnum {
 				// Keep hyphen for compound words: "Spider-Man", "F-Zero"
-				result.WriteRune(r)
+				_, _ = result.WriteRune(r)
 			} else {
 				// Convert to space for standalone or spaced hyphens
-				result.WriteRune(' ')
+				_, _ = result.WriteRune(' ')
 			}
 		default:
-			result.WriteRune(r)
+			_, _ = result.WriteRune(r)
 		}
 	}
 
@@ -813,7 +813,7 @@ func ConvertRomanNumerals(s string) string {
 				atEnd := endIdx == len(runeSlice) || !isLatinWordCharForRoman(runeSlice[endIdx])
 
 				if atEnd {
-					result.WriteString(num.replacement)
+					_, _ = result.WriteString(num.replacement)
 					i += len(num.pattern)
 					matched = true
 					break

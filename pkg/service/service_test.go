@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -268,4 +269,89 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 
 	// Verify that no indexing was triggered for failed status
 	mockMediaDB.AssertNotCalled(t, "GetOptimizationStatus")
+}
+
+func TestStartPublishers_NoPublishers(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
+	notifChan := make(chan models.Notification)
+
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
+
+	assert.Empty(t, publishers, "should return empty slice when no publishers configured")
+}
+
+func TestStartPublishers_DisabledPublisher(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	configDir := t.TempDir()
+
+	// Create config with explicitly disabled publisher
+	configContent := `
+schema_version = 1
+
+[service]
+api_port = 7497
+
+[[service.publishers.mqtt]]
+enabled = false
+broker = "localhost:1883"
+topic = "zaparoo/events"
+`
+	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
+	notifChan := make(chan models.Notification)
+
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
+
+	assert.Empty(t, publishers, "should skip disabled publishers")
+}
+
+func TestStartPublishers_InvalidBroker(t *testing.T) {
+	t.Parallel()
+
+	fs := testhelpers.NewMemoryFS()
+	configDir := t.TempDir()
+
+	// Create config with invalid broker that will fail to connect
+	configContent := `
+schema_version = 1
+
+[service]
+api_port = 7497
+
+[[service.publishers.mqtt]]
+broker = "invalid-broker-does-not-exist:1883"
+topic = "zaparoo/events"
+`
+	err := fs.WriteFile(configDir+"/config.toml", []byte(configContent), 0o644)
+	require.NoError(t, err)
+
+	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
+	notifChan := make(chan models.Notification)
+
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
+
+	// Should return empty slice when publisher fails to start
+	assert.Empty(t, publishers, "should not include publishers that fail to start")
 }

@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -157,7 +158,30 @@ func Start(
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// TODO: define the notifications chan here instead of in state
-	st, ns := state.NewState(pl) // global state, notification queue
+	st, ns := state.NewState(pl) // global state, notification queue (source)
+
+	// Create separate notification channels for API and publishers to avoid race conditions
+	apiNotifications := make(chan models.Notification, 100)
+	publisherNotifications := make(chan models.Notification, 100)
+
+	// Start main fan-out goroutine to broadcast notifications to all consumers
+	go func() {
+		for notif := range ns {
+			select {
+			case apiNotifications <- notif:
+			case <-st.GetContext().Done():
+				return
+			}
+			select {
+			case publisherNotifications <- notif:
+			case <-st.GetContext().Done():
+				return
+			}
+		}
+		close(apiNotifications)
+		close(publisherNotifications)
+	}()
+
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
@@ -227,7 +251,10 @@ func Start(
 	go checkAndResumeOptimization(db, st.Notifications)
 
 	log.Info().Msg("starting API service")
-	go api.Start(pl, cfg, st, itq, db, ns)
+	go api.Start(pl, cfg, st, itq, db, apiNotifications)
+
+	log.Info().Msg("starting publishers")
+	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
@@ -249,6 +276,10 @@ func Start(
 	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return func() error {
+		cancelPublisherFanOut()
+		for _, publisher := range activePublishers {
+			publisher.Stop()
+		}
 		err = pl.Stop()
 		if err != nil {
 			log.Warn().Msgf("error stopping platform: %s", err)
@@ -259,6 +290,71 @@ func Start(
 		close(itq)
 		return nil
 	}, nil
+}
+
+// startPublishers initializes and starts all configured publishers.
+// Returns a slice of active publishers and a cancel function for graceful shutdown.
+func startPublishers(
+	st *state.State,
+	cfg *config.Instance,
+	notifChan <-chan models.Notification,
+) ([]*publishers.MQTTPublisher, context.CancelFunc) {
+	mqttConfigs := cfg.GetMQTTPublishers()
+	if len(mqttConfigs) == 0 {
+		return nil, func() {}
+	}
+
+	activePublishers := make([]*publishers.MQTTPublisher, 0, len(mqttConfigs))
+
+	for _, mqttCfg := range mqttConfigs {
+		// Skip if explicitly disabled (nil = enabled by default)
+		if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
+			continue
+		}
+
+		log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
+
+		publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
+		if err := publisher.Start(); err != nil {
+			log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
+			continue
+		}
+
+		activePublishers = append(activePublishers, publisher)
+	}
+
+	if len(activePublishers) == 0 {
+		return nil, func() {}
+	}
+
+	log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
+
+	// Start a single fan-out goroutine to broadcast notifications to all publishers
+	// Derived from service context so it automatically stops when service stops
+	ctx, cancel := context.WithCancel(st.GetContext())
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				log.Debug().Msg("mqtt publisher fan-out: stopping")
+				return
+			case notif, ok := <-notifChan:
+				if !ok {
+					log.Debug().Msg("mqtt publisher fan-out: notification channel closed")
+					return
+				}
+				// Publish to all active publishers sequentially
+				// Timeout in Publish() prevents blocking indefinitely
+				for _, pub := range activePublishers {
+					if err := pub.Publish(notif); err != nil {
+						log.Warn().Err(err).Msgf("failed to publish %s notification", notif.Method)
+					}
+				}
+			}
+		}
+	}()
+
+	return activePublishers, cancel
 }
 
 // checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it
