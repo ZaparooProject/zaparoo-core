@@ -389,6 +389,7 @@ preprocessing:
 			}
 
 			// avoid launching a token that was just written by a reader
+			// NOTE: This check requires both UID and Text to match (see helpers.TokensEqual).
 			wt := st.GetWroteToken()
 			if wt != nil && helpers.TokensEqual(scan, wt) {
 				log.Info().Msg("skipping launching just written token")
