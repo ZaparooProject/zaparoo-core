@@ -116,8 +116,8 @@ func NewClientOptions(brokerURL, clientIDPrefix string) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fullBrokerURL)
 	opts.SetClientID(clientIDPrefix + uuid.New().String()[:8])
-	opts.SetAutoReconnect(true)
-	opts.SetConnectRetry(true)
+	opts.SetAutoReconnect(true) // Auto-reconnect if connection is lost after initial success
+	opts.SetConnectRetry(false) // Disable background retry on initial connect - caller handles timeout
 	opts.SetConnectTimeout(10 * time.Second)
 	opts.SetOrderMatters(false) // Allow blocking in message handlers
 

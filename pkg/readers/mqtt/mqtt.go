@@ -119,8 +119,18 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 	r.client = r.clientFactory(opts)
 
 	token := r.client.Connect()
-	if token.Wait() && token.Error() != nil {
-		return fmt.Errorf("failed to connect to MQTT broker: %w", token.Error())
+	// Use WaitTimeout to prevent indefinite blocking (5 second timeout)
+	if !token.WaitTimeout(5 * time.Second) {
+		// Clean up client on timeout to prevent resource leak
+		r.client.Disconnect(0)
+		r.client = nil
+		return errors.New("failed to connect to MQTT broker: connection timeout")
+	}
+	if err := token.Error(); err != nil {
+		// Clean up client on error to prevent resource leak
+		r.client.Disconnect(0)
+		r.client = nil
+		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
 	}
 
 	log.Info().Msgf("mqtt reader: opened connection to %s (topic: %s)", broker, topic)
