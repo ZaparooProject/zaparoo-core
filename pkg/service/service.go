@@ -158,7 +158,30 @@ func Start(
 	log.Info().Msgf("version: %s", config.AppVersion)
 
 	// TODO: define the notifications chan here instead of in state
-	st, ns := state.NewState(pl) // global state, notification queue
+	st, ns := state.NewState(pl) // global state, notification queue (source)
+
+	// Create separate notification channels for API and publishers to avoid race conditions
+	apiNotifications := make(chan models.Notification, 100)
+	publisherNotifications := make(chan models.Notification, 100)
+
+	// Start main fan-out goroutine to broadcast notifications to all consumers
+	go func() {
+		for notif := range ns {
+			select {
+			case apiNotifications <- notif:
+			case <-st.GetContext().Done():
+				return
+			}
+			select {
+			case publisherNotifications <- notif:
+			case <-st.GetContext().Done():
+				return
+			}
+		}
+		close(apiNotifications)
+		close(publisherNotifications)
+	}()
+
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
 	lsq := make(chan *tokens.Token)       // launch software queue
@@ -228,10 +251,10 @@ func Start(
 	go checkAndResumeOptimization(db, st.Notifications)
 
 	log.Info().Msg("starting API service")
-	go api.Start(pl, cfg, st, itq, db, ns)
+	go api.Start(pl, cfg, st, itq, db, apiNotifications)
 
 	log.Info().Msg("starting publishers")
-	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, ns)
+	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
@@ -323,7 +346,9 @@ func startPublishers(
 				// Publish to all active publishers sequentially
 				// Timeout in Publish() prevents blocking indefinitely
 				for _, pub := range activePublishers {
-					_ = pub.Publish(notif) // Errors are logged in Publish()
+					if err := pub.Publish(notif); err != nil {
+						log.Warn().Err(err).Msgf("failed to publish %s notification", notif.Method)
+					}
 				}
 			}
 		}

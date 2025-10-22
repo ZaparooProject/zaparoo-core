@@ -72,8 +72,8 @@ const (
 )
 
 type Notification struct {
-	Method string
-	Params json.RawMessage
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
 }
 
 type RequestObject struct {

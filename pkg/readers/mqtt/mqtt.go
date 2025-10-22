@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -193,7 +194,8 @@ func (r *Reader) createMessageHandler() mqtt.MessageHandler {
 		// Create token with ZapScript content
 		token := &tokens.Token{
 			Type:     TokenType,
-			Text:     payload, // ZapScript content
+			UID:      uuid.New().String(), // Generate unique ID for each message
+			Text:     payload,             // ZapScript content
 			ScanTime: time.Now(),
 			Source:   r.device.ConnectionString(),
 		}

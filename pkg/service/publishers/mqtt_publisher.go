@@ -109,8 +109,8 @@ func (p *MQTTPublisher) Publish(notif models.Notification) error {
 		return nil // Not an error, just filtered out
 	}
 
-	// Marshal params to JSON (direct payload, no JSON-RPC wrapper)
-	payload, err := json.Marshal(notif.Params)
+	// Marshal notification to JSON (includes method and params)
+	payload, err := json.Marshal(notif)
 	if err != nil {
 		log.Error().Err(err).Msg("mqtt publisher: failed to marshal notification")
 		return fmt.Errorf("failed to marshal notification: %w", err)
