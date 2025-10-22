@@ -174,6 +174,7 @@ func TestStart_Success(t *testing.T) {
 	// Manually connect the mock (Start would do this via mqtt.NewClient)
 	mockClient.connected = true
 
+	publisher.wg.Add(1)
 	go publisher.publishNotifications(notifChan)
 
 	// Send a test notification
@@ -203,6 +204,7 @@ func TestPublishNotifications_FilteredOut(t *testing.T) {
 
 	notifChan := make(chan models.Notification, 10)
 
+	publisher.wg.Add(1)
 	go publisher.publishNotifications(notifChan)
 
 	// Send notification that should be filtered out
@@ -243,6 +245,7 @@ func TestPublishNotifications_PublishError(t *testing.T) {
 
 	notifChan := make(chan models.Notification, 10)
 
+	publisher.wg.Add(1)
 	go publisher.publishNotifications(notifChan)
 
 	// Send notification
@@ -269,6 +272,7 @@ func TestPublishNotifications_ChannelClosed(t *testing.T) {
 
 	notifChan := make(chan models.Notification, 10)
 
+	publisher.wg.Add(1)
 	go publisher.publishNotifications(notifChan)
 
 	// Close notification channel

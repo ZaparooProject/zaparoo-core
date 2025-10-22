@@ -20,9 +20,9 @@
 package mqtt
 
 import (
-	"crypto/tls"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -31,7 +31,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -83,45 +82,15 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 	r.topic = topic
 	r.scanCh = scanQueue
 
-	// Parse protocol and TLS settings from device path
-	protocolInfo := ParseMQTTProtocol(device.Path)
-
-	// Build auth lookup URL (scheme://broker:port or just broker:port)
-	authLookupURL := broker
-	if protocolInfo.Scheme != "" {
-		authLookupURL = fmt.Sprintf("%s://%s", protocolInfo.Scheme, broker)
+	// Build broker URL for client options (use device.Path to preserve scheme if present)
+	brokerURL := device.Path
+	if !strings.Contains(device.Path, "://") {
+		// If no scheme in path, just use the broker address
+		brokerURL = broker
 	}
 
-	brokerURL := fmt.Sprintf("%s://%s", protocolInfo.Protocol, broker)
-
-	// Configure MQTT client options
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(brokerURL)
-	opts.SetClientID("zaparoo-mqtt-" + uuid.New().String()[:8])
-	opts.SetAutoReconnect(true)
-	opts.SetConnectRetry(true)
-	opts.SetConnectTimeout(10 * time.Second)
-	opts.SetOrderMatters(false) // Allow blocking in message handlers
-
-	// Look up authentication credentials from auth.toml
-	creds := config.LookupAuth(config.GetAuthCfg(), authLookupURL)
-	if creds != nil {
-		if creds.Username != "" {
-			opts.SetUsername(creds.Username)
-			opts.SetPassword(creds.Password)
-			log.Debug().Msgf("mqtt reader: using authentication for %s", broker)
-		}
-	}
-
-	// Configure TLS if using secure connection
-	if protocolInfo.UseTLS {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: false,
-			MinVersion:         tls.VersionTLS12,
-		}
-		opts.SetTLSConfig(tlsConfig)
-		log.Debug().Msgf("mqtt reader: using TLS for %s", broker)
-	}
+	// Configure MQTT client options using shared helper
+	opts := NewClientOptions(brokerURL, "zaparoo-mqtt-")
 
 	// Set up connection handlers
 	opts.OnConnect = func(client mqtt.Client) {

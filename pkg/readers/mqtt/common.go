@@ -20,10 +20,17 @@
 package mqtt
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 // ParseMQTTPath parses an MQTT connection path in the format "broker:port/topic"
@@ -98,4 +105,39 @@ func ParseMQTTProtocol(urlStr string) MQTTProtocolInfo {
 	}
 
 	return info
+}
+
+// NewClientOptions creates and configures MQTT client options based on a broker URL.
+// The clientIDPrefix is used to generate a unique client ID (e.g., "zaparoo-mqtt-" or "zaparoo-publisher-").
+func NewClientOptions(brokerURL, clientIDPrefix string) *mqtt.ClientOptions {
+	protocolInfo := ParseMQTTProtocol(brokerURL)
+	fullBrokerURL := fmt.Sprintf("%s://%s", protocolInfo.Protocol, protocolInfo.Remainder)
+
+	opts := mqtt.NewClientOptions()
+	opts.AddBroker(fullBrokerURL)
+	opts.SetClientID(clientIDPrefix + uuid.New().String()[:8])
+	opts.SetAutoReconnect(true)
+	opts.SetConnectRetry(true)
+	opts.SetConnectTimeout(10 * time.Second)
+	opts.SetOrderMatters(false) // Allow blocking in message handlers
+
+	// Look up authentication credentials from auth.toml
+	creds := config.LookupAuth(config.GetAuthCfg(), brokerURL)
+	if creds != nil && creds.Username != "" {
+		opts.SetUsername(creds.Username)
+		opts.SetPassword(creds.Password)
+		log.Debug().Msgf("mqtt: using authentication for %s", protocolInfo.Remainder)
+	}
+
+	// Configure TLS if using secure connection
+	if protocolInfo.UseTLS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}
+		opts.SetTLSConfig(tlsConfig)
+		log.Debug().Msgf("mqtt: using TLS for %s", protocolInfo.Remainder)
+	}
+
+	return opts
 }

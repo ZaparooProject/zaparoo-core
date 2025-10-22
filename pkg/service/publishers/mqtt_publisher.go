@@ -20,16 +20,13 @@
 package publishers
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"time"
+	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	mqttreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,6 +37,7 @@ type MQTTPublisher struct {
 	broker string
 	topic  string
 	filter []string
+	wg     sync.WaitGroup
 }
 
 // NewMQTTPublisher creates a new MQTT publisher for the given broker, topic, and optional filter.
@@ -56,38 +54,8 @@ func NewMQTTPublisher(broker, topic string, filter []string) *MQTTPublisher {
 
 // Start connects to the MQTT broker and begins publishing notifications.
 func (p *MQTTPublisher) Start(notifications <-chan models.Notification) error {
-	// Parse protocol and TLS settings from broker URL
-	protocolInfo := mqttreader.ParseMQTTProtocol(p.broker)
-	brokerURL := fmt.Sprintf("%s://%s", protocolInfo.Protocol, protocolInfo.Remainder)
-
-	// Configure MQTT client options
-	opts := mqtt.NewClientOptions()
-	opts.AddBroker(brokerURL)
-	opts.SetClientID("zaparoo-publisher-" + uuid.New().String()[:8])
-	opts.SetAutoReconnect(true)
-	opts.SetConnectRetry(true)
-	opts.SetConnectTimeout(10 * time.Second)
-	opts.SetOrderMatters(false) // Allow blocking in message handlers
-
-	// Look up authentication credentials from auth.toml using user-provided broker URL
-	creds := config.LookupAuth(config.GetAuthCfg(), p.broker)
-	if creds != nil {
-		if creds.Username != "" {
-			opts.SetUsername(creds.Username)
-			opts.SetPassword(creds.Password)
-			log.Debug().Msgf("mqtt publisher: using authentication for %s", protocolInfo.Remainder)
-		}
-	}
-
-	// Configure TLS if using secure connection
-	if protocolInfo.UseTLS {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: false,
-			MinVersion:         tls.VersionTLS12,
-		}
-		opts.SetTLSConfig(tlsConfig)
-		log.Debug().Msgf("mqtt publisher: using TLS for %s", protocolInfo.Remainder)
-	}
+	// Configure MQTT client options using shared helper
+	opts := mqttreader.NewClientOptions(p.broker, "zaparoo-publisher-")
 
 	// Set up connection handlers
 	opts.OnConnect = func(_ mqtt.Client) {
@@ -109,6 +77,7 @@ func (p *MQTTPublisher) Start(notifications <-chan models.Notification) error {
 	log.Info().Msgf("mqtt publisher: connected to %s (topic: %s)", p.broker, p.topic)
 
 	// Start publishing goroutine
+	p.wg.Add(1)
 	go p.publishNotifications(notifications)
 
 	return nil
@@ -117,6 +86,7 @@ func (p *MQTTPublisher) Start(notifications <-chan models.Notification) error {
 // Stop disconnects from the MQTT broker and stops publishing.
 func (p *MQTTPublisher) Stop() {
 	close(p.stopCh)
+	p.wg.Wait() // Wait for the publishing goroutine to finish
 
 	if p.client != nil && p.client.IsConnected() {
 		log.Debug().Msg("mqtt publisher: disconnecting")
@@ -126,6 +96,8 @@ func (p *MQTTPublisher) Stop() {
 
 // publishNotifications is the main loop that forwards notifications to MQTT.
 func (p *MQTTPublisher) publishNotifications(notifications <-chan models.Notification) {
+	defer p.wg.Done() // Signal completion when goroutine exits
+
 	log.Debug().Msg("mqtt publisher: starting notification publisher goroutine")
 
 	for {
