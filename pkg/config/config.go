@@ -74,14 +74,6 @@ type ZapScript struct {
 	allowExecuteRe []*regexp.Regexp
 }
 
-type Service struct {
-	DeviceID       string   `toml:"device_id"`
-	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
-	allowRunRe     []*regexp.Regexp
-	AllowedOrigins []string `toml:"allowed_origins,omitempty"`
-	APIPort        int      `toml:"api_port"`
-}
-
 type Auth struct {
 	Creds map[string]CredentialEntry `toml:"creds,omitempty"`
 }
@@ -419,28 +411,10 @@ func checkAllow(allow []string, allowRe []*regexp.Regexp, s string) bool {
 	return false
 }
 
-func (c *Instance) APIPort() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.vals.Service.APIPort
-}
-
-func (c *Instance) AllowedOrigins() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.vals.Service.AllowedOrigins
-}
-
 func (c *Instance) IsExecuteAllowed(s string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return checkAllow(c.vals.ZapScript.AllowExecute, c.vals.ZapScript.allowExecuteRe, s)
-}
-
-func (c *Instance) IsRunAllowed(s string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return checkAllow(c.vals.Service.AllowRun, c.vals.Service.allowRunRe, s)
 }
 
 func LookupAuth(authCfg Auth, reqURL string) *CredentialEntry {
