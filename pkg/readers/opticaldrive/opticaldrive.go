@@ -130,6 +130,21 @@ func (r *FileReader) Open(
 				continue
 			}
 
+			// Check if device still exists (distinguish hardware error from disc removal)
+			if _, err := os.Stat(r.path); err != nil {
+				if token != nil {
+					log.Warn().Err(err).Msg("optical drive device no longer exists - " +
+						"sending error signal to keep media running")
+					token = nil
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					continue
+				}
+			}
+
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			//nolint:gosec // Safe: r.path validated as device path starting with /dev/
 			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
@@ -138,6 +153,7 @@ func (r *FileReader) Open(
 				if token == nil {
 					continue
 				}
+				// Device exists but blkid failed - this is normal disc removal
 				log.Debug().Err(err).Msg("error identifying optical media, removing token")
 				token = nil
 				iq <- readers.Scan{

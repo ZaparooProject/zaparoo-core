@@ -194,6 +194,17 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 				log.Error().Msgf("error during poll: %s", err)
 				log.Error().Msg("fatal IO error, device was possibly unplugged")
 
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.prevToken != nil {
+					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.conn.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.prevToken = nil
+				}
+
 				err = r.Close()
 				if err != nil {
 					log.Warn().Msgf("error closing device: %s", err)

@@ -223,6 +223,21 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				log.Error().Err(err).Msg("PN532 session ended with error")
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				r.mutex.Lock()
+				hasActiveToken := r.lastToken != nil
+				if hasActiveToken {
+					log.Warn().Msg("reader session error with active token - " +
+						"sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.deviceInfo.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+				r.mutex.Unlock()
 			}
 		}
 	}()

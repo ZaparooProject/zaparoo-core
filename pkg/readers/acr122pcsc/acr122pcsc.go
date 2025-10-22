@@ -39,11 +39,12 @@ import (
 )
 
 type ACR122PCSC struct {
-	cfg     *config.Instance
-	ctx     *scard.Context
-	device  config.ReadersConnect
-	name    string
-	polling bool
+	cfg       *config.Instance
+	ctx       *scard.Context
+	lastToken *tokens.Token
+	device    config.ReadersConnect
+	name      string
+	polling   bool
 }
 
 func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
@@ -101,12 +102,36 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 			rls, err := ctx.ListReaders()
 			if err != nil {
 				log.Debug().Msgf("error listing pcsc readers: %s", err)
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.lastToken != nil {
+					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+
 				r.polling = false
 				break
 			}
 
 			if !helpers.Contains(rls, r.name) {
 				log.Debug().Msgf("reader not found: %s", r.name)
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.lastToken != nil {
+					log.Warn().Msg("reader disconnected with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+
 				r.polling = false
 				break
 			}
@@ -193,15 +218,19 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				text = ""
 			}
 
+			token := &tokens.Token{
+				UID:      hex.EncodeToString(uid),
+				Text:     text,
+				ScanTime: time.Now(),
+				Source:   r.device.ConnectionString(),
+			}
+
 			iq <- readers.Scan{
 				Source: r.device.ConnectionString(),
-				Token: &tokens.Token{
-					UID:      hex.EncodeToString(uid),
-					Text:     text,
-					ScanTime: time.Now(),
-					Source:   r.device.ConnectionString(),
-				},
+				Token:  token,
 			}
+
+			r.lastToken = token
 
 			_ = tag.Disconnect(scard.ResetCard)
 
@@ -226,6 +255,8 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 				Source: r.device.ConnectionString(),
 				Token:  nil,
 			}
+
+			r.lastToken = nil
 		}
 	}()
 

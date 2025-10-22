@@ -135,6 +135,18 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 		for r.polling {
 			if errCount >= maxErrors {
 				log.Error().Msg("too many errors, exiting")
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.lastToken != nil {
+					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+
 				err := r.Close()
 				if err != nil {
 					log.Warn().Err(err).Msg("failed to close serial port")

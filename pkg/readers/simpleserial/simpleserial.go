@@ -152,6 +152,18 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 			n, err := r.port.Read(buf)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to read from serial port")
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.lastToken != nil {
+					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+
 				err = r.Close()
 				if err != nil {
 					log.Error().Err(err).Msg("failed to close serial port")
