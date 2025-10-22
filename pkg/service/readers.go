@@ -319,6 +319,7 @@ func readerManager(
 preprocessing:
 	for {
 		var scan *tokens.Token
+		var readerError bool
 
 		select {
 		case <-st.GetContext().Done():
@@ -334,6 +335,7 @@ preprocessing:
 				continue preprocessing
 			}
 			scan = t.Token
+			readerError = t.ReaderError
 		case stoken := <-lsq:
 			// a token has been launched that starts software, used for managing exits
 			log.Debug().Msgf("new software token: %v", st)
@@ -407,6 +409,13 @@ preprocessing:
 			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")
+
+			// If removal was due to reader error, skip on_remove and exit to keep media running
+			if readerError {
+				log.Warn().Msg("token removal due to reader error - skipping on_remove and exit to keep media running")
+				st.SetActiveCard(tokens.Token{})
+				continue preprocessing
+			}
 
 			onRemoveScript := cfg.ReadersScan().OnRemove
 			if cfg.HoldModeEnabled() && onRemoveScript != "" {

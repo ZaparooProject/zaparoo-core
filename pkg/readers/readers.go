@@ -40,9 +40,10 @@ type DriverMetadata struct {
 }
 
 type Scan struct {
-	Error  error
-	Token  *tokens.Token
-	Source string
+	Error       error
+	Token       *tokens.Token
+	Source      string
+	ReaderError bool // True when Token is nil due to reader error/disconnect vs normal token removal
 }
 
 type Reader interface {

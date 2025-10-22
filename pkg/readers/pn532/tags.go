@@ -49,7 +49,14 @@ func (*Reader) convertTagType(tagType pn533.TagType) string {
 
 func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data []byte) {
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
-	tagOps := tagops.New(r.device)
+
+	// Use realDevice for tag operations (mocks won't reach here in tests)
+	if r.realDevice == nil {
+		log.Debug().Str("uid", detectedTag.UID).Msg("real device not available, returning target data")
+		return "", detectedTag.TargetData
+	}
+
+	tagOps := tagops.New(r.realDevice)
 
 	// Detect tag first - use reader's context to ensure proper cancellation
 	ctx, cancel := context.WithTimeout(r.ctx, ndefReadTimeout)

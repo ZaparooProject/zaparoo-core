@@ -41,18 +41,61 @@ import (
 	"go.bug.st/serial"
 )
 
+// SerialPort defines the interface for serial port operations (for mocking in tests).
+type SerialPort interface {
+	Close() error
+}
+
+// ConnectFunc creates and initializes a PN532 UART connection.
+type ConnectFunc func(name string) (SerialPort, error)
+
+// PN532Commander handles PN532 protocol commands.
+type PN532Commander interface {
+	InListPassiveTarget(port SerialPort) (*Target, error)
+	InDataExchange(port SerialPort, data []byte) ([]byte, error)
+}
+
+// DefaultPN532Commander uses the real PN532 command functions.
+type DefaultPN532Commander struct{}
+
+func (DefaultPN532Commander) InListPassiveTarget(port SerialPort) (*Target, error) {
+	// Cast to serial.Port for the actual command
+	if sp, ok := port.(serial.Port); ok {
+		return InListPassiveTarget(sp)
+	}
+	return nil, errors.New("invalid port type")
+}
+
+func (DefaultPN532Commander) InDataExchange(port SerialPort, data []byte) ([]byte, error) {
+	// Cast to serial.Port for the actual command
+	if sp, ok := port.(serial.Port); ok {
+		return InDataExchange(sp, data)
+	}
+	return nil, errors.New("invalid port type")
+}
+
+// DefaultConnectFunc wraps the package-level connect function.
+func DefaultConnectFunc(name string) (SerialPort, error) {
+	return connect(name)
+}
+
 type PN532UARTReader struct {
-	port      serial.Port
+	port      SerialPort
+	commander PN532Commander
 	cfg       *config.Instance
 	lastToken *tokens.Token
+	connectFn ConnectFunc
 	device    config.ReadersConnect
 	name      string
 	polling   bool
+	mu        sync.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *PN532UARTReader {
 	return &PN532UARTReader{
-		cfg: cfg,
+		cfg:       cfg,
+		connectFn: DefaultConnectFunc,
+		commander: DefaultPN532Commander{},
 	}
 }
 
@@ -113,7 +156,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 		}
 	}
 
-	port, err := connect(name)
+	port, err := r.connectFn(name)
 	if err != nil {
 		if port != nil {
 			_ = port.Close()
@@ -124,7 +167,9 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 	r.port = port
 	r.device = device
 	r.name = name
+	r.mu.Lock()
 	r.polling = true
+	r.mu.Unlock()
 
 	go func() {
 		errCount := 0
@@ -132,20 +177,37 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 		zeroScans := 0
 		maxZeroScans := 3
 
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			r.mu.RUnlock()
+			if !polling {
+				break
+			}
 			if errCount >= maxErrors {
 				log.Error().Msg("too many errors, exiting")
+
+				// Send reader error notification to prevent triggering on_remove/exit
+				if r.lastToken != nil {
+					log.Warn().Msg("reader error with active token - sending error signal to keep media running")
+					iq <- readers.Scan{
+						Source:      r.device.ConnectionString(),
+						Token:       nil,
+						ReaderError: true,
+					}
+					r.lastToken = nil
+				}
+
 				err := r.Close()
 				if err != nil {
 					log.Warn().Err(err).Msg("failed to close serial port")
 				}
-				r.polling = false
 				break
 			}
 
 			time.Sleep(250 * time.Millisecond)
 
-			tgt, err := InListPassiveTarget(r.port)
+			tgt, err := r.commander.InListPassiveTarget(r.port)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to read passive target")
 				errCount++
@@ -176,7 +238,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 			}
 
 			if tgt.Type == tokens.TypeMifare {
-				log.Error().Err(err).Msg("mifare not supported")
+				log.Debug().Msg("mifare not supported, skipping")
 				continue
 			}
 
@@ -197,7 +259,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 					break readLoop
 				}
 
-				res, exchangeErr := InDataExchange(r.port, []byte{0x30, byte(i)})
+				res, exchangeErr := r.commander.InDataExchange(r.port, []byte{0x30, byte(i)})
 				switch {
 				case errors.Is(exchangeErr, ErrNoFrameFound):
 					// sometimes the response just doesn't work, try again
@@ -268,7 +330,9 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 }
 
 func (r *PN532UARTReader) Close() error {
+	r.mu.Lock()
 	r.polling = false
+	r.mu.Unlock()
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {
@@ -369,6 +433,8 @@ func (r *PN532UARTReader) Device() string {
 }
 
 func (r *PN532UARTReader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling && r.port != nil
 }
 
