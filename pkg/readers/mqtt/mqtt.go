@@ -106,7 +106,7 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 		log.Info().Msgf("mqtt reader: subscribed to topic %s", topic)
 	}
 
-	opts.OnConnectionLost = func(client mqtt.Client, err error) {
+	opts.OnConnectionLost = func(_ mqtt.Client, err error) {
 		log.Warn().Err(err).Msg("mqtt reader: connection lost")
 	}
 
@@ -164,7 +164,7 @@ func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 
 // createMessageHandler returns a MessageHandler that converts MQTT messages to tokens.
 func (r *Reader) createMessageHandler() mqtt.MessageHandler {
-	return func(client mqtt.Client, msg mqtt.Message) {
+	return func(_ mqtt.Client, msg mqtt.Message) {
 		payload := string(msg.Payload())
 
 		// Ignore empty messages

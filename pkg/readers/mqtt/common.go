@@ -21,6 +21,7 @@ package mqtt
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 )
@@ -44,7 +45,7 @@ func ParseMQTTPath(path string) (broker, topic string, err error) {
 
 	u, err := url.Parse(urlStr)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to parse MQTT URL: %w", err)
 	}
 
 	if u.Host == "" {

@@ -272,10 +272,9 @@ func Start(
 
 // startPublishers initializes and starts all configured publishers.
 // Returns a slice of active publishers for graceful shutdown.
-func startPublishers(cfg *config.Instance, notifications <-chan models.Notification) []*publishers.MQTTPublisher {
-	var activePublishers []*publishers.MQTTPublisher
-
+func startPublishers(cfg *config.Instance, notifChan <-chan models.Notification) []*publishers.MQTTPublisher {
 	mqttConfigs := cfg.GetMQTTPublishers()
+	activePublishers := make([]*publishers.MQTTPublisher, 0, len(mqttConfigs))
 	for _, mqttCfg := range mqttConfigs {
 		// Skip if explicitly disabled (nil = enabled by default)
 		if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
@@ -285,7 +284,7 @@ func startPublishers(cfg *config.Instance, notifications <-chan models.Notificat
 		log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
 
 		publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
-		if err := publisher.Start(notifications); err != nil {
+		if err := publisher.Start(notifChan); err != nil {
 			log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
 			continue
 		}
