@@ -185,10 +185,12 @@ func TestOpen_NonExistentParentDirectory(t *testing.T) {
 	reader := NewReader(cfg)
 	scanQueue := testutils.CreateTestScanChannel(t)
 
-	// Use a path with non-existent parent
+	// Create an absolute path with non-existent parent directory
+	nonExistentPath := filepath.Join(os.TempDir(), "nonexistent-directory-12345", "subdir", "token.txt")
+
 	device := config.ReadersConnect{
 		Driver: "file",
-		Path:   "/nonexistent/directory/path/token.txt",
+		Path:   nonExistentPath,
 	}
 
 	err := reader.Open(device, scanQueue)
