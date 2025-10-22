@@ -50,6 +50,122 @@ const (
 	deviceTimeout         = 5 * time.Second
 )
 
+// PN532Device abstracts the pn532.Device for testing.
+type PN532Device interface {
+	Init() error
+	SetTimeout(timeout time.Duration) error
+	Close() error
+}
+
+// PollingSession abstracts the polling.Session for testing.
+type PollingSession interface {
+	Start(ctx context.Context) error
+	Close() error
+	SetOnCardDetected(callback func(*pn532.DetectedTag) error)
+	SetOnCardRemoved(callback func())
+	SetOnCardChanged(callback func(*pn532.DetectedTag) error)
+	WriteToNextTag(
+		ctx, writeCtx context.Context,
+		timeout time.Duration,
+		writeFunc func(context.Context, pn532.Tag) error,
+	) error
+}
+
+// TransportFactory creates a transport from device info.
+type TransportFactory func(deviceInfo detection.DeviceInfo) (pn532.Transport, error)
+
+// DeviceFactory creates a PN532 device from a transport.
+type DeviceFactory func(transport pn532.Transport) (PN532Device, error)
+
+// SessionFactory creates a polling session from a device.
+type SessionFactory func(device PN532Device, sessionConfig *polling.Config) PollingSession
+
+// DefaultTransportFactory creates a real transport.
+func DefaultTransportFactory(deviceInfo detection.DeviceInfo) (pn532.Transport, error) {
+	switch deviceInfo.Transport {
+	case "uart":
+		transport, err := uart.New(deviceInfo.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create UART transport: %w", err)
+		}
+		return transport, nil
+	case "i2c":
+		transport, err := i2c.New(deviceInfo.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create I2C transport: %w", err)
+		}
+		return transport, nil
+	case "spi":
+		transport, err := spi.New(deviceInfo.Path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create SPI transport: %w", err)
+		}
+		return transport, nil
+	default:
+		return nil, fmt.Errorf("unsupported transport type: %s", deviceInfo.Transport)
+	}
+}
+
+// DefaultDeviceFactory creates a real pn532.Device.
+func DefaultDeviceFactory(transport pn532.Transport) (PN532Device, error) {
+	device, err := pn532.New(transport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PN532 device: %w", err)
+	}
+	return device, nil
+}
+
+// realSession wraps polling.Session to implement PollingSession interface.
+type realSession struct {
+	session *polling.Session
+}
+
+func (s *realSession) Start(ctx context.Context) error {
+	if err := s.session.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start polling session: %w", err)
+	}
+	return nil
+}
+
+func (s *realSession) Close() error {
+	if err := s.session.Close(); err != nil {
+		return fmt.Errorf("failed to close polling session: %w", err)
+	}
+	return nil
+}
+
+func (s *realSession) SetOnCardDetected(callback func(*pn532.DetectedTag) error) {
+	s.session.OnCardDetected = callback
+}
+
+func (s *realSession) SetOnCardRemoved(callback func()) {
+	s.session.OnCardRemoved = callback
+}
+
+func (s *realSession) SetOnCardChanged(callback func(*pn532.DetectedTag) error) {
+	s.session.OnCardChanged = callback
+}
+
+func (s *realSession) WriteToNextTag(
+	ctx, writeCtx context.Context,
+	timeout time.Duration,
+	writeFunc func(context.Context, pn532.Tag) error,
+) error {
+	if err := s.session.WriteToNextTag(ctx, writeCtx, timeout, writeFunc); err != nil {
+		return fmt.Errorf("failed to write to tag: %w", err)
+	}
+	return nil
+}
+
+// DefaultSessionFactory creates a real polling.Session.
+func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) PollingSession {
+	// Cast back to *pn532.Device for the real session
+	if dev, ok := device.(*pn532.Device); ok {
+		return &realSession{session: polling.NewSession(dev, sessionConfig)}
+	}
+	return nil
+}
+
 func createVIDPIDBlocklist() []string {
 	return []string{
 		"16C0:0F38", // Sinden Lightgun
@@ -74,24 +190,31 @@ func createVIDPIDBlocklist() []string {
 }
 
 type Reader struct {
-	ctx         context.Context
-	writeCtx    context.Context
-	device      *pn532.Device
-	session     *polling.Session
-	cfg         *config.Instance
-	lastToken   *tokens.Token
-	cancel      context.CancelFunc
-	writeCancel context.CancelFunc
-	deviceInfo  config.ReadersConnect
-	name        string
-	mutex       sync.RWMutex
-	writeMutex  sync.Mutex
-	wg          sync.WaitGroup
+	session          PollingSession
+	writeCtx         context.Context
+	device           PN532Device
+	ctx              context.Context
+	writeCancel      context.CancelFunc
+	cfg              *config.Instance
+	lastToken        *tokens.Token
+	cancel           context.CancelFunc
+	realDevice       *pn532.Device
+	transportFactory TransportFactory
+	deviceFactory    DeviceFactory
+	sessionFactory   SessionFactory
+	deviceInfo       config.ReadersConnect
+	name             string
+	wg               sync.WaitGroup
+	mutex            sync.RWMutex
+	writeMutex       sync.Mutex
 }
 
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg: cfg,
+		cfg:              cfg,
+		transportFactory: DefaultTransportFactory,
+		deviceFactory:    DefaultDeviceFactory,
+		sessionFactory:   DefaultSessionFactory,
 	}
 }
 
@@ -110,31 +233,6 @@ func (*Reader) IDs() []string {
 		"pn532_uart",
 		"pn532_i2c",
 		"pn532_spi",
-	}
-}
-
-func (*Reader) createTransport(deviceInfo detection.DeviceInfo) (pn532.Transport, error) {
-	switch deviceInfo.Transport {
-	case "uart":
-		transport, err := uart.New(deviceInfo.Path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create UART transport: %w", err)
-		}
-		return transport, nil
-	case "i2c":
-		transport, err := i2c.New(deviceInfo.Path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create I2C transport: %w", err)
-		}
-		return transport, nil
-	case "spi":
-		transport, err := spi.New(deviceInfo.Path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create SPI transport: %w", err)
-		}
-		return transport, nil
-	default:
-		return nil, fmt.Errorf("unsupported transport type: %s", deviceInfo.Transport)
 	}
 }
 
@@ -163,7 +261,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		Path:      device.Path,
 	}
 
-	transport, err = r.createTransport(deviceInfo)
+	transport, err = r.transportFactory(deviceInfo)
 	if err != nil {
 		return fmt.Errorf("failed to create transport: %w", err)
 	}
@@ -172,12 +270,17 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	log.Debug().Msgf("opening PN532 device: %s", r.name)
 
 	// Create PN532 device
-	r.device, err = pn532.New(transport)
+	r.device, err = r.deviceFactory(transport)
 	if err != nil {
 		if transport != nil {
 			_ = transport.Close()
 		}
 		return fmt.Errorf("failed to create PN532 device: %w", err)
+	}
+
+	// Store real device if it's a *pn532.Device (for tag operations)
+	if realDev, ok := r.device.(*pn532.Device); ok {
+		r.realDevice = realDev
 	}
 
 	// Initialize device
@@ -201,20 +304,20 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	sessionConfig := polling.DefaultConfig()
 
 	// Create session with callbacks
-	r.session = polling.NewSession(r.device, sessionConfig)
+	r.session = r.sessionFactory(r.device, sessionConfig)
 
 	// Set up callbacks
-	r.session.OnCardDetected = func(detectedTag *pn532.DetectedTag) error {
+	r.session.SetOnCardDetected(func(detectedTag *pn532.DetectedTag) error {
 		return r.handleTagDetected(detectedTag, iq)
-	}
+	})
 
-	r.session.OnCardRemoved = func() {
+	r.session.SetOnCardRemoved(func() {
 		r.handleTagRemoved(iq)
-	}
+	})
 
-	r.session.OnCardChanged = func(detectedTag *pn532.DetectedTag) error {
+	r.session.SetOnCardChanged(func(detectedTag *pn532.DetectedTag) error {
 		return r.handleTagDetected(detectedTag, iq)
-	}
+	})
 
 	// Start session
 	r.wg.Add(1)

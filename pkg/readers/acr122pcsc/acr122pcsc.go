@@ -38,18 +38,87 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// ScardCard abstracts the scard.Card for testing.
+type ScardCard interface {
+	Status() (*scard.CardStatus, error)
+	Transmit([]byte) ([]byte, error)
+	Disconnect(scard.Disposition) error
+}
+
+// ScardContext abstracts the scard.Context for testing.
+type ScardContext interface {
+	ListReaders() ([]string, error)
+	GetStatusChange([]scard.ReaderState, time.Duration) error
+	Connect(string, scard.ShareMode, scard.Protocol) (ScardCard, error)
+	Release() error
+}
+
+// realScardContext wraps scard.Context to implement ScardContext interface.
+type realScardContext struct {
+	ctx *scard.Context
+}
+
+func (r *realScardContext) ListReaders() ([]string, error) {
+	readerList, err := r.ctx.ListReaders()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list readers: %w", err)
+	}
+	return readerList, nil
+}
+
+func (r *realScardContext) GetStatusChange(rs []scard.ReaderState, timeout time.Duration) error {
+	if err := r.ctx.GetStatusChange(rs, timeout); err != nil {
+		return fmt.Errorf("failed to get status change: %w", err)
+	}
+	return nil
+}
+
+func (r *realScardContext) Connect(
+	reader string,
+	mode scard.ShareMode,
+	proto scard.Protocol,
+) (ScardCard, error) {
+	card, err := r.ctx.Connect(reader, mode, proto)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to reader: %w", err)
+	}
+	return card, nil
+}
+
+func (r *realScardContext) Release() error {
+	if err := r.ctx.Release(); err != nil {
+		return fmt.Errorf("failed to release context: %w", err)
+	}
+	return nil
+}
+
+// ScardContextFactory creates a ScardContext.
+type ScardContextFactory func() (ScardContext, error)
+
+// DefaultScardContextFactory creates a real scard context.
+func DefaultScardContextFactory() (ScardContext, error) {
+	ctx, err := scard.EstablishContext()
+	if err != nil {
+		return nil, fmt.Errorf("failed to establish scard context: %w", err)
+	}
+	return &realScardContext{ctx: ctx}, nil
+}
+
 type ACR122PCSC struct {
-	cfg       *config.Instance
-	ctx       *scard.Context
-	lastToken *tokens.Token
-	device    config.ReadersConnect
-	name      string
-	polling   bool
+	ctx            ScardContext
+	cfg            *config.Instance
+	lastToken      *tokens.Token
+	contextFactory ScardContextFactory
+	device         config.ReadersConnect
+	name           string
+	polling        bool
+	mu             sync.RWMutex // protects polling
 }
 
 func NewAcr122Pcsc(cfg *config.Instance) *ACR122PCSC {
 	return &ACR122PCSC{
-		cfg: cfg,
+		cfg:            cfg,
+		contextFactory: DefaultScardContextFactory,
 	}
 }
 
@@ -72,7 +141,7 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 	}
 
 	if r.ctx == nil {
-		ctx, err := scard.EstablishContext()
+		ctx, err := r.contextFactory()
 		if err != nil {
 			return fmt.Errorf("failed to establish scard context: %w", err)
 		}
@@ -90,10 +159,18 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 
 	r.device = device
 	r.name = device.Path
+	r.mu.Lock()
 	r.polling = true
+	r.mu.Unlock()
 
 	go func() {
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			r.mu.RUnlock()
+			if !polling {
+				break
+			}
 			ctx := r.ctx
 			if ctx == nil {
 				continue
@@ -114,7 +191,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 					r.lastToken = nil
 				}
 
+				r.mu.Lock()
 				r.polling = false
+				r.mu.Unlock()
 				break
 			}
 
@@ -132,7 +211,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 					r.lastToken = nil
 				}
 
+				r.mu.Lock()
 				r.polling = false
+				r.mu.Unlock()
 				break
 			}
 
@@ -234,7 +315,13 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 
 			_ = tag.Disconnect(scard.ResetCard)
 
-			for r.polling {
+			for {
+				r.mu.RLock()
+				polling := r.polling
+				r.mu.RUnlock()
+				if !polling {
+					break
+				}
 				rs := []scard.ReaderState{{
 					Reader:       r.name,
 					CurrentState: scard.StatePresent,
@@ -264,7 +351,9 @@ func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) 
 }
 
 func (r *ACR122PCSC) Close() error {
+	r.mu.Lock()
 	r.polling = false
+	r.mu.Unlock()
 	if r.ctx != nil {
 		err := r.ctx.Release()
 		if err != nil {
@@ -278,12 +367,12 @@ func (r *ACR122PCSC) Close() error {
 // functions on readers should actually return an error instead of ""
 var detectErrorOnce sync.Once
 
-func (*ACR122PCSC) Detect(connected []string) string {
-	ctx, err := scard.EstablishContext()
+func (r *ACR122PCSC) Detect(connected []string) string {
+	ctx, err := r.contextFactory()
 	if err != nil {
 		return ""
 	}
-	defer func(ctx *scard.Context) {
+	defer func(ctx ScardContext) {
 		if releaseErr := ctx.Release(); releaseErr != nil {
 			log.Warn().Err(releaseErr).Msg("error releasing pcsc context")
 		}
@@ -317,6 +406,8 @@ func (r *ACR122PCSC) Device() string {
 }
 
 func (r *ACR122PCSC) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling
 }
 

@@ -25,6 +25,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -36,18 +37,40 @@ import (
 	"go.bug.st/serial"
 )
 
+// SerialPort defines the interface for serial port operations (for mocking in tests).
+type SerialPort interface {
+	Read(p []byte) (n int, err error)
+	Close() error
+	SetReadTimeout(t time.Duration) error
+}
+
+// SerialPortFactory creates a serial port connection.
+type SerialPortFactory func(path string, mode *serial.Mode) (SerialPort, error)
+
+// DefaultSerialPortFactory is the default factory that opens real serial ports.
+func DefaultSerialPortFactory(path string, mode *serial.Mode) (SerialPort, error) {
+	port, err := serial.Open(path, mode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open serial port: %w", err)
+	}
+	return port, nil
+}
+
 type SimpleSerialReader struct {
-	port      serial.Port
-	cfg       *config.Instance
-	lastToken *tokens.Token
-	device    config.ReadersConnect
-	path      string
-	polling   bool
+	port        SerialPort
+	portFactory SerialPortFactory
+	cfg         *config.Instance
+	lastToken   *tokens.Token
+	device      config.ReadersConnect
+	path        string
+	polling     bool
+	mu          sync.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
-		cfg: cfg,
+		cfg:         cfg,
+		portFactory: DefaultSerialPortFactory,
 	}
 }
 
@@ -127,7 +150,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 		}
 	}
 
-	port, err := serial.Open(path, &serial.Mode{
+	port, err := r.portFactory(path, &serial.Mode{
 		BaudRate: 115200,
 	})
 	if err != nil {
@@ -142,12 +165,20 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 	r.port = port
 	r.device = device
 	r.path = path
+	r.mu.Lock()
 	r.polling = true
+	r.mu.Unlock()
 
 	go func() {
 		var lineBuf []byte
 
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			r.mu.RUnlock()
+			if !polling {
+				break
+			}
 			buf := make([]byte, 1024)
 			n, err := r.port.Read(buf)
 			if err != nil {
@@ -197,6 +228,10 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 				}
 			}
 
+			// Token removal timeout: Consider a token "removed" if no new data is received
+			// for 1 second. This timeout-based approach works for simple serial devices that
+			// don't send explicit "REMOVED" messages. However, on slow or heavily loaded
+			// systems, serial data processing delays could cause spurious token removal events.
 			if r.lastToken != nil && time.Since(r.lastToken.ScanTime) > 1*time.Second {
 				iq <- readers.Scan{
 					Source: r.device.ConnectionString(),
@@ -211,7 +246,9 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 }
 
 func (r *SimpleSerialReader) Close() error {
+	r.mu.Lock()
 	r.polling = false
+	r.mu.Unlock()
 	if r.port != nil {
 		err := r.port.Close()
 		if err != nil {

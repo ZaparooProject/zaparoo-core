@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -45,16 +46,53 @@ const (
 	MergedIDSeparator = "/"
 )
 
+// FSChecker checks if files/devices exist.
+type FSChecker interface {
+	Stat(path string) (os.FileInfo, error)
+}
+
+// CommandRunner runs external commands.
+type CommandRunner interface {
+	RunBlkid(ctx context.Context, valueType, devicePath string) ([]byte, error)
+}
+
+// DefaultFSChecker uses os.Stat for filesystem checks.
+type DefaultFSChecker struct{}
+
+func (DefaultFSChecker) Stat(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat failed: %w", err)
+	}
+	return info, nil
+}
+
+// DefaultCommandRunner runs real blkid commands.
+type DefaultCommandRunner struct{}
+
+func (DefaultCommandRunner) RunBlkid(ctx context.Context, valueType, devicePath string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", valueType, devicePath).Output()
+	if err != nil {
+		return nil, fmt.Errorf("blkid command failed: %w", err)
+	}
+	return out, nil
+}
+
 type FileReader struct {
-	cfg     *config.Instance
-	device  config.ReadersConnect
-	path    string
-	polling bool
+	fsChecker     FSChecker
+	commandRunner CommandRunner
+	cfg           *config.Instance
+	device        config.ReadersConnect
+	path          string
+	polling       bool
+	mu            sync.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *FileReader {
 	return &FileReader{
-		cfg: cfg,
+		cfg:           cfg,
+		fsChecker:     DefaultFSChecker{},
+		commandRunner: DefaultCommandRunner{},
 	}
 }
 
@@ -91,13 +129,15 @@ func (r *FileReader) Open(
 		return errors.New("invalid device path")
 	}
 
-	if _, err := os.Stat(parent); err != nil {
+	if _, err := r.fsChecker.Stat(parent); err != nil {
 		return fmt.Errorf("failed to stat device parent directory: %w", err)
 	}
 
 	r.device = device
 	r.path = path
+	r.mu.Lock()
 	r.polling = true
+	r.mu.Unlock()
 
 	getID := func(uuid string, label string) string {
 		if uuid == "" {
@@ -121,7 +161,13 @@ func (r *FileReader) Open(
 	go func() {
 		var token *tokens.Token
 
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			r.mu.RUnlock()
+			if !polling {
+				break
+			}
 			time.Sleep(1 * time.Second)
 
 			// Validate device path to prevent command injection
@@ -131,7 +177,7 @@ func (r *FileReader) Open(
 			}
 
 			// Check if device still exists (distinguish hardware error from disc removal)
-			if _, err := os.Stat(r.path); err != nil {
+			if _, err := r.fsChecker.Stat(r.path); err != nil {
 				if token != nil {
 					log.Warn().Err(err).Msg("optical drive device no longer exists - " +
 						"sending error signal to keep media running")
@@ -146,8 +192,7 @@ func (r *FileReader) Open(
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			//nolint:gosec // Safe: r.path validated as device path starting with /dev/
-			rawUUID, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "UUID", r.path).Output()
+			rawUUID, err := r.commandRunner.RunBlkid(ctx, "UUID", r.path)
 			cancel()
 			if err != nil {
 				if token == nil {
@@ -163,8 +208,7 @@ func (r *FileReader) Open(
 			}
 
 			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-			//nolint:gosec // Safe: r.path validated as device path starting with /dev/
-			rawLabel, err := exec.CommandContext(ctx, "blkid", "-o", "value", "-s", "LABEL", r.path).Output()
+			rawLabel, err := r.commandRunner.RunBlkid(ctx, "LABEL", r.path)
 			cancel()
 			if err != nil {
 				if token == nil {
@@ -216,7 +260,9 @@ func (r *FileReader) Open(
 }
 
 func (r *FileReader) Close() error {
+	r.mu.Lock()
 	r.polling = false
+	r.mu.Unlock()
 	return nil
 }
 
@@ -229,6 +275,8 @@ func (r *FileReader) Device() string {
 }
 
 func (r *FileReader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling
 }
 

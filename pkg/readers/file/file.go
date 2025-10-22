@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -43,6 +44,7 @@ type Reader struct {
 	device  config.ReadersConnect
 	path    string
 	polling bool
+	mu      sync.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -96,23 +98,48 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 	r.device = device
 	r.path = path
+	r.mu.Lock()
 	r.polling = true
+	r.mu.Unlock()
 
 	go func() {
 		var token *tokens.Token
+		var consecutiveErrors int
+		const maxConsecutiveErrors = 10
 
-		for r.polling {
+		for {
+			r.mu.RLock()
+			polling := r.polling
+			r.mu.RUnlock()
+			if !polling {
+				break
+			}
 			time.Sleep(100 * time.Millisecond)
 
 			contents, err := os.ReadFile(r.path)
 			if err != nil {
-				// TODO: have a max retries?
+				consecutiveErrors++
+				if consecutiveErrors > maxConsecutiveErrors {
+					log.Error().Err(err).Msg("too many consecutive file read errors, stopping reader")
+					// Send ReaderError scan if there was an active token
+					if token != nil {
+						iq <- readers.Scan{
+							Source:      r.device.ConnectionString(),
+							ReaderError: true,
+						}
+					}
+					if closeErr := r.Close(); closeErr != nil {
+						log.Warn().Err(closeErr).Msg("error closing reader after consecutive failures")
+					}
+					break
+				}
 				iq <- readers.Scan{
 					Source: r.device.ConnectionString(),
 					Error:  err,
 				}
 				continue
 			}
+			consecutiveErrors = 0 // Reset on successful read
 
 			text := strings.TrimSpace(string(contents))
 
@@ -155,7 +182,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 }
 
 func (r *Reader) Close() error {
+	r.mu.Lock()
 	r.polling = false
+	r.mu.Unlock()
 	return nil
 }
 
@@ -168,6 +197,8 @@ func (r *Reader) Device() string {
 }
 
 func (r *Reader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling
 }
 
