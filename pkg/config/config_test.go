@@ -533,3 +533,204 @@ func TestIsWindowsStylePath(t *testing.T) {
 		})
 	}
 }
+
+func TestGetMQTTPublishers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected []MQTTPublisher
+		config   Values
+	}{
+		{
+			name: "empty publishers",
+			config: Values{
+				Service: Service{},
+			},
+			expected: nil,
+		},
+		{
+			name: "single publisher",
+			config: Values{
+				Service: Service{
+					Publishers: Publishers{
+						MQTT: []MQTTPublisher{
+							{
+								Broker: "localhost:1883",
+								Topic:  "zaparoo/events",
+								Filter: []string{"media.launched"},
+							},
+						},
+					},
+				},
+			},
+			expected: []MQTTPublisher{
+				{
+					Broker: "localhost:1883",
+					Topic:  "zaparoo/events",
+					Filter: []string{"media.launched"},
+				},
+			},
+		},
+		{
+			name: "multiple publishers",
+			config: Values{
+				Service: Service{
+					Publishers: Publishers{
+						MQTT: []MQTTPublisher{
+							{
+								Broker: "localhost:1883",
+								Topic:  "zaparoo/events",
+								Filter: []string{"media.launched"},
+							},
+							{
+								Broker: "remote:8883",
+								Topic:  "remote/events",
+								Filter: nil,
+							},
+						},
+					},
+				},
+			},
+			expected: []MQTTPublisher{
+				{
+					Broker: "localhost:1883",
+					Topic:  "zaparoo/events",
+					Filter: []string{"media.launched"},
+				},
+				{
+					Broker: "remote:8883",
+					Topic:  "remote/events",
+					Filter: nil,
+				},
+			},
+		},
+		{
+			name: "publisher with enabled flag",
+			config: Values{
+				Service: Service{
+					Publishers: Publishers{
+						MQTT: []MQTTPublisher{
+							{
+								Enabled: func() *bool { b := true; return &b }(),
+								Broker:  "localhost:1883",
+								Topic:   "zaparoo/events",
+								Filter:  []string{},
+							},
+						},
+					},
+				},
+			},
+			expected: []MQTTPublisher{
+				{
+					Enabled: func() *bool { b := true; return &b }(),
+					Broker:  "localhost:1883",
+					Topic:   "zaparoo/events",
+					Filter:  []string{},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{vals: tt.config}
+			result := cfg.GetMQTTPublishers()
+
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestAPIPort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		apiPort  int
+		expected int
+	}{
+		{
+			name:     "default port",
+			apiPort:  7497,
+			expected: 7497,
+		},
+		{
+			name:     "custom port",
+			apiPort:  8080,
+			expected: 8080,
+		},
+		{
+			name:     "zero port",
+			apiPort:  0,
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{
+				vals: Values{
+					Service: Service{
+						APIPort: tt.apiPort,
+					},
+				},
+			}
+
+			result := cfg.APIPort()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestAllowedOrigins(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		origins  []string
+		expected []string
+	}{
+		{
+			name:     "nil origins",
+			origins:  nil,
+			expected: nil,
+		},
+		{
+			name:     "empty origins",
+			origins:  []string{},
+			expected: []string{},
+		},
+		{
+			name:     "single origin",
+			origins:  []string{"http://localhost:3000"},
+			expected: []string{"http://localhost:3000"},
+		},
+		{
+			name:     "multiple origins",
+			origins:  []string{"http://localhost:3000", "https://example.com"},
+			expected: []string{"http://localhost:3000", "https://example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{
+				vals: Values{
+					Service: Service{
+						AllowedOrigins: tt.origins,
+					},
+				},
+			}
+
+			result := cfg.AllowedOrigins()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

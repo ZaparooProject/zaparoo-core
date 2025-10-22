@@ -37,17 +37,19 @@ import (
 const TokenType = "mqtt"
 
 type Reader struct {
-	client mqtt.Client
-	cfg    *config.Instance
-	scanCh chan<- readers.Scan
-	device config.ReadersConnect
-	broker string
-	topic  string
+	client        mqtt.Client
+	cfg           *config.Instance
+	scanCh        chan<- readers.Scan
+	clientFactory ClientFactory
+	device        config.ReadersConnect
+	broker        string
+	topic         string
 }
 
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg: cfg,
+		cfg:           cfg,
+		clientFactory: DefaultClientFactory,
 	}
 }
 
@@ -111,7 +113,7 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 	}
 
 	// Create and connect client
-	r.client = mqtt.NewClient(opts)
+	r.client = r.clientFactory(opts)
 
 	token := r.client.Connect()
 	if token.Wait() && token.Error() != nil {
