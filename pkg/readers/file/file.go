@@ -45,6 +45,7 @@ type Reader struct {
 	path    string
 	polling bool
 	mu      sync.RWMutex // protects polling
+	wg      sync.WaitGroup
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -102,7 +103,9 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	r.polling = true
 	r.mu.Unlock()
 
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		var token *tokens.Token
 		var consecutiveErrors int
 		const maxConsecutiveErrors = 10
@@ -185,6 +188,10 @@ func (r *Reader) Close() error {
 	r.mu.Lock()
 	r.polling = false
 	r.mu.Unlock()
+
+	// Wait for the polling goroutine to exit
+	r.wg.Wait()
+
 	return nil
 }
 
