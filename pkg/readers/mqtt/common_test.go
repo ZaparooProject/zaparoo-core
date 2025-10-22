@@ -137,3 +137,70 @@ func TestParseMQTTPath(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMQTTProtocol(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		urlStr        string
+		wantProtocol  string
+		wantScheme    string
+		wantRemainder string
+		wantUseTLS    bool
+	}{
+		{
+			name:          "mqtts scheme",
+			urlStr:        "mqtts://broker:8883/topic",
+			wantProtocol:  "ssl",
+			wantUseTLS:    true,
+			wantScheme:    "mqtts",
+			wantRemainder: "broker:8883/topic",
+		},
+		{
+			name:          "ssl scheme",
+			urlStr:        "ssl://broker:8883",
+			wantProtocol:  "ssl",
+			wantUseTLS:    true,
+			wantScheme:    "ssl",
+			wantRemainder: "broker:8883",
+		},
+		{
+			name:          "mqtt scheme",
+			urlStr:        "mqtt://broker:1883/topic",
+			wantProtocol:  "tcp",
+			wantUseTLS:    false,
+			wantScheme:    "mqtt",
+			wantRemainder: "broker:1883/topic",
+		},
+		{
+			name:          "no scheme",
+			urlStr:        "broker:1883/topic",
+			wantProtocol:  "tcp",
+			wantUseTLS:    false,
+			wantScheme:    "",
+			wantRemainder: "broker:1883/topic",
+		},
+		{
+			name:          "no scheme simple",
+			urlStr:        "localhost:1883",
+			wantProtocol:  "tcp",
+			wantUseTLS:    false,
+			wantScheme:    "",
+			wantRemainder: "localhost:1883",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info := ParseMQTTProtocol(tt.urlStr)
+
+			assert.Equal(t, tt.wantProtocol, info.Protocol)
+			assert.Equal(t, tt.wantUseTLS, info.UseTLS)
+			assert.Equal(t, tt.wantScheme, info.Scheme)
+			assert.Equal(t, tt.wantRemainder, info.Remainder)
+		})
+	}
+}

@@ -20,6 +20,7 @@
 package mqtt
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"time"
@@ -82,20 +83,53 @@ func (r *Reader) Open(device config.ReadersConnect, scanQueue chan<- readers.Sca
 	r.topic = topic
 	r.scanCh = scanQueue
 
+	// Parse protocol and TLS settings from device path
+	protocolInfo := ParseMQTTProtocol(device.Path)
+
+	// Build auth lookup URL (scheme://broker:port or just broker:port)
+	authLookupURL := broker
+	if protocolInfo.Scheme != "" {
+		authLookupURL = fmt.Sprintf("%s://%s", protocolInfo.Scheme, broker)
+	}
+
+	brokerURL := fmt.Sprintf("%s://%s", protocolInfo.Protocol, broker)
+
 	// Configure MQTT client options
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s", broker))
+	opts.AddBroker(brokerURL)
 	opts.SetClientID("zaparoo-mqtt-" + uuid.New().String()[:8])
 	opts.SetAutoReconnect(true)
 	opts.SetConnectRetry(true)
 	opts.SetConnectTimeout(10 * time.Second)
+	opts.SetOrderMatters(false) // Allow blocking in message handlers
+
+	// Look up authentication credentials from auth.toml
+	creds := config.LookupAuth(config.GetAuthCfg(), authLookupURL)
+	if creds != nil {
+		if creds.Username != "" {
+			opts.SetUsername(creds.Username)
+			opts.SetPassword(creds.Password)
+			log.Debug().Msgf("mqtt reader: using authentication for %s", broker)
+		}
+	}
+
+	// Configure TLS if using secure connection
+	if protocolInfo.UseTLS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}
+		opts.SetTLSConfig(tlsConfig)
+		log.Debug().Msgf("mqtt reader: using TLS for %s", broker)
+	}
 
 	// Set up connection handlers
 	opts.OnConnect = func(client mqtt.Client) {
 		log.Info().Msgf("mqtt reader: connected to %s", broker)
 
 		// Subscribe to topic on connect (auto re-subscribes on reconnect)
-		token := client.Subscribe(topic, 0, r.createMessageHandler())
+		// QoS 1 = at-least-once delivery for reliability
+		token := client.Subscribe(topic, 1, r.createMessageHandler())
 		if token.Wait() && token.Error() != nil {
 			log.Error().Err(token.Error()).Msgf("mqtt reader: failed to subscribe to %s", topic)
 			scanQueue <- readers.Scan{

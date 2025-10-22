@@ -62,3 +62,40 @@ func ParseMQTTPath(path string) (broker, topic string, err error) {
 
 	return broker, topic, nil
 }
+
+// MQTTProtocolInfo contains parsed MQTT protocol information.
+type MQTTProtocolInfo struct {
+	Protocol  string
+	Scheme    string
+	Remainder string
+	UseTLS    bool
+}
+
+// ParseMQTTProtocol extracts protocol information from an MQTT URL string.
+//
+// Examples:
+//   - "mqtts://broker:8883" -> {Protocol: "ssl", UseTLS: true, Scheme: "mqtts", Remainder: "broker:8883"}
+//   - "ssl://broker:8883" -> {Protocol: "ssl", UseTLS: true, Scheme: "ssl", Remainder: "broker:8883"}
+//   - "mqtt://broker:1883" -> {Protocol: "tcp", UseTLS: false, Scheme: "mqtt", Remainder: "broker:1883"}
+//   - "broker:1883" -> {Protocol: "tcp", UseTLS: false, Scheme: "", Remainder: "broker:1883"}
+func ParseMQTTProtocol(urlStr string) MQTTProtocolInfo {
+	info := MQTTProtocolInfo{
+		Protocol:  "tcp",
+		UseTLS:    false,
+		Scheme:    "",
+		Remainder: urlStr,
+	}
+
+	if strings.Contains(urlStr, "://") {
+		parts := strings.SplitN(urlStr, "://", 2)
+		info.Scheme = parts[0]
+		info.Remainder = parts[1]
+
+		if info.Scheme == "mqtts" || info.Scheme == "ssl" {
+			info.Protocol = "ssl"
+			info.UseTLS = true
+		}
+	}
+
+	return info
+}

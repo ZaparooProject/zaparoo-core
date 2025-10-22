@@ -20,11 +20,14 @@
 package publishers
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	mqttreader "github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -53,13 +56,38 @@ func NewMQTTPublisher(broker, topic string, filter []string) *MQTTPublisher {
 
 // Start connects to the MQTT broker and begins publishing notifications.
 func (p *MQTTPublisher) Start(notifications <-chan models.Notification) error {
+	// Parse protocol and TLS settings from broker URL
+	protocolInfo := mqttreader.ParseMQTTProtocol(p.broker)
+	brokerURL := fmt.Sprintf("%s://%s", protocolInfo.Protocol, protocolInfo.Remainder)
+
 	// Configure MQTT client options
 	opts := mqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s", p.broker))
+	opts.AddBroker(brokerURL)
 	opts.SetClientID("zaparoo-publisher-" + uuid.New().String()[:8])
 	opts.SetAutoReconnect(true)
 	opts.SetConnectRetry(true)
 	opts.SetConnectTimeout(10 * time.Second)
+	opts.SetOrderMatters(false) // Allow blocking in message handlers
+
+	// Look up authentication credentials from auth.toml using user-provided broker URL
+	creds := config.LookupAuth(config.GetAuthCfg(), p.broker)
+	if creds != nil {
+		if creds.Username != "" {
+			opts.SetUsername(creds.Username)
+			opts.SetPassword(creds.Password)
+			log.Debug().Msgf("mqtt publisher: using authentication for %s", protocolInfo.Remainder)
+		}
+	}
+
+	// Configure TLS if using secure connection
+	if protocolInfo.UseTLS {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
+		}
+		opts.SetTLSConfig(tlsConfig)
+		log.Debug().Msgf("mqtt publisher: using TLS for %s", protocolInfo.Remainder)
+	}
 
 	// Set up connection handlers
 	opts.OnConnect = func(_ mqtt.Client) {
@@ -124,7 +152,8 @@ func (p *MQTTPublisher) publishNotifications(notifications <-chan models.Notific
 			}
 
 			// Publish to MQTT broker
-			token := p.client.Publish(p.topic, 0, false, payload)
+			// QoS 1 = at-least-once delivery for reliability
+			token := p.client.Publish(p.topic, 1, false, payload)
 			if token.Wait() && token.Error() != nil {
 				log.Error().Err(token.Error()).Msgf("mqtt publisher: failed to publish message")
 				continue
