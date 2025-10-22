@@ -278,9 +278,12 @@ func TestStartPublishers_NoPublishers(t *testing.T) {
 	cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
 	require.NoError(t, err)
 
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
 	notifChan := make(chan models.Notification)
 
-	publishers := startPublishers(cfg, notifChan)
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
 
 	assert.Empty(t, publishers, "should return empty slice when no publishers configured")
 }
@@ -309,9 +312,12 @@ topic = "zaparoo/events"
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
 	require.NoError(t, err)
 
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
 	notifChan := make(chan models.Notification)
 
-	publishers := startPublishers(cfg, notifChan)
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
 
 	assert.Empty(t, publishers, "should skip disabled publishers")
 }
@@ -339,9 +345,12 @@ topic = "zaparoo/events"
 	cfg, err := testhelpers.NewTestConfigWithPort(fs, configDir, 7497)
 	require.NoError(t, err)
 
+	mockPlatform := mocks.NewMockPlatform()
+	st, _ := state.NewState(mockPlatform)
 	notifChan := make(chan models.Notification)
 
-	publishers := startPublishers(cfg, notifChan)
+	publishers, cancel := startPublishers(st, cfg, notifChan)
+	defer cancel()
 
 	// Should return empty slice when publisher fails to start
 	assert.Empty(t, publishers, "should not include publishers that fail to start")

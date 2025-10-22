@@ -231,7 +231,7 @@ func Start(
 	go api.Start(pl, cfg, st, itq, db, ns)
 
 	log.Info().Msg("starting publishers")
-	activePublishers := startPublishers(cfg, ns)
+	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, ns)
 
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
@@ -253,11 +253,10 @@ func Start(
 	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return func() error {
-		// Stop publishers gracefully
+		cancelPublisherFanOut()
 		for _, publisher := range activePublishers {
 			publisher.Stop()
 		}
-
 		err = pl.Stop()
 		if err != nil {
 			log.Warn().Msgf("error stopping platform: %s", err)
@@ -271,15 +270,18 @@ func Start(
 }
 
 // startPublishers initializes and starts all configured publishers.
-// Returns a slice of active publishers for graceful shutdown.
-func startPublishers(cfg *config.Instance, notifChan <-chan models.Notification) []*publishers.MQTTPublisher {
+// Returns a slice of active publishers and a cancel function for graceful shutdown.
+func startPublishers(
+	st *state.State,
+	cfg *config.Instance,
+	notifChan <-chan models.Notification,
+) ([]*publishers.MQTTPublisher, context.CancelFunc) {
 	mqttConfigs := cfg.GetMQTTPublishers()
 	if len(mqttConfigs) == 0 {
-		return nil
+		return nil, func() {}
 	}
 
 	activePublishers := make([]*publishers.MQTTPublisher, 0, len(mqttConfigs))
-	publisherChans := make([]chan models.Notification, 0, len(mqttConfigs))
 
 	for _, mqttCfg := range mqttConfigs {
 		// Skip if explicitly disabled (nil = enabled by default)
@@ -289,42 +291,45 @@ func startPublishers(cfg *config.Instance, notifChan <-chan models.Notification)
 
 		log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
 
-		// Create a dedicated channel for this publisher
-		pChan := make(chan models.Notification, 10) // Use a buffered channel
-
 		publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
-		if err := publisher.Start(pChan); err != nil {
+		if err := publisher.Start(); err != nil {
 			log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
 			continue
 		}
 
 		activePublishers = append(activePublishers, publisher)
-		publisherChans = append(publisherChans, pChan)
 	}
 
-	// Start a fan-out goroutine to broadcast notifications to all active publishers
+	if len(activePublishers) == 0 {
+		return nil, func() {}
+	}
+
+	log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
+
+	// Start a single fan-out goroutine to broadcast notifications to all publishers
+	// Derived from service context so it automatically stops when service stops
+	ctx, cancel := context.WithCancel(st.GetContext())
 	go func() {
-		for notif := range notifChan {
-			for _, pChan := range publisherChans {
-				// Use a non-blocking send to prevent a slow publisher from blocking others
-				select {
-				case pChan <- notif:
-				default:
-					log.Warn().Msg("MQTT publisher channel full, dropping notification.")
+		for {
+			select {
+			case <-ctx.Done():
+				log.Debug().Msg("mqtt publisher fan-out: stopping")
+				return
+			case notif, ok := <-notifChan:
+				if !ok {
+					log.Debug().Msg("mqtt publisher fan-out: notification channel closed")
+					return
+				}
+				// Publish to all active publishers sequentially
+				// Timeout in Publish() prevents blocking indefinitely
+				for _, pub := range activePublishers {
+					_ = pub.Publish(notif) // Errors are logged in Publish()
 				}
 			}
 		}
-		// When the main notification channel closes, close all publisher channels
-		for _, pChan := range publisherChans {
-			close(pChan)
-		}
 	}()
 
-	if len(activePublishers) > 0 {
-		log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
-	}
-
-	return activePublishers
+	return activePublishers, cancel
 }
 
 // checkAndResumeIndexing checks if media indexing was interrupted and automatically resumes it

@@ -21,10 +21,10 @@ package publishers
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewMQTTPublisher(t *testing.T) {
@@ -66,7 +66,6 @@ func TestNewMQTTPublisher(t *testing.T) {
 			assert.Equal(t, tt.broker, publisher.broker)
 			assert.Equal(t, tt.topic, publisher.topic)
 			assert.Equal(t, tt.filter, publisher.filter)
-			assert.NotNil(t, publisher.stopCh)
 		})
 	}
 }
@@ -150,51 +149,60 @@ func TestMatchesFilter(t *testing.T) {
 func TestStop(t *testing.T) {
 	t.Parallel()
 
+	mockClient := newMockMQTTClient()
 	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+	publisher.client = mockClient
+	mockClient.connected = true
 
-	// Stop should not panic and should close the channel
+	// Stop should not panic and should disconnect
 	publisher.Stop()
 
-	// Verify stopCh is closed
-	_, ok := <-publisher.stopCh
-	assert.False(t, ok, "stopCh should be closed after Stop()")
+	// Verify disconnect was called
+	assert.Equal(t, 1, mockClient.disconnectCall)
+	assert.False(t, mockClient.IsConnected())
 }
 
-func TestStart_Success(t *testing.T) {
+func TestStopMultipleTimes(t *testing.T) {
+	t.Parallel()
+
+	mockClient := newMockMQTTClient()
+	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
+	publisher.client = mockClient
+	mockClient.connected = true
+
+	// Stop should be idempotent and safe to call multiple times (no panic)
+	publisher.Stop()
+	publisher.Stop()
+	publisher.Stop()
+
+	// Disconnect is only called on the first Stop() when connected=true
+	// Subsequent calls see connected=false and skip disconnect
+	assert.Equal(t, 1, mockClient.disconnectCall)
+}
+
+func TestPublish_Success(t *testing.T) {
 	t.Parallel()
 
 	mockClient := newMockMQTTClient()
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
-
-	// Replace client creation with mock
 	publisher.client = mockClient
-
-	notifChan := make(chan models.Notification, 10)
-
-	// Manually connect the mock (Start would do this via mqtt.NewClient)
 	mockClient.connected = true
-
-	publisher.wg.Add(1)
-	go publisher.publishNotifications(notifChan)
 
 	// Send a test notification
 	testNotif := models.Notification{
 		Method: "media.started",
 		Params: []byte(`{"system": "NES", "name": "Super Mario Bros."}`),
 	}
-	notifChan <- testNotif
+	err := publisher.Publish(testNotif)
 
-	// Wait for publish
-	time.Sleep(50 * time.Millisecond)
+	// Should succeed without error
+	require.NoError(t, err)
 
 	// Verify message was published (thread-safe check)
 	assert.Equal(t, 1, mockClient.getPublishedCount())
-
-	// Cleanup
-	publisher.Stop()
 }
 
-func TestPublishNotifications_FilteredOut(t *testing.T) {
+func TestPublish_FilteredOut(t *testing.T) {
 	t.Parallel()
 
 	mockClient := newMockMQTTClient()
@@ -202,38 +210,32 @@ func TestPublishNotifications_FilteredOut(t *testing.T) {
 	publisher.client = mockClient
 	mockClient.connected = true
 
-	notifChan := make(chan models.Notification, 10)
-
-	publisher.wg.Add(1)
-	go publisher.publishNotifications(notifChan)
-
 	// Send notification that should be filtered out
-	notifChan <- models.Notification{
+	err := publisher.Publish(models.Notification{
 		Method: "media.started",
 		Params: []byte(`{"system": "NES"}`),
-	}
+	})
 
-	// Wait briefly
-	time.Sleep(50 * time.Millisecond)
+	// Should succeed (filtering is not an error)
+	require.NoError(t, err)
 
 	// Should not have published anything
 	assert.Equal(t, 0, mockClient.getPublishedCount())
 
 	// Now send one that matches filter
-	notifChan <- models.Notification{
+	err = publisher.Publish(models.Notification{
 		Method: "tokens.added",
 		Params: []byte(`{"uid": "test-uid"}`),
-	}
+	})
 
-	time.Sleep(50 * time.Millisecond)
+	// Should succeed
+	require.NoError(t, err)
 
 	// Should have published the matching one
 	assert.Equal(t, 1, mockClient.getPublishedCount())
-
-	publisher.Stop()
 }
 
-func TestPublishNotifications_PublishError(t *testing.T) {
+func TestPublish_PublishError(t *testing.T) {
 	t.Parallel()
 
 	mockClient := newMockMQTTClient()
@@ -243,64 +245,67 @@ func TestPublishNotifications_PublishError(t *testing.T) {
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
 	publisher.client = mockClient
 
-	notifChan := make(chan models.Notification, 10)
-
-	publisher.wg.Add(1)
-	go publisher.publishNotifications(notifChan)
-
-	// Send notification
-	notifChan <- models.Notification{
+	// Send notification - should return error
+	err := publisher.Publish(models.Notification{
 		Method: "media.stopped",
 		Params: []byte(`{}`),
-	}
+	})
 
-	// Wait briefly - should handle error gracefully
-	time.Sleep(50 * time.Millisecond)
-
-	// No panic means success - error was handled
-	publisher.Stop()
+	// Should get the error back (either timeout or publish error)
+	assert.Error(t, err)
 }
 
-func TestPublishNotifications_ChannelClosed(t *testing.T) {
+func TestPublish_DisconnectedClient(t *testing.T) {
 	t.Parallel()
 
 	mockClient := newMockMQTTClient()
-	mockClient.connected = true
-
 	publisher := NewMQTTPublisher("localhost:1883", "test/topic", nil)
 	publisher.client = mockClient
+	mockClient.connected = false // Client not connected
 
-	notifChan := make(chan models.Notification, 10)
+	// Send notification - should return error
+	err := publisher.Publish(models.Notification{
+		Method: "test.notification",
+		Params: []byte(`{"valid": "json"}`),
+	})
 
-	publisher.wg.Add(1)
-	go publisher.publishNotifications(notifChan)
+	// Should get error about not being connected
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not connected")
 
-	// Close notification channel
-	close(notifChan)
-
-	// Wait for goroutine to exit
-	time.Sleep(50 * time.Millisecond)
-
-	// Should have exited gracefully
-	// No assertions needed - we're verifying no panic occurs
+	// Should not have attempted to publish
+	assert.Equal(t, 0, mockClient.getPublishedCount())
 }
 
-func TestStop_WithConnectedClient(t *testing.T) {
+func TestPublish_Concurrent(t *testing.T) {
 	t.Parallel()
 
 	mockClient := newMockMQTTClient()
-	mockClient.connected = true
-
 	publisher := NewMQTTPublisher("localhost:1883", "test", nil)
 	publisher.client = mockClient
+	mockClient.connected = true
 
-	publisher.Stop()
+	// Publish multiple notifications concurrently
+	const numGoroutines = 10
+	done := make(chan bool, numGoroutines)
 
-	// Verify disconnect was called
-	assert.Equal(t, 1, mockClient.disconnectCall)
-	assert.False(t, mockClient.IsConnected())
+	for i := range numGoroutines {
+		go func(id int) {
+			err := publisher.Publish(models.Notification{
+				Method: "test.notification",
+				Params: []byte(`{"id": ` + string(rune(id+'0')) + `}`),
+			})
+			// Use assert in goroutine (require.FailNow doesn't work in goroutines)
+			assert.NoError(t, err)
+			done <- true
+		}(i)
+	}
 
-	// Verify stopCh is closed
-	_, ok := <-publisher.stopCh
-	assert.False(t, ok, "stopCh should be closed after Stop()")
+	// Wait for all goroutines
+	for range numGoroutines {
+		<-done
+	}
+
+	// Should have published all notifications
+	assert.Equal(t, numGoroutines, mockClient.getPublishedCount())
 }
