@@ -22,6 +22,7 @@
 package testutils
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -32,9 +33,16 @@ func isWindows() bool {
 
 func createTempFile(t *testing.T, dir, pattern string) (*os.File, error) {
 	t.Helper()
-	return os.CreateTemp(dir, pattern)
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	return f, nil
 }
 
 func removeTempFile(path string) error {
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("failed to remove temp file: %w", err)
+	}
+	return nil
 }
