@@ -68,7 +68,7 @@ jobs:
           cache: true
 
       - name: Run GoSec Security Scanner
-        uses: securego/gosec@master
+        uses: securego/gosec@v2.20.0
         with:
           args: '-fmt sarif -out results.sarif ./...'
 
