@@ -93,7 +93,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkgconfiglite
+          key: ${{ runner.os }}-scoop-pkg-config
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
@@ -101,7 +101,7 @@ jobs:
           if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
             irm get.scoop.sh | iex
           }
-          scoop install pkgconfiglite
+          scoop install pkg-config
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -162,7 +162,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\scoop
-          key: ${{ runner.os }}-scoop-pkgconfiglite
+          key: ${{ runner.os }}-scoop-pkg-config
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
@@ -170,7 +170,7 @@ jobs:
           if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
             irm get.scoop.sh | iex
           }
-          scoop install pkgconfiglite
+          scoop install pkg-config
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
