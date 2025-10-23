@@ -49,26 +49,8 @@ jobs:
           version: latest
           args: --timeout=5m
 
-  govulncheck:
-    name: Dependency Vulnerability Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24.6"
-          cache: true
-
-      - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-
   quick-test:
-    name: Quick Test (Unit Tests)
+    name: Quick Test (Unit + Vuln Check)
     needs: lint # Only run tests if lint passes
     timeout-minutes: 10
     strategy:
@@ -107,6 +89,9 @@ jobs:
       - name: Get dependencies
         run: go mod download
 
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
       - name: Run unit tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
@@ -117,7 +102,7 @@ jobs:
         run: go test -v -short -race ./...
 
   full-test:
-    name: Full Test (Unit + Integration)
+    name: Full Test (Unit + Integration + Vuln Check)
     needs: lint # Only run tests if lint passes
     timeout-minutes: 20
     # Only run on Linux for PRs, all platforms for main/tags
@@ -156,6 +141,9 @@ jobs:
 
       - name: Get dependencies
         run: go mod download
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Run full tests (Windows)
         if: matrix.os == 'windows-latest'
