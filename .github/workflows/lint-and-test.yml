@@ -73,6 +73,7 @@ jobs:
           args: '-fmt sarif -out results.sarif ./...'
 
       - name: Upload GoSec SARIF file
+        if: always() # Upload even if GoSec found issues
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
