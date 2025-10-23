@@ -95,11 +95,11 @@ func TestWroteTokenState(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
 		wroteToken   *tokens.Token
-		expectNonNil bool
+		name         string
 		expectUID    string
 		expectText   string
+		expectNonNil bool
 	}{
 		{
 			name: "set wrote token",
@@ -165,9 +165,9 @@ func TestTokensEqualForWroteTokenSkip(t *testing.T) {
 	baseTime := time.Now()
 
 	tests := []struct {
-		name     string
 		token1   *tokens.Token
 		token2   *tokens.Token
+		name     string
 		expected bool
 	}{
 		{
@@ -286,11 +286,11 @@ func TestWroteTokenSkipLogic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
 		wroteToken   *tokens.Token
 		scannedToken *tokens.Token
-		expectSkip   bool
+		name         string
 		description  string
+		expectSkip   bool
 	}{
 		{
 			name: "just written token should be skipped",
