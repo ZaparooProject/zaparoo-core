@@ -6,7 +6,7 @@ A README for AI coding agents working on Zaparoo Core.
 
 Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 8 reader types, and includes a custom ZapScript language for automation.
 
-**Tech Stack**: Go 1.24.5+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, testify/mock, sqlmock, afero
+**Tech Stack**: Go 1.24.6+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, testify/mock, sqlmock, afero
 
 **Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
 
@@ -14,7 +14,7 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 
 ### Code Quality
 
-- **Use Go 1.24.5+** with Go modules enabled
+- **Use Go 1.24.6+** with Go modules enabled
 - **Write tests for all new features and bug fixes** (see TESTING.md) - high test coverage is required
 - **Use table-driven tests** with subtests for multiple scenarios
 - **Handle all errors explicitly** - use golangci-lint's error handling checks

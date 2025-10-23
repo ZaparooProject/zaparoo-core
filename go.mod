@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.24.5
+go 1.24.6
 
 require (
 	fyne.io/systray v1.11.0
