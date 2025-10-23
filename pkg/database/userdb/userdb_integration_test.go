@@ -59,6 +59,9 @@ func setupTempUserDB(t *testing.T) (db *UserDB, cleanup func()) {
 }
 
 func TestUserDB_OpenClose_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 
@@ -78,6 +81,9 @@ func TestUserDB_OpenClose_Integration(t *testing.T) {
 }
 
 func TestUserDB_GetDBPath_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 
@@ -95,6 +101,9 @@ func TestUserDB_GetDBPath_Integration(t *testing.T) {
 }
 
 func TestMappingCRUD_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	userDB, cleanup := setupTempUserDB(t)
 	defer cleanup()
 

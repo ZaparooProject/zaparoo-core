@@ -209,6 +209,9 @@ func (m *mockPollingSession) WriteToNextTag(
 // When session.Start() returns an error (not context.Canceled) and there's an active token,
 // ReaderError should be set to true to prevent triggering on_remove hooks.
 func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -287,6 +290,9 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 // TestOpen_SessionErrorWithoutActiveToken verifies that when session errors
 // but there's NO active token, no ReaderError scan is sent.
 func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -338,6 +344,9 @@ func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 // TestOpen_SessionContextCanceled verifies that context.Canceled errors
 // do NOT trigger ReaderError (normal shutdown).
 func TestOpen_SessionContextCanceled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -389,6 +398,9 @@ func TestOpen_SessionContextCanceled(t *testing.T) {
 
 // TestOpen_TagDetectionAndRemoval tests normal tag detection and removal flow.
 func TestOpen_TagDetectionAndRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -462,6 +474,9 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 
 // TestOpen_TagChanged tests the OnCardChanged callback flow.
 func TestOpen_TagChanged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -540,6 +555,9 @@ func TestOpen_TagChanged(t *testing.T) {
 
 // TestClose tests that Close() properly cancels context and closes session.
 func TestClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -594,6 +612,9 @@ func TestClose(t *testing.T) {
 
 // TestOpen_DeviceInitError verifies that device initialization errors are handled correctly.
 func TestOpen_DeviceInitError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -629,6 +650,9 @@ func TestOpen_DeviceInitError(t *testing.T) {
 // TestWriteWithContext_Success tests successful write operation that creates result token
 // with UID and Type from the tag.
 func TestWriteWithContext_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -685,6 +709,9 @@ func TestWriteWithContext_Success(t *testing.T) {
 // TestWriteWithContext_DifferentTagTypes tests that different tag types are converted correctly
 // via convertTagType() method.
 func TestWriteWithContext_DifferentTagTypes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	tests := []struct {

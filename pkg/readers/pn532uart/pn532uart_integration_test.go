@@ -74,6 +74,9 @@ func (m *mockPN532Commander) InDataExchange(port SerialPort, data []byte) ([]byt
 // When error count exceeds maxErrors (5) and there's an active token,
 // ReaderError should be set to true to prevent triggering on_remove hooks.
 func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -146,6 +149,9 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 // TestOpen_ErrorCountExceedsMaxWithoutActiveToken verifies that when error count
 // exceeds maxErrors but there's NO active token, no scan is sent (no ReaderError needed).
 func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -190,6 +196,9 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 
 // TestOpen_TokenDetectionAndRemoval tests normal token detection and removal flow.
 func TestOpen_TokenDetectionAndRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -256,6 +265,9 @@ func TestOpen_TokenDetectionAndRemoval(t *testing.T) {
 
 // TestOpen_MifareTokenRejected tests that Mifare tokens are rejected with a log message.
 func TestOpen_MifareTokenRejected(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -304,6 +316,9 @@ func TestOpen_MifareTokenRejected(t *testing.T) {
 
 // TestOpen_DuplicateTokenIgnored tests that duplicate tokens are ignored.
 func TestOpen_DuplicateTokenIgnored(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -356,6 +371,9 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 
 // TestClose tests that Close() properly stops polling and closes the port.
 func TestClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
