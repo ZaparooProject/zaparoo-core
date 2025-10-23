@@ -110,6 +110,9 @@ func (m *mockScardContext) Release() error {
 // TestOpen_ReaderListingErrorAfterTagRemoval tests error handling after normal tag removal.
 // This test verifies that the reader stops gracefully when ListReaders fails.
 func TestOpen_ReaderListingErrorAfterTagRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -196,6 +199,9 @@ func TestOpen_ReaderListingErrorAfterTagRemoval(t *testing.T) {
 // TestOpen_ReaderDisconnectedAfterTagRemoval tests reader disconnect after normal tag removal.
 // This test verifies that the reader stops gracefully when it's no longer in the reader list.
 func TestOpen_ReaderDisconnectedAfterTagRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -278,6 +284,9 @@ func TestOpen_ReaderDisconnectedAfterTagRemoval(t *testing.T) {
 
 // TestOpen_NormalTagDetectionAndRemoval tests normal tag lifecycle without errors.
 func TestOpen_NormalTagDetectionAndRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -351,6 +360,9 @@ func TestOpen_NormalTagDetectionAndRemoval(t *testing.T) {
 
 // TestOpen_ConnectFails tests when Connect() fails (no scan should be sent).
 func TestOpen_ConnectFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -396,6 +408,9 @@ func TestOpen_ConnectFails(t *testing.T) {
 
 // TestOpen_NDEFDataReading tests NDEF data reading from tag.
 func TestOpen_NDEFDataReading(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -479,6 +494,9 @@ func TestOpen_NDEFDataReading(t *testing.T) {
 
 // TestClose tests that Close() properly stops polling and releases context.
 func TestClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}

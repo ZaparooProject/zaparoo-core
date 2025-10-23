@@ -30,6 +30,9 @@ import (
 // TestResumeScenarios tests basic resume functionality setup
 // This is a placeholder for when the actual resume functions are implemented
 func TestResumeScenarios(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	mockMediaDB := &helpers.MockMediaDBI{}
 
 	// Mock GetMax*ID calls for resume functionality
@@ -70,6 +73,9 @@ func TestResumeScenarios(t *testing.T) {
 
 // TestIndexingStatusMethods tests the new indexing status tracking methods
 func TestIndexingStatusMethods(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	mockMediaDB := &helpers.MockMediaDBI{}
 
 	// Mock indexing status methods

@@ -61,6 +61,9 @@ func setupTempMediaDB(t *testing.T) (db *MediaDB, cleanup func()) {
 }
 
 func TestMediaDB_OpenClose_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -81,6 +84,9 @@ func TestMediaDB_OpenClose_Integration(t *testing.T) {
 }
 
 func TestMediaDB_TransactionCycle_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -111,6 +117,9 @@ func TestMediaDB_TransactionCycle_Integration(t *testing.T) {
 }
 
 func TestMediaDB_MultipleTransactionCycles_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -143,6 +152,9 @@ func TestMediaDB_MultipleTransactionCycles_Integration(t *testing.T) {
 }
 
 func TestMediaDB_BulkInsert_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -193,6 +205,9 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 }
 
 func TestMediaDB_SystemTagsCache_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
 
@@ -224,6 +239,9 @@ func TestMediaDB_SystemTagsCache_Integration(t *testing.T) {
 }
 
 func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -294,6 +312,9 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 }
 
 func TestMediaDB_RandomGame_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -355,6 +376,9 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 }
 
 func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -421,6 +445,9 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 }
 
 func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -515,6 +542,9 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 }
 
 func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -625,6 +655,9 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 }
 
 func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -652,6 +685,9 @@ func TestMediaDB_RollbackTransaction_Integration(t *testing.T) {
 }
 
 func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -718,6 +754,9 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 }
 
 func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -959,6 +998,9 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 
 // TestMediaDB_CacheInvalidation_OnInsert_Integration tests that caches are properly invalidated on inserts
 func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -1048,6 +1090,9 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 
 // TestMediaDB_CacheInvalidation_OnTransaction_Integration tests cache invalidation during transactions
 func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -1124,6 +1169,9 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 
 // TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration tests slug cache invalidation on system truncate
 func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()
@@ -1217,6 +1265,9 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 
 // TestMediaDB_Truncate_AllCachesCleared_Integration tests full truncate clears all caches
 func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 	mediaDB, cleanup := setupTempMediaDB(t)
 	defer cleanup()

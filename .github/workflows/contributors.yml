@@ -12,7 +12,14 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Generate GitHub App token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.ZAPAROO_APP_ID }}
+          private-key: ${{ secrets.ZAPAROO_APP_PRIVATE_KEY }}
+
       - name: Contribute List
         uses: akhilmhdh/contributors-readme-action@v2.3.10
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

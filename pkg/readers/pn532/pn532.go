@@ -549,13 +549,14 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 
 			log.Info().Msgf("successfully wrote text to PN532 tag: %s", text)
 
-			// Create result token - we'll use the text we wrote as the primary identifier
-			// The UID and type will be populated by the next card detection event
+			// Create result token with UID from the tag
+			tagType := tag.Type()
 			resultToken = &tokens.Token{
+				UID:      tag.UID(),
 				Text:     text,
+				Type:     r.convertTagType(tagType),
 				ScanTime: time.Now(),
 				Source:   r.deviceInfo.ConnectionString(),
-				Type:     tokens.TypeNTAG, // Assume NTAG since we're writing NDEF
 			}
 
 			return nil

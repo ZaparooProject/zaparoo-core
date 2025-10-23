@@ -110,9 +110,10 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 
 	// Wait for async operation to start and complete
 	// With minimal system list (just NES), this should complete quickly
+	// Use longer timeout for slower CI environments (especially Windows)
 	var status string
-	maxWait := time.Second
-	pollInterval := 50 * time.Millisecond
+	maxWait := 10 * time.Second
+	pollInterval := 100 * time.Millisecond
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		var err error
@@ -122,6 +123,24 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 			break
 		}
 		time.Sleep(pollInterval)
+	}
+
+	// If indexing is still running after timeout, cancel it to prevent
+	// "database is closed" errors during cleanup
+	if status == mediadb.IndexingStatusRunning {
+		t.Logf("indexing did not complete within %v, cancelling to prevent cleanup race", maxWait)
+		methods.CancelIndexing()
+		// Wait for cancellation to complete
+		cancelDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(cancelDeadline) {
+			var err error
+			status, err = db.MediaDB.GetIndexingStatus()
+			require.NoError(t, err)
+			if status != mediadb.IndexingStatusRunning {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
 	// Verify that indexing resume was triggered and completed

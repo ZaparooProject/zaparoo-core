@@ -473,6 +473,9 @@ func makeConfigWithPreferences(t *testing.T, regions, langs []string) *config.In
 //
 // All tests share the SAME database to verify realistic matching behavior.
 func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	// Setup SHARED database for ALL tests
 	mediaDB, cleanup := setupTestMediaDBWithAllGames(t)
 	defer cleanup()
@@ -1577,6 +1580,9 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 // Root cause: 100% of titles have NULL SecondarySlug (no secondary title), and
 // rows.Scan() failed with "converting NULL to string is unsupported".
 func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	// Create temp directory for test database

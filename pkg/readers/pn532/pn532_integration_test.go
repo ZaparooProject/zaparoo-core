@@ -86,6 +86,71 @@ func (m *mockPN532Device) Close() error {
 	return m.closeErr
 }
 
+// mockTag is a mock implementation of pn532.Tag for testing.
+type mockTag struct {
+	writeNDEFErr    error
+	lastNDEFMessage *pn532.NDEFMessage
+	uid             string
+	tagType         pn532.TagType
+	writeNDEFCalled bool
+}
+
+func (m *mockTag) UID() string {
+	return m.uid
+}
+
+func (*mockTag) UIDBytes() []byte {
+	return []byte{}
+}
+
+func (m *mockTag) Type() pn532.TagType {
+	return m.tagType
+}
+
+func (*mockTag) ReadBlock(_ uint8) ([]byte, error) {
+	return nil, nil
+}
+
+func (*mockTag) WriteBlock(_ uint8, _ []byte) error {
+	return nil
+}
+
+func (*mockTag) ReadNDEF() (*pn532.NDEFMessage, error) {
+	return nil, assert.AnError
+}
+
+func (m *mockTag) WriteNDEF(message *pn532.NDEFMessage) error {
+	m.writeNDEFCalled = true
+	m.lastNDEFMessage = message
+	return m.writeNDEFErr
+}
+
+func (m *mockTag) WriteNDEFWithContext(_ context.Context, message *pn532.NDEFMessage) error {
+	m.writeNDEFCalled = true
+	m.lastNDEFMessage = message
+	return m.writeNDEFErr
+}
+
+func (*mockTag) ReadText() (string, error) {
+	return "", nil
+}
+
+func (*mockTag) WriteText(_ string) error {
+	return nil
+}
+
+func (*mockTag) WriteTextWithContext(_ context.Context, _ string) error {
+	return nil
+}
+
+func (*mockTag) DebugInfo() string {
+	return "mockTag"
+}
+
+func (*mockTag) Summary() string {
+	return "mockTag summary"
+}
+
 // mockPollingSession is a mock implementation of PollingSession for testing.
 type mockPollingSession struct {
 	startFunc          func(ctx context.Context) error
@@ -93,6 +158,7 @@ type mockPollingSession struct {
 	onCardDetected     func(*pn532.DetectedTag) error
 	onCardRemoved      func()
 	onCardChanged      func(*pn532.DetectedTag) error
+	mockTag            pn532.Tag
 	closeCalled        bool
 	setCallbacksCalled bool
 }
@@ -126,11 +192,16 @@ func (m *mockPollingSession) SetOnCardChanged(callback func(*pn532.DetectedTag) 
 	m.onCardChanged = callback
 }
 
-func (*mockPollingSession) WriteToNextTag(
-	_, _ context.Context,
+func (m *mockPollingSession) WriteToNextTag(
+	_ context.Context,
+	writeCtx context.Context,
 	_ time.Duration,
-	_ func(context.Context, pn532.Tag) error,
+	writeFunc func(context.Context, pn532.Tag) error,
 ) error {
+	// If a mock tag is provided, invoke the callback
+	if m.mockTag != nil {
+		return writeFunc(writeCtx, m.mockTag)
+	}
 	return nil
 }
 
@@ -138,6 +209,9 @@ func (*mockPollingSession) WriteToNextTag(
 // When session.Start() returns an error (not context.Canceled) and there's an active token,
 // ReaderError should be set to true to prevent triggering on_remove hooks.
 func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -216,6 +290,9 @@ func TestOpen_SessionErrorWithActiveToken(t *testing.T) {
 // TestOpen_SessionErrorWithoutActiveToken verifies that when session errors
 // but there's NO active token, no ReaderError scan is sent.
 func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -267,6 +344,9 @@ func TestOpen_SessionErrorWithoutActiveToken(t *testing.T) {
 // TestOpen_SessionContextCanceled verifies that context.Canceled errors
 // do NOT trigger ReaderError (normal shutdown).
 func TestOpen_SessionContextCanceled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -318,6 +398,9 @@ func TestOpen_SessionContextCanceled(t *testing.T) {
 
 // TestOpen_TagDetectionAndRemoval tests normal tag detection and removal flow.
 func TestOpen_TagDetectionAndRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -391,6 +474,9 @@ func TestOpen_TagDetectionAndRemoval(t *testing.T) {
 
 // TestOpen_TagChanged tests the OnCardChanged callback flow.
 func TestOpen_TagChanged(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -469,6 +555,9 @@ func TestOpen_TagChanged(t *testing.T) {
 
 // TestClose tests that Close() properly cancels context and closes session.
 func TestClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -523,6 +612,9 @@ func TestClose(t *testing.T) {
 
 // TestOpen_DeviceInitError verifies that device initialization errors are handled correctly.
 func TestOpen_DeviceInitError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Parallel()
 
 	cfg := &config.Instance{}
@@ -553,4 +645,146 @@ func TestOpen_DeviceInitError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to initialize PN532 device")
 	assert.True(t, mockDevice.initCalled)
 	assert.True(t, mockDevice.closeCalled, "device should be closed on init error")
+}
+
+// TestWriteWithContext_Success tests successful write operation that creates result token
+// with UID and Type from the tag.
+func TestWriteWithContext_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+
+	// Create mock tag with specific UID and type
+	mockNTAGTag := &mockTag{
+		uid:     "test-uid-123",
+		tagType: pn532.TagTypeNTAG,
+	}
+
+	// Create mock session that will invoke the write callback
+	mockSession := &mockPollingSession{
+		mockTag: mockNTAGTag,
+	}
+
+	// Set up reader with mock session
+	reader.session = mockSession
+	reader.deviceInfo = config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	// Perform write operation
+	ctx := context.Background()
+	text := "test-text-content"
+	token, err := reader.WriteWithContext(ctx, text)
+
+	// Verify write succeeded
+	require.NoError(t, err)
+	require.NotNil(t, token)
+
+	// Verify token has UID from tag
+	assert.Equal(t, "test-uid-123", token.UID, "token should have UID from tag.UID()")
+
+	// Verify token has Type from convertTagType
+	assert.Equal(t, tokens.TypeNTAG, token.Type, "token should have Type from convertTagType()")
+
+	// Verify token has correct text
+	assert.Equal(t, text, token.Text, "token should have the written text")
+
+	// Verify token has correct source
+	expectedSource := reader.deviceInfo.ConnectionString()
+	assert.Equal(t, expectedSource, token.Source, "token should have correct source")
+
+	// Verify NDEF was written to tag
+	assert.True(t, mockNTAGTag.writeNDEFCalled, "WriteNDEFWithContext should be called")
+	require.NotNil(t, mockNTAGTag.lastNDEFMessage, "NDEF message should be written")
+	require.Len(t, mockNTAGTag.lastNDEFMessage.Records, 1, "should have one NDEF record")
+	assert.Equal(t, pn532.NDEFTypeText, mockNTAGTag.lastNDEFMessage.Records[0].Type)
+	assert.Equal(t, text, mockNTAGTag.lastNDEFMessage.Records[0].Text)
+}
+
+// TestWriteWithContext_DifferentTagTypes tests that different tag types are converted correctly
+// via convertTagType() method.
+func TestWriteWithContext_DifferentTagTypes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	tests := []struct {
+		pn532TagType      pn532.TagType
+		expectedTokenType string
+		name              string
+		description       string
+	}{
+		{
+			name:              "NTAG tag type",
+			pn532TagType:      pn532.TagTypeNTAG,
+			expectedTokenType: tokens.TypeNTAG,
+			description:       "NTAG should convert to TypeNTAG",
+		},
+		{
+			name:              "MIFARE tag type",
+			pn532TagType:      pn532.TagTypeMIFARE,
+			expectedTokenType: tokens.TypeMifare,
+			description:       "MIFARE should convert to TypeMifare",
+		},
+		{
+			name:              "FeliCa tag type",
+			pn532TagType:      pn532.TagTypeFeliCa,
+			expectedTokenType: tokens.TypeFeliCa,
+			description:       "FeliCa should convert to TypeFeliCa",
+		},
+		{
+			name:              "Unknown tag type",
+			pn532TagType:      pn532.TagTypeUnknown,
+			expectedTokenType: tokens.TypeUnknown,
+			description:       "Unknown should convert to TypeUnknown",
+		},
+		{
+			name:              "Any tag type",
+			pn532TagType:      pn532.TagTypeAny,
+			expectedTokenType: tokens.TypeUnknown,
+			description:       "Any should convert to TypeUnknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &config.Instance{}
+			reader := NewReader(cfg)
+
+			// Create mock tag with specific type
+			mockTestTag := &mockTag{
+				uid:     "test-uid-" + string(tt.pn532TagType),
+				tagType: tt.pn532TagType,
+			}
+
+			// Create mock session
+			mockSession := &mockPollingSession{
+				mockTag: mockTestTag,
+			}
+
+			// Set up reader
+			reader.session = mockSession
+			reader.deviceInfo = config.ReadersConnect{
+				Driver: "pn532",
+				Path:   "/dev/test",
+			}
+
+			// Perform write
+			ctx := context.Background()
+			token, err := reader.WriteWithContext(ctx, "test-text")
+
+			// Verify
+			require.NoError(t, err)
+			require.NotNil(t, token)
+			assert.Equal(t, tt.expectedTokenType, token.Type, tt.description)
+		})
+	}
 }
