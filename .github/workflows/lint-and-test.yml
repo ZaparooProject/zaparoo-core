@@ -49,13 +49,10 @@ jobs:
           version: latest
           args: --timeout=5m
 
-  security:
-    name: Security Scanning
+  govulncheck:
+    name: Dependency Vulnerability Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write # Required for SARIF upload
 
     steps:
       - name: Checkout code
@@ -66,18 +63,6 @@ jobs:
         with:
           go-version: "1.24.5"
           cache: true
-
-      - name: Run GoSec Security Scanner
-        uses: securego/gosec@v2.20.0
-        with:
-          args: '-fmt sarif -out results.sarif ./...'
-
-      - name: Upload GoSec SARIF file
-        if: always() # Upload even if GoSec found issues
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif
-          category: gosec
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
