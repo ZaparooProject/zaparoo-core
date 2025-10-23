@@ -23,6 +23,7 @@ import (
 	"context"
 	"testing"
 
+	pn533 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/detection"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -168,4 +169,56 @@ func TestCreateTransport_InvalidType(t *testing.T) {
 	assert.Nil(t, transport)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported transport type")
+}
+
+func TestConvertTagType(t *testing.T) {
+	t.Parallel()
+
+	reader := &Reader{}
+
+	tests := []struct {
+		inputTagType      pn533.TagType
+		expectedTokenType string
+		name              string
+	}{
+		{
+			name:              "NTAG converts to TypeNTAG",
+			inputTagType:      pn533.TagTypeNTAG,
+			expectedTokenType: "NTAG",
+		},
+		{
+			name:              "MIFARE converts to TypeMifare",
+			inputTagType:      pn533.TagTypeMIFARE,
+			expectedTokenType: "MIFARE",
+		},
+		{
+			name:              "FeliCa converts to TypeFeliCa",
+			inputTagType:      pn533.TagTypeFeliCa,
+			expectedTokenType: "FeliCa",
+		},
+		{
+			name:              "Unknown converts to TypeUnknown",
+			inputTagType:      pn533.TagTypeUnknown,
+			expectedTokenType: "Unknown",
+		},
+		{
+			name:              "Any converts to TypeUnknown",
+			inputTagType:      pn533.TagTypeAny,
+			expectedTokenType: "Unknown",
+		},
+		{
+			name:              "Invalid/default converts to TypeUnknown",
+			inputTagType:      pn533.TagType("INVALID"),
+			expectedTokenType: "Unknown",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := reader.convertTagType(tt.inputTagType)
+			assert.Equal(t, tt.expectedTokenType, result)
+		})
+	}
 }
