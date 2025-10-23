@@ -132,6 +132,11 @@ func ClearIndexingStatus() {
 	statusInstance.clear()
 }
 
+// CancelIndexing cancels the currently running indexing operation - used for testing
+func CancelIndexing() bool {
+	return statusInstance.cancel()
+}
+
 func (s *indexingStatus) set(vals indexingStatusVals) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
