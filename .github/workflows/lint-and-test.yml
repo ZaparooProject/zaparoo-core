@@ -81,13 +81,27 @@ jobs:
         run: |
           brew install libusb pkg-config
 
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          echo "GOCACHE=D:\go-cache" >> $GITHUB_ENV
+          echo "GOMODCACHE=D:\go-mod-cache" >> $GITHUB_ENV
+          echo "GOTMPDIR=D:\go-tmp" >> $GITHUB_ENV
+
+      - name: Cache scoop packages (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~\scoop
+          key: ${{ runner.os }}-scoop-pkgconfiglite
+
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          choco install pkgconfiglite
-
-      - name: Get dependencies
-        run: go mod download
+          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+            irm get.scoop.sh | iex
+          }
+          scoop install pkgconfiglite
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -95,6 +109,8 @@ jobs:
       - name: Run unit tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
+        env:
+          GOMAXPROCS: 2
         run: go test -v -short -race ./...
 
       - name: Run unit tests (Unix)
@@ -134,13 +150,27 @@ jobs:
         run: |
           brew install libusb pkg-config
 
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          echo "GOCACHE=D:\go-cache" >> $GITHUB_ENV
+          echo "GOMODCACHE=D:\go-mod-cache" >> $GITHUB_ENV
+          echo "GOTMPDIR=D:\go-tmp" >> $GITHUB_ENV
+
+      - name: Cache scoop packages (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v4
+        with:
+          path: ~\scoop
+          key: ${{ runner.os }}-scoop-pkgconfiglite
+
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          choco install pkgconfiglite
-
-      - name: Get dependencies
-        run: go mod download
+          if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+            irm get.scoop.sh | iex
+          }
+          scoop install pkgconfiglite
 
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
@@ -148,6 +178,8 @@ jobs:
       - name: Run full tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
+        env:
+          GOMAXPROCS: 2
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Run full tests (Unix)
