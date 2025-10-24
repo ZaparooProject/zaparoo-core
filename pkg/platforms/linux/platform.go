@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
@@ -71,6 +72,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewACR122Reader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
+		externaldrive.NewReader(cfg),
 	}
 
 	var enabled []readers.Reader
