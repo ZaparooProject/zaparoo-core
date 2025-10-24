@@ -48,6 +48,12 @@ const (
 	tokenFileName = "zaparoo.txt"
 )
 
+var (
+	// platformSupported caches whether this platform supports mount detection
+	platformSupported     bool
+	platformSupportedOnce sync.Once
+)
+
 // Reader implements the readers.Reader interface for external drive devices.
 type Reader struct {
 	detector     MountDetector
@@ -106,20 +112,23 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	r.wg.Add(1)
 	go r.processEvents()
 
-	log.Info().Str("driver", device.Driver).Msg("External drive reader started")
+	log.Info().Str("driver", device.Driver).Msg("external drive reader started")
 
 	return nil
 }
 
 func (r *Reader) Close() error {
-	close(r.stopChan)
-	r.wg.Wait()
+	// Check if Open() was called (stopChan is only initialized in Open)
+	if r.stopChan != nil {
+		close(r.stopChan)
+		r.wg.Wait()
 
-	if r.detector != nil {
-		r.detector.Stop()
+		if r.detector != nil {
+			r.detector.Stop()
+		}
+
+		log.Info().Msg("external drive reader stopped")
 	}
-
-	log.Info().Msg("External drive reader stopped")
 
 	return nil
 }
@@ -181,7 +190,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 				Err(err).
 				Str("device_id", event.DeviceID).
 				Str("path", tokenPath).
-				Msg("Failed to stat token file")
+				Msg("failed to stat token file")
 		}
 		return
 	}
@@ -191,7 +200,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 		log.Warn().
 			Str("device_id", event.DeviceID).
 			Str("path", tokenPath).
-			Msg("Rejecting symlink zaparoo.txt for security")
+			Msg("rejecting symlink zaparoo.txt for security")
 		return
 	}
 
@@ -200,7 +209,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 		log.Warn().
 			Str("device_id", event.DeviceID).
 			Int64("size", fileInfo.Size()).
-			Msg("Token file exceeds maximum size limit")
+			Msg("token file exceeds maximum size limit")
 		return
 	}
 
@@ -215,7 +224,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 			Err(err).
 			Str("device_id", event.DeviceID).
 			Str("path", tokenPath).
-			Msg("Failed to read token file")
+			Msg("failed to read token file")
 		return
 	}
 
@@ -223,7 +232,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 	if text == "" {
 		log.Debug().
 			Str("device_id", event.DeviceID).
-			Msg("Token file is empty")
+			Msg("token file is empty")
 		return
 	}
 
@@ -242,7 +251,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 		log.Debug().
 			Str("device_id", event.DeviceID).
 			Str("mount_path", event.MountPath).
-			Msg("Device unmounted during token read, discarding")
+			Msg("device unmounted during token read, discarding")
 		return
 	}
 
@@ -261,7 +270,7 @@ func (r *Reader) handleMountEvent(event MountEvent) {
 			Str("device_id", event.DeviceID).
 			Str("label", event.VolumeLabel).
 			Str("mount_path", event.MountPath).
-			Msg("External drive token detected")
+			Msg("external drive token detected")
 	case <-r.stopChan:
 		return
 	}
@@ -287,21 +296,32 @@ func (r *Reader) handleUnmountEvent(deviceID string) {
 	}:
 		log.Info().
 			Str("device_id", deviceID).
-			Msg("External drive token removed")
+			Msg("external drive token removed")
 	case <-r.stopChan:
 		return
 	}
 }
 
 func (*Reader) Detect(_ []string) string {
-	// Try to create a detector to verify platform support
-	detector, err := NewMountDetector()
-	if err != nil {
+	// Check platform support once and cache the result
+	platformSupportedOnce.Do(func() {
+		// Try to create a detector to verify platform support
+		detector, err := NewMountDetector()
+		if err != nil {
+			platformSupported = false
+			return
+		}
+		// Clean up immediately - we just wanted to verify it works
+		detector.Stop()
+		platformSupported = true
+	})
+
+	if !platformSupported {
 		return ""
 	}
-	// Clean up immediately - we just wanted to verify it works
-	detector.Stop()
-	return DriverID
+
+	// Return driver:path format (empty path since we monitor all mounts)
+	return DriverID + ":"
 }
 
 func (r *Reader) Device() string {

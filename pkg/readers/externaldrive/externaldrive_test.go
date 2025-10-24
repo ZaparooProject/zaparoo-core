@@ -143,10 +143,11 @@ func TestDetect(t *testing.T) {
 	reader := &Reader{}
 	result := reader.Detect([]string{})
 
-	// Should return DriverID if platform supports mount detection
+	// Should return "driver:path" format if platform supports mount detection
 	// (will return empty string on platforms without detector implementation)
+	// For external_drive, path is empty since it monitors all mounts
 	if result != "" {
-		assert.Equal(t, DriverID, result)
+		assert.Equal(t, DriverID+":", result)
 	}
 }
 
@@ -157,10 +158,35 @@ func TestDetect_PlatformSupport(t *testing.T) {
 	result := reader.Detect([]string{})
 
 	// On supported platforms (Linux, macOS, Windows), Detect() should succeed
-	// and return the driver ID, verifying that the platform-specific detector
-	// can be instantiated successfully.
-	assert.NotEmpty(t, result, "Detect() should return DriverID on supported platforms")
-	assert.Equal(t, DriverID, result, "Detect() should return the correct driver ID")
+	// and return the driver ID in "driver:path" format (with empty path),
+	// verifying that the platform-specific detector can be instantiated successfully.
+	assert.NotEmpty(t, result, "Detect() should return driver:path format on supported platforms")
+	assert.Equal(t, DriverID+":", result, "Detect() should return the correct driver:path format")
+}
+
+func TestDetect_MultipleCalls(t *testing.T) {
+	t.Parallel()
+
+	// Call Detect() multiple times to verify caching works
+	reader := &Reader{}
+
+	// First call initializes the cache
+	result1 := reader.Detect([]string{})
+
+	// Subsequent calls should return the same cached result
+	result2 := reader.Detect([]string{})
+	result3 := reader.Detect([]string{})
+
+	// All results should be identical (platform check is cached)
+	assert.Equal(t, result1, result2, "Detect() should return cached result on second call")
+	assert.Equal(t, result1, result3, "Detect() should return cached result on third call")
+
+	// On supported platforms, all should return "external_drive:"
+	if result1 != "" {
+		assert.Equal(t, DriverID+":", result1)
+		assert.Equal(t, DriverID+":", result2)
+		assert.Equal(t, DriverID+":", result3)
+	}
 }
 
 func TestDetect_DetectorInstantiation(t *testing.T) {
