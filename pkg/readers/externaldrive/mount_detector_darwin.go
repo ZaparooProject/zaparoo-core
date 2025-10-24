@@ -1,4 +1,6 @@
-// Copyright (C) 2025 Zaparoo Core contributors
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.
 //
@@ -9,11 +11,11 @@
 //
 // Zaparoo Core is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Zaparoo Core. If not, see <https://www.gnu.org/licenses/>.
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 //go:build darwin
 
@@ -35,8 +37,8 @@ import (
 const (
 	volumesPath = "/Volumes"
 	// macOS flags for removable/ejectable media
-	mntLocal     = 0x00001000 // Local filesystem
-	mntDoVolFs   = 0x00008000 // VFS handles this
+	mntLocal      = 0x00001000 // Local filesystem
+	mntDoVolFs    = 0x00008000 // VFS handles this
 	mntDontBrowse = 0x00100000 // Don't show in GUI
 )
 
@@ -46,9 +48,9 @@ type darwinMountDetector struct {
 	events      chan MountEvent
 	unmounts    chan string
 	stopChan    chan struct{}
+	mountedDevs map[string]MountEvent
 	wg          sync.WaitGroup
 	mu          sync.RWMutex
-	mountedDevs map[string]MountEvent // deviceID -> MountEvent
 	stopOnce    sync.Once
 }
 
@@ -80,7 +82,7 @@ func (d *darwinMountDetector) Start() error {
 
 	// Watch /Volumes directory
 	if err := d.watcher.Add(volumesPath); err != nil {
-		d.watcher.Close()
+		_ = d.watcher.Close()
 		return fmt.Errorf("failed to watch /Volumes: %w", err)
 	}
 
@@ -97,7 +99,7 @@ func (d *darwinMountDetector) Stop() {
 	d.stopOnce.Do(func() {
 		close(d.stopChan)
 		if d.watcher != nil {
-			d.watcher.Close()
+			_ = d.watcher.Close()
 		}
 		d.wg.Wait()
 		close(d.events)
@@ -246,7 +248,7 @@ func (d *darwinMountDetector) handleVolumeUnmount(mountPath string) {
 	}
 }
 
-func (d *darwinMountDetector) isSystemVolume(volumeName string) bool {
+func (*darwinMountDetector) isSystemVolume(volumeName string) bool {
 	// Common macOS system volumes to ignore
 	systemVolumes := []string{
 		"Macintosh HD",
@@ -267,7 +269,7 @@ func (d *darwinMountDetector) isSystemVolume(volumeName string) bool {
 	return false
 }
 
-func (d *darwinMountDetector) isRemovableVolume(mountPath string) bool {
+func (*darwinMountDetector) isRemovableVolume(mountPath string) bool {
 	// Use statfs to get mount flags
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(mountPath, &stat); err != nil {
@@ -280,7 +282,12 @@ func (d *darwinMountDetector) isRemovableVolume(mountPath string) bool {
 	}
 
 	// Check filesystem type - removable drives are typically msdos, exfat, or hfs
-	fstype := string(stat.Fstypename[:])
+	// Convert []int8 to string
+	fstypeBytes := make([]byte, len(stat.Fstypename))
+	for i, b := range stat.Fstypename {
+		fstypeBytes[i] = byte(b)
+	}
+	fstype := string(fstypeBytes)
 	fstype = strings.TrimRight(fstype, "\x00")
 
 	removableFSTypes := []string{"msdos", "exfat", "hfs", "apfs"}
@@ -305,7 +312,7 @@ func (d *darwinMountDetector) isRemovableVolume(mountPath string) bool {
 	return true
 }
 
-func (d *darwinMountDetector) getVolumeInfo(mountPath string) (deviceID, volumeLabel string) {
+func (*darwinMountDetector) getVolumeInfo(mountPath string) (deviceID, volumeLabel string) {
 	// Get filesystem stats for device ID
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(mountPath, &stat); err != nil {

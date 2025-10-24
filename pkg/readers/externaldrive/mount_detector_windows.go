@@ -1,4 +1,6 @@
-// Copyright (C) 2025 Zaparoo Core contributors
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // This file is part of Zaparoo Core.
 //
@@ -9,11 +11,11 @@
 //
 // Zaparoo Core is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Zaparoo Core. If not, see <https://www.gnu.org/licenses/>.
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 //go:build windows
 
@@ -38,12 +40,12 @@ const (
 
 // windowsMountDetector implements MountDetector for Windows using WMI.
 type windowsMountDetector struct {
+	mountedDevs map[string]MountEvent // deviceID -> MountEvent
 	events      chan MountEvent
 	unmounts    chan string
 	stopChan    chan struct{}
-	wg          sync.WaitGroup
 	mu          sync.RWMutex
-	mountedDevs map[string]MountEvent // deviceID -> MountEvent
+	wg          sync.WaitGroup
 	stopOnce    sync.Once
 }
 
@@ -260,7 +262,7 @@ func (d *windowsMountDetector) handleDriveRemove(driveName string) {
 	}
 }
 
-func (d *windowsMountDetector) isRemovableDrive(drivePath string) bool {
+func (*windowsMountDetector) isRemovableDrive(drivePath string) bool {
 	drivePathPtr, err := windows.UTF16PtrFromString(drivePath)
 	if err != nil {
 		return false
@@ -270,7 +272,7 @@ func (d *windowsMountDetector) isRemovableDrive(drivePath string) bool {
 	return driveType == windows.DRIVE_REMOVABLE
 }
 
-func (d *windowsMountDetector) getDriveInfo(drivePath string) (deviceID, volumeLabel string) {
+func (*windowsMountDetector) getDriveInfo(drivePath string) (deviceID, volumeLabel string) {
 	drivePathPtr, err := windows.UTF16PtrFromString(drivePath)
 	if err != nil {
 		return "", ""
