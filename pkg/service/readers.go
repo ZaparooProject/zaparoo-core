@@ -69,8 +69,24 @@ func connectReaders(
 		}
 	}
 
-	// user defined readers
+	// Detect duplicate device paths in config
+	pathSeen := make(map[string]string) // path -> connection string
+	validToConnect := make([]toConnectDevice, 0, len(toConnect))
+
 	for _, device := range toConnect {
+		if firstConn, exists := pathSeen[device.device.Path]; exists {
+			log.Warn().Msgf(
+				"device path %s configured for multiple readers (%s and %s) - ignoring %s",
+				device.device.Path, firstConn, device.connectionString, device.connectionString,
+			)
+			continue
+		}
+		pathSeen[device.device.Path] = device.connectionString
+		validToConnect = append(validToConnect, device)
+	}
+
+	// user defined readers
+	for _, device := range validToConnect {
 		if _, ok := st.GetReader(device.connectionString); !ok {
 			rt := device.device.Driver
 			for _, r := range pl.SupportedReaders(cfg) {

@@ -119,7 +119,7 @@ func TestOpen_ErrorCountExceedsMaxWithActiveToken(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 
@@ -174,7 +174,7 @@ func TestOpen_ErrorCountExceedsMaxWithoutActiveToken(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 
@@ -239,7 +239,7 @@ func TestOpen_TokenDetectionAndRemoval(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 
@@ -300,7 +300,7 @@ func TestOpen_MifareTokenRejected(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 
@@ -350,7 +350,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 
@@ -395,7 +395,7 @@ func TestClose(t *testing.T) {
 
 	devicePath := testutils.CreateTempDevicePath(t)
 	device := config.ReadersConnect{
-		Driver: "pn532_uart",
+		Driver: "legacy_pn532_uart",
 		Path:   devicePath,
 	}
 

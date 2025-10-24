@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
@@ -103,10 +104,13 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		tty2oled.NewReader(cfg, p),
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
+		libnfc.NewLegacyUARTReader(cfg),
+		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
+		externaldrive.NewReader(cfg),
 	}
 
 	var enabled []readers.Reader

@@ -17,6 +17,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
@@ -46,6 +47,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		simpleserial.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
+		externaldrive.NewReader(cfg),
 	}
 
 	var enabled []readers.Reader

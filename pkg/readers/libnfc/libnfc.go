@@ -125,6 +125,15 @@ type WriteRequest struct {
 	Text   string
 }
 
+type readerMode int
+
+const (
+	modeAll readerMode = iota
+	modeACR122Only
+	modeLegacyUART
+	modeLegacyI2C
+)
+
 type Reader struct {
 	cfg           *config.Instance
 	pnd           *nfc.Device
@@ -134,7 +143,7 @@ type Reader struct {
 	conn          config.ReadersConnect
 	activeWriteMu sync.RWMutex
 	polling       bool
-	acr122Only    bool // ACR122-only mode flag
+	mode          readerMode // Reader mode for different device types
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -142,7 +151,7 @@ func NewReader(cfg *config.Instance) *Reader {
 		cfg:           cfg,
 		write:         make(chan WriteRequest),
 		activeWriteMu: sync.RWMutex{},
-		acr122Only:    false, // Default behavior - detect all devices
+		mode:          modeAll,
 	}
 }
 
@@ -154,7 +163,31 @@ func NewACR122Reader(cfg *config.Instance) *Reader {
 		cfg:           cfg,
 		write:         make(chan WriteRequest),
 		activeWriteMu: sync.RWMutex{},
-		acr122Only:    true, // Skip UART/I2C detection
+		mode:          modeACR122Only,
+	}
+}
+
+// NewLegacyUARTReader creates a reader for legacy PN532 UART devices.
+// This provides a fallback option for users experiencing issues with the
+// new go-pn532 driver. Auto-detect is disabled by default.
+func NewLegacyUARTReader(cfg *config.Instance) *Reader {
+	return &Reader{
+		cfg:           cfg,
+		write:         make(chan WriteRequest),
+		activeWriteMu: sync.RWMutex{},
+		mode:          modeLegacyUART,
+	}
+}
+
+// NewLegacyI2CReader creates a reader for legacy PN532 I2C devices.
+// This provides a fallback option for users experiencing issues with the
+// new go-pn532 driver. Auto-detect is disabled by default.
+func NewLegacyI2CReader(cfg *config.Instance) *Reader {
+	return &Reader{
+		cfg:           cfg,
+		write:         make(chan WriteRequest),
+		activeWriteMu: sync.RWMutex{},
+		mode:          modeLegacyI2C,
 	}
 }
 
@@ -164,6 +197,16 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		connStr = ""
 	} else {
 		log.Debug().Msgf("opening device: %s", connStr)
+	}
+
+	// Translate legacy connection strings to libnfc format
+	switch r.mode {
+	case modeLegacyUART:
+		connStr = strings.Replace(connStr, "legacy_pn532_uart:", "pn532_uart:", 1)
+	case modeLegacyI2C:
+		connStr = strings.Replace(connStr, "legacy_pn532_i2c:", "pn532_i2c:", 1)
+	default:
+		// No translation needed for other modes
 	}
 
 	pnd, err := openDeviceWithRetries(connStr)
@@ -256,55 +299,99 @@ func (r *Reader) Close() error {
 }
 
 func (r *Reader) Metadata() readers.DriverMetadata {
-	if r.acr122Only {
+	switch r.mode {
+	case modeACR122Only:
 		return readers.DriverMetadata{
 			ID:                "libnfc_acr122",
 			DefaultEnabled:    true,
 			DefaultAutoDetect: true,
 			Description:       "LibNFC ACR122 USB NFC reader",
 		}
-	}
-
-	return readers.DriverMetadata{
-		ID:                "libnfc",
-		DefaultEnabled:    true,
-		DefaultAutoDetect: true,
-		Description:       "LibNFC NFC reader (PN532/ACR122)",
+	case modeLegacyUART:
+		return readers.DriverMetadata{
+			ID:                "legacy_pn532_uart",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: false,
+			Description:       "Legacy PN532 UART reader via LibNFC",
+		}
+	case modeLegacyI2C:
+		return readers.DriverMetadata{
+			ID:                "legacy_pn532_i2c",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: false,
+			Description:       "Legacy PN532 I2C reader via LibNFC",
+		}
+	default:
+		return readers.DriverMetadata{
+			ID:                "libnfc",
+			DefaultEnabled:    true,
+			DefaultAutoDetect: true,
+			Description:       "LibNFC NFC reader (PN532/ACR122)",
+		}
 	}
 }
 
 func (r *Reader) IDs() []string {
-	// When ACR122-only mode, exclude PN532 device types
-	if r.acr122Only {
+	switch r.mode {
+	case modeACR122Only:
 		return []string{
 			"acr122_usb",
 		}
-	}
-
-	// Default behavior - all device types
-	return []string{
-		"pn532_uart",
-		"pn532_i2c",
-		"acr122_usb",
+	case modeLegacyUART:
+		return []string{
+			"legacy_pn532_uart",
+		}
+	case modeLegacyI2C:
+		return []string{
+			"legacy_pn532_i2c",
+		}
+	default:
+		// Default behavior - all device types
+		return []string{
+			"pn532_uart",
+			"pn532_i2c",
+			"acr122_usb",
+		}
 	}
 }
 
 func (r *Reader) Detect(connected []string) string {
-	if !r.cfg.Readers().AutoDetect {
+	metadata := r.Metadata()
+	if !r.cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
 		return ""
 	}
 
-	// Skip serial detection when ACR122-only mode enabled
-	if !r.acr122Only {
+	switch r.mode {
+	case modeACR122Only:
+		// Auto-detect for ACR122 and other USB/PCSC devices
+		if !helpers.Contains(connected, autoConnStr) {
+			return autoConnStr
+		}
+	case modeLegacyUART:
+		// Only detect UART devices, return with legacy prefix
+		device := detectSerialReaders(connected)
+		if device != "" && !helpers.Contains(connected, device) {
+			// Replace pn532_uart: with legacy_pn532_uart:
+			return strings.Replace(device, "pn532_uart:", "legacy_pn532_uart:", 1)
+		}
+	case modeLegacyI2C:
+		// Only detect I2C devices, return with legacy prefix
+		device := detectI2CReaders(connected)
+		if device != "" && !helpers.Contains(connected, device) {
+			// Replace pn532_i2c: with legacy_pn532_i2c:
+			return strings.Replace(device, "pn532_i2c:", "legacy_pn532_i2c:", 1)
+		}
+	default:
+		// Default mode - detect UART/I2C serial devices
 		device := detectSerialReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
 			return device
 		}
-	}
 
-	// Auto-detect for ACR122 and other USB/PCSC devices
-	if !helpers.Contains(connected, autoConnStr) {
-		return autoConnStr
+		// Auto-detect for ACR122 and other USB/PCSC devices
+		if !helpers.Contains(connected, autoConnStr) {
+			return autoConnStr
+		}
 	}
 
 	return ""
@@ -458,6 +545,72 @@ func detectSerialReaders(connected []string) string {
 		err = pnd.Close()
 		if err != nil {
 			log.Warn().Err(err).Msgf("error closing device: %s", device)
+		}
+		return connStr
+	}
+
+	return ""
+}
+
+// keep track of I2C devices that had failed opens
+var (
+	i2cCacheMu   = &sync.RWMutex{}
+	i2cBlockList []string
+)
+
+func detectI2CReaders(connected []string) string {
+	// Look for I2C devices on Linux (typically /dev/i2c-*)
+	i2cDevices := []string{
+		"/dev/i2c-0",
+		"/dev/i2c-1",
+		"/dev/i2c-2",
+		"/dev/i2c-3",
+	}
+
+	for _, device := range i2cDevices {
+		// Check if device exists
+		if _, err := os.Stat(device); os.IsNotExist(err) {
+			continue
+		}
+
+		connStr := "pn532_i2c:" + device
+
+		// ignore if device is in block list
+		i2cCacheMu.RLock()
+		if helpers.Contains(i2cBlockList, device) {
+			i2cCacheMu.RUnlock()
+			continue
+		}
+		i2cCacheMu.RUnlock()
+
+		// ignore if exact same device and reader are connected
+		if helpers.Contains(connected, connStr) {
+			continue
+		}
+
+		// ignore if different reader already connected
+		match := false
+		for _, c := range connected {
+			if strings.HasSuffix(c, ":"+device) {
+				match = true
+				break
+			}
+		}
+		if match {
+			continue
+		}
+
+		// Try to open the device to see if it's a valid PN532
+		pnd, err := nfc.Open(connStr)
+		if err != nil {
+			i2cCacheMu.Lock()
+			i2cBlockList = append(i2cBlockList, device)
+			i2cCacheMu.Unlock()
+			continue
+		}
+		err = pnd.Close()
+		if err != nil {
+			log.Warn().Err(err).Msgf("error closing I2C device: %s", device)
 		}
 		return connStr
 	}
