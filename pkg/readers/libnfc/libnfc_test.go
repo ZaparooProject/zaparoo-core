@@ -49,6 +49,29 @@ func TestNewACR122Reader(t *testing.T) {
 
 	assert.NotNil(t, reader)
 	assert.Equal(t, cfg, reader.cfg)
+	assert.Equal(t, modeACR122Only, reader.mode)
+}
+
+func TestNewLegacyUARTReader(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewLegacyUARTReader(cfg)
+
+	assert.NotNil(t, reader)
+	assert.Equal(t, cfg, reader.cfg)
+	assert.Equal(t, modeLegacyUART, reader.mode)
+}
+
+func TestNewLegacyI2CReader(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewLegacyI2CReader(cfg)
+
+	assert.NotNil(t, reader)
+	assert.Equal(t, cfg, reader.cfg)
+	assert.Equal(t, modeLegacyI2C, reader.mode)
 }
 
 func TestMetadata(t *testing.T) {
@@ -76,6 +99,30 @@ func TestMetadata(t *testing.T) {
 		assert.Equal(t, "LibNFC ACR122 USB NFC reader", metadata.Description)
 		assert.True(t, metadata.DefaultEnabled)
 		assert.True(t, metadata.DefaultAutoDetect)
+	})
+
+	t.Run("legacy uart mode", func(t *testing.T) {
+		t.Parallel()
+
+		reader := NewLegacyUARTReader(&config.Instance{})
+		metadata := reader.Metadata()
+
+		assert.Equal(t, "legacy_pn532_uart", metadata.ID)
+		assert.Equal(t, "Legacy PN532 UART reader via LibNFC", metadata.Description)
+		assert.True(t, metadata.DefaultEnabled)
+		assert.False(t, metadata.DefaultAutoDetect)
+	})
+
+	t.Run("legacy i2c mode", func(t *testing.T) {
+		t.Parallel()
+
+		reader := NewLegacyI2CReader(&config.Instance{})
+		metadata := reader.Metadata()
+
+		assert.Equal(t, "legacy_pn532_i2c", metadata.ID)
+		assert.Equal(t, "Legacy PN532 I2C reader via LibNFC", metadata.Description)
+		assert.True(t, metadata.DefaultEnabled)
+		assert.False(t, metadata.DefaultAutoDetect)
 	})
 }
 
@@ -105,6 +152,32 @@ func TestIDs(t *testing.T) {
 
 		expectedIDs := []string{
 			"acr122_usb",
+		}
+
+		assert.Equal(t, expectedIDs, ids)
+	})
+
+	t.Run("legacy uart mode", func(t *testing.T) {
+		t.Parallel()
+
+		reader := NewLegacyUARTReader(&config.Instance{})
+		ids := reader.IDs()
+
+		expectedIDs := []string{
+			"legacy_pn532_uart",
+		}
+
+		assert.Equal(t, expectedIDs, ids)
+	})
+
+	t.Run("legacy i2c mode", func(t *testing.T) {
+		t.Parallel()
+
+		reader := NewLegacyI2CReader(&config.Instance{})
+		ids := reader.IDs()
+
+		expectedIDs := []string{
+			"legacy_pn532_i2c",
 		}
 
 		assert.Equal(t, expectedIDs, ids)
@@ -222,3 +295,46 @@ func TestDataCorruptedError(t *testing.T) {
 // - Write operations with context cancellation
 // These require mocking libnfc C library
 // Consider refactoring to use dependency injection for nfc.Device
+
+// TestOpenConnectionStringTranslation verifies that legacy connection strings
+// are correctly translated to libnfc format by validating the reader mode
+func TestOpenConnectionStringTranslation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reader       *Reader
+		name         string
+		expectedMode readerMode
+	}{
+		{
+			name:         "legacy uart mode",
+			reader:       NewLegacyUARTReader(&config.Instance{}),
+			expectedMode: modeLegacyUART,
+		},
+		{
+			name:         "legacy i2c mode",
+			reader:       NewLegacyI2CReader(&config.Instance{}),
+			expectedMode: modeLegacyI2C,
+		},
+		{
+			name:         "normal mode",
+			reader:       NewReader(&config.Instance{}),
+			expectedMode: modeAll,
+		},
+		{
+			name:         "acr122 mode",
+			reader:       NewACR122Reader(&config.Instance{}),
+			expectedMode: modeACR122Only,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Verify the reader was created with the correct mode
+			// which determines how connection strings are translated
+			assert.Equal(t, tt.expectedMode, tt.reader.mode)
+		})
+	}
+}

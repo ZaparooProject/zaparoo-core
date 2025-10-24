@@ -56,6 +56,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	allReaders := []readers.Reader{
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
+		libnfc.NewLegacyUARTReader(cfg),
+		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
