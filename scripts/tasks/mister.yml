@@ -1,5 +1,15 @@
 version: "3"
 
+vars:
+  MISTER_UTILS_DIR: scripts/mister/utils
+  MISTER_SRC_DIR: "{{.MISTER_UTILS_DIR}}/src"
+  MISTER_BUILD_DIR: "{{.MISTER_UTILS_DIR}}/build"
+  MISTER_OUTPUT_DIR: _build/mister_arm
+  FFMPEG_VERSION: "7.1"
+  DOCKER_IMAGE: misterkun/toolchain
+  TOOLCHAIN_PREFIX: arm-none-linux-gnueabihf
+  ARM_CFLAGS: "-mcpu=cortex-a9 -mfloat-abi=hard -mtune=cortex-a9 -mfpu=neon"
+
 tasks:
   build-arm:
     desc: Build MiSTer ARM binary
@@ -14,3 +24,108 @@ tasks:
       - task: build-{{.CLI_ARGS}}
       - scp _build/mister_{{.CLI_ARGS}}/zaparoo.sh root@${MISTER_IP}:/media/fat/Scripts/zaparoo.sh
       - ssh root@${MISTER_IP} /media/fat/Scripts/zaparoo.sh -service restart
+
+  build-ffmpeg-libs:
+    desc: Build FFmpeg static libraries for MiSTer
+    vars:
+      FFMPEG_SRC: "{{.MISTER_SRC_DIR}}/ffmpeg"
+      FFMPEG_BUILD: "{{.MISTER_BUILD_DIR}}/ffmpeg"
+    cmds:
+      - mkdir -p {{.MISTER_SRC_DIR}} {{.MISTER_BUILD_DIR}} {{.MISTER_OUTPUT_DIR}}
+      - |
+        if [ ! -d "{{.FFMPEG_SRC}}" ]; then
+          git clone --depth 1 --branch n{{.FFMPEG_VERSION}} https://github.com/FFmpeg/FFmpeg.git {{.FFMPEG_SRC}}
+        else
+          echo "FFmpeg source already exists at {{.FFMPEG_SRC}}"
+        fi
+      - |
+        docker run --rm \
+          --platform linux/arm \
+          -v "$(pwd):/mister" \
+          -w /mister/{{.FFMPEG_SRC}} \
+          {{.DOCKER_IMAGE}} \
+          bash -c "
+            ./configure \
+              --enable-static \
+              --disable-shared \
+              --pkg-config-flags='--static' \
+              --extra-ldexeflags='-static' \
+              --extra-cflags='{{.ARM_CFLAGS}}' \
+              --prefix=/mister/{{.FFMPEG_BUILD}} \
+              --disable-programs \
+              --enable-ffprobe \
+              --enable-small \
+              --disable-doc \
+              --disable-htmlpages \
+              --disable-manpages \
+              --disable-podpages \
+              --disable-txtpages \
+              --disable-debug \
+              --disable-avdevice \
+              --disable-postproc \
+              --disable-network \
+              --disable-encoders \
+              --disable-muxers \
+              --enable-gpl && \
+            make -j\$(nproc) && \
+            make install
+          "
+
+  build-ffprobe:
+    desc: Build ffprobe binary for MiSTer
+    deps: [build-ffmpeg-libs]
+    vars:
+      FFMPEG_SRC: "{{.MISTER_SRC_DIR}}/ffmpeg"
+    cmds:
+      - |
+        docker run --rm \
+          --platform linux/arm \
+          -v "$(pwd):/mister" \
+          -w /mister \
+          {{.DOCKER_IMAGE}} \
+          bash -c "
+            cp {{.FFMPEG_SRC}}/ffprobe /mister/{{.MISTER_OUTPUT_DIR}}/ffprobe && \
+            strip /mister/{{.MISTER_OUTPUT_DIR}}/ffprobe
+          "
+
+  build-nextfvp:
+    desc: Build nextfvp framebuffer video player for MiSTer
+    deps: [build-ffmpeg-libs]
+    vars:
+      NEXTFVP_SRC: "{{.MISTER_SRC_DIR}}/nextfvp"
+      FFMPEG_BUILD: "{{.MISTER_BUILD_DIR}}/ffmpeg"
+    cmds:
+      - mkdir -p {{.MISTER_SRC_DIR}} {{.MISTER_OUTPUT_DIR}}
+      - |
+        if [ ! -d "{{.NEXTFVP_SRC}}" ]; then
+          git clone https://github.com/kyx0r/nextfvp.git {{.NEXTFVP_SRC}}
+        else
+          echo "nextfvp source already exists at {{.NEXTFVP_SRC}}"
+        fi
+      - |
+        docker run --rm \
+          --platform linux/arm \
+          -v "$(pwd):/mister" \
+          -w /mister/{{.NEXTFVP_SRC}} \
+          {{.DOCKER_IMAGE}} \
+          bash -c "
+            echo 'deb http://archive.debian.org/debian stretch main' > /etc/apt/sources.list && \
+            apt-get update && apt-get install -y libasound2-dev && \
+            gcc fvp.c \
+              -pedantic -Wall -Wextra -Wno-implicit-fallthrough \
+              -Wno-missing-field-initializers -Wno-unused-parameter \
+              -Wfatal-errors -std=c99 -D_POSIX_C_SOURCE=200809L \
+              {{.ARM_CFLAGS}} \
+              -I/mister/{{.FFMPEG_BUILD}}/include \
+              -O2 \
+              -L/mister/{{.FFMPEG_BUILD}}/lib \
+              /mister/{{.FFMPEG_BUILD}}/lib/libavformat.a \
+              /mister/{{.FFMPEG_BUILD}}/lib/libavcodec.a \
+              /mister/{{.FFMPEG_BUILD}}/lib/libavutil.a \
+              /mister/{{.FFMPEG_BUILD}}/lib/libswscale.a \
+              /mister/{{.FFMPEG_BUILD}}/lib/libswresample.a \
+              -lz -lm -lpthread -lasound \
+              -o fvp && \
+            cp fvp /mister/{{.MISTER_OUTPUT_DIR}}/fvp && \
+            strip /mister/{{.MISTER_OUTPUT_DIR}}/fvp
+          "
