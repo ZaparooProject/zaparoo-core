@@ -59,6 +59,16 @@ const (
 	LifecycleBlocking
 )
 
+// StopIntent indicates the reason for stopping a launcher
+type StopIntent int
+
+const (
+	// StopForPreemption (zero value) means a new launcher is starting
+	StopForPreemption StopIntent = iota
+	// StopForMenu means stopping to return to menu/frontend
+	StopForMenu
+)
+
 const (
 	PlatformIDBatocera  = "batocera"
 	PlatformIDBazzite   = "bazzite"
@@ -215,7 +225,9 @@ type Platform interface {
 	RootDirs(*config.Instance) []string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
-	StopActiveLauncher() error
+	// intent indicates whether this is a preemption (new launcher starting)
+	// or a termination (returning to menu).
+	StopActiveLauncher(intent StopIntent) error
 	// ReturnToMenu returns the platform to its main UI/launcher/frontend.
 	// For platforms with a menu system (MiSTer OSD, EmulationStation, Steam Big Picture),
 	// this launches the menu/frontend. For platforms without a menu concept, this is a no-op.

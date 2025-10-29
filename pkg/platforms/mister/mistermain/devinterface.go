@@ -24,7 +24,6 @@ package mistermain
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/rs/zerolog/log"
@@ -45,8 +44,9 @@ func LaunchMenu() error {
 		}
 	}()
 
-	// TODO: don't hardcode here
-	if _, err := fmt.Fprintf(cmd, "load_core %s\n", filepath.Join(config.SDRootDir, "menu.rbf")); err != nil {
+	// Send just "menu.rbf" to let MiSTer_Main resolve the correct path
+	// (it will use getStorageDir to find menu on current storage device)
+	if _, err := fmt.Fprintf(cmd, "load_core menu.rbf\n"); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 

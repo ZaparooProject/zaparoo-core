@@ -64,7 +64,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	systemID := env.Cmd.Args[0]
 
 	if strings.EqualFold(systemID, "menu") {
-		if err := pl.StopActiveLauncher(); err != nil {
+		if err := pl.StopActiveLauncher(platforms.StopForPreemption); err != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
 			}, fmt.Errorf("failed to stop active launcher: %w", err)

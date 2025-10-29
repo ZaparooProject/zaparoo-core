@@ -138,7 +138,7 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	// Invalidate old launcher context - signals cleanup goroutines they're stale
 	if p.launcherManager != nil {
 		p.launcherManager.NewContext()

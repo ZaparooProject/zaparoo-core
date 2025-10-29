@@ -121,8 +121,8 @@ func (m *MockPlatform) NormalizePath(cfg *config.Instance, path string) string {
 }
 
 // StopActiveLauncher kills/exits the currently running launcher process
-func (m *MockPlatform) StopActiveLauncher() error {
-	args := m.Called()
+func (m *MockPlatform) StopActiveLauncher(intent platforms.StopIntent) error {
+	args := m.Called(intent)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform stop active launcher failed: %w", err)
 	}

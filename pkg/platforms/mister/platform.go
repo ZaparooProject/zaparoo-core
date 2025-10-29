@@ -58,8 +58,11 @@ type Platform struct {
 	kbd                 linuxinput.Keyboard
 	gpd                 linuxinput.Gamepad
 	lastLauncher        platforms.Launcher
+	stopIntent          platforms.StopIntent
+	consoleActive       bool
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex
+	consoleMu           sync.RWMutex
 }
 
 func NewPlatform() *Platform {
@@ -307,7 +310,12 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
+	// Store intent before cancelling context so cleanup goroutine can read it
+	p.processMu.Lock()
+	p.stopIntent = intent
+	p.processMu.Unlock()
+
 	// Invalidate old launcher context - signals cleanup goroutines they're stale
 	if p.launcherManager != nil {
 		p.launcherManager.NewContext()
@@ -316,14 +324,38 @@ func (p *Platform) StopActiveLauncher() error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
 	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
+		proc := p.trackedProcess
+		if err := proc.Kill(); err != nil {
 			log.Warn().Err(err).Msg("failed to kill tracked process")
+			p.trackedProcess = nil
+			p.processMu.Unlock()
 		} else {
 			log.Debug().Msg("killed tracked process")
+			p.trackedProcess = nil
+			p.processMu.Unlock()
+
+			// Wait for process to fully exit (with timeout)
+			// This prevents race conditions when launching consecutive videos
+			done := make(chan error, 1)
+			go func() {
+				_, err := proc.Wait()
+				done <- err
+			}()
+
+			select {
+			case err := <-done:
+				if err != nil {
+					log.Debug().Err(err).Msg("process wait completed with error")
+				} else {
+					log.Debug().Msg("tracked process fully exited")
+				}
+			case <-time.After(500 * time.Millisecond):
+				log.Warn().Msg("timeout waiting for process exit, continuing anyway")
+			}
 		}
-		p.trackedProcess = nil
+	} else {
+		p.processMu.Unlock()
 	}
-	p.processMu.Unlock()
 
 	// Clear active media
 	p.setActiveMedia(nil)
@@ -331,13 +363,19 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
-func (*Platform) ReturnToMenu() error {
+func (p *Platform) ReturnToMenu() error {
 	err := mistermain.LaunchMenu()
 	if err != nil {
 		return fmt.Errorf("failed to launch menu: %w", err)
 	}
 	// Wait for menu transition to settle
 	time.Sleep(300 * time.Millisecond)
+
+	// Clear console active flag - we're back in FPGA mode
+	p.consoleMu.Lock()
+	p.consoleActive = false
+	p.consoleMu.Unlock()
+
 	return nil
 }
 
@@ -542,7 +580,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 			return false
 		},
-		Launch: launch(systemdefs.SystemAmiga),
+		Launch: launch(p, systemdefs.SystemAmiga),
 		Scanner: func(
 			_ context.Context,
 			cfg *config.Instance,
@@ -609,7 +647,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 			return false
 		},
-		Launch: launch(systemdefs.SystemNeoGeo),
+		Launch: launch(p, systemdefs.SystemNeoGeo),
 		Scanner: func(
 			_ context.Context,
 			cfg *config.Instance,
@@ -674,7 +712,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	ls := Launchers
+	ls := createLaunchers(p)
 	ls = append(ls, amiga, neogeo, createVideoLauncher(p))
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)

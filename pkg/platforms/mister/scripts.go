@@ -41,6 +41,18 @@ func scriptIsActive() bool {
 }
 
 func openConsole(pl platforms.Platform, vt string) error {
+	// Check if console is already active (for video→video transitions)
+	if p, ok := pl.(*Platform); ok {
+		p.consoleMu.RLock()
+		isActive := p.consoleActive
+		p.consoleMu.RUnlock()
+
+		if isActive {
+			log.Debug().Msg("console already active, skipping F9 sequence")
+			return nil
+		}
+	}
+
 	// We use the F9 key to signal MiSTer_Main to release the framebuffer and
 	// allow Linux console access. F9 triggers video_fb_enable() in Main_MiSTer which:
 	// 1. Switches VT using VT_ACTIVATE/VT_WAITACTIVE ioctls
@@ -84,11 +96,50 @@ func openConsole(pl platforms.Platform, vt string) error {
 		if tty == "tty1" {
 			log.Debug().Msg("console mode confirmed")
 			// Wait for framebuffer to be ready
-			return waitForFramebuffer(time.Until(deadline))
+			if err := waitForFramebuffer(time.Until(deadline)); err != nil {
+				return err
+			}
+
+			// Set console active flag
+			if p, ok := pl.(*Platform); ok {
+				p.consoleMu.Lock()
+				p.consoleActive = true
+				p.consoleMu.Unlock()
+			}
+
+			return nil
 		}
 	}
 
 	return errors.New("open console: timeout waiting for console switch after 5s")
+}
+
+func closeConsole(pl platforms.Platform) error {
+	// Check if console is already inactive (for FPGA/MGL transitions)
+	if p, ok := pl.(*Platform); ok {
+		p.consoleMu.RLock()
+		isActive := p.consoleActive
+		p.consoleMu.RUnlock()
+
+		if !isActive {
+			log.Debug().Msg("console already inactive, skipping close")
+			return nil
+		}
+
+		// Press F12 to return to FPGA framebuffer
+		if err := pl.KeyboardPress("{f12}"); err != nil {
+			return fmt.Errorf("failed to press F12 key: %w", err)
+		}
+
+		// Clear console active flag
+		p.consoleMu.Lock()
+		p.consoleActive = false
+		p.consoleMu.Unlock()
+
+		log.Debug().Msg("console closed, returned to FPGA mode")
+	}
+
+	return nil
 }
 
 // waitForFramebuffer waits for the framebuffer device to become accessible
@@ -132,7 +183,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	if pl.activeMedia() != nil {
 		// menu must be open to switch tty and launch script
 		log.Debug().Msg("killing launcher...")
-		err := pl.StopActiveLauncher()
+		err := pl.StopActiveLauncher(platforms.StopForPreemption)
 		if err != nil {
 			return err
 		}

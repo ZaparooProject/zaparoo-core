@@ -217,7 +217,7 @@ func timedExit(
 		runBeforeExitHook(pl, cfg, st, db, lsq, plq, *activeMedia)
 
 		log.Info().Msg("exiting media")
-		err := pl.StopActiveLauncher()
+		err := pl.StopActiveLauncher(platforms.StopForMenu)
 		if err != nil {
 			log.Warn().Msgf("error killing launcher: %s", err)
 		}

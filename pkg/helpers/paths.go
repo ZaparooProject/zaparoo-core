@@ -471,7 +471,7 @@ func DoLaunch(
 	// Stop any currently running launcher before starting new one
 	// This ensures tracked processes (like videos) are stopped even when
 	// FireAndForget launches (like MGL files) start
-	if stopErr := pl.StopActiveLauncher(); stopErr != nil {
+	if stopErr := pl.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
 		log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 	}
 

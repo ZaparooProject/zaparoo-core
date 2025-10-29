@@ -229,7 +229,7 @@ func LaunchMenu() error {
 	return nil
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
 	if p.trackedProcess != nil {

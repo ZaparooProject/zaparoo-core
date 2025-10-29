@@ -139,7 +139,7 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 

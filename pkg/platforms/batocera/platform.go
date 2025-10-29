@@ -220,7 +220,7 @@ func (p *Platform) PlayAudio(path string) error {
 	return nil
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 	tries := 0
 	maxTries := 10
@@ -291,7 +291,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 		return fmt.Errorf("failed to check running game status: %w", err)
 	} else if running {
 		log.Info().Msg("exiting current media")
-		err = p.StopActiveLauncher()
+		err = p.StopActiveLauncher(platforms.StopForPreemption)
 		if err != nil {
 			return err
 		}

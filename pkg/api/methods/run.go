@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/go-chi/chi/v5"
@@ -166,7 +167,7 @@ func HandleRunRest(
 
 func HandleStop(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received stop request")
-	err := env.Platform.StopActiveLauncher()
+	err := env.Platform.StopActiveLauncher(platforms.StopForMenu)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stop active launcher: %w", err)
 	}

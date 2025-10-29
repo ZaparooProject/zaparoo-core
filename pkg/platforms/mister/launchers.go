@@ -86,8 +86,13 @@ func checkInZip(path string) string {
 	return path
 }
 
-func launch(coreID string) func(*config.Instance, string) (*os.Process, error) {
+func launch(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
 	return func(cfg *config.Instance, path string) (*os.Process, error) {
+		// Close console if needed - FPGA cores take over display
+		if err := closeConsole(pl); err != nil {
+			log.Warn().Err(err).Msg("failed to close console before FPGA launch")
+		}
+
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
 			err := mgls.LaunchBasicFile(path)
 			if err != nil {
@@ -349,10 +354,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			Str("path", path).
 			Msg("video playback starting")
 
-		// Grace period to allow any previous console/menu transitions to complete
-		time.Sleep(300 * time.Millisecond)
-
-		// Check if FPGA core is active (need to return to menu before console switch)
+		// Check if FPGA core is active and return to menu if needed
 		if pl.isFPGAActive() {
 			log.Debug().Msg("FPGA core active, returning to menu before console switch")
 			if err := pl.ReturnToMenu(); err != nil {
@@ -446,10 +448,21 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 
 			// Check if we're stale (new launcher has started)
 			if launcherCtx.Err() != nil {
-				log.Debug().Msg("video cleanup cancelled: new launcher started")
-				// Just restore cursor, new launcher owns console state
-				if restoreErr := restoreConsole(vt); restoreErr != nil {
-					log.Warn().Err(restoreErr).Msg("error restoring console cursor")
+				log.Debug().Msg("video cleanup cancelled - launcher superseded")
+
+				// Check intent stored before context cancellation
+				pl.processMu.RLock()
+				intent := pl.stopIntent
+				pl.processMu.RUnlock()
+
+				if intent == platforms.StopForMenu {
+					log.Debug().Msg("stopping for menu, exiting console")
+					restore() // Press F12 and launch menu
+				} else {
+					log.Debug().Msg("preemption, preserving console state")
+					if restoreErr := restoreConsole(vt); restoreErr != nil {
+						log.Warn().Err(restoreErr).Msg("error restoring console cursor")
+					}
 				}
 				return
 			}
@@ -493,35 +506,36 @@ func createVideoLauncher(pl *Platform) platforms.Launcher {
 	}
 }
 
-var Launchers = []platforms.Launcher{
+func createLaunchers(pl *Platform) []platforms.Launcher {
+	return []platforms.Launcher{
 	// Consoles
 	{
 		ID:         systemdefs.SystemAdventureVision,
 		SystemID:   systemdefs.SystemAdventureVision,
 		Folders:    []string{"AVision"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemAdventureVision),
+		Launch:     launch(pl, systemdefs.SystemAdventureVision),
 	},
 	{
 		ID:         systemdefs.SystemArcadia,
 		SystemID:   systemdefs.SystemArcadia,
 		Folders:    []string{"Arcadia"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemArcadia),
+		Launch:     launch(pl, systemdefs.SystemArcadia),
 	},
 	{
 		ID:         systemdefs.SystemAmigaCD32,
 		SystemID:   systemdefs.SystemAmigaCD32,
 		Folders:    []string{"AmigaCD32"},
 		Extensions: []string{".cue", ".chd", ".iso"},
-		Launch:     launch(systemdefs.SystemAmigaCD32),
+		Launch:     launch(pl, systemdefs.SystemAmigaCD32),
 	},
 	{
 		ID:         systemdefs.SystemAstrocade,
 		SystemID:   systemdefs.SystemAstrocade,
 		Folders:    []string{"Astrocade"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemAstrocade),
+		Launch:     launch(pl, systemdefs.SystemAstrocade),
 	},
 	{
 		ID:         systemdefs.SystemAtari2600,
@@ -553,14 +567,14 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemAtari5200,
 		Folders:    []string{"ATARI5200"},
 		Extensions: []string{".car", ".a52", ".bin", ".rom"},
-		Launch:     launch(systemdefs.SystemAtari5200),
+		Launch:     launch(pl, systemdefs.SystemAtari5200),
 	},
 	{
 		ID:         systemdefs.SystemAtari7800,
 		SystemID:   systemdefs.SystemAtari7800,
 		Folders:    []string{"ATARI7800"},
 		Extensions: []string{".a78", ".bin"},
-		Launch:     launch(systemdefs.SystemAtari7800),
+		Launch:     launch(pl, systemdefs.SystemAtari7800),
 	},
 	{
 		ID:       "LLAPIAtari7800",
@@ -572,63 +586,63 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemAtariLynx,
 		Folders:    []string{"AtariLynx"},
 		Extensions: []string{".lnx"},
-		Launch:     launch(systemdefs.SystemAtariLynx),
+		Launch:     launch(pl, systemdefs.SystemAtariLynx),
 	},
 	{
 		ID:         systemdefs.SystemCasioPV1000,
 		SystemID:   systemdefs.SystemCasioPV1000,
 		Folders:    []string{"Casio_PV-1000"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemCasioPV1000),
+		Launch:     launch(pl, systemdefs.SystemCasioPV1000),
 	},
 	{
 		ID:         systemdefs.SystemCDI,
 		SystemID:   systemdefs.SystemCDI,
 		Folders:    []string{"CD-i"},
 		Extensions: []string{".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemCDI),
+		Launch:     launch(pl, systemdefs.SystemCDI),
 	},
 	{
 		ID:         systemdefs.SystemChannelF,
 		SystemID:   systemdefs.SystemChannelF,
 		Folders:    []string{"ChannelF"},
 		Extensions: []string{".rom", ".bin"},
-		Launch:     launch(systemdefs.SystemChannelF),
+		Launch:     launch(pl, systemdefs.SystemChannelF),
 	},
 	{
 		ID:         systemdefs.SystemColecoVision,
 		SystemID:   systemdefs.SystemColecoVision,
 		Folders:    []string{"Coleco"},
 		Extensions: []string{".col", ".bin", ".rom"},
-		Launch:     launch(systemdefs.SystemColecoVision),
+		Launch:     launch(pl, systemdefs.SystemColecoVision),
 	},
 	{
 		ID:         systemdefs.SystemCreatiVision,
 		SystemID:   systemdefs.SystemCreatiVision,
 		Folders:    []string{"CreatiVision"},
 		Extensions: []string{".rom", ".bin", ".bas"},
-		Launch:     launch(systemdefs.SystemCreatiVision),
+		Launch:     launch(pl, systemdefs.SystemCreatiVision),
 	},
 	{
 		ID:         systemdefs.SystemFDS,
 		SystemID:   systemdefs.SystemFDS,
 		Folders:    []string{"NES", "FDS"},
 		Extensions: []string{".fds"},
-		Launch:     launch(systemdefs.SystemFDS),
+		Launch:     launch(pl, systemdefs.SystemFDS),
 	},
 	{
 		ID:         systemdefs.SystemGamate,
 		SystemID:   systemdefs.SystemGamate,
 		Folders:    []string{"Gamate"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemGamate),
+		Launch:     launch(pl, systemdefs.SystemGamate),
 	},
 	{
 		ID:         systemdefs.SystemGameboy,
 		SystemID:   systemdefs.SystemGameboy,
 		Folders:    []string{"GAMEBOY"},
 		Extensions: []string{".gb"},
-		Launch:     launch(systemdefs.SystemGameboy),
+		Launch:     launch(pl, systemdefs.SystemGameboy),
 	},
 	{
 		ID:       "LLAPIGameboy",
@@ -640,28 +654,28 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemGameboyColor,
 		Folders:    []string{"GAMEBOY", "GBC"},
 		Extensions: []string{".gbc"},
-		Launch:     launch(systemdefs.SystemGameboyColor),
+		Launch:     launch(pl, systemdefs.SystemGameboyColor),
 	},
 	{
 		ID:         systemdefs.SystemGameboy2P,
 		SystemID:   systemdefs.SystemGameboy2P,
 		Folders:    []string{"GAMEBOY2P"},
 		Extensions: []string{".gb", ".gbc"},
-		Launch:     launch(systemdefs.SystemGameboy2P),
+		Launch:     launch(pl, systemdefs.SystemGameboy2P),
 	},
 	{
 		ID:         systemdefs.SystemGameGear,
 		SystemID:   systemdefs.SystemGameGear,
 		Folders:    []string{"SMS", "GameGear"},
 		Extensions: []string{".gg"},
-		Launch:     launch(systemdefs.SystemGameGear),
+		Launch:     launch(pl, systemdefs.SystemGameGear),
 	},
 	{
 		ID:         systemdefs.SystemGameNWatch,
 		SystemID:   systemdefs.SystemGameNWatch,
 		Folders:    []string{"GameNWatch"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemGameNWatch),
+		Launch:     launch(pl, systemdefs.SystemGameNWatch),
 	},
 	{
 		ID:         "GameAndWatch",
@@ -675,7 +689,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemGBA,
 		Folders:    []string{"GBA"},
 		Extensions: []string{".gba"},
-		Launch:     launch(systemdefs.SystemGBA),
+		Launch:     launch(pl, systemdefs.SystemGBA),
 	},
 	{
 		ID:       "LLAPIGBA",
@@ -687,14 +701,14 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemGBA2P,
 		Folders:    []string{"GBA2P"},
 		Extensions: []string{".gba"},
-		Launch:     launch(systemdefs.SystemGBA2P),
+		Launch:     launch(pl, systemdefs.SystemGBA2P),
 	},
 	{
 		ID:         systemdefs.SystemGenesis,
 		SystemID:   systemdefs.SystemGenesis,
 		Folders:    []string{"MegaDrive", "Genesis"},
 		Extensions: []string{".gen", ".bin", ".md"},
-		Launch:     launch(systemdefs.SystemGenesis),
+		Launch:     launch(pl, systemdefs.SystemGenesis),
 	},
 	{
 		ID:       "SindenGenesis",
@@ -716,21 +730,21 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemIntellivision,
 		Folders:    []string{"Intellivision"},
 		Extensions: []string{".int", ".bin"},
-		Launch:     launch(systemdefs.SystemIntellivision),
+		Launch:     launch(pl, systemdefs.SystemIntellivision),
 	},
 	{
 		ID:         systemdefs.SystemJaguar,
 		SystemID:   systemdefs.SystemJaguar,
 		Folders:    []string{"Jaguar"},
 		Extensions: []string{".jag", ".j64", ".rom", ".bin"},
-		Launch:     launch(systemdefs.SystemJaguar),
+		Launch:     launch(pl, systemdefs.SystemJaguar),
 	},
 	{
 		ID:         systemdefs.SystemMasterSystem,
 		SystemID:   systemdefs.SystemMasterSystem,
 		Folders:    []string{"SMS"},
 		Extensions: []string{".sms"},
-		Launch:     launch(systemdefs.SystemMasterSystem),
+		Launch:     launch(pl, systemdefs.SystemMasterSystem),
 	},
 	{
 		ID:       "SindenSMS",
@@ -747,7 +761,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemMegaCD,
 		Folders:    []string{"MegaCD"},
 		Extensions: []string{".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemMegaCD),
+		Launch:     launch(pl, systemdefs.SystemMegaCD),
 	},
 	{
 		ID:       "SindenMegaCD",
@@ -764,7 +778,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemMegaDuck,
 		Folders:    []string{"GAMEBOY", "MegaDuck"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemMegaDuck),
+		Launch:     launch(pl, systemdefs.SystemMegaDuck),
 	},
 	{
 		ID:       "LLAPINeoGeo",
@@ -776,14 +790,14 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemNeoGeoCD,
 		Folders:    []string{"NeoGeo-CD", "NEOGEO"},
 		Extensions: []string{".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemNeoGeoCD),
+		Launch:     launch(pl, systemdefs.SystemNeoGeoCD),
 	},
 	{
 		ID:         systemdefs.SystemNES,
 		SystemID:   systemdefs.SystemNES,
 		Folders:    []string{"NES"},
 		Extensions: []string{".nes"},
-		Launch:     launch(systemdefs.SystemNES),
+		Launch:     launch(pl, systemdefs.SystemNES),
 	},
 	{
 		ID:       "SindenNES",
@@ -795,7 +809,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemNESMusic,
 		Folders:    []string{"NES"},
 		Extensions: []string{".nsf"},
-		Launch:     launch(systemdefs.SystemNESMusic),
+		Launch:     launch(pl, systemdefs.SystemNESMusic),
 	},
 	{
 		ID:       "LLAPINES",
@@ -807,7 +821,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemNintendo64,
 		Folders:    []string{"N64"},
 		Extensions: []string{".n64", ".z64"},
-		Launch:     launch(systemdefs.SystemNintendo64),
+		Launch:     launch(pl, systemdefs.SystemNintendo64),
 	},
 	{
 		ID:       "LLAPINintendo64",
@@ -839,28 +853,28 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemOdyssey2,
 		Folders:    []string{"ODYSSEY2"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemOdyssey2),
+		Launch:     launch(pl, systemdefs.SystemOdyssey2),
 	},
 	{
 		ID:         systemdefs.SystemPocketChallengeV2,
 		SystemID:   systemdefs.SystemPocketChallengeV2,
 		Folders:    []string{"WonderSwan", "PocketChallengeV2"},
 		Extensions: []string{".pc2"},
-		Launch:     launch(systemdefs.SystemPocketChallengeV2),
+		Launch:     launch(pl, systemdefs.SystemPocketChallengeV2),
 	},
 	{
 		ID:         systemdefs.SystemPokemonMini,
 		SystemID:   systemdefs.SystemPokemonMini,
 		Folders:    []string{"PokemonMini"},
 		Extensions: []string{".min"},
-		Launch:     launch(systemdefs.SystemPokemonMini),
+		Launch:     launch(pl, systemdefs.SystemPokemonMini),
 	},
 	{
 		ID:         systemdefs.SystemPSX,
 		SystemID:   systemdefs.SystemPSX,
 		Folders:    []string{"PSX"},
 		Extensions: []string{".cue", ".chd", ".exe"},
-		Launch:     launch(systemdefs.SystemPSX),
+		Launch:     launch(pl, systemdefs.SystemPSX),
 	},
 	{
 		ID:       "LLAPIPSX",
@@ -892,7 +906,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemSega32X,
 		Folders:    []string{"S32X"},
 		Extensions: []string{".32x"},
-		Launch:     launch(systemdefs.SystemSega32X),
+		Launch:     launch(pl, systemdefs.SystemSega32X),
 	},
 	{
 		ID:       "LLAPIS32X",
@@ -904,14 +918,14 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemSG1000,
 		Folders:    []string{"SG1000", "Coleco", "SMS"},
 		Extensions: []string{".sg"},
-		Launch:     launch(systemdefs.SystemSG1000),
+		Launch:     launch(pl, systemdefs.SystemSG1000),
 	},
 	{
 		ID:         systemdefs.SystemSuperGameboy,
 		SystemID:   systemdefs.SystemSuperGameboy,
 		Folders:    []string{"SGB"},
 		Extensions: []string{".sgb", ".gb", ".gbc"},
-		Launch:     launch(systemdefs.SystemSuperGameboy),
+		Launch:     launch(pl, systemdefs.SystemSuperGameboy),
 	},
 	{
 		ID:       "LLAPISuperGameboy",
@@ -923,14 +937,14 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemSuperVision,
 		Folders:    []string{"SuperVision"},
 		Extensions: []string{".bin", ".sv"},
-		Launch:     launch(systemdefs.SystemSuperVision),
+		Launch:     launch(pl, systemdefs.SystemSuperVision),
 	},
 	{
 		ID:         systemdefs.SystemSaturn,
 		SystemID:   systemdefs.SystemSaturn,
 		Folders:    []string{"Saturn"},
 		Extensions: []string{".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemSaturn),
+		Launch:     launch(pl, systemdefs.SystemSaturn),
 	},
 	{
 		ID:       "LLAPISaturn",
@@ -947,7 +961,7 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemSNES,
 		Folders:    []string{"SNES"},
 		Extensions: []string{".sfc", ".smc", ".bin", ".bs"},
-		Launch:     launch(systemdefs.SystemSNES),
+		Launch:     launch(pl, systemdefs.SystemSNES),
 	},
 	{
 		ID:       "LLAPISNES",
@@ -964,21 +978,21 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemSNESMusic,
 		Folders:    []string{"SNES"},
 		Extensions: []string{".spc"},
-		Launch:     launch(systemdefs.SystemSNESMusic),
+		Launch:     launch(pl, systemdefs.SystemSNESMusic),
 	},
 	{
 		ID:         systemdefs.SystemSuperGrafx,
 		SystemID:   systemdefs.SystemSuperGrafx,
 		Folders:    []string{"TGFX16"},
 		Extensions: []string{".sgx"},
-		Launch:     launch(systemdefs.SystemSuperGrafx),
+		Launch:     launch(pl, systemdefs.SystemSuperGrafx),
 	},
 	{
 		ID:         systemdefs.SystemTurboGrafx16,
 		SystemID:   systemdefs.SystemTurboGrafx16,
 		Folders:    []string{"TGFX16"},
 		Extensions: []string{".pce", ".bin"},
-		Launch:     launch(systemdefs.SystemTurboGrafx16),
+		Launch:     launch(pl, systemdefs.SystemTurboGrafx16),
 	},
 	{
 		ID:       "LLAPITurboGrafx16",
@@ -990,35 +1004,35 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemTurboGrafx16CD,
 		Folders:    []string{"TGFX16-CD"},
 		Extensions: []string{".cue", ".chd"},
-		Launch:     launch(systemdefs.SystemTurboGrafx16CD),
+		Launch:     launch(pl, systemdefs.SystemTurboGrafx16CD),
 	},
 	{
 		ID:         systemdefs.SystemVC4000,
 		SystemID:   systemdefs.SystemVC4000,
 		Folders:    []string{"VC4000"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemVC4000),
+		Launch:     launch(pl, systemdefs.SystemVC4000),
 	},
 	{
 		ID:         systemdefs.SystemVectrex,
 		SystemID:   systemdefs.SystemVectrex,
 		Folders:    []string{"VECTREX"},
 		Extensions: []string{".vec", ".bin", ".rom"}, // TODO: overlays (.ovr)
-		Launch:     launch(systemdefs.SystemVectrex),
+		Launch:     launch(pl, systemdefs.SystemVectrex),
 	},
 	{
 		ID:         systemdefs.SystemWonderSwan,
 		SystemID:   systemdefs.SystemWonderSwan,
 		Folders:    []string{"WonderSwan"},
 		Extensions: []string{".ws"},
-		Launch:     launch(systemdefs.SystemWonderSwan),
+		Launch:     launch(pl, systemdefs.SystemWonderSwan),
 	},
 	{
 		ID:         systemdefs.SystemWonderSwanColor,
 		SystemID:   systemdefs.SystemWonderSwanColor,
 		Folders:    []string{"WonderSwan", "WonderSwanColor"},
 		Extensions: []string{".wsc"},
-		Launch:     launch(systemdefs.SystemWonderSwanColor),
+		Launch:     launch(pl, systemdefs.SystemWonderSwanColor),
 	},
 	// Computers
 	{
@@ -1026,35 +1040,35 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemAcornAtom,
 		Folders:    []string{"AcornAtom"},
 		Extensions: []string{".vhd"},
-		Launch:     launch(systemdefs.SystemAcornAtom),
+		Launch:     launch(pl, systemdefs.SystemAcornAtom),
 	},
 	{
 		ID:         systemdefs.SystemAcornElectron,
 		SystemID:   systemdefs.SystemAcornElectron,
 		Folders:    []string{"AcornElectron"},
 		Extensions: []string{".vhd"},
-		Launch:     launch(systemdefs.SystemAcornElectron),
+		Launch:     launch(pl, systemdefs.SystemAcornElectron),
 	},
 	{
 		ID:         systemdefs.SystemAliceMC10,
 		SystemID:   systemdefs.SystemAliceMC10,
 		Folders:    []string{"AliceMC10"},
 		Extensions: []string{".c10"},
-		Launch:     launch(systemdefs.SystemAliceMC10),
+		Launch:     launch(pl, systemdefs.SystemAliceMC10),
 	},
 	{
 		ID:         systemdefs.SystemAmstrad,
 		SystemID:   systemdefs.SystemAmstrad,
 		Folders:    []string{"Amstrad"},
 		Extensions: []string{".dsk", ".cdt"}, // TODO: globbing support? for .e??
-		Launch:     launch(systemdefs.SystemAmstrad),
+		Launch:     launch(pl, systemdefs.SystemAmstrad),
 	},
 	{
 		ID:         systemdefs.SystemAmstradPCW,
 		SystemID:   systemdefs.SystemAmstradPCW,
 		Folders:    []string{"Amstrad PCW"},
 		Extensions: []string{".dsk"},
-		Launch:     launch(systemdefs.SystemAmstradPCW),
+		Launch:     launch(pl, systemdefs.SystemAmstradPCW),
 	},
 	{
 		ID:         systemdefs.SystemDOS,
@@ -1068,315 +1082,315 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemApogee,
 		Folders:    []string{"APOGEE"},
 		Extensions: []string{".rka", ".rkr", ".gam"},
-		Launch:     launch(systemdefs.SystemApogee),
+		Launch:     launch(pl, systemdefs.SystemApogee),
 	},
 	{
 		ID:         systemdefs.SystemAppleI,
 		SystemID:   systemdefs.SystemAppleI,
 		Folders:    []string{"Apple-I"},
 		Extensions: []string{".txt"},
-		Launch:     launch(systemdefs.SystemAppleI),
+		Launch:     launch(pl, systemdefs.SystemAppleI),
 	},
 	{
 		ID:         systemdefs.SystemAppleII,
 		SystemID:   systemdefs.SystemAppleII,
 		Folders:    []string{"Apple-II"},
 		Extensions: []string{".dsk", ".do", ".po", ".nib", ".hdv"},
-		Launch:     launch(systemdefs.SystemAppleII),
+		Launch:     launch(pl, systemdefs.SystemAppleII),
 	},
 	{
 		ID:         systemdefs.SystemAquarius,
 		SystemID:   systemdefs.SystemAquarius,
 		Folders:    []string{"AQUARIUS"},
 		Extensions: []string{".bin", ".caq"},
-		Launch:     launch(systemdefs.SystemAquarius),
+		Launch:     launch(pl, systemdefs.SystemAquarius),
 	},
 	{
 		ID:         systemdefs.SystemAtari800,
 		SystemID:   systemdefs.SystemAtari800,
 		Folders:    []string{"ATARI800"},
 		Extensions: []string{".atr", ".xex", ".xfd", ".atx", ".car", ".rom", ".bin"},
-		Launch:     launch(systemdefs.SystemAtari800),
+		Launch:     launch(pl, systemdefs.SystemAtari800),
 	},
 	{
 		ID:         systemdefs.SystemBBCMicro,
 		SystemID:   systemdefs.SystemBBCMicro,
 		Folders:    []string{"BBCMicro"},
 		Extensions: []string{".ssd", ".dsd", ".vhd"},
-		Launch:     launch(systemdefs.SystemBBCMicro),
+		Launch:     launch(pl, systemdefs.SystemBBCMicro),
 	},
 	{
 		ID:         systemdefs.SystemBK0011M,
 		SystemID:   systemdefs.SystemBK0011M,
 		Folders:    []string{"BK0011M"},
 		Extensions: []string{".bin", ".dsk", ".vhd"},
-		Launch:     launch(systemdefs.SystemBK0011M),
+		Launch:     launch(pl, systemdefs.SystemBK0011M),
 	},
 	{
 		ID:         systemdefs.SystemC16,
 		SystemID:   systemdefs.SystemC16,
 		Folders:    []string{"C16"},
 		Extensions: []string{".d64", ".g64", ".prg", ".tap", ".bin"},
-		Launch:     launch(systemdefs.SystemC16),
+		Launch:     launch(pl, systemdefs.SystemC16),
 	},
 	{
 		ID:         systemdefs.SystemC64,
 		SystemID:   systemdefs.SystemC64,
 		Folders:    []string{"C64"},
 		Extensions: []string{".d64", ".g64", ".t64", ".d81", ".prg", ".crt", ".reu", ".tap"},
-		Launch:     launch(systemdefs.SystemC64),
+		Launch:     launch(pl, systemdefs.SystemC64),
 	},
 	{
 		ID:         systemdefs.SystemCasioPV2000,
 		SystemID:   systemdefs.SystemCasioPV2000,
 		Folders:    []string{"Casio_PV-2000"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemCasioPV2000),
+		Launch:     launch(pl, systemdefs.SystemCasioPV2000),
 	},
 	{
 		ID:         systemdefs.SystemCoCo2,
 		SystemID:   systemdefs.SystemCoCo2,
 		Folders:    []string{"CoCo2"},
 		Extensions: []string{".dsk", ".cas", ".ccc", ".rom"},
-		Launch:     launch(systemdefs.SystemCoCo2),
+		Launch:     launch(pl, systemdefs.SystemCoCo2),
 	},
 	{
 		ID:         systemdefs.SystemEDSAC,
 		SystemID:   systemdefs.SystemEDSAC,
 		Folders:    []string{"EDSAC"},
 		Extensions: []string{".tap"},
-		Launch:     launch(systemdefs.SystemEDSAC),
+		Launch:     launch(pl, systemdefs.SystemEDSAC),
 	},
 	{
 		ID:         systemdefs.SystemGalaksija,
 		SystemID:   systemdefs.SystemGalaksija,
 		Folders:    []string{"Galaksija"},
 		Extensions: []string{".tap"},
-		Launch:     launch(systemdefs.SystemGalaksija),
+		Launch:     launch(pl, systemdefs.SystemGalaksija),
 	},
 	{
 		ID:         systemdefs.SystemInteract,
 		SystemID:   systemdefs.SystemInteract,
 		Folders:    []string{"Interact"},
 		Extensions: []string{".cin", ".k7"},
-		Launch:     launch(systemdefs.SystemInteract),
+		Launch:     launch(pl, systemdefs.SystemInteract),
 	},
 	{
 		ID:         systemdefs.SystemJupiter,
 		SystemID:   systemdefs.SystemJupiter,
 		Folders:    []string{"Jupiter"},
 		Extensions: []string{".ace"},
-		Launch:     launch(systemdefs.SystemJupiter),
+		Launch:     launch(pl, systemdefs.SystemJupiter),
 	},
 	{
 		ID:         systemdefs.SystemLaser,
 		SystemID:   systemdefs.SystemLaser,
 		Folders:    []string{"Laser"},
 		Extensions: []string{".vz"},
-		Launch:     launch(systemdefs.SystemLaser),
+		Launch:     launch(pl, systemdefs.SystemLaser),
 	},
 	{
 		ID:         systemdefs.SystemLynx48,
 		SystemID:   systemdefs.SystemLynx48,
 		Folders:    []string{"Lynx48"},
 		Extensions: []string{".tap"},
-		Launch:     launch(systemdefs.SystemLynx48),
+		Launch:     launch(pl, systemdefs.SystemLynx48),
 	},
 	{
 		ID:         systemdefs.SystemMacPlus,
 		SystemID:   systemdefs.SystemMacPlus,
 		Folders:    []string{"MACPLUS"},
 		Extensions: []string{".dsk", ".img", ".vhd"},
-		Launch:     launch(systemdefs.SystemMacPlus),
+		Launch:     launch(pl, systemdefs.SystemMacPlus),
 	},
 	{
 		ID:         systemdefs.SystemMSX,
 		SystemID:   systemdefs.SystemMSX,
 		Folders:    []string{"MSX"},
 		Extensions: []string{".vhd"},
-		Launch:     launch(systemdefs.SystemMSX),
+		Launch:     launch(pl, systemdefs.SystemMSX),
 	},
 	{
 		ID:         "MSX1",
 		SystemID:   systemdefs.SystemMSX1,
 		Folders:    []string{"MSX1"},
 		Extensions: []string{".dsk", ".rom"},
-		Launch:     launch(systemdefs.SystemMSX1),
+		Launch:     launch(pl, systemdefs.SystemMSX1),
 	},
 	{
 		ID:         systemdefs.SystemMultiComp,
 		SystemID:   systemdefs.SystemMultiComp,
 		Folders:    []string{"MultiComp"},
 		Extensions: []string{".img"},
-		Launch:     launch(systemdefs.SystemMultiComp),
+		Launch:     launch(pl, systemdefs.SystemMultiComp),
 	},
 	{
 		ID:         systemdefs.SystemOrao,
 		SystemID:   systemdefs.SystemOrao,
 		Folders:    []string{"ORAO"},
 		Extensions: []string{".tap"},
-		Launch:     launch(systemdefs.SystemOrao),
+		Launch:     launch(pl, systemdefs.SystemOrao),
 	},
 	{
 		ID:         systemdefs.SystemOric,
 		SystemID:   systemdefs.SystemOric,
 		Folders:    []string{"Oric"},
 		Extensions: []string{".dsk"},
-		Launch:     launch(systemdefs.SystemOric),
+		Launch:     launch(pl, systemdefs.SystemOric),
 	},
 	{
 		ID:         systemdefs.SystemPCXT,
 		SystemID:   systemdefs.SystemPCXT,
 		Folders:    []string{"PCXT"},
 		Extensions: []string{".img", ".vhd", ".ima", ".vfd"},
-		Launch:     launch(systemdefs.SystemPCXT),
+		Launch:     launch(pl, systemdefs.SystemPCXT),
 	},
 	{
 		ID:         systemdefs.SystemPDP1,
 		SystemID:   systemdefs.SystemPDP1,
 		Folders:    []string{"PDP1"},
 		Extensions: []string{".bin", ".rim", ".pdp"},
-		Launch:     launch(systemdefs.SystemPDP1),
+		Launch:     launch(pl, systemdefs.SystemPDP1),
 	},
 	{
 		ID:         systemdefs.SystemPET2001,
 		SystemID:   systemdefs.SystemPET2001,
 		Folders:    []string{"PET2001"},
 		Extensions: []string{".prg", ".tap"},
-		Launch:     launch(systemdefs.SystemPET2001),
+		Launch:     launch(pl, systemdefs.SystemPET2001),
 	},
 	{
 		ID:         systemdefs.SystemPMD85,
 		SystemID:   systemdefs.SystemPMD85,
 		Folders:    []string{"PMD85"},
 		Extensions: []string{".rmm"},
-		Launch:     launch(systemdefs.SystemPMD85),
+		Launch:     launch(pl, systemdefs.SystemPMD85),
 	},
 	{
 		ID:         systemdefs.SystemQL,
 		SystemID:   systemdefs.SystemQL,
 		Folders:    []string{"QL"},
 		Extensions: []string{".mdv", ".win"},
-		Launch:     launch(systemdefs.SystemQL),
+		Launch:     launch(pl, systemdefs.SystemQL),
 	},
 	{
 		ID:         systemdefs.SystemRX78,
 		SystemID:   systemdefs.SystemRX78,
 		Folders:    []string{"RX78"},
 		Extensions: []string{".bin"},
-		Launch:     launch(systemdefs.SystemRX78),
+		Launch:     launch(pl, systemdefs.SystemRX78),
 	},
 	{
 		ID:         systemdefs.SystemSAMCoupe,
 		SystemID:   systemdefs.SystemSAMCoupe,
 		Folders:    []string{"SAMCOUPE"},
 		Extensions: []string{".dsk", ".mgt", ".img"},
-		Launch:     launch(systemdefs.SystemSAMCoupe),
+		Launch:     launch(pl, systemdefs.SystemSAMCoupe),
 	},
 	{
 		ID:         systemdefs.SystemSordM5,
 		SystemID:   systemdefs.SystemSordM5,
 		Folders:    []string{"Sord M5"},
 		Extensions: []string{".bin", ".rom", ".cas"},
-		Launch:     launch(systemdefs.SystemSordM5),
+		Launch:     launch(pl, systemdefs.SystemSordM5),
 	},
 	{
 		ID:         systemdefs.SystemSpecialist,
 		SystemID:   systemdefs.SystemSpecialist,
 		Folders:    []string{"SPMX"},
 		Extensions: []string{".rks", ".odi"},
-		Launch:     launch(systemdefs.SystemSpecialist),
+		Launch:     launch(pl, systemdefs.SystemSpecialist),
 	},
 	{
 		ID:         systemdefs.SystemSVI328,
 		SystemID:   systemdefs.SystemSVI328,
 		Folders:    []string{"SVI328"},
 		Extensions: []string{".cas", ".bin", ".rom"},
-		Launch:     launch(systemdefs.SystemSVI328),
+		Launch:     launch(pl, systemdefs.SystemSVI328),
 	},
 	{
 		ID:         systemdefs.SystemTatungEinstein,
 		SystemID:   systemdefs.SystemTatungEinstein,
 		Folders:    []string{"TatungEinstein"},
 		Extensions: []string{".dsk"},
-		Launch:     launch(systemdefs.SystemTatungEinstein),
+		Launch:     launch(pl, systemdefs.SystemTatungEinstein),
 	},
 	{
 		ID:         systemdefs.SystemTI994A,
 		SystemID:   systemdefs.SystemTI994A,
 		Folders:    []string{"TI-99_4A"},
 		Extensions: []string{".bin", ".m99"},
-		Launch:     launch(systemdefs.SystemTI994A),
+		Launch:     launch(pl, systemdefs.SystemTI994A),
 	},
 	{
 		ID:         systemdefs.SystemTomyTutor,
 		SystemID:   systemdefs.SystemTomyTutor,
 		Folders:    []string{"TomyTutor"},
 		Extensions: []string{".bin", ".cas"},
-		Launch:     launch(systemdefs.SystemTomyTutor),
+		Launch:     launch(pl, systemdefs.SystemTomyTutor),
 	},
 	{
 		ID:         systemdefs.SystemTRS80,
 		SystemID:   systemdefs.SystemTRS80,
 		Folders:    []string{"TRS-80"},
 		Extensions: []string{".dsk", ".jvi", ".cmd", ".cas"},
-		Launch:     launch(systemdefs.SystemTRS80),
+		Launch:     launch(pl, systemdefs.SystemTRS80),
 	},
 	{
 		ID:         systemdefs.SystemTSConf,
 		SystemID:   systemdefs.SystemTSConf,
 		Folders:    []string{"TSConf"},
 		Extensions: []string{".vhd"},
-		Launch:     launch(systemdefs.SystemTSConf),
+		Launch:     launch(pl, systemdefs.SystemTSConf),
 	},
 	{
 		ID:         systemdefs.SystemUK101,
 		SystemID:   systemdefs.SystemUK101,
 		Folders:    []string{"UK101"},
 		Extensions: []string{".txt", ".bas", ".lod"},
-		Launch:     launch(systemdefs.SystemUK101),
+		Launch:     launch(pl, systemdefs.SystemUK101),
 	},
 	{
 		ID:         systemdefs.SystemVector06C,
 		SystemID:   systemdefs.SystemVector06C,
 		Folders:    []string{"VECTOR06"},
 		Extensions: []string{".rom", ".com", ".c00", ".edd", ".fdd"},
-		Launch:     launch(systemdefs.SystemVector06C),
+		Launch:     launch(pl, systemdefs.SystemVector06C),
 	},
 	{
 		ID:         systemdefs.SystemVIC20,
 		SystemID:   systemdefs.SystemVIC20,
 		Folders:    []string{"VIC20"},
 		Extensions: []string{".d64", ".g64", ".prg", ".tap", ".crt"},
-		Launch:     launch(systemdefs.SystemVIC20),
+		Launch:     launch(pl, systemdefs.SystemVIC20),
 	},
 	{
 		ID:         systemdefs.SystemX68000,
 		SystemID:   systemdefs.SystemX68000,
 		Folders:    []string{"X68000"},
 		Extensions: []string{".d88", ".hdf", ".mgl"},
-		Launch:     launch(systemdefs.SystemX68000),
+		Launch:     launch(pl, systemdefs.SystemX68000),
 	},
 	{
 		ID:         systemdefs.SystemZX81,
 		SystemID:   systemdefs.SystemZX81,
 		Folders:    []string{"ZX81"},
 		Extensions: []string{".p", ".0"},
-		Launch:     launch(systemdefs.SystemZX81),
+		Launch:     launch(pl, systemdefs.SystemZX81),
 	},
 	{
 		ID:         systemdefs.SystemZXSpectrum,
 		SystemID:   systemdefs.SystemZXSpectrum,
 		Folders:    []string{"Spectrum"},
 		Extensions: []string{".tap", ".csw", ".tzx", ".sna", ".z80", ".trd", ".img", ".dsk", ".mgt", ".vhd"},
-		Launch:     launch(systemdefs.SystemZXSpectrum),
+		Launch:     launch(pl, systemdefs.SystemZXSpectrum),
 	},
 	{
 		ID:         systemdefs.SystemZXNext,
 		SystemID:   systemdefs.SystemZXNext,
 		Folders:    []string{"ZXNext"},
 		Extensions: []string{".vhd", ".tzx", ".csw"},
-		Launch:     launch(systemdefs.SystemZXNext),
+		Launch:     launch(pl, systemdefs.SystemZXNext),
 	},
 	// Other
 	{
@@ -1384,28 +1398,28 @@ var Launchers = []platforms.Launcher{
 		SystemID:   systemdefs.SystemArcade,
 		Folders:    []string{"_Arcade"},
 		Extensions: []string{".mra"},
-		Launch:     launch(systemdefs.SystemArcade),
+		Launch:     launch(pl, systemdefs.SystemArcade),
 	},
 	{
 		ID:         systemdefs.SystemArduboy,
 		SystemID:   systemdefs.SystemArduboy,
 		Folders:    []string{"Arduboy"},
 		Extensions: []string{".hex", ".bin"},
-		Launch:     launch(systemdefs.SystemArduboy),
+		Launch:     launch(pl, systemdefs.SystemArduboy),
 	},
 	{
 		ID:         systemdefs.SystemChip8,
 		SystemID:   systemdefs.SystemChip8,
 		Folders:    []string{"Chip8"},
 		Extensions: []string{".ch8"},
-		Launch:     launch(systemdefs.SystemChip8),
+		Launch:     launch(pl, systemdefs.SystemChip8),
 	},
 	{
 		ID:         systemdefs.SystemGroovy,
 		SystemID:   systemdefs.SystemGroovy,
 		Folders:    []string{"Groovy"},
 		Extensions: []string{".gmc"},
-		Launch:     launch(systemdefs.SystemGroovy),
+		Launch:     launch(pl, systemdefs.SystemGroovy),
 	},
 	{
 		ID:         "Generic",
@@ -1423,4 +1437,5 @@ var Launchers = []platforms.Launcher{
 			return nil, nil //nolint:nilnil // MiSTer launches don't return a process handle
 		},
 	},
+}
 }
