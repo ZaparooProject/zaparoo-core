@@ -446,24 +446,8 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			defer cancel() // Cancel context when process finishes
 			waitErr := cmd.Wait()
 
-			// Check if we're stale (new launcher has started)
 			if launcherCtx.Err() != nil {
 				log.Debug().Msg("video cleanup cancelled - launcher superseded")
-
-				// Check intent stored before context cancellation
-				pl.processMu.RLock()
-				intent := pl.stopIntent
-				pl.processMu.RUnlock()
-
-				if intent == platforms.StopForMenu {
-					log.Debug().Msg("stopping for menu, exiting console")
-					restore() // Press F12 and launch menu
-				} else {
-					log.Debug().Msg("preemption, preserving console state")
-					if restoreErr := restoreConsole(vt); restoreErr != nil {
-						log.Warn().Err(restoreErr).Msg("error restoring console cursor")
-					}
-				}
 				return
 			}
 
