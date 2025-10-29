@@ -257,7 +257,12 @@ func (m *MockPlatform) ShowPicker(cfg *config.Instance, args widgetmodels.Picker
 	return nil
 }
 
-func (*MockPlatform) ConsoleManager() platforms.ConsoleManager {
+func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
+	args := m.Called()
+	if manager, ok := args.Get(0).(platforms.ConsoleManager); ok {
+		return manager
+	}
+	// Return a safe default if not configured
 	return platforms.NoOpConsoleManager{}
 }
 

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/rs/zerolog/log"
 )
 
@@ -52,18 +54,35 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	}
 
 	if pl.activeMedia() != nil {
-		// menu must be open to switch tty and launch script
-		log.Debug().Msg("killing launcher...")
-		err := pl.StopActiveLauncher(platforms.StopForPreemption)
+		// Scripts need clean console state (normal resolution, not scaled video mode)
+		// Use StopForConsoleReset to ensure menu is opened before console switch
+		log.Debug().Msg("stopping active launcher for script...")
+		err := pl.StopActiveLauncher(platforms.StopForConsoleReset)
 		if err != nil {
 			return err
 		}
-		// wait for menu core
-		time.Sleep(1 * time.Second)
+
+		// Wait for menu core to become active to ensure console state is reset
+		menuWaitCtx, menuWaitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer menuWaitCancel()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		menuReady := false
+		for !menuReady {
+			select {
+			case <-menuWaitCtx.Done():
+				return errors.New("timed out waiting for menu core to load")
+			case <-ticker.C:
+				if mistermain.GetActiveCoreName() == misterconfig.MenuCore {
+					menuReady = true
+				}
+			}
+		}
 	}
 
 	// run it on-screen like a regular script
-	err := pl.ConsoleManager().Open("3")
+	err := pl.ConsoleManager().Open(scriptConsoleVT)
 	if err != nil {
 		return fmt.Errorf("failed to open console for script: %w", err)
 	}

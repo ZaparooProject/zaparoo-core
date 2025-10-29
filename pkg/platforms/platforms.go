@@ -67,6 +67,8 @@ const (
 	StopForPreemption StopIntent = iota
 	// StopForMenu means stopping to return to menu/frontend
 	StopForMenu
+	// StopForConsoleReset means stopping to reset console state (video mode, etc) before new console launch
+	StopForConsoleReset
 )
 
 const (

@@ -361,8 +361,8 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	// Clear active media
 	p.setActiveMedia(nil)
 
-	// If stopping for menu, return to menu (clears console state internally)
-	if intent == platforms.StopForMenu {
+	// Return to menu if needed
+	if intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset {
 		if err := p.ReturnToMenu(); err != nil {
 			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
 		}

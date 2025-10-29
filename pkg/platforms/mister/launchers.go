@@ -29,6 +29,7 @@ import (
 const (
 	f9ConsoleVT       = "1"
 	launcherConsoleVT = "7"
+	scriptConsoleVT   = "3"
 )
 
 func checkInZip(path string) string {
