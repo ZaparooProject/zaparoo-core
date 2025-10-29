@@ -44,31 +44,32 @@ import (
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
+	launcherManager     platforms.LauncherContextManager
+	setActiveMedia      func(*models.ActiveMedia)
 	textMap             map[string]string
-	trackedProcess      *os.Process
-	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
 	stopTracker         func() error
-	setActiveMedia      func(*models.ActiveMedia)
+	trackedProcess      *os.Process
 	activeMedia         func() *models.ActiveMedia
-	launcherManager     platforms.LauncherContextManager
-	kbd                 linuxinput.Keyboard
+	tracker             *tracker.Tracker
+	consoleManager      *MiSTerConsoleManager
 	gpd                 linuxinput.Gamepad
+	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
 	stopIntent          platforms.StopIntent
-	consoleActive       bool
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex
-	consoleMu           sync.RWMutex
 }
 
 func NewPlatform() *Platform {
-	return &Platform{
+	p := &Platform{
 		platformMu: sync.Mutex{},
 	}
+	p.consoleManager = newConsoleManager(p)
+	return p
 }
 
 func (p *Platform) setLastLauncher(l *platforms.Launcher) {
@@ -372,11 +373,11 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 
 func (p *Platform) ReturnToMenu() error {
 	// Restore console cursor state on both TTYs
-	if err := restoreConsole(f9ConsoleVT); err != nil {
+	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
 		log.Debug().Err(err).Msg("failed to restore tty1 state")
 	}
 	if launcherConsoleVT != f9ConsoleVT {
-		if err := restoreConsole(launcherConsoleVT); err != nil {
+		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
 			log.Debug().Err(err).Msgf("failed to restore tty%s state", launcherConsoleVT)
 		}
 	}
@@ -389,9 +390,9 @@ func (p *Platform) ReturnToMenu() error {
 	time.Sleep(300 * time.Millisecond)
 
 	// Clear console active flag - we're back in FPGA mode
-	p.consoleMu.Lock()
-	p.consoleActive = false
-	p.consoleMu.Unlock()
+	p.consoleManager.mu.Lock()
+	p.consoleManager.active = false
+	p.consoleManager.mu.Unlock()
 
 	return nil
 }
@@ -729,7 +730,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	ls := createLaunchers(p)
+	ls := CreateLaunchers(p)
 	ls = append(ls, amiga, neogeo, createVideoLauncher(p))
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
@@ -786,4 +787,8 @@ func (p *Platform) ShowPicker(
 	args widgetmodels.PickerArgs,
 ) error {
 	return showPicker(cfg, p, args)
+}
+
+func (p *Platform) ConsoleManager() platforms.ConsoleManager {
+	return p.consoleManager
 }

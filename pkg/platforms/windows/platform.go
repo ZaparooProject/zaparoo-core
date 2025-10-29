@@ -701,3 +701,7 @@ func (*Platform) ShowPicker(
 ) error {
 	return platforms.ErrNotSupported
 }
+
+func (p *Platform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
+}

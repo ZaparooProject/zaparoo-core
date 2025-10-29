@@ -257,6 +257,10 @@ func (m *MockPlatform) ShowPicker(cfg *config.Instance, args widgetmodels.Picker
 	return nil
 }
 
+func (*MockPlatform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
+}
+
 // Helper methods for testing
 
 // GetLaunchedMedia returns a slice of all media paths that were launched

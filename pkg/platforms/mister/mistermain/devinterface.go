@@ -46,7 +46,7 @@ func LaunchMenu() error {
 
 	// Send just "menu.rbf" to let MiSTer_Main resolve the correct path
 	// (it will use getStorageDir to find menu on current storage device)
-	if _, err := fmt.Fprintf(cmd, "load_core menu.rbf\n"); err != nil {
+	if _, err := fmt.Fprint(cmd, "load_core menu.rbf\n"); err != nil {
 		return fmt.Errorf("failed to write to command interface: %w", err)
 	}
 

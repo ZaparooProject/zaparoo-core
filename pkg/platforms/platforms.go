@@ -283,4 +283,7 @@ type Platform interface {
 	// may be used to manually cancel and hide the picker.
 	// TODO: it appears to not return said function
 	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
+	// ConsoleManager returns the platform's console manager for TTY/console switching.
+	// Platforms without console switching return NoOpConsoleManager.
+	ConsoleManager() ConsoleManager
 }
