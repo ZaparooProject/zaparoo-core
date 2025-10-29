@@ -259,6 +259,11 @@ func (*Platform) GetActiveLauncher() string {
 	return core
 }
 
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
+	return nil
+}
+
 func (p *Platform) PlayAudio(path string) error {
 	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
 		return fmt.Errorf("unsupported audio format: %s", path)

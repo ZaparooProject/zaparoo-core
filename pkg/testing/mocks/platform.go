@@ -129,6 +129,15 @@ func (m *MockPlatform) StopActiveLauncher() error {
 	return nil
 }
 
+// ReturnToMenu returns the platform to its main UI/launcher/frontend
+func (m *MockPlatform) ReturnToMenu() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock platform return to menu failed: %w", err)
+	}
+	return nil
+}
+
 // PlayAudio plays an audio file at the given path
 func (m *MockPlatform) PlayAudio(path string) error {
 	args := m.Called(path)

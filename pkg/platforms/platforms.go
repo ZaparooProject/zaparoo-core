@@ -216,6 +216,12 @@ type Platform interface {
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
 	StopActiveLauncher() error
+	// ReturnToMenu returns the platform to its main UI/launcher/frontend.
+	// For platforms with a menu system (MiSTer OSD, EmulationStation, Steam Big Picture),
+	// this launches the menu/frontend. For platforms without a menu concept, this is a no-op.
+	// This is separate from StopActiveLauncher to allow optimized transitions where
+	// returning to the menu is not always necessary (e.g., MGL to MGL on MiSTer).
+	ReturnToMenu() error
 	// SetTrackedProcess stores a process handle for lifecycle management.
 	// Used by DoLaunch to track processes that can be killed later.
 	SetTrackedProcess(*os.Process)

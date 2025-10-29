@@ -315,7 +315,6 @@ func (p *Platform) StopActiveLauncher() error {
 
 	// Kill tracked process if it exists
 	p.processMu.Lock()
-	hadProcess := p.trackedProcess != nil
 	if p.trackedProcess != nil {
 		if err := p.trackedProcess.Kill(); err != nil {
 			log.Warn().Err(err).Msg("failed to kill tracked process")
@@ -326,15 +325,29 @@ func (p *Platform) StopActiveLauncher() error {
 	}
 	p.processMu.Unlock()
 
-	// Only launch menu and clear active media if we actually stopped something
-	if hadProcess {
-		err := mistermain.LaunchMenu()
-		if err != nil {
-			return fmt.Errorf("failed to launch menu: %w", err)
-		}
-		p.setActiveMedia(nil)
-	}
+	// Clear active media
+	p.setActiveMedia(nil)
+
 	return nil
+}
+
+func (*Platform) ReturnToMenu() error {
+	err := mistermain.LaunchMenu()
+	if err != nil {
+		return fmt.Errorf("failed to launch menu: %w", err)
+	}
+	// Wait for menu transition to settle
+	time.Sleep(300 * time.Millisecond)
+	return nil
+}
+
+// isFPGAActive checks if an FPGA core is currently running (not menu).
+// This reads the CORENAME file which MiSTer updates whenever cores change.
+// Returns true when a game/system core is active, false when in menu or on error.
+// This detects ALL active cores, even those launched outside Zaparoo.
+func (*Platform) isFPGAActive() bool {
+	coreName := mistermain.GetActiveCoreName()
+	return coreName != "" && coreName != misterconfig.MenuCore
 }
 
 func (p *Platform) PlayAudio(path string) error {

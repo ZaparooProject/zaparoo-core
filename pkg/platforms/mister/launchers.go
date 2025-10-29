@@ -352,6 +352,14 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 		// Grace period to allow any previous console/menu transitions to complete
 		time.Sleep(300 * time.Millisecond)
 
+		// Check if FPGA core is active (need to return to menu before console switch)
+		if pl.isFPGAActive() {
+			log.Debug().Msg("FPGA core active, returning to menu before console switch")
+			if err := pl.ReturnToMenu(); err != nil {
+				return nil, fmt.Errorf("failed to return to menu: %w", err)
+			}
+		}
+
 		// 1. Prepare console
 		vt := "4"
 		if cleanErr := cleanConsole(vt); cleanErr != nil {

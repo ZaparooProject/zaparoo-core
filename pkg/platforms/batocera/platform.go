@@ -265,6 +265,11 @@ func (p *Platform) StopActiveLauncher() error {
 	return errors.New("stop active launcher: failed to stop launcher")
 }
 
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
+	return nil
+}
+
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }

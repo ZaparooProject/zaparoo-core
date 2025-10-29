@@ -143,6 +143,11 @@ func (p *Platform) StopActiveLauncher() error {
 	return nil
 }
 
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
+	return nil
+}
+
 func (*Platform) PlayAudio(_ string) error {
 	return nil
 }
