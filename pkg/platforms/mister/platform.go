@@ -371,6 +371,16 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 }
 
 func (p *Platform) ReturnToMenu() error {
+	// Restore console cursor state on both TTYs
+	if err := restoreConsole(f9ConsoleVT); err != nil {
+		log.Debug().Err(err).Msg("failed to restore tty1 state")
+	}
+	if launcherConsoleVT != f9ConsoleVT {
+		if err := restoreConsole(launcherConsoleVT); err != nil {
+			log.Debug().Err(err).Msgf("failed to restore tty%s state", launcherConsoleVT)
+		}
+	}
+
 	err := mistermain.LaunchMenu()
 	if err != nil {
 		return fmt.Errorf("failed to launch menu: %w", err)

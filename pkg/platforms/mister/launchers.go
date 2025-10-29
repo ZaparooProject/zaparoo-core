@@ -4,6 +4,7 @@ package mister
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	f9ConsoleVT      = "1"
+	launcherConsoleVT = "7"
 )
 
 func checkInZip(path string) string {
@@ -362,15 +368,14 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			}
 		}
 
-		// 1. Prepare console
-		vt := "4"
-		if cleanErr := cleanConsole(vt); cleanErr != nil {
-			return nil, fmt.Errorf("failed to clean console: %w", cleanErr)
+		// 1. Switch to console mode
+		if openErr := openConsole(pl, launcherConsoleVT); openErr != nil {
+			return nil, fmt.Errorf("failed to open console: %w", openErr)
 		}
 
-		// 2. Switch to console mode
-		if openErr := openConsole(pl, vt); openErr != nil {
-			return nil, fmt.Errorf("failed to open console: %w", openErr)
+		// 2. Prepare console (after switching so escape sequences are processed)
+		if cleanErr := cleanConsole(launcherConsoleVT); cleanErr != nil {
+			return nil, fmt.Errorf("failed to clean console: %w", cleanErr)
 		}
 
 		// 3. Set scaled video mode (critical for performance)
@@ -402,18 +407,27 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 		)
 		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
 
-		// Redirect to actual console TTY for terminal-based players
-		ttyDev := "/dev/tty" + vt
-		if ttyFile, ttyErr := os.OpenFile(ttyDev, os.O_RDWR, 0); ttyErr == nil {
-			cmd.Stdin = ttyFile
-			cmd.Stdout = ttyFile
-			cmd.Stderr = ttyFile
-		} else {
-			log.Warn().Err(ttyErr).Str("tty", ttyDev).Msg("failed to open TTY, using default")
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
+		// Redirect stdin/stdout to /dev/null to prevent console text
+		devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open /dev/null: %w", err)
 		}
+		cmd.Stdin = devNull
+		cmd.Stdout = devNull
+
+		// Capture stderr for logging
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		}
+
+		// Log stderr output in background
+		go func() {
+			scanner := bufio.NewScanner(stderrPipe)
+			for scanner.Scan() {
+				log.Debug().Str("source", "fvp").Msg(scanner.Text())
+			}
+		}()
 
 		// 6. Define cleanup function
 		restore := func() {
@@ -421,14 +435,24 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 				log.Warn().Err(menuErr).Msg("error launching menu")
 			}
 
-			if restoreErr := restoreConsole(vt); restoreErr != nil {
-				log.Warn().Err(restoreErr).Msg("error restoring console")
+			if restoreErr := restoreConsole(f9ConsoleVT); restoreErr != nil {
+				log.Warn().Err(restoreErr).Msg("error restoring tty1")
+			}
+			if launcherConsoleVT != f9ConsoleVT {
+				if restoreErr := restoreConsole(launcherConsoleVT); restoreErr != nil {
+					log.Warn().Err(restoreErr).Msgf("error restoring tty%s", launcherConsoleVT)
+				}
 			}
 
 			// Exit console mode back to OSD
 			if keyErr := pl.KeyboardPress("{f12}"); keyErr != nil {
 				log.Warn().Err(keyErr).Msg("error pressing F12 to exit console")
 			}
+
+			// Clear console active flag
+			pl.consoleMu.Lock()
+			pl.consoleActive = false
+			pl.consoleMu.Unlock()
 
 			// Grace period for console/menu transition to complete
 			time.Sleep(200 * time.Millisecond)
@@ -458,7 +482,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 				log.Debug().Msg("video playback stopped by new media launch")
 				// Don't restore console - new launcher will handle it
 				// Just ensure cursor is restored on our VT in case we need it later
-				if restoreErr := restoreConsole(vt); restoreErr != nil {
+				if restoreErr := restoreConsole(launcherConsoleVT); restoreErr != nil {
 					log.Warn().Err(restoreErr).Msg("error restoring console cursor")
 				}
 			case waitErr != nil:

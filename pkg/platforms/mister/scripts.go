@@ -93,11 +93,25 @@ func openConsole(pl platforms.Platform, vt string) error {
 		if err != nil {
 			return err
 		}
-		if tty == "tty1" {
+		if tty == "tty"+f9ConsoleVT {
 			log.Debug().Msg("console mode confirmed")
 			// Wait for framebuffer to be ready
 			if err := waitForFramebuffer(time.Until(deadline)); err != nil {
 				return err
+			}
+
+			// Clean tty1 (where F9 takes us)
+			if err := cleanConsole(f9ConsoleVT); err != nil {
+				log.Debug().Err(err).Msg("failed to clean tty1")
+			}
+
+			// Switch to target VT for video playback
+			if vt != f9ConsoleVT {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if err := exec.CommandContext(ctx, "chvt", vt).Run(); err != nil {
+					log.Debug().Err(err).Msgf("failed to switch to tty%s", vt)
+				}
 			}
 
 			// Set console active flag
@@ -124,6 +138,16 @@ func closeConsole(pl platforms.Platform) error {
 		if !isActive {
 			log.Debug().Msg("console already inactive, skipping close")
 			return nil
+		}
+
+		// Restore console cursor state on both TTYs
+		if err := restoreConsole(f9ConsoleVT); err != nil {
+			log.Debug().Err(err).Msg("failed to restore tty1 state")
+		}
+		if launcherConsoleVT != f9ConsoleVT {
+			if err := restoreConsole(launcherConsoleVT); err != nil {
+				log.Debug().Err(err).Msgf("failed to restore tty%s state", launcherConsoleVT)
+			}
 		}
 
 		// Press F12 to return to FPGA framebuffer
@@ -208,7 +232,7 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 		// to avoid the active script check (widgets handle this)
 		log.Debug().Msg("widget launched, changing params")
 		scriptPath = "/tmp/widget_script"
-		vt = "4"
+		vt = launcherConsoleVT
 		runScript = "2"
 	}
 
@@ -297,17 +321,20 @@ func writeTty(id, s string) error {
 }
 
 func cleanConsole(vt string) error {
-	err := writeTty(vt, "\033[?25l")
+	// Clear screen and reset
+	err := writeTty(vt, "\033[2J\033[H")
 	if err != nil {
 		return err
 	}
 
+	// Disable cursor blinking
 	err = echoFile("/sys/class/graphics/fbcon/cursor_blink", "0")
 	if err != nil {
 		return err
 	}
 
-	return writeTty(vt, "\033[?17;0;0c")
+	// Hide cursor
+	return writeTty(vt, "\033[?25l")
 }
 
 func restoreConsole(vt string) error {
