@@ -41,13 +41,15 @@ func scriptIsActive() bool {
 }
 
 func openConsole(pl platforms.Platform, vt string) error {
-	// we use the F9 key as a means to disable main's usage of the framebuffer and
-	// allow scripts to run unfortunately when the menu "sleeps". any key press will
-	// be eaten by main and not trigger the console switch. there's also no simple way
-	// to tell if mister has switched to the console. so what we do is switch to tty3,
-	// which is unused by mister. then attempt to switch to console, which sets tty
-	// to 1 on success. then check in a loop if it actually did change to 1 and keep
-	// pressing F9 until it's switched
+	// We use the F9 key to signal MiSTer_Main to release the framebuffer and
+	// allow Linux console access. F9 triggers video_fb_enable() in Main_MiSTer which:
+	// 1. Switches VT using VT_ACTIVATE/VT_WAITACTIVE ioctls
+	// 2. Sends SPI commands to FPGA to release framebuffer control
+	// 3. Stops OSD rendering when video_chvt(0) != 2
+	//
+	// Problem: When the menu "sleeps", keypresses can be eaten by Main and not
+	// trigger the console switch. We use retry logic with exponential
+	// backoff and verification to handle this reliably.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -57,29 +59,50 @@ func openConsole(pl platforms.Platform, vt string) error {
 		return fmt.Errorf("failed to run chvt: %w", err)
 	}
 
-	tries := 0
-	tty := ""
-	for {
-		if tries > 10 {
-			return errors.New("open console: could not switch to tty1")
-		}
-		// switch to console
+	deadline := time.Now().Add(5 * time.Second)
+	backoff := 50 * time.Millisecond
+	maxBackoff := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		// Press F9 to signal MiSTer_Main to release framebuffer
 		err := pl.KeyboardPress("{f9}")
 		if err != nil {
 			return fmt.Errorf("failed to press F9 key: %w", err)
 		}
-		time.Sleep(50 * time.Millisecond)
-		tty, err = getTTY()
+
+		time.Sleep(backoff)
+		backoff = time.Duration(float64(backoff) * 1.5)
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+
+		// Verify console mode active by checking VT state
+		tty, err := getTTY()
 		if err != nil {
 			return err
 		}
 		if tty == "tty1" {
-			break
+			log.Debug().Msg("console mode confirmed")
+			// Wait for framebuffer to be ready
+			return waitForFramebuffer(time.Until(deadline))
 		}
-		tries++
 	}
 
-	return nil
+	return errors.New("open console: timeout waiting for console switch after 5s")
+}
+
+// waitForFramebuffer waits for the framebuffer device to become accessible
+func waitForFramebuffer(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat("/dev/fb0"); err == nil {
+			if _, err := os.Stat("/sys/class/graphics/fbcon/cursor_blink"); err == nil {
+				return nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return errors.New("framebuffer not ready")
 }
 
 func runScript(pl *Platform, bin, args string, hidden bool) error {

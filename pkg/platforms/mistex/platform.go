@@ -101,6 +101,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	cfg *config.Instance,
+	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {

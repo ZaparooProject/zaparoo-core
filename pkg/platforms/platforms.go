@@ -37,6 +37,16 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// LauncherContextManager manages launcher lifecycle contexts.
+// When a new launcher starts, it creates a new context and cancels the old one,
+// allowing previous launcher cleanup routines to detect they've been superseded.
+type LauncherContextManager interface {
+	// GetContext returns the current launcher context
+	GetContext() context.Context
+	// NewContext cancels the current context and creates a new one
+	NewContext() context.Context
+}
+
 // LauncherLifecycle determines how a launcher process is managed
 type LauncherLifecycle int
 
@@ -185,6 +195,7 @@ type Platform interface {
 	// started running.
 	StartPost(
 		*config.Instance,
+		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
 	) error

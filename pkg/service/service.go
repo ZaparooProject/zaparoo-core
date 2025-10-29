@@ -268,7 +268,7 @@ func Start(
 	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
 
 	log.Info().Msg("running platform post start")
-	err = pl.StartPost(cfg, st.ActiveMedia, st.SetActiveMedia)
+	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia)
 	if err != nil {
 		log.Error().Err(err).Msg("platform post start error")
 		return nil, fmt.Errorf("platform start post failed: %w", err)

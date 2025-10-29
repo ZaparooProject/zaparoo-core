@@ -54,6 +54,7 @@ type Platform struct {
 	stopTracker         func() error
 	setActiveMedia      func(*models.ActiveMedia)
 	activeMedia         func() *models.ActiveMedia
+	launcherManager     platforms.LauncherContextManager
 	kbd                 linuxinput.Keyboard
 	gpd                 linuxinput.Gamepad
 	lastLauncher        platforms.Launcher
@@ -178,9 +179,11 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
+	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
@@ -305,8 +308,14 @@ func (*Platform) Settings() platforms.Settings {
 }
 
 func (p *Platform) StopActiveLauncher() error {
+	// Invalidate old launcher context - signals cleanup goroutines they're stale
+	if p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
+
 	// Kill tracked process if it exists
 	p.processMu.Lock()
+	hadProcess := p.trackedProcess != nil
 	if p.trackedProcess != nil {
 		if err := p.trackedProcess.Kill(); err != nil {
 			log.Warn().Err(err).Msg("failed to kill tracked process")
@@ -317,11 +326,14 @@ func (p *Platform) StopActiveLauncher() error {
 	}
 	p.processMu.Unlock()
 
-	err := mistermain.LaunchMenu()
-	if err != nil {
-		return fmt.Errorf("failed to launch menu: %w", err)
+	// Only launch menu and clear active media if we actually stopped something
+	if hadProcess {
+		err := mistermain.LaunchMenu()
+		if err != nil {
+			return fmt.Errorf("failed to launch menu: %w", err)
+		}
+		p.setActiveMedia(nil)
 	}
-	p.setActiveMedia(nil)
 	return nil
 }
 
@@ -649,18 +661,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	mplayerVideo := platforms.Launcher{
-		ID:         "MPlayerVideo",
-		SystemID:   systemdefs.SystemVideo,
-		Folders:    []string{"Video", "Movies", "TV"},
-		Extensions: []string{".mp4", ".mkv", ".avi"},
-		Lifecycle:  platforms.LifecycleBlocking,
-		Launch:     launchMPlayer(p),
-		Kill:       killMPlayer,
-	}
-
 	ls := Launchers
-	ls = append(ls, amiga, neogeo, mplayerVideo)
+	ls = append(ls, amiga, neogeo, createVideoLauncher(p))
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }

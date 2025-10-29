@@ -59,9 +59,10 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 
 // StartPost runs any necessary platform setup AFTER the main service has started running
 func (m *MockPlatform) StartPost(cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
 ) error {
-	args := m.Called(cfg, getActiveMedia, setActiveMedia)
+	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}

@@ -30,14 +30,23 @@ import (
 
 const VideoModeFormatRGB32 = "18888"
 
-// fb_cmd0 = scaled = fb_cmd0 $fmt $rb $scale
+// fb_cmd0 = scaled = fb_cmd0 $fmt $rb $divisor
+//   - Creates framebuffer at display_resolution/divisor
+//   - Scales to fill entire screen (no borders)
+//   - divisor: 1=full, 2=half, 3=third, 4=quarter
+//
 // fb_cmd1 = exact = fb_cmd1 $fmt $rb $width $height
+//   - Creates framebuffer at exact dimensions
+//   - Integer-scales to fit display
+//   - Centers with borders
 
-// in vmode script, checks for rescount contents at start, sets mode,
-// then polls until it's the same value (up to 5 times)
-// /sys/module/MiSTer_fb/parameters/res_count
+// SetVideoModeScaled sets a scaled video mode that fills the entire screen.
+// divisor controls resolution: 1=full, 2=half, 3=third, 4=quarter
+func SetVideoModeScaled(divisor int) error {
+	if divisor < 1 || divisor > 4 {
+		return fmt.Errorf("divisor must be 1-4, got %d", divisor)
+	}
 
-func SetVideoMode(width, height int) error {
 	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
 		return fmt.Errorf("command interface not accessible: %w", err)
 	}
@@ -50,12 +59,12 @@ func SetVideoMode(width, height int) error {
 		_ = cmd.Close()
 	}(cmd)
 
+	// fb_cmd0 format: "fb_cmd0 format rb divisor"
 	cmdStr := fmt.Sprintf(
-		"%s %d %d %d",
-		VideoModeFormatRGB32[1:],
-		VideoModeFormatRGB32[0],
-		width,
-		height,
+		"fb_cmd0 %s %d %d",
+		VideoModeFormatRGB32[1:], // "8888"
+		VideoModeFormatRGB32[0],  // Rune '1' as int (49)
+		divisor,
 	)
 
 	_, err = cmd.WriteString(cmdStr)

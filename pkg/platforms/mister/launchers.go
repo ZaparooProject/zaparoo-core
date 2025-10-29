@@ -332,113 +332,157 @@ func launchAtari2600() func(*config.Instance, string) (*os.Process, error) {
 	}
 }
 
-func launchMPlayer(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
+func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
 	return func(_ *config.Instance, path string) (*os.Process, error) {
+		// videoDivisor controls the framebuffer resolution divisor for video playback.
+		// Using fb_cmd0 (scaled mode):
+		//   - divisor 3: ~640x360 on 1920x1080, ~853x480 on 2560x1440
+		//   - Scales to fill entire screen (no borders)
+		const videoDivisor = 3
+
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
 
+		log.Info().
+			Int("divisor", videoDivisor).
+			Str("path", path).
+			Msg("video playback starting")
+
+		// Grace period to allow any previous console/menu transitions to complete
+		time.Sleep(300 * time.Millisecond)
+
+		// 1. Prepare console
 		vt := "4"
-
-		err := cleanConsole(vt)
-		if err != nil {
-			return nil, err
+		if cleanErr := cleanConsole(vt); cleanErr != nil {
+			return nil, fmt.Errorf("failed to clean console: %w", cleanErr)
 		}
 
-		err = openConsole(pl, vt)
-		if err != nil {
-			return nil, err
+		// 2. Switch to console mode
+		if openErr := openConsole(pl, vt); openErr != nil {
+			return nil, fmt.Errorf("failed to open console: %w", openErr)
 		}
 
-		time.Sleep(500 * time.Millisecond)
-		err = mistermain.SetVideoMode(640, 480)
-		if err != nil {
-			return nil, fmt.Errorf("error setting video mode: %w", err)
+		// 3. Set scaled video mode (critical for performance)
+		if modeErr := mistermain.SetVideoModeScaled(videoDivisor); modeErr != nil {
+			return nil, fmt.Errorf("failed to set scaled video mode (divisor %d): %w",
+				videoDivisor, modeErr)
 		}
 
+		log.Info().Str("path", path).Msg("launching video with fvp")
+
+		// 4. Capture launcher context for staleness detection
+		launcherCtx := pl.launcherManager.GetContext()
+
+		// 5. Prepare fvp command with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+
+		fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
 		cmd := exec.CommandContext( //nolint:gosec // Path comes from internal launcher system, not user input
-			context.Background(),
+			ctx,
 			"nice",
-			"-n",
-			"-20",
-			filepath.Join(misterconfig.LinuxDir, "mplayer"),
-			"-cache",
-			"8192",
+			"-n", "-20",
+			"setsid", // fvp needs setsid to create a new session for proper TTY control
+			fvpBinary,
+			"-f", // Fullscreen mode
+			// "-j", "1", // Jump every 1 video frame for slow machines
+			"-u", // Record A/V diff after first few frames
+			"-s", // Always synchronize audio/video
 			path,
 		)
 		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 
+		// Redirect to actual console TTY for terminal-based players
+		ttyDev := "/dev/tty" + vt
+		if ttyFile, ttyErr := os.OpenFile(ttyDev, os.O_RDWR, 0); ttyErr == nil {
+			cmd.Stdin = ttyFile
+			cmd.Stdout = ttyFile
+			cmd.Stderr = ttyFile
+		} else {
+			log.Warn().Err(ttyErr).Str("tty", ttyDev).Msg("failed to open TTY, using default")
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
+
+		// 6. Define cleanup function
 		restore := func() {
-			menuErr := mistermain.LaunchMenu()
-			if menuErr != nil {
+			if menuErr := mistermain.LaunchMenu(); menuErr != nil {
 				log.Warn().Err(menuErr).Msg("error launching menu")
 			}
 
-			err = restoreConsole(vt)
-			if err != nil {
-				log.Warn().Err(err).Msg("error restoring console")
+			if restoreErr := restoreConsole(vt); restoreErr != nil {
+				log.Warn().Err(restoreErr).Msg("error restoring console")
 			}
+
+			// Exit console mode back to OSD
+			if keyErr := pl.KeyboardPress("{f12}"); keyErr != nil {
+				log.Warn().Err(keyErr).Msg("error pressing F12 to exit console")
+			}
+
+			// Grace period for console/menu transition to complete
+			time.Sleep(200 * time.Millisecond)
 		}
 
-		err = cmd.Start()
-		if err != nil {
+		// 7. Start fvp
+		if startErr := cmd.Start(); startErr != nil {
+			cancel() // Cancel context to prevent leak
 			restore()
-			return nil, fmt.Errorf("failed to start command: %w", err)
+			return nil, fmt.Errorf("failed to start fvp: %w", startErr)
 		}
 
-		// Launch cleanup in goroutine so we can return the process immediately
+		// 8. Cleanup in goroutine (non-blocking)
 		go func() {
-			err = cmd.Wait()
-			if err != nil {
-				log.Debug().Err(err).Msg("mplayer process ended with error")
+			defer cancel() // Cancel context when process finishes
+			waitErr := cmd.Wait()
+
+			// Check if we're stale (new launcher has started)
+			if launcherCtx.Err() != nil {
+				log.Debug().Msg("video cleanup cancelled: new launcher started")
+				// Just restore cursor, new launcher owns console state
+				if restoreErr := restoreConsole(vt); restoreErr != nil {
+					log.Warn().Err(restoreErr).Msg("error restoring console cursor")
+				}
+				return
 			}
-			restore()
+
+			// Handle different exit scenarios
+			switch {
+			case waitErr != nil && (waitErr.Error() == "signal: killed" || strings.Contains(waitErr.Error(), "killed")):
+				// Process was killed (likely by StopActiveLauncher for new media)
+				log.Debug().Msg("video playback stopped by new media launch")
+				// Don't restore console - new launcher will handle it
+				// Just ensure cursor is restored on our VT in case we need it later
+				if restoreErr := restoreConsole(vt); restoreErr != nil {
+					log.Warn().Err(restoreErr).Msg("error restoring console cursor")
+				}
+			case waitErr != nil:
+				// Process crashed
+				log.Error().Err(waitErr).Msg("fvp crashed")
+				pl.SetTrackedProcess(nil) // Clear tracked process
+				restore()                 // Full cleanup on crash
+			default:
+				// Process completed normally
+				log.Debug().Msg("video playback completed normally")
+				pl.SetTrackedProcess(nil) // Clear tracked process before cleanup
+				restore()                 // Full cleanup on natural completion
+			}
 		}()
 
 		return cmd.Process, nil
 	}
 }
 
-func killMPlayer(_ *config.Instance) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	psCmd := exec.CommandContext(ctx, "sh", "-c", "ps aux | grep mplayer | grep -v grep")
-	output, err := psCmd.Output()
-	if err != nil {
-		log.Info().Msgf("mplayer processes not detected.")
-		return fmt.Errorf("failed to get process output: %w", err)
+// createVideoLauncher creates a Launcher definition for fvp video playback.
+func createVideoLauncher(pl *Platform) platforms.Launcher {
+	return platforms.Launcher{
+		ID:         "GenericVideo",
+		SystemID:   systemdefs.SystemVideo,
+		Folders:    []string{"Video", "Movies", "TV"},
+		Extensions: []string{".mp4", ".mkv", ".avi", ".mov", ".webm"},
+		Lifecycle:  platforms.LifecycleTracked,
+		Launch:     launchVideo(pl),
 	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		log.Debug().Msgf("processing line: %s", line)
-
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			log.Warn().Msgf("unexpected line format: %s", line)
-			continue
-		}
-
-		pid := fields[0]
-		log.Info().Msgf("killing mplayer process with PID: %s", pid)
-
-		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		//nolint:gosec // PID from system ps command, not user input
-		killCmd := exec.CommandContext(killCtx, "kill", "-9", pid)
-		if err := killCmd.Run(); err != nil {
-			log.Error().Msgf("failed to kill process %s: %v", pid, err)
-		}
-		killCancel()
-	}
-
-	return nil
 }
 
 var Launchers = []platforms.Launcher{

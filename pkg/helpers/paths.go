@@ -468,6 +468,13 @@ func DoLaunch(
 ) error {
 	log.Debug().Msgf("launching with: %v", launcher)
 
+	// Stop any currently running launcher before starting new one
+	// This ensures tracked processes (like videos) are stopped even when
+	// FireAndForget launches (like MGL files) start
+	if stopErr := pl.StopActiveLauncher(); stopErr != nil {
+		log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
+	}
+
 	// Handle different lifecycle modes
 	switch launcher.Lifecycle {
 	case platforms.LifecycleTracked:
