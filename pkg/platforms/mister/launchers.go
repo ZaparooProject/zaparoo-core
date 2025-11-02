@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -362,31 +361,13 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			Str("path", path).
 			Msg("video playback starting")
 
-		// Check if FPGA core is active and return to menu if needed
-		if pl.isFPGAActive() {
-			log.Debug().Msg("FPGA core active, returning to menu before console switch")
-			if err := pl.ReturnToMenu(); err != nil {
-				return nil, fmt.Errorf("failed to return to menu: %w", err)
-			}
+		// Setup console environment (FPGA check, console switch, cleanup)
+		cm, err := setupConsoleEnvironment(pl)
+		if err != nil {
+			return nil, err
 		}
 
-		// Get console manager
-		cm := pl.ConsoleManager()
-
-		// 1. Switch to console mode
-		if openErr := cm.Open(launcherConsoleVT); openErr != nil {
-			return nil, fmt.Errorf("failed to open console: %w", openErr)
-		}
-
-		// 2. Prepare consoles (hide cursor and clear screen for clean video playback)
-		if cleanErr := cm.Clean(f9ConsoleVT); cleanErr != nil {
-			log.Debug().Err(cleanErr).Msg("failed to clean f9 console")
-		}
-		if cleanErr := cm.Clean(launcherConsoleVT); cleanErr != nil {
-			return nil, fmt.Errorf("failed to clean console: %w", cleanErr)
-		}
-
-		// 3. Set scaled video mode
+		// Set scaled video mode for video playback
 		if modeErr := mistermain.SetVideoModeScaled(videoDivisor); modeErr != nil {
 			return nil, fmt.Errorf("failed to set scaled video mode (divisor %d): %w",
 				videoDivisor, modeErr)
@@ -394,10 +375,10 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
 
-		// 4. Capture launcher context for staleness detection
+		// Capture launcher context for staleness detection
 		launcherCtx := pl.launcherManager.GetContext()
 
-		// 5. Prepare fvp command with timeout
+		// Prepare fvp command with timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 
 		fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
@@ -439,87 +420,17 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			}
 		}()
 
-		// 6. Define cleanup function
-		restore := func() {
-			if menuErr := mistermain.LaunchMenu(); menuErr != nil {
-				log.Warn().Err(menuErr).Msg("error launching menu")
-			}
+		// Build cleanup function that will be called on completion/crash
+		restoreFunc := createConsoleRestoreFunc(pl, cm)
 
-			if restoreErr := cm.Restore(f9ConsoleVT); restoreErr != nil {
-				log.Warn().Err(restoreErr).Msg("error restoring tty1")
-			}
-			if restoreErr := cm.Restore(launcherConsoleVT); restoreErr != nil {
-				log.Warn().Err(restoreErr).Msgf("error restoring tty%s", launcherConsoleVT)
-			}
-
-			// Exit console mode back to OSD
-			if keyErr := pl.KeyboardPress("{f12}"); keyErr != nil {
-				log.Warn().Err(keyErr).Msg("error pressing F12 to exit console")
-			}
-
-			// Clear console active flag
-			pl.consoleManager.mu.Lock()
-			pl.consoleManager.active = false
-			pl.consoleManager.mu.Unlock()
-
-			// Grace period for console/menu transition to complete
-			time.Sleep(200 * time.Millisecond)
+		// Wrap restore to also cancel context
+		restoreWithCancel := func() {
+			cancel()
+			restoreFunc()
 		}
 
-		// 7. Start fvp
-		if startErr := cmd.Start(); startErr != nil {
-			cancel() // Cancel context to prevent leak
-			restore()
-			return nil, fmt.Errorf("failed to start fvp: %w", startErr)
-		}
-
-		// 8. Cleanup in goroutine (non-blocking)
-		go func() {
-			defer cancel() // Cancel context when process finishes
-			waitErr := cmd.Wait()
-
-			if launcherCtx.Err() != nil {
-				log.Debug().Msg("video cleanup cancelled - launcher superseded")
-				return
-			}
-
-			// Handle different exit scenarios
-			if waitErr != nil {
-				// Check if process was killed by signal
-				isKilled := false
-				exitErr := &exec.ExitError{}
-				if errors.As(waitErr, &exitErr) {
-					if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-						sig := status.Signal()
-						if status.Signaled() && (sig == syscall.SIGKILL || sig == syscall.SIGTERM) {
-							isKilled = true
-						}
-					}
-				}
-
-				if isKilled {
-					// Process was killed (likely by StopActiveLauncher for new media)
-					log.Debug().Msg("video playback stopped by new media launch")
-					// Don't restore console - new launcher will handle it
-					// Just ensure cursor is restored on our VT in case we need it later
-					if restoreErr := cm.Restore(launcherConsoleVT); restoreErr != nil {
-						log.Warn().Err(restoreErr).Msg("error restoring console cursor")
-					}
-				} else {
-					// Process crashed
-					log.Error().Err(waitErr).Msg("fvp crashed")
-					pl.SetTrackedProcess(nil) // Clear tracked process
-					restore()                 // Full cleanup on crash
-				}
-			} else {
-				// Process completed normally
-				log.Debug().Msg("video playback completed normally")
-				pl.SetTrackedProcess(nil) // Clear tracked process before cleanup
-				restore()                 // Full cleanup on natural completion
-			}
-		}()
-
-		return cmd.Process, nil
+		// Start process and manage lifecycle
+		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithCancel, "fvp")
 	}
 }
 
