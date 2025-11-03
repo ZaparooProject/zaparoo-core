@@ -59,9 +59,10 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 
 // StartPost runs any necessary platform setup AFTER the main service has started running
 func (m *MockPlatform) StartPost(cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
 ) error {
-	args := m.Called(cfg, getActiveMedia, setActiveMedia)
+	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}
@@ -120,10 +121,19 @@ func (m *MockPlatform) NormalizePath(cfg *config.Instance, path string) string {
 }
 
 // StopActiveLauncher kills/exits the currently running launcher process
-func (m *MockPlatform) StopActiveLauncher() error {
-	args := m.Called()
+func (m *MockPlatform) StopActiveLauncher(intent platforms.StopIntent) error {
+	args := m.Called(intent)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform stop active launcher failed: %w", err)
+	}
+	return nil
+}
+
+// ReturnToMenu returns the platform to its main UI/launcher/frontend
+func (m *MockPlatform) ReturnToMenu() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock platform return to menu failed: %w", err)
 	}
 	return nil
 }
@@ -245,6 +255,15 @@ func (m *MockPlatform) ShowPicker(cfg *config.Instance, args widgetmodels.Picker
 		return fmt.Errorf("mock operation failed: %w", err)
 	}
 	return nil
+}
+
+func (m *MockPlatform) ConsoleManager() platforms.ConsoleManager {
+	args := m.Called()
+	if manager, ok := args.Get(0).(platforms.ConsoleManager); ok {
+		return manager
+	}
+	// Return a safe default if not configured
+	return platforms.NoOpConsoleManager{}
 }
 
 // Helper methods for testing

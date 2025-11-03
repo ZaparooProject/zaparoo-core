@@ -53,10 +53,11 @@ import (
 )
 
 type Platform struct {
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	processMu      sync.RWMutex
+	activeMedia     func() *models.ActiveMedia
+	setActiveMedia  func(*models.ActiveMedia)
+	launcherManager platforms.LauncherContextManager
+	trackedProcess  *os.Process
+	processMu       sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -93,9 +94,11 @@ func (*Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	_ *config.Instance,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
+	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 	return nil
@@ -137,7 +140,12 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+	// Invalidate old launcher context - signals cleanup goroutines they're stale
+	if p.launcherManager != nil {
+		p.launcherManager.NewContext()
+	}
+
 	p.processMu.Lock()
 	defer p.processMu.Unlock()
 
@@ -151,6 +159,11 @@ func (p *Platform) StopActiveLauncher() error {
 	}
 
 	p.setActiveMedia(nil)
+	return nil
+}
+
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
 	return nil
 }
 
@@ -248,4 +261,8 @@ func (*Platform) ShowPicker(
 	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
+}
+
+func (*Platform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
 }

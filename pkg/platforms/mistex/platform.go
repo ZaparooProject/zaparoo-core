@@ -103,6 +103,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	cfg *config.Instance,
+	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
@@ -230,7 +231,7 @@ func LaunchMenu() error {
 	return nil
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
 	if p.trackedProcess != nil {
@@ -258,6 +259,11 @@ func (*Platform) GetActiveLauncher() string {
 	}
 
 	return core
+}
+
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
+	return nil
 }
 
 func (p *Platform) PlayAudio(path string) error {
@@ -363,7 +369,12 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
-	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), mister.Launchers...)
+	ls := mister.CreateLaunchers(p)
+	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
+}
+
+func (*Platform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
 }
 
 func (*Platform) ShowNotice(

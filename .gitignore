@@ -47,3 +47,6 @@ worktrees/
 /pkg/zapscript/testdata/**/*.cue
 /pkg/zapscript/testdata/**/*.dvd
 /pkg/zapscript/testdata/**/*.gdi
+
+/scripts/mister/utils/src/
+/scripts/mister/utils/build/

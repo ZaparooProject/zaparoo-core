@@ -304,8 +304,13 @@ func (s *Service) Restart() error {
 		}
 	}
 
+	// Wait for service to stop with timeout
+	deadline := time.Now().Add(10 * time.Second)
 	for s.Running() {
-		time.Sleep(1 * time.Second)
+		if time.Now().After(deadline) {
+			return errors.New("timeout waiting for service to stop")
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	err := s.Start()

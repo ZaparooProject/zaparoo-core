@@ -479,7 +479,7 @@ func cmdPlaylistStop(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 	env.Playlist.Queue <- nil
 
-	if err := pl.StopActiveLauncher(); err != nil {
+	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        nil,
@@ -500,7 +500,7 @@ func cmdPlaylistPause(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cm
 	pls := playlists.Pause(*env.Playlist.Active)
 	env.Playlist.Queue <- pls
 
-	if err := pl.StopActiveLauncher(); err != nil {
+	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
 		return platforms.CmdResult{
 			PlaylistChanged: true,
 			Playlist:        pls,

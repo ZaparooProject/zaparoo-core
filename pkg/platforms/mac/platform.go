@@ -66,6 +66,7 @@ func (*Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	_ *config.Instance,
+	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
@@ -101,7 +102,7 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	// Kill tracked process if it exists
 	p.processMu.Lock()
 	if p.trackedProcess != nil {
@@ -115,6 +116,11 @@ func (p *Platform) StopActiveLauncher() error {
 	p.processMu.Unlock()
 
 	p.setActiveMedia(nil)
+	return nil
+}
+
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
 	return nil
 }
 
@@ -200,4 +206,8 @@ func (*Platform) ShowPicker(
 	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
+}
+
+func (*Platform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
 }

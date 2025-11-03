@@ -37,6 +37,16 @@ import (
 
 var ErrNotSupported = errors.New("operation not supported on this platform")
 
+// LauncherContextManager manages launcher lifecycle contexts.
+// When a new launcher starts, it creates a new context and cancels the old one,
+// allowing previous launcher cleanup routines to detect they've been superseded.
+type LauncherContextManager interface {
+	// GetContext returns the current launcher context
+	GetContext() context.Context
+	// NewContext cancels the current context and creates a new one
+	NewContext() context.Context
+}
+
 // LauncherLifecycle determines how a launcher process is managed
 type LauncherLifecycle int
 
@@ -47,6 +57,18 @@ const (
 	LifecycleTracked
 	// LifecycleBlocking waits for process to exit naturally
 	LifecycleBlocking
+)
+
+// StopIntent indicates the reason for stopping a launcher
+type StopIntent int
+
+const (
+	// StopForPreemption (zero value) means a new launcher is starting
+	StopForPreemption StopIntent = iota
+	// StopForMenu means stopping to return to menu/frontend
+	StopForMenu
+	// StopForConsoleReset means stopping to reset console state (video mode, etc) before new console launch
+	StopForConsoleReset
 )
 
 const (
@@ -125,7 +147,11 @@ type Launcher struct {
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	Launch func(*config.Instance, string) (*os.Process, error)
-	// Kill function kills the current active launcher, if possible.
+	// Kill function provides custom termination logic for the launcher.
+	// If defined, this function is called instead of signal-based termination
+	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
+	// such as keyboard shortcuts, IPC commands, or other non-signal mechanisms.
+	// Example: ScummVM uses keyboard input (Ctrl+q) to avoid VT lock issues.
 	Kill func(*config.Instance) error
 	// Optional function to perform custom media scanning. Takes the list of
 	// results from the standard scan, if any, and returns the final list.
@@ -185,6 +211,7 @@ type Platform interface {
 	// started running.
 	StartPost(
 		*config.Instance,
+		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
 	) error
@@ -204,7 +231,15 @@ type Platform interface {
 	RootDirs(*config.Instance) []string
 	// StopActiveLauncher kills/exits the currently running launcher process
 	// and clears the active media if it was successful.
-	StopActiveLauncher() error
+	// intent indicates whether this is a preemption (new launcher starting)
+	// or a termination (returning to menu).
+	StopActiveLauncher(intent StopIntent) error
+	// ReturnToMenu returns the platform to its main UI/launcher/frontend.
+	// For platforms with a menu system (MiSTer OSD, EmulationStation, Steam Big Picture),
+	// this launches the menu/frontend. For platforms without a menu concept, this is a no-op.
+	// This is separate from StopActiveLauncher to allow optimized transitions where
+	// returning to the menu is not always necessary (e.g., MGL to MGL on MiSTer).
+	ReturnToMenu() error
 	// SetTrackedProcess stores a process handle for lifecycle management.
 	// Used by DoLaunch to track processes that can be killed later.
 	SetTrackedProcess(*os.Process)
@@ -254,4 +289,7 @@ type Platform interface {
 	// may be used to manually cancel and hide the picker.
 	// TODO: it appears to not return said function
 	ShowPicker(*config.Instance, widgetmodels.PickerArgs) error
+	// ConsoleManager returns the platform's console manager for TTY/console switching.
+	// Platforms without console switching return NoOpConsoleManager.
+	ConsoleManager() ConsoleManager
 }

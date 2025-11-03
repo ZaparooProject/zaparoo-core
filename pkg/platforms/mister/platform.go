@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -44,27 +45,32 @@ import (
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
+	launcherManager     platforms.LauncherContextManager
+	setActiveMedia      func(*models.ActiveMedia)
 	textMap             map[string]string
-	trackedProcess      *os.Process
-	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
 	stopTracker         func() error
-	setActiveMedia      func(*models.ActiveMedia)
+	trackedProcess      *os.Process
 	activeMedia         func() *models.ActiveMedia
-	kbd                 linuxinput.Keyboard
+	tracker             *tracker.Tracker
+	consoleManager      *MiSTerConsoleManager
 	gpd                 linuxinput.Gamepad
+	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
+	stopIntent          platforms.StopIntent
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex
 }
 
 func NewPlatform() *Platform {
-	return &Platform{
+	p := &Platform{
 		platformMu: sync.Mutex{},
 	}
+	p.consoleManager = newConsoleManager(p)
+	return p
 }
 
 func (p *Platform) setLastLauncher(l *platforms.Launcher) {
@@ -180,9 +186,11 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
+	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
@@ -306,25 +314,149 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) StopActiveLauncher() error {
-	// Kill tracked process if it exists
+func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
+	// Store intent before cancelling context so cleanup goroutine can read it
 	p.processMu.Lock()
-	if p.trackedProcess != nil {
-		if err := p.trackedProcess.Kill(); err != nil {
-			log.Warn().Err(err).Msg("failed to kill tracked process")
-		} else {
-			log.Debug().Msg("killed tracked process")
-		}
-		p.trackedProcess = nil
-	}
+	p.stopIntent = intent
 	p.processMu.Unlock()
+
+	// Invalidate old launcher context ONLY for preemption (new launcher starting)
+	// For StopForMenu and StopForConsoleReset, we need cleanup to run to unlock VT
+	if intent == platforms.StopForPreemption {
+		if p.launcherManager != nil {
+			p.launcherManager.NewContext()
+		}
+	}
+
+	// Check if launcher has custom Kill function
+	p.platformMu.Lock()
+	customKill := p.lastLauncher.Kill
+	p.platformMu.Unlock()
+
+	// Check if we have a tracked process before attempting to stop it
+	p.processMu.Lock()
+	hadTrackedProcess := p.trackedProcess != nil
+	p.processMu.Unlock()
+
+	// Use custom Kill if defined (e.g., keyboard input for ScummVM)
+	if customKill != nil {
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := customKill(&config.Instance{}); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed")
+		}
+		// Custom Kill function used - skip signal-based termination entirely
+		// The process will exit on its own via the custom method
+	} else {
+		// Stop tracked process if it exists using signal-based termination
+		p.processMu.Lock()
+		if p.trackedProcess != nil {
+			proc := p.trackedProcess
+
+			// Staged termination approach:
+			// 1. Try SIGTERM first (allows SDL cleanup to run)
+			// 2. Wait 5 seconds
+			// 3. If still running, force kill with SIGKILL
+			// 4. After process dies, deallocate the VT to reset all state
+			log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
+			if err := proc.Signal(syscall.SIGTERM); err != nil {
+				log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
+				p.trackedProcess = nil
+				p.processMu.Unlock()
+			} else {
+				p.trackedProcess = nil
+				p.processMu.Unlock()
+
+				// Wait for graceful exit with timeout
+				done := make(chan error, 1)
+				go func() {
+					_, err := proc.Wait()
+					done <- err
+				}()
+
+				select {
+				case err := <-done:
+					if err != nil {
+						log.Debug().Err(err).Msg("process exited after SIGTERM")
+					} else {
+						log.Debug().Msg("process exited gracefully after SIGTERM")
+					}
+				case <-time.After(5 * time.Second):
+					// SIGTERM didn't work within 5 seconds - force kill
+					log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
+					if err := proc.Kill(); err != nil {
+						log.Warn().Err(err).Msg("failed to SIGKILL process")
+					} else {
+						// Wait for SIGKILL to complete (should be fast)
+						select {
+						case <-done:
+							log.Debug().Msg("process killed with SIGKILL")
+						case <-time.After(500 * time.Millisecond):
+							log.Warn().Msg("SIGKILL took too long")
+						}
+					}
+				}
+			}
+		} else {
+			p.processMu.Unlock()
+		}
+	}
+
+	// Clear active media
+	p.setActiveMedia(nil)
+
+	// Return to menu if needed - but ONLY for launchers without tracked processes
+	// Console launchers (video/ScummVM) have cleanup goroutines that call ReturnToMenu
+	// FPGA/MGL launchers have no cleanup goroutine, so we must call it here
+	if intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset {
+		if !hadTrackedProcess {
+			// No cleanup goroutine will run - we must call ReturnToMenu ourselves
+			log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
+			if err := p.ReturnToMenu(); err != nil {
+				log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
+			}
+		} else {
+			log.Debug().Msg("tracked process existed - cleanup goroutine will call ReturnToMenu")
+		}
+	}
+
+	return nil
+}
+
+func (p *Platform) ReturnToMenu() error {
+	// Restore console cursor state on both TTYs
+	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
+		log.Warn().Err(err).Msg("failed to restore tty1 cursor")
+	}
+	if launcherConsoleVT != f9ConsoleVT {
+		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
+			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", launcherConsoleVT)
+		}
+	}
 
 	err := mistermain.LaunchMenu()
 	if err != nil {
+		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
 	}
-	p.setActiveMedia(nil)
+
+	// Wait for menu transition to settle
+	time.Sleep(300 * time.Millisecond)
+
+	// Clear console active flag - we're back in FPGA mode
+	p.consoleManager.mu.Lock()
+	p.consoleManager.active = false
+	p.consoleManager.mu.Unlock()
+
 	return nil
+}
+
+// isFPGAActive checks if an FPGA core is currently running (not menu).
+// This reads the CORENAME file which MiSTer updates whenever cores change.
+// Returns true when a game/system core is active, false when in menu or on error.
+// This detects ALL active cores, even those launched outside Zaparoo.
+func (*Platform) isFPGAActive() bool {
+	coreName := mistermain.GetActiveCoreName()
+	return coreName != "" && coreName != misterconfig.MenuCore
 }
 
 func (p *Platform) PlayAudio(path string) error {
@@ -519,7 +651,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 			return false
 		},
-		Launch: launch(systemdefs.SystemAmiga),
+		Launch: launch(p, systemdefs.SystemAmiga),
 		Scanner: func(
 			_ context.Context,
 			cfg *config.Instance,
@@ -586,7 +718,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 			return false
 		},
-		Launch: launch(systemdefs.SystemNeoGeo),
+		Launch: launch(p, systemdefs.SystemNeoGeo),
 		Scanner: func(
 			_ context.Context,
 			cfg *config.Instance,
@@ -651,18 +783,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	mplayerVideo := platforms.Launcher{
-		ID:         "MPlayerVideo",
-		SystemID:   systemdefs.SystemVideo,
-		Folders:    []string{"Video", "Movies", "TV"},
-		Extensions: []string{".mp4", ".mkv", ".avi"},
-		Lifecycle:  platforms.LifecycleBlocking,
-		Launch:     launchMPlayer(p),
-		Kill:       killMPlayer,
-	}
-
-	ls := Launchers
-	ls = append(ls, amiga, neogeo, mplayerVideo)
+	ls := CreateLaunchers(p)
+	ls = append(ls, amiga, neogeo, createVideoLauncher(p), createScummVMLauncher(p))
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }
@@ -718,4 +840,8 @@ func (p *Platform) ShowPicker(
 	args widgetmodels.PickerArgs,
 ) error {
 	return showPicker(cfg, p, args)
+}
+
+func (p *Platform) ConsoleManager() platforms.ConsoleManager {
+	return p.consoleManager
 }

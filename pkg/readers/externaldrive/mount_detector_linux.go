@@ -463,10 +463,10 @@ func (d *linuxMountDetectorFallback) Start() error {
 func (d *linuxMountDetectorFallback) Stop() {
 	d.stopOnce.Do(func() {
 		close(d.stopChan)
+		d.wg.Wait() // Wait for polling goroutine to finish BEFORE closing file
 		if d.mountsFile != nil {
 			_ = d.mountsFile.Close()
 		}
-		d.wg.Wait()
 		close(d.events)
 		close(d.unmounts)
 	})

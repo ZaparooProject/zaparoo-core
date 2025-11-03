@@ -44,6 +44,7 @@ type State struct {
 	ctxCancelFunc    context.CancelFunc
 	activeMedia      *models.ActiveMedia
 	onMediaStartHook func(*models.ActiveMedia)
+	launcherManager  *LauncherManager
 	Notifications    chan<- models.Notification
 	lastScanned      tokens.Token
 	activeToken      tokens.Token
@@ -56,12 +57,13 @@ func NewState(platform platforms.Platform) (state *State, notificationCh <-chan 
 	ns := make(chan models.Notification, 100)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
-		runZapScript:  true,
-		platform:      platform,
-		readers:       make(map[string]readers.Reader),
-		Notifications: ns,
-		ctx:           ctx,
-		ctxCancelFunc: ctxCancelFunc,
+		runZapScript:    true,
+		platform:        platform,
+		readers:         make(map[string]readers.Reader),
+		Notifications:   ns,
+		ctx:             ctx,
+		ctxCancelFunc:   ctxCancelFunc,
+		launcherManager: NewLauncherManager(),
 	}, ns
 }
 
@@ -316,4 +318,8 @@ func (s *State) notifyDisplayReaders(media *models.ActiveMedia) {
 
 func (s *State) GetContext() context.Context {
 	return s.ctx
+}
+
+func (s *State) LauncherManager() *LauncherManager {
+	return s.launcherManager
 }

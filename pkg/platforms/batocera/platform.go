@@ -98,6 +98,7 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 
 func (p *Platform) StartPost(
 	_ *config.Instance,
+	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 ) error {
@@ -221,7 +222,7 @@ func (p *Platform) PlayAudio(path string) error {
 	return nil
 }
 
-func (p *Platform) StopActiveLauncher() error {
+func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 	tries := 0
 	maxTries := 10
@@ -266,6 +267,11 @@ func (p *Platform) StopActiveLauncher() error {
 	return errors.New("stop active launcher: failed to stop launcher")
 }
 
+func (*Platform) ReturnToMenu() error {
+	// No menu concept on this platform
+	return nil
+}
+
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
@@ -287,7 +293,7 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 		return fmt.Errorf("failed to check running game status: %w", err)
 	} else if running {
 		log.Info().Msg("exiting current media")
-		err = p.StopActiveLauncher()
+		err = p.StopActiveLauncher(platforms.StopForPreemption)
 		if err != nil {
 			return err
 		}
@@ -475,4 +481,8 @@ func (*Platform) ShowPicker(
 	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
+}
+
+func (*Platform) ConsoleManager() platforms.ConsoleManager {
+	return platforms.NoOpConsoleManager{}
 }
