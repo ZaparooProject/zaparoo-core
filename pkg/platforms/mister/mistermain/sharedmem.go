@@ -86,8 +86,9 @@ func GetActiveIni() (int, error) { // used for reference later
 		return 0, err
 	}
 
+	//nolint:gosec // G602 - vs slice has exactly 4 elements, all indices 0-3 are safe
 	if vs[0] == 0x34 && vs[1] == 0x99 && vs[2] == 0xBA {
-		return int(vs[3] + 1), nil
+		return int(vs[3] + 1), nil //nolint:gosec // G602 - vs slice has exactly 4 elements, index 3 is safe
 	}
 	return 0, nil
 }

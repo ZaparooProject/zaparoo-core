@@ -70,6 +70,8 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		simpleserial.NewReader(cfg),
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
+		libnfc.NewLegacyUARTReader(cfg),
+		libnfc.NewLegacyI2CReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),

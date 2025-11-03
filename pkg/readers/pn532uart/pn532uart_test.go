@@ -44,10 +44,10 @@ func TestMetadata(t *testing.T) {
 	reader := &PN532UARTReader{}
 	metadata := reader.Metadata()
 
-	assert.Equal(t, "pn532uart", metadata.ID)
-	assert.Equal(t, "PN532 NFC reader via UART (legacy)", metadata.Description)
+	assert.Equal(t, "legacy_pn532_uart", metadata.ID)
+	assert.Equal(t, "Legacy PN532 UART reader", metadata.Description)
 	assert.True(t, metadata.DefaultEnabled)
-	assert.True(t, metadata.DefaultAutoDetect)
+	assert.False(t, metadata.DefaultAutoDetect)
 }
 
 func TestIDs(t *testing.T) {
@@ -57,7 +57,7 @@ func TestIDs(t *testing.T) {
 	ids := reader.IDs()
 
 	require.Len(t, ids, 1)
-	assert.Equal(t, "pn532_uart", ids[0])
+	assert.Equal(t, "legacy_pn532_uart", ids[0])
 }
 
 func TestDetect(t *testing.T) {

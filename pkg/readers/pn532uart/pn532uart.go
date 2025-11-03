@@ -101,15 +101,15 @@ func NewReader(cfg *config.Instance) *PN532UARTReader {
 
 func (*PN532UARTReader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{
-		ID:                "pn532uart",
+		ID:                "legacy_pn532_uart",
 		DefaultEnabled:    true,
-		DefaultAutoDetect: true,
-		Description:       "PN532 NFC reader via UART (legacy)",
+		DefaultAutoDetect: false,
+		Description:       "Legacy PN532 UART reader",
 	}
 }
 
 func (*PN532UARTReader) IDs() []string {
-	return []string{"pn532_uart"}
+	return []string{"legacy_pn532_uart"}
 }
 
 func connect(name string) (serial.Port, error) {
@@ -355,7 +355,7 @@ func (*PN532UARTReader) Detect(connected []string) string {
 	}
 
 	for _, name := range ports {
-		device := "pn532_uart:" + name
+		device := "legacy_pn532_uart:" + name
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
