@@ -24,17 +24,17 @@ package externaldrive
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/godbus/dbus/v5"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -58,7 +58,7 @@ type linuxMountDetector struct {
 	stopOnce     sync.Once
 }
 
-// isDBusAvailable quickly checks if D-Bus is available on the system.
+// isDBusAvailable quickly checks if D-Bus and UDisks2 are available on the system.
 func isDBusAvailable() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -70,8 +70,31 @@ func isDBusAvailable() bool {
 			done <- false
 			return
 		}
-		_ = conn.Close()
-		done <- true
+		defer func() { _ = conn.Close() }()
+
+		// Verify UDisks2 service is actually available
+		obj := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+		call := obj.CallWithContext(ctx, "org.freedesktop.DBus.ListNames", 0)
+		if call.Err != nil {
+			done <- false
+			return
+		}
+
+		var names []string
+		if err := call.Store(&names); err != nil {
+			done <- false
+			return
+		}
+
+		// Check if UDisks2 service is in the list
+		for _, name := range names {
+			if name == udisks2Service {
+				done <- true
+				return
+			}
+		}
+
+		done <- false
 	}()
 
 	select {
@@ -87,7 +110,7 @@ func isDBusAvailable() bool {
 func NewMountDetector() (MountDetector, error) {
 	// Try D-Bus first (preferred method for full Linux systems)
 	if isDBusAvailable() {
-		log.Debug().Msg("Using D-Bus/UDisks2 for mount detection")
+		log.Debug().Msg("using D-Bus/UDisks2 for mount detection")
 		return &linuxMountDetector{
 			events:       make(chan MountEvent, 10),
 			unmounts:     make(chan string, 10),
@@ -227,7 +250,7 @@ func (d *linuxMountDetector) handleInterfacesAdded(signal *dbus.Signal) {
 	// Extract device information
 	deviceID := d.getDeviceID(blockProps)
 	if deviceID == "" {
-		log.Debug().Str("path", string(objectPath)).Msg("Device has no ID, skipping")
+		log.Debug().Str("path", string(objectPath)).Msg("device has no ID, skipping")
 		return
 	}
 
@@ -254,7 +277,7 @@ func (d *linuxMountDetector) handleInterfacesAdded(signal *dbus.Signal) {
 			Str("device_id", deviceID).
 			Str("mount_path", event.MountPath).
 			Str("label", volumeLabel).
-			Msg("Mount event detected")
+			Msg("mount event detected")
 	case <-d.stopChan:
 		return
 	}
@@ -302,7 +325,7 @@ func (d *linuxMountDetector) handleInterfacesRemoved(signal *dbus.Signal) {
 		case d.unmounts <- deviceID:
 			log.Debug().
 				Str("device_id", deviceID).
-				Msg("Unmount event detected")
+				Msg("unmount event detected")
 		case <-d.stopChan:
 			return
 		}
@@ -389,69 +412,26 @@ func (*linuxMountDetector) getDeviceType(props map[string]dbus.Variant) string {
 	return "unknown"
 }
 
-// linuxMountDetectorFallback implements MountDetector for Linux using inotify (fsnotify).
-// This is used when D-Bus/UDisks2 is not available (minimal Linux systems).
+// linuxMountDetectorFallback implements MountDetector for Linux using poll() on /proc/mounts.
+// This is used when D-Bus/UDisks2 is not available (minimal Linux systems like MiSTer).
 type linuxMountDetectorFallback struct {
-	watcher     *fsnotify.Watcher
+	mountsFile  *os.File
 	events      chan MountEvent
 	unmounts    chan string
 	stopChan    chan struct{}
 	mountedDevs map[string]MountEvent
-	watchDirs   []string
 	wg          sync.WaitGroup
 	mu          sync.RWMutex
 	stopOnce    sync.Once
 }
 
-// newLinuxMountDetectorFallback creates a new inotify-based mount detector for Linux.
+// newLinuxMountDetectorFallback creates a new poll()-based mount detector for Linux.
 func newLinuxMountDetectorFallback() (MountDetector, error) {
-	// Determine which directories to watch based on what exists
-	var watchDirs []string
-
-	// Try user-specific media directories first
-	mediaDir := "/media"
-	runMediaDir := "/run/media"
-
-	if username := os.Getenv("USER"); username != "" {
-		userMedia := filepath.Join(mediaDir, username)
-		if _, err := os.Stat(userMedia); err == nil {
-			watchDirs = append(watchDirs, userMedia)
-		}
-
-		userRunMedia := filepath.Join(runMediaDir, username)
-		if _, err := os.Stat(userRunMedia); err == nil {
-			watchDirs = append(watchDirs, userRunMedia)
-		}
-	}
-
-	// Add common mount directories if they exist
-	commonDirs := []string{"/media", "/mnt"}
-	for _, dir := range commonDirs {
-		if _, err := os.Stat(dir); err == nil {
-			// Only add if not already in watchDirs
-			found := false
-			for _, existing := range watchDirs {
-				if existing == dir {
-					found = true
-					break
-				}
-			}
-			if !found {
-				watchDirs = append(watchDirs, dir)
-			}
-		}
-	}
-
-	if len(watchDirs) == 0 {
-		return nil, errors.New("no suitable mount directories found to watch")
-	}
-
 	return &linuxMountDetectorFallback{
 		events:      make(chan MountEvent, 10),
 		unmounts:    make(chan string, 10),
 		stopChan:    make(chan struct{}),
 		mountedDevs: make(map[string]MountEvent),
-		watchDirs:   watchDirs,
 	}, nil
 }
 
@@ -464,25 +444,18 @@ func (d *linuxMountDetectorFallback) Unmounts() <-chan string {
 }
 
 func (d *linuxMountDetectorFallback) Start() error {
-	// Create fsnotify watcher
-	watcher, err := fsnotify.NewWatcher()
+	// Open /proc/mounts for polling
+	file, err := os.Open("/proc/mounts")
 	if err != nil {
-		return fmt.Errorf("failed to create fsnotify watcher: %w", err)
+		return fmt.Errorf("failed to open /proc/mounts: %w", err)
 	}
-	d.watcher = watcher
+	d.mountsFile = file
 
-	// Watch all mount directories
-	for _, dir := range d.watchDirs {
-		if err := d.watcher.Add(dir); err != nil {
-			log.Warn().Err(err).Str("dir", dir).Msg("Failed to watch directory")
-			continue
-		}
-		log.Debug().Str("dir", dir).Msg("Watching directory for mount events")
-	}
+	log.Debug().Msg("watching /proc/mounts for mount events via poll()")
 
 	// Start event loop
 	d.wg.Add(1)
-	go d.watchFileSystemEvents()
+	go d.pollMountChanges()
 
 	return nil
 }
@@ -490,8 +463,8 @@ func (d *linuxMountDetectorFallback) Start() error {
 func (d *linuxMountDetectorFallback) Stop() {
 	d.stopOnce.Do(func() {
 		close(d.stopChan)
-		if d.watcher != nil {
-			_ = d.watcher.Close()
+		if d.mountsFile != nil {
+			_ = d.mountsFile.Close()
 		}
 		d.wg.Wait()
 		close(d.events)
@@ -499,156 +472,69 @@ func (d *linuxMountDetectorFallback) Stop() {
 	})
 }
 
-func (d *linuxMountDetectorFallback) watchFileSystemEvents() {
+func (d *linuxMountDetectorFallback) pollMountChanges() {
 	defer d.wg.Done()
 
-	// Debounce timer to handle rapid events
-	debounceTimer := time.NewTimer(0)
-	if !debounceTimer.Stop() {
-		<-debounceTimer.C
+	// Initial scan of mounts
+	d.scanMounts()
+
+	// Set up poll for /proc/mounts with POLLPRI (priority event) and POLLERR
+	pollFds := []unix.PollFd{
+		{
+			Fd:     int32(d.mountsFile.Fd()),
+			Events: unix.POLLPRI | unix.POLLERR,
+		},
 	}
-	pendingChecks := make(map[string]bool)
 
 	for {
 		select {
 		case <-d.stopChan:
-			debounceTimer.Stop()
 			return
+		default:
+		}
 
-		case event, ok := <-d.watcher.Events:
-			if !ok {
-				return
+		// Poll with 1 second timeout to check stopChan periodically
+		n, err := unix.Poll(pollFds, 1000)
+		if err != nil {
+			if err == unix.EINTR {
+				// Interrupted by signal, retry
+				continue
 			}
+			log.Error().Err(err).Msg("poll() on /proc/mounts failed")
+			return
+		}
 
-			// Only process events in watched directories (not subdirectories)
-			parentDir := filepath.Dir(event.Name)
-			isWatchedDir := false
-			for _, dir := range d.watchDirs {
-				if parentDir == dir {
-					isWatchedDir = true
-					break
-				}
-			}
+		// Check if stop was requested
+		select {
+		case <-d.stopChan:
+			return
+		default:
+		}
 
-			if !isWatchedDir {
+		// If poll returned 0, it was a timeout - continue waiting
+		if n == 0 {
+			continue
+		}
+
+		// Mount change detected (POLLPRI or POLLERR)
+		if pollFds[0].Revents&(unix.POLLPRI|unix.POLLERR) != 0 {
+			// Seek back to beginning of file and re-read
+			if _, err := d.mountsFile.Seek(0, io.SeekStart); err != nil {
+				log.Error().Err(err).Msg("failed to seek /proc/mounts")
 				continue
 			}
 
-			// Mark for debounced check
-			pendingChecks[event.Name] = true
-			debounceTimer.Reset(100 * time.Millisecond)
-
-		case err, ok := <-d.watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Warn().Err(err).Msg("fsnotify error")
-
-		case <-debounceTimer.C:
-			// Process pending checks
-			for path := range pendingChecks {
-				d.checkMount(path)
-			}
-			pendingChecks = make(map[string]bool)
+			// Scan mounts and detect changes
+			d.scanMounts()
 		}
 	}
 }
 
-func (d *linuxMountDetectorFallback) checkMount(mountPath string) {
-	// Check if mount exists
-	info, err := os.Stat(mountPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Mount was removed
-			d.handleMountRemoval(mountPath)
-		}
-		return
-	}
+func (d *linuxMountDetectorFallback) scanMounts() {
+	// Read current mounts from /proc/mounts
+	currentMounts := make(map[string]MountEvent)
 
-	// Only process directories
-	if !info.IsDir() {
-		return
-	}
-
-	// Get device information from /proc/mounts
-	deviceID, deviceType := d.getMountInfo(mountPath)
-	if deviceID == "" {
-		// Not a removable device or couldn't get info
-		return
-	}
-
-	// Check if already mounted
-	d.mu.RLock()
-	_, exists := d.mountedDevs[deviceID]
-	d.mu.RUnlock()
-
-	if exists {
-		return
-	}
-
-	// New mount detected
-	volumeLabel := filepath.Base(mountPath)
-	event := MountEvent{
-		DeviceID:    deviceID,
-		MountPath:   mountPath,
-		VolumeLabel: volumeLabel,
-		DeviceType:  deviceType,
-	}
-
-	d.mu.Lock()
-	d.mountedDevs[deviceID] = event
-	d.mu.Unlock()
-
-	select {
-	case d.events <- event:
-		log.Debug().
-			Str("device_id", deviceID).
-			Str("mount_path", mountPath).
-			Str("label", volumeLabel).
-			Msg("Mount detected (inotify)")
-	case <-d.stopChan:
-		return
-	}
-}
-
-func (d *linuxMountDetectorFallback) handleMountRemoval(mountPath string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	// Find device by mount path
-	var foundID string
-	for id, event := range d.mountedDevs {
-		if event.MountPath == mountPath {
-			foundID = id
-			break
-		}
-	}
-
-	if foundID != "" {
-		delete(d.mountedDevs, foundID)
-
-		select {
-		case d.unmounts <- foundID:
-			log.Debug().
-				Str("device_id", foundID).
-				Str("mount_path", mountPath).
-				Msg("Unmount detected (inotify)")
-		case <-d.stopChan:
-			return
-		}
-	}
-}
-
-// getMountInfo extracts device information from /proc/mounts for a given mount path.
-// Returns deviceID and deviceType, or empty strings if not a removable device.
-func (d *linuxMountDetectorFallback) getMountInfo(mountPath string) (deviceID, deviceType string) {
-	file, err := os.Open("/proc/mounts")
-	if err != nil {
-		return "", ""
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(d.mountsFile)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 3 {
@@ -656,13 +542,8 @@ func (d *linuxMountDetectorFallback) getMountInfo(mountPath string) (deviceID, d
 		}
 
 		device := fields[0]
-		mount := fields[1]
+		mountPath := fields[1]
 		fstype := fields[2]
-
-		// Check if this is our mount path
-		if mount != mountPath {
-			continue
-		}
 
 		// Skip system filesystems
 		systemFSTypes := []string{
@@ -687,16 +568,20 @@ func (d *linuxMountDetectorFallback) getMountInfo(mountPath string) (deviceID, d
 			continue
 		}
 
+		// Only watch /media and /mnt mount points (removable media)
+		if !strings.HasPrefix(mountPath, "/media/") && !strings.HasPrefix(mountPath, "/mnt/") {
+			continue
+		}
+
 		// Try to get UUID from /dev/disk/by-uuid/
-		uuid := d.getDeviceUUID(device)
-		if uuid != "" {
-			deviceID = uuid
-		} else {
+		deviceID := d.getDeviceUUID(device)
+		if deviceID == "" {
 			// Fall back to device name
 			deviceID = device
 		}
 
-		// Determine device type based on filesystem
+		// Determine device type
+		deviceType := "removable"
 		removableFSTypes := []string{"vfat", "exfat", "ntfs", "ext2", "ext3", "ext4", "hfs", "hfsplus"}
 		for _, rmFS := range removableFSTypes {
 			if strings.HasPrefix(fstype, rmFS) {
@@ -705,15 +590,57 @@ func (d *linuxMountDetectorFallback) getMountInfo(mountPath string) (deviceID, d
 			}
 		}
 
-		if deviceType == "" {
-			// If we can't determine type, assume removable for mounts in watched directories
-			deviceType = "removable"
+		volumeLabel := filepath.Base(mountPath)
+		event := MountEvent{
+			DeviceID:    deviceID,
+			MountPath:   mountPath,
+			VolumeLabel: volumeLabel,
+			DeviceType:  deviceType,
 		}
 
-		return deviceID, deviceType
+		currentMounts[deviceID] = event
 	}
 
-	return "", ""
+	// Compare with previously tracked mounts
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Find newly mounted devices
+	for deviceID, event := range currentMounts {
+		if _, exists := d.mountedDevs[deviceID]; !exists {
+			// New mount detected
+			d.mountedDevs[deviceID] = event
+
+			select {
+			case d.events <- event:
+				log.Debug().
+					Str("device_id", deviceID).
+					Str("mount_path", event.MountPath).
+					Str("label", event.VolumeLabel).
+					Msg("mount detected (poll)")
+			case <-d.stopChan:
+				return
+			}
+		}
+	}
+
+	// Find removed mounts
+	for deviceID, event := range d.mountedDevs {
+		if _, exists := currentMounts[deviceID]; !exists {
+			// Mount was removed
+			delete(d.mountedDevs, deviceID)
+
+			select {
+			case d.unmounts <- deviceID:
+				log.Debug().
+					Str("device_id", deviceID).
+					Str("mount_path", event.MountPath).
+					Msg("unmount detected (poll)")
+			case <-d.stopChan:
+				return
+			}
+		}
+	}
 }
 
 // getDeviceUUID attempts to find the UUID for a device by checking /dev/disk/by-uuid/.

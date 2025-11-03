@@ -90,7 +90,7 @@ func (d *darwinMountDetector) Start() error {
 	d.wg.Add(1)
 	go d.watchFileSystemEvents()
 
-	log.Debug().Msg("Started watching macOS /Volumes for mount events")
+	log.Debug().Msg("started watching macOS /Volumes for mount events")
 
 	return nil
 }
@@ -141,7 +141,7 @@ func (d *darwinMountDetector) watchFileSystemEvents() {
 			if !ok {
 				return
 			}
-			log.Warn().Err(err).Msg("FSNotify error")
+			log.Warn().Err(err).Msg("fsnotify error")
 
 		case <-debounceTimer.C:
 			// Process pending checks
@@ -214,7 +214,7 @@ func (d *darwinMountDetector) checkVolume(mountPath string) {
 			Str("device_id", deviceID).
 			Str("mount_path", mountPath).
 			Str("label", volumeLabel).
-			Msg("Volume mount detected")
+			Msg("volume mount detected")
 	case <-d.stopChan:
 		return
 	}
@@ -241,7 +241,7 @@ func (d *darwinMountDetector) handleVolumeUnmount(mountPath string) {
 			log.Debug().
 				Str("device_id", foundID).
 				Str("mount_path", mountPath).
-				Msg("Volume unmount detected")
+				Msg("volume unmount detected")
 		case <-d.stopChan:
 			return
 		}

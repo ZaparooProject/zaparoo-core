@@ -95,7 +95,7 @@ func (d *windowsMountDetector) watchVolumeChanges() {
 
 	// Initialize COM for this goroutine
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		log.Error().Err(err).Msg("Failed to initialize COM for volume watcher")
+		log.Error().Err(err).Msg("failed to initialize COM for volume watcher")
 		return
 	}
 	defer ole.CoUninitialize()
@@ -103,14 +103,14 @@ func (d *windowsMountDetector) watchVolumeChanges() {
 	// Connect to WMI
 	unknown, err := oleutil.CreateObject("WbemScripting.SWbemLocator")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create WMI locator")
+		log.Error().Err(err).Msg("failed to create WMI locator")
 		return
 	}
 	defer unknown.Release()
 
 	wmi, err := unknown.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to query WMI interface")
+		log.Error().Err(err).Msg("failed to query WMI interface")
 		return
 	}
 	defer wmi.Release()
@@ -118,7 +118,7 @@ func (d *windowsMountDetector) watchVolumeChanges() {
 	// Connect to local WMI service
 	serviceRaw, err := oleutil.CallMethod(wmi, "ConnectServer")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to connect to WMI service")
+		log.Error().Err(err).Msg("failed to connect to WMI service")
 		return
 	}
 	service := serviceRaw.ToIDispatch()
@@ -129,13 +129,13 @@ func (d *windowsMountDetector) watchVolumeChanges() {
 	queryRaw, err := oleutil.CallMethod(service, "ExecNotificationQuery",
 		"SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2 OR EventType = 3")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to execute WMI query")
+		log.Error().Err(err).Msg("failed to execute WMI query")
 		return
 	}
 	eventSink := queryRaw.ToIDispatch()
 	defer eventSink.Release()
 
-	log.Debug().Msg("Started watching for Windows volume changes")
+	log.Debug().Msg("started watching for Windows volume changes")
 
 	for {
 		select {
@@ -169,7 +169,7 @@ func (d *windowsMountDetector) handleVolumeEvent(event *ole.IDispatch) {
 	// Get event type
 	eventTypeRaw, err := oleutil.GetProperty(event, "EventType")
 	if err != nil {
-		log.Debug().Err(err).Msg("Failed to get event type")
+		log.Debug().Err(err).Msg("failed to get event type")
 		return
 	}
 	eventType := int(eventTypeRaw.Val)
@@ -177,7 +177,7 @@ func (d *windowsMountDetector) handleVolumeEvent(event *ole.IDispatch) {
 	// Get drive name (e.g., "E:")
 	driveNameRaw, err := oleutil.GetProperty(event, "DriveName")
 	if err != nil {
-		log.Debug().Err(err).Msg("Failed to get drive name")
+		log.Debug().Err(err).Msg("failed to get drive name")
 		return
 	}
 	driveName := driveNameRaw.ToString()
@@ -225,7 +225,7 @@ func (d *windowsMountDetector) handleDriveInsert(driveName string) {
 			Str("device_id", deviceID).
 			Str("drive", driveName).
 			Str("label", volumeLabel).
-			Msg("Drive insertion detected")
+			Msg("drive insertion detected")
 	case <-d.stopChan:
 		return
 	}
@@ -253,7 +253,7 @@ func (d *windowsMountDetector) handleDriveRemove(driveName string) {
 			log.Debug().
 				Str("device_id", foundID).
 				Str("drive", driveName).
-				Msg("Drive removal detected")
+				Msg("drive removal detected")
 		case <-d.stopChan:
 			return
 		}
