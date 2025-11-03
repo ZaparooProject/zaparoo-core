@@ -4,6 +4,7 @@ package mister
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -343,6 +344,25 @@ func launchAtari2600() func(*config.Instance, string) (*os.Process, error) {
 	}
 }
 
+// buildFvpCommand constructs the command for launching fvp video player.
+func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
+	fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
+	cmd := exec.CommandContext( //nolint:gosec // Path comes from internal launcher system, not user input
+		ctx,
+		fvpBinary,
+		"-f", // Fullscreen mode
+		// "-j", "1", // Jump every 1 video frame for slow machines
+		"-u", // Record A/V diff after first few frames
+		"-s", // Always synchronize audio/video
+		path,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true, // Create new session for proper TTY control
+	}
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
+	return cmd
+}
+
 func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
 	return func(_ *config.Instance, path string) (*os.Process, error) {
 		// videoDivisor controls the framebuffer resolution divisor for video playback.
@@ -377,20 +397,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
 
-		fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
-		cmd := exec.CommandContext( //nolint:gosec // Path comes from internal launcher system, not user input
-			launcherCtx,
-			fvpBinary,
-			"-f", // Fullscreen mode
-			// "-j", "1", // Jump every 1 video frame for slow machines
-			"-u", // Record A/V diff after first few frames
-			"-s", // Always synchronize audio/video
-			path,
-		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true, // Create new session for proper TTY control
-		}
-		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
+		cmd := buildFvpCommand(launcherCtx, path)
 
 		// Build cleanup function that will be called on completion/crash
 		restoreFunc := createConsoleRestoreFunc(pl, cm)
@@ -398,6 +405,30 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 		// Start process and manage lifecycle
 		return runTrackedProcess(launcherCtx, pl, cmd, restoreFunc, "fvp")
 	}
+}
+
+// buildScummVMCommand constructs the command for launching ScummVM.
+func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *exec.Cmd {
+	cmd := exec.CommandContext(
+		ctx,
+		"taskset", "03", // CPU affinity: cores 0-1
+		scummvmBinary,
+		"--opl-driver=db",
+		"--output-rate=48000",
+		targetID,
+	)
+
+	// Set environment variables
+	cmd.Env = append(os.Environ(),
+		"HOME="+scummvmBaseDir,
+		"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
+			filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf", "pulseaudio"),
+	)
+
+	// Set working directory to ScummVM base
+	cmd.Dir = scummvmBaseDir
+
+	return cmd
 }
 
 // launchScummVM returns a launcher function for ScummVM games on MiSTer.
@@ -448,26 +479,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 
 		log.Info().Str("binary", scummvmBinary).Str("target", targetID).Msg("launching ScummVM")
 
-		// Prepare ScummVM command with taskset for CPU affinity
-		cmd := exec.CommandContext( //nolint:gosec // Path validated by findScummVMBinary
-			launcherCtx,
-			"taskset", "03", // CPU affinity: cores 0-1
-			scummvmBinary,
-			"--opl-driver=db",
-			"--output-rate=48000",
-			targetID,
-		)
-		// setsid causes and instant SIGHUP when launching
-
-		// Set environment variables
-		cmd.Env = append(os.Environ(),
-			"HOME="+scummvmBaseDir,
-			"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
-				filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf", "pulseaudio"),
-		)
-
-		// Set working directory to ScummVM base
-		cmd.Dir = scummvmBaseDir
+		cmd := buildScummVMCommand(launcherCtx, scummvmBinary, targetID)
 
 		// Build cleanup function that will be called on completion/crash
 		restoreFunc := createConsoleRestoreFunc(pl, cm)

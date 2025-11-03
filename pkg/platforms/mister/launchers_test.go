@@ -23,10 +23,14 @@ package mister
 
 import (
 	"archive/zip"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -233,4 +237,194 @@ func TestCheckInZip_SkipsDirectories(t *testing.T) {
 	result := checkInZip(zipPath)
 	expected := filepath.Join(zipPath, "folder", "game.rom")
 	assert.Equal(t, expected, result)
+}
+
+func TestLaunchVideo_EmptyPath(t *testing.T) {
+	// Cannot use t.Parallel() - uses Platform instance
+
+	pl := &Platform{
+		consoleManager:  newConsoleManager(&Platform{}),
+		launcherManager: state.NewLauncherManager(),
+	}
+
+	launcherFunc := launchVideo(pl)
+
+	// Call with empty path - should fail validation before hitting hardware
+	process, err := launcherFunc(nil, "")
+
+	require.Error(t, err)
+	assert.Nil(t, process)
+	assert.Contains(t, err.Error(), "no path specified")
+}
+
+func TestLaunchScummVM_EmptyPath(t *testing.T) {
+	// Cannot use t.Parallel() - uses Platform instance
+
+	pl := &Platform{
+		consoleManager:  newConsoleManager(&Platform{}),
+		launcherManager: state.NewLauncherManager(),
+	}
+
+	launcherFunc := launchScummVM(pl)
+
+	// Call with empty path - should fail validation before hitting hardware
+	process, err := launcherFunc(nil, "")
+
+	require.Error(t, err)
+	assert.Nil(t, process)
+	assert.Contains(t, err.Error(), "no path specified")
+}
+
+func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
+	// Cannot use t.Parallel() - uses Platform instance
+
+	pl := &Platform{
+		consoleManager:  newConsoleManager(&Platform{}),
+		launcherManager: state.NewLauncherManager(),
+	}
+
+	launcherFunc := launchScummVM(pl)
+
+	// Path without target ID - should fail before hardware access
+	testPaths := []string{
+		"scummvm://",
+		"scummvm:///",
+		"scummvm:///GameName",
+	}
+
+	for _, path := range testPaths {
+		process, err := launcherFunc(nil, path)
+		require.Error(t, err, "path %s should fail", path)
+		assert.Nil(t, process)
+		assert.Contains(t, err.Error(), "no ScummVM target ID specified")
+	}
+}
+
+func TestBuildFvpCommand(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := "/media/fat/Videos/test.mp4"
+
+	cmd := buildFvpCommand(ctx, path)
+
+	require.NotNil(t, cmd)
+
+	// Verify args contain the flags and path
+	assert.Contains(t, cmd.Args, "-f", "should have fullscreen flag")
+	assert.Contains(t, cmd.Args, "-u", "should have A/V diff recording flag")
+	assert.Contains(t, cmd.Args, "-s", "should have sync flag")
+	assert.Contains(t, cmd.Args, path, "should have video path")
+
+	// Verify binary path is set
+	expectedBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
+	assert.Contains(t, cmd.Args[0], "fvp", "first arg should be fvp binary")
+	assert.Equal(t, expectedBinary, cmd.Args[0])
+
+	// Verify SysProcAttr
+	require.NotNil(t, cmd.SysProcAttr)
+	assert.True(t, cmd.SysProcAttr.Setsid, "should set Setsid for new session")
+
+	// Verify environment
+	hasLDPath := false
+	for _, env := range cmd.Env {
+		if strings.HasPrefix(env, "LD_LIBRARY_PATH=") {
+			hasLDPath = true
+			assert.Contains(t, env, misterconfig.LinuxDir)
+			break
+		}
+	}
+	assert.True(t, hasLDPath, "should set LD_LIBRARY_PATH")
+}
+
+func TestBuildFvpCommand_DifferentPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"absolute path", "/media/fat/Videos/movie.mp4"},
+		{"with spaces", "/media/fat/My Videos/file.mkv"},
+		{"special chars", "/media/fat/Videos/test-file_v2.avi"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := buildFvpCommand(context.Background(), tt.path)
+
+			require.NotNil(t, cmd)
+			assert.Contains(t, cmd.Args, tt.path, "path should be in args")
+		})
+	}
+}
+
+func TestBuildScummVMCommand(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	scummvmBinary := "/media/fat/ScummVM/scummvm"
+	targetID := "monkey2"
+
+	cmd := buildScummVMCommand(ctx, scummvmBinary, targetID)
+
+	require.NotNil(t, cmd)
+
+	// Verify taskset wrapper is used
+	assert.Contains(t, cmd.Args[0], "taskset", "should use taskset")
+	assert.Contains(t, cmd.Args, "03", "should have CPU affinity")
+	assert.Contains(t, cmd.Args, scummvmBinary, "should have ScummVM binary")
+	assert.Contains(t, cmd.Args, targetID, "should have target ID")
+
+	// Verify ScummVM flags
+	assert.Contains(t, cmd.Args, "--opl-driver=db")
+	assert.Contains(t, cmd.Args, "--output-rate=48000")
+
+	// Verify working directory
+	assert.Equal(t, scummvmBaseDir, cmd.Dir)
+
+	// Verify environment variables - check that our custom ones are set
+	hasCustomHome := false
+	hasCustomLDPath := false
+	for _, env := range cmd.Env {
+		if strings.HasPrefix(env, "HOME=") && strings.Contains(env, scummvmBaseDir) {
+			hasCustomHome = true
+		}
+		if strings.HasPrefix(env, "LD_LIBRARY_PATH=") {
+			if strings.Contains(env, "arm-linux-gnueabihf") && strings.Contains(env, "pulseaudio") {
+				hasCustomLDPath = true
+			}
+		}
+	}
+	assert.True(t, hasCustomHome, "should set custom HOME for ScummVM")
+	assert.True(t, hasCustomLDPath, "should set custom LD_LIBRARY_PATH")
+}
+
+func TestBuildScummVMCommand_DifferentTargets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		binary   string
+		targetID string
+	}{
+		{"standard target", "/media/fat/ScummVM/scummvm", "monkey"},
+		{"target with numbers", "/media/fat/ScummVM/scummvm", "loom-ega"},
+		{"custom binary path", "/tmp/scummvm", "testgame"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := buildScummVMCommand(context.Background(), tt.binary, tt.targetID)
+
+			require.NotNil(t, cmd)
+			assert.Contains(t, cmd.Args, tt.binary)
+			assert.Contains(t, cmd.Args, tt.targetID)
+			assert.Equal(t, scummvmBaseDir, cmd.Dir)
+		})
+	}
 }

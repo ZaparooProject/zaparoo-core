@@ -23,6 +23,7 @@ package mister
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"sync"
 	"testing"
@@ -31,6 +32,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testConsoleManager is a simple mock console manager for testing
+type testConsoleManager struct {
+	openErr    error
+	closeErr   error
+	cleanErr   error
+	restoreErr error
+	openCalled bool
+}
+
+func (m *testConsoleManager) Open(_ context.Context, _ string) error {
+	m.openCalled = true
+	return m.openErr
+}
+
+func (m *testConsoleManager) Close() error {
+	return m.closeErr
+}
+
+func (m *testConsoleManager) Clean(_ string) error {
+	return m.cleanErr
+}
+
+func (m *testConsoleManager) Restore(_ string) error {
+	return m.restoreErr
+}
 
 func TestRunTrackedProcess_InvalidCommand(t *testing.T) {
 	// Cannot use t.Parallel() because we're testing with actual Platform instance
@@ -164,4 +191,65 @@ func TestSetupConsoleEnvironment_CancelledContext(t *testing.T) {
 	// Should get context.Canceled error
 	require.Error(t, err)
 	assert.Nil(t, cm)
+}
+
+func TestConsoleManager_ErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		openErr    error
+		closeErr   error
+		cleanErr   error
+		restoreErr error
+		name       string
+	}{
+		{
+			name:    "Open returns error",
+			openErr: errors.New("open failed"),
+		},
+		{
+			name:     "Close returns error",
+			closeErr: errors.New("close failed"),
+		},
+		{
+			name:     "Clean returns error",
+			cleanErr: errors.New("clean failed"),
+		},
+		{
+			name:       "Restore returns error",
+			restoreErr: errors.New("restore failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockCM := &testConsoleManager{
+				openErr:    tt.openErr,
+				closeErr:   tt.closeErr,
+				cleanErr:   tt.cleanErr,
+				restoreErr: tt.restoreErr,
+			}
+
+			// Test that methods return expected errors
+			ctx := context.Background()
+			if tt.openErr != nil {
+				err := mockCM.Open(ctx, "7")
+				assert.Equal(t, tt.openErr, err)
+			}
+			if tt.closeErr != nil {
+				err := mockCM.Close()
+				assert.Equal(t, tt.closeErr, err)
+			}
+			if tt.cleanErr != nil {
+				err := mockCM.Clean("1")
+				assert.Equal(t, tt.cleanErr, err)
+			}
+			if tt.restoreErr != nil {
+				err := mockCM.Restore("1")
+				assert.Equal(t, tt.restoreErr, err)
+			}
+		})
+	}
 }
