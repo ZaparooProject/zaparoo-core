@@ -434,6 +434,102 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 	}
 }
 
+// launchScummVM returns a launcher function for ScummVM games on MiSTer.
+func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
+	return func(_ *config.Instance, path string) (*os.Process, error) {
+		if path == "" {
+			return nil, errors.New("no path specified")
+		}
+
+		// Extract game target ID from virtual path: scummvm://targetid/Game Name
+		targetID := strings.TrimPrefix(path, "scummvm://")
+		targetID = strings.SplitN(targetID, "/", 2)[0]
+
+		if targetID == "" {
+			return nil, errors.New("no ScummVM target ID specified in path")
+		}
+
+		log.Info().Str("target", targetID).Msg("ScummVM game launching")
+
+		// Find ScummVM binary
+		scummvmBinary, err := findScummVMBinary()
+		if err != nil {
+			return nil, fmt.Errorf("failed to find ScummVM binary: %w", err)
+		}
+
+		// Setup console environment (FPGA check, console switch, cleanup)
+		cm, err := setupConsoleEnvironment(pl)
+		if err != nil {
+			return nil, err
+		}
+
+		// Set video mode for ScummVM (640x480 RGB32)
+		if err := mistermain.SetVideoModeExact(640, 480, mistermain.VideoModeFormatRGB32); err != nil {
+			return nil, fmt.Errorf("failed to set video mode: %w", err)
+		}
+
+		// Start MIDIMeister if available
+		midiStarted := false
+		if err := startMIDIMeister(); err != nil {
+			log.Warn().Err(err).Msg("failed to start MIDIMeister, continuing without MIDI support")
+		} else if shouldStartMIDIMeister() {
+			midiStarted = true
+		}
+
+		log.Info().Str("binary", scummvmBinary).Str("target", targetID).Msg("launching ScummVM")
+
+		// Capture launcher context for staleness detection
+		launcherCtx := pl.launcherManager.GetContext()
+
+		// Prepare ScummVM command
+		cmd := exec.CommandContext( //nolint:gosec // Path validated by findScummVMBinary
+			context.Background(),
+			"taskset", "03", // CPU affinity: cores 0-1
+			scummvmBinary,
+			"--opl-driver=db",
+			"--output-rate=48000",
+			targetID,
+		)
+
+		// Set environment variables
+		cmd.Env = append(os.Environ(),
+			"HOME="+scummvmBaseDir,
+			"LD_LIBRARY_PATH="+filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf")+":"+
+				filepath.Join(scummvmBaseDir, "arm-linux-gnueabihf", "pulseaudio"),
+		)
+
+		// Set working directory to ScummVM base
+		cmd.Dir = scummvmBaseDir
+
+		// Build cleanup function that will be called on completion/crash
+		restoreFunc := createConsoleRestoreFunc(pl, cm)
+
+		// Wrap restore to also stop MIDI if we started it
+		restoreWithMIDI := func() {
+			if midiStarted {
+				stopMIDIMeister()
+			}
+			restoreFunc()
+		}
+
+		// Start process and manage lifecycle
+		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithMIDI, "scummvm")
+	}
+}
+
+// createScummVMLauncher creates a Launcher definition for ScummVM games.
+func createScummVMLauncher(pl *Platform) platforms.Launcher {
+	return platforms.Launcher{
+		ID:                 "ScummVM",
+		SystemID:           systemdefs.SystemScummVM,
+		Schemes:            []string{"scummvm"},
+		SkipFilesystemScan: true,
+		Lifecycle:          platforms.LifecycleTracked,
+		Scanner:            scanScummVMGames,
+		Launch:             launchScummVM(pl),
+	}
+}
+
 // createVideoLauncher creates a Launcher definition for fvp video playback.
 func createVideoLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{

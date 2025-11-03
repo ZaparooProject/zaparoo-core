@@ -705,21 +705,24 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 		f.Path = filepath.ToSlash(filepath.Clean(path))
 	}
 
-	fileBase := filepath.Base(f.Path)
-
-	// Skip extension extraction for virtual paths to avoid extracting garbage
-	// like ".)(ocs)" from "/games/file.txt/Game (v1.0)(ocs)" or
-	// ". Strange" from "kodi://123/Dr. Strange"
-	if noExt || helpers.ReURI.MatchString(path) {
-		f.Ext = ""
+	// Use FilenameFromPath for virtual paths to get URL-decoded names
+	// For regular paths, extract basename manually
+	if helpers.ReURI.MatchString(path) {
+		f.FileName = helpers.FilenameFromPath(f.Path)
+		f.Ext = "" // Virtual paths have no extension
 	} else {
-		f.Ext = strings.ToLower(filepath.Ext(f.Path))
-		if helpers.HasSpace(f.Ext) {
+		fileBase := filepath.Base(f.Path)
+		// Skip extension extraction if noExt is true or extract normally
+		if noExt {
 			f.Ext = ""
+		} else {
+			f.Ext = strings.ToLower(filepath.Ext(f.Path))
+			if helpers.HasSpace(f.Ext) {
+				f.Ext = ""
+			}
 		}
+		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
-
-	f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 
 	f.Title = tags.ParseTitleFromFilename(f.FileName, stripLeadingNumbers)
 	f.Slug = slugs.SlugifyString(f.Title)

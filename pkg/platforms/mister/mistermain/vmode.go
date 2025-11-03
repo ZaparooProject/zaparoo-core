@@ -74,3 +74,41 @@ func SetVideoModeScaled(divisor int) error {
 
 	return nil
 }
+
+// SetVideoModeExact sets an exact video mode with specific width and height.
+// The framebuffer is created at the exact dimensions and integer-scaled to fit the display.
+func SetVideoModeExact(width, height int, format string) error {
+	if width < 1 || height < 1 {
+		return fmt.Errorf("width and height must be positive, got %dx%d", width, height)
+	}
+
+	if _, err := os.Stat(misterconfig.CmdInterface); err != nil {
+		return fmt.Errorf("command interface not accessible: %w", err)
+	}
+
+	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open command interface: %w", err)
+	}
+	defer func(cmd *os.File) {
+		_ = cmd.Close()
+	}(cmd)
+
+	// fb_cmd1 format: "fb_cmd1 format rb width height"
+	// format is typically "8888" for RGB32
+	// rb is '1' for RGBA order
+	cmdStr := fmt.Sprintf(
+		"fb_cmd1 %s %d %d %d",
+		format[1:], // "8888"
+		format[0],  // Rune '1' as int (49)
+		width,
+		height,
+	)
+
+	_, err = cmd.WriteString(cmdStr)
+	if err != nil {
+		return fmt.Errorf("failed to write to command interface: %w", err)
+	}
+
+	return nil
+}

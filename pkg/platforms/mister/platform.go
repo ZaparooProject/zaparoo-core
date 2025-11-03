@@ -731,7 +731,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	ls := CreateLaunchers(p)
-	ls = append(ls, amiga, neogeo, createVideoLauncher(p))
+	ls = append(ls, amiga, neogeo, createVideoLauncher(p), createScummVMLauncher(p))
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)
 }

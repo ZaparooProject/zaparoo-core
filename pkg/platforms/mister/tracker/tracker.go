@@ -181,12 +181,12 @@ func (tr *Tracker) LoadCore() {
 	defer tr.mu.Unlock()
 
 	data, err := os.ReadFile(misterconfig.CoreNameFile)
-	coreName := string(data)
-
 	if err != nil {
 		log.Error().Msgf("error reading core name: %s", err)
 		return
 	}
+
+	coreName := strings.TrimSpace(string(data))
 
 	if coreName == misterconfig.MenuCore {
 		err := activegame.SetActiveGame("")
