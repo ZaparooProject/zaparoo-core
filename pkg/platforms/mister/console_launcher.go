@@ -156,7 +156,11 @@ func runTrackedProcess(
 		restoreFunc()
 		return nil, fmt.Errorf("failed to open /dev/null: %w", devErr)
 	}
-	defer devNull.Close()
+	defer func() {
+		if err := devNull.Close(); err != nil {
+			log.Debug().Err(err).Msg("failed to close /dev/null")
+		}
+	}()
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 
