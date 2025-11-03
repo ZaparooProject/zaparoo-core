@@ -326,58 +326,77 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 		}
 	}
 
-	// Stop tracked process if it exists
+	// Check if launcher has custom Kill function
+	p.platformMu.Lock()
+	customKill := p.lastLauncher.Kill
+	p.platformMu.Unlock()
+
+	// Check if we have a tracked process before attempting to stop it
 	p.processMu.Lock()
 	hadTrackedProcess := p.trackedProcess != nil
-	if p.trackedProcess != nil {
-		proc := p.trackedProcess
+	p.processMu.Unlock()
 
-		// Staged termination approach:
-		// 1. Try SIGTERM first (allows SDL cleanup to run)
-		// 2. Wait 3 seconds
-		// 3. If still running, force kill with SIGKILL
-		// 4. After process dies, deallocate the VT to reset all state
-		log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
-		if err := proc.Signal(syscall.SIGTERM); err != nil {
-			log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
-			p.trackedProcess = nil
-			p.processMu.Unlock()
-		} else {
-			p.trackedProcess = nil
-			p.processMu.Unlock()
+	// Use custom Kill if defined (e.g., keyboard input for ScummVM)
+	if customKill != nil {
+		log.Debug().Msg("using custom Kill function for launcher")
+		if err := customKill(&config.Instance{}); err != nil {
+			log.Warn().Err(err).Msg("custom Kill function failed")
+		}
+		// Custom Kill function used - skip signal-based termination entirely
+		// The process will exit on its own via the custom method
+	} else {
+		// Stop tracked process if it exists using signal-based termination
+		p.processMu.Lock()
+		if p.trackedProcess != nil {
+			proc := p.trackedProcess
 
-			// Wait for graceful exit with timeout
-			done := make(chan error, 1)
-			go func() {
-				_, err := proc.Wait()
-				done <- err
-			}()
+			// Staged termination approach:
+			// 1. Try SIGTERM first (allows SDL cleanup to run)
+			// 2. Wait 5 seconds
+			// 3. If still running, force kill with SIGKILL
+			// 4. After process dies, deallocate the VT to reset all state
+			log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
+			if err := proc.Signal(syscall.SIGTERM); err != nil {
+				log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
+				p.trackedProcess = nil
+				p.processMu.Unlock()
+			} else {
+				p.trackedProcess = nil
+				p.processMu.Unlock()
 
-			select {
-			case err := <-done:
-				if err != nil {
-					log.Debug().Err(err).Msg("process exited after SIGTERM")
-				} else {
-					log.Debug().Msg("process exited gracefully after SIGTERM")
-				}
-			case <-time.After(3 * time.Second):
-				// SIGTERM didn't work within 3 seconds - force kill
-				log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
-				if err := proc.Kill(); err != nil {
-					log.Warn().Err(err).Msg("failed to SIGKILL process")
-				} else {
-					// Wait for SIGKILL to complete (should be fast)
-					select {
-					case <-done:
-						log.Debug().Msg("process killed with SIGKILL")
-					case <-time.After(500 * time.Millisecond):
-						log.Warn().Msg("SIGKILL took too long")
+				// Wait for graceful exit with timeout
+				done := make(chan error, 1)
+				go func() {
+					_, err := proc.Wait()
+					done <- err
+				}()
+
+				select {
+				case err := <-done:
+					if err != nil {
+						log.Debug().Err(err).Msg("process exited after SIGTERM")
+					} else {
+						log.Debug().Msg("process exited gracefully after SIGTERM")
+					}
+				case <-time.After(5 * time.Second):
+					// SIGTERM didn't work within 5 seconds - force kill
+					log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
+					if err := proc.Kill(); err != nil {
+						log.Warn().Err(err).Msg("failed to SIGKILL process")
+					} else {
+						// Wait for SIGKILL to complete (should be fast)
+						select {
+						case <-done:
+							log.Debug().Msg("process killed with SIGKILL")
+						case <-time.After(500 * time.Millisecond):
+							log.Warn().Msg("SIGKILL took too long")
+						}
 					}
 				}
 			}
+		} else {
+			p.processMu.Unlock()
 		}
-	} else {
-		p.processMu.Unlock()
 	}
 
 	// Clear active media

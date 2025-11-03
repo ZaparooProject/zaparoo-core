@@ -147,7 +147,11 @@ type Launcher struct {
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	Launch func(*config.Instance, string) (*os.Process, error)
-	// Kill function kills the current active launcher, if possible.
+	// Kill function provides custom termination logic for the launcher.
+	// If defined, this function is called instead of signal-based termination
+	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
+	// such as keyboard shortcuts, IPC commands, or other non-signal mechanisms.
+	// Example: ScummVM uses keyboard input (Ctrl+q) to avoid VT lock issues.
 	Kill func(*config.Instance) error
 	// Optional function to perform custom media scanning. Takes the list of
 	// results from the standard scan, if any, and returns the final list.

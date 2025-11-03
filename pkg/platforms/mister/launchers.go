@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -456,9 +457,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 			"--output-rate=48000",
 			targetID,
 		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true, // Create new session for proper TTY control
-		}
+		// setsid causes and instant SIGHUP when launching
 
 		// Set environment variables
 		cmd.Env = append(os.Environ(),
@@ -496,6 +495,43 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
 		Launch:             launchScummVM(pl),
+		// Kill uses keyboard input instead of signals to avoid VT lock issues.
+		// ScummVM's VT management doesn't handle SIGKILL properly and causes
+		// kernel-level VT locks requiring a reboot. Ctrl+q triggers clean exit.
+		// This function blocks until ScummVM exits (up to 5 seconds) to prevent
+		// new launches from starting during VT cleanup.
+		Kill: func(_ *config.Instance) error {
+			// Send Ctrl+q to trigger ScummVM's clean exit
+			if err := pl.KeyboardPress("{ctrl+q}"); err != nil {
+				return fmt.Errorf("failed to send ctrl+q: %w", err)
+			}
+
+			// Wait for process to exit cleanly (up to 5 seconds)
+			pl.processMu.Lock()
+			proc := pl.trackedProcess
+			pl.processMu.Unlock()
+
+			if proc == nil {
+				// No tracked process, nothing to wait for
+				return nil
+			}
+
+			// Wait for process exit with timeout
+			done := make(chan error, 1)
+			go func() {
+				_, err := proc.Wait()
+				done <- err
+			}()
+
+			select {
+			case <-done:
+				log.Debug().Msg("ScummVM exited cleanly after ctrl+q")
+				return nil
+			case <-time.After(5 * time.Second):
+				log.Warn().Msg("ScummVM did not exit within 5 seconds")
+				return errors.New("timeout waiting for ScummVM to exit")
+			}
+		},
 	}
 }
 
