@@ -28,7 +28,10 @@ import (
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 )
 
-const VideoModeFormatRGB32 = "18888"
+const (
+	VideoModeFormatRGB32 = "18888" // 32-bit RGBA (8 bits per channel), rb=1
+	VideoModeFormatRGB16 = "1565"  // 16-bit RGB (5 red, 6 green, 5 blue), rb=1
+)
 
 // fb_cmd0 = scaled = fb_cmd0 $fmt $rb $divisor
 //   - Creates framebuffer at display_resolution/divisor

@@ -82,7 +82,10 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 	}
 
 	// run it on-screen like a regular script
-	err := pl.ConsoleManager().Open(scriptConsoleVT)
+	// Use background context with timeout since scripts are not launcher operations
+	scriptCtx, scriptCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer scriptCancel()
+	err := pl.ConsoleManager().Open(scriptCtx, scriptConsoleVT)
 	if err != nil {
 		return fmt.Errorf("failed to open console for script: %w", err)
 	}
@@ -104,9 +107,9 @@ func runScript(pl *Platform, bin, args string, hidden bool) error {
 
 	// this is just to follow mister's convention, which reserves
 	// tty2 for scripts
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	err = exec.CommandContext(ctx, "chvt", vt).Run()
+	cancel()
 	if err != nil {
 		return fmt.Errorf("failed to switch to tty %s: %w", vt, err)
 	}

@@ -26,7 +26,14 @@ func newConsoleManager(p *Platform) *MiSTerConsoleManager {
 }
 
 // Open switches to console mode on the specified VT.
-func (m *MiSTerConsoleManager) Open(vt string) error {
+// The provided context can be used to cancel the operation if the launcher is superseded.
+func (m *MiSTerConsoleManager) Open(ctx context.Context, vt string) error {
+	// Check if launcher context is already cancelled
+	if ctx.Err() != nil {
+		log.Debug().Err(ctx.Err()).Msg("launcher context cancelled before open")
+		return ctx.Err()
+	}
+
 	// Check if console is already active (for video→video transitions)
 	m.mu.RLock()
 	isActive := m.active
@@ -47,12 +54,13 @@ func (m *MiSTerConsoleManager) Open(vt string) error {
 	// trigger the console switch. We use retry logic with exponential
 	// backoff and verification to handle this reliably.
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err := exec.CommandContext(ctx, "chvt", vt).Run()
+	// Switch to target VT using chvt command
+	chvtCtx, chvtCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err := exec.CommandContext(chvtCtx, "chvt", vt).Run()
+	chvtCancel()
 	if err != nil {
-		log.Debug().Err(err).Msg("open console: error running chvt")
-		return fmt.Errorf("failed to run chvt: %w", err)
+		log.Debug().Err(err).Msg("error switching VT")
+		return fmt.Errorf("failed to switch VT: %w", err)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -60,6 +68,12 @@ func (m *MiSTerConsoleManager) Open(vt string) error {
 	maxBackoff := 500 * time.Millisecond
 
 	for time.Now().Before(deadline) {
+		// Check if launcher context was cancelled
+		if ctx.Err() != nil {
+			log.Debug().Err(ctx.Err()).Msg("launcher context cancelled during F9 loop")
+			return ctx.Err()
+		}
+
 		// Press F9 to signal MiSTer_Main to release framebuffer
 		err := m.platform.KeyboardPress("{f9}")
 		if err != nil {
@@ -75,6 +89,7 @@ func (m *MiSTerConsoleManager) Open(vt string) error {
 		// Verify console mode active by checking VT state
 		tty, err := m.getTTY()
 		if err != nil {
+			log.Warn().Err(err).Msg("failed to get TTY")
 			return err
 		}
 		if tty == "tty"+f9ConsoleVT {
@@ -86,9 +101,9 @@ func (m *MiSTerConsoleManager) Open(vt string) error {
 
 			// Switch to target VT
 			if vt != f9ConsoleVT {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				err := exec.CommandContext(ctx, "chvt", vt).Run()
-				cancel()
+				chvtCtx, chvtCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				err := exec.CommandContext(chvtCtx, "chvt", vt).Run()
+				chvtCancel()
 				if err != nil {
 					log.Debug().Err(err).Msgf("failed to switch to tty%s", vt)
 				}
@@ -103,7 +118,10 @@ func (m *MiSTerConsoleManager) Open(vt string) error {
 		}
 	}
 
-	return errors.New("open console: timeout waiting for console switch after 5s")
+	// Timeout - log final state
+	finalTTY, _ := m.getTTY()
+	log.Error().Msgf("timeout after 5s - stuck on %s, expected tty%s", finalTTY, f9ConsoleVT)
+	return errors.New("timeout waiting for console switch after 5s")
 }
 
 // Close exits console mode and returns to normal display.

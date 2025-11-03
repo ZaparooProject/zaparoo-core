@@ -4,15 +4,13 @@ package mister
 
 import (
 	"archive/zip"
-	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -361,8 +359,11 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			Str("path", path).
 			Msg("video playback starting")
 
+		// Capture launcher context for staleness detection and cancellation
+		launcherCtx := pl.launcherManager.GetContext()
+
 		// Setup console environment (FPGA check, console switch, cleanup)
-		cm, err := setupConsoleEnvironment(pl)
+		cm, err := setupConsoleEnvironment(launcherCtx, pl)
 		if err != nil {
 			return nil, err
 		}
@@ -375,18 +376,9 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 
 		log.Info().Str("path", path).Msg("launching video with fvp")
 
-		// Capture launcher context for staleness detection
-		launcherCtx := pl.launcherManager.GetContext()
-
-		// Prepare fvp command with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-
 		fvpBinary := filepath.Join(misterconfig.LinuxDir, "fvp")
 		cmd := exec.CommandContext( //nolint:gosec // Path comes from internal launcher system, not user input
-			ctx,
-			"nice",
-			"-n", "-20",
-			"setsid", // fvp needs setsid to create a new session for proper TTY control
+			launcherCtx,
 			fvpBinary,
 			"-f", // Fullscreen mode
 			// "-j", "1", // Jump every 1 video frame for slow machines
@@ -394,43 +386,16 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 			"-s", // Always synchronize audio/video
 			path,
 		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true, // Create new session for proper TTY control
+		}
 		cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+misterconfig.LinuxDir)
-
-		// Redirect stdin/stdout to /dev/null to prevent console text
-		devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to open /dev/null: %w", err)
-		}
-		cmd.Stdin = devNull
-		cmd.Stdout = devNull
-
-		// Capture stderr for logging
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
-		}
-
-		// Log stderr output in background
-		go func() {
-			scanner := bufio.NewScanner(stderrPipe)
-			for scanner.Scan() {
-				log.Debug().Str("source", "fvp").Msg(scanner.Text())
-			}
-		}()
 
 		// Build cleanup function that will be called on completion/crash
 		restoreFunc := createConsoleRestoreFunc(pl, cm)
 
-		// Wrap restore to also cancel context
-		restoreWithCancel := func() {
-			cancel()
-			restoreFunc()
-		}
-
 		// Start process and manage lifecycle
-		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithCancel, "fvp")
+		return runTrackedProcess(launcherCtx, pl, cmd, restoreFunc, "fvp")
 	}
 }
 
@@ -457,14 +422,18 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 			return nil, fmt.Errorf("failed to find ScummVM binary: %w", err)
 		}
 
+		// Capture launcher context for staleness detection and cancellation
+		launcherCtx := pl.launcherManager.GetContext()
+
 		// Setup console environment (FPGA check, console switch, cleanup)
-		cm, err := setupConsoleEnvironment(pl)
+		cm, err := setupConsoleEnvironment(launcherCtx, pl)
 		if err != nil {
 			return nil, err
 		}
 
-		// Set video mode for ScummVM (640x480 RGB32)
-		if err := mistermain.SetVideoModeExact(640, 480, mistermain.VideoModeFormatRGB32); err != nil {
+		// Set video mode for ScummVM (640x480 RGB16)
+		// Matches original MiSTer_ScummVM: vmode -r 640 480 rgb16
+		if err := mistermain.SetVideoModeExact(640, 480, mistermain.VideoModeFormatRGB16); err != nil {
 			return nil, fmt.Errorf("failed to set video mode: %w", err)
 		}
 
@@ -478,18 +447,18 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 
 		log.Info().Str("binary", scummvmBinary).Str("target", targetID).Msg("launching ScummVM")
 
-		// Capture launcher context for staleness detection
-		launcherCtx := pl.launcherManager.GetContext()
-
-		// Prepare ScummVM command
+		// Prepare ScummVM command with taskset for CPU affinity
 		cmd := exec.CommandContext( //nolint:gosec // Path validated by findScummVMBinary
-			context.Background(),
+			launcherCtx,
 			"taskset", "03", // CPU affinity: cores 0-1
 			scummvmBinary,
 			"--opl-driver=db",
 			"--output-rate=48000",
 			targetID,
 		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true, // Create new session for proper TTY control
+		}
 
 		// Set environment variables
 		cmd.Env = append(os.Environ(),
@@ -512,7 +481,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 			restoreFunc()
 		}
 
-		// Start process and manage lifecycle
+		// Start process and manage lifecycle (wraps with nice/setsid)
 		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithMIDI, "scummvm")
 	}
 }

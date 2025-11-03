@@ -46,11 +46,6 @@ func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, er
 			MediaChanged: true,
 		}, fmt.Errorf("failed to stop active launcher: %w", err)
 	}
-	if err := pl.ReturnToMenu(); err != nil {
-		return platforms.CmdResult{
-			MediaChanged: true,
-		}, fmt.Errorf("failed to return to menu: %w", err)
-	}
 	return platforms.CmdResult{
 		MediaChanged: true,
 	}, nil

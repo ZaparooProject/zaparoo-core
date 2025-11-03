@@ -19,11 +19,14 @@
 
 package platforms
 
+import "context"
+
 // ConsoleManager handles platform-specific console/TTY switching operations.
 // This is primarily used by MiSTer for video playback and script execution.
 type ConsoleManager interface {
-	// Open switches to console mode on the specified VT
-	Open(vt string) error
+	// Open switches to console mode on the specified VT.
+	// The provided context can be used to cancel the operation if the launcher is superseded.
+	Open(ctx context.Context, vt string) error
 
 	// Close exits console mode and returns to normal display
 	Close() error
@@ -39,7 +42,7 @@ type ConsoleManager interface {
 // Used by platforms that don't have console switching (MiSTeX, etc).
 type NoOpConsoleManager struct{}
 
-func (NoOpConsoleManager) Open(_ string) error    { return nil }
-func (NoOpConsoleManager) Close() error           { return nil }
-func (NoOpConsoleManager) Clean(_ string) error   { return nil }
-func (NoOpConsoleManager) Restore(_ string) error { return nil }
+func (NoOpConsoleManager) Open(_ context.Context, _ string) error { return nil }
+func (NoOpConsoleManager) Close() error                           { return nil }
+func (NoOpConsoleManager) Clean(_ string) error                   { return nil }
+func (NoOpConsoleManager) Restore(_ string) error                 { return nil }

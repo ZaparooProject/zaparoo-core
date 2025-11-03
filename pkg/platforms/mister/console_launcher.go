@@ -22,12 +22,11 @@
 package mister
 
 import (
+	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -40,11 +39,13 @@ import (
 //   - Opening the console (switching to launcher VT)
 //   - Cleaning both F9 console (tty1) and launcher console (tty7)
 //
+// The provided context can be used to cancel console operations if the launcher is superseded.
+//
 // Returns the ConsoleManager instance for later cleanup, or an error if setup fails.
 //
 // This function is reusable for any launcher that needs console/framebuffer access
 // (video playback, ScummVM, DOSBox, etc.).
-func setupConsoleEnvironment(pl *Platform) (platforms.ConsoleManager, error) {
+func setupConsoleEnvironment(ctx context.Context, pl *Platform) (platforms.ConsoleManager, error) {
 	// Check if FPGA core is active and return to menu if needed
 	if pl.isFPGAActive() {
 		log.Debug().Msg("FPGA core active, returning to menu before console switch")
@@ -57,7 +58,7 @@ func setupConsoleEnvironment(pl *Platform) (platforms.ConsoleManager, error) {
 	cm := pl.ConsoleManager()
 
 	// Switch to console mode (F9 + chvt to launcher VT)
-	if err := cm.Open(launcherConsoleVT); err != nil {
+	if err := cm.Open(ctx, launcherConsoleVT); err != nil {
 		return nil, fmt.Errorf("failed to open console: %w", err)
 	}
 
@@ -93,32 +94,31 @@ func setupConsoleEnvironment(pl *Platform) (platforms.ConsoleManager, error) {
 // This function is reusable for any console-based launcher.
 func createConsoleRestoreFunc(pl *Platform, cm platforms.ConsoleManager) func() {
 	return func() {
-		// Launch menu core to reset video mode and FPGA state
-		if err := pl.ReturnToMenu(); err != nil {
-			log.Warn().Err(err).Msg("error launching menu during console restore")
-		}
-
-		// Restore cursor state on F9 console (tty1)
-		if err := cm.Restore(f9ConsoleVT); err != nil {
-			log.Warn().Err(err).Msg("error restoring tty1")
-		}
-
-		// Restore cursor state on launcher console (tty7)
-		if err := cm.Restore(launcherConsoleVT); err != nil {
-			log.Warn().Err(err).Msgf("error restoring tty%s", launcherConsoleVT)
-		}
-
-		// Exit console mode back to OSD
+		// Exit console mode FIRST before loading menu
+		// If we call LaunchMenu() while in console mode, MiSTer Main switches to tty2
 		if err := pl.KeyboardPress("{f12}"); err != nil {
-			log.Warn().Err(err).Msg("error pressing F12 to exit console")
+			log.Error().Err(err).Msg("error pressing F12 to exit console")
+		}
+		time.Sleep(100 * time.Millisecond)
+
+		// Restore cursor state on F9 console (tty1) and launcher console (tty7)
+		if err := cm.Restore(f9ConsoleVT); err != nil {
+			log.Warn().Err(err).Msg("error restoring tty1 cursor")
+		}
+		if err := cm.Restore(launcherConsoleVT); err != nil {
+			log.Warn().Err(err).Msgf("error restoring tty%s cursor", launcherConsoleVT)
 		}
 
-		// Clear console active flag to allow next console launcher
+		// NOW load menu core after exiting console mode
+		if err := pl.ReturnToMenu(); err != nil {
+			log.Error().Err(err).Msg("error launching menu")
+		}
+
+		// Clear console active flag
 		pl.consoleManager.mu.Lock()
 		pl.consoleManager.active = false
 		pl.consoleManager.mu.Unlock()
 
-		// Grace period for console/menu transition to complete
 		time.Sleep(200 * time.Millisecond)
 	}
 }
@@ -150,6 +150,35 @@ func runTrackedProcess(
 	restoreFunc func(),
 	logPrefix string,
 ) (*os.Process, error) {
+	// Redirect stdin/stdout to /dev/null to prevent console text interference
+	devNull, devErr := os.OpenFile("/dev/null", os.O_RDWR, 0)
+	if devErr != nil {
+		restoreFunc()
+		return nil, fmt.Errorf("failed to open /dev/null: %w", devErr)
+	}
+	defer devNull.Close()
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+
+	// Capture stderr for logging
+	stderrPipe, pipeErr := cmd.StderrPipe()
+	if pipeErr != nil {
+		restoreFunc()
+		return nil, fmt.Errorf("failed to create stderr pipe: %w", pipeErr)
+	}
+
+	// Log stderr output in background
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			log.Debug().Str("source", logPrefix).Msg(scanner.Text())
+		}
+	}()
+
+	log.Debug().
+		Strs("args", cmd.Args).
+		Msgf("%s: starting console launcher", logPrefix)
+
 	// Start process non-blocking
 	if err := cmd.Start(); err != nil {
 		restoreFunc()
@@ -162,49 +191,29 @@ func runTrackedProcess(
 	// Cleanup in goroutine (non-blocking)
 	go func() {
 		waitErr := cmd.Wait()
+		log.Debug().Msgf("%s: process exited, waitErr=%v", logPrefix, waitErr)
 
 		// Check if launcher context is stale (new launcher started)
 		if launcherCtx.Err() != nil {
-			log.Debug().Msgf("%s cleanup cancelled - launcher superseded", logPrefix)
+			log.Warn().
+				Err(launcherCtx.Err()).
+				Msgf("%s cleanup cancelled - launcher superseded", logPrefix)
 			return
 		}
 
 		// Handle different exit scenarios
 		if waitErr != nil {
-			// Check if process was killed by signal
-			isKilled := false
-			exitErr := &exec.ExitError{}
-			if errors.As(waitErr, &exitErr) {
-				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-					sig := status.Signal()
-					if status.Signaled() && (sig == syscall.SIGKILL || sig == syscall.SIGTERM) {
-						isKilled = true
-					}
-				}
-			}
-
-			if isKilled {
-				// Process was killed (likely by StopActiveLauncher for new media)
-				log.Debug().Msgf("%s stopped by new media launch", logPrefix)
-				// Don't restore console - new launcher will handle it
-				// Just ensure cursor is restored on our VT in case we need it later
-				cm := pl.ConsoleManager()
-				if err := cm.Restore(launcherConsoleVT); err != nil {
-					log.Warn().Err(err).Msg("error restoring console cursor")
-				}
-				pl.SetTrackedProcess(nil)
-			} else {
-				// Process crashed (non-zero exit without signal)
-				log.Error().Err(waitErr).Msgf("%s crashed", logPrefix)
-				pl.SetTrackedProcess(nil)
-				restoreFunc() // Full cleanup on crash
-			}
+			// Process exited with error (crash, SIGTERM, or SIGKILL)
+			// For crashes, we do full cleanup (menu launch, cursor restore)
+			// For SIGTERM/SIGKILL, VT deallocation happens in StopActiveLauncher
+			log.Info().Err(waitErr).Msgf("%s exited with error", logPrefix)
 		} else {
-			// Process completed normally
-			log.Debug().Msgf("%s completed normally", logPrefix)
-			pl.SetTrackedProcess(nil)
-			restoreFunc() // Full cleanup on natural completion
+			// Process completed normally (exit code 0)
+			log.Info().Msgf("%s completed normally", logPrefix)
 		}
+
+		pl.SetTrackedProcess(nil)
+		restoreFunc() // Full cleanup (menu launch, cursor restore)
 	}()
 
 	return cmd.Process, nil

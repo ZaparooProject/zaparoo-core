@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -317,26 +318,35 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.stopIntent = intent
 	p.processMu.Unlock()
 
-	// Invalidate old launcher context - signals cleanup goroutines they're stale
-	if p.launcherManager != nil {
-		p.launcherManager.NewContext()
+	// Invalidate old launcher context ONLY for preemption (new launcher starting)
+	// For StopForMenu and StopForConsoleReset, we need cleanup to run to unlock VT
+	if intent == platforms.StopForPreemption {
+		if p.launcherManager != nil {
+			p.launcherManager.NewContext()
+		}
 	}
 
-	// Kill tracked process if it exists
+	// Stop tracked process if it exists
 	p.processMu.Lock()
+	hadTrackedProcess := p.trackedProcess != nil
 	if p.trackedProcess != nil {
 		proc := p.trackedProcess
-		if err := proc.Kill(); err != nil {
-			log.Warn().Err(err).Msg("failed to kill tracked process")
+
+		// Staged termination approach:
+		// 1. Try SIGTERM first (allows SDL cleanup to run)
+		// 2. Wait 3 seconds
+		// 3. If still running, force kill with SIGKILL
+		// 4. After process dies, deallocate the VT to reset all state
+		log.Debug().Msg("sending SIGTERM to tracked process for graceful shutdown")
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			log.Warn().Err(err).Msg("failed to send SIGTERM to tracked process")
 			p.trackedProcess = nil
 			p.processMu.Unlock()
 		} else {
-			log.Debug().Msg("killed tracked process")
 			p.trackedProcess = nil
 			p.processMu.Unlock()
 
-			// Wait for process to fully exit (with timeout)
-			// This prevents race conditions when launching consecutive videos
+			// Wait for graceful exit with timeout
 			done := make(chan error, 1)
 			go func() {
 				_, err := proc.Wait()
@@ -346,12 +356,24 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 			select {
 			case err := <-done:
 				if err != nil {
-					log.Debug().Err(err).Msg("process wait completed with error")
+					log.Debug().Err(err).Msg("process exited after SIGTERM")
 				} else {
-					log.Debug().Msg("tracked process fully exited")
+					log.Debug().Msg("process exited gracefully after SIGTERM")
 				}
-			case <-time.After(500 * time.Millisecond):
-				log.Warn().Msg("timeout waiting for process exit, continuing anyway")
+			case <-time.After(3 * time.Second):
+				// SIGTERM didn't work within 3 seconds - force kill
+				log.Debug().Msg("SIGTERM timeout - sending SIGKILL")
+				if err := proc.Kill(); err != nil {
+					log.Warn().Err(err).Msg("failed to SIGKILL process")
+				} else {
+					// Wait for SIGKILL to complete (should be fast)
+					select {
+					case <-done:
+						log.Debug().Msg("process killed with SIGKILL")
+					case <-time.After(500 * time.Millisecond):
+						log.Warn().Msg("SIGKILL took too long")
+					}
+				}
 			}
 		}
 	} else {
@@ -361,10 +383,18 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	// Clear active media
 	p.setActiveMedia(nil)
 
-	// Return to menu if needed
+	// Return to menu if needed - but ONLY for launchers without tracked processes
+	// Console launchers (video/ScummVM) have cleanup goroutines that call ReturnToMenu
+	// FPGA/MGL launchers have no cleanup goroutine, so we must call it here
 	if intent == platforms.StopForMenu || intent == platforms.StopForConsoleReset {
-		if err := p.ReturnToMenu(); err != nil {
-			log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
+		if !hadTrackedProcess {
+			// No cleanup goroutine will run - we must call ReturnToMenu ourselves
+			log.Debug().Msg("no tracked process - calling ReturnToMenu directly")
+			if err := p.ReturnToMenu(); err != nil {
+				log.Warn().Err(err).Msg("failed to return to menu after stopping launcher")
+			}
+		} else {
+			log.Debug().Msg("tracked process existed - cleanup goroutine will call ReturnToMenu")
 		}
 	}
 
@@ -374,18 +404,20 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 func (p *Platform) ReturnToMenu() error {
 	// Restore console cursor state on both TTYs
 	if err := p.consoleManager.Restore(f9ConsoleVT); err != nil {
-		log.Debug().Err(err).Msg("failed to restore tty1 state")
+		log.Warn().Err(err).Msg("failed to restore tty1 cursor")
 	}
 	if launcherConsoleVT != f9ConsoleVT {
 		if err := p.consoleManager.Restore(launcherConsoleVT); err != nil {
-			log.Debug().Err(err).Msgf("failed to restore tty%s state", launcherConsoleVT)
+			log.Warn().Err(err).Msgf("failed to restore tty%s cursor", launcherConsoleVT)
 		}
 	}
 
 	err := mistermain.LaunchMenu()
 	if err != nil {
+		log.Error().Err(err).Msg("failed to launch menu")
 		return fmt.Errorf("failed to launch menu: %w", err)
 	}
+
 	// Wait for menu transition to settle
 	time.Sleep(300 * time.Millisecond)
 
