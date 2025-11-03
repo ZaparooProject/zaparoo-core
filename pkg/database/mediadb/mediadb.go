@@ -1711,3 +1711,48 @@ func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path 
 
 	return sqlGetLaunchCommandForMedia(ctx, db.sql, systemID, path)
 }
+
+// CheckForDuplicateMediaTitles returns any MediaTitle records that have duplicate (SystemDBID, Slug) combinations.
+// Used in tests to validate data integrity after selective updates.
+func (db *MediaDB) CheckForDuplicateMediaTitles() ([]string, error) {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+
+	if db.sql == nil {
+		return nil, ErrNullSQL
+	}
+
+	query := `
+		SELECT SystemDBID, Slug, COUNT(*) as cnt
+		FROM MediaTitles
+		GROUP BY SystemDBID, Slug
+		HAVING cnt > 1
+	`
+
+	rows, err := db.sql.QueryContext(db.ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query duplicate media titles: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("failed to close rows in CheckForDuplicateMediaTitles")
+		}
+	}()
+
+	duplicates := make([]string, 0)
+	for rows.Next() {
+		var systemDBID int64
+		var slug string
+		var count int
+		if err := rows.Scan(&systemDBID, &slug, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan duplicate media title row: %w", err)
+		}
+		duplicates = append(duplicates, fmt.Sprintf("SystemDBID=%d, Slug=%s (count=%d)", systemDBID, slug, count))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating duplicate media titles: %w", err)
+	}
+
+	return duplicates, nil
+}
