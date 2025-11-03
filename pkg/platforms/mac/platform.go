@@ -208,6 +208,6 @@ func (*Platform) ShowPicker(
 	return platforms.ErrNotSupported
 }
 
-func (p *Platform) ConsoleManager() platforms.ConsoleManager {
+func (*Platform) ConsoleManager() platforms.ConsoleManager {
 	return platforms.NoOpConsoleManager{}
 }
