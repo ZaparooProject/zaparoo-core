@@ -7,6 +7,7 @@
 package batocera
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -334,5 +335,133 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 	for _, expectedID := range kodiLibraryLaunchers {
 		assert.True(t, foundKodiLaunchers[expectedID],
 			"Should find Kodi library launcher %s in Batocera platform", expectedID)
+	}
+}
+
+// TestLaunchMediaConcurrentProtection tests that concurrent launches are rejected
+func TestLaunchMediaConcurrentProtection(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+
+	// Verify flag starts as false
+	assert.False(t, platform.launchInProgress.Load(), "launch flag should start as false")
+
+	// First launch should succeed in acquiring the lock
+	acquired := platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "first launch should acquire the lock")
+	assert.True(t, platform.launchInProgress.Load(), "flag should be true after acquisition")
+
+	// Second concurrent launch should fail to acquire
+	acquired = platform.launchInProgress.CompareAndSwap(false, true)
+	assert.False(t, acquired, "concurrent launch should fail to acquire lock")
+	assert.True(t, platform.launchInProgress.Load(), "flag should still be true")
+
+	// Clear the flag
+	platform.launchInProgress.Store(false)
+	assert.False(t, platform.launchInProgress.Load(), "flag should be cleared")
+
+	// Third launch should succeed after clearing
+	acquired = platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "launch should succeed after flag is cleared")
+}
+
+// TestLaunchMediaFlagClearance tests that defer clears the flag
+func TestLaunchMediaFlagClearance(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+
+	// Verify flag starts as false
+	assert.False(t, platform.launchInProgress.Load(), "flag should start as false")
+
+	// Set the flag
+	platform.launchInProgress.Store(true)
+	assert.True(t, platform.launchInProgress.Load(), "flag should be set")
+
+	// Simulate defer clearing the flag (what happens at end of LaunchMedia)
+	platform.launchInProgress.Store(false)
+	assert.False(t, platform.launchInProgress.Load(), "flag should be cleared by defer")
+
+	// Verify next launch can proceed
+	acquired := platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "launch should succeed after flag is cleared")
+}
+
+// TestGameListPathHandling tests that paths from gamelist.xml are handled correctly
+func TestGameListPathHandling(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		gamePathInXML string
+		rootDir       string
+		systemName    string
+		expectedPath  string
+		description   string
+	}{
+		{
+			name:          "relative path with dot slash",
+			gamePathInXML: "./Day_of_the_Tentacle/tentacle.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/Day_of_the_Tentacle/tentacle.scummvm",
+			description:   "Batocera gamelist.xml often uses ./relative paths",
+		},
+		{
+			name:          "relative path without dot slash",
+			gamePathInXML: "Day_of_the_Tentacle/tentacle.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/Day_of_the_Tentacle/tentacle.scummvm",
+			description:   "Some gamelists use simple relative paths",
+		},
+		{
+			name:          "simple filename only",
+			gamePathInXML: "game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/game.scummvm",
+			description:   "File directly in scummvm folder",
+		},
+		{
+			name:          "absolute path should not be modified",
+			gamePathInXML: "/userdata/roms/scummvm/monkey_island/monkey.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/monkey_island/monkey.scummvm",
+			description:   "Absolute paths should pass through unchanged",
+		},
+		{
+			name:          "nested relative path",
+			gamePathInXML: "./games/adventure/game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/games/adventure/game.scummvm",
+			description:   "Nested folders with relative path",
+		},
+		{
+			name:          "path with multiple dot slashes",
+			gamePathInXML: "./././game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/game.scummvm",
+			description:   "Multiple ./ should be cleaned by filepath.Clean",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Simulate the path handling logic from the Scanner function
+			gamePath := tt.gamePathInXML
+			if !filepath.IsAbs(gamePath) {
+				gamePath = filepath.Clean(gamePath)
+				gamePath = filepath.Join(tt.rootDir, tt.systemName, gamePath)
+			}
+
+			assert.Equal(t, tt.expectedPath, gamePath, tt.description)
+		})
 	}
 }

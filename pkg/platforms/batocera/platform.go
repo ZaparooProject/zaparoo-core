@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -44,12 +45,13 @@ const (
 )
 
 type Platform struct {
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
-	processMu      sync.RWMutex
+	activeMedia      func() *models.ActiveMedia
+	setActiveMedia   func(*models.ActiveMedia)
+	trackedProcess   *os.Process
+	kbd              linuxinput.Keyboard
+	gpd              linuxinput.Gamepad
+	processMu        sync.RWMutex
+	launchInProgress atomic.Bool
 }
 
 func (*Platform) ID() string {
@@ -277,6 +279,15 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 }
 
 func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+	// Prevent concurrent launches - discard if launch is already in progress
+	if !p.launchInProgress.CompareAndSwap(false, true) {
+		log.Debug().Msg("launch already in progress, ignoring tap")
+		return fmt.Errorf("launch already in progress")
+	}
+
+	// Clear flag when function exits
+	defer p.launchInProgress.Store(false)
+
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -421,9 +432,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 							continue
 						}
 						for _, game := range gameList.Games {
+							// Handle both absolute and relative paths from gamelist.xml
+							gamePath := game.Path
+							if !filepath.IsAbs(gamePath) {
+								// Clean up relative path markers like "./"
+								gamePath = filepath.Clean(gamePath)
+								// Join with root directory
+								gamePath = filepath.Join(rootDir, batSysName, gamePath)
+							}
 							results = append(results, platforms.ScanResult{
 								Name: game.Name,
-								Path: filepath.Join(rootDir, batSysName, game.Path),
+								Path: gamePath,
 							})
 						}
 					}
