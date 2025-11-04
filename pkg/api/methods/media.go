@@ -514,18 +514,18 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			resultSystem.Name = metadata.Name
 		}
 
-		// Build launch command in memory using data from query
-		launchCommand := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
+		// Build zapscript command in memory using data from query
+		zapScript := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
 		if result.Year != nil && *result.Year != "" {
-			launchCommand = fmt.Sprintf("%s (year:%s)", launchCommand, *result.Year)
+			zapScript = fmt.Sprintf("%s (year:%s)", zapScript, *result.Year)
 		}
 
 		results = append(results, models.SearchResultMedia{
-			System:        resultSystem,
-			Name:          result.Name,
-			Path:          result.Path,
-			LaunchCommand: launchCommand,
-			Tags:          result.Tags,
+			System:    resultSystem,
+			Name:      result.Name,
+			Path:      result.Path,
+			ZapScript: zapScript,
+			Tags:      result.Tags,
 		})
 	}
 

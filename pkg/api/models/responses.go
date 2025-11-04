@@ -27,11 +27,11 @@ import (
 )
 
 type SearchResultMedia struct {
-	System        System             `json:"system"`
-	Name          string             `json:"name"`
-	Path          string             `json:"path"`
-	LaunchCommand string             `json:"launchCommand"`
-	Tags          []database.TagInfo `json:"tags"`
+	System    System             `json:"system"`
+	Name      string             `json:"name"`
+	Path      string             `json:"path"`
+	ZapScript string             `json:"zapScript"`
+	Tags      []database.TagInfo `json:"tags"`
 }
 
 type PaginationInfo struct {
