@@ -46,8 +46,8 @@ const (
 )
 
 type Values struct {
-	Media        Media     `toml:"media,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
+	Media        Media     `toml:"media,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`

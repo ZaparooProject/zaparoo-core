@@ -148,6 +148,18 @@ func (m *MockUserDBI) GetHistory(lastID int) ([]database.HistoryEntry, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) CleanupHistory(retentionDays int) (int64, error) {
+	args := m.Called(retentionDays)
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock UserDBI cleanup history failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
 func (m *MockUserDBI) AddMapping(mapping *database.Mapping) error {
 	args := m.Called(mapping)
 	if err := args.Error(0); err != nil {

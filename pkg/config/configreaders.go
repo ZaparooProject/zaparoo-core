@@ -26,10 +26,11 @@ import (
 )
 
 type Readers struct {
-	Drivers    map[string]DriverConfig `toml:"drivers,omitempty"`
-	Connect    []ReadersConnect        `toml:"connect,omitempty"`
-	Scan       ReadersScan             `toml:"scan,omitempty"`
-	AutoDetect bool                    `toml:"auto_detect"`
+	Drivers     map[string]DriverConfig `toml:"drivers,omitempty"`
+	ScanHistory *int                    `toml:"scan_history,omitempty"`
+	Connect     []ReadersConnect        `toml:"connect,omitempty"`
+	Scan        ReadersScan             `toml:"scan,omitempty"`
+	AutoDetect  bool                    `toml:"auto_detect"`
 }
 
 type DriverConfig struct {
@@ -149,4 +150,13 @@ func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect 
 	}
 
 	return c.vals.Readers.AutoDetect && defaultAutoDetect
+}
+
+func (c *Instance) ScanHistory() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Readers.ScanHistory == nil {
+		return 30 // Default: keep 30 days of scan history
+	}
+	return *c.vals.Readers.ScanHistory
 }

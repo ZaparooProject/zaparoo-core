@@ -207,6 +207,23 @@ func Start(
 		return nil, err
 	}
 
+	// Cleanup old scan history entries if retention is configured
+	scanHistoryDays := cfg.ScanHistory()
+	if scanHistoryDays > 0 {
+		log.Info().Msgf("cleaning up scan history older than %d days", scanHistoryDays)
+		rowsDeleted, cleanupErr := db.UserDB.CleanupHistory(scanHistoryDays)
+		switch {
+		case cleanupErr != nil:
+			log.Error().Err(cleanupErr).Msg("error cleaning up scan history")
+		case rowsDeleted > 0:
+			log.Info().Msgf("deleted %d old scan history entries", rowsDeleted)
+		default:
+			log.Debug().Msg("no old scan history entries to clean up")
+		}
+	} else {
+		log.Debug().Msg("scan history cleanup disabled (retention set to 0)")
+	}
+
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
 		onMediaStartScript := cfg.LaunchersOnMediaStart()

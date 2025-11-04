@@ -72,6 +72,39 @@ func sqlVacuum(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func sqlCleanupHistory(ctx context.Context, db *sql.DB, retentionDays int) (int64, error) {
+	cutoffTime := time.Now().AddDate(0, 0, -retentionDays).Unix()
+
+	stmt, err := db.PrepareContext(ctx, `DELETE FROM History WHERE Time < ?;`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prepare history cleanup statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	result, err := stmt.ExecContext(ctx, cutoffTime)
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute history cleanup: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	// Vacuum to reclaim disk space after cleanup
+	if rowsAffected > 0 {
+		if err := sqlVacuum(ctx, db); err != nil {
+			return rowsAffected, fmt.Errorf("cleanup succeeded but vacuum failed: %w", err)
+		}
+	}
+
+	return rowsAffected, nil
+}
+
 //nolint:gocritic // struct passed for DB insertion
 func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry) error {
 	stmt, err := db.PrepareContext(ctx, `

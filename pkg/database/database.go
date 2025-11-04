@@ -241,6 +241,7 @@ type UserDBI interface {
 	GenericDBI
 	AddHistory(entry *HistoryEntry) error
 	GetHistory(lastID int) ([]HistoryEntry, error)
+	CleanupHistory(retentionDays int) (int64, error)
 	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error
