@@ -279,8 +279,54 @@ func TestParseMultiLanguageTag(t *testing.T) {
 			},
 		},
 		{
+			name: "dash-separated three languages",
+			tag:  "en-fr-de",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "dash-separated two languages",
+			tag:  "en-fr",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "dash-separated four languages",
+			tag:  "en-fr-de-it",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangIT, Source: TagSourceBracketed},
+			},
+		},
+		{
+			name: "dash-separated uppercase",
+			tag:  "EN-FR-DE",
+			wantTags: []CanonicalTag{
+				{Type: TagTypeLang, Value: TagLangEN, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceBracketed},
+				{Type: TagTypeLang, Value: TagLangDE, Source: TagSourceBracketed},
+			},
+		},
+		{
 			name:    "single language not multi",
 			tag:     "En",
+			wantNil: true,
+		},
+		{
+			name:    "dash but not language codes (should let parseMultiRegionTag handle)",
+			tag:     "USA-Europe",
+			wantNil: true,
+		},
+		{
+			name:    "dash with single language returns nil",
+			tag:     "en",
 			wantNil: true,
 		},
 		{
@@ -484,6 +530,21 @@ func TestParseFilenameToCanonicalTags_Integration(t *testing.T) {
 			name:     "multi-language plus-separated (TOSEC)",
 			filename: "Game (En+Fr)(Europe)[!].gba",
 			wantTags: []string{"lang:en", "lang:fr", "region:eu", "dump:verified"},
+		},
+		{
+			name:     "multi-language dash-separated in square brackets",
+			filename: "Game (USA)[en-fr-de][!].gba",
+			wantTags: []string{"region:us", "lang:en", "lang:fr", "lang:de", "dump:verified"},
+		},
+		{
+			name:     "multi-language dash-separated in parentheses",
+			filename: "Game (en-de-fr)(Europe).rom",
+			wantTags: []string{"lang:en", "lang:de", "lang:fr", "region:eu"},
+		},
+		{
+			name:     "multi-language dash-separated two languages",
+			filename: "Game [en-fr](World).iso",
+			wantTags: []string{"lang:en", "lang:fr", "region:world"},
 		},
 		{
 			name:     "multi-language plus four languages",

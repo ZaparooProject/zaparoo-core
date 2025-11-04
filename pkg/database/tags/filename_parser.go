@@ -432,19 +432,36 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	return tags, remaining
 }
 
-// parseMultiLanguageTag handles multi-language tags in both formats:
+// parseMultiLanguageTag handles multi-language tags in multiple formats:
 //   - Comma-separated (No-Intro): "(En,Fr,De)" → lang:en, lang:fr, lang:de
 //   - Plus-separated (TOSEC): "(En+Fr)" → lang:en, lang:fr
+//   - Dash-separated: "[en-de-fr]" → lang:en, lang:de, lang:fr
 //
 // Returns individual language tags or nil if not a multi-language tag.
 func parseMultiLanguageTag(tag string) []CanonicalTag {
-	// Multi-language tags contain commas or plus signs
+	// Multi-language tags contain commas, plus signs, or dashes
 	var parts []string
 	switch {
 	case strings.Contains(tag, ","):
 		parts = strings.Split(tag, ",")
 	case strings.Contains(tag, "+"):
 		parts = strings.Split(tag, "+")
+	case strings.Contains(tag, "-"):
+		// Check if this looks like a language dash (not a region dash)
+		// Language codes are 2-3 characters, so validate all parts before accepting
+		tempParts := strings.Split(tag, "-")
+		allShortCodes := true
+		for _, part := range tempParts {
+			normalized := NormalizeTag(part)
+			if len(normalized) < 2 || len(normalized) > 3 {
+				allShortCodes = false
+				break
+			}
+		}
+		if !allShortCodes || len(tempParts) < 2 {
+			return nil // Not a language tag, let parseMultiRegionTag handle it
+		}
+		parts = tempParts
 	default:
 		return nil // Single language
 	}
@@ -559,7 +576,8 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 }
 
 // mapBracketTag maps tags from square brackets [].
-// These are always dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
+// These are typically dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
+// Also handles multi-language patterns (en-fr-de, En,Fr,De, En+Fr) and translation patterns (T+Eng).
 // NOTE: This function receives the raw tag (not normalized) to preserve special characters like !
 func mapBracketTag(tag string) []CanonicalTag {
 	// Check for translation patterns first (T+Eng, T-Chi, etc.)
@@ -578,6 +596,11 @@ func mapBracketTag(tag string) []CanonicalTag {
 
 	// Normalize the tag for regular processing
 	normalized := NormalizeTag(tag)
+
+	// Check for multi-language patterns (en-fr-de, En,Fr,De, En+Fr)
+	if langTags := parseMultiLanguageTag(normalized); langTags != nil {
+		return langTags
+	}
 
 	// Handle standard dump info tags
 	switch normalized {
