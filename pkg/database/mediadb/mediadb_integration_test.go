@@ -1331,3 +1331,50 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, tags, "system tags cache should be cleared after truncate")
 }
+
+// TestCheckForDuplicateMediaTitles_Integration tests duplicate detection with real database.
+func TestCheckForDuplicateMediaTitles_Integration(t *testing.T) {
+	t.Parallel()
+
+	mediaDB, cleanup := setupTempMediaDB(t)
+	defer cleanup()
+
+	// Create a system
+	system, err := mediaDB.InsertSystem(database.System{
+		SystemID: "nes",
+		Name:     "Nintendo Entertainment System",
+	})
+	require.NoError(t, err)
+
+	// Insert duplicate slugs (no unique constraint, so this is allowed)
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "mario",
+		Name:       "Super Mario Bros",
+	})
+	require.NoError(t, err)
+
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "mario", // Duplicate!
+		Name:       "Super Mario Bros 2",
+	})
+	require.NoError(t, err)
+
+	// Insert unique slug
+	_, err = mediaDB.InsertMediaTitle(&database.MediaTitle{
+		SystemDBID: system.DBID,
+		Slug:       "zelda",
+		Name:       "The Legend of Zelda",
+	})
+	require.NoError(t, err)
+
+	// Check for duplicates
+	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
+	require.NoError(t, err)
+
+	// Should find exactly one duplicate (mario)
+	require.Len(t, duplicates, 1)
+	assert.Contains(t, duplicates[0], "mario")
+	assert.Contains(t, duplicates[0], "count=2")
+}

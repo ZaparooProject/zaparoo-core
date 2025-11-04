@@ -634,55 +634,17 @@ func PopulateScanStateForSelectiveIndexing(
 	}
 	ss.TagsIndex = int(maxTagID)
 
-	// Use pure lazy loading for Systems and TagTypes (they have UNIQUE constraints)
-	// Empty maps will be populated on-demand when UNIQUE constraint violations occur
-	// This is handled automatically in AddMediaPath for these tables
-
-	// For MediaTitles and Media, we need to maintain maps since they don't have
-	// unique constraints on the columns we insert (no constraint on SystemDBID+Slug or Path)
-	// But we optimize by only loading data for systems NOT being reindexed
-
-	// Check for cancellation before loading titles
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Populate titles map (only for systems not being reindexed)
-	// Use optimized query that excludes systems being reindexed
-	titlesWithSystems, err := db.GetTitlesWithSystemsExcluding(systemsToReindex)
-	if err != nil {
-		return fmt.Errorf("failed to get existing titles with systems (excluding reindexed): %w", err)
-	}
-	for _, title := range titlesWithSystems {
-		titleKey := title.SystemID + ":" + title.Slug
-		ss.TitleIDs[titleKey] = int(title.DBID)
-	}
-
-	// Check for cancellation before loading media
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	// Populate media map (only for systems not being reindexed)
-	// Use optimized query that excludes systems being reindexed
-	mediaWithFullPath, err := db.GetMediaWithFullPathExcluding(systemsToReindex)
-	if err != nil {
-		return fmt.Errorf("failed to get existing media with full path (excluding reindexed): %w", err)
-	}
-	for _, m := range mediaWithFullPath {
-		mediaKey := m.SystemID + ":" + m.Path
-		ss.MediaIDs[mediaKey] = int(m.DBID)
-	}
-
-	// For selective indexing, use true lazy loading for Systems, TagTypes, and Tags
-	// This dramatically reduces memory usage and startup time by:
-	// 1. Not pre-loading Systems/TagTypes (use UNIQUE constraint handling)
-	// 2. Not pre-loading any Tags (handled by constraint violations)
-	// 3. Only loading MediaTitles/Media for systems NOT being reindexed
+	// For selective indexing, use empty maps instead of pre-loading non-reindexed systems.
+	// This is safe because cache keys are system-scoped (e.g., "nes:mario" vs "snes:mario"),
+	// so data from other systems cannot collide with the systems being reindexed.
+	// TruncateSystems() already removed all target system data via CASCADE, and the max ID
+	// queries above ensure DBID continuity. The cache only needs to prevent duplicates
+	// within the current indexing session for the systems being reindexed.
+	ss.SystemIDs = make(map[string]int)
+	ss.TagTypeIDs = make(map[string]int)
+	ss.TagIDs = make(map[string]int)
+	ss.TitleIDs = make(map[string]int)
+	ss.MediaIDs = make(map[string]int)
 
 	log.Debug().Msgf("populated scan state for selective indexing: "+
 		"maxIDs: Sys=%d, Titles=%d, Media=%d, TagTypes=%d, Tags=%d; "+

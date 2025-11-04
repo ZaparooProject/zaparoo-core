@@ -1163,3 +1163,53 @@ func TestSqlSearchMediaBySlug_TagsScanError(t *testing.T) {
 	assert.Empty(t, results[0].Tags)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestCheckForDuplicateMediaTitles_WithDuplicates tests the duplicate detection query.
+func TestCheckForDuplicateMediaTitles_WithDuplicates(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Mock query that finds duplicates
+	rows := sqlmock.NewRows([]string{"SystemDBID", "Slug", "cnt"}).
+		AddRow(int64(1), "mario", 2).
+		AddRow(int64(1), "zelda", 3)
+
+	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
+		WillReturnRows(rows)
+
+	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
+	require.NoError(t, err)
+
+	// Should find two duplicates
+	require.Len(t, duplicates, 2)
+	assert.Contains(t, duplicates[0], "mario")
+	assert.Contains(t, duplicates[0], "count=2")
+	assert.Contains(t, duplicates[1], "zelda")
+	assert.Contains(t, duplicates[1], "count=3")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCheckForDuplicateMediaTitles_NoDuplicates tests when no duplicates exist.
+func TestCheckForDuplicateMediaTitles_NoDuplicates(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Mock query that finds no duplicates (empty result)
+	rows := sqlmock.NewRows([]string{"SystemDBID", "Slug", "cnt"})
+
+	mock.ExpectQuery(`SELECT SystemDBID, Slug, COUNT.*FROM MediaTitles.*GROUP BY SystemDBID, Slug.*HAVING cnt > 1`).
+		WillReturnRows(rows)
+
+	mediaDB := &MediaDB{sql: db, ctx: context.Background()}
+	duplicates, err := mediaDB.CheckForDuplicateMediaTitles()
+	require.NoError(t, err)
+	assert.Empty(t, duplicates, "Should have no duplicates")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
