@@ -85,7 +85,7 @@ tasks:
     dir: "{{.PACKAGE_DIR}}"
     cmds:
       - echo "Creating package manually..."
-      - tar -cf - .PKGINFO .BATOEXEC userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
+      - tar -cf - .PKGINFO .BATOEXEC* userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
       - chmod go+r "../{{.PACKAGE_NAME}}.pkg.tar.zst"
 
   package-any:
