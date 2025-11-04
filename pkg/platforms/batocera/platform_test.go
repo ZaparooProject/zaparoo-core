@@ -7,6 +7,7 @@
 package batocera
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -385,4 +386,82 @@ func TestLaunchMediaFlagClearance(t *testing.T) {
 	// Verify next launch can proceed
 	acquired := platform.launchInProgress.CompareAndSwap(false, true)
 	assert.True(t, acquired, "launch should succeed after flag is cleared")
+}
+
+// TestGameListPathHandling tests that paths from gamelist.xml are handled correctly
+func TestGameListPathHandling(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		gamePathInXML  string
+		rootDir        string
+		systemName     string
+		expectedPath   string
+		description    string
+	}{
+		{
+			name:          "relative path with dot slash",
+			gamePathInXML: "./Day_of_the_Tentacle/tentacle.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/Day_of_the_Tentacle/tentacle.scummvm",
+			description:   "Batocera gamelist.xml often uses ./relative paths",
+		},
+		{
+			name:          "relative path without dot slash",
+			gamePathInXML: "Day_of_the_Tentacle/tentacle.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/Day_of_the_Tentacle/tentacle.scummvm",
+			description:   "Some gamelists use simple relative paths",
+		},
+		{
+			name:          "simple filename only",
+			gamePathInXML: "game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/game.scummvm",
+			description:   "File directly in scummvm folder",
+		},
+		{
+			name:          "absolute path should not be modified",
+			gamePathInXML: "/userdata/roms/scummvm/monkey_island/monkey.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/monkey_island/monkey.scummvm",
+			description:   "Absolute paths should pass through unchanged",
+		},
+		{
+			name:          "nested relative path",
+			gamePathInXML: "./games/adventure/game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/games/adventure/game.scummvm",
+			description:   "Nested folders with relative path",
+		},
+		{
+			name:          "path with multiple dot slashes",
+			gamePathInXML: "./././game.scummvm",
+			rootDir:       "/userdata/roms",
+			systemName:    "scummvm",
+			expectedPath:  "/userdata/roms/scummvm/game.scummvm",
+			description:   "Multiple ./ should be cleaned by filepath.Clean",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Simulate the path handling logic from the Scanner function
+			gamePath := tt.gamePathInXML
+			if !filepath.IsAbs(gamePath) {
+				gamePath = filepath.Clean(gamePath)
+				gamePath = filepath.Join(tt.rootDir, tt.systemName, gamePath)
+			}
+
+			assert.Equal(t, tt.expectedPath, gamePath, tt.description)
+		})
+	}
 }

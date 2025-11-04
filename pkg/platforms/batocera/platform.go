@@ -432,9 +432,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 							continue
 						}
 						for _, game := range gameList.Games {
+							// Handle both absolute and relative paths from gamelist.xml
+							gamePath := game.Path
+							if !filepath.IsAbs(gamePath) {
+								// Clean up relative path markers like "./"
+								gamePath = filepath.Clean(gamePath)
+								// Join with root directory
+								gamePath = filepath.Join(rootDir, batSysName, gamePath)
+							}
 							results = append(results, platforms.ScanResult{
 								Name: game.Name,
-								Path: filepath.Join(rootDir, batSysName, game.Path),
+								Path: gamePath,
 							})
 						}
 					}
