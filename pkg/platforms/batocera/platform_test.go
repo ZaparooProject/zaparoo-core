@@ -393,12 +393,12 @@ func TestGameListPathHandling(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		gamePathInXML  string
-		rootDir        string
-		systemName     string
-		expectedPath   string
-		description    string
+		name          string
+		gamePathInXML string
+		rootDir       string
+		systemName    string
+		expectedPath  string
+		description   string
 	}{
 		{
 			name:          "relative path with dot slash",

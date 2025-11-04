@@ -165,7 +165,7 @@ jobs:
           esac
           mkdir -p _build/packages/batocera
           BUILD_ARCH=${{matrix.arch}} PKG_ARCH=${PKG_ARCH} VERSION=${VERSION} task batocera:package-arch
-          gh release upload "$tag" _build/packages/batocera/zaparoo-batocera-${VERSION}-${PKG_ARCH}.pkg.tar.zst
+          gh release upload "$tag" _build/packages/batocera/zaparoo-core-${VERSION}-1-${PKG_ARCH}.pkg.tar.zst
       - name: Upload Batocera binary as artifact
         if: matrix.platform == 'batocera'
         uses: actions/upload-artifact@v4
@@ -218,7 +218,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
         run: |
-          gh release upload "$tag" _build/packages/batocera/zaparoo-batocera-${VERSION}-any.pkg.tar.zst
+          gh release upload "$tag" _build/packages/batocera/zaparoo-core-${VERSION}-1-any.pkg.tar.zst
 
 #  build_mac_app:
 #    runs-on: macos-12
