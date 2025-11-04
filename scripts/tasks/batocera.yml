@@ -85,6 +85,34 @@ tasks:
       - tar -cf - .PKGINFO .BATOEXEC userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
       - chmod go+r "../{{.PACKAGE_NAME}}.pkg.tar.zst"
 
+  package-any:
+    desc: Build universal Batocera pacman package for all architectures
+    deps: [build-amd64, build-arm64, build-arm]
+    vars:
+      TEMPLATE_DIR: scripts/batocera/template-any
+      BUILD_DIR: _build/packages/batocera
+      PACKAGE_NAME: zaparoo-batocera-{{.APP_VERSION}}-any
+      PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
+    cmds:
+      - echo "Creating universal 'any' architecture package..."
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
+      - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
+      - cp _build/batocera_arm64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
+      - cp _build/batocera_arm/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
+      - sed -i "s/__VERSION__/{{.APP_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/services/zaparoo_service
+      - task: create-package
+        vars:
+          PACKAGE_DIR: "{{.PACKAGE_DIR}}"
+          PACKAGE_NAME: "{{.PACKAGE_NAME}}"
+          BUILD_DIR: "{{.BUILD_DIR}}"
+      - echo "Universal package created at {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst"
+
   deploy:
     cmds:
       - task: build-{{.CLI_ARGS}}
