@@ -336,3 +336,53 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 			"Should find Kodi library launcher %s in Batocera platform", expectedID)
 	}
 }
+
+// TestLaunchMediaConcurrentProtection tests that concurrent launches are rejected
+func TestLaunchMediaConcurrentProtection(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+
+	// Verify flag starts as false
+	assert.False(t, platform.launchInProgress.Load(), "launch flag should start as false")
+
+	// First launch should succeed in acquiring the lock
+	acquired := platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "first launch should acquire the lock")
+	assert.True(t, platform.launchInProgress.Load(), "flag should be true after acquisition")
+
+	// Second concurrent launch should fail to acquire
+	acquired = platform.launchInProgress.CompareAndSwap(false, true)
+	assert.False(t, acquired, "concurrent launch should fail to acquire lock")
+	assert.True(t, platform.launchInProgress.Load(), "flag should still be true")
+
+	// Clear the flag
+	platform.launchInProgress.Store(false)
+	assert.False(t, platform.launchInProgress.Load(), "flag should be cleared")
+
+	// Third launch should succeed after clearing
+	acquired = platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "launch should succeed after flag is cleared")
+}
+
+// TestLaunchMediaFlagClearance tests that defer clears the flag
+func TestLaunchMediaFlagClearance(t *testing.T) {
+	t.Parallel()
+
+	platform := &Platform{}
+
+	// Verify flag starts as false
+	assert.False(t, platform.launchInProgress.Load(), "flag should start as false")
+
+	// Set the flag
+	platform.launchInProgress.Store(true)
+	assert.True(t, platform.launchInProgress.Load(), "flag should be set")
+
+	// Simulate defer clearing the flag (what happens at end of LaunchMedia)
+	platform.launchInProgress.Store(false)
+	assert.False(t, platform.launchInProgress.Load(), "flag should be cleared by defer")
+
+	// Verify next launch can proceed
+	acquired := platform.launchInProgress.CompareAndSwap(false, true)
+	assert.True(t, acquired, "launch should succeed after flag is cleared")
+}
