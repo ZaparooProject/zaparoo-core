@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,6 +45,7 @@ const (
 )
 
 type Platform struct {
+	clock          clockwork.Clock
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
@@ -81,6 +83,11 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 }
 
 func (p *Platform) StartPre(_ *config.Instance) error {
+	// Initialize clock if not set (for production use)
+	if p.clock == nil {
+		p.clock = clockwork.NewRealClock()
+	}
+
 	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
 	if err != nil {
 		return fmt.Errorf("failed to create keyboard input device: %w", err)
@@ -108,7 +115,7 @@ func (p *Platform) StartPost(
 	// Try to check for running game with retries during startup
 	maxRetries := 10
 	baseDelay := 100 * time.Millisecond
-	var game models.ActiveMedia
+	var game *models.ActiveMedia
 	running := false
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -127,7 +134,7 @@ func (p *Platform) StartPost(
 
 			log.Debug().Msgf("ES API check failed during startup (attempt %d/%d), retrying in %v: %v",
 				attempt+1, maxRetries+1, delay, err)
-			time.Sleep(delay)
+			p.clock.Sleep(delay)
 			continue
 		}
 
@@ -147,19 +154,20 @@ func (p *Platform) StartPost(
 				return nil
 			}
 
-			game = models.ActiveMedia{
-				SystemID:   systemID,
-				SystemName: systemMeta.Name,
-				Name:       gameResp.Name,
-				Path:       gameResp.Path,
-			}
+			game = models.NewActiveMedia(
+				systemID,
+				systemMeta.Name,
+				gameResp.Path,
+				gameResp.Name,
+				"", // LauncherID unknown when detecting already-running game
+			)
 			running = true
 		}
 		break
 	}
 
 	if running {
-		p.setActiveMedia(&game)
+		p.setActiveMedia(game)
 	} else {
 		p.setActiveMedia(nil)
 	}

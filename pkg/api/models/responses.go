@@ -134,6 +134,18 @@ type ActiveMedia struct {
 	Name       string    `json:"mediaName"`
 }
 
+// NewActiveMedia creates a new ActiveMedia with the current timestamp.
+func NewActiveMedia(systemID, systemName, path, name, launcherID string) *ActiveMedia {
+	return &ActiveMedia{
+		Started:    time.Now(),
+		LauncherID: launcherID,
+		SystemID:   systemID,
+		SystemName: systemName,
+		Path:       path,
+		Name:       name,
+	}
+}
+
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if with == nil {
 		return false

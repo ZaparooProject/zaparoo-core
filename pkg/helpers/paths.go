@@ -530,13 +530,13 @@ func DoLaunch(
 	}
 
 	// Set active media immediately (non-blocking for all lifecycle modes)
-	setActiveMedia(&models.ActiveMedia{
-		LauncherID: launcher.ID,
-		SystemID:   launcher.SystemID,
-		SystemName: systemMeta.Name,
-		Name:       GetPathInfo(path).Name,
-		Path:       path,
-	})
+	setActiveMedia(models.NewActiveMedia(
+		launcher.SystemID,
+		systemMeta.Name,
+		path,
+		GetPathInfo(path).Name,
+		launcher.ID,
+	))
 
 	return nil
 }

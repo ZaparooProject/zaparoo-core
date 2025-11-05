@@ -66,6 +66,9 @@ func TestMediaHistoryTracker_Listen_Started(t *testing.T) {
 		LauncherID: "retroarch",
 	}
 
+	// Validate test data is properly formed
+	testhelpers.AssertValidActiveMedia(t, activeMedia)
+
 	// Set active media in state
 	st.SetActiveMedia(activeMedia)
 
@@ -351,6 +354,7 @@ func TestMediaHistoryTracker_Listen_MultipleNotifications(t *testing.T) {
 		Name:       "Super Mario Bros.",
 		LauncherID: "retroarch",
 	}
+	testhelpers.AssertValidActiveMedia(t, activeMedia)
 	st.SetActiveMedia(activeMedia)
 	notifChan <- models.Notification{Method: models.NotificationStarted}
 

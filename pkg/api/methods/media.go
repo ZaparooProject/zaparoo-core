@@ -615,6 +615,8 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
+			Started:    activeMedia.Started,
+			LauncherID: activeMedia.LauncherID,
 			SystemID:   system.ID,
 			SystemName: system.Name,
 			Name:       activeMedia.Name,
@@ -706,14 +708,15 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("error getting system metadata: %w", err)
 	}
 
-	activeMedia := models.ActiveMedia{
-		SystemID:   system.ID,
-		SystemName: systemMeta.Name,
-		Name:       params.MediaName,
-		Path:       params.MediaPath,
-	}
+	activeMedia := models.NewActiveMedia(
+		system.ID,
+		systemMeta.Name,
+		params.MediaPath,
+		params.MediaName,
+		"", // LauncherID unknown when set via API
+	)
 
-	env.State.SetActiveMedia(&activeMedia)
+	env.State.SetActiveMedia(activeMedia)
 	return NoContent{}, nil
 }
 
@@ -726,6 +729,8 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	return models.ActiveMedia{
+		Started:    media.Started,
+		LauncherID: media.LauncherID,
 		SystemID:   media.SystemID,
 		SystemName: media.SystemName,
 		Name:       media.Name,

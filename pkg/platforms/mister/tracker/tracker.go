@@ -224,13 +224,13 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
 
-		tr.setActiveMedia(&models.ActiveMedia{
-			SystemID:   tr.ActiveSystem,
-			SystemName: tr.ActiveSystemName,
-			Name:       tr.ActiveGameName,
-			Path:       coreName,
-			Started:    time.Now(),
-		})
+		tr.setActiveMedia(models.NewActiveMedia(
+			tr.ActiveSystem,
+			tr.ActiveSystemName,
+			coreName,
+			tr.ActiveGameName,
+			"", // LauncherID unknown when tracking MiSTer core changes
+		))
 	}
 }
 
@@ -315,13 +315,13 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
-		tr.setActiveMedia(&models.ActiveMedia{
-			SystemID:   system.ID,
-			SystemName: meta.Name,
-			Name:       name,
-			Path:       path,
-			Started:    time.Now(),
-		})
+		tr.setActiveMedia(models.NewActiveMedia(
+			system.ID,
+			meta.Name,
+			path,
+			name,
+			"", // LauncherID unknown when tracking MiSTer core changes
+		))
 	}
 }
 
