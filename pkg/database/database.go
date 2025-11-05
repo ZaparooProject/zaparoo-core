@@ -53,6 +53,18 @@ type HistoryEntry struct {
 	Success    bool      `json:"success"`
 }
 
+type MediaHistoryEntry struct {
+	StartTime  time.Time  `json:"startTime"`
+	EndTime    *time.Time `json:"endTime,omitempty"`
+	SystemID   string     `json:"systemId"`
+	SystemName string     `json:"systemName"`
+	MediaPath  string     `json:"mediaPath"`
+	MediaName  string     `json:"mediaName"`
+	LauncherID string     `json:"launcherId"`
+	DBID       int64      `db:"DBID" json:"id"`
+	PlayTime   int        `json:"playTime"`
+}
+
 type Mapping struct {
 	Label    string `json:"label"`
 	Type     string `json:"type"`
@@ -242,6 +254,12 @@ type UserDBI interface {
 	AddHistory(entry *HistoryEntry) error
 	GetHistory(lastID int) ([]HistoryEntry, error)
 	CleanupHistory(retentionDays int) (int64, error)
+	AddMediaHistory(entry *MediaHistoryEntry) (int64, error)
+	UpdateMediaHistoryTime(dbid int64, playTime int) error
+	CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error
+	GetMediaHistory(lastID, limit int) ([]MediaHistoryEntry, error)
+	CloseHangingMediaHistory() error
+	CleanupMediaHistory(retentionDays int) (int64, error)
 	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
@@ -46,6 +47,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
 
@@ -151,6 +153,49 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	return db, nil
 }
 
+// cleanupHistoryOnStartup performs all history cleanup operations at service startup
+func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
+	// Cleanup old scan history entries if retention is configured
+	scanHistoryDays := cfg.ScanHistory()
+	if scanHistoryDays > 0 {
+		log.Info().Msgf("cleaning up scan history older than %d days", scanHistoryDays)
+		rowsDeleted, cleanupErr := db.UserDB.CleanupHistory(scanHistoryDays)
+		switch {
+		case cleanupErr != nil:
+			log.Error().Err(cleanupErr).Msg("error cleaning up scan history")
+		case rowsDeleted > 0:
+			log.Info().Msgf("deleted %d old scan history entries", rowsDeleted)
+		default:
+			log.Debug().Msg("no old scan history entries to clean up")
+		}
+	} else {
+		log.Debug().Msg("scan history cleanup disabled (retention set to 0)")
+	}
+
+	// Close any hanging media history entries from unclean shutdown
+	log.Info().Msg("closing hanging media history entries")
+	if hangingErr := db.UserDB.CloseHangingMediaHistory(); hangingErr != nil {
+		log.Error().Err(hangingErr).Msg("error closing hanging media history entries")
+	}
+
+	// Cleanup old media history entries if retention is configured
+	mediaHistoryDays := cfg.MediaHistory()
+	if mediaHistoryDays > 0 {
+		log.Info().Msgf("cleaning up media history older than %d days", mediaHistoryDays)
+		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(mediaHistoryDays)
+		switch {
+		case cleanupErr != nil:
+			log.Error().Err(cleanupErr).Msg("error cleaning up media history")
+		case rowsDeleted > 0:
+			log.Info().Msgf("deleted %d old media history entries", rowsDeleted)
+		default:
+			log.Debug().Msg("no old media history entries to clean up")
+		}
+	} else {
+		log.Debug().Msg("media history cleanup disabled (retention set to 0)")
+	}
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -160,9 +205,10 @@ func Start(
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl) // global state, notification queue (source)
 
-	// Create separate notification channels for API and publishers to avoid race conditions
+	// Create separate notification channels for API, publishers, and history to avoid race conditions
 	apiNotifications := make(chan models.Notification, 100)
 	publisherNotifications := make(chan models.Notification, 100)
+	historyNotifications := make(chan models.Notification, 100)
 
 	// Start main fan-out goroutine to broadcast notifications to all consumers
 	go func() {
@@ -177,9 +223,15 @@ func Start(
 			case <-st.GetContext().Done():
 				return
 			}
+			select {
+			case historyNotifications <- notif:
+			case <-st.GetContext().Done():
+				return
+			}
 		}
 		close(apiNotifications)
 		close(publisherNotifications)
+		close(historyNotifications)
 	}()
 
 	// TODO: convert this to a *token channel
@@ -207,22 +259,8 @@ func Start(
 		return nil, err
 	}
 
-	// Cleanup old scan history entries if retention is configured
-	scanHistoryDays := cfg.ScanHistory()
-	if scanHistoryDays > 0 {
-		log.Info().Msgf("cleaning up scan history older than %d days", scanHistoryDays)
-		rowsDeleted, cleanupErr := db.UserDB.CleanupHistory(scanHistoryDays)
-		switch {
-		case cleanupErr != nil:
-			log.Error().Err(cleanupErr).Msg("error cleaning up scan history")
-		case rowsDeleted > 0:
-			log.Info().Msgf("deleted %d old scan history entries", rowsDeleted)
-		default:
-			log.Debug().Msg("no old scan history entries to clean up")
-		}
-	} else {
-		log.Debug().Msg("scan history cleanup disabled (retention set to 0)")
-	}
+	// Perform all history cleanup operations
+	cleanupHistoryOnStartup(cfg, db)
 
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
@@ -273,6 +311,17 @@ func Start(
 	log.Info().Msg("starting publishers")
 	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
+	// Start media history tracking
+	log.Info().Msg("starting media history listener")
+	historyTracker := &mediaHistoryTracker{
+		st:    st,
+		db:    db,
+		clock: clockwork.NewRealClock(),
+	}
+	go historyTracker.listen(historyNotifications)
+	log.Info().Msg("starting media history PlayTime updater")
+	go historyTracker.updatePlayTime(st.GetContext())
+
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
 		go groovyproxy.Start(cfg, st, itq)
@@ -307,6 +356,98 @@ func Start(
 		close(itq)
 		return nil
 	}, nil
+}
+
+// mediaHistoryTracker encapsulates the state and logic for tracking media history.
+// It coordinates between the notification listener and the periodic PlayTime updater.
+type mediaHistoryTracker struct {
+	clock                 clockwork.Clock
+	currentMediaStartTime time.Time
+	st                    *state.State
+	db                    *database.Database
+	currentHistoryDBID    int64
+	mu                    sync.RWMutex
+}
+
+// listen processes media start/stop notifications and records them in the database.
+func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification) {
+	for notif := range notificationChan {
+		switch notif.Method {
+		case models.NotificationStarted:
+			// Media started - create new history entry
+			activeMedia := t.st.ActiveMedia()
+			if activeMedia != nil {
+				entry := &database.MediaHistoryEntry{
+					StartTime:  activeMedia.Started,
+					SystemID:   activeMedia.SystemID,
+					SystemName: activeMedia.SystemName,
+					MediaPath:  activeMedia.Path,
+					MediaName:  activeMedia.Name,
+					LauncherID: activeMedia.LauncherID,
+					PlayTime:   0,
+				}
+				dbid, addErr := t.db.UserDB.AddMediaHistory(entry)
+				if addErr != nil {
+					log.Error().Err(addErr).Msg("failed to add media history entry")
+				} else {
+					t.mu.Lock()
+					t.currentHistoryDBID = dbid
+					t.currentMediaStartTime = activeMedia.Started
+					t.mu.Unlock()
+					log.Debug().Int64("dbid", dbid).Msg("created media history entry")
+				}
+			}
+
+		case models.NotificationStopped:
+			// Media stopped - close history entry
+			t.mu.Lock()
+			dbid := t.currentHistoryDBID
+			startTime := t.currentMediaStartTime
+			t.currentHistoryDBID = 0
+			t.currentMediaStartTime = time.Time{}
+			t.mu.Unlock()
+
+			if dbid != 0 {
+				endTime := t.clock.Now()
+				playTime := int(endTime.Sub(startTime).Seconds())
+				closeErr := t.db.UserDB.CloseMediaHistory(dbid, endTime, playTime)
+				if closeErr != nil {
+					log.Error().Err(closeErr).Int64("dbid", dbid).Msg("failed to close media history entry")
+				} else {
+					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("closed media history entry")
+				}
+			}
+		}
+	}
+}
+
+// updatePlayTime periodically updates the PlayTime for the currently active media
+// history entry every minute.
+func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
+	ticker := t.clock.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.Chan():
+			t.mu.RLock()
+			dbid := t.currentHistoryDBID
+			startTime := t.currentMediaStartTime
+			t.mu.RUnlock()
+
+			if dbid != 0 {
+				playTime := int(t.clock.Since(startTime).Seconds())
+				updateErr := t.db.UserDB.UpdateMediaHistoryTime(dbid, playTime)
+				if updateErr != nil {
+					log.Warn().Err(updateErr).Msg("failed to update media history play time")
+				} else {
+					log.Debug().Int64("dbid", dbid).Int("playTime", playTime).Msg("updated media history play time")
+				}
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // startPublishers initializes and starts all configured publishers.
