@@ -138,15 +138,6 @@ func (m *MockPlatform) ReturnToMenu() error {
 	return nil
 }
 
-// PlayAudio plays an audio file at the given path
-func (m *MockPlatform) PlayAudio(path string) error {
-	args := m.Called(path)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock platform play audio failed: %w", err)
-	}
-	return nil
-}
-
 // LaunchSystem launches a system by ID
 func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error {
 	args := m.Called(cfg, systemID)

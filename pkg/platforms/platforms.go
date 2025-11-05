@@ -243,10 +243,6 @@ type Platform interface {
 	// SetTrackedProcess stores a process handle for lifecycle management.
 	// Used by DoLaunch to track processes that can be killed later.
 	SetTrackedProcess(*os.Process)
-	// PlayAudio plays an audio file at the given path. A relative path will be
-	// resolved using the data directory assets folder as the base. This
-	// function does not block until the audio finishes.
-	PlayAudio(string) error
 	// LaunchSystem launches a system by ID. This generally means, if a
 	// platform even has the capability, attempt to launch the default or most
 	// appropriate launcher for a given system, without any media loaded.

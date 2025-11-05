@@ -33,7 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -71,44 +71,6 @@ func setupEnvironment(pl platforms.Platform) error {
 		if err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
-	}
-
-	successSoundPath := filepath.Join(
-		helpers.DataDir(pl),
-		config.AssetsDir,
-		config.SuccessSoundFilename,
-	)
-	if _, err := os.Stat(successSoundPath); err != nil {
-		// copy success sound to temp
-		//nolint:gosec // Safe: creates audio files in controlled application directories
-		sf, err := os.Create(successSoundPath)
-		if err != nil {
-			log.Error().Msgf("error creating success sound file: %s", err)
-		}
-		_, err = sf.Write(assets.SuccessSound)
-		if err != nil {
-			log.Error().Msgf("error writing success sound file: %s", err)
-		}
-		_ = sf.Close()
-	}
-
-	failSoundPath := filepath.Join(
-		helpers.DataDir(pl),
-		config.AssetsDir,
-		config.FailSoundFilename,
-	)
-	if _, err := os.Stat(failSoundPath); err != nil {
-		// copy fail sound to temp
-		//nolint:gosec // Safe: creates audio files in controlled application directories
-		ff, err := os.Create(failSoundPath)
-		if err != nil {
-			log.Error().Msgf("error creating fail sound file: %s", err)
-		}
-		_, err = ff.Write(assets.FailSound)
-		if err != nil {
-			log.Error().Msgf("error writing fail sound file: %s", err)
-		}
-		_ = ff.Close()
 	}
 
 	return nil
@@ -245,6 +207,11 @@ func Start(
 		return nil, err
 	}
 
+	log.Info().Msg("initializing audio system")
+	if audioErr := audio.Initialize(); audioErr != nil {
+		log.Warn().Err(audioErr).Msg("failed to initialize audio - audio feedback will be disabled")
+	}
+
 	log.Info().Msg("running platform pre start")
 	err = pl.StartPre(cfg)
 	if err != nil {
@@ -354,6 +321,9 @@ func Start(
 		close(plq)
 		close(lsq)
 		close(itq)
+		if err := audio.Shutdown(); err != nil {
+			log.Warn().Err(err).Msg("error shutting down audio")
+		}
 		return nil
 	}, nil
 }

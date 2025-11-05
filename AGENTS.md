@@ -4,9 +4,9 @@ A README for AI coding agents working on Zaparoo Core.
 
 ## Project Overview
 
-Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 8 reader types, and includes a custom ZapScript language for automation.
+Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 8 reader types, includes cross-platform audio feedback via beep, and features a custom ZapScript language for automation.
 
-**Tech Stack**: Go 1.24.6+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, testify/mock, sqlmock, afero
+**Tech Stack**: Go 1.24.6+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, beep/v2 (audio), testify/mock, sqlmock, afero
 
 **Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
 
@@ -132,6 +132,7 @@ zaparoo-core/
 │   ├── api/             # WebSocket/HTTP JSON-RPC server
 │   │   ├── methods/     # RPC method handlers
 │   │   └── models/      # API data models
+│   ├── audio/           # Cross-platform audio playback (beep-based)
 │   ├── config/          # Configuration management (TOML-based)
 │   ├── database/        # Dual database system
 │   │   ├── userdb/      # User mappings, history, playlists
@@ -151,6 +152,18 @@ zaparoo-core/
 └── Taskfile.dist.yml    # Build and development tasks
 ```
 
+## Audio System
+
+Zaparoo uses **beep** (github.com/gopxl/beep/v2) for cross-platform audio playback of feedback sounds. Beep is a high-level audio library that wraps oto/v3 for hardware output.
+
+### Overview
+
+- **Location**: `pkg/audio/audio.go`
+- **Supported platforms**: All 12 platforms (Linux, Windows, macOS, MiSTer, MiSTeX, Batocera, etc.)
+- **Audio format**: WAV files (beep handles various formats and sample rates automatically)
+- **Playback**: Fire-and-forget asynchronous playback with automatic cleanup
+- **Initialization**: Speaker initialized once at application startup with 44100 Hz sample rate
+
 ## Good Examples to Follow
 
 **Copy these patterns for new code:**
@@ -158,6 +171,7 @@ zaparoo-core/
 - **Tests**: `pkg/testing/examples/service_token_processing_test.go` - Complete test pattern with mocks
 - **Tests**: `pkg/testing/examples/mock_usage_example_test.go` - How to use mocks and fixtures
 - **API**: `pkg/api/methods/` - JSON-RPC method handler pattern
+- **Audio**: `pkg/audio/audio.go` - Cross-platform audio playback pattern
 - **Config**: `pkg/config/config.go` - Thread-safe config with RWMutex
 - **Database**: `pkg/database/userdb/` and `pkg/database/mediadb/` - Database interface pattern
 - **Platform**: `pkg/platforms/linux/platform.go` - Platform implementation pattern
@@ -487,7 +501,7 @@ Each platform has its own entry point in `cmd/{platform}/` with platform-specifi
 task linux:build-amd64
 
 # Windows
-GOOS=windows GOARCH=amd64 task build
+task windows:build-amd64
 
 # MiSTer (ARM)
 task mister:arm

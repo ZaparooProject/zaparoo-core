@@ -163,9 +163,6 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (*Platform) PlayAudio(_ string) error {
-	return nil
-}
 
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")

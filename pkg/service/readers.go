@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -283,7 +285,7 @@ func readerManager(
 			return
 		}
 		if time.Since(lastError) > 1*time.Second {
-			if audioErr := pl.PlayAudio(config.FailSoundFilename); audioErr != nil {
+			if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
 				log.Warn().Msgf("error playing fail sound: %s", audioErr)
 			}
 		}
@@ -417,8 +419,7 @@ preprocessing:
 			log.Info().Msgf("sending token to queue: %v", scan)
 
 			if cfg.AudioFeedback() {
-				err := pl.PlayAudio(config.SuccessSoundFilename)
-				if err != nil {
+				if err := audio.PlayWAVBytes(assets.SuccessSound); err != nil {
 					log.Warn().Msgf("error playing success sound: %s", err)
 				}
 			}

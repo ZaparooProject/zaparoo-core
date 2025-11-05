@@ -212,24 +212,6 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) PlayAudio(path string) error {
-	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
-		return fmt.Errorf("unsupported audio format: %s", path)
-	}
-
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(helpers.DataDir(p), path)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := exec.CommandContext(ctx, "aplay", path).Start()
-	if err != nil {
-		return fmt.Errorf("failed to start aplay command: %w", err)
-	}
-	return nil
-}
-
 func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 	tries := 0

@@ -3,12 +3,9 @@
 package mistex
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -263,24 +260,6 @@ func (*Platform) GetActiveLauncher() string {
 
 func (*Platform) ReturnToMenu() error {
 	// No menu concept on this platform
-	return nil
-}
-
-func (p *Platform) PlayAudio(path string) error {
-	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
-		return fmt.Errorf("unsupported audio format: %s", path)
-	}
-
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(helpers.DataDir(p), path)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := exec.CommandContext(ctx, "aplay", path).Start()
-	if err != nil {
-		return fmt.Errorf("failed to start audio playback: %w", err)
-	}
 	return nil
 }
 

@@ -14,6 +14,7 @@ RUN apk add --no-cache \
     bash \
     eudev-dev \
     mingw-w64-gcc \
+    alsa-lib-dev \
     xz && \
     # Clean up to reduce image size
     rm -rf /var/cache/apk/*
@@ -50,7 +51,7 @@ COPY build_c_lib.sh /usr/local/bin/build_c_lib.sh
 RUN chmod +x /usr/local/bin/build_c_lib.sh
 
 # Define target architectures and their corresponding host triplets
-ENV TARGETS="x86_64-linux-musl aarch64-linux-musl arm-linux-musleabihf"
+ENV TARGETS="x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf"
 ENV HOSTS="x86_64-linux aarch64-linux arm-linux"
 
 WORKDIR /src
@@ -87,11 +88,27 @@ RUN autoreconf -vis
 # Build libnfc for all targets using the consolidated script
 RUN /usr/local/bin/build_c_lib.sh libnfc "/opt/libnfc" "--with-drivers=acr122_usb,pn532_i2c,pn532_uart" "$TARGETS" "$HOSTS"
 
+# Build minimal alsa-lib for each target architecture (for audio support via beep/oto)
+FROM libnfc-builder AS alsa-builder
+
+# Copy alsa build script
+COPY build_alsa_lib.sh /usr/local/bin/build_alsa_lib.sh
+RUN chmod +x /usr/local/bin/build_alsa_lib.sh
+
+WORKDIR /src
+ENV ALSA_LIB_VERSION=1.2.14
+RUN wget ftp://ftp.alsa-project.org/pub/lib/alsa-lib-${ALSA_LIB_VERSION}.tar.bz2 && \
+    tar -xf alsa-lib-${ALSA_LIB_VERSION}.tar.bz2
+WORKDIR /src/alsa-lib-${ALSA_LIB_VERSION}
+
+# Build alsa-lib for all targets using the build script
+RUN /usr/local/bin/build_alsa_lib.sh "$TARGETS" "$HOSTS"
+
 # Final builder stage with all cross-compiled libraries
 FROM base AS builder
 
 # Copy all pre-built dependencies
-COPY --from=libnfc-builder /opt /opt
+COPY --from=alsa-builder /opt /opt
 
 # Install task runner
 RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin

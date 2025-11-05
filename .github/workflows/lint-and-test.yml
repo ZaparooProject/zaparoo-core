@@ -40,8 +40,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: awalsh128/cache-apt-pkgs-action@v1.6.0
         with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev
-          version: 1.0
+          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
+          version: 1.1
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7
@@ -73,8 +73,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: awalsh128/cache-apt-pkgs-action@v1.6.0
         with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev
-          version: 1.0
+          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
+          version: 1.1
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
@@ -142,8 +142,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: awalsh128/cache-apt-pkgs-action@v1.6.0
         with:
-          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev
-          version: 1.0
+          packages: libnfc-dev libgtk-3-dev libx11-dev libpcsclite-dev libasound2-dev
+          version: 1.1
 
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-latest'
