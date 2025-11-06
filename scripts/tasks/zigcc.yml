@@ -25,8 +25,8 @@ tasks:
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include -isystem /usr/include"
-            -e CGO_LDFLAGS="-L/opt/sysroot/x86_64-linux-gnu/lib -L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -lasound"
+            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
 
   build-linux-arm64:
     internal: true
@@ -44,8 +44,8 @@ tasks:
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-gnu/include -isystem /usr/include"
-            -e CGO_LDFLAGS="-L/opt/sysroot/aarch64-linux-gnu/lib -L/opt/libnfc/aarch64-linux-gnu/lib -L/opt/deps/aarch64-linux-gnu/lib /opt/libnfc/aarch64-linux-gnu/lib/libnfc.a /opt/deps/aarch64-linux-gnu/lib/libusb.a /opt/deps/aarch64-linux-gnu/lib/libusb-1.0.a -lasound"
+            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-gnu/lib -L/opt/deps/aarch64-linux-gnu/lib /opt/libnfc/aarch64-linux-gnu/lib/libnfc.a /opt/deps/aarch64-linux-gnu/lib/libusb.a /opt/deps/aarch64-linux-gnu/lib/libusb-1.0.a -ldl"
 
   build-linux-arm:
     internal: true
@@ -63,8 +63,8 @@ tasks:
           NO_STATIC: true
           EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include -isystem /usr/include"
-            -e CGO_LDFLAGS="-L/opt/sysroot/arm-linux-gnueabihf/lib -L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -lasound"
+            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
 
   build-windows-amd64:
     internal: true

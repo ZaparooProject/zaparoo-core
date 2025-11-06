@@ -19,63 +19,28 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Package audio provides cross-platform audio playback using beep.
+// Package audio provides cross-platform audio playback using malgo.
 package audio
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
-	"time"
 
+	"github.com/gen2brain/malgo"
 	"github.com/gopxl/beep/v2"
-	"github.com/gopxl/beep/v2/speaker"
 	"github.com/gopxl/beep/v2/wav"
 	"github.com/rs/zerolog/log"
 )
 
-var (
-	// initOnce ensures speaker initialization happens only once
-	initOnce sync.Once
-	// initErr stores the result of speaker initialization
-	initErr error
-)
-
-// Initialize sets up the global audio speaker.
-// This should be called once at application startup.
-// If initialization fails, audio will be disabled but the application continues.
-// Subsequent calls return the cached initialization result.
-func Initialize() error {
-	initOnce.Do(func() {
-		// Initialize speaker with 44100 Hz sample rate and 100ms buffer
-		sr := beep.SampleRate(44100)
-		err := speaker.Init(sr, sr.N(time.Second/10))
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to initialize audio speaker - audio will be disabled")
-			initErr = fmt.Errorf("failed to initialize speaker: %w", err)
-			return
-		}
-
-		log.Info().Msg("audio system initialized successfully")
-	})
-
-	return initErr
-}
-
-// Shutdown cleans up the audio system.
-// This should be called during application shutdown.
-func Shutdown() error {
-	speaker.Clear()
-	log.Debug().Msg("audio system shut down")
-	return nil
-}
-
-// PlayWAV plays a WAV audio stream asynchronously from an io.ReadCloser.
+// PlayWAV plays a WAV audio stream from an io.ReadCloser asynchronously.
 // The function returns immediately after starting playback.
 // The reader will be closed after playback completes.
-// If the speaker was never initialized, audio simply won't play (no error).
+// The audio device is created, used, and released for each playback.
 func PlayWAV(r io.ReadCloser) error {
 	// Decode WAV stream
 	streamer, format, err := wav.Decode(r)
@@ -86,20 +51,28 @@ func PlayWAV(r io.ReadCloser) error {
 		return fmt.Errorf("failed to decode WAV stream: %w", err)
 	}
 
-	// Resample if needed (beep handles different sample rates automatically)
-	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(44100), streamer)
+	// Resample to 48000 Hz for compatibility with HDMI audio and systems like MiSTer
+	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
 
-	// Play with cleanup callback
-	speaker.Play(beep.Seq(resampled, beep.Callback(func() {
-		if err := streamer.Close(); err != nil {
-			log.Warn().Err(err).Msg("failed to close audio streamer")
-		}
-		if err := r.Close(); err != nil {
-			log.Warn().Err(err).Msg("failed to close underlying audio reader")
-		}
-	})))
+	// Play asynchronously in a goroutine
+	go func() {
+		defer func() {
+			if err := streamer.Close(); err != nil {
+				log.Warn().Err(err).Msg("failed to close audio streamer")
+			}
+			if err := r.Close(); err != nil {
+				log.Warn().Err(err).Msg("failed to close audio reader")
+			}
+		}()
 
-	log.Debug().Msg("started audio playback")
+		if err := playWAVWithMalgo(resampled); err != nil {
+			log.Warn().Err(err).Msg("failed to play audio")
+			return
+		}
+
+		log.Debug().Msg("completed audio playback")
+	}()
+
 	return nil
 }
 
@@ -109,9 +82,8 @@ func PlayWAVBytes(data []byte) error {
 	return PlayWAV(io.NopCloser(bytes.NewReader(data)))
 }
 
-// PlayWAVFile plays a WAV audio file asynchronously from a file path.
+// PlayWAVFile plays a WAV audio file from a file path asynchronously.
 // The function returns immediately after starting playback.
-// If the speaker was never initialized, audio simply won't play (no error).
 func PlayWAVFile(path string) error {
 	// Open WAV file
 	//nolint:gosec // G304: Potential file inclusion via variable path - callers are responsible for path sanitization
@@ -122,4 +94,103 @@ func PlayWAVFile(path string) error {
 
 	log.Debug().Str("path", path).Msg("started audio playback")
 	return PlayWAV(f)
+}
+
+// playWAVWithMalgo plays audio using malgo with proper device lifecycle management.
+// The device is initialized, used, and released within this function.
+func playWAVWithMalgo(streamer beep.Streamer) error {
+	// Create malgo context
+	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to initialize malgo context: %w", err)
+	}
+	defer func() {
+		_ = ctx.Uninit()
+		ctx.Free()
+	}()
+
+	// Configure device for 48kHz, S16LE, 2ch (stereo)
+	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
+	deviceConfig.Playback.Format = malgo.FormatS16
+	deviceConfig.Playback.Channels = 2
+	deviceConfig.SampleRate = 48000
+	deviceConfig.Alsa.NoMMap = 1 // Disable mmap for better compatibility
+
+	// Channel to signal completion
+	done := make(chan struct{})
+
+	// Buffer to store samples for conversion
+	var (
+		mu       sync.Mutex
+		finished bool
+		samples  [][2]float64
+	)
+
+	// Callback function to feed audio samples
+	onSamples := func(pOutputSample, _ []byte, frameCount uint32) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if finished {
+			return
+		}
+
+		// Allocate buffer if needed or if too small
+		if len(samples) < int(frameCount) {
+			samples = make([][2]float64, frameCount)
+		}
+
+		// Read samples from beep streamer
+		n, ok := streamer.Stream(samples[:frameCount])
+		if !ok || n == 0 {
+			finished = true
+			close(done)
+			return
+		}
+
+		// Convert beep samples ([][2]float64) to S16LE PCM bytes
+		offset := 0
+		for i := range n {
+			// Left channel
+			sample := int16(math.Max(-32768, math.Min(32767, samples[i][0]*32767)))
+			//nolint:gosec // G115: Intentional conversion of int16 to uint16 for S16LE PCM encoding
+			binary.LittleEndian.PutUint16(pOutputSample[offset:], uint16(sample))
+			offset += 2
+
+			// Right channel
+			sample = int16(math.Max(-32768, math.Min(32767, samples[i][1]*32767)))
+			//nolint:gosec // G115: Intentional conversion of int16 to uint16 for S16LE PCM encoding
+			binary.LittleEndian.PutUint16(pOutputSample[offset:], uint16(sample))
+			offset += 2
+		}
+
+		// Fill remaining buffer with silence if needed
+		for i := offset; i < len(pOutputSample); i++ {
+			pOutputSample[i] = 0
+		}
+	}
+
+	// Initialize device
+	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
+		Data: onSamples,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize audio device: %w", err)
+	}
+	defer device.Uninit() // Critical: releases ALSA device
+
+	// Start playback
+	if err := device.Start(); err != nil {
+		return fmt.Errorf("failed to start audio device: %w", err)
+	}
+
+	// Wait for playback to complete
+	<-done
+
+	// Stop playback
+	if err := device.Stop(); err != nil {
+		log.Warn().Err(err).Msg("failed to stop audio device")
+	}
+
+	return nil
 }

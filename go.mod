@@ -18,6 +18,7 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
+	github.com/gen2brain/malgo v0.11.24
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.1
 	github.com/go-ole/go-ole v1.3.0
@@ -56,8 +57,6 @@ require (
 	github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc // indirect
 	github.com/creack/goselect v0.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/ebitengine/oto/v3 v3.4.0 // indirect
-	github.com/ebitengine/purego v0.9.0 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect

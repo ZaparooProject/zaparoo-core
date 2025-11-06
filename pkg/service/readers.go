@@ -418,12 +418,6 @@ preprocessing:
 
 			log.Info().Msgf("sending token to queue: %v", scan)
 
-			if cfg.AudioFeedback() {
-				if err := audio.PlayWAVBytes(assets.SuccessSound); err != nil {
-					log.Warn().Msgf("error playing success sound: %s", err)
-				}
-			}
-
 			itq <- *scan
 		} else {
 			log.Info().Msg("token was removed")

@@ -79,66 +79,8 @@ func validWAVHeader() []byte {
 	return wav
 }
 
-func TestInitialize(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		wantErr bool
-	}{
-		{
-			name:    "initialization succeeds",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Initialize()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else if err != nil {
-				// Initialization may fail in CI/test environments without audio hardware
-				// This is acceptable - audio should degrade gracefully
-				t.Logf("audio initialization failed (expected in CI): %v", err)
-			}
-		})
-	}
-}
-
-func TestShutdown(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		wantErr bool
-	}{
-		{
-			name:    "shutdown succeeds",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Shutdown()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestPlayWAV(t *testing.T) {
 	t.Parallel()
-
-	// Initialize audio system (may fail in CI, which is ok)
-	_ = Initialize()
-	t.Cleanup(func() {
-		_ = Shutdown()
-	})
 
 	tests := []struct {
 		setupMock func() io.ReadCloser
@@ -222,12 +164,6 @@ func TestPlayWAV(t *testing.T) {
 func TestPlayWAVBytes(t *testing.T) {
 	t.Parallel()
 
-	// Initialize audio system (may fail in CI, which is ok)
-	_ = Initialize()
-	t.Cleanup(func() {
-		_ = Shutdown()
-	})
-
 	tests := []struct {
 		name    string
 		data    []byte
@@ -270,12 +206,6 @@ func TestPlayWAVBytes(t *testing.T) {
 
 func TestPlayWAVFile(t *testing.T) {
 	t.Parallel()
-
-	// Initialize audio system (may fail in CI, which is ok)
-	_ = Initialize()
-	t.Cleanup(func() {
-		_ = Shutdown()
-	})
 
 	// Create a temporary directory for test files
 	tmpDir := t.TempDir()

@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -248,6 +250,19 @@ func processTokenQueue(
 				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
+				}
+
+				// Play audio feedback based on launch result
+				if cfg.AudioFeedback() {
+					if err == nil {
+						if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
+							log.Warn().Msgf("error playing success sound: %s", audioErr)
+						}
+					} else {
+						if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
+							log.Warn().Msgf("error playing fail sound: %s", audioErr)
+						}
+					}
 				}
 
 				he.Success = err == nil

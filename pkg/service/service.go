@@ -33,7 +33,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/methods"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
@@ -207,11 +206,6 @@ func Start(
 		return nil, err
 	}
 
-	log.Info().Msg("initializing audio system")
-	if audioErr := audio.Initialize(); audioErr != nil {
-		log.Warn().Err(audioErr).Msg("failed to initialize audio - audio feedback will be disabled")
-	}
-
 	log.Info().Msg("running platform pre start")
 	err = pl.StartPre(cfg)
 	if err != nil {
@@ -321,9 +315,6 @@ func Start(
 		close(plq)
 		close(lsq)
 		close(itq)
-		if err := audio.Shutdown(); err != nil {
-			log.Warn().Err(err).Msg("error shutting down audio")
-		}
 		return nil
 	}, nil
 }

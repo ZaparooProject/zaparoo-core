@@ -32,10 +32,6 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7 h1:HYAhfGa9dEemCZgGZWL5AvVsctBCsHxl2CI0HUXzHQE=
 github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7/go.mod h1:BkYEeWL6FbT4Ek+TcOBnPzEKnL7kOq2g19tTQXkorHY=
-github.com/ebitengine/oto/v3 v3.4.0 h1:br0PgASsEWaoWn38b2Goe7m1GKFYfNgnsjSd5Gg+/bQ=
-github.com/ebitengine/oto/v3 v3.4.0/go.mod h1:IOleLVD0m+CMak3mRVwsYY8vTctQgOM0iiL6S7Ar7eI=
-github.com/ebitengine/purego v0.9.0 h1:mh0zpKBIXDceC63hpvPuGLiJ8ZAa3DfrFTudmfi8A4k=
-github.com/ebitengine/purego v0.9.0/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
 github.com/eclipse/paho.mqtt.golang v1.5.1 h1:/VSOv3oDLlpqR2Epjn1Q7b2bSTplJIeV2ISgCl2W7nE=
 github.com/eclipse/paho.mqtt.golang v1.5.1/go.mod h1:1/yJCneuyOoCOzKSsOTUc0AJfpsItBGWvYpBLimhArU=
 github.com/expr-lang/expr v1.17.5 h1:i1WrMvcdLF249nSNlpQZN1S6NXuW9WaOfF5tPi3aw3k=
@@ -48,6 +44,8 @@ github.com/gdamore/tcell/v2 v2.8.1 h1:KPNxyqclpWpWQlPLx6Xui1pMk8S+7+R37h3g07997N
 github.com/gdamore/tcell/v2 v2.8.1/go.mod h1:bj8ori1BG3OYMjmb3IklZVWfZUJ1UBQt9JXrOCOhGWw=
 github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4 h1:ygs9POGDQpQGLJPlq4+0LBUmMBNox1N4JSpw+OETcvI=
 github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4/go.mod h1:0W7dI87PvXJ1Sjs0QPvWXKcQmNERY77e8l7GFhZB/s4=
+github.com/gen2brain/malgo v0.11.24 h1:hHcIJVfzWcEDHFdPl5Dl/CUSOjzOleY0zzAV8Kx+imE=
+github.com/gen2brain/malgo v0.11.24/go.mod h1:f9TtuN7DVrXMiV/yIceMeWpvanyVzJQMlBecJFVMxww=
 github.com/geoffgarside/ber v1.1.0 h1:qTmFG4jJbwiSzSXoNJeHcOprVzZ8Ulde2Rrrifu5U9w=
 github.com/geoffgarside/ber v1.1.0/go.mod h1:jVPKeCbj6MvQZhwLYsGwaGI52oUorHoHKNecGT85ZCc=
 github.com/go-chi/chi/v5 v5.2.2 h1:CMwsvRVTbXVytCk1Wd72Zy1LAsAh9GxMmSNWLHCG618=
