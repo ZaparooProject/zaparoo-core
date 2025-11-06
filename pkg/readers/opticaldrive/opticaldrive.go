@@ -106,7 +106,7 @@ func (*FileReader) Metadata() readers.DriverMetadata {
 }
 
 func (*FileReader) IDs() []string {
-	return []string{"optical_drive"}
+	return []string{"opticaldrive", "optical_drive"}
 }
 
 func (r *FileReader) Open(

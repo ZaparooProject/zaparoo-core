@@ -84,7 +84,7 @@ func (*SimpleSerialReader) Metadata() readers.DriverMetadata {
 }
 
 func (*SimpleSerialReader) IDs() []string {
-	return []string{"simple_serial"}
+	return []string{"simpleserial", "simple_serial"}
 }
 
 func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {

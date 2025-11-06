@@ -230,8 +230,11 @@ func (*Reader) Metadata() readers.DriverMetadata {
 func (*Reader) IDs() []string {
 	return []string{
 		"pn532",
+		"pn532uart",
 		"pn532_uart",
+		"pn532i2c",
 		"pn532_i2c",
+		"pn532spi",
 		"pn532_spi",
 	}
 }

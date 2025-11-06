@@ -90,7 +90,7 @@ func connectReaders(
 	// user defined readers
 	for _, device := range validToConnect {
 		if _, ok := st.GetReader(device.connectionString); !ok {
-			rt := device.device.Driver
+			rt := readers.NormalizeDriverID(device.device.Driver)
 			for _, r := range pl.SupportedReaders(cfg) {
 				metadata := r.Metadata()
 
@@ -99,8 +99,13 @@ func connectReaders(
 					continue
 				}
 
+				// Normalize IDs for comparison
 				ids := r.IDs()
-				if helpers.Contains(ids, rt) {
+				normalizedIDs := make([]string, len(ids))
+				for i, id := range ids {
+					normalizedIDs[i] = readers.NormalizeDriverID(id)
+				}
+				if helpers.Contains(normalizedIDs, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
 					err := r.Open(device.device, iq)
 					if err != nil {
