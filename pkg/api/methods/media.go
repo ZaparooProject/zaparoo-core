@@ -512,6 +512,13 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			log.Err(err).Msg("error getting system metadata")
 		} else {
 			resultSystem.Name = metadata.Name
+			resultSystem.Category = metadata.Category
+			if metadata.ReleaseDate != "" {
+				resultSystem.ReleaseDate = &metadata.ReleaseDate
+			}
+			if metadata.Manufacturer != "" {
+				resultSystem.Manufacturer = &metadata.Manufacturer
+			}
 		}
 
 		// Build zapscript command in memory using data from query

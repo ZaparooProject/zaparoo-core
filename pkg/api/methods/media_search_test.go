@@ -579,3 +579,77 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	mockMediaDB.AssertExpectations(t)
 	mockPlatform.AssertExpectations(t)
 }
+
+func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
+	// Setup mocks
+	mockUserDB := &helpers.MockUserDBI{}
+	mockMediaDB := helpers.NewMockMediaDBI()
+	mockPlatform := mocks.NewMockPlatform()
+
+	// Setup search results with a real system that has metadata
+	expectedResults := []database.SearchResultWithCursor{
+		{SystemID: "Atari7800", Name: "Asteroids", Path: "/games/asteroids.a78", MediaID: 1},
+		{SystemID: "NES", Name: "Mario Bros", Path: "/games/mario.nes", MediaID: 2},
+	}
+
+	mockMediaDB.On("SearchMediaWithFilters",
+		mock.Anything, // context
+		mock.Anything, // filters
+	).Return(expectedResults, nil)
+
+	// Create request
+	query := "test"
+	params := models.SearchParams{
+		Query: &query,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	// Create state
+	appState, _ := state.NewState(mockPlatform)
+
+	env := requests.RequestEnv{
+		Params: paramsJSON,
+		Database: &database.Database{
+			UserDB:  mockUserDB,
+			MediaDB: mockMediaDB,
+		},
+		Platform: mockPlatform,
+		State:    appState,
+		Config:   &config.Instance{},
+		ClientID: "127.0.0.1:12345",
+	}
+
+	// Execute
+	result, err := HandleMediaSearch(env)
+	require.NoError(t, err)
+
+	// Verify response
+	searchResults, ok := result.(models.SearchResults)
+	require.True(t, ok, "Should return SearchResults")
+	require.Len(t, searchResults.Results, 2, "Should return 2 results")
+
+	// Verify Atari7800 system metadata is populated
+	atariResult := searchResults.Results[0]
+	assert.Equal(t, "Atari7800", atariResult.System.ID)
+	assert.Equal(t, "Atari 7800", atariResult.System.Name)
+	assert.Equal(t, "Console", atariResult.System.Category)
+	require.NotNil(t, atariResult.System.ReleaseDate, "ReleaseDate should be populated")
+	assert.Equal(t, "1986-05-01", *atariResult.System.ReleaseDate)
+	require.NotNil(t, atariResult.System.Manufacturer, "Manufacturer should be populated")
+	assert.Equal(t, "Atari", *atariResult.System.Manufacturer)
+
+	// Verify NES system metadata is populated
+	nesResult := searchResults.Results[1]
+	assert.Equal(t, "NES", nesResult.System.ID)
+	assert.Equal(t, "NES", nesResult.System.Name)
+	assert.Equal(t, "Console", nesResult.System.Category)
+	require.NotNil(t, nesResult.System.ReleaseDate, "ReleaseDate should be populated")
+	assert.Equal(t, "1985-10-18", *nesResult.System.ReleaseDate)
+	require.NotNil(t, nesResult.System.Manufacturer, "Manufacturer should be populated")
+	assert.Equal(t, "Nintendo", *nesResult.System.Manufacturer)
+
+	// Verify mock was called
+	mockMediaDB.AssertExpectations(t)
+	mockPlatform.AssertExpectations(t)
+}
