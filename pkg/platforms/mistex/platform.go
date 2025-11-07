@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -280,6 +281,14 @@ func (p *Platform) ActiveGamePath() string {
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	// Handle menu specially - launch menu core directly
+	if strings.EqualFold(id, "menu") {
+		if err := LaunchMenu(); err != nil {
+			return fmt.Errorf("failed to launch menu: %w", err)
+		}
+		return nil
+	}
+
 	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
