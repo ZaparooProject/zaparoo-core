@@ -98,6 +98,7 @@ func (p *Platform) StartPost(
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	_ *database.Database,
 ) error {
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia

@@ -70,6 +70,7 @@ func (p *Platform) StartPost(
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	_ *database.Database,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia

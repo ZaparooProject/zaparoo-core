@@ -170,7 +170,7 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	// Match the actual SQL query structure
 	mock.ExpectPrepare(`select.*from Systems.*inner join.*MediaTitles.*inner join.*Media.*where.*LIMIT`).
 		ExpectQuery().
-		WithArgs("test-system", sqlmock.AnyArg(), path). // slug will be computed
+		WithArgs("test-system", path).
 		WillReturnRows(rows)
 
 	result, err := sqlSearchMediaPathExact(context.Background(), db, systems, path)

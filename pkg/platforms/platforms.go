@@ -214,6 +214,7 @@ type Platform interface {
 		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
+		*database.Database,
 	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.

@@ -62,8 +62,9 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 func (m *MockPlatform) StartPost(cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) error {
-	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia)
+	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia, db)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}

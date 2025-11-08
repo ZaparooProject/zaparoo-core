@@ -189,6 +189,7 @@ func (p *Platform) StartPost(
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) error {
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
@@ -199,6 +200,7 @@ func (p *Platform) StartPost(
 		p,
 		activeMedia,
 		setActiveMedia,
+		db,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to start tracker: %w", err)

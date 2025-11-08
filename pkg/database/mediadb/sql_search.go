@@ -156,14 +156,13 @@ func sqlSearchMediaPathExact(
 	if len(systems) == 0 {
 		return nil, errors.New("no systems provided for media search")
 	}
-	slug := helpers.SlugifyPath(path)
 
 	results := make([]database.SearchResult, 0, 1)
 	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
-	args = append(args, slug, path)
+	args = append(args, path)
 
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
 	stmt, err := db.PrepareContext(ctx, `
@@ -179,7 +178,6 @@ func sqlSearchMediaPathExact(
 		where Systems.SystemID IN (`+
 		prepareVariadic("?", ",", len(systems))+
 		`)
-		and MediaTitles.Slug = ?
 		and Media.Path = ?
 		LIMIT 1
 	`)

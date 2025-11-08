@@ -537,7 +537,7 @@ func DoLaunch(params *LaunchParams) error {
 	}
 
 	// Try to get clean display name from database first
-	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Filename, false)
+	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Name, false)
 	if params.DB != nil && params.DB.MediaDB != nil {
 		systems := []systemdefs.System{{ID: params.Launcher.SystemID}}
 		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(systems, params.Path)

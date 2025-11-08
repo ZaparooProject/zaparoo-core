@@ -364,7 +364,7 @@ func TestStartPost_NoRunningGame(t *testing.T) {
 	}
 
 	// StartPost should detect no running game and set active media to nil
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia)
+	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
 
 	// Should not error
 	require.NoError(t, err)
@@ -401,7 +401,7 @@ func TestStartPost_WithRunningGame(t *testing.T) {
 	}
 
 	// StartPost should detect running game and set active media
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia)
+	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
 
 	// Should not error
 	require.NoError(t, err)
@@ -487,7 +487,7 @@ func TestLaunchMedia_SetsActiveMediaWithTimestamp(t *testing.T) {
 	}
 
 	// Initialize platform (need setActiveMedia function)
-	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia)
+	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
 	require.NoError(t, err)
 
 	// Note: We can't actually test LaunchMedia because it requires ES API running game

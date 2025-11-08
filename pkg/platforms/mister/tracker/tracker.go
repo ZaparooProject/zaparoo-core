@@ -15,7 +15,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
@@ -42,6 +44,7 @@ type Tracker struct {
 	setActiveMedia   func(*models.ActiveMedia)
 	cfg              *config.Instance
 	activeMedia      func() *models.ActiveMedia
+	db               *database.Database
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -96,6 +99,7 @@ func NewTracker(
 	cfg *config.Instance,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
@@ -106,6 +110,7 @@ func NewTracker(
 	return &Tracker{
 		pl:               pl,
 		cfg:              cfg,
+		db:               db,
 		ActiveCore:       "",
 		ActiveSystem:     "",
 		ActiveSystemName: "",
@@ -268,7 +273,6 @@ func (tr *Tracker) loadGame() {
 
 	path := ResolvePath(activeGame)
 	filename := filepath.Base(path)
-	name := helpers.FilenameFromPath(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mgls.ReadMgl(path)
@@ -303,6 +307,20 @@ func (tr *Tracker) loadGame() {
 	if err != nil {
 		log.Error().Msgf("error getting system metadata %s", err)
 		return
+	}
+
+	// Try to get clean display name from database first, fallback to filename parsing
+	pathInfo := helpers.GetPathInfo(path)
+	name := tags.ParseTitleFromFilename(pathInfo.Name, false)
+	if tr.db != nil && tr.db.MediaDB != nil {
+		systems := []systemdefs.System{{ID: system.ID}}
+		results, searchErr := tr.db.MediaDB.SearchMediaPathExact(systems, path)
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			name = results[0].Name
+			log.Debug().Str("path", path).Msg("tracker using indexed display name")
+		} else {
+			log.Debug().Str("path", path).Msg("tracker media not indexed, using filename")
+		}
 	}
 
 	id := fmt.Sprintf("%s/%s", system.ID, filename)
@@ -542,8 +560,9 @@ func StartTracker(
 	pl platforms.Platform,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) (*Tracker, func() error, error) {
-	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia)
+	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia, db)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err
