@@ -109,9 +109,10 @@ func playWAVWithMalgo(streamer beep.Streamer) error {
 		ctx.Free()
 	}()
 
-	// Configure device for 48kHz, S16LE, 2ch (stereo)
+	// Configure device for 48kHz, F32, 2ch (stereo)
+	// Using F32 to avoid buggy S16->S32 conversion in miniaudio on PulseAudio
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
-	deviceConfig.Playback.Format = malgo.FormatS16
+	deviceConfig.Playback.Format = malgo.FormatF32
 	deviceConfig.Playback.Channels = 2
 	deviceConfig.SampleRate = 48000
 	deviceConfig.Alsa.NoMMap = 1 // Disable mmap for better compatibility
@@ -148,20 +149,18 @@ func playWAVWithMalgo(streamer beep.Streamer) error {
 			return
 		}
 
-		// Convert beep samples ([][2]float64) to S16LE PCM bytes
+		// Convert beep samples ([][2]float64) to F32 PCM bytes
 		offset := 0
 		for i := range n {
-			// Left channel
-			sample := int16(math.Max(-32768, math.Min(32767, samples[i][0]*32767)))
-			//nolint:gosec // G115: Intentional conversion of int16 to uint16 for S16LE PCM encoding
-			binary.LittleEndian.PutUint16(pOutputSample[offset:], uint16(sample))
-			offset += 2
+			// Left channel - convert float64 to float32
+			sample := float32(samples[i][0])
+			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(sample))
+			offset += 4 // 4 bytes per F32 sample
 
 			// Right channel
-			sample = int16(math.Max(-32768, math.Min(32767, samples[i][1]*32767)))
-			//nolint:gosec // G115: Intentional conversion of int16 to uint16 for S16LE PCM encoding
-			binary.LittleEndian.PutUint16(pOutputSample[offset:], uint16(sample))
-			offset += 2
+			sample = float32(samples[i][1])
+			binary.LittleEndian.PutUint32(pOutputSample[offset:], math.Float32bits(sample))
+			offset += 4
 		}
 
 		// Fill remaining buffer with silence if needed
