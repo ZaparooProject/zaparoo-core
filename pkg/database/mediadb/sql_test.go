@@ -159,12 +159,13 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	expectedResults := []database.SearchResult{
 		{
 			SystemID: "test-system",
+			Name:     "Test Game",
 			Path:     "/games/test.rom",
 		},
 	}
 
-	rows := sqlmock.NewRows([]string{"SystemID", "Path"}).
-		AddRow(expectedResults[0].SystemID, expectedResults[0].Path)
+	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path"}).
+		AddRow(expectedResults[0].SystemID, expectedResults[0].Name, expectedResults[0].Path)
 
 	// Match the actual SQL query structure
 	mock.ExpectPrepare(`select.*from Systems.*inner join.*MediaTitles.*inner join.*Media.*where.*LIMIT`).
@@ -176,6 +177,7 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, expectedResults[0].SystemID, result[0].SystemID)
+	assert.Equal(t, expectedResults[0].Name, result[0].Name)
 	assert.Equal(t, expectedResults[0].Path, result[0].Path)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

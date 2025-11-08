@@ -249,7 +249,7 @@ type Platform interface {
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches some media by path and sets the active media if it
 	// was successful. Pass nil for launcher to auto-detect, or a specific Launcher.
-	LaunchMedia(*config.Instance, string, *Launcher) error
+	LaunchMedia(*config.Instance, string, *Launcher, *database.Database) error
 	// KeyboardPress presses and then releases a single keyboard button on a
 	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error

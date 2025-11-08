@@ -169,6 +169,7 @@ func sqlSearchMediaPathExact(
 	stmt, err := db.PrepareContext(ctx, `
 		select
 			Systems.SystemID,
+			MediaTitles.Name,
 			Media.Path
 		from Systems
 		inner join MediaTitles
@@ -206,11 +207,11 @@ func sqlSearchMediaPathExact(
 		result := database.SearchResult{}
 		if scanErr := rows.Scan(
 			&result.SystemID,
+			&result.Name,
 			&result.Path,
 		); scanErr != nil {
 			return results, fmt.Errorf("failed to scan search result: %w", scanErr)
 		}
-		result.Name = helpers.FilenameFromPath(result.Path)
 		results = append(results, result)
 	}
 	err = rows.Err()

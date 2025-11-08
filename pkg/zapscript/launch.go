@@ -278,12 +278,12 @@ func getAltLauncher(
 
 		return func(args string) error {
 			// Pass the specific launcher - DoLaunch handles lifecycle
-			return pl.LaunchMedia(env.Cfg, args, &launcher)
+			return pl.LaunchMedia(env.Cfg, args, &launcher, env.Database)
 		}, nil
 	}
 	// Normal path - pass nil for auto-detection
 	return func(args string) error {
-		return pl.LaunchMedia(env.Cfg, args, nil)
+		return pl.LaunchMedia(env.Cfg, args, nil, env.Database)
 	}, nil
 }
 

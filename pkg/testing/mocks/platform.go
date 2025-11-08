@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -149,8 +150,10 @@ func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error
 }
 
 // LaunchMedia launches some media by path and sets the active media if it was successful
-func (m *MockPlatform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
-	args := m.Called(cfg, path, launcher)
+func (m *MockPlatform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
+	args := m.Called(cfg, path, launcher, db)
 	m.launchedMedia = append(m.launchedMedia, path)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)

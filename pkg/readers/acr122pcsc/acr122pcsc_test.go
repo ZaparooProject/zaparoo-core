@@ -56,8 +56,9 @@ func TestIDs(t *testing.T) {
 	reader := &ACR122PCSC{}
 	ids := reader.IDs()
 
-	require.Len(t, ids, 1)
-	assert.Equal(t, "acr122_pcsc", ids[0])
+	require.Len(t, ids, 2)
+	assert.Equal(t, "acr122pcsc", ids[0])
+	assert.Equal(t, "acr122_pcsc", ids[1])
 }
 
 func TestWrite_NotSupported(t *testing.T) {
