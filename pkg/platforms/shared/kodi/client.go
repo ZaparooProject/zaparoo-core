@@ -299,7 +299,7 @@ func (c *Client) LaunchSong(path string) error {
 	return err
 }
 
-// LaunchAlbum launches an album by ID using playlist generation
+// LaunchAlbum launches an album by ID from Kodi's library
 func (c *Client) LaunchAlbum(path string) error {
 	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiAlbum)
 	if err != nil {
@@ -311,60 +311,18 @@ func (c *Client) LaunchAlbum(path string) error {
 		return fmt.Errorf("failed to parse album ID %q: %w", idStr, err)
 	}
 
-	// Step 1: Clear music playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
-		PlaylistID: 0,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 2: Get songs with album filter
-	filter := &FilterRule{
-		Field:    "albumid",
-		Operator: "is",
-		Value:    albumID,
-	}
-	params := AudioLibraryGetSongsParams{Filter: filter}
-
-	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
-	if err != nil {
-		return err
-	}
-
-	var response AudioLibraryGetSongsResponse
-	err = json.Unmarshal(result, &response)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
-	}
-
-	allSongs := response.Songs
-
-	// Convert to playlist items - no filtering needed since API filtered
-	albumSongs := make([]PlaylistItemSongID, 0, len(allSongs))
-	for _, song := range allSongs {
-		albumSongs = append(albumSongs, PlaylistItemSongID{SongID: song.ID})
-	}
-
-	// Step 3: Add to playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
-		PlaylistID: 0,
-		Item:       albumSongs,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 4: Start playback
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
-			PlaylistID: 0,
+			AlbumID: albumID,
+		},
+		Options: ItemOptions{
+			Resume: true,
 		},
 	})
 	return err
 }
 
-// LaunchArtist launches an artist by ID using playlist generation
+// LaunchArtist launches an artist by ID from Kodi's library
 func (c *Client) LaunchArtist(path string) error {
 	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiArtist)
 	if err != nil {
@@ -376,58 +334,12 @@ func (c *Client) LaunchArtist(path string) error {
 		return fmt.Errorf("failed to parse artist ID %q: %w", idStr, err)
 	}
 
-	// Step 1: Clear music playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
-		PlaylistID: 0,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 2: Get songs for specific artist using API filtering
-	filter := &FilterRule{
-		Field:    "artistid",
-		Operator: "is",
-		Value:    artistID,
-	}
-	params := AudioLibraryGetSongsParams{Filter: filter}
-
-	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
-	if err != nil {
-		return err
-	}
-
-	var response AudioLibraryGetSongsResponse
-	err = json.Unmarshal(result, &response)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
-	}
-
-	allSongs := response.Songs
-
-	// Convert to playlist items - no filtering needed since API filtered
-	artistSongs := make([]PlaylistItemSongID, 0, len(allSongs))
-	for _, song := range allSongs {
-		artistSongs = append(artistSongs, PlaylistItemSongID{SongID: song.ID})
-	}
-
-	if len(artistSongs) == 0 {
-		return fmt.Errorf("no songs found for artist ID %d", artistID)
-	}
-
-	// Step 3: Add songs to playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
-		PlaylistID: 0,
-		Item:       artistSongs,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 4: Start playback
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
-			PlaylistID: 0,
+			ArtistID: artistID,
+		},
+		Options: ItemOptions{
+			Resume: true,
 		},
 	})
 	return err

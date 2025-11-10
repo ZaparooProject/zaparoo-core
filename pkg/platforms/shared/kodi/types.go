@@ -128,6 +128,8 @@ type Item struct {
 	TVShowID   int    `json:"tvshowid,omitempty"`
 	EpisodeID  int    `json:"episodeid,omitempty"`
 	SongID     int    `json:"songid,omitempty"`
+	AlbumID    int    `json:"albumid,omitempty"`
+	ArtistID   int    `json:"artistid,omitempty"`
 	PlaylistID int    `json:"playlistid,omitempty"`
 }
 
