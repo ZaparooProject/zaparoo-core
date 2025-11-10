@@ -80,6 +80,45 @@ func TestMyService(t *testing.T) {
 
 **See TESTING.md for comprehensive examples and best practices.**
 
+### Fuzz Testing
+
+#### Native Go Fuzzing (Go 1.18+)
+- `func FuzzFunctionName(f *testing.F)` - Fuzz test function signature
+- `f.Add(inputs...)` - Seed corpus with known test cases
+- `f.Fuzz(func(t *testing.T, inputs...) { ... })` - Fuzz target function
+
+#### Running Fuzz Tests
+```bash
+# Run all tests (includes fuzz corpus) - FAST
+task test
+
+# Manual fuzzing (runs until failure or Ctrl+C)
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+
+# Time-boxed fuzzing
+go test -fuzz=FuzzName -fuzztime=30s ./pkg/helpers/
+```
+
+#### Example Fuzz Test
+```go
+func FuzzParseURI(f *testing.F) {
+    // Seed corpus
+    f.Add("steam://123/Game")
+    f.Add("") // Edge case
+
+    f.Fuzz(func(t *testing.T, uri string) {
+        result, err := ParseURI(uri)
+
+        // Test properties (invariants)
+        if err == nil && !utf8.ValidString(result) {
+            t.Errorf("Invalid UTF-8: %q", result)
+        }
+    })
+}
+```
+
+**Example fuzz tests**: `pkg/helpers/uris_fuzz_test.go`, `pkg/helpers/paths_fuzz_test.go`
+
 ### API Testing
 
 #### WebSocket & JSON-RPC
