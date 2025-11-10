@@ -428,3 +428,317 @@ func TestAddMediaPath_PopulatesSlugMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestGetPathFragments_VirtualPathsWithEncoding tests that GetPathFragments correctly
+// processes virtual paths with URL encoding, ensuring:
+// 1. Path is preserved as-is (with encoding)
+// 2. FileName is decoded for display
+// 3. Title is decoded and cleaned
+// 4. Slug is generated from decoded name
+// 5. Extension is empty for virtual paths
+func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		path         string
+		description  string
+		expectedFrag MediaPathFragments
+		noExt        bool
+	}{
+		{
+			name:  "kodi_movie_with_spaces",
+			path:  "kodi-movie://123/The%20Matrix",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "kodi-movie://123/The%20Matrix",
+				FileName: "The Matrix", // Decoded
+				Title:    "The Matrix", // Decoded and cleaned
+				Slug:     "matrix",     // Slugified strips leading "The"
+				Ext:      "",           // Virtual paths have no extension
+			},
+			description: "Movie with URL-encoded spaces",
+		},
+		{
+			name:  "kodi_movie_with_parens",
+			path:  "kodi-movie://456/The%20Matrix%20%28Reloaded%29",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "kodi-movie://456/The%20Matrix%20%28Reloaded%29",
+				FileName: "The Matrix (Reloaded)",
+				Title:    "The Matrix", // Parens stripped by title parser
+				Slug:     "matrix",     // Slugified strips leading "The"
+				Ext:      "",
+			},
+			description: "Movie with encoded spaces and parentheses",
+		},
+		{
+			name:  "kodi_show_with_encoded_slash",
+			path:  "kodi-show://789/Hot%2FCold",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "kodi-show://789/Hot%2FCold",
+				FileName: "Hot/Cold", // %2F decoded to /
+				Title:    "Hot/Cold",
+				Slug:     "hotcold", // Slash removed in slugification
+				Ext:      "",
+			},
+			description: "Show with encoded forward slash (critical test)",
+		},
+		{
+			name:  "steam_with_brackets",
+			path:  "steam://111/Game%20%5BDLC%5D%20Edition",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "steam://111/Game%20%5BDLC%5D%20Edition",
+				FileName: "Game [DLC] Edition",
+				Title:    "Game Edition", // Brackets stripped
+				Slug:     "game",         // "Edition" suffix stripped by slugify
+				Ext:      "",
+			},
+			description: "Steam game with encoded brackets",
+		},
+		{
+			name:  "scummvm_with_colon",
+			path:  "scummvm://monkey1/Monkey%20Island%3A%20Special%20Edition",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "scummvm://monkey1/Monkey%20Island%3A%20Special%20Edition",
+				FileName: "Monkey Island: Special Edition",
+				Title:    "Monkey Island: Special Edition", // Colon preserved in title
+				Slug:     "monkeyislandspecial",            // "Edition" suffix stripped
+				Ext:      "",
+			},
+			description: "ScummVM with encoded colon",
+		},
+		{
+			name:  "flashpoint_with_ampersand",
+			path:  "flashpoint://flash1/Tom%20%26%20Jerry",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "flashpoint://flash1/Tom%20%26%20Jerry",
+				FileName: "Tom & Jerry",
+				Title:    "Tom & Jerry",
+				Slug:     "tomandjerry", // & becomes 'and' in slug
+				Ext:      "",
+			},
+			description: "Flashpoint with encoded ampersand",
+		},
+		{
+			name:  "http_url_with_spaces",
+			path:  "http://server.com/My%20Game.zip",
+			noExt: false,
+			expectedFrag: MediaPathFragments{
+				Path:     "http://server.com/My%20Game.zip",
+				FileName: "My Game.zip", // Includes extension from HTTP URL
+				Title:    "My Game.zip", // Extension preserved in title for URLs
+				Slug:     "mygamezip",   // Extension included in slug
+				Ext:      "",            // Virtual paths (URIs) have no extension field
+			},
+			description: "HTTP URL with encoded spaces",
+		},
+		{
+			name:  "https_nested_path",
+			path:  "https://cdn.example.com/games/Super%20Mario.sfc",
+			noExt: false,
+			expectedFrag: MediaPathFragments{
+				Path:     "https://cdn.example.com/games/Super%20Mario.sfc",
+				FileName: "Super Mario.sfc", // Includes extension from HTTP URL
+				Title:    "Super Mario.sfc", // Extension preserved in title for URLs
+				Slug:     "supermariosfc",   // Extension included in slug
+				Ext:      "",                // Virtual paths (URIs) have no extension field
+			},
+			description: "HTTPS URL with nested path",
+		},
+		{
+			name:  "kodi_episode_complex",
+			path:  "kodi-episode://222/S01E01%20-%20The%20Beginning%20%28Part%201%29",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "kodi-episode://222/S01E01%20-%20The%20Beginning%20%28Part%201%29",
+				FileName: "S01E01 - The Beginning (Part 1)",
+				Title:    "S01E01 - The Beginning",
+				Slug:     "s01e01beginning", // "The" article stripped
+				Ext:      "",
+			},
+			description: "Episode with complex naming",
+		},
+		{
+			name:  "launchbox_simple",
+			path:  "launchbox://lb123/SimpleGame",
+			noExt: true,
+			expectedFrag: MediaPathFragments{
+				Path:     "launchbox://lb123/SimpleGame",
+				FileName: "SimpleGame",
+				Title:    "SimpleGame",
+				Slug:     "simplegame",
+				Ext:      "",
+			},
+			description: "LaunchBox with no special characters",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := GetPathFragments(nil, tc.path, tc.noExt, false)
+
+			assert.Equal(t, tc.expectedFrag.Path, result.Path,
+				"Path should be preserved as-is (with encoding): %s", tc.description)
+			assert.Equal(t, tc.expectedFrag.FileName, result.FileName,
+				"FileName should be decoded: %s", tc.description)
+			assert.Equal(t, tc.expectedFrag.Title, result.Title,
+				"Title should be decoded and cleaned: %s", tc.description)
+			assert.Equal(t, tc.expectedFrag.Slug, result.Slug,
+				"Slug should be generated from decoded name: %s", tc.description)
+			assert.Equal(t, tc.expectedFrag.Ext, result.Ext,
+				"Extension should be empty for virtual paths: %s", tc.description)
+
+			// Verify no percent encoding in decoded fields
+			assert.NotContains(t, result.FileName, "%",
+				"FileName should not contain percent encoding")
+			assert.NotContains(t, result.Title, "%",
+				"Title should not contain percent encoding")
+			assert.NotContains(t, result.Slug, "%",
+				"Slug should not contain percent encoding")
+
+			t.Logf("✓ %s: %s → title=%q, slug=%q",
+				tc.name, tc.path, result.Title, result.Slug)
+		})
+	}
+}
+
+// TestGetPathFragments_MalformedVirtualPaths tests graceful handling of malformed virtual paths
+func TestGetPathFragments_MalformedVirtualPaths(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		path        string
+		description string
+		noExt       bool
+		shouldPanic bool
+	}{
+		{
+			name:        "incomplete_percent_encoding",
+			path:        "kodi-movie://123/Game%",
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle incomplete percent encoding gracefully",
+		},
+		{
+			name:        "invalid_percent_hex",
+			path:        "steam://456/Game%ZZ",
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle invalid hex in percent encoding",
+		},
+		{
+			name:        "double_encoding",
+			path:        "kodi-show://789/Name%2520Here", // %2520 = encoded %20
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle double encoding (decodes once)",
+		},
+		{
+			name:        "mixed_case_scheme",
+			path:        "Kodi-Movie://111/Title",
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle case-insensitive schemes",
+		},
+		{
+			name:        "empty_name_section",
+			path:        "kodi-movie://123/",
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle empty name section",
+		},
+		{
+			name:        "no_name_section",
+			path:        "kodi-episode://456",
+			noExt:       true,
+			shouldPanic: false,
+			description: "Should handle missing name section",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.shouldPanic {
+				assert.Panics(t, func() {
+					GetPathFragments(nil, tc.path, tc.noExt, false)
+				}, tc.description)
+			} else {
+				assert.NotPanics(t, func() {
+					result := GetPathFragments(nil, tc.path, tc.noExt, false)
+					t.Logf("Handled malformed path gracefully: %s → fileName=%q",
+						tc.path, result.FileName)
+				}, tc.description)
+			}
+		})
+	}
+}
+
+// TestGetPathFragments_VirtualPathsVsRegularPaths compares behavior between
+// virtual paths and regular file paths to ensure consistent handling
+func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name                string
+		virtualPath         string
+		regularPath         string
+		description         string
+		expectDifferentSlug bool
+	}{
+		{
+			name:                "simple_name",
+			virtualPath:         "kodi-movie://123/SimpleGame",
+			regularPath:         "/roms/snes/SimpleGame.sfc",
+			expectDifferentSlug: false,
+			description:         "Simple names should produce same slug",
+		},
+		{
+			name:                "spaces_in_name",
+			virtualPath:         "steam://456/Super%20Mario",
+			regularPath:         "/roms/snes/Super Mario.sfc",
+			expectDifferentSlug: false,
+			description:         "Spaces should produce same slug after decoding",
+		},
+		{
+			name:                "metadata_in_name",
+			virtualPath:         "kodi-movie://789/Game%20%28USA%29",
+			regularPath:         "/roms/snes/Game (USA).sfc",
+			expectDifferentSlug: false,
+			description:         "Metadata cleanup should produce same slug",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			virtualResult := GetPathFragments(nil, tc.virtualPath, true, false)
+			regularResult := GetPathFragments(nil, tc.regularPath, false, false)
+
+			if tc.expectDifferentSlug {
+				assert.NotEqual(t, virtualResult.Slug, regularResult.Slug,
+					"%s: slugs should differ", tc.description)
+			} else {
+				assert.Equal(t, virtualResult.Slug, regularResult.Slug,
+					"%s: slugs should match after decoding/normalization", tc.description)
+			}
+
+			// Virtual paths should never have extensions
+			assert.Empty(t, virtualResult.Ext,
+				"Virtual paths should have no extension")
+
+			t.Logf("✓ %s: virtual_slug=%q, regular_slug=%q",
+				tc.name, virtualResult.Slug, regularResult.Slug)
+		})
+	}
+}

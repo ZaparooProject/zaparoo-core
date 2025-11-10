@@ -16,12 +16,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
 
@@ -439,8 +441,10 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Extract game target ID from virtual path: scummvm://targetid/Game Name
-		targetID := strings.TrimPrefix(path, "scummvm://")
-		targetID = strings.SplitN(targetID, "/", 2)[0]
+		targetID, err := helpers.ExtractSchemeID(path, shared.SchemeScummVM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract ScummVM target ID from path: %w", err)
+		}
 
 		if targetID == "" {
 			return nil, errors.New("no ScummVM target ID specified in path")
@@ -502,7 +506,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "ScummVM",
 		SystemID:           systemdefs.SystemScummVM,
-		Schemes:            []string{"scummvm"},
+		Schemes:            []string{shared.SchemeScummVM},
 		SkipFilesystemScan: true,
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,

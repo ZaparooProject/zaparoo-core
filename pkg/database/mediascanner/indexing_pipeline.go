@@ -679,7 +679,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 			f.Ext = ""
 		} else {
 			f.Ext = strings.ToLower(filepath.Ext(f.Path))
-			if helpers.HasSpace(f.Ext) {
+			if !helpers.IsValidExtension(f.Ext) {
 				f.Ext = ""
 			}
 		}

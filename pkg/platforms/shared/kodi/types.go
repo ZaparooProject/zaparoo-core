@@ -19,16 +19,8 @@
 
 package kodi
 
-import "encoding/json"
-
-// URL scheme constants for Kodi media
-const (
-	SchemeKodiMovie   = "kodi-movie"
-	SchemeKodiEpisode = "kodi-episode"
-	SchemeKodiSong    = "kodi-song"
-	SchemeKodiAlbum   = "kodi-album"
-	SchemeKodiArtist  = "kodi-artist"
-	SchemeKodiShow    = "kodi-show"
+import (
+	"encoding/json"
 )
 
 // Player represents an active Kodi player

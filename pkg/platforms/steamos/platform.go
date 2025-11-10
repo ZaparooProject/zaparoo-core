@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -247,7 +248,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		{
 			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
-			Schemes:  []string{"steam"},
+			Schemes:  []string{shared.SchemeSteam},
 			Scanner: func(
 				_ context.Context,
 				cfg *config.Instance,
@@ -275,15 +276,22 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return results, nil
 			},
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				id := strings.TrimPrefix(path, "steam://")
-				id = strings.TrimPrefix(id, "rungameid/")
-				id = strings.SplitN(id, "/", 2)[0]
+				// Handle native Steam URL format: steam://rungameid/123
+				// Normalize to standard virtual path format: steam://123
+				if strings.HasPrefix(path, "steam://rungameid/") {
+					path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
+				}
 
-				if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+				id, err := helpers.ExtractSchemeID(path, shared.SchemeSteam)
+				if err != nil {
+					return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
+				}
+
+				if _, parseErr := strconv.ParseUint(id, 10, 64); parseErr != nil {
 					return nil, fmt.Errorf("invalid Steam game ID: %s", id)
 				}
 
-				err := exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
+				err = exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
 					context.Background(),
 					"steam",
 					"steam://rungameid/"+id,

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestLinuxHasKodiMovieLauncher(t *testing.T) {
 		if launcher.ID == "KodiMovie" {
 			kodiMovie = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMovie, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiMovie)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiMovie)
 			break
 		}
 	}
@@ -76,7 +76,7 @@ func TestLinuxHasKodiTVLauncher(t *testing.T) {
 		if launcher.ID == "KodiTV" {
 			kodiTV = &launcher.ID
 			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiEpisode)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiEpisode)
 			break
 		}
 	}

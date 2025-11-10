@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
 )
 
@@ -95,12 +97,14 @@ func (c *Client) LaunchFile(path string) error {
 
 // LaunchMovie launches a movie by ID from Kodi's library
 func (c *Client) LaunchMovie(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiMovie+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	movieID, err := strconv.Atoi(pathID)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiMovie)
 	if err != nil {
-		return fmt.Errorf("failed to parse movie ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract movie ID from path: %w", err)
+	}
+
+	movieID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse movie ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -116,16 +120,14 @@ func (c *Client) LaunchMovie(path string) error {
 
 // LaunchTVEpisode launches a TV episode by ID from Kodi's library
 func (c *Client) LaunchTVEpisode(path string) error {
-	if !strings.HasPrefix(path, SchemeKodiEpisode+"://") {
-		return fmt.Errorf("invalid path: %s", path)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiEpisode)
+	if err != nil {
+		return fmt.Errorf("failed to extract episode ID from path: %w", err)
 	}
 
-	id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
-	id = strings.SplitN(id, "/", 2)[0]
-
-	intID, err := strconv.Atoi(id)
+	intID, err := strconv.Atoi(idStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse episode ID %q: %w", id, err)
+		return fmt.Errorf("failed to parse episode ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -276,12 +278,14 @@ func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
 
 // LaunchSong launches a song by ID from Kodi's library
 func (c *Client) LaunchSong(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiSong+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	songID, err := strconv.Atoi(pathID)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiSong)
 	if err != nil {
-		return fmt.Errorf("failed to parse song ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract song ID from path: %w", err)
+	}
+
+	songID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse song ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -297,12 +301,14 @@ func (c *Client) LaunchSong(path string) error {
 
 // LaunchAlbum launches an album by ID using playlist generation
 func (c *Client) LaunchAlbum(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiAlbum+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	albumID, err := strconv.Atoi(pathID)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiAlbum)
 	if err != nil {
-		return fmt.Errorf("failed to parse album ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract album ID from path: %w", err)
+	}
+
+	albumID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse album ID %q: %w", idStr, err)
 	}
 
 	// Step 1: Clear music playlist
@@ -360,12 +366,14 @@ func (c *Client) LaunchAlbum(path string) error {
 
 // LaunchArtist launches an artist by ID using playlist generation
 func (c *Client) LaunchArtist(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiArtist+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	artistID, err := strconv.Atoi(pathID)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiArtist)
 	if err != nil {
-		return fmt.Errorf("failed to parse artist ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract artist ID from path: %w", err)
+	}
+
+	artistID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse artist ID %q: %w", idStr, err)
 	}
 
 	// Step 1: Clear music playlist
@@ -428,12 +436,14 @@ func (c *Client) LaunchArtist(path string) error {
 // LaunchTVShow launches a TV show by ID using playlist generation
 func (c *Client) LaunchTVShow(path string) error {
 	// Parse show ID
-	pathID := strings.TrimPrefix(path, SchemeKodiShow+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	showID, err := strconv.Atoi(pathID)
+	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiShow)
 	if err != nil {
-		return fmt.Errorf("failed to parse show ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract show ID from path: %w", err)
+	}
+
+	showID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse show ID %q: %w", idStr, err)
 	}
 
 	// Step 1: Clear video playlist (playlistid=1)

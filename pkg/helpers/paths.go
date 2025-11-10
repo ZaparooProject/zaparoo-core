@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 )
@@ -341,7 +342,6 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 
 type PathInfo struct {
 	Path      string
-	Base      string
 	Filename  string
 	Extension string
 	Name      string
@@ -353,7 +353,45 @@ func GetPathInfo(path string) PathInfo {
 
 	// Use custom path parsing to preserve original path format
 	// instead of filepath functions which are OS-specific
-	info.Base = getPathDir(path)
+
+	// For URIs (containing ://), check if they need special handling
+	if strings.Contains(path, "://") {
+		// Extract scheme manually to avoid url.Parse dependency
+		schemeEnd := strings.Index(path, "://")
+		if schemeEnd >= 0 {
+			scheme := strings.ToLower(path[:schemeEnd])
+
+			// For custom Zaparoo schemes and standard web schemes, use FilenameFromPath
+			// which properly handles URL decoding via ParseVirtualPathStr
+			if platformsshared.ShouldDecodeURIScheme(scheme) {
+				decodedFilename := FilenameFromPath(path) // URL-decoded filename
+
+				if platformsshared.IsStandardSchemeForDecoding(scheme) {
+					// For http/https, only parse extension if there's a path component
+					// (URLs without paths like "https://example.com" shouldn't have .com treated as extension)
+					info.Filename = decodedFilename
+					rest := path[schemeEnd+3:] // Skip "://"
+					if strings.Contains(rest, "/") {
+						// Has path component - parse extension from filename
+						info.Extension = getPathExt(decodedFilename)
+						info.Name = strings.TrimSuffix(decodedFilename, info.Extension)
+					} else {
+						// No path component (bare domain) - no extension
+						info.Extension = ""
+						info.Name = decodedFilename
+					}
+				} else {
+					// For custom Zaparoo schemes (steam://, kodi-*://, etc.), no extension
+					info.Filename = decodedFilename
+					info.Extension = ""
+					info.Name = decodedFilename
+				}
+				return info
+			}
+		}
+	}
+
+	// Regular file paths or URIs that don't need decoding
 	info.Filename = getPathBase(path)
 	info.Extension = getPathExt(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)

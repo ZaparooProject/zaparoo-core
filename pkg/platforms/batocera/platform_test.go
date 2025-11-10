@@ -14,8 +14,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +103,7 @@ func TestKodiMovieLauncherExists(t *testing.T) {
 	require.NotNil(t, kodiMovie, "KodiMovie launcher should exist")
 	assert.Equal(t, "KodiMovie", kodiMovie.ID)
 	assert.Equal(t, systemdefs.SystemMovie, kodiMovie.SystemID)
-	assert.Contains(t, kodiMovie.Schemes, kodi.SchemeKodiMovie)
+	assert.Contains(t, kodiMovie.Schemes, shared.SchemeKodiMovie)
 }
 
 // TestKodiTVLauncherExists tests that KodiTV launcher exists in Batocera
@@ -130,7 +130,7 @@ func TestKodiTVLauncherExists(t *testing.T) {
 	require.NotNil(t, kodiTV, "KodiTV launcher should exist")
 	assert.Equal(t, "KodiTV", kodiTV.ID)
 	assert.Equal(t, systemdefs.SystemTV, kodiTV.SystemID)
-	assert.Contains(t, kodiTV.Schemes, kodi.SchemeKodiEpisode)
+	assert.Contains(t, kodiTV.Schemes, shared.SchemeKodiEpisode)
 }
 
 // TestKodiMusicLauncherExists tests that KodiMusic launcher exists in Batocera
@@ -181,25 +181,25 @@ func TestKodiCollectionLaunchersExist(t *testing.T) {
 	kodiSong, exists := foundLaunchers["KodiSong"]
 	require.True(t, exists, "KodiSong launcher should exist")
 	assert.Equal(t, systemdefs.SystemMusic, kodiSong.SystemID)
-	assert.Contains(t, kodiSong.Schemes, kodi.SchemeKodiSong)
+	assert.Contains(t, kodiSong.Schemes, shared.SchemeKodiSong)
 
 	// Check KodiAlbum launcher
 	kodiAlbum, exists := foundLaunchers["KodiAlbum"]
 	require.True(t, exists, "KodiAlbum launcher should exist")
 	assert.Equal(t, systemdefs.SystemMusicAlbum, kodiAlbum.SystemID)
-	assert.Contains(t, kodiAlbum.Schemes, kodi.SchemeKodiAlbum)
+	assert.Contains(t, kodiAlbum.Schemes, shared.SchemeKodiAlbum)
 
 	// Check KodiArtist launcher
 	kodiArtist, exists := foundLaunchers["KodiArtist"]
 	require.True(t, exists, "KodiArtist launcher should exist")
 	assert.Equal(t, systemdefs.SystemMusicArtist, kodiArtist.SystemID)
-	assert.Contains(t, kodiArtist.Schemes, kodi.SchemeKodiArtist)
+	assert.Contains(t, kodiArtist.Schemes, shared.SchemeKodiArtist)
 
 	// Check KodiTVShow launcher
 	kodiTVShow, exists := foundLaunchers["KodiTVShow"]
 	require.True(t, exists, "KodiTVShow launcher should exist")
 	assert.Equal(t, systemdefs.SystemTVShow, kodiTVShow.SystemID)
-	assert.Contains(t, kodiTVShow.Schemes, kodi.SchemeKodiShow)
+	assert.Contains(t, kodiTVShow.Schemes, shared.SchemeKodiShow)
 }
 
 // TestLauncherExtensions tests that launchers have proper extensions from SystemInfo
