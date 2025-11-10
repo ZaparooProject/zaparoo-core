@@ -35,20 +35,20 @@ func FuzzParseVirtualPathStr(f *testing.F) {
 	f.Add("flashpoint://abc/Flash%20Game")
 	f.Add("launchbox://def/Game%20Title")
 	f.Add("scummvm://ghi/Monkey%20Island")
-	f.Add("") // Empty string
-	f.Add("://") // Malformed
-	f.Add("steam://") // Missing ID
-	f.Add("steam://123") // Missing name
-	f.Add("steam:///Name") // Empty ID (legacy support)
-	f.Add("http://example.com") // Wrong scheme type
-	f.Add("steam://123/Name\x00Control") // Control char
-	f.Add("steam://123/Game%") // Incomplete encoding
-	f.Add("steam://123/Game%ZZ") // Invalid encoding
+	f.Add("")                               // Empty string
+	f.Add("://")                            // Malformed
+	f.Add("steam://")                       // Missing ID
+	f.Add("steam://123")                    // Missing name
+	f.Add("steam:///Name")                  // Empty ID (legacy support)
+	f.Add("http://example.com")             // Wrong scheme type
+	f.Add("steam://123/Name\x00Control")    // Control char
+	f.Add("steam://123/Game%")              // Incomplete encoding
+	f.Add("steam://123/Game%ZZ")            // Invalid encoding
 	f.Add("steam://123/Super%20Hot%2FCold") // Encoded slash
-	f.Add("invalid") // No scheme
-	f.Add("nocolon") // No colon
-	f.Add("1scheme://test") // Invalid scheme (starts with digit)
-	f.Add("sch eme://test") // Space in scheme
+	f.Add("invalid")                        // No scheme
+	f.Add("nocolon")                        // No colon
+	f.Add("1scheme://test")                 // Invalid scheme (starts with digit)
+	f.Add("sch eme://test")                 // Space in scheme
 
 	f.Fuzz(func(t *testing.T, virtualPath string) {
 		// Call the function - should never panic
@@ -106,17 +106,17 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 	f.Add("https://example.com/path%20with%20spaces/file.txt")
 	f.Add("kodi-movie://456/Movie")
 	f.Add("file:///path/file.txt")
-	f.Add("") // Empty
-	f.Add("just/a/path") // No scheme
-	f.Add("http://example.com/file%") // Incomplete encoding
-	f.Add("steam://123/Name\x00") // Control char
-	f.Add("http://[2001:db8::1]/file.zip") // IPv6
-	f.Add("http://example.com:8080/file.zip") // Port
-	f.Add("http://user:pass@host/file.zip") // Userinfo
-	f.Add("steam://123/Super%20Hot%2FCold") // Encoded slash
+	f.Add("")                                        // Empty
+	f.Add("just/a/path")                             // No scheme
+	f.Add("http://example.com/file%")                // Incomplete encoding
+	f.Add("steam://123/Name\x00")                    // Control char
+	f.Add("http://[2001:db8::1]/file.zip")           // IPv6
+	f.Add("http://example.com:8080/file.zip")        // Port
+	f.Add("http://user:pass@host/file.zip")          // Userinfo
+	f.Add("steam://123/Super%20Hot%2FCold")          // Encoded slash
 	f.Add("https://example.com/games/My%20Game.iso") // HTTPS
-	f.Add("ftp://server/My%20File.zip") // FTP (should not decode)
-	f.Add("myscheme://data%20here") // Unknown scheme
+	f.Add("ftp://server/My%20File.zip")              // FTP (should not decode)
+	f.Add("myscheme://data%20here")                  // Unknown scheme
 
 	f.Fuzz(func(t *testing.T, uri string) {
 		// Call function - should never panic
@@ -179,12 +179,12 @@ func FuzzIsValidExtension(f *testing.F) {
 	f.Add("")
 	f.Add(".")
 	f.Add("..")
-	f.Add(".txt~") // Special char
+	f.Add(".txt~")      // Special char
 	f.Add(".file-name") // Dash
 	f.Add(".file name") // Space
-	f.Add(".123") // Numbers only
-	f.Add("txt") // No leading dot
-	f.Add(".a") // Single char
+	f.Add(".123")       // Numbers only
+	f.Add("txt")        // No leading dot
+	f.Add(".a")         // Single char
 	f.Add(".UPPERCASE")
 	f.Add(".MiXeD")
 
@@ -207,7 +207,7 @@ func FuzzIsValidExtension(f *testing.F) {
 				checkExt = ext[1:]
 			}
 			for _, ch := range checkExt {
-				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+				if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') {
 					hasNonAlnum = true
 					break
 				}
@@ -227,7 +227,7 @@ func FuzzIsValidExtension(f *testing.F) {
 				t.Errorf("Valid extension has no characters after dot: %q", ext)
 			}
 			for _, ch := range checkExt {
-				if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+				if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') {
 					t.Errorf("Valid extension has non-alphanumeric char: %q (char: %c)", ext, ch)
 					break
 				}
@@ -310,7 +310,7 @@ func FuzzContainsControlChar(f *testing.F) {
 	f.Add("\x1F") // Unit separator
 	f.Add("\x7F") // DEL
 	f.Add("")
-	f.Add("unicode: 你好")
+	f.Add("unicode: 你好") //nolint:gosmopolitan // Intentional use of Han script to test unicode handling
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Call function - should never panic
@@ -343,7 +343,7 @@ func FuzzIsValidScheme(f *testing.F) {
 	f.Add("h2")
 	f.Add("file")
 	f.Add("")
-	f.Add("123") // Starts with digit
+	f.Add("123")     // Starts with digit
 	f.Add("-scheme") // Starts with dash
 	f.Add("sch eme") // Contains space
 	f.Add("sch@eme") // Contains @
@@ -354,11 +354,11 @@ func FuzzIsValidScheme(f *testing.F) {
 
 		// Property 1: Empty should be invalid
 		if scheme == "" && result {
-			t.Errorf("Empty scheme should be invalid")
+			t.Error("Empty scheme should be invalid")
 		}
 
 		// Property 2: Must start with letter
-		if len(scheme) > 0 {
+		if scheme != "" {
 			firstChar := scheme[0]
 			isLetter := (firstChar >= 'a' && firstChar <= 'z') || (firstChar >= 'A' && firstChar <= 'Z')
 			if !isLetter && result {
@@ -371,14 +371,14 @@ func FuzzIsValidScheme(f *testing.F) {
 			for i, ch := range scheme {
 				if i == 0 {
 					// First char must be letter
-					if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+					if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') {
 						t.Errorf("Valid scheme doesn't start with letter: %q", scheme)
 						break
 					}
 				} else {
 					// Remaining chars must be alphanumeric or +-.
-					if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-						(ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.') {
+					if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') &&
+						(ch < '0' || ch > '9') && ch != '+' && ch != '-' && ch != '.' {
 						t.Errorf("Valid scheme has invalid char: %q (char: %c)", scheme, ch)
 						break
 					}
@@ -398,7 +398,7 @@ func FuzzIsValidPort(f *testing.F) {
 	f.Add("")
 	f.Add(":")
 	f.Add(":abc")
-	f.Add("80") // Missing colon
+	f.Add("80")  // Missing colon
 	f.Add(":1a") // Mixed
 
 	f.Fuzz(func(t *testing.T, port string) {
@@ -407,7 +407,7 @@ func FuzzIsValidPort(f *testing.F) {
 
 		// Property 1: Empty should be valid
 		if port == "" && !result {
-			t.Errorf("Empty port should be valid")
+			t.Error("Empty port should be valid")
 		}
 
 		// Property 2: If not empty, must start with colon

@@ -531,9 +531,9 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "http://server.com/My%20Game.zip",
 				FileName: "My Game.zip", // Includes extension from HTTP URL
-				Title:    "My Game.zip", // Extension preserved in title for URLs
-				Slug:     "mygamezip",   // Extension included in slug
-				Ext:      "",            // Virtual paths (URIs) have no extension field
+				Title:    "My Game",     // Extension stripped by ParseTitleFromFilename
+				Slug:     "mygame",      // Extension not included in slug
+				Ext:      ".zip",        // HTTP/HTTPS URLs have extension extracted for tags
 			},
 			description: "HTTP URL with encoded spaces",
 		},
@@ -544,9 +544,9 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "https://cdn.example.com/games/Super%20Mario.sfc",
 				FileName: "Super Mario.sfc", // Includes extension from HTTP URL
-				Title:    "Super Mario.sfc", // Extension preserved in title for URLs
-				Slug:     "supermariosfc",   // Extension included in slug
-				Ext:      "",                // Virtual paths (URIs) have no extension field
+				Title:    "Super Mario",     // Extension stripped by ParseTitleFromFilename
+				Slug:     "supermario",      // Extension not included in slug
+				Ext:      ".sfc",            // HTTP/HTTPS URLs have extension extracted for tags
 			},
 			description: "HTTPS URL with nested path",
 		},
@@ -557,8 +557,8 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 			expectedFrag: MediaPathFragments{
 				Path:     "kodi-episode://222/S01E01%20-%20The%20Beginning%20%28Part%201%29",
 				FileName: "S01E01 - The Beginning (Part 1)",
-				Title:    "S01E01 - The Beginning",
-				Slug:     "s01e01beginning", // "The" article stripped
+				Title:    "- The Beginning", // S01E01 stripped by ParseTitleFromFilename (scene release parsing)
+				Slug:     "thebeginning",    // "The" article stripped, S01E01 removed
 				Ext:      "",
 			},
 			description: "Episode with complex naming",

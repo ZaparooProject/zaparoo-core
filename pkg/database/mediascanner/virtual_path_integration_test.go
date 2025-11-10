@@ -472,7 +472,11 @@ func TestVirtualPath_HTTPURLHandling(t *testing.T) {
 				TagTypesIndex: 0,
 			}
 
-			err := db.BeginTransaction(false)
+			// Seed canonical tags before testing (required for extension tag creation)
+			err := SeedCanonicalTags(db, scanState)
+			require.NoError(t, err)
+
+			err = db.BeginTransaction(false)
 			require.NoError(t, err)
 
 			titleIndex, mediaIndex, err := AddMediaPath(

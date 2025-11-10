@@ -185,7 +185,7 @@ func FuzzGetPathDir(f *testing.F) {
 		// Property 5: Result should not be just separators for non-root paths
 		// Note: We allow ending with separators for edge cases with multiple consecutive separators
 		// as this is valid path manipulation behavior
-		if len(result) > 0 {
+		if result != "" {
 			allSeparators := true
 			for _, ch := range result {
 				if ch != '/' && ch != '\\' {

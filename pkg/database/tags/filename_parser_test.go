@@ -1198,3 +1198,376 @@ func TestParseFilenameToCanonicalTags_EditionWords(t *testing.T) {
 		})
 	}
 }
+
+// TestParseTitleFromFilename_SceneReleases tests scene release artifact stripping from movie and TV show filenames.
+func TestParseTitleFromFilename_SceneReleases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Movie scene releases
+		{
+			name:     "Movie with full scene release tags",
+			input:    "The.Dark.Knight.2008.1080p.BluRay.x264.DTS-GROUP.mkv",
+			expected: "The Dark Knight 2008",
+		},
+		{
+			name:     "Movie with WEB-DL and audio codec",
+			input:    "Avatar.2009.2160p.WEB-DL.DD5.1.H264-TEAM.mkv",
+			expected: "Avatar 2009",
+		},
+		{
+			name:     "Movie with HDR and HEVC",
+			input:    "Blade.Runner.1982.4K.UHD.HDR10.x265-GROUP.mkv",
+			expected: "Blade Runner 1982",
+		},
+		{
+			name:     "Movie with PROPER tag",
+			input:    "Inception.2010.1080p.BluRay.PROPER.x264-SPARKS.mkv",
+			expected: "Inception 2010",
+		},
+		{
+			name:     "Movie with extended cut and codec",
+			input:    "Lord.of.the.Rings.2001.EXTENDED.1080p.BluRay.x264.TrueHD-FGT.mkv",
+			expected: "Lord of the Rings 2001",
+		},
+		{
+			name:     "Movie with Dolby Vision and Atmos",
+			input:    "Dune.2021.2160p.WEB-DL.DV.HDR10.Atmos.HEVC-CMRG.mkv",
+			expected: "Dune 2021",
+		},
+		{
+			name:     "Movie with underscores",
+			input:    "The_Matrix_1999_1080p_BluRay_x264_AAC-YTS.mkv",
+			expected: "The Matrix 1999",
+		},
+
+		// TV show scene releases
+		{
+			name:     "TV show with episode and quality",
+			input:    "The.Office.US.S01E01.Pilot.1080p.WEB-DL.DD5.1.H264-GROUP.mkv",
+			expected: "The Office US Pilot",
+		},
+		{
+			name:     "TV show with season pack notation",
+			input:    "Breaking.Bad.S05E16.1080p.BluRay.x264-ROVERS.mkv",
+			expected: "Breaking Bad",
+		},
+		{
+			name:     "TV show with HDTV source",
+			input:    "Game.of.Thrones.S08E03.720p.HDTV.x264-AVS.mkv",
+			expected: "Game of Thrones",
+		},
+		{
+			name:     "TV show with PROPER and WEBRip",
+			input:    "Stranger.Things.S01E01.PROPER.720p.WEBRip.x264-RARBG.mkv",
+			expected: "Stranger Things",
+		},
+
+		// Edge cases
+		{
+			name:     "ROM filename should be unchanged",
+			input:    "Super Mario Bros (USA) [!].sfc",
+			expected: "Super Mario Bros",
+		},
+		{
+			name:     "Game with year shouldn't strip it",
+			input:    "Elden Ring (2022).exe",
+			expected: "Elden Ring 2022",
+		},
+		{
+			name:     "Filename with spaces (no scene tags)",
+			input:    "My Movie Title.mkv",
+			expected: "My Movie Title",
+		},
+		{
+			name:     "Multiple quality indicators",
+			input:    "Movie.2020.UHD.2160p.HDR.BluRay.x265-GRP.mkv",
+			expected: "Movie 2020",
+		},
+		{
+			name:     "Release group without hyphen",
+			input:    "Movie.Title.2010.1080p.BluRay.x264.mkv",
+			expected: "Movie Title 2010",
+		},
+		{
+			name:     "Mixed case scene tags",
+			input:    "Show.Name.s02e05.WEBDL.h264.AAC.mkv",
+			expected: "Show Name",
+		},
+
+		// Critical edge cases from expert review
+		{
+			name:     "Movie titled 'Cam' should not have title stripped",
+			input:    "Cam.2018.1080p.WEB-DL.x264-GROUP.mkv",
+			expected: "Cam 2018",
+		},
+		{
+			name:     "Movie titled 'TS' should not have title stripped",
+			input:    "TS.2020.720p.BluRay.x264.mkv",
+			expected: "TS 2020",
+		},
+		{
+			name:     "Short title before year should be preserved",
+			input:    "IT.2017.1080p.BluRay.x264-SPARKS.mkv",
+			expected: "IT 2017",
+		},
+		{
+			name:     "Game title with dash and number should be preserved",
+			input:    "Mega-Man-X-4.sfc",
+			expected: "Mega Man X 4",
+		},
+		{
+			name:     "Game title ending in single letter-number should be preserved",
+			input:    "F-Zero-X.n64",
+			expected: "F Zero X",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ParseTitleFromFilename(tt.input, false)
+			assert.Equal(t, tt.expected, got, "Title parsing mismatch")
+		})
+	}
+}
+
+// TestExtractSpecialPatterns_MediaMetadata tests extraction of TV show, comic, and music metadata.
+func TestExtractSpecialPatterns_MediaMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		filename     string
+		wantContains []string
+		wantNotFound []string
+	}{
+		// TV show patterns
+		{
+			name:         "TV show season and episode lowercase",
+			filename:     "Breaking.Bad.s05e16.Felina.mkv",
+			wantContains: []string{"season:5", "episode:16"},
+		},
+		{
+			name:         "TV show season and episode uppercase",
+			filename:     "Game.of.Thrones.S08E03.The.Long.Night.mkv",
+			wantContains: []string{"season:8", "episode:3"},
+		},
+		{
+			name:         "TV show with quality tags",
+			filename:     "The.Office.S01E01.1080p.WEB-DL.mkv",
+			wantContains: []string{"season:1", "episode:1"},
+		},
+		{
+			name:         "TV show double-digit season",
+			filename:     "Doctor.Who.S12E10.mkv",
+			wantContains: []string{"season:12", "episode:10"},
+		},
+		{
+			name:         "TV show triple-digit episode",
+			filename:     "One.Piece.S01E125.mkv",
+			wantContains: []string{"season:1", "episode:125"},
+		},
+
+		// Comic patterns
+		{
+			name:         "Comic with hash issue number",
+			filename:     "Amazing Spider-Man #47.cbr",
+			wantContains: []string{"issue:47"},
+		},
+		{
+			name:         "Comic with Issue keyword",
+			filename:     "Batman Issue 100.cbr",
+			wantContains: []string{"issue:100"},
+		},
+		{
+			name:         "Comic with No. format",
+			filename:     "Superman No. 25.cbz",
+			wantContains: []string{"issue:25"},
+		},
+		{
+			name:         "Comic with leading zeros",
+			filename:     "X-Men #001.cbr",
+			wantContains: []string{"issue:1"},
+		},
+
+		// Music patterns
+		{
+			name:         "Music track with dash separator",
+			filename:     "01 - Song Title.mp3",
+			wantContains: []string{"track:1"},
+		},
+		{
+			name:         "Music track with dot separator",
+			filename:     "02. Artist - Song Name.flac",
+			wantContains: []string{"track:2"},
+		},
+		{
+			name:         "Music track with space separator",
+			filename:     "03 Artist Name.mp3",
+			wantContains: []string{"track:3"},
+		},
+		{
+			name:         "Music track with Track keyword",
+			filename:     "Track 05 - Album Name.wav",
+			wantContains: []string{"track:5"},
+		},
+		{
+			name:         "Music track triple digit",
+			filename:     "125 - Song Title.mp3",
+			wantContains: []string{"track:125"},
+		},
+
+		// Edge cases and combinations
+		{
+			name:         "TV show with year",
+			filename:     "The Office (2005) S01E01.mkv",
+			wantContains: []string{"year:2005", "season:1", "episode:1"},
+		},
+		{
+			name:         "ROM with revision (should not extract as season)",
+			filename:     "Game (USA) (Rev A).sfc",
+			wantContains: []string{"region:us", "rev:a"},
+			wantNotFound: []string{"season:", "episode:"},
+		},
+		{
+			name:         "Year 1942 should not be track number",
+			filename:     "1942 (USA).zip",
+			wantContains: []string{"region:us"},
+			wantNotFound: []string{"track:1942"},
+		},
+
+		// Critical edge cases from expert review
+		{
+			name:         "4-digit year in music filename should not be parsed as track",
+			filename:     "1985.mp3",
+			wantContains: []string{},
+			wantNotFound: []string{"track:198", "track:1985"},
+		},
+		{
+			name:         "Year at start should not be track",
+			filename:     "2024 Song Title.flac",
+			wantContains: []string{},
+			wantNotFound: []string{"track:202"},
+		},
+		{
+			name:         "Volume number with Vol. keyword",
+			filename:     "Book Title (Vol. 2).epub",
+			wantContains: []string{"volume:2"},
+		},
+		{
+			name:         "Volume number with Volume keyword",
+			filename:     "Comic Series (Volume 3).cbr",
+			wantContains: []string{"volume:3"},
+		},
+		{
+			name:         "Volume number with leading zeros",
+			filename:     "Series Name (Vol. 001).cbz",
+			wantContains: []string{"volume:1"},
+		},
+		{
+			name:         "Bare v pattern should be version not volume",
+			filename:     "Game (v01) (USA).sfc",
+			wantContains: []string{"rev:01", "region:us"},
+			wantNotFound: []string{"volume:"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ParseFilenameToCanonicalTags(tt.filename)
+			gotStrings := make([]string, len(got))
+			for i, tag := range got {
+				gotStrings[i] = tag.String()
+			}
+
+			// Check for expected tags
+			for _, want := range tt.wantContains {
+				assert.Contains(t, gotStrings, want, "Expected tag %s not found in %v", want, gotStrings)
+			}
+
+			// Check that unwanted tags are not present
+			for _, notWant := range tt.wantNotFound {
+				for _, gotTag := range gotStrings {
+					assert.NotContains(t, gotTag, notWant,
+						"Unexpected tag pattern %s found in tag %s", notWant, gotTag)
+				}
+			}
+		})
+	}
+}
+
+// TestStripSceneArtifacts tests the scene artifact stripping function directly.
+func TestStripSceneArtifacts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Strip resolution",
+			input:    "Movie Title 1080p mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip source type",
+			input:    "Movie Title BluRay mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip video codec",
+			input:    "Movie Title x264 mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip audio codec",
+			input:    "Movie Title DTS mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip HDR format",
+			input:    "Movie Title HDR10 mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip scene status",
+			input:    "Movie Title PROPER mkv",
+			expected: "Movie Title   mkv",
+		},
+		{
+			name:     "Strip release group",
+			input:    "Movie Title-GROUP",
+			expected: "Movie Title",
+		},
+		{
+			name:     "Strip all artifacts",
+			input:    "Movie 2020 1080p BluRay x264 DTS HDR10-GROUP",
+			expected: "Movie 2020          ",
+		},
+		{
+			name:     "Leave non-scene text alone",
+			input:    "Regular Movie Title mkv",
+			expected: "Regular Movie Title mkv",
+		},
+		{
+			name:     "Case insensitive matching",
+			input:    "Movie webdl H265 aac mkv",
+			expected: "Movie       mkv",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := stripSceneArtifacts(tt.input)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
