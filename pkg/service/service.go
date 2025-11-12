@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -166,34 +167,9 @@ func Start(
 	// TODO: define the notifications chan here instead of in state
 	st, ns := state.NewState(pl) // global state, notification queue (source)
 
-	// Create separate notification channels for API, publishers, and history to avoid race conditions
-	apiNotifications := make(chan models.Notification, 100)
-	publisherNotifications := make(chan models.Notification, 100)
-	historyNotifications := make(chan models.Notification, 100)
-
-	// Start main fan-out goroutine to broadcast notifications to all consumers
-	go func() {
-		for notif := range ns {
-			select {
-			case apiNotifications <- notif:
-			case <-st.GetContext().Done():
-				return
-			}
-			select {
-			case publisherNotifications <- notif:
-			case <-st.GetContext().Done():
-				return
-			}
-			select {
-			case historyNotifications <- notif:
-			case <-st.GetContext().Done():
-				return
-			}
-		}
-		close(apiNotifications)
-		close(publisherNotifications)
-		close(historyNotifications)
-	}()
+	// Create and start notification broker to broadcast to all consumers
+	notifBroker := broker.NewBroker(st.GetContext(), ns)
+	notifBroker.Start()
 
 	// TODO: convert this to a *token channel
 	itq := make(chan tokens.Token)        // input token queue
@@ -267,9 +243,11 @@ func Start(
 	go checkAndResumeOptimization(db, st.Notifications)
 
 	log.Info().Msg("starting API service")
+	apiNotifications, _ := notifBroker.Subscribe(50)
 	go api.Start(pl, cfg, st, itq, db, apiNotifications)
 
 	log.Info().Msg("starting publishers")
+	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
 	// Start media history tracking
@@ -279,6 +257,7 @@ func Start(
 		db:    db,
 		clock: clockwork.NewRealClock(),
 	}
+	historyNotifications, _ := notifBroker.Subscribe(100)
 	go historyTracker.listen(historyNotifications)
 	log.Info().Msg("starting media history PlayTime updater")
 	go historyTracker.updatePlayTime(st.GetContext())
@@ -311,6 +290,7 @@ func Start(
 		if err != nil {
 			log.Warn().Msgf("error stopping platform: %s", err)
 		}
+		notifBroker.Stop()
 		st.StopService()
 		close(plq)
 		close(lsq)
