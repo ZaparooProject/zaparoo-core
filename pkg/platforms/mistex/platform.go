@@ -36,15 +36,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
+type arcadeCardLaunchCache struct {
+	timestamp time.Time
+	setname   string
+	mu        sync.RWMutex
+}
+
 type Platform struct {
-	tr             *tracker.Tracker
-	stopTr         func() error
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
-	processMu      sync.RWMutex
+	tr               *tracker.Tracker
+	stopTr           func() error
+	activeMedia      func() *models.ActiveMedia
+	setActiveMedia   func(*models.ActiveMedia)
+	trackedProcess   *os.Process
+	kbd              linuxinput.Keyboard
+	gpd              linuxinput.Gamepad
+	arcadeCardLaunch arcadeCardLaunchCache
+	processMu        sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -396,4 +404,49 @@ func (*Platform) ShowPicker(
 	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
+}
+
+// SetArcadeCardLaunch caches the arcade setname when launching via card.
+func (p *Platform) SetArcadeCardLaunch(setname string) {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+	p.arcadeCardLaunch.setname = setname
+	p.arcadeCardLaunch.timestamp = time.Now()
+	log.Debug().
+		Str("setname", setname).
+		Msg("cached arcade card launch")
+}
+
+// CheckAndClearArcadeCardLaunch checks if the setname was recently launched via card.
+// Returns true if there's a match within the last 15 seconds, false otherwise.
+// Clears the cache after checking to prevent stale suppressions.
+func (p *Platform) CheckAndClearArcadeCardLaunch(setname string) bool {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+
+	// Check if cache is empty
+	if p.arcadeCardLaunch.setname == "" {
+		return false
+	}
+
+	// Check if setnames match
+	if p.arcadeCardLaunch.setname != setname {
+		return false
+	}
+
+	// Check if within time window (15 seconds)
+	elapsed := time.Since(p.arcadeCardLaunch.timestamp)
+	if elapsed > 15*time.Second {
+		// Cache is stale, clear it
+		p.arcadeCardLaunch.setname = ""
+		return false
+	}
+
+	// Match found - clear cache and return true
+	log.Debug().
+		Str("setname", setname).
+		Dur("elapsed", elapsed).
+		Msg("suppressing duplicate arcade notification")
+	p.arcadeCardLaunch.setname = ""
+	return true
 }

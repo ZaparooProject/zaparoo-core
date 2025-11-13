@@ -38,6 +38,38 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// MRA represents the structure of a MiSTer Arcade ROM file.
+type MRA struct {
+	XMLName xml.Name `xml:"misterromdescription"`
+	SetName string   `xml:"setname"`
+	Name    string   `xml:"name"`
+	Rbf     string   `xml:"rbf"`
+}
+
+// ReadMRA parses an MRA file and returns the MRA struct with extracted metadata.
+func ReadMRA(path string) (MRA, error) {
+	var mra MRA
+
+	// Check if file exists
+	if _, err := os.Stat(path); err != nil {
+		return mra, fmt.Errorf("failed to stat MRA file: %w", err)
+	}
+
+	// Read the file
+	data, err := os.ReadFile(path) //nolint:gosec // Path is validated MRA file from user's media directory
+	if err != nil {
+		return mra, fmt.Errorf("failed to read MRA file: %w", err)
+	}
+
+	// Parse XML
+	err = xml.Unmarshal(data, &mra)
+	if err != nil {
+		return mra, fmt.Errorf("failed to parse MRA XML: %w", err)
+	}
+
+	return mra, nil
+}
+
 func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 	if core == nil {
 		return "", errors.New("no core supplied for MGL generation")

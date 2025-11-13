@@ -136,6 +136,32 @@ func launch(pl platforms.Platform, coreID string) func(*config.Instance, string)
 	}
 }
 
+// arcadePlatform is a small interface for platforms that support arcade setname caching.
+type arcadePlatform interface {
+	SetArcadeCardLaunch(setname string)
+}
+
+// launchArcade provides a specialized launch function for the Arcade system.
+// It handles MRA file parsing and setname caching before delegating to the generic launch logic.
+func launchArcade(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
+	genericLauncher := launch(pl, coreID)
+
+	return func(cfg *config.Instance, path string) (*os.Process, error) {
+		if strings.HasSuffix(strings.ToLower(path), ".mra") {
+			if arcadePl, ok := pl.(arcadePlatform); ok {
+				mra, err := mgls.ReadMRA(path)
+				if err != nil {
+					log.Warn().Err(err).Str("path", path).Msg("failed to parse MRA for setname caching")
+				} else if mra.SetName != "" {
+					arcadePl.SetArcadeCardLaunch(mra.SetName)
+				}
+			}
+		}
+
+		return genericLauncher(cfg, path)
+	}
+}
+
 func launchSinden(
 	systemID string,
 	rbfName string,
@@ -1457,7 +1483,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			SystemID:   systemdefs.SystemArcade,
 			Folders:    []string{"_Arcade"},
 			Extensions: []string{".mra"},
-			Launch:     launch(pl, systemdefs.SystemArcade),
+			Launch:     launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,

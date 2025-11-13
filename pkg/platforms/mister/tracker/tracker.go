@@ -32,6 +32,12 @@ import (
 
 const ArcadeSystem = "Arcade"
 
+// platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
+type platformWithArcadeCache interface {
+	platforms.Platform
+	CheckAndClearArcadeCardLaunch(setname string) bool
+}
+
 type NameMapping struct {
 	CoreName   string
 	System     string
@@ -228,6 +234,17 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveGamePath = "" // no way to find mra path from CORENAME
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
+
+		// Check if this arcade game was recently launched via card scan
+		// If so, suppress duplicate notification
+		if arcadePl, ok := tr.pl.(platformWithArcadeCache); ok {
+			if arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName) {
+				log.Debug().
+					Str("setname", result.CoreName).
+					Msg("skipping duplicate arcade notification (launched via card)")
+				return
+			}
+		}
 
 		tr.setActiveMedia(models.NewActiveMedia(
 			tr.ActiveSystem,
