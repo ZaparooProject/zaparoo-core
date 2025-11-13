@@ -251,7 +251,9 @@ func RandomInt(maxVal int) (int, error) {
 	return int(n.Int64()), nil
 }
 
-func CopyFile(sourcePath, destPath string) error {
+// CopyFile copies a file from sourcePath to destPath.
+// Optional perm parameter sets file permissions (uses 0644 if not specified).
+func CopyFile(sourcePath, destPath string, perm ...os.FileMode) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
@@ -278,6 +280,16 @@ func CopyFile(sourcePath, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
+
+	// Set permissions if provided, otherwise use default 0644
+	fileMode := os.FileMode(0o644)
+	if len(perm) > 0 {
+		fileMode = perm[0]
+	}
+	if err := os.Chmod(destPath, fileMode); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
 	return nil
 }
 

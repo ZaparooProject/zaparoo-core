@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Zaparoo Core
+Comment=Open source universal loading system
+Exec=zaparoo -gui
+Icon=zaparoo
+Type=Application
+Categories=Game;Utility;
+Terminal=false
+StartupWMClass=zaparoo
+Keywords=games;launcher;nfc;
+StartupNotify=false
