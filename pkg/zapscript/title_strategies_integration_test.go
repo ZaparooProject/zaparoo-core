@@ -1508,7 +1508,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			// Create mock platform for launch
 			mockPlatform := mocks.NewMockPlatform()
 			if !tt.expectedError {
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).
+				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return(nil)
 			}
 
@@ -1703,7 +1703,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold)
 	t.Run("typo_earthbond_matches_earthbound", func(t *testing.T) {
 		mockPlatform := mocks.NewMockPlatform()
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		cmd := parser.Command{
 			Name:    "launch.title",
@@ -1731,7 +1731,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Jaro-Winkler similarity: 0.99
 	t.Run("british_spelling_neighbours_matches_neighbors", func(t *testing.T) {
 		mockPlatform := mocks.NewMockPlatform()
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		cmd := parser.Command{
 			Name:    "launch.title",

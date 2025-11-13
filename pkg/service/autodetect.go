@@ -238,8 +238,11 @@ func (ad *AutoDetector) getFailedConnectionsForReader(readerIDs []string) []stri
 		driverType := parts[0]
 
 		// Check if this driver type matches any of the reader's IDs
+		// Normalize both sides for comparison to support both old and new formats
+		normalizedDriverType := readers.NormalizeDriverID(driverType)
 		for _, readerID := range readerIDs {
-			if driverType == readerID || strings.HasPrefix(driverType, readerID+"_") {
+			normalizedReaderID := readers.NormalizeDriverID(readerID)
+			if normalizedDriverType == normalizedReaderID {
 				failed = append(failed, connectionString)
 				break
 			}

@@ -734,3 +734,55 @@ func TestAllowedOrigins(t *testing.T) {
 		})
 	}
 }
+
+func TestScanHistory(t *testing.T) {
+	t.Parallel()
+
+	thirtyDays := 30
+	sevenDays := 7
+	zero := 0
+
+	tests := []struct {
+		scanHistory *int
+		name        string
+		expected    int
+	}{
+		{
+			name:        "nil returns default 30 days",
+			scanHistory: nil,
+			expected:    30,
+		},
+		{
+			name:        "explicit 7 days",
+			scanHistory: &sevenDays,
+			expected:    7,
+		},
+		{
+			name:        "explicit 30 days",
+			scanHistory: &thirtyDays,
+			expected:    30,
+		},
+		{
+			name:        "zero (unlimited)",
+			scanHistory: &zero,
+			expected:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{
+				vals: Values{
+					Readers: Readers{
+						ScanHistory: tt.scanHistory,
+					},
+				},
+			}
+
+			result := cfg.ScanHistory()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

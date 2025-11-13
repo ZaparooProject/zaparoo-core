@@ -108,6 +108,13 @@ func (db *UserDB) Vacuum() error {
 	return sqlVacuum(db.ctx, db.sql)
 }
 
+func (db *UserDB) CleanupHistory(retentionDays int) (int64, error) {
+	if db.sql == nil {
+		return 0, ErrNullSQL
+	}
+	return sqlCleanupHistory(db.ctx, db.sql, retentionDays)
+}
+
 func (db *UserDB) Close() error {
 	if db.sql == nil {
 		return nil

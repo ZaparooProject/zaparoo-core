@@ -3,10 +3,8 @@
 package mistex
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -106,6 +105,7 @@ func (p *Platform) StartPost(
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -115,6 +115,7 @@ func (p *Platform) StartPost(
 		p,
 		activeMedia,
 		setActiveMedia,
+		db,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to start tracker: %w", err)
@@ -266,24 +267,6 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
-	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
-		return fmt.Errorf("unsupported audio format: %s", path)
-	}
-
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(helpers.DataDir(p), path)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := exec.CommandContext(ctx, "aplay", path).Start()
-	if err != nil {
-		return fmt.Errorf("failed to start audio playback: %w", err)
-	}
-	return nil
-}
-
 func (p *Platform) ActiveSystem() string {
 	return p.tr.ActiveSystem
 }
@@ -301,6 +284,14 @@ func (p *Platform) ActiveGamePath() string {
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	// Handle menu specially - launch menu core directly
+	if strings.EqualFold(id, "menu") {
+		if err := LaunchMenu(); err != nil {
+			return fmt.Errorf("failed to launch menu: %w", err)
+		}
+		return nil
+	}
+
 	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
@@ -313,7 +304,9 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return nil
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -325,7 +318,14 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err := helpers.DoLaunch(&helpers.LaunchParams{
+		Config:         cfg,
+		Platform:       p,
+		SetActiveMedia: p.setActiveMedia,
+		Launcher:       launcher,
+		Path:           path,
+		DB:             db,
+	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}

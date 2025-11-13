@@ -704,3 +704,96 @@ func TestSqlVacuum_DatabaseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to vacuum database")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestSqlCleanupHistory_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	retentionDays := 30
+	rowsDeleted := int64(5)
+
+	// Expect DELETE query with time parameter
+	mock.ExpectPrepare(`DELETE FROM History WHERE Time`).
+		ExpectExec().
+		WithArgs(sqlmock.AnyArg()). // Time cutoff will be calculated dynamically
+		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+
+	// Expect VACUUM after delete
+	mock.ExpectExec(`vacuum`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	rowsAffected, err := sqlCleanupHistory(context.Background(), db, retentionDays)
+	require.NoError(t, err)
+	assert.Equal(t, rowsDeleted, rowsAffected)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlCleanupHistory_NoRowsToDelete(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	retentionDays := 30
+
+	// Expect DELETE query but return 0 rows affected
+	mock.ExpectPrepare(`DELETE FROM History WHERE Time`).
+		ExpectExec().
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// No VACUUM expected when no rows deleted
+
+	rowsAffected, err := sqlCleanupHistory(context.Background(), db, retentionDays)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), rowsAffected)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlCleanupHistory_DeleteError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	retentionDays := 30
+
+	mock.ExpectPrepare(`DELETE FROM History WHERE Time`).
+		ExpectExec().
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	rowsAffected, err := sqlCleanupHistory(context.Background(), db, retentionDays)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute history cleanup")
+	assert.Equal(t, int64(0), rowsAffected)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlCleanupHistory_VacuumError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	retentionDays := 30
+	rowsDeleted := int64(3)
+
+	// DELETE succeeds
+	mock.ExpectPrepare(`DELETE FROM History WHERE Time`).
+		ExpectExec().
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+
+	// VACUUM fails
+	mock.ExpectExec(`vacuum`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	rowsAffected, err := sqlCleanupHistory(context.Background(), db, retentionDays)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup succeeded but vacuum failed")
+	assert.Equal(t, rowsDeleted, rowsAffected) // Still returns rows deleted even if vacuum fails
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

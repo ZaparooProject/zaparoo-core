@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -88,7 +90,7 @@ func connectReaders(
 	// user defined readers
 	for _, device := range validToConnect {
 		if _, ok := st.GetReader(device.connectionString); !ok {
-			rt := device.device.Driver
+			rt := readers.NormalizeDriverID(device.device.Driver)
 			for _, r := range pl.SupportedReaders(cfg) {
 				metadata := r.Metadata()
 
@@ -97,8 +99,13 @@ func connectReaders(
 					continue
 				}
 
+				// Normalize IDs for comparison
 				ids := r.IDs()
-				if helpers.Contains(ids, rt) {
+				normalizedIDs := make([]string, len(ids))
+				for i, id := range ids {
+					normalizedIDs[i] = readers.NormalizeDriverID(id)
+				}
+				if helpers.Contains(normalizedIDs, rt) {
 					log.Debug().Msgf("connecting to reader: %s", device)
 					err := r.Open(device.device, iq)
 					if err != nil {
@@ -283,7 +290,7 @@ func readerManager(
 			return
 		}
 		if time.Since(lastError) > 1*time.Second {
-			if audioErr := pl.PlayAudio(config.FailSoundFilename); audioErr != nil {
+			if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
 				log.Warn().Msgf("error playing fail sound: %s", audioErr)
 			}
 		}
@@ -415,13 +422,6 @@ preprocessing:
 			st.SetWroteToken(nil)
 
 			log.Info().Msgf("sending token to queue: %v", scan)
-
-			if cfg.AudioFeedback() {
-				err := pl.PlayAudio(config.SuccessSoundFilename)
-				if err != nil {
-					log.Warn().Msgf("error playing success sound: %s", err)
-				}
-			}
 
 			itq <- *scan
 		} else {

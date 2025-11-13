@@ -214,6 +214,7 @@ type Platform interface {
 		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
+		*database.Database,
 	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
@@ -243,17 +244,13 @@ type Platform interface {
 	// SetTrackedProcess stores a process handle for lifecycle management.
 	// Used by DoLaunch to track processes that can be killed later.
 	SetTrackedProcess(*os.Process)
-	// PlayAudio plays an audio file at the given path. A relative path will be
-	// resolved using the data directory assets folder as the base. This
-	// function does not block until the audio finishes.
-	PlayAudio(string) error
 	// LaunchSystem launches a system by ID. This generally means, if a
 	// platform even has the capability, attempt to launch the default or most
 	// appropriate launcher for a given system, without any media loaded.
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches some media by path and sets the active media if it
 	// was successful. Pass nil for launcher to auto-detect, or a specific Launcher.
-	LaunchMedia(*config.Instance, string, *Launcher) error
+	LaunchMedia(*config.Instance, string, *Launcher, *database.Database) error
 	// KeyboardPress presses and then releases a single keyboard button on a
 	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error

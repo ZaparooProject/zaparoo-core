@@ -963,69 +963,27 @@ func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
 func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the implementation of LaunchAlbum to make playlist-based API requests
-	// It should: 1) Clear music playlist, 2) Get album songs, 3) Add songs to playlist, 4) Start playback
+	// This test verifies LaunchAlbum makes a direct Player.Open call with albumid
 
-	var receivedPayloads []map[string]any
+	var receivedParams kodi.PlayerOpenParams
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
+		var payload kodi.APIPayload
 		err := json.NewDecoder(r.Body).Decode(&payload)
 		if err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-		receivedPayloads = append(receivedPayloads, payload)
 
-		method, ok := payload["method"].(string)
-		assert.True(t, ok, "method should be a string")
+		assert.Equal(t, kodi.APIMethodPlayerOpen, payload.Method)
 
-		// Mock different responses based on method
-		var response map[string]any
-		switch method {
-		case "Playlist.Clear":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		case "AudioLibrary.GetSongs":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result": map[string]any{
-					"songs": []map[string]any{
-						{
-							"songid":   123,
-							"label":    "Song 1",
-							"albumid":  456,
-							"artist":   "Test Artist",
-							"duration": 240,
-						},
-						{
-							"songid":   124,
-							"label":    "Song 2",
-							"albumid":  456,
-							"artist":   "Test Artist",
-							"duration": 180,
-						},
-					},
-				},
-			}
-		case "Playlist.Add":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		case "Player.Open":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		default:
-			http.Error(w, "Unknown method", http.StatusBadRequest)
-			return
+		// Extract params
+		paramsJSON, _ := json.Marshal(payload.Params)
+		_ = json.Unmarshal(paramsJSON, &receivedParams)
+
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload.ID,
+			"result":  "OK",
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1042,33 +1000,9 @@ func TestClient_LaunchAlbum_MakesCorrectAPICall(t *testing.T) {
 	err := client.LaunchAlbum(albumPath)
 	require.NoError(t, err)
 
-	// Verify the correct sequence of API calls was made
-	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetSongs, Add, Open")
-
-	// 1. Clear music playlist (playlistid=0)
-	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	assert.Equal(t, 0, int(clearParams["playlistid"].(float64)))
-
-	// 2. Get songs (filtered by album)
-	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[1]["method"])
-
-	// 3. Add songs to playlist
-	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
-	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	assert.Equal(t, 0, int(addParams["playlistid"].(float64)))
-
-	// 4. Start playback with playlist
-	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
-	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	item, ok := openParams["item"].(map[string]any)
-	require.True(t, ok, "item should be a map[string]any")
-	// PlaylistID is 0, which gets omitted due to omitempty tag
-	// The item should be an empty map {} for playing playlist 0
-	assert.Empty(t, item, "item should be empty map for playlist 0")
+	// Verify Player.Open was called with albumid
+	assert.Equal(t, 456, receivedParams.Item.AlbumID, "albumid should be 456")
+	assert.True(t, receivedParams.Options.Resume, "resume should be true")
 }
 
 func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
@@ -1198,82 +1132,27 @@ func TestClient_GetArtists_MakesCorrectAPICall(t *testing.T) {
 func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 	t.Parallel()
 
-	// This test drives the implementation of LaunchArtist to make playlist-based API requests
-	// It should: 1) Clear music playlist, 2) Get songs with artist filter, 3) Add songs to playlist, 4) Start playback
+	// This test verifies LaunchArtist makes a direct Player.Open call with artistid
 
-	var receivedPayloads []map[string]any
+	var receivedParams kodi.PlayerOpenParams
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
+		var payload kodi.APIPayload
 		err := json.NewDecoder(r.Body).Decode(&payload)
 		if err != nil {
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
-		receivedPayloads = append(receivedPayloads, payload)
 
-		method, ok := payload["method"].(string)
-		assert.True(t, ok, "method should be a string")
+		assert.Equal(t, kodi.APIMethodPlayerOpen, payload.Method)
 
-		// Mock different responses based on method
-		var response map[string]any
-		switch method {
-		case "Playlist.Clear":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		case "AudioLibrary.GetArtists":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result": map[string]any{
-					"artists": []map[string]any{
-						{
-							"artistid": 789,
-							"label":    "Test Artist",
-						},
-					},
-				},
-			}
-		case "AudioLibrary.GetSongs":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result": map[string]any{
-					"songs": []map[string]any{
-						{
-							"songid":   123,
-							"label":    "Song 1",
-							"albumid":  456,
-							"artist":   "Test Artist",
-							"duration": 240,
-						},
-						{
-							"songid":   124,
-							"label":    "Song 2",
-							"albumid":  456,
-							"artist":   "Test Artist",
-							"duration": 180,
-						},
-					},
-				},
-			}
-		case "Playlist.Add":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		case "Player.Open":
-			response = map[string]any{
-				"jsonrpc": "2.0",
-				"id":      payload["id"],
-				"result":  "OK",
-			}
-		default:
-			http.Error(w, "Unknown method", http.StatusBadRequest)
-			return
+		// Extract params
+		paramsJSON, _ := json.Marshal(payload.Params)
+		_ = json.Unmarshal(paramsJSON, &receivedParams)
+
+		response := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      payload.ID,
+			"result":  "OK",
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1290,33 +1169,9 @@ func TestClient_LaunchArtist_MakesCorrectAPICall(t *testing.T) {
 	err := client.LaunchArtist(artistPath)
 	require.NoError(t, err)
 
-	// Verify the correct sequence of API calls was made
-	require.Len(t, receivedPayloads, 4, "Should make 4 API calls: Clear, GetSongs, Add, Open")
-
-	// 1. Clear music playlist (playlistid=0)
-	assert.Equal(t, "Playlist.Clear", receivedPayloads[0]["method"])
-	clearParams, ok := receivedPayloads[0]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	assert.Equal(t, 0, int(clearParams["playlistid"].(float64)))
-
-	// 2. Get songs with artist filter
-	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayloads[1]["method"])
-
-	// 3. Add songs to playlist
-	assert.Equal(t, "Playlist.Add", receivedPayloads[2]["method"])
-	addParams, ok := receivedPayloads[2]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	assert.Equal(t, 0, int(addParams["playlistid"].(float64)))
-
-	// 4. Start playback with playlist
-	assert.Equal(t, "Player.Open", receivedPayloads[3]["method"])
-	openParams, ok := receivedPayloads[3]["params"].(map[string]any)
-	require.True(t, ok, "params should be a map[string]any")
-	item, ok := openParams["item"].(map[string]any)
-	require.True(t, ok, "item should be a map[string]any")
-	// PlaylistID is 0, which gets omitted due to omitempty tag
-	// The item should be an empty map {} for playing playlist 0
-	assert.Empty(t, item, "item should be empty map for playlist 0")
+	// Verify Player.Open was called with artistid
+	assert.Equal(t, 789, receivedParams.Item.ArtistID, "artistid should be 789")
+	assert.True(t, receivedParams.Options.Resume, "resume should be true")
 }
 
 func TestClient_LaunchTVShow_MakesCorrectAPICall(t *testing.T) {

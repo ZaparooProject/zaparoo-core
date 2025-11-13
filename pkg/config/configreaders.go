@@ -26,10 +26,11 @@ import (
 )
 
 type Readers struct {
-	Drivers    map[string]DriverConfig `toml:"drivers,omitempty"`
-	Connect    []ReadersConnect        `toml:"connect,omitempty"`
-	Scan       ReadersScan             `toml:"scan,omitempty"`
-	AutoDetect bool                    `toml:"auto_detect"`
+	Drivers     map[string]DriverConfig `toml:"drivers,omitempty"`
+	ScanHistory *int                    `toml:"scan_history,omitempty"`
+	Connect     []ReadersConnect        `toml:"connect,omitempty"`
+	Scan        ReadersScan             `toml:"scan,omitempty"`
+	AutoDetect  bool                    `toml:"auto_detect"`
 }
 
 type DriverConfig struct {
@@ -52,7 +53,14 @@ type ReadersConnect struct {
 }
 
 func (r ReadersConnect) ConnectionString() string {
-	return fmt.Sprintf("%s:%s", r.Driver, r.Path)
+	// Normalize driver ID by removing underscores
+	normalizedDriver := strings.ReplaceAll(r.Driver, "_", "")
+	return fmt.Sprintf("%s:%s", normalizedDriver, r.Path)
+}
+
+// normalizeDriverID removes underscores from driver IDs for backwards compatibility.
+func normalizeDriverID(id string) string {
+	return strings.ReplaceAll(id, "_", "")
 }
 
 func (c *Instance) ReadersScan() ReadersScan {
@@ -134,8 +142,12 @@ func (c *Instance) IsDriverEnabled(driverID string, defaultEnabled bool) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if cfg, ok := c.vals.Readers.Drivers[driverID]; ok && cfg.Enabled != nil {
-		return *cfg.Enabled
+	// Try normalized ID first, then fall back to original
+	normalizedID := normalizeDriverID(driverID)
+	for key, cfg := range c.vals.Readers.Drivers {
+		if normalizeDriverID(key) == normalizedID && cfg.Enabled != nil {
+			return *cfg.Enabled
+		}
 	}
 	return defaultEnabled
 }
@@ -144,9 +156,22 @@ func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if cfg, ok := c.vals.Readers.Drivers[driverID]; ok && cfg.AutoDetect != nil {
-		return *cfg.AutoDetect
+	// Try normalized ID first, then fall back to original
+	normalizedID := normalizeDriverID(driverID)
+	for key, cfg := range c.vals.Readers.Drivers {
+		if normalizeDriverID(key) == normalizedID && cfg.AutoDetect != nil {
+			return *cfg.AutoDetect
+		}
 	}
 
 	return c.vals.Readers.AutoDetect && defaultAutoDetect
+}
+
+func (c *Instance) ScanHistory() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Readers.ScanHistory == nil {
+		return 30 // Default: keep 30 days of scan history
+	}
+	return *c.vals.Readers.ScanHistory
 }

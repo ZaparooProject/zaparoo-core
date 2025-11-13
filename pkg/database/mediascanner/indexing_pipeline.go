@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -670,8 +671,29 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually
 	if helpers.ReURI.MatchString(path) {
+		// For URIs, FilenameFromPath returns the decoded last path segment, which may include an extension for http/s
 		f.FileName = helpers.FilenameFromPath(f.Path)
-		f.Ext = "" // Virtual paths have no extension
+
+		// Check the scheme to decide if we should extract an extension
+		schemeEnd := strings.Index(f.Path, "://")
+		scheme := ""
+		if schemeEnd > 0 {
+			scheme = strings.ToLower(f.Path[:schemeEnd])
+		}
+
+		if platformsshared.IsStandardSchemeForDecoding(scheme) {
+			// For http/https, extract the extension for tag creation
+			// ParseTitleFromFilename will strip it from the display title later
+			ext := strings.ToLower(filepath.Ext(f.FileName))
+			if helpers.IsValidExtension(ext) {
+				f.Ext = ext
+			} else {
+				f.Ext = ""
+			}
+		} else {
+			// For custom schemes (steam, kodi, etc.), there is no extension
+			f.Ext = ""
+		}
 	} else {
 		fileBase := filepath.Base(f.Path)
 		// Skip extension extraction if noExt is true or extract normally
@@ -679,7 +701,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 			f.Ext = ""
 		} else {
 			f.Ext = strings.ToLower(filepath.Ext(f.Path))
-			if helpers.HasSpace(f.Ext) {
+			if !helpers.IsValidExtension(f.Ext) {
 				f.Ext = ""
 			}
 		}

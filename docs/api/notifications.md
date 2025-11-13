@@ -67,11 +67,22 @@ New media was started on server.
 #### Response
 
 | Key        | Type   | Required | Description                                  |
-| :--------- | :----- | :------- | :------------------------------------------- |
+|:-----------|:-------|:---------|:---------------------------------------------|
 | systemId   | string | Yes      | Internal ID of system associated with media. |
 | systemName | string | Yes      | Display name of system.                      |
 | mediaPath  | string | Yes      | Path to media file on server.                |
-| mediaName  | string | Yes      | Display name of media.                       |
+| mediaName  | string | Yes      | Cleaned display title of media.              |
+
+#### Example
+
+```json
+{
+  "systemId": "SNES",
+  "systemName": "Super Nintendo Entertainment System",
+  "mediaPath": "/roms/snes/Super_Mario_World_(USA)_[!].sfc",
+  "mediaName": "Super Mario World"
+}
+```
 
 ### media.stopped
 

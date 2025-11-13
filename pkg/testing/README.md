@@ -42,6 +42,83 @@ This directory provides comprehensive testing utilities for Zaparoo Core, enabli
 - `helpers.NewTestConfig(fs, configDir)` - Test configuration with random port
 - `helpers.NewTestConfigWithPort(fs, configDir, port)` - Test configuration with specific port
 
+### Time-Based Testing
+
+#### Clockwork for Deterministic Time
+- `clockwork.NewFakeClock()` - Fake clock for fast, deterministic tests
+- `fakeClock.Advance(duration)` - Progress time instantly without waiting
+- `fakeClock.BlockUntilContext(ctx, n)` - Wait for n goroutines to block on clock
+- `clock.Now()` - Get current time (fake or real)
+- `clock.Since(t)` - Calculate elapsed time
+- `clock.NewTicker(d)` - Create ticker (fake or real)
+
+#### Production Code Pattern
+```go
+type MyService struct {
+    clock clockwork.Clock  // Inject clock for testability
+}
+
+func NewMyService() *MyService {
+    return &MyService{
+        clock: clockwork.NewRealClock(),  // Real clock in production
+    }
+}
+```
+
+#### Test Pattern
+```go
+func TestMyService(t *testing.T) {
+    fakeClock := clockwork.NewFakeClock()
+    service := &MyService{clock: fakeClock}  // Inject fake clock
+
+    // Advance time instantly
+    fakeClock.Advance(1 * time.Minute)
+
+    // No time.Sleep() needed!
+}
+```
+
+**See TESTING.md for comprehensive examples and best practices.**
+
+### Fuzz Testing
+
+#### Native Go Fuzzing (Go 1.18+)
+- `func FuzzFunctionName(f *testing.F)` - Fuzz test function signature
+- `f.Add(inputs...)` - Seed corpus with known test cases
+- `f.Fuzz(func(t *testing.T, inputs...) { ... })` - Fuzz target function
+
+#### Running Fuzz Tests
+```bash
+# Run all tests (includes fuzz corpus) - FAST
+task test
+
+# Manual fuzzing (runs until failure or Ctrl+C)
+go test -fuzz=FuzzParseVirtualPathStr ./pkg/helpers/
+
+# Time-boxed fuzzing
+go test -fuzz=FuzzName -fuzztime=30s ./pkg/helpers/
+```
+
+#### Example Fuzz Test
+```go
+func FuzzParseURI(f *testing.F) {
+    // Seed corpus
+    f.Add("steam://123/Game")
+    f.Add("") // Edge case
+
+    f.Fuzz(func(t *testing.T, uri string) {
+        result, err := ParseURI(uri)
+
+        // Test properties (invariants)
+        if err == nil && !utf8.ValidString(result) {
+            t.Errorf("Invalid UTF-8: %q", result)
+        }
+    })
+}
+```
+
+**Example fuzz tests**: `pkg/helpers/uris_fuzz_test.go`, `pkg/helpers/paths_fuzz_test.go`
+
 ### API Testing
 
 #### WebSocket & JSON-RPC

@@ -44,6 +44,29 @@ var (
 	// Title parsing
 	reMultiSpace = regexp.MustCompile(`\s+`)
 	reLeadingNum = regexp.MustCompile(`^\d+[.\s\-]+`)
+
+	// Scene release artifact patterns (for modern media: movies, TV shows)
+	// Note: These patterns match AFTER separator normalization, so hyphens have become spaces
+	reResolution = regexp.MustCompile(`(?i)\b(480p|720p|1080p|2160p|4K|8K|UHD)\b`)
+	reSource     = regexp.MustCompile(
+		`(?i)\b(CAM|TS|TC|TELESYNC|TELECINE|SCREENER|SCR|HDTV|PDTV|WEB[\s-]?DL|WEBRip|WEBRIP|` +
+			`BluRay|BRRip|BDRip|Blu[\s-]?ray|Remux|DVDRip|DVDSCR|R5)\b`,
+	)
+	reVideoCodec = regexp.MustCompile(`(?i)\b(x264|x265|h[\s.]?264|h[\s.]?265|HEVC|AVC|XviD|VP9|AV1)\b`)
+	reAudioCodec = regexp.MustCompile(
+		`(?i)\b(AAC|MP3|AC3|DTS|DD5[\s.]?1|DD\+?5[\s.]?1|TrueHD|Atmos|EAC3|FLAC|DTS[\s-]?HD)\b`,
+	)
+	reHDR         = regexp.MustCompile(`(?i)\b(HDR|HDR10|HDR10\+|DV|Dolby[\s.]?Vision)\b`)
+	reSceneStatus = regexp.MustCompile(
+		`(?i)\b(PROPER|REPACK|INTERNAL|LIMITED|READNFO|DIRFIX|NFOFIX|UNRATED|EXTENDED)\b`,
+	)
+	// Uppercase group at end like "-GROUP" (min 3 chars)
+	reReleaseGroup  = regexp.MustCompile(`-([A-Z][A-Z0-9]{2,})$`)
+	reSeasonEpisode = regexp.MustCompile(`(?i)[Ss](\d{1,2})[Ee](\d{1,3})`)
+	reIssueNumber   = regexp.MustCompile(`(?i)#(\d+)|(?:Issue|No\.?)\s*(\d+)`)
+	reTrackNumber   = regexp.MustCompile(`^(\d{1,3})[\s.\-_]+|(?i)^track\s*(\d{1,3})[\s.\-_]+`)
+	reVolumeNumber  = regexp.MustCompile(`(?i)\((?:vol\.|volume)\s*(\d+)\)`) // Only explicit keywords, not bare "v"
+	reYear4Digit    = regexp.MustCompile(`^(19\d{2}|20\d{2})`)               // For detecting 4-digit years
 )
 
 // langMap maps 3-letter ROM language codes to 2-letter ISO 639-1 codes.
@@ -308,7 +331,32 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
-	// Pattern 3: Version tags - "v1.2", "v1.2.3"
+	// Pattern 3: Volume numbers - "(Vol. 2)", "(Volume 3)"
+	// IMPORTANT: Only matches explicit "Vol." or "Volume" keywords (NOT bare "v")
+	// This avoids ambiguity with version tags like "(v1.2)" used in ROM filenames
+	// Volume numbers are for comics/manga/books and use explicit keywords
+	// Version tags are for ROM revisions and use bare "v" or have dots (v1.2)
+	// Examples: "Book Title (Vol. 2).epub", "Comic Series (Volume 3).cbr"
+	if matches := reVolumeNumber.FindStringSubmatch(remaining); len(matches) > 1 {
+		volumeNum := matches[1]
+
+		// Strip leading zeros from volume numbers
+		volumeNum = strings.TrimLeft(volumeNum, "0")
+		if volumeNum == "" {
+			volumeNum = "0"
+		}
+
+		tags = append(tags, CanonicalTag{
+			Type:   TagTypeVolume,
+			Value:  TagValue(volumeNum),
+			Source: TagSourceBracketed,
+		})
+
+		// Remove pattern from remaining to clean title
+		remaining = reVolumeNumber.ReplaceAllString(remaining, " ")
+	}
+
+	// Pattern 4: Version tags - "v1.2", "v1.2.3"
 	if indices := reVersion.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		versionValue := remaining[indices[2]:indices[3]]
 		// Normalize periods to dashes (e.g., "1.2.3" → "1-2-3")
@@ -321,7 +369,7 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
-	// Pattern 4: Year tags - "(1995)", "(2004)"
+	// Pattern 5: Year tags - "(1995)", "(2004)"
 	// Matches years 1970-2099 in parentheses
 	if indices := reYear.FindStringSubmatchIndex(remaining); len(indices) > 0 {
 		yearValue := remaining[indices[2]:indices[3]]
@@ -333,7 +381,102 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 		remaining = remaining[:indices[0]] + remaining[indices[1]:]
 	}
 
-	// Pattern 6: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
+	// Pattern 6: TV show season/episode - "S01E02", "s02e15"
+	// Common format for TV show episode identification
+	// Examples: "Show.Name.S01E01", "Series.S02E05.Episode.Title"
+	if matches := reSeasonEpisode.FindStringSubmatch(remaining); len(matches) > 0 {
+		// Strip leading zeros from season and episode numbers
+		season := strings.TrimLeft(matches[1], "0")
+		if season == "" {
+			season = "0" // Handle case where it's "00"
+		}
+		episode := strings.TrimLeft(matches[2], "0")
+		if episode == "" {
+			episode = "0"
+		}
+
+		tags = append(tags,
+			CanonicalTag{
+				Type:   TagTypeSeason,
+				Value:  TagValue(season),
+				Source: TagSourceInferred,
+			},
+			CanonicalTag{
+				Type:   TagTypeEpisode,
+				Value:  TagValue(episode),
+				Source: TagSourceInferred,
+			},
+		)
+
+		// Remove pattern from remaining to clean title
+		remaining = reSeasonEpisode.ReplaceAllString(remaining, " ")
+	}
+
+	// Pattern 7: Comic issue numbers - "#47", "Issue 5"
+	// Common format for comic book issue identification
+	// Examples: "Amazing Spider-Man #47", "Batman Issue 100"
+	if matches := reIssueNumber.FindStringSubmatch(remaining); len(matches) > 0 {
+		// The regex has two capture groups - try both
+		issueNum := matches[1]
+		if issueNum == "" && len(matches) > 2 {
+			issueNum = matches[2]
+		}
+
+		if issueNum != "" {
+			// Strip leading zeros from issue numbers
+			issueNum = strings.TrimLeft(issueNum, "0")
+			if issueNum == "" {
+				issueNum = "0"
+			}
+
+			tags = append(tags, CanonicalTag{
+				Type:   TagTypeIssue,
+				Value:  TagValue(issueNum),
+				Source: TagSourceInferred,
+			})
+
+			// Remove pattern from remaining to clean title
+			remaining = reIssueNumber.ReplaceAllString(remaining, " ")
+		}
+	}
+
+	// Pattern 8: Music track numbers - "01 -", "Track 03"
+	// Common format for music file track numbering
+	// Examples: "01 - Song Title", "Track 03 Artist Name"
+	// Only extract if at start of filename (not in middle of title)
+	if matches := reTrackNumber.FindStringSubmatch(remaining); len(matches) > 0 {
+		// The regex has two capture groups - try both
+		trackNum := matches[1]
+		if trackNum == "" && len(matches) > 2 {
+			trackNum = matches[2]
+		}
+
+		if trackNum != "" {
+			// CRITICAL: Check if this is actually a 4-digit year being mis-parsed as a 3-digit track
+			// Example: "1985.mp3" should NOT be parsed as track 198
+			// Check if the original filename starts with a 4-digit year
+			isYear := reYear4Digit.MatchString(remaining)
+
+			if !isYear {
+				// Strip leading zeros from track numbers
+				trackNum = strings.TrimLeft(trackNum, "0")
+				if trackNum == "" {
+					trackNum = "0"
+				}
+
+				tags = append(tags, CanonicalTag{
+					Type:   TagTypeTrack,
+					Value:  TagValue(trackNum),
+					Source: TagSourceInferred,
+				})
+
+				// Remove pattern from remaining to clean title
+				remaining = reTrackNumber.ReplaceAllString(remaining, "")
+			}
+		}
+	}
+
+	// Pattern 9: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
 	// Format: T[+-]?<lang_code>( v<version>)?
 	// Examples: "T+Eng", "T-Ger", "TFre", "T+Eng v1.0", "T+Spa v2.1.3"
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
@@ -432,19 +575,36 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	return tags, remaining
 }
 
-// parseMultiLanguageTag handles multi-language tags in both formats:
+// parseMultiLanguageTag handles multi-language tags in multiple formats:
 //   - Comma-separated (No-Intro): "(En,Fr,De)" → lang:en, lang:fr, lang:de
 //   - Plus-separated (TOSEC): "(En+Fr)" → lang:en, lang:fr
+//   - Dash-separated: "[en-de-fr]" → lang:en, lang:de, lang:fr
 //
 // Returns individual language tags or nil if not a multi-language tag.
 func parseMultiLanguageTag(tag string) []CanonicalTag {
-	// Multi-language tags contain commas or plus signs
+	// Multi-language tags contain commas, plus signs, or dashes
 	var parts []string
 	switch {
 	case strings.Contains(tag, ","):
 		parts = strings.Split(tag, ",")
 	case strings.Contains(tag, "+"):
 		parts = strings.Split(tag, "+")
+	case strings.Contains(tag, "-"):
+		// Check if this looks like a language dash (not a region dash)
+		// Language codes are 2-3 characters, so validate all parts before accepting
+		tempParts := strings.Split(tag, "-")
+		allShortCodes := true
+		for _, part := range tempParts {
+			normalized := NormalizeTag(part)
+			if len(normalized) < 2 || len(normalized) > 3 {
+				allShortCodes = false
+				break
+			}
+		}
+		if !allShortCodes || len(tempParts) < 2 {
+			return nil // Not a language tag, let parseMultiRegionTag handle it
+		}
+		parts = tempParts
 	default:
 		return nil // Single language
 	}
@@ -559,7 +719,8 @@ func disambiguateTag(ctx *ParseContext) []CanonicalTag {
 }
 
 // mapBracketTag maps tags from square brackets [].
-// These are always dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
+// These are typically dump-related: verified, bad, hacked, cracked, fixed, translated, etc.
+// Also handles multi-language patterns (en-fr-de, En,Fr,De, En+Fr) and translation patterns (T+Eng).
 // NOTE: This function receives the raw tag (not normalized) to preserve special characters like !
 func mapBracketTag(tag string) []CanonicalTag {
 	// Check for translation patterns first (T+Eng, T-Chi, etc.)
@@ -578,6 +739,11 @@ func mapBracketTag(tag string) []CanonicalTag {
 
 	// Normalize the tag for regular processing
 	normalized := NormalizeTag(tag)
+
+	// Check for multi-language patterns (en-fr-de, En,Fr,De, En+Fr)
+	if langTags := parseMultiLanguageTag(normalized); langTags != nil {
+		return langTags
+	}
 
 	// Handle standard dump info tags
 	switch normalized {
@@ -830,6 +996,50 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 	return allTags
 }
 
+// stripSceneArtifacts removes common scene release artifacts from filenames.
+// These patterns are common in movie and TV show filenames but should be removed
+// from display titles for better readability.
+//
+// Removed patterns include:
+//   - Resolution markers: 720p, 1080p, 2160p, 4K, UHD
+//   - Source types: BluRay, WEB-DL, WEBRip, HDTV, DVDRip
+//   - Video codecs: x264, x265, h264, HEVC, AVC
+//   - Audio codecs: AAC, AC3, DTS, DD5.1, TrueHD, Atmos
+//   - HDR formats: HDR, HDR10, DV (Dolby Vision)
+//   - Scene status: PROPER, REPACK, INTERNAL, LIMITED
+//   - Release groups: -GROUP suffix (uppercase alphanumeric)
+//
+// Examples:
+//   - "The.Dark.Knight.2008.1080p.BluRay.x264-GROUP" → "The.Dark.Knight.2008"
+//   - "Movie.Title.2010.WEB-DL.DD5.1.H264" → "Movie.Title.2010"
+//   - "Show.S01E01.PROPER.720p.HDTV" → "Show.S01E01"
+func stripSceneArtifacts(input string) string {
+	result := input
+
+	// Remove resolution markers
+	result = reResolution.ReplaceAllString(result, " ")
+
+	// Remove source types
+	result = reSource.ReplaceAllString(result, " ")
+
+	// Remove video codecs
+	result = reVideoCodec.ReplaceAllString(result, " ")
+
+	// Remove audio codecs
+	result = reAudioCodec.ReplaceAllString(result, " ")
+
+	// Remove HDR formats
+	result = reHDR.ReplaceAllString(result, " ")
+
+	// Remove scene status tags
+	result = reSceneStatus.ReplaceAllString(result, " ")
+
+	// Remove release group suffix (at end of string)
+	result = reReleaseGroup.ReplaceAllString(result, "")
+
+	return result
+}
+
 // ParseTitleFromFilename extracts a clean, human-readable display title from a filename.
 // It removes metadata brackets and normalizes common filename artifacts for better presentation.
 //
@@ -838,6 +1048,7 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 // is present in the directory.
 //
 // Transformations applied:
+//   - Strips scene release artifacts (resolution, codecs, sources, etc.)
 //   - Optionally removes leading number prefixes (e.g., "1. ", "01 - ") if stripLeadingNumbers is true
 //   - Converts underscores to spaces (common filename artifact)
 //   - Removes all bracket content: (), [], {}, <>
@@ -850,6 +1061,8 @@ func ParseFilenameToCanonicalTags(filename string) []CanonicalTag {
 //   - "Street Fighter II: The World Warrior" → "Street Fighter II: The World Warrior"
 //   - "1. Game Title (USA)" → "Game Title" (if stripLeadingNumbers is true)
 //   - "1942 (USA)" → "1942" (if stripLeadingNumbers is false)
+//   - "The.Dark.Knight.2008.1080p.BluRay.x264-GROUP" → "The Dark Knight 2008"
+//   - "TV.Show.S01E01.1080p.WEB-DL" → "TV Show S01E01"
 //
 // Note: This uses shared normalization functions from the slugs package to eliminate
 // code duplication. However, it only applies transformations appropriate for display
@@ -859,31 +1072,88 @@ func ParseTitleFromFilename(filename string, stripLeadingNumbers bool) string {
 	// This eliminates code duplication while keeping display-appropriate behavior
 	title := filename
 
-	// Step 1: Normalize filename separators (underscores and dashes used as space substitutes)
-	// Heuristic: If filename has no spaces AND contains 2+ separators, treat them as space substitutes
-	// This handles: "super-mario-bros.sfc", "legend_of_zelda.sfc", "mega-man-x.sfc"
-	// Preserves: "Spider-Man.sfc" (only 1 dash), "F-Zero.sfc" (only 1 dash)
-	// IMPORTANT: Do this BEFORE leading number stripping so "01_super_mario" → "01 super mario" → "super mario"
+	// Step 1: Remove file extension first (simplifies later processing)
+	// Find the last dot that's likely an extension (after the last slash if any)
+	if lastDot := strings.LastIndex(title, "."); lastDot > 0 {
+		// Only remove if the extension looks reasonable (2-4 characters after the dot)
+		ext := title[lastDot+1:]
+		if len(ext) >= 2 && len(ext) <= 4 && !strings.Contains(ext, " ") {
+			title = title[:lastDot]
+		}
+	}
+
+	// Step 2: Strip release group BEFORE separator normalization
+	// Release groups are typically "-GROUP" at the end, and the hyphen will be converted to a space
+	// So we need to remove it early before that conversion happens
+	title = reReleaseGroup.ReplaceAllString(title, "")
+
+	// Step 3: Normalize filename separators (before scene artifact stripping)
+	// Heuristic: If filename has no spaces AND has 2+ separators (dots, underscores, or dashes),
+	// treat them all as space substitutes. Common in scene releases and ROM filenames.
+	// Examples: "The.Dark.Knight.2008.mkv", "super_mario_bros.sfc", "mega-man-x.nes"
+	dotCount := strings.Count(title, ".")
 	sepCount := strings.Count(title, "_") + strings.Count(title, "-")
-	if !strings.Contains(title, " ") && sepCount >= 2 {
+
+	if !strings.Contains(title, " ") && (dotCount >= 2 || sepCount >= 2) {
+		title = strings.ReplaceAll(title, ".", " ")
 		title = strings.ReplaceAll(title, "_", " ")
 		title = strings.ReplaceAll(title, "-", " ")
 	}
 
-	// Step 2: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
+	// Step 4: Strip scene release artifacts CONTEXTUALLY (AFTER separator normalization)
+	// CRITICAL: Only strip artifacts from the portion AFTER the year to avoid corrupting titles
+	// Example: "Cam (2018)" should NOT have "Cam" removed as a scene tag
+	// Use a more robust year regex that matches both bracketed (2018) and unbracketed 2018
+	reYearScene := regexp.MustCompile(`\b(19[789]\d|20\d{2})\b`)
+	yearMatch := reYearScene.FindStringSubmatchIndex(title)
+
+	var extractedYearForStripping string
+	if len(yearMatch) > 0 {
+		// Found a year - split title and only strip artifacts from the part AFTER the year
+		yearIdx := yearMatch[0]
+		extractedYearForStripping = title[yearMatch[2]:yearMatch[3]]
+
+		beforeYear := title[:yearIdx]
+		afterYear := title[yearIdx+len(extractedYearForStripping):]
+
+		// Only strip artifacts from AFTER the year to protect the title
+		cleanedAfterYear := stripSceneArtifacts(afterYear)
+		title = beforeYear + extractedYearForStripping + cleanedAfterYear
+	} else {
+		// No year found - apply stripping to entire title (safer for non-media files)
+		title = stripSceneArtifacts(title)
+	}
+
+	// Step 5: Strip S##E## patterns (TV show episode markers) from titles
+	// These are useful as metadata but clutter the display title
+	title = reSeasonEpisode.ReplaceAllString(title, " ")
+
+	// Step 6: Optionally strip leading number prefixes (e.g., "1. ", "01 - ")
 	// Only done when contextual detection confirms list-based numbering
 	if stripLeadingNumbers {
 		title = reLeadingNum.ReplaceAllString(title, "")
 		title = strings.TrimSpace(title)
 	}
 
-	// Step 3: Remove all bracket content using shared function from slugs package
+	// Step 7: Extract year from brackets BEFORE removing brackets (for preservation)
+	// Years are useful in display titles, so we extract them and re-append after bracket removal
+	var extractedYear string
+	if yearMatches := reYear.FindStringSubmatch(title); len(yearMatches) > 1 {
+		extractedYear = yearMatches[1]
+	}
+
+	// Step 8: Remove all bracket content using shared function from slugs package
 	// This replaces the previous regex-based extraction with a more robust implementation
 	// that handles nested brackets and all bracket types uniformly
 	title = slugs.StripMetadataBrackets(title)
 	title = strings.TrimSpace(title)
 
-	// Step 4: Normalize multiple spaces to single space
+	// Step 9: Re-append extracted year if it was removed by bracket stripping
+	if extractedYear != "" && !strings.Contains(title, extractedYear) {
+		title = title + " " + extractedYear
+	}
+
+	// Step 10: Normalize multiple spaces to single space
 	// This handles cases where bracket removal creates gaps like "Game [USA] [!]" → "Game  "
 	title = reMultiSpace.ReplaceAllString(title, " ")
 

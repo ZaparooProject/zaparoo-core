@@ -144,8 +144,7 @@ func TestZapScriptExecution(t *testing.T) {
 			mockUserDB := helpers.NewMockUserDBI()
 			mockMediaDB := helpers.NewMockMediaDBI()
 
-			// Database struct available if needed for more complex scenarios
-			_ = &database.Database{
+			db := &database.Database{
 				UserDB:  mockUserDB,
 				MediaDB: mockMediaDB,
 			}
@@ -157,8 +156,11 @@ func TestZapScriptExecution(t *testing.T) {
 					// Mock media database search
 					mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), tt.commands[1]).
 						Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
-					platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path,
-						(*platforms.Launcher)(nil)).Return(nil)
+					platform.On("LaunchMedia",
+						cfg,
+						fixtures.SearchResults.Collection[0].Path,
+						(*platforms.Launcher)(nil),
+						db).Return(nil)
 				case "SENDKEY":
 					platform.On("KeyboardPress", tt.commands[1]).Return(nil)
 				case "SENDPAD":
@@ -178,7 +180,7 @@ func TestZapScriptExecution(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, results, 1, "Should find media")
 
-					err = platform.LaunchMedia(cfg, results[0].Path, nil)
+					err = platform.LaunchMedia(cfg, results[0].Path, nil, db)
 					require.NoError(t, err)
 
 					// Verify launch was tracked
@@ -280,18 +282,21 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	mockUserDB := helpers.NewMockUserDBI()
 	mockMediaDB := helpers.NewMockMediaDBI()
 
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
 	// Set expectations for complex workflow
 	mockUserDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 	mockMediaDB.On("SearchMediaPathExact", []systemdefs.System(nil), "Complex Game").
 		Return([]database.SearchResult{fixtures.SearchResults.Collection[0]}, nil)
-	platform.On("LaunchMedia", cfg, fixtures.SearchResults.Collection[0].Path, (*platforms.Launcher)(nil)).Return(nil)
+	platform.On("LaunchMedia",
+		cfg,
+		fixtures.SearchResults.Collection[0].Path,
+		(*platforms.Launcher)(nil),
+		db).Return(nil)
 	platform.On("KeyboardPress", "RETURN").Return(nil)
-
-	// Database struct available if needed for more complex scenarios
-	_ = &database.Database{
-		UserDB:  mockUserDB,
-		MediaDB: mockMediaDB,
-	}
 
 	// Execute complex workflow by directly calling mocked methods
 	// This demonstrates the TDD infrastructure capabilities
@@ -301,7 +306,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "Should find media")
 
-	err = platform.LaunchMedia(cfg, results[0].Path, nil)
+	err = platform.LaunchMedia(cfg, results[0].Path, nil, db)
 	require.NoError(t, err)
 
 	// Step 2: Send keyboard input

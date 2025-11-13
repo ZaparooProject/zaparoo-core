@@ -27,11 +27,11 @@ import (
 )
 
 type SearchResultMedia struct {
-	System        System             `json:"system"`
-	Name          string             `json:"name"`
-	Path          string             `json:"path"`
-	LaunchCommand string             `json:"launchCommand"`
-	Tags          []database.TagInfo `json:"tags"`
+	System    System             `json:"system"`
+	Name      string             `json:"name"`
+	Path      string             `json:"path"`
+	ZapScript string             `json:"zapScript"`
+	Tags      []database.TagInfo `json:"tags"`
 }
 
 type PaginationInfo struct {
@@ -132,6 +132,18 @@ type ActiveMedia struct {
 	SystemName string    `json:"systemName"`
 	Path       string    `json:"mediaPath"`
 	Name       string    `json:"mediaName"`
+}
+
+// NewActiveMedia creates a new ActiveMedia with the current timestamp.
+func NewActiveMedia(systemID, systemName, path, name, launcherID string) *ActiveMedia {
+	return &ActiveMedia{
+		Started:    time.Now(),
+		LauncherID: launcherID,
+		SystemID:   systemID,
+		SystemName: systemName,
+		Path:       path,
+		Name:       name,
+	}
 }
 
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {

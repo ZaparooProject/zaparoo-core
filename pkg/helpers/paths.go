@@ -33,7 +33,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 )
@@ -338,7 +342,6 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 
 type PathInfo struct {
 	Path      string
-	Base      string
 	Filename  string
 	Extension string
 	Name      string
@@ -350,7 +353,45 @@ func GetPathInfo(path string) PathInfo {
 
 	// Use custom path parsing to preserve original path format
 	// instead of filepath functions which are OS-specific
-	info.Base = getPathDir(path)
+
+	// For URIs (containing ://), check if they need special handling
+	if strings.Contains(path, "://") {
+		// Extract scheme manually to avoid url.Parse dependency
+		schemeEnd := strings.Index(path, "://")
+		if schemeEnd >= 0 {
+			scheme := strings.ToLower(path[:schemeEnd])
+
+			// For custom Zaparoo schemes and standard web schemes, use FilenameFromPath
+			// which properly handles URL decoding via ParseVirtualPathStr
+			if platformsshared.ShouldDecodeURIScheme(scheme) {
+				decodedFilename := FilenameFromPath(path) // URL-decoded filename
+
+				if platformsshared.IsStandardSchemeForDecoding(scheme) {
+					// For http/https, only parse extension if there's a path component
+					// (URLs without paths like "https://example.com" shouldn't have .com treated as extension)
+					info.Filename = decodedFilename
+					rest := path[schemeEnd+3:] // Skip "://"
+					if strings.Contains(rest, "/") {
+						// Has path component - parse extension from filename
+						info.Extension = getPathExt(decodedFilename)
+						info.Name = strings.TrimSuffix(decodedFilename, info.Extension)
+					} else {
+						// No path component (bare domain) - no extension
+						info.Extension = ""
+						info.Name = decodedFilename
+					}
+				} else {
+					// For custom Zaparoo schemes (steam://, kodi-*://, etc.), no extension
+					info.Filename = decodedFilename
+					info.Extension = ""
+					info.Name = decodedFilename
+				}
+				return info
+			}
+		}
+	}
+
+	// Regular file paths or URIs that don't need decoding
 	info.Filename = getPathBase(path)
 	info.Extension = getPathExt(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)
@@ -457,86 +498,103 @@ func FindLauncher(
 	return launcher, nil
 }
 
+// LaunchParams contains all dependencies required for launching media.
+type LaunchParams struct {
+	Platform       platforms.Platform
+	Config         *config.Instance
+	SetActiveMedia func(*models.ActiveMedia)
+	Launcher       *platforms.Launcher
+	DB             *database.Database
+	Path           string
+}
+
 // DoLaunch launches the given path and updates the active media with it if
 // it was successful.
-func DoLaunch(
-	cfg *config.Instance,
-	pl platforms.Platform,
-	setActiveMedia func(*models.ActiveMedia),
-	launcher *platforms.Launcher,
-	path string,
-) error {
-	log.Debug().Msgf("launching with: %v", launcher)
+func DoLaunch(params *LaunchParams) error {
+	log.Debug().Msgf("launching with: %v", params.Launcher)
 
 	// Stop any currently running launcher before starting new one
 	// This ensures tracked processes (like videos) are stopped even when
 	// FireAndForget launches (like MGL files) start
-	if stopErr := pl.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+	if stopErr := params.Platform.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
 		log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
 	}
 
 	// Handle different lifecycle modes
-	switch launcher.Lifecycle {
+	switch params.Launcher.Lifecycle {
 	case platforms.LifecycleTracked:
 		// Launch and store process handle for future stopping
-		proc, err := launcher.Launch(cfg, path)
+		proc, err := params.Launcher.Launch(params.Config, params.Path)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
 		// Store process in platform for tracking and later killing
 		if proc != nil {
-			pl.SetTrackedProcess(proc)
+			params.Platform.SetTrackedProcess(proc)
 		}
-		log.Debug().Msgf("launched tracked process for: %s", path)
+		log.Debug().Msgf("launched tracked process for: %s", params.Path)
 	case platforms.LifecycleBlocking:
 		// Launch in goroutine to avoid blocking the service
 		go func() {
-			log.Debug().Msgf("launching blocking process for: %s", path)
-			proc, err := launcher.Launch(cfg, path)
+			log.Debug().Msgf("launching blocking process for: %s", params.Path)
+			proc, err := params.Launcher.Launch(params.Config, params.Path)
 			if err != nil {
-				log.Error().Err(err).Msgf("blocking launcher failed for: %s", path)
-				setActiveMedia(nil)
+				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
+				params.SetActiveMedia(nil)
 				return
 			}
 
 			// Store process in platform for tracking (blocking processes can also be killed)
 			if proc != nil {
-				pl.SetTrackedProcess(proc)
+				params.Platform.SetTrackedProcess(proc)
 
 				// Wait for process to finish naturally
 				_, waitErr := proc.Wait()
 				if waitErr != nil {
-					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", path)
+					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", params.Path)
 				} else {
-					log.Debug().Msgf("blocking process completed for: %s", path)
+					log.Debug().Msgf("blocking process completed for: %s", params.Path)
 				}
 
 				// Clear active media when process ends (naturally or killed)
-				setActiveMedia(nil)
-				log.Debug().Msgf("cleared active media after blocking process ended: %s", path)
+				params.SetActiveMedia(nil)
+				log.Debug().Msgf("cleared active media after blocking process ended: %s", params.Path)
 			}
 		}()
 	case platforms.LifecycleFireAndForget:
 		// Default behavior - just launch and forget (ignore process)
-		_, err := launcher.Launch(cfg, path)
+		_, err := params.Launcher.Launch(params.Config, params.Path)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
 	}
 
-	systemMeta, err := assets.GetSystemMetadata(launcher.SystemID)
+	systemMeta, err := assets.GetSystemMetadata(params.Launcher.SystemID)
 	if err != nil {
-		log.Warn().Err(err).Msgf("no system metadata for: %s", launcher.SystemID)
+		log.Warn().Err(err).Msgf("no system metadata for: %s", params.Launcher.SystemID)
+	}
+
+	// Try to get clean display name from database first
+	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Name, false)
+	if params.DB != nil && params.DB.MediaDB != nil {
+		systems := []systemdefs.System{{ID: params.Launcher.SystemID}}
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(systems, params.Path)
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			displayName = results[0].Name
+			log.Debug().Str("path", params.Path).Msg("using indexed display name")
+		} else {
+			log.Debug().Str("path", params.Path).Msg("media not indexed, using filename")
+		}
 	}
 
 	// Set active media immediately (non-blocking for all lifecycle modes)
-	setActiveMedia(&models.ActiveMedia{
-		LauncherID: launcher.ID,
-		SystemID:   launcher.SystemID,
-		SystemName: systemMeta.Name,
-		Name:       GetPathInfo(path).Name,
-		Path:       path,
-	})
+	params.SetActiveMedia(models.NewActiveMedia(
+		params.Launcher.SystemID,
+		systemMeta.Name,
+		params.Path,
+		displayName,
+		params.Launcher.ID,
+	))
 
 	return nil
 }

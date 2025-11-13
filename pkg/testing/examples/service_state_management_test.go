@@ -393,7 +393,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		userDB := helpers.NewMockUserDBI()
 		mediaDB := helpers.NewMockMediaDBI()
 
-		_ = &database.Database{
+		db := &database.Database{
 			UserDB:  userDB,
 			MediaDB: mediaDB,
 		}
@@ -402,8 +402,11 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		userDB.On("AddHistory", helpers.HistoryEntryMatcher()).Return(nil)
 		mediaDB.On("SearchMediaPathExact", fixtures.GetTestSystemDefs(),
 			helpers.TextMatcher()).Return(fixtures.SearchResults.Collection, nil)
-		platform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"),
-			mock.AnythingOfType("string"), (*platforms.Launcher)(nil)).Return(nil)
+		platform.On("LaunchMedia",
+			mock.AnythingOfType("*config.Instance"),
+			mock.AnythingOfType("string"),
+			(*platforms.Launcher)(nil),
+			mock.AnythingOfType("*database.Database")).Return(nil)
 
 		// Simulate token processing that updates state
 		sampleTokens := fixtures.SampleTokens()
@@ -432,7 +435,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Use the first search result path for launch
 		mediaPath := searchResults[0].Path
-		err = platform.LaunchMedia(cfg, mediaPath, nil)
+		err = platform.LaunchMedia(cfg, mediaPath, nil, db)
 		require.NoError(t, err)
 
 		// 5. Record history

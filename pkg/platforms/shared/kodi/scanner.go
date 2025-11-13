@@ -26,6 +26,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
 // ScanMovies scans movies from Kodi library using the provided client
@@ -44,7 +45,7 @@ func ScanMovies(
 	for _, movie := range movies {
 		results = append(results, platforms.ScanResult{
 			Name:  movie.Label,
-			Path:  helpers.CreateVirtualPath(SchemeKodiMovie, fmt.Sprintf("%d", movie.ID), movie.Label),
+			Path:  helpers.CreateVirtualPath(shared.SchemeKodiMovie, fmt.Sprintf("%d", movie.ID), movie.Label),
 			NoExt: true,
 		})
 	}
@@ -75,7 +76,7 @@ func ScanTV(
 			label := show.Label + " - " + ep.Label
 			results = append(results, platforms.ScanResult{
 				Name:  label,
-				Path:  helpers.CreateVirtualPath(SchemeKodiEpisode, fmt.Sprintf("%d", ep.ID), label),
+				Path:  helpers.CreateVirtualPath(shared.SchemeKodiEpisode, fmt.Sprintf("%d", ep.ID), label),
 				NoExt: true,
 			})
 		}
@@ -101,7 +102,7 @@ func ScanSongs(
 		name := song.Artist + " - " + song.Label
 		results = append(results, platforms.ScanResult{
 			Name:  name,
-			Path:  helpers.CreateVirtualPath(SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),
+			Path:  helpers.CreateVirtualPath(shared.SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),
 			NoExt: true,
 		})
 	}
@@ -129,7 +130,7 @@ func ScanAlbums(
 		}
 		results = append(results, platforms.ScanResult{
 			Name:  name,
-			Path:  helpers.CreateVirtualPath(SchemeKodiAlbum, fmt.Sprintf("%d", album.ID), name),
+			Path:  helpers.CreateVirtualPath(shared.SchemeKodiAlbum, fmt.Sprintf("%d", album.ID), name),
 			NoExt: true,
 		})
 	}
@@ -158,7 +159,7 @@ func ScanArtists(
 
 		results = append(results, platforms.ScanResult{
 			Name:  artist.Label,
-			Path:  helpers.CreateVirtualPath(SchemeKodiArtist, fmt.Sprintf("%d", artist.ID), artist.Label),
+			Path:  helpers.CreateVirtualPath(shared.SchemeKodiArtist, fmt.Sprintf("%d", artist.ID), artist.Label),
 			NoExt: true,
 		})
 	}
@@ -182,7 +183,7 @@ func ScanTVShows(
 	for _, show := range shows {
 		results = append(results, platforms.ScanResult{
 			Name:  show.Label,
-			Path:  helpers.CreateVirtualPath(SchemeKodiShow, fmt.Sprintf("%d", show.ID), show.Label),
+			Path:  helpers.CreateVirtualPath(shared.SchemeKodiShow, fmt.Sprintf("%d", show.ID), show.Label),
 			NoExt: true,
 		})
 	}

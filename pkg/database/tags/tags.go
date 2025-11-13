@@ -101,6 +101,11 @@ const (
 	TagTypeMameParent    TagType = "mameparent"    // MAME parent ROM relationship
 	TagTypeRegion        TagType = "region"        // Release region
 	TagTypeYear          TagType = "year"          // Release year
+	TagTypeSeason        TagType = "season"        // TV show season number
+	TagTypeEpisode       TagType = "episode"       // TV show episode number
+	TagTypeTrack         TagType = "track"         // Music track number
+	TagTypeIssue         TagType = "issue"         // Comic/magazine issue number
+	TagTypeVolume        TagType = "volume"        // Comic/manga/book volume number
 	TagTypeVideo         TagType = "video"         // Video format (NTSC, PAL, etc.)
 	TagTypeCopyright     TagType = "copyright"     // Copyright status (TOSEC)
 	TagTypeDump          TagType = "dump"          // Dump quality/status

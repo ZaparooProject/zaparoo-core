@@ -512,20 +512,27 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 			log.Err(err).Msg("error getting system metadata")
 		} else {
 			resultSystem.Name = metadata.Name
+			resultSystem.Category = metadata.Category
+			if metadata.ReleaseDate != "" {
+				resultSystem.ReleaseDate = &metadata.ReleaseDate
+			}
+			if metadata.Manufacturer != "" {
+				resultSystem.Manufacturer = &metadata.Manufacturer
+			}
 		}
 
-		// Build launch command in memory using data from query
-		launchCommand := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
+		// Build zapscript command in memory using data from query
+		zapScript := fmt.Sprintf("@%s/%s", result.SystemID, result.Name)
 		if result.Year != nil && *result.Year != "" {
-			launchCommand = fmt.Sprintf("%s (year:%s)", launchCommand, *result.Year)
+			zapScript = fmt.Sprintf("%s (year:%s)", zapScript, *result.Year)
 		}
 
 		results = append(results, models.SearchResultMedia{
-			System:        resultSystem,
-			Name:          result.Name,
-			Path:          result.Path,
-			LaunchCommand: launchCommand,
-			Tags:          result.Tags,
+			System:    resultSystem,
+			Name:      result.Name,
+			Path:      result.Path,
+			ZapScript: zapScript,
+			Tags:      result.Tags,
 		})
 	}
 
@@ -615,6 +622,8 @@ func HandleMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic // si
 		}
 
 		resp.Active = append(resp.Active, models.ActiveMedia{
+			Started:    activeMedia.Started,
+			LauncherID: activeMedia.LauncherID,
 			SystemID:   system.ID,
 			SystemName: system.Name,
 			Name:       activeMedia.Name,
@@ -706,14 +715,15 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 		return nil, fmt.Errorf("error getting system metadata: %w", err)
 	}
 
-	activeMedia := models.ActiveMedia{
-		SystemID:   system.ID,
-		SystemName: systemMeta.Name,
-		Name:       params.MediaName,
-		Path:       params.MediaPath,
-	}
+	activeMedia := models.NewActiveMedia(
+		system.ID,
+		systemMeta.Name,
+		params.MediaPath,
+		params.MediaName,
+		"", // LauncherID unknown when set via API
+	)
 
-	env.State.SetActiveMedia(&activeMedia)
+	env.State.SetActiveMedia(activeMedia)
 	return NoContent{}, nil
 }
 
@@ -726,6 +736,8 @@ func HandleActiveMedia(env requests.RequestEnv) (any, error) { //nolint:gocritic
 	}
 
 	return models.ActiveMedia{
+		Started:    media.Started,
+		LauncherID: media.LauncherID,
 		SystemID:   media.SystemID,
 		SystemName: media.SystemName,
 		Name:       media.Name,
