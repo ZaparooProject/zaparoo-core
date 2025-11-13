@@ -20,12 +20,14 @@
 package installer
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"text/template"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -153,10 +155,34 @@ func doInstallService(cmd helpers.CommandExecutor) error {
 		return errors.New("service install must not be run as root")
 	}
 
-	// Check if application is installed first
-	binaryPath := filepath.Join(xdg.Home, ".local", "bin", "zaparoo")
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		return errors.New("application must be installed first (run: zaparoo -install application)")
+	// Get current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Resolve symlinks (important for AppImage)
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve executable path: %w", err)
+	}
+
+	// Create template data
+	type ServiceData struct {
+		ExecPath string
+	}
+	data := ServiceData{ExecPath: execPath}
+
+	// Parse service file as template
+	tmpl, err := template.New("service").Parse(systemdServiceFile)
+	if err != nil {
+		return fmt.Errorf("failed to parse service template: %w", err)
+	}
+
+	// Execute template
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute service template: %w", err)
 	}
 
 	// Install systemd user service
@@ -167,7 +193,7 @@ func doInstallService(cmd helpers.CommandExecutor) error {
 
 	servicePath := filepath.Join(systemdDir, "zaparoo.service")
 	//nolint:gosec // Service file needs to be readable by systemd
-	if err := os.WriteFile(servicePath, []byte(systemdServiceFile), 0o644); err != nil {
+	if err := os.WriteFile(servicePath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("error writing systemd service file: %w", err)
 	}
 
@@ -186,10 +212,34 @@ func InstallDesktop() error {
 		return errors.New("desktop install must not be run as root")
 	}
 
-	// Check if application is installed first
-	binaryPath := filepath.Join(xdg.Home, ".local", "bin", "zaparoo")
-	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		return errors.New("application must be installed first (run: zaparoo -install application)")
+	// Get current executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Resolve symlinks (important for AppImage)
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve executable path: %w", err)
+	}
+
+	// Create template data
+	type DesktopData struct {
+		ExecPath string
+	}
+	data := DesktopData{ExecPath: execPath}
+
+	// Parse desktop file as template
+	tmpl, err := template.New("desktop").Parse(desktopFile)
+	if err != nil {
+		return fmt.Errorf("failed to parse desktop template: %w", err)
+	}
+
+	// Execute template
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute desktop template: %w", err)
 	}
 
 	// Install desktop shortcut to ~/Desktop
@@ -202,7 +252,7 @@ func InstallDesktop() error {
 	}
 
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := os.WriteFile(desktopPath, []byte(desktopFile), 0o755); err != nil {
+	if err := os.WriteFile(desktopPath, buf.Bytes(), 0o755); err != nil {
 		return fmt.Errorf("error writing desktop shortcut: %w", err)
 	}
 

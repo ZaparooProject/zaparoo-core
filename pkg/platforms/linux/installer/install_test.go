@@ -138,18 +138,12 @@ func TestInstallService(t *testing.T) {
 		expectError   bool
 	}{
 		{
-			name:        "successful installation with application present",
+			name:        "successful installation",
 			setupBinary: true,
 			setupMock: func(_ *mocks.MockCommandExecutor) {
 				// Commands succeed by default from helper
 			},
 			expectError: false,
-		},
-		{
-			name:          "fails when application not installed",
-			setupBinary:   false,
-			expectError:   true,
-			errorContains: "application must be installed first",
 		},
 		{
 			name:        "daemon-reload fails silently",
@@ -223,15 +217,9 @@ func TestInstallDesktop(t *testing.T) {
 		expectError   bool
 	}{
 		{
-			name:        "successful installation with application present",
+			name:        "successful installation",
 			setupBinary: true,
 			expectError: false,
-		},
-		{
-			name:          "fails when application not installed",
-			setupBinary:   false,
-			expectError:   true,
-			errorContains: "application must be installed first",
 		},
 	}
 

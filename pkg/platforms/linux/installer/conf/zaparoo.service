@@ -5,7 +5,7 @@ After=graphical-session.target dbus.service
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/zaparoo -daemon
+ExecStart={{.ExecPath}} -daemon
 Restart=on-failure
 RestartSec=5s
 

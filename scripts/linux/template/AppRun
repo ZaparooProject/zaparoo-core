@@ -4,7 +4,9 @@ export PATH="${APPDIR}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${LD_LIBRARY_PATH}"
 
 if [ $# -eq 0 ]; then
-    exec "${APPDIR}/usr/bin/zaparoo" -gui
+    # Double-click mode: start service and open browser
+    exec "${APPDIR}/usr/bin/zaparoo" -start
 else
+    # CLI mode: pass through all arguments to zaparoo
     exec "${APPDIR}/usr/bin/zaparoo" "$@"
 fi

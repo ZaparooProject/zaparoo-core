@@ -24,15 +24,19 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -40,13 +44,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rs/zerolog/log"
 )
-
-//go:embed app/systrayicon.png
-var systrayIcon []byte
 
 func main() {
 	if err := run(); err != nil {
@@ -76,10 +76,10 @@ func run() error {
 		false,
 		"run service in foreground with no UI",
 	)
-	guiMode := flag.Bool(
-		"gui",
+	start := flag.Bool(
+		"start",
 		false,
-		"run service as daemon with system tray GUI",
+		"start service and open web UI in browser",
 	)
 
 	flags.Pre(pl)
@@ -156,7 +156,7 @@ func run() error {
 	}
 
 	var logWriters []io.Writer
-	if *daemonMode || *guiMode {
+	if *daemonMode {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
@@ -165,6 +165,11 @@ func run() error {
 		config.BaseDefaults,
 		logWriters,
 	)
+
+	// Handle start mode (for AppImage and desktop entry)
+	if *start {
+		return startAndOpenBrowser(cfg)
+	}
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -208,10 +213,6 @@ func run() error {
 	switch {
 	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
-	case *guiMode:
-		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
-			exit <- true
-		})
 	default:
 		// default to showing the TUI
 		app, err := tui.BuildMain(
@@ -240,4 +241,75 @@ func run() error {
 	}
 
 	return nil
+}
+
+func startAndOpenBrowser(cfg *config.Instance) error {
+	// Get actual API port from config
+	port := cfg.APIPort()
+	webURL := fmt.Sprintf("http://localhost:%d/app/", port)
+
+	// Check if API is already responding
+	apiURL := fmt.Sprintf("http://localhost:%d/api/v0.1/ping", port)
+	if isAPIRespondingAt(apiURL) {
+		// Service already running - just open browser
+		_, _ = fmt.Fprintln(os.Stderr, "Service is already running")
+		return openBrowser(webURL)
+	}
+
+	// All status messages go to stderr
+	_, _ = fmt.Fprintln(os.Stderr, "Service not running, attempting to start...")
+
+	// Check if systemd service is installed
+	ctx := context.Background()
+	checkCmd := exec.CommandContext(ctx, "systemctl", "--user", "status", "zaparoo")
+	if err := checkCmd.Run(); err != nil {
+		// Service not installed, install it
+		_, _ = fmt.Fprintln(os.Stderr, "Service not installed, installing...")
+		if err := installer.InstallService(); err != nil {
+			return fmt.Errorf("failed to install service: %w", err)
+		}
+		_, _ = fmt.Fprintln(os.Stderr, "Service installed successfully")
+	}
+
+	// Start the service
+	_, _ = fmt.Fprintln(os.Stderr, "Starting service...")
+	startCmd := exec.CommandContext(ctx, "systemctl", "--user", "start", "zaparoo")
+	if err := startCmd.Run(); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
+	}
+
+	// Wait for API to respond (with retries)
+	_, _ = fmt.Fprintln(os.Stderr, "Waiting for service to be ready...")
+	for range 30 {
+		if isAPIRespondingAt(apiURL) {
+			_, _ = fmt.Fprintln(os.Stderr, "Service is ready")
+			return openBrowser(webURL)
+		}
+		time.Sleep(time.Second)
+	}
+
+	return errors.New("service failed to start within 30 seconds")
+}
+
+func openBrowser(url string) error {
+	_, _ = fmt.Fprintf(os.Stderr, "Opening %s in browser...\n", url)
+
+	cmd := exec.CommandContext(context.Background(), "xdg-open", url)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to open browser: %w", err)
+	}
+	return nil
+}
+
+func isAPIRespondingAt(url string) bool {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode == http.StatusOK
 }
