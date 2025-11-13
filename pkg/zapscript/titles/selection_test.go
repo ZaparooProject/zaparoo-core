@@ -911,3 +911,103 @@ func TestFilterByFileTypePriority(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectBest_SingleResultVariant(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		description  string
+		results      []database.SearchResultWithCursor
+		matchQuality float64
+		wantSelected bool
+	}{
+		{
+			name: "single result with unlicensed:translation should be selected (FTL regression)",
+			results: []database.SearchResultWithCursor{
+				{
+					MediaID:  1,
+					Name:     "FTL: Faster Than Light",
+					Path:     "steam://212680/FTL",
+					SystemID: "PC",
+					Tags: []database.TagInfo{
+						{Type: string(tags.TagTypeUnlicensed), Tag: string(tags.TagUnlicensedTranslation)},
+					},
+				},
+			},
+			matchQuality: 1.0,
+			wantSelected: true,
+			description:  "single result should be selected even if it's a variant",
+		},
+		{
+			name: "single result with demo tag should be selected",
+			results: []database.SearchResultWithCursor{
+				{
+					MediaID:  1,
+					Name:     "Game Demo",
+					Path:     "/path/to/demo",
+					SystemID: "PC",
+					Tags: []database.TagInfo{
+						{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedDemo)},
+					},
+				},
+			},
+			matchQuality: 1.0,
+			wantSelected: true,
+			description:  "single demo result should be selected",
+		},
+		{
+			name: "single result with beta tag should be selected",
+			results: []database.SearchResultWithCursor{
+				{
+					MediaID:  1,
+					Name:     "Game Beta",
+					Path:     "/path/to/beta",
+					SystemID: "PC",
+					Tags: []database.TagInfo{
+						{Type: string(tags.TagTypeUnfinished), Tag: string(tags.TagUnfinishedBeta)},
+					},
+				},
+			},
+			matchQuality: 1.0,
+			wantSelected: true,
+			description:  "single beta result should be selected",
+		},
+		{
+			name: "single result with no variant tags should be selected",
+			results: []database.SearchResultWithCursor{
+				{
+					MediaID:  1,
+					Name:     "Regular Game",
+					Path:     "/path/to/game",
+					SystemID: "PC",
+					Tags:     []database.TagInfo{},
+				},
+			},
+			matchQuality: 1.0,
+			wantSelected: true,
+			description:  "single normal result should be selected",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, confidence := SelectBestResult(
+				tt.results,
+				[]database.TagFilter{},
+				nil, // cfg
+				tt.matchQuality,
+				[]platforms.Launcher{},
+			)
+
+			if tt.wantSelected {
+				assert.NotZero(t, confidence, "expected result to be selected but confidence was 0")
+				assert.Equal(t, tt.results[0].MediaID, result.MediaID, "wrong result selected")
+			} else {
+				assert.Zero(t, confidence, "expected result to be rejected but confidence was non-zero")
+			}
+		})
+	}
+}

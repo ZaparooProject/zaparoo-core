@@ -1359,18 +1359,20 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			advArgs: map[string]string{"tags": "-region:us"},
 		},
 		{
-			name:          "error_variant_proto_excluded",
-			input:         "Genesis/Plumber Quest Adventures Ultimate Edition",
-			expectedError: true,
-			description: "Prototype variant should be excluded by default variant filtering " +
-				"(only (Proto) exists in DB)",
+			name:             "single_variant_proto_now_selected",
+			input:            "Genesis/Plumber Quest Adventures Ultimate Edition",
+			expectedPath:     "/roms/genesis/Plumber Proto (USA).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Prototype variant is selected when it's the only match " +
+				"(Fix #2: single results bypass variant exclusion)",
 		},
 		{
-			name:          "error_only_beta_variant_exists",
-			input:         "Genesis/Lost Project",
-			expectedError: true,
-			description: "Game with ONLY beta variant and no release version should fail " +
-				"(variants excluded by default)",
+			name:             "single_variant_beta_now_selected",
+			input:            "Genesis/Lost Project",
+			expectedPath:     "/roms/genesis/Lost Project (Beta).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Beta variant is selected when it's the only match " +
+				"(Fix #2: single results bypass variant exclusion)",
 		},
 		{
 			name:          "error_only_demo_and_beta_variants_exist",

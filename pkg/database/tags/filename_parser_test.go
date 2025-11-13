@@ -650,13 +650,10 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			wantRemaining: "Secret of Mana sfc",
 		},
 		{
-			name:     "TFre generic translation",
-			filename: "Chrono Trigger TFre.smc",
-			wantTags: []CanonicalTag{
-				{Type: TagTypeUnlicensed, Value: TagUnlicensedTranslation, Source: TagSourceInferred},
-				{Type: TagTypeLang, Value: TagLangFR, Source: TagSourceInferred},
-			},
-			wantRemaining: "Chrono Trigger smc",
+			name:          "TFre without +/- should NOT match (regression: avoid false positives)",
+			filename:      "Chrono Trigger TFre.smc",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Chrono Trigger TFre.smc",
 		},
 		{
 			name:     "T+Eng v1.0 with version",
@@ -733,6 +730,30 @@ func TestExtractSpecialPatterns_BracketlessTranslation(t *testing.T) {
 			filename:      "ATP Tennis (USA).rom",
 			wantTags:      []CanonicalTag{},
 			wantRemaining: "ATP Tennis (USA).rom",
+		},
+		{
+			name:          "FTL should not match translation tag (regression test)",
+			filename:      "FTL: Faster Than Light",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "FTL: Faster Than Light",
+		},
+		{
+			name:          "The Legend should not match translation tag",
+			filename:      "The Legend of Zelda",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "The Legend of Zelda",
+		},
+		{
+			name:          "Tony Hawk should not match translation tag",
+			filename:      "Tony Hawk's Pro Skater",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Tony Hawk's Pro Skater",
+		},
+		{
+			name:          "Team Fortress should not match translation tag",
+			filename:      "Team Fortress 2",
+			wantTags:      []CanonicalTag{},
+			wantRemaining: "Team Fortress 2",
 		},
 	}
 
@@ -827,15 +848,6 @@ func TestParseBracketlessTranslation_FullPipeline(t *testing.T) {
 				"unlicensed:translation:old",
 				"lang:de",
 				"region:eu",
-			},
-		},
-		{
-			name:     "TFre without version",
-			filename: "Chrono Trigger TFre (France).smc",
-			wantContains: []string{
-				"unlicensed:translation",
-				"lang:fr",
-				"region:fr",
 			},
 		},
 		{

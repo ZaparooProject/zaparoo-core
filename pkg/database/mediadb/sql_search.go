@@ -54,19 +54,22 @@ func fetchAndAttachTags(
 		mediaIDs[i] = result.MediaID
 	}
 
-	// Query tags for all media IDs using LEFT JOIN for robustness
+	// Query tags for all media IDs from both MediaTags (file-level) and MediaTitleTags (title-level)
 	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?"
 	tagsQuery := `
-		SELECT
-			MediaTags.MediaDBID,
+		SELECT DISTINCT
+			Media.DBID as MediaDBID,
 			Tags.Tag,
 			COALESCE(TagTypes.Type, '') as Type
-		FROM MediaTags
-		INNER JOIN Tags ON MediaTags.TagDBID = Tags.DBID
+		FROM Media
+		LEFT JOIN MediaTags ON MediaTags.MediaDBID = Media.DBID
+		LEFT JOIN MediaTitleTags ON MediaTitleTags.MediaTitleDBID = Media.MediaTitleDBID
+		LEFT JOIN Tags ON (Tags.DBID = MediaTags.TagDBID OR Tags.DBID = MediaTitleTags.TagDBID)
 		LEFT JOIN TagTypes ON Tags.TypeDBID = TagTypes.DBID
-		WHERE MediaTags.MediaDBID IN (` +
+		WHERE Media.DBID IN (` +
 		prepareVariadic("?", ",", len(mediaIDs)) +
-		`) ORDER BY MediaTags.MediaDBID, TagTypes.Type, Tags.Tag`
+		`) AND Tags.DBID IS NOT NULL
+		ORDER BY Media.DBID, TagTypes.Type, Tags.Tag`
 
 	tagsArgs := make([]any, len(mediaIDs))
 	for i, id := range mediaIDs {

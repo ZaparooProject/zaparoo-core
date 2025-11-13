@@ -34,7 +34,7 @@ var (
 	reRev                = regexp.MustCompile(`(?i)\(Rev[\s-]([A-Z0-9]+)\)`)
 	reVersion            = regexp.MustCompile(`(?i)\(v(\d+(?:\.\d+)*)\)`)
 	reYear               = regexp.MustCompile(`\((19[789]\d|20\d{2})\)`)
-	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-]?)([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
+	reTrans              = regexp.MustCompile(`(^|\s)(T)([+-])([A-Za-z]{2,3})(?:\s+v(\d+(?:\.\d+)*))?(?:\s|[.]|$)`)
 	reTransBracketed     = regexp.MustCompile(`^T([+-]?)([A-Za-z]{2,3})(?:.*?v(\d+(?:\.\d+)*))?`)
 	reBracketlessVersion = regexp.MustCompile(`\bv(\d+(?:\.\d+)*)`)
 	reEditionWord        = regexp.MustCompile(
@@ -477,39 +477,30 @@ func extractSpecialPatterns(filename string) (tags []CanonicalTag, remaining str
 	}
 
 	// Pattern 9: Bracketless translation tags - "T+Eng", "T-Ger", "T+Spa v1.2"
-	// Format: T[+-]?<lang_code>( v<version>)?
-	// Examples: "T+Eng", "T-Ger", "TFre", "T+Eng v1.0", "T+Spa v2.1.3"
+	// Format: T[+-]<lang_code>( v<version>)?
+	// Examples: "T+Eng", "T-Ger", "T+Eng v1.0", "T+Spa v2.1.3"
+	// Note: +/- is REQUIRED to avoid false positives (e.g., "FTL", "The Legend")
 	// Must be standalone: preceded by space (captured) OR at start, followed by space/dot/end
 	if indices := reTrans.FindStringSubmatchIndex(remaining); len(indices) >= 10 {
 		// indices[0:2] = full match
 		// indices[2:4] = prefix (^ or space)
 		// indices[4:6] = "T"
-		// indices[6:8] = +/- or empty
+		// indices[6:8] = +/- (required)
 		// indices[8:10] = language code
 		// indices[10:12] = version number or empty (if present)
-		plusMinus := ""
-		if indices[6] != -1 {
-			plusMinus = remaining[indices[6]:indices[7]]
-		}
+		plusMinus := remaining[indices[6]:indices[7]]
 		langCode := strings.ToLower(remaining[indices[8]:indices[9]])
 		versionNum := ""
 		if len(indices) > 11 && indices[10] != -1 {
 			versionNum = remaining[indices[10]:indices[11]]
 		}
 
-		// Only process if it's a valid translation tag pattern:
-		// - Has +/- prefix (T+Eng, T-Ger), OR
-		// - Language code is exactly 3 letters (TFre, TEng)
-		isValid := plusMinus != "" || len(langCode) == 3
+		// Use shared tag building logic (inferred from plain text, not bracketed)
+		transTags := buildTranslationTags(plusMinus, langCode, versionNum, TagSourceInferred)
+		tags = append(tags, transTags...)
 
-		if isValid {
-			// Use shared tag building logic (inferred from plain text, not bracketed)
-			transTags := buildTranslationTags(plusMinus, langCode, versionNum, TagSourceInferred)
-			tags = append(tags, transTags...)
-
-			// Replace the matched pattern with a space to preserve word boundaries
-			remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
-		}
+		// Replace the matched pattern with a space to preserve word boundaries
+		remaining = remaining[:indices[0]] + " " + remaining[indices[1]:]
 	}
 
 	// Pattern 7: Bracketless version tags (if not part of translation) - "v1.0", "v1.2.3"
