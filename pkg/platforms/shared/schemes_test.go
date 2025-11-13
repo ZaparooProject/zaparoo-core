@@ -20,6 +20,7 @@
 package shared
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -306,4 +307,35 @@ func TestStandardSchemesForDecoding(t *testing.T) {
 	// Should contain http and https
 	assert.Contains(t, schemes, "http", "StandardSchemesForDecoding should contain http")
 	assert.Contains(t, schemes, "https", "StandardSchemesForDecoding should contain https")
+}
+
+func TestAllSchemesAreUnique(t *testing.T) {
+	t.Parallel()
+
+	// Collect all schemes (case-insensitive)
+	seen := make(map[string]string) // lowercase -> original
+
+	// Check custom schemes for duplicates
+	for _, scheme := range customSchemes {
+		lower := strings.ToLower(scheme)
+		if original, exists := seen[lower]; exists {
+			t.Errorf("duplicate scheme found (case-insensitive): %q and %q both resolve to %q",
+				original, scheme, lower)
+		}
+		seen[lower] = scheme
+	}
+
+	// Check standard schemes for duplicates
+	for _, scheme := range standardSchemesForDecoding {
+		lower := strings.ToLower(scheme)
+		if original, exists := seen[lower]; exists {
+			t.Errorf("duplicate scheme found (case-insensitive): %q and %q both resolve to %q",
+				original, scheme, lower)
+		}
+		seen[lower] = scheme
+	}
+
+	// Verify we have at least 12 unique schemes (6 custom + 6 kodi + 2 standard)
+	assert.GreaterOrEqual(t, len(seen), 12,
+		"should have at least 12 unique schemes across custom and standard")
 }

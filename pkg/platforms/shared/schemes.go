@@ -29,6 +29,8 @@ const (
 	SchemeFlashpoint = "flashpoint"
 	SchemeLaunchBox  = "launchbox"
 	SchemeScummVM    = "scummvm"
+	SchemeLutris     = "lutris"
+	SchemeHeroic     = "heroic"
 )
 
 // Kodi URI scheme constants for Kodi media library items.
@@ -53,6 +55,8 @@ var customSchemes = []string{
 	SchemeFlashpoint,
 	SchemeLaunchBox,
 	SchemeScummVM,
+	SchemeLutris,
+	SchemeHeroic,
 	SchemeKodiMovie,
 	SchemeKodiEpisode,
 	SchemeKodiSong,

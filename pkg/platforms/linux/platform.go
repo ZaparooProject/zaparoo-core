@@ -35,8 +35,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -231,6 +233,79 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		NewSteamLauncher(),
+		{
+			ID:        "WebBrowser",
+			Schemes:   []string{"http", "https"},
+			Lifecycle: platforms.LifecycleFireAndForget,
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				cmd := exec.CommandContext(context.Background(), "xdg-open", path)
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to open URL in browser: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Browser launches don't return a process handle
+			},
+		},
+		NewLutrisLauncher(),
+		{
+			ID:       "Heroic",
+			SystemID: systemdefs.SystemPC,
+			Schemes:  []string{shared.SchemeHeroic},
+			Scanner: func(
+				_ context.Context,
+				_ *config.Instance,
+				_ string,
+				results []platforms.ScanResult,
+			) ([]platforms.ScanResult, error) {
+				// Check if Heroic is installed
+				_, err := exec.LookPath("heroic")
+				if err != nil {
+					log.Debug().Err(err).Msg("Heroic Games Launcher not found in PATH, skipping scanner")
+					// Not an error condition - just means Heroic isn't installed
+					return results, nil
+				}
+
+				// Heroic stores library data in ~/.config/heroic/
+				// JSON files: legendary_library.json (Epic), gog_library.json (GOG)
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return results, fmt.Errorf("failed to get user home directory: %w", err)
+				}
+
+				heroicConfig := filepath.Join(home, ".config", "heroic")
+				if _, err := os.Stat(heroicConfig); os.IsNotExist(err) {
+					log.Debug().Msg("Heroic config directory not found")
+					return results, nil
+				}
+
+				// Note: Full JSON parsing would require library integration
+				// For now, we support manual heroic:// URIs through the scheme
+				// Future: Implement full library scanning with helpers.ScanHeroicGames()
+				log.Debug().Msg("Heroic config found, but scanner not yet implemented")
+				return results, nil
+			},
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				// Extract game app name from heroic://appName format
+				appName, err := helpers.ExtractSchemeID(path, shared.SchemeHeroic)
+				if err != nil {
+					return nil, fmt.Errorf("failed to extract Heroic game name from path: %w", err)
+				}
+
+				// Launch via heroic command
+				cmd := exec.CommandContext( //nolint:gosec // App name from internal database
+					context.Background(),
+					"heroic",
+					"launch",
+					appName,
+				)
+				err = cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to start Heroic Games Launcher: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Heroic launches don't return a process handle
+			},
+		},
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
