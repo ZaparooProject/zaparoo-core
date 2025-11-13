@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,9 +40,13 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
 	"github.com/rs/zerolog/log"
 )
+
+//go:embed app/systrayicon.png
+var systrayIcon []byte
 
 func main() {
 	if err := run(); err != nil {
@@ -51,47 +56,107 @@ func main() {
 }
 
 func run() error {
+	// Parse flags early for install/uninstall operations
+	install := flag.String(
+		"install",
+		"",
+		"install component: application, desktop, service, hardware",
+	)
+	uninstall := flag.String(
+		"uninstall",
+		"",
+		"uninstall component: application, desktop, service, hardware",
+	)
+
 	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool(
-		"install",
-		false,
-		"configure system for Zaparoo",
-	)
-	doUninstall := flag.Bool(
-		"uninstall",
-		false,
-		"revert Zaparoo system configuration",
-	)
 	daemonMode := flag.Bool(
 		"daemon",
 		false,
 		"run service in foreground with no UI",
 	)
+	guiMode := flag.Bool(
+		"gui",
+		false,
+		"run service as daemon with system tray GUI",
+	)
 
 	flags.Pre(pl)
 
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			return errors.New("installation failed")
-		}
-		return nil
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			return errors.New("uninstallation failed")
+	// Handle install operations
+	if *install != "" {
+		switch *install {
+		case "application":
+			if err := installer.InstallApplication(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("application installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Application installation complete")
+		case "desktop":
+			if err := installer.InstallDesktop(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("desktop installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Desktop installation complete")
+		case "service":
+			if err := installer.InstallService(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("service installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Service installation complete")
+		case "hardware":
+			if err := installer.InstallHardware(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("hardware installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Hardware installation complete")
+		default:
+			return fmt.Errorf("unknown component: %s (valid: application, desktop, service, hardware)", *install)
 		}
 		return nil
 	}
 
+	// Handle uninstall operations
+	if *uninstall != "" {
+		switch *uninstall {
+		case "application":
+			if err := installer.UninstallApplication(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("application uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Application uninstallation complete")
+		case "desktop":
+			if err := installer.UninstallDesktop(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("desktop uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Desktop uninstallation complete")
+		case "service":
+			if err := installer.UninstallService(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("service uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Service uninstallation complete")
+		case "hardware":
+			if err := installer.UninstallHardware(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("hardware uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Hardware uninstallation complete")
+		default:
+			return fmt.Errorf("unknown component: %s (valid: application, desktop, service, hardware)", *uninstall)
+		}
+		return nil
+	}
+
+	// Normal root check for regular operations
 	if os.Geteuid() == 0 {
 		return errors.New("zaparoo cannot be run as root")
 	}
 
 	var logWriters []io.Writer
-	if *daemonMode {
+	if *daemonMode || *guiMode {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
@@ -110,8 +175,11 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
+	var stopSvc func() error
 	if !helpers.IsServiceRunning(cfg) {
-		stopSvc, err := service.Start(pl, cfg)
+		log.Info().Msg("starting new service instance")
+		var err error
+		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
@@ -123,6 +191,10 @@ func run() error {
 				log.Error().Msgf("error stopping service: %s", err)
 			}
 		}()
+	} else {
+		log.Info().
+			Int("port", cfg.APIPort()).
+			Msg("connecting to existing service instance")
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -132,9 +204,15 @@ func run() error {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	if *daemonMode {
+	// Handle application modes
+	switch {
+	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
-	} else {
+	case *guiMode:
+		systray.Run(cfg, pl, systrayIcon, func(string) {}, func() {
+			exit <- true
+		})
+	default:
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,

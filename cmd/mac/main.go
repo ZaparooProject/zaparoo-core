@@ -97,6 +97,7 @@ func run() error {
 
 	var stopSvc func() error
 	if !helpers.IsServiceRunning(cfg) {
+		log.Info().Msg("starting new service instance")
 		var err error
 		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
@@ -110,6 +111,10 @@ func run() error {
 				log.Error().Msgf("error stopping service: %s", err)
 			}
 		}()
+	} else {
+		log.Info().
+			Int("port", cfg.APIPort()).
+			Msg("connecting to existing service instance")
 	}
 
 	sigs := make(chan os.Signal, 1)

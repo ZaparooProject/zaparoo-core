@@ -336,9 +336,15 @@ func YesNoPrompt(label string, def bool) bool {
 func IsServiceRunning(cfg *config.Instance) bool {
 	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
 	if err != nil {
-		log.Debug().Err(err).Msg("error checking if service running")
+		log.Debug().
+			Err(err).
+			Int("port", cfg.APIPort()).
+			Msg("service not detected on API port")
 		return false
 	}
+	log.Debug().
+		Int("port", cfg.APIPort()).
+		Msg("detected running service instance")
 	return true
 }
 
