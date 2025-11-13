@@ -108,6 +108,14 @@ func TestInstallApplication(t *testing.T) {
 				_, err = os.Stat(desktopPath)
 				require.NoError(t, err, "desktop file should be installed")
 
+				// Verify desktop file is properly templated with binary path
+				//nolint:gosec // Reading test fixture file for verification
+				desktopContent, err := os.ReadFile(desktopPath)
+				require.NoError(t, err, "should be able to read desktop file")
+				expectedPath := filepath.Join(xdg.Home, ".local", "bin", "zaparoo")
+				assert.Contains(t, string(desktopContent), "Exec="+expectedPath+" -start",
+					"desktop file should contain templated path, not {{.ExecPath}}")
+
 				// Verify all icon sizes were installed
 				iconSizes := []string{"16x16", "32x32", "48x48", "128x128", "256x256"}
 				for _, size := range iconSizes {

@@ -101,9 +101,25 @@ func doInstallApplication(cmd helpers.CommandExecutor) error {
 		return fmt.Errorf("error creating applications directory: %w", err)
 	}
 
+	// Template the desktop file with the installed binary path
+	type DesktopData struct {
+		ExecPath string
+	}
+	data := DesktopData{ExecPath: destBinary}
+
+	tmpl, tmplErr := template.New("desktop").Parse(desktopFile)
+	if tmplErr != nil {
+		return fmt.Errorf("failed to parse desktop template: %w", tmplErr)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute desktop template: %w", err)
+	}
+
 	desktopPath := filepath.Join(desktopDir, "zaparoo.desktop")
 	//nolint:gosec // Desktop file needs to be readable by desktop environment
-	if err := os.WriteFile(desktopPath, []byte(desktopFile), 0o644); err != nil {
+	if err := os.WriteFile(desktopPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("error writing desktop file: %w", err)
 	}
 
