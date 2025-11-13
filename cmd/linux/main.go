@@ -30,7 +30,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -249,8 +248,7 @@ func startAndOpenBrowser(cfg *config.Instance) error {
 	webURL := fmt.Sprintf("http://localhost:%d/app/", port)
 
 	// Check if API is already responding
-	apiURL := fmt.Sprintf("http://localhost:%d/api/v0.1/ping", port)
-	if isAPIRespondingAt(apiURL) {
+	if helpers.IsServiceRunning(cfg) {
 		// Service already running - just open browser
 		_, _ = fmt.Fprintln(os.Stderr, "Service is already running")
 		return openBrowser(webURL)
@@ -281,7 +279,7 @@ func startAndOpenBrowser(cfg *config.Instance) error {
 	// Wait for API to respond (with retries)
 	_, _ = fmt.Fprintln(os.Stderr, "Waiting for service to be ready...")
 	for range 30 {
-		if isAPIRespondingAt(apiURL) {
+		if helpers.IsServiceRunning(cfg) {
 			_, _ = fmt.Fprintln(os.Stderr, "Service is ready")
 			return openBrowser(webURL)
 		}
@@ -299,17 +297,4 @@ func openBrowser(url string) error {
 		return fmt.Errorf("failed to open browser: %w", err)
 	}
 	return nil
-}
-
-func isAPIRespondingAt(url string) bool {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
-	if err != nil {
-		return false
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return resp.StatusCode == http.StatusOK
 }
