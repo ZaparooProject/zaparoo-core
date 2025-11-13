@@ -29,7 +29,6 @@ DeviceAllow=/dev/ttyACM* rw
 DeviceAllow=/dev/bus/usb rw
 DeviceAllow=/dev/sr* r
 DeviceAllow=char-usb_device rw
-SupplementaryGroups=dialout cdrom
 
 # Security - Privileges
 NoNewPrivileges=true

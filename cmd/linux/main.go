@@ -166,7 +166,7 @@ func run() error {
 		logWriters,
 	)
 
-	// Handle start mode (for AppImage and desktop entry)
+	// Handle start mode (for desktop entry)
 	if *start {
 		return startAndOpenBrowser(cfg)
 	}

@@ -161,7 +161,7 @@ func doInstallService(cmd helpers.CommandExecutor) error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Resolve symlinks (important for AppImage)
+	// Resolve symlinks to get actual binary path
 	execPath, err = filepath.EvalSymlinks(execPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
@@ -218,7 +218,7 @@ func InstallDesktop() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Resolve symlinks (important for AppImage)
+	// Resolve symlinks to get actual binary path
 	execPath, err = filepath.EvalSymlinks(execPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
