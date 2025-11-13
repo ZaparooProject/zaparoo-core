@@ -170,7 +170,9 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -583,7 +585,6 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				//nolint:gosec // Safe: opens user-scanned URLs in default web browser
 				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
@@ -703,7 +704,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				cliLauncher := filepath.Join(lbDir, "ThirdParty", "CLI_Launcher", "CLI_Launcher.exe")
-				if _, err := os.Stat(cliLauncher); os.IsNotExist(err) {
+				if _, statErr := os.Stat(cliLauncher); os.IsNotExist(statErr) {
 					return nil, errors.New("CLI_Launcher not found")
 				}
 
