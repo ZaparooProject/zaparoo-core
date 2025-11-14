@@ -414,11 +414,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		}
 
 		launchers = append(launchers, platforms.Launcher{
-			ID:                 launcherID,
-			SystemID:           v.SystemID,
-			Extensions:         v.Extensions,
-			Folders:            []string{k},
-			SkipFilesystemScan: true, // Use gamelist.xml via Scanner, no filesystem scanning needed
+			ID:         launcherID,
+			SystemID:   v.SystemID,
+			Extensions: v.Extensions,
+			Folders:    []string{k},
+			// SkipFilesystemScan defaults to false - built-in scanner will find all ROM files
+			// Scanner function adds metadata from gamelist.xml
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 				err := esapi.APILaunch(path)
 				if err != nil {
@@ -430,66 +431,82 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				ctx context.Context,
 				cfg *config.Instance,
 				systemID string,
-				_ []platforms.ScanResult,
+				results []platforms.ScanResult,
 			) ([]platforms.ScanResult, error) {
-				results := []platforms.ScanResult{}
+				// Filter out metadata files as a defensive guard
+				metadataDirs := []string{"images", "videos", "manuals", "marquees", "thumbnails", "wheels", "fanart"}
+				filteredResults := make([]platforms.ScanResult, 0, len(results))
+				for _, result := range results {
+					// Skip gamelist.xml files
+					if strings.HasSuffix(strings.ToLower(result.Path), "gamelist.xml") {
+						continue
+					}
+
+					// Skip files in metadata directories
+					pathLower := strings.ToLower(result.Path)
+					inMetadataDir := false
+					for _, metaDir := range metadataDirs {
+						// Check if path contains /metadatadir/ (with separator on both sides)
+						if strings.Contains(pathLower, string(filepath.Separator)+metaDir+string(filepath.Separator)) {
+							inMetadataDir = true
+							break
+						}
+					}
+					if inMetadataDir {
+						continue
+					}
+
+					filteredResults = append(filteredResults, result)
+				}
+				results = filteredResults
 
 				batSysNames, err := toBatoceraSystems(systemID)
 				if err != nil {
-					return nil, err
+					return results, err
 				}
 
+				// Create map of existing results for quick lookup
+				resultMap := make(map[string]*platforms.ScanResult)
+				for i := range results {
+					resultMap[results[i].Path] = &results[i]
+				}
+
+				// Process each Batocera system name for this Zaparoo system
 				for _, batSysName := range batSysNames {
-					// Check for cancellation before processing each system
+					// Check for cancellation
 					select {
 					case <-ctx.Done():
-						return nil, ctx.Err()
+						return results, ctx.Err()
 					default:
 					}
 
+					// Try each root directory
 					for _, rootDir := range p.RootDirs(cfg) {
-						// Check for cancellation before processing each root directory
-						select {
-						case <-ctx.Done():
-							return nil, ctx.Err()
-						default:
-						}
+						systemDir := filepath.Join(rootDir, batSysName)
+						gameListPath := filepath.Join(systemDir, "gamelist.xml")
 
-						gameListPath := filepath.Join(rootDir, batSysName, "gamelist.xml")
+						// Read gamelist.xml for metadata
 						gameList, err := esapi.ReadGameListXML(gameListPath)
 						if err != nil {
-							log.Error().Msgf("error reading gamelist.xml: %s", err)
-							continue
+							log.Debug().Err(err).Msgf("no gamelist.xml for %s", batSysName)
+							continue // No gamelist.xml is fine - use filesystem names
 						}
+
+						// Update names from gamelist.xml metadata
 						for _, game := range gameList.Games {
-							results = append(results, platforms.ScanResult{
-								Name: game.Name,
-								Path: filepath.Join(rootDir, batSysName, game.Path),
-							})
+							// Clean the game path (remove leading ./)
+							gamePath := filepath.Clean(game.Path)
+							fullPath := filepath.Join(systemDir, gamePath)
+
+							// If this game was found by filesystem scanner, update its name
+							if result, exists := resultMap[fullPath]; exists {
+								result.Name = game.Name
+							}
 						}
 					}
 				}
 
 				return results, nil
-			},
-			Test: func(cfg *config.Instance, path string) bool {
-				path = filepath.Clean(path)
-				path = strings.ToLower(path)
-				for _, rootDir := range p.RootDirs(cfg) {
-					sysDir := filepath.Join(rootDir, k)
-					sysDir = filepath.Clean(sysDir)
-					sysDir = strings.ToLower(sysDir)
-					if strings.HasPrefix(path, sysDir) {
-						if filepath.Ext(path) == "" {
-							return false
-						}
-						if filepath.Ext(path) == ".txt" {
-							return false
-						}
-						return true
-					}
-				}
-				return false
 			},
 		})
 	}

@@ -264,9 +264,9 @@ func TestCommanderX16SystemImplemented(t *testing.T) {
 	assert.Contains(t, commanderX16Launcher.Folders, "commanderx16")
 }
 
-// TestBatoceraGameLaunchersSkipFilesystemScan tests that Batocera game launchers
-// have SkipFilesystemScan set to true since they use gamelist.xml via custom Scanner
-func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
+// TestBatoceraGameLaunchersUseBuiltInScanner tests that Batocera game launchers
+// use the built-in filesystem scanner + Scanner to add metadata (Pattern A)
+func TestBatoceraGameLaunchersUseBuiltInScanner(t *testing.T) {
 	t.Parallel()
 	platform := &Platform{}
 	cfg := &config.Instance{}
@@ -291,11 +291,22 @@ func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
 
 		gameSystemLaunchers = append(gameSystemLaunchers, launcher.ID)
 
-		// EXPECTED: Batocera game system launchers should skip filesystem scanning
-		// ACTUAL (before fix): SkipFilesystemScan is false (default)
-		// This test will FAIL until we set SkipFilesystemScan = true on these launchers
-		assert.True(t, launcher.SkipFilesystemScan,
-			"Batocera game launcher %s should skip filesystem scanning (uses gamelist.xml)", launcher.ID)
+		// Batocera game launchers should use built-in scanner + Scanner to add metadata
+		// SkipFilesystemScan should be false (or default) to enable built-in scanning
+		assert.False(t, launcher.SkipFilesystemScan,
+			"Batocera game launcher %s should use built-in filesystem scanner", launcher.ID)
+
+		// Should have Scanner function to add gamelist.xml metadata
+		assert.NotNil(t, launcher.Scanner,
+			"Batocera game launcher %s should have Scanner to add metadata", launcher.ID)
+
+		// Should have Extensions defined (for built-in scanner to use)
+		assert.NotEmpty(t, launcher.Extensions,
+			"Batocera game launcher %s should have Extensions defined", launcher.ID)
+
+		// Should have Folders defined (for built-in scanner to use)
+		assert.NotEmpty(t, launcher.Folders,
+			"Batocera game launcher %s should have Folders defined", launcher.ID)
 	}
 
 	// Verify we found some game system launchers to test
