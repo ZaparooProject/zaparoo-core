@@ -231,6 +231,22 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		NewSteamLauncher(),
+		{
+			ID:        "WebBrowser",
+			Schemes:   []string{"http", "https"},
+			Lifecycle: platforms.LifecycleFireAndForget,
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				cmd := exec.CommandContext(context.Background(), "xdg-open", path)
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to open URL in browser: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Browser launches don't return a process handle
+			},
+		},
+		NewLutrisLauncher(),
+		NewHeroicLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

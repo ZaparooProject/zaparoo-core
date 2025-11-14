@@ -34,7 +34,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/linux/installer"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/retropie"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/rs/zerolog"
@@ -56,25 +55,9 @@ func run() error {
 	pl := &retropie.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "configure system for zaparoo")
-	doUninstall := flag.Bool("uninstall", false, "revert zaparoo system configuration")
 	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
 
 	flags.Pre(pl)
-
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			return errors.New("installation failed")
-		}
-		return nil
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			return errors.New("uninstallation failed")
-		}
-		return nil
-	}
 
 	if os.Geteuid() == 0 {
 		return errors.New("zaparoo must not be run as root")

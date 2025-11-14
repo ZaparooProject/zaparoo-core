@@ -43,11 +43,8 @@ func SelectBestResult(
 	launchers []platforms.Launcher,
 ) (result database.SearchResultWithCursor, confidence float64) {
 	if len(results) == 1 {
-		// Check if the single result is a variant (and user didn't explicitly request it)
-		if IsVariant(&results[0]) && !hasVariantTagFilter(tagFilters) {
-			log.Info().Msg("single result is a variant (demo/beta/proto), excluding")
-			return database.SearchResultWithCursor{}, 0.0
-		}
+		// If there's only ONE match, that's what the user searched for - return it
+		// Variant exclusion only makes sense when choosing between multiple results
 		tagConfidence := CalculateTagMatchConfidence(&results[0], tagFilters)
 		confidence = matchQuality * tagConfidence
 		log.Info().Msgf("single result, confidence: %.2f (match: %.2f, tags: %.2f)",

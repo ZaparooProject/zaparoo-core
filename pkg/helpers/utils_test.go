@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -1407,6 +1408,80 @@ func TestCopyFile(t *testing.T) {
 				assert.NoError(t, err)
 				if tt.checkFunc != nil {
 					tt.checkFunc(t, tt.destPath)
+				}
+			}
+		})
+	}
+}
+
+func TestCopyFileWithPermissions(t *testing.T) {
+	t.Parallel()
+
+	// Skip on Windows - Unix file permissions don't work the same way
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix file permission test on Windows")
+	}
+
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		sourcePath string
+		destPath   string
+		perm       os.FileMode
+		wantErr    bool
+	}{
+		{
+			name:       "set_executable_permissions",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/executable.txt",
+			perm:       0o755,
+			wantErr:    false,
+		},
+		{
+			name:       "set_readonly_permissions",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/readonly.txt",
+			perm:       0o444,
+			wantErr:    false,
+		},
+		{
+			name:       "default_permissions_when_not_specified",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/default.txt",
+			perm:       0, // No permission specified
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var err error
+			if tt.perm == 0 {
+				// Test default permissions
+				err = CopyFile(tt.sourcePath, tt.destPath)
+			} else {
+				// Test with specified permissions
+				err = CopyFile(tt.sourcePath, tt.destPath, tt.perm)
+			}
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+
+				// Verify file exists
+				info, err := os.Stat(tt.destPath)
+				require.NoError(t, err)
+
+				// Check permissions match expected
+				if tt.perm != 0 {
+					assert.Equal(t, tt.perm, info.Mode().Perm(), "permissions should match")
+				} else {
+					// Default should be 0644
+					assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "default permissions should be 0644")
 				}
 			}
 		})

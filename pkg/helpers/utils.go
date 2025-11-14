@@ -251,7 +251,9 @@ func RandomInt(maxVal int) (int, error) {
 	return int(n.Int64()), nil
 }
 
-func CopyFile(sourcePath, destPath string) error {
+// CopyFile copies a file from sourcePath to destPath.
+// Optional perm parameter sets file permissions (uses 0644 if not specified).
+func CopyFile(sourcePath, destPath string, perm ...os.FileMode) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
@@ -278,6 +280,16 @@ func CopyFile(sourcePath, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
+
+	// Set permissions if provided, otherwise use default 0644
+	fileMode := os.FileMode(0o644)
+	if len(perm) > 0 {
+		fileMode = perm[0]
+	}
+	if err := os.Chmod(destPath, fileMode); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
 	return nil
 }
 
@@ -324,9 +336,15 @@ func YesNoPrompt(label string, def bool) bool {
 func IsServiceRunning(cfg *config.Instance) bool {
 	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
 	if err != nil {
-		log.Debug().Err(err).Msg("error checking if service running")
+		log.Debug().
+			Err(err).
+			Int("port", cfg.APIPort()).
+			Msg("service not detected on API port")
 		return false
 	}
+	log.Debug().
+		Int("port", cfg.APIPort()).
+		Msg("detected running service instance")
 	return true
 }
 
