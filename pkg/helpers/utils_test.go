@@ -21,6 +21,7 @@ package helpers
 
 import (
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -1415,6 +1416,11 @@ func TestCopyFile(t *testing.T) {
 
 func TestCopyFileWithPermissions(t *testing.T) {
 	t.Parallel()
+
+	// Skip on Windows - Unix file permissions don't work the same way
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix file permission test on Windows")
+	}
 
 	tempDir := t.TempDir()
 
