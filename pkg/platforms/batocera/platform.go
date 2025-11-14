@@ -268,6 +268,41 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
+// shouldKeepRunningInstance checks if we should preserve the currently running application
+// when launching new media. Returns true if both current and new launchers use the same
+// running instance identifier (e.g., both use "kodi"), meaning they communicate with the
+// same persistent application.
+func (p *Platform) shouldKeepRunningInstance(cfg *config.Instance, newLauncher *platforms.Launcher) bool {
+	// If new launcher doesn't use a running instance, always kill current app
+	if newLauncher.UsesRunningInstance == "" {
+		return false
+	}
+
+	// Get currently active media
+	activeMedia := p.activeMedia()
+	if activeMedia == nil {
+		return false
+	}
+
+	// Find the current launcher to check if it shares the same running instance
+	// TODO: This performs an O(N) linear scan over all launchers on every media launch.
+	launchers := p.Launchers(cfg)
+	for i := range launchers {
+		if launchers[i].ID == activeMedia.LauncherID {
+			// Keep running if both launchers use the same instance identifier
+			if launchers[i].UsesRunningInstance == newLauncher.UsesRunningInstance {
+				log.Info().Msgf("keeping running %s instance for launcher transition: %s -> %s",
+					newLauncher.UsesRunningInstance, launchers[i].ID, newLauncher.ID)
+				return true
+			}
+			// Found the launcher but it uses a different instance, don't keep running
+			break
+		}
+	}
+
+	return false
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 ) error {
@@ -286,12 +321,15 @@ func (p *Platform) LaunchMedia(
 	if err != nil {
 		return fmt.Errorf("failed to check running game status: %w", err)
 	} else if running {
-		log.Info().Msg("exiting current media")
-		err = p.StopActiveLauncher(platforms.StopForPreemption)
-		if err != nil {
-			return err
+		// Check if we should preserve the running app (e.g., both launchers use same Kodi instance)
+		if !p.shouldKeepRunningInstance(cfg, launcher) {
+			log.Info().Msg("exiting current media")
+			err = p.StopActiveLauncher(platforms.StopForPreemption)
+			if err != nil {
+				return err
+			}
+			time.Sleep(2500 * time.Millisecond)
 		}
-		time.Sleep(2500 * time.Millisecond)
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)

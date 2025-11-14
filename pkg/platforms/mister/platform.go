@@ -53,21 +53,21 @@ type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
-	setActiveMedia      func(*models.ActiveMedia)
-	textMap             map[string]string
+	trackedProcess      *os.Process
+	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
 	stopTracker         func() error
-	trackedProcess      *os.Process
+	setActiveMedia      func(*models.ActiveMedia)
 	activeMedia         func() *models.ActiveMedia
-	tracker             *tracker.Tracker
-	arcadeCardLaunch    arcadeCardLaunchCache
+	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
 	gpd                 linuxinput.Gamepad
 	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
+	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex

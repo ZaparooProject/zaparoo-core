@@ -495,3 +495,108 @@ func TestLaunchMedia_SetsActiveMediaWithTimestamp(t *testing.T) {
 	// and that DoLaunch properly creates ActiveMedia with timestamps
 	// This test documents the integration point for future testing
 }
+
+// TestShouldKeepRunningInstance tests the shouldKeepRunningInstance function
+func TestShouldKeepRunningInstance(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	tests := []struct {
+		newLauncher       *platforms.Launcher
+		name              string
+		activeLauncherID  string
+		description       string
+		activeMediaExists bool
+		expectedResult    bool
+	}{
+		{
+			name: "new launcher without running instance",
+			newLauncher: &platforms.Launcher{
+				ID:                  "GenericGame",
+				UsesRunningInstance: "", // Empty = starts its own process
+			},
+			activeLauncherID:  "KodiAlbum",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when new launcher starts its own process",
+		},
+		{
+			name: "no active media",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiSong",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "",
+			activeMediaExists: false,
+			expectedResult:    false,
+			description:       "Should not keep running when there's no active media",
+		},
+		{
+			name: "both launchers use same instance - kodi to kodi",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiSong",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "KodiAlbum",
+			activeMediaExists: true,
+			expectedResult:    true,
+			description:       "Should keep running when both use same Kodi instance",
+		},
+		{
+			name: "current launcher uses different instance",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiMovie",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "GenericGame",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when current launcher uses different instance",
+		},
+		{
+			name: "same launcher id different instances",
+			newLauncher: &platforms.Launcher{
+				ID:                  "TestLauncher",
+				UsesRunningInstance: "plex", // Different instance
+			},
+			activeLauncherID:  "TestLauncher",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when same launcher ID but different instances (hypothetical)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create platform
+			platform := &Platform{}
+
+			// Set up active media state
+			var currentActiveMedia *models.ActiveMedia
+			if tt.activeMediaExists {
+				currentActiveMedia = &models.ActiveMedia{
+					LauncherID: tt.activeLauncherID,
+					SystemID:   systemdefs.SystemVideo,
+					Path:       "/test/path",
+					Name:       "Test Media",
+				}
+			}
+
+			// Set the activeMedia function
+			platform.activeMedia = func() *models.ActiveMedia {
+				return currentActiveMedia
+			}
+
+			// Call shouldKeepRunningInstance
+			result := platform.shouldKeepRunningInstance(cfg, tt.newLauncher)
+
+			// Assert result
+			assert.Equal(t, tt.expectedResult, result, tt.description)
+		})
+	}
+}
