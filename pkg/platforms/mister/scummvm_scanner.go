@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -159,7 +159,7 @@ func scanScummVMGames(
 
 	// Build virtual paths for each game
 	for _, game := range games {
-		virtualPath := helpers.CreateVirtualPath(shared.SchemeScummVM, game.TargetID, game.Description)
+		virtualPath := virtualpath.CreateVirtualPath(shared.SchemeScummVM, game.TargetID, game.Description)
 		results = append(results, platforms.ScanResult{
 			Path:  virtualPath,
 			Name:  game.Description,

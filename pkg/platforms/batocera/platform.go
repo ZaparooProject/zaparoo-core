@@ -43,6 +43,7 @@ const (
 	HomeDir   = "/userdata/system"
 	DataDir   = HomeDir + "/.local/share/" + config.AppName
 	ConfigDir = HomeDir + "/.config/" + config.AppName
+	LogDir    = DataDir + "/" + config.LogsDir
 )
 
 type Platform struct {
@@ -210,6 +211,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    DataDir,
 		ConfigDir:  ConfigDir,
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     LogDir,
 		ZipsAsDirs: false,
 	}
 }

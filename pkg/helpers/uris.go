@@ -22,79 +22,15 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package helpers
 
 import (
-	"errors"
-	"fmt"
 	"net/url"
 	"path"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
-
-// We can use actual URIs for paths, but we also define a "Virtual Path", which
-// is a slightly simplified version of the URI standard. The only major difference
-// is that fragments aren't supported in virtual paths, but that also means we
-// can't simply use the Go url.Parse function since it's so strict. That's why
-// we reimplement parts of the standard library here.
-
-// CreateVirtualPath creates a properly encoded virtual path for media
-// Example: "kodi-show", "123", "Some Hot/Cold" -> "kodi-show://123/Some%20Hot%2FCold"
-// Both id and name are URL-encoded to ensure round-trip compatibility with ParseVirtualPathStr
-// Note: Simple alphanumeric IDs like "123" or "monkey1" remain unchanged after encoding
-func CreateVirtualPath(scheme, id, name string) string {
-	return fmt.Sprintf("%s://%s/%s", scheme, url.PathEscape(id), url.PathEscape(name))
-}
-
-// VirtualPathResult holds parsed virtual path components
-type VirtualPathResult struct {
-	Scheme string
-	ID     string
-	Name   string
-}
-
-// uriComponents holds parsed URI components
-type uriComponents struct {
-	Scheme string
-	Rest   string // Everything after ://
-	Query  string
-}
-
-// containsControlChar checks if a string contains any control characters (0x00-0x1F, 0x7F)
-// Returns true if control characters are found (invalid for URLs)
-func containsControlChar(s string) bool {
-	for i := range len(s) {
-		c := s[i]
-		if c < 0x20 || c == 0x7F {
-			return true
-		}
-	}
-	return false
-}
-
-// isValidScheme validates that a scheme follows RFC 3986 rules:
-// - Must start with a letter
-// - Can contain letters, digits, '+', '-', '.'
-func isValidScheme(scheme string) bool {
-	if scheme == "" {
-		return false
-	}
-	// First character must be a letter
-	c := scheme[0]
-	if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-		return false
-	}
-	// Remaining characters must be alphanumeric or +-.
-	for i := 1; i < len(scheme); i++ {
-		c := scheme[i]
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
-			(c < '0' || c > '9') && c != '+' && c != '-' && c != '.' {
-			return false
-		}
-	}
-	return true
-}
 
 // isValidPort checks if a port string is valid (empty or numeric)
 func isValidPort(port string) bool {
@@ -113,98 +49,8 @@ func isValidPort(port string) bool {
 	return true
 }
 
-// parseURIComponents manually parses a URI into its components
-// Note: Does not extract fragments - they remain part of name/query for custom schemes
-// Returns empty result if URI contains control characters or has invalid scheme
-func parseURIComponents(uri string) uriComponents {
-	var result uriComponents
-
-	// Validate no control characters
-	if containsControlChar(uri) {
-		return result // Return empty - invalid URI
-	}
-
-	// Extract query (everything after ?)
-	if idx := strings.Index(uri, "?"); idx >= 0 {
-		result.Query = uri[idx+1:]
-		uri = uri[:idx]
-	}
-
-	// Extract scheme (everything before ://)
-	if idx := strings.Index(uri, "://"); idx >= 0 {
-		result.Scheme = uri[:idx]
-		result.Rest = uri[idx+3:] // Skip ://
-
-		// Validate scheme format (RFC 3986)
-		if !isValidScheme(result.Scheme) {
-			return uriComponents{} // Return empty - invalid scheme
-		}
-	} else {
-		result.Rest = uri
-	}
-
-	return result
-}
-
-// ParseVirtualPathStr parses a virtual path and returns its components with string ID
-// Virtual path format: scheme://id/name (e.g., "steam://123/Game%20Name")
-// Maps to URL structure: scheme://host/path where host=id, path=name
-// Uses manual parsing to handle malformed URLs gracefully
-func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
-	var result VirtualPathResult
-
-	parsed := parseURIComponents(virtualPath)
-
-	if parsed.Scheme == "" {
-		return result, errors.New("not a virtual path")
-	}
-
-	result.Scheme = parsed.Scheme
-
-	// Require at least some content after scheme:// (even if just a slash)
-	if parsed.Rest == "" {
-		return result, errors.New("missing ID in virtual path")
-	}
-
-	// Split rest into ID and name (ID is before first /, name is after)
-	idAndName := strings.SplitN(parsed.Rest, "/", 2)
-	if len(idAndName) < 1 {
-		return result, errors.New("missing ID in virtual path")
-	}
-
-	// Support empty ID for legacy cards (e.g., "steam:///Name")
-	// Decode the ID component for future-proofing (handles encoded characters)
-	idPart := idAndName[0]
-	if idPart != "" {
-		decodedID, err := url.PathUnescape(idPart)
-		if err == nil {
-			result.ID = decodedID
-		} else {
-			result.ID = idPart // Graceful fallback for invalid encoding
-		}
-	} else {
-		result.ID = idPart // Empty ID allowed for legacy support
-	}
-
-	if len(idAndName) == 2 {
-		// Remove trailing slash
-		namePart := strings.TrimSuffix(idAndName[1], "/")
-		if namePart != "" {
-			// Try to decode, fallback to raw on error
-			decoded, err := url.PathUnescape(namePart)
-			if err == nil {
-				result.Name = decoded
-			} else {
-				result.Name = namePart // Graceful fallback for invalid encoding
-			}
-		}
-	}
-
-	return result, nil
-}
-
 // DecodeURIIfNeeded applies URL decoding to URIs based on their scheme
-// - Zaparoo custom schemes (steam://, kodi-*://, etc.): uses ParseVirtualPathStr for full decoding
+// - Zaparoo custom schemes (steam://, kodi-*://, etc.): uses virtualpath.ParseVirtualPathStr for full decoding
 // - Standard web schemes (http://, https://): decodes path component only
 // - Other schemes: returns as-is (no decoding)
 // Returns the original URI on decoding errors (graceful fallback)
@@ -215,7 +61,7 @@ func DecodeURIIfNeeded(uri string) string {
 		return uri
 	}
 
-	parsed := parseURIComponents(uri)
+	parsed := virtualpath.ParseURIComponents(uri)
 
 	if parsed.Scheme == "" {
 		return uri
@@ -225,7 +71,7 @@ func DecodeURIIfNeeded(uri string) string {
 
 	// Handle Zaparoo custom virtual paths
 	if shared.IsCustomScheme(schemeLower) {
-		result, err := ParseVirtualPathStr(uri)
+		result, err := virtualpath.ParseVirtualPathStr(uri)
 		if err != nil {
 			log.Debug().Err(err).Str("uri", uri).Msg("failed to parse custom scheme URI, using as-is")
 			return uri
@@ -365,23 +211,6 @@ func DecodeURIIfNeeded(uri string) string {
 	return uri
 }
 
-// ExtractSchemeID extracts the ID component from a scheme-based virtual path
-// with proper URL decoding. Returns error if the path doesn't match the expected scheme.
-// Example: ExtractSchemeID("steam://123/Game%20Name", "steam") -> "123", nil
-func ExtractSchemeID(virtualPath, expectedScheme string) (string, error) {
-	result, err := ParseVirtualPathStr(virtualPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse virtual path: %w", err)
-	}
-
-	// RFC 3986: scheme comparison is case-insensitive
-	if !strings.EqualFold(result.Scheme, expectedScheme) {
-		return "", fmt.Errorf("scheme mismatch: expected %s, got %s", expectedScheme, result.Scheme)
-	}
-
-	return result.ID, nil
-}
-
 func FilenameFromPath(p string) string {
 	if p == "" {
 		return ""
@@ -389,14 +218,14 @@ func FilenameFromPath(p string) string {
 
 	// Handle URIs with manual parsing
 	if strings.Contains(p, "://") {
-		parsed := parseURIComponents(p)
+		parsed := virtualpath.ParseURIComponents(p)
 
 		if parsed.Scheme != "" {
 			schemeLower := strings.ToLower(parsed.Scheme)
 
-			// For custom Zaparoo schemes, use ParseVirtualPathStr
+			// For custom Zaparoo schemes, use virtualpath.ParseVirtualPathStr
 			if shared.IsCustomScheme(schemeLower) {
-				result, err := ParseVirtualPathStr(p)
+				result, err := virtualpath.ParseVirtualPathStr(p)
 				if err == nil {
 					// If no name component and no slash in rest, return the ID (legacy card support)
 					// Example: "kodi-episode://666" → return "666"

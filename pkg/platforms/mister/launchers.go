@@ -16,7 +16,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -467,7 +467,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Extract game target ID from virtual path: scummvm://targetid/Game Name
-		targetID, err := helpers.ExtractSchemeID(path, shared.SchemeScummVM)
+		targetID, err := virtualpath.ExtractSchemeID(path, shared.SchemeScummVM)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract ScummVM target ID from path: %w", err)
 		}

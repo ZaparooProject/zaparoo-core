@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1564,11 +1565,11 @@ func TestCreateVirtualPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := CreateVirtualPath(tt.scheme, tt.id, tt.pathName)
+			result := virtualpath.CreateVirtualPath(tt.scheme, tt.id, tt.pathName)
 			assert.Equal(t, tt.expected, result)
 
 			// Verify round-trip: create path, parse it back
-			parsed, err := ParseVirtualPathStr(result)
+			parsed, err := virtualpath.ParseVirtualPathStr(result)
 			require.NoError(t, err, "Should parse created path without error")
 			assert.Equal(t, tt.scheme, parsed.Scheme, "Scheme should match")
 			assert.Equal(t, tt.id, parsed.ID, "ID should match after round-trip")

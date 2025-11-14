@@ -22,6 +22,7 @@ package helpers
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -191,7 +192,7 @@ func TestExtractSchemeID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := ExtractSchemeID(tt.virtualPath, tt.expectedScheme)
+			result, err := virtualpath.ExtractSchemeID(tt.virtualPath, tt.expectedScheme)
 
 			if tt.wantErr {
 				require.Error(t, err, "ExtractSchemeID should return error")
@@ -322,7 +323,7 @@ func TestParseVirtualPathStr_EdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := ParseVirtualPathStr(tt.virtualPath)
+			result, err := virtualpath.ParseVirtualPathStr(tt.virtualPath)
 
 			if tt.wantErr {
 				require.Error(t, err, "ParseVirtualPathStr should return error")
@@ -750,7 +751,7 @@ func TestIsValidScheme(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := isValidScheme(tt.scheme)
+			result := virtualpath.IsValidScheme(tt.scheme)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -819,7 +820,7 @@ func TestContainsControlChar(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := containsControlChar(tt.input)
+			result := virtualpath.ContainsControlChar(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1098,11 +1099,11 @@ func TestParseVirtualPathStr_MalformedGracefulFallback(t *testing.T) {
 
 			if tt.shouldPanic {
 				assert.Panics(t, func() {
-					_, _ = ParseVirtualPathStr(tt.input)
+					_, _ = virtualpath.ParseVirtualPathStr(tt.input)
 				}, tt.description)
 			} else {
 				assert.NotPanics(t, func() {
-					result, _ := ParseVirtualPathStr(tt.input)
+					result, _ := virtualpath.ParseVirtualPathStr(tt.input)
 					t.Logf("Handled malformed path: %q → scheme=%q, id=%q, name=%q",
 						tt.input, result.Scheme, result.ID, result.Name)
 				}, tt.description)
@@ -1170,7 +1171,7 @@ func TestExtractSchemeID_MalformedHandling(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result, err := ExtractSchemeID(tt.path, tt.expectedScheme)
+			result, err := virtualpath.ExtractSchemeID(tt.path, tt.expectedScheme)
 
 			if tt.shouldError {
 				assert.Error(t, err, tt.description)

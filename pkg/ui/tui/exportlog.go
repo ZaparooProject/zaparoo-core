@@ -95,7 +95,7 @@ func BuildExportLogModal(
 }
 
 func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string {
-	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
+	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 	newPath := logDestPath
 	err := helpers.CopyFile(logPath, newPath)
 	outcome := ""
@@ -109,7 +109,7 @@ func copyLogToSd(pl platforms.Platform, logDestPath, logDestName string) string 
 }
 
 func uploadLog(pl platforms.Platform, pages *tview.Pages, app *tview.Application) string {
-	logPath := path.Join(pl.Settings().TempDir, config.LogFile)
+	logPath := path.Join(pl.Settings().LogDir, config.LogFile)
 	modal := genericModal("Uploading log file...", "Log upload", func(_ int, _ string) {}, false)
 	pages.AddPage("temp_upload", modal, true, true)
 	app.SetFocus(modal)

@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/andygrunwald/vdf"
@@ -274,7 +275,7 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path:  CreateVirtualPath("steam", appID, appName),
+				Path:  virtualpath.CreateVirtualPath("steam", appID, appName),
 				Name:  appName,
 				NoExt: true,
 			})
@@ -330,7 +331,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			}
 
 			results = append(results, platforms.ScanResult{
-				Path:  CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
 				Name:  shortcut.AppName,
 				NoExt: true,
 			})

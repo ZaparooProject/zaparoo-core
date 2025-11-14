@@ -32,7 +32,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
 )
@@ -97,7 +97,7 @@ func (c *Client) LaunchFile(path string) error {
 
 // LaunchMovie launches a movie by ID from Kodi's library
 func (c *Client) LaunchMovie(path string) error {
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiMovie)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiMovie)
 	if err != nil {
 		return fmt.Errorf("failed to extract movie ID from path: %w", err)
 	}
@@ -120,7 +120,7 @@ func (c *Client) LaunchMovie(path string) error {
 
 // LaunchTVEpisode launches a TV episode by ID from Kodi's library
 func (c *Client) LaunchTVEpisode(path string) error {
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiEpisode)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiEpisode)
 	if err != nil {
 		return fmt.Errorf("failed to extract episode ID from path: %w", err)
 	}
@@ -278,7 +278,7 @@ func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
 
 // LaunchSong launches a song by ID from Kodi's library
 func (c *Client) LaunchSong(path string) error {
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiSong)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiSong)
 	if err != nil {
 		return fmt.Errorf("failed to extract song ID from path: %w", err)
 	}
@@ -301,7 +301,7 @@ func (c *Client) LaunchSong(path string) error {
 
 // LaunchAlbum launches an album by ID from Kodi's library
 func (c *Client) LaunchAlbum(path string) error {
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiAlbum)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiAlbum)
 	if err != nil {
 		return fmt.Errorf("failed to extract album ID from path: %w", err)
 	}
@@ -324,7 +324,7 @@ func (c *Client) LaunchAlbum(path string) error {
 
 // LaunchArtist launches an artist by ID from Kodi's library
 func (c *Client) LaunchArtist(path string) error {
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiArtist)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiArtist)
 	if err != nil {
 		return fmt.Errorf("failed to extract artist ID from path: %w", err)
 	}
@@ -348,7 +348,7 @@ func (c *Client) LaunchArtist(path string) error {
 // LaunchTVShow launches a TV show by ID using playlist generation
 func (c *Client) LaunchTVShow(path string) error {
 	// Parse show ID
-	idStr, err := helpers.ExtractSchemeID(path, shared.SchemeKodiShow)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiShow)
 	if err != nil {
 		return fmt.Errorf("failed to extract show ID from path: %w", err)
 	}

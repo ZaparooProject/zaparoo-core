@@ -320,6 +320,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    misterconfig.DataDir,
 		ConfigDir:  misterconfig.DataDir,
 		TempDir:    misterconfig.TempDir,
+		LogDir:     misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }

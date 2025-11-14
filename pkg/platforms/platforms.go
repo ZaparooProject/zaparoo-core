@@ -205,9 +205,12 @@ type Settings struct {
 	// WARNING: This value should be accessed using the ConfigDir function in
 	// the utils package.
 	ConfigDir string
-	// TempDir returns a temporary directory where the logs are stored and any
-	// files used for inter-process communication. Expect it to be deleted.
+	// TempDir returns a temporary directory for files used for inter-process
+	// communication such as PID files and temporary binaries. Expect it to be
+	// deleted.
 	TempDir string
+	// LogDir returns the directory where persistent log files are stored.
+	LogDir string
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool

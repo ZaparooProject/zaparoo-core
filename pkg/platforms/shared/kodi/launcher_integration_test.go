@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,7 +157,7 @@ func TestKodiLaunchers_IDExtraction_WithEncodedPaths(t *testing.T) {
 			t.Parallel()
 
 			// Step 1: Create virtual path (simulating what scanner does)
-			virtualPath := helpers.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
+			virtualPath := virtualpath.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
 			t.Logf("Virtual path created: %s", virtualPath)
 
 			// Step 2: Extract ID using the CURRENT launcher implementation
@@ -175,7 +175,7 @@ func TestKodiLaunchers_IDExtraction_WithEncodedPaths(t *testing.T) {
 
 			// Step 3: Also verify using the ExtractSchemeID helper
 			// This tests the alternative approach
-			extractedIDStr, err := helpers.ExtractSchemeID(virtualPath, tc.scheme)
+			extractedIDStr, err := virtualpath.ExtractSchemeID(virtualPath, tc.scheme)
 			require.NoError(t, err, "ExtractSchemeID helper should succeed")
 
 			extractedIDInt, err := strconv.Atoi(extractedIDStr)
@@ -393,14 +393,14 @@ func TestKodiLaunchers_ManualParsingVsHelper(t *testing.T) {
 				t.Parallel()
 
 				// Create virtual path
-				virtualPath := helpers.CreateVirtualPath(scheme, tp.id, tp.name)
+				virtualPath := virtualpath.CreateVirtualPath(scheme, tp.id, tp.name)
 
 				// Method 1: Manual parsing (current implementation)
 				pathID1 := strings.TrimPrefix(virtualPath, scheme+"://")
 				pathID1 = strings.SplitN(pathID1, "/", 2)[0]
 
 				// Method 2: ExtractSchemeID helper
-				pathID2, err := helpers.ExtractSchemeID(virtualPath, scheme)
+				pathID2, err := virtualpath.ExtractSchemeID(virtualPath, scheme)
 				require.NoError(t, err)
 
 				// Both methods should give same result
@@ -425,7 +425,7 @@ func TestKodiLaunchers_ManualParsingVsHelper(t *testing.T) {
 
 // BenchmarkIDExtraction benchmarks the two ID extraction methods
 func BenchmarkIDExtraction(b *testing.B) {
-	virtualPath := helpers.CreateVirtualPath(
+	virtualPath := virtualpath.CreateVirtualPath(
 		shared.SchemeKodiMovie,
 		"12345",
 		"The Matrix (Reloaded) [4K] - Director's Cut",
@@ -441,7 +441,7 @@ func BenchmarkIDExtraction(b *testing.B) {
 
 	b.Run("ExtractSchemeID", func(b *testing.B) {
 		for range b.N {
-			extractedID, _ := helpers.ExtractSchemeID(virtualPath, shared.SchemeKodiMovie)
+			extractedID, _ := virtualpath.ExtractSchemeID(virtualPath, shared.SchemeKodiMovie)
 			_, _ = strconv.Atoi(extractedID)
 		}
 	})
