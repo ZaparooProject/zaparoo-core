@@ -585,12 +585,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				//nolint:gosec // Safe: opens user-scanned URLs in default web browser
-				cmd := exec.CommandContext(context.Background(),
-					"cmd", "/c",
-					"start",
-					path,
-				)
+				cmd := exec.CommandContext(context.Background(), "cmd", "/c", "start", path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				err := cmd.Start()
 				if err != nil {
