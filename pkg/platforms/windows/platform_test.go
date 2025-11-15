@@ -72,7 +72,7 @@ func TestWindowsHasAllKodiLaunchers(t *testing.T) {
 
 	// Test all Kodi launchers exist (same as Linux platform)
 	expectedLaunchers := []string{
-		"KodiLocal", "KodiMovie", "KodiTV", "KodiMusic",
+		"KodiLocalVideo", "KodiMovie", "KodiTVEpisode", "KodiLocalAudio",
 		"KodiSong", "KodiAlbum", "KodiArtist", "KodiTVShow",
 	}
 	for _, expected := range expectedLaunchers {

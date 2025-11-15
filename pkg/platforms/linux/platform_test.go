@@ -25,7 +25,7 @@ func TestLinuxHasKodiLocalLauncher(t *testing.T) {
 	// Check for KodiLocal launcher
 	var kodiLocal *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiLocal" {
+		if launcher.ID == "KodiLocalVideo" {
 			kodiLocal = &launcher.ID
 			assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp4")
@@ -70,12 +70,12 @@ func TestLinuxHasKodiTVLauncher(t *testing.T) {
 	platform := &Platform{}
 	launchers := platform.Launchers(cfg)
 
-	// Check for KodiTV launcher
+	// Check for KodiTVEpisode launcher
 	var kodiTV *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiTV" {
+		if launcher.ID == "KodiTVEpisode" {
 			kodiTV = &launcher.ID
-			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, shared.SchemeKodiEpisode)
 			break
 		}
@@ -97,7 +97,7 @@ func TestLinuxHasKodiMusicLauncher(t *testing.T) {
 	// Check for KodiMusic launcher
 	var kodiMusic *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiMusic" {
+		if launcher.ID == "KodiLocalAudio" {
 			kodiMusic = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp3")

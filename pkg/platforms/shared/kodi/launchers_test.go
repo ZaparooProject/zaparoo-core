@@ -33,7 +33,7 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 
 	launcher := NewKodiLocalLauncher()
 
-	assert.Equal(t, "KodiLocal", launcher.ID)
+	assert.Equal(t, "KodiLocalVideo", launcher.ID)
 	assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 	assert.Equal(t, []string{"videos", "tvshows"}, launcher.Folders)
 
@@ -66,8 +66,8 @@ func TestNewKodiTVLauncher(t *testing.T) {
 
 	launcher := NewKodiTVLauncher()
 
-	assert.Equal(t, "KodiTV", launcher.ID)
-	assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+	assert.Equal(t, "KodiTVEpisode", launcher.ID)
+	assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
 	assert.Equal(t, []string{shared.SchemeKodiEpisode}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
@@ -93,7 +93,7 @@ func TestNewKodiMusicLauncher(t *testing.T) {
 
 	launcher := NewKodiMusicLauncher()
 
-	assert.Equal(t, "KodiMusic", launcher.ID)
+	assert.Equal(t, "KodiLocalAudio", launcher.ID)
 	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
 	assert.Contains(t, launcher.Folders, "music")
 	assert.Contains(t, launcher.Extensions, ".mp3")

@@ -29,10 +29,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
-// NewKodiLocalLauncher creates a standard KodiLocal launcher for direct video file playback
+// NewKodiLocalLauncher creates a standard KodiLocalVideo launcher for direct video file playback
 func NewKodiLocalLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:                  "KodiLocal",
+		ID:                  "KodiLocalVideo",
 		SystemID:            systemdefs.SystemVideo,
 		Folders:             []string{"videos", "tvshows"},
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
@@ -72,11 +72,11 @@ func NewKodiMovieLauncher() platforms.Launcher {
 	}
 }
 
-// NewKodiTVLauncher creates a standard KodiTV launcher for library TV episode playback
+// NewKodiTVLauncher creates a standard KodiTVEpisode launcher for library TV episode playback
 func NewKodiTVLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:                  "KodiTV",
-		SystemID:            systemdefs.SystemTV,
+		ID:                  "KodiTVEpisode",
+		SystemID:            systemdefs.SystemTVEpisode,
 		Schemes:             []string{shared.SchemeKodiEpisode},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
@@ -96,10 +96,10 @@ func NewKodiTVLauncher() platforms.Launcher {
 	}
 }
 
-// NewKodiMusicLauncher creates a KodiMusic launcher for local music files
+// NewKodiMusicLauncher creates a KodiLocalAudio launcher for local music files
 func NewKodiMusicLauncher() platforms.Launcher {
 	return platforms.Launcher{
-		ID:                  "KodiMusic",
+		ID:                  "KodiLocalAudio",
 		SystemID:            systemdefs.SystemMusic,
 		Folders:             []string{"music"},
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC

@@ -36,14 +36,14 @@ func TestKodiLocalLauncherExists(t *testing.T) {
 	// Look for KodiLocal launcher
 	var kodiLocal *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiLocal" {
+		if launchers[i].ID == "KodiLocalVideo" {
 			kodiLocal = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiLocal, "KodiLocal launcher should exist")
-	assert.Equal(t, "KodiLocal", kodiLocal.ID)
+	require.NotNil(t, kodiLocal, "KodiLocalVideo launcher should exist")
+	assert.Equal(t, "KodiLocalVideo", kodiLocal.ID)
 	assert.Equal(t, systemdefs.SystemVideo, kodiLocal.SystemID)
 	assert.Contains(t, kodiLocal.Folders, "videos")
 	assert.Contains(t, kodiLocal.Extensions, ".mp4")
@@ -63,10 +63,10 @@ func TestKodiLocalLaunchesVideoFiles(t *testing.T) {
 
 	launchers := platform.Launchers(cfg)
 
-	// Find KodiLocal launcher
+	// Find KodiLocalVideo launcher
 	var kodiLocal *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiLocal" {
+		if launchers[i].ID == "KodiLocalVideo" {
 			kodiLocal = &launchers[i]
 			break
 		}
@@ -121,15 +121,15 @@ func TestKodiTVLauncherExists(t *testing.T) {
 	// Look for KodiTV launcher
 	var kodiTV *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiTV" {
+		if launchers[i].ID == "KodiTVEpisode" {
 			kodiTV = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiTV, "KodiTV launcher should exist")
-	assert.Equal(t, "KodiTV", kodiTV.ID)
-	assert.Equal(t, systemdefs.SystemTV, kodiTV.SystemID)
+	require.NotNil(t, kodiTV, "KodiTVEpisode launcher should exist")
+	assert.Equal(t, "KodiTVEpisode", kodiTV.ID)
+	assert.Equal(t, systemdefs.SystemTVEpisode, kodiTV.SystemID)
 	assert.Contains(t, kodiTV.Schemes, shared.SchemeKodiEpisode)
 }
 
@@ -147,14 +147,14 @@ func TestKodiMusicLauncherExists(t *testing.T) {
 	// Look for KodiMusic launcher
 	var kodiMusic *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiMusic" {
+		if launchers[i].ID == "KodiLocalAudio" {
 			kodiMusic = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiMusic, "KodiMusic launcher should exist")
-	assert.Equal(t, "KodiMusic", kodiMusic.ID)
+	require.NotNil(t, kodiMusic, "KodiLocalAudio launcher should exist")
+	assert.Equal(t, "KodiLocalAudio", kodiMusic.ID)
 	assert.Equal(t, systemdefs.SystemMusic, kodiMusic.SystemID)
 	assert.Contains(t, kodiMusic.Extensions, ".mp3")
 	assert.Contains(t, kodiMusic.Extensions, ".flac")
@@ -278,10 +278,10 @@ func TestBatoceraGameLaunchersUseBuiltInScanner(t *testing.T) {
 	for _, launcher := range launchers {
 		// Skip non-game launchers
 		if launcher.ID == "Generic" ||
-			launcher.ID == "KodiLocal" ||
+			launcher.ID == "KodiLocalVideo" ||
 			launcher.ID == "KodiMovie" ||
-			launcher.ID == "KodiTV" ||
-			launcher.ID == "KodiMusic" ||
+			launcher.ID == "KodiTVEpisode" ||
+			launcher.ID == "KodiLocalAudio" ||
 			launcher.ID == "KodiSong" ||
 			launcher.ID == "KodiAlbum" ||
 			launcher.ID == "KodiArtist" ||
@@ -323,7 +323,7 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 	launchers := platform.Launchers(cfg)
 
 	// Find Kodi library launchers that should have SkipFilesystemScan=true
-	kodiLibraryLaunchers := []string{"KodiMovie", "KodiTV", "KodiAlbum", "KodiArtist", "KodiTVShow", "KodiSong"}
+	kodiLibraryLaunchers := []string{"KodiMovie", "KodiTVEpisode", "KodiAlbum", "KodiArtist", "KodiTVShow", "KodiSong"}
 	foundKodiLaunchers := make(map[string]bool)
 
 	for _, launcher := range launchers {
@@ -338,7 +338,7 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 		}
 
 		// File-based Kodi launchers should allow filesystem scanning
-		if launcher.ID == "KodiLocal" || launcher.ID == "KodiMusic" {
+		if launcher.ID == "KodiLocalVideo" || launcher.ID == "KodiLocalAudio" {
 			assert.False(t, launcher.SkipFilesystemScan,
 				"Kodi file launcher %s should allow filesystem scanning", launcher.ID)
 		}
@@ -622,8 +622,8 @@ func TestIsKodiLauncher(t *testing.T) {
 		expected   bool
 	}{
 		{
-			name:       "KodiLocal is a Kodi launcher",
-			launcherID: "KodiLocal",
+			name:       "KodiLocalVideo is a Kodi launcher",
+			launcherID: "KodiLocalVideo",
 			expected:   true,
 		},
 		{
@@ -632,13 +632,13 @@ func TestIsKodiLauncher(t *testing.T) {
 			expected:   true,
 		},
 		{
-			name:       "KodiTV is a Kodi launcher",
-			launcherID: "KodiTV",
+			name:       "KodiTVEpisode is a Kodi launcher",
+			launcherID: "KodiTVEpisode",
 			expected:   true,
 		},
 		{
-			name:       "KodiMusic is a Kodi launcher",
-			launcherID: "KodiMusic",
+			name:       "KodiLocalAudio is a Kodi launcher",
+			launcherID: "KodiLocalAudio",
 			expected:   true,
 		},
 		{
@@ -715,7 +715,7 @@ func TestStopActiveLauncher_WithKodiActive(t *testing.T) {
 		{
 			name:              "StopForPreemption with Kodi active",
 			reason:            platforms.StopForPreemption,
-			activeLauncherID:  "KodiTV",
+			activeLauncherID:  "KodiTVEpisode",
 			shouldCallStopAPI: true,
 			description:       "Should attempt to quit Kodi when launching a different app",
 		},

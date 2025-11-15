@@ -324,7 +324,7 @@ func (p *Platform) shouldKeepRunningInstance(cfg *config.Instance, newLauncher *
 // TODO: shouldn't be hardcoding this list
 func isKodiLauncher(launcherID string) bool {
 	kodiLaunchers := []string{
-		"KodiLocal", "KodiMovie", "KodiTV", "KodiMusic",
+		"KodiLocalVideo", "KodiMovie", "KodiTVEpisode", "KodiLocalAudio",
 		"KodiSong", "KodiAlbum", "KodiArtist", "KodiTVShow",
 	}
 	for _, id := range kodiLaunchers {
