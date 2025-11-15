@@ -109,6 +109,15 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
+// Quit mocks gracefully exiting Kodi application
+func (m *MockKodiClient) Quit(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Quit error: %w", err)
+	}
+	return nil
+}
+
 // GetActivePlayers mocks retrieving all active players in Kodi
 func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, error) {
 	args := m.Called(ctx)
@@ -248,6 +257,7 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("LaunchMovie", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("LaunchTVEpisode", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("Stop").Return(nil).Maybe()
+	m.On("Quit", mock.Anything).Return(nil).Maybe()
 	m.On("GetActivePlayers", mock.Anything).Return([]kodi.Player{}, nil).Maybe()
 	m.On("GetMovies", mock.Anything).Return([]kodi.Movie{}, nil).Maybe()
 	m.On("GetTVShows", mock.Anything).Return([]kodi.TVShow{}, nil).Maybe()

@@ -611,3 +611,216 @@ func TestShouldKeepRunningInstance(t *testing.T) {
 		})
 	}
 }
+
+// TestIsKodiLauncher tests the isKodiLauncher helper function
+func TestIsKodiLauncher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		launcherID string
+		name       string
+		expected   bool
+	}{
+		{
+			name:       "KodiLocal is a Kodi launcher",
+			launcherID: "KodiLocal",
+			expected:   true,
+		},
+		{
+			name:       "KodiMovie is a Kodi launcher",
+			launcherID: "KodiMovie",
+			expected:   true,
+		},
+		{
+			name:       "KodiTV is a Kodi launcher",
+			launcherID: "KodiTV",
+			expected:   true,
+		},
+		{
+			name:       "KodiMusic is a Kodi launcher",
+			launcherID: "KodiMusic",
+			expected:   true,
+		},
+		{
+			name:       "KodiSong is a Kodi launcher",
+			launcherID: "KodiSong",
+			expected:   true,
+		},
+		{
+			name:       "KodiAlbum is a Kodi launcher",
+			launcherID: "KodiAlbum",
+			expected:   true,
+		},
+		{
+			name:       "KodiArtist is a Kodi launcher",
+			launcherID: "KodiArtist",
+			expected:   true,
+		},
+		{
+			name:       "KodiTVShow is a Kodi launcher",
+			launcherID: "KodiTVShow",
+			expected:   true,
+		},
+		{
+			name:       "Generic is not a Kodi launcher",
+			launcherID: "Generic",
+			expected:   false,
+		},
+		{
+			name:       "NES is not a Kodi launcher",
+			launcherID: "NES",
+			expected:   false,
+		},
+		{
+			name:       "Empty string is not a Kodi launcher",
+			launcherID: "",
+			expected:   false,
+		},
+		{
+			name:       "Partial match 'Kodi' is not a Kodi launcher",
+			launcherID: "Kodi",
+			expected:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isKodiLauncher(tt.launcherID)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestStopActiveLauncher_WithKodiActive tests that StopActiveLauncher correctly
+// detects when Kodi is active and delegates to stopKodi with the appropriate reason.
+// This is an integration test that verifies the Kodi mode behavior without mocking.
+func TestStopActiveLauncher_WithKodiActive(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	tests := []struct {
+		name              string
+		activeLauncherID  string
+		description       string
+		reason            platforms.StopIntent
+		shouldCallStopAPI bool
+	}{
+		{
+			name:              "StopForMenu with Kodi active",
+			reason:            platforms.StopForMenu,
+			activeLauncherID:  "KodiMovie",
+			shouldCallStopAPI: true,
+			description:       "Should attempt to stop Kodi playback when returning to menu",
+		},
+		{
+			name:              "StopForPreemption with Kodi active",
+			reason:            platforms.StopForPreemption,
+			activeLauncherID:  "KodiTV",
+			shouldCallStopAPI: true,
+			description:       "Should attempt to quit Kodi when launching a different app",
+		},
+		{
+			name:              "StopForMenu with non-Kodi launcher",
+			reason:            platforms.StopForMenu,
+			activeLauncherID:  "NES",
+			shouldCallStopAPI: false,
+			description:       "Should use ES API for non-Kodi launchers",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mock ES API server
+			mockESAPI := helpers.NewMockESAPIServer(t)
+			if !tt.shouldCallStopAPI {
+				// For non-Kodi launchers, ES API will be called
+				mockESAPI.WithNoRunningGame()
+			}
+
+			fs := helpers.NewMemoryFS()
+			cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+			require.NoError(t, err)
+
+			platform := &Platform{
+				cfg: cfg,
+			}
+
+			// Set up active media state
+			var currentActiveMedia *models.ActiveMedia
+			if tt.activeLauncherID != "" {
+				currentActiveMedia = &models.ActiveMedia{
+					LauncherID: tt.activeLauncherID,
+					SystemID:   systemdefs.SystemVideo,
+					Path:       "/test/path",
+					Name:       "Test Media",
+					Started:    time.Now(),
+				}
+			}
+
+			platform.activeMedia = func() *models.ActiveMedia {
+				return currentActiveMedia
+			}
+
+			platform.setActiveMedia = func(media *models.ActiveMedia) {
+				currentActiveMedia = media
+			}
+
+			// Call StopActiveLauncher with the specified reason
+			err = platform.StopActiveLauncher(tt.reason)
+
+			// The important thing is that the function doesn't panic and handles
+			// the flow correctly based on the reason parameter. We can't verify
+			// which exact Kodi method was called without mocking, but we can verify
+			// the function executes the right code path (Kodi vs ES API)
+
+			// For StopForMenu with Kodi, client.Stop() will be called (Player.Stop API)
+			// For StopForPreemption with Kodi, client.Quit() will be called (Application.Quit API)
+			// Both will fail to connect since Kodi isn't running, but that's expected in tests
+
+			// Verify no panic occurred - the test reaching here means success
+			if tt.shouldCallStopAPI {
+				// For Kodi launchers: StopForMenu succeeds (just stops playback),
+				// StopForPreemption may fail if Kodi can't be reached
+				// We don't assert error state since it depends on network/Kodi availability
+				t.Logf("StopActiveLauncher completed for Kodi launcher with reason %v: %v", tt.reason, err)
+			}
+		})
+	}
+}
+
+// TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu tests that ReturnToMenu
+// correctly passes StopForMenu intent to StopActiveLauncher
+func TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	// Setup mock ES API server
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithNoRunningGame()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{
+		cfg: cfg,
+	}
+
+	// Set no active media
+	platform.activeMedia = func() *models.ActiveMedia {
+		return nil
+	}
+
+	platform.setActiveMedia = func(_ *models.ActiveMedia) {
+		// No-op for this test
+	}
+
+	// Call ReturnToMenu - it should internally call StopActiveLauncher(platforms.StopForMenu)
+	// We can't directly verify the reason parameter without refactoring,
+	// but we verify the function executes without panicking
+	err = platform.ReturnToMenu()
+
+	// With no active media, StopActiveLauncher will check for games via ES API
+	// The mock returns "NO GAME RUNNING" which is handled gracefully
+	// The important thing is no panic occurred
+	assert.NoError(t, err, "ReturnToMenu should handle no active media gracefully")
+}

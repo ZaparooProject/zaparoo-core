@@ -516,9 +516,13 @@ func DoLaunch(params *LaunchParams) error {
 
 	// Stop any currently running launcher before starting new one
 	// This ensures tracked processes (like videos) are stopped even when
-	// FireAndForget launches (like MGL files) start
-	if stopErr := params.Platform.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
-		log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
+	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
+	// uses a running instance (e.g., Kodi), in which case the platform's
+	// shouldKeepRunningInstance logic will handle stopping if needed.
+	if params.Launcher.UsesRunningInstance == "" {
+		if stopErr := params.Platform.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
+			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
+		}
 	}
 
 	// Handle different lifecycle modes

@@ -31,21 +31,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCmdSystem_Menu is a regression test for the bug where `launch.system:menu`
-// would stop the active launcher but never actually launch the menu core.
-// This caused the success sound to play and media state to clear, but the menu
-// never appeared.
+// TestCmdSystem_Menu verifies that launch.system:menu calls ReturnToMenu
 func TestCmdSystem_Menu(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
-	// Mock StopActiveLauncher to verify it's called
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
-
-	// Mock LaunchSystem with "menu" to verify it's called (the fix!)
-	mockPlatform.On("LaunchSystem", cfg, "menu").Return(nil).Once()
+	// Mock ReturnToMenu - cmdSystem now directly calls this for "menu"
+	mockPlatform.On("ReturnToMenu").Return(nil).Once()
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
@@ -61,24 +55,19 @@ func TestCmdSystem_Menu(t *testing.T) {
 	require.NoError(t, err, "cmdSystem should not return an error for menu")
 	assert.True(t, result.MediaChanged, "MediaChanged should be true when launching menu")
 
-	// Verify both StopActiveLauncher AND LaunchSystem were called
+	// Verify ReturnToMenu was called
 	mockPlatform.AssertExpectations(t)
 }
 
-// TestCmdSystem_MenuStopFails verifies that if StopActiveLauncher fails,
-// we still attempt to launch the menu (just log the error)
-func TestCmdSystem_MenuStopFails(t *testing.T) {
+// TestCmdSystem_MenuReturnFails verifies error handling when ReturnToMenu fails
+func TestCmdSystem_MenuReturnFails(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
-	// Mock StopActiveLauncher to return an error
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).
-		Return(assert.AnError).Once()
-
-	// LaunchSystem should still be called despite stop failure
-	mockPlatform.On("LaunchSystem", cfg, "menu").Return(nil).Once()
+	// Mock ReturnToMenu to return an error
+	mockPlatform.On("ReturnToMenu").Return(assert.AnError).Once()
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
@@ -91,35 +80,8 @@ func TestCmdSystem_MenuStopFails(t *testing.T) {
 
 	result, err := cmdSystem(mockPlatform, env)
 
-	require.NoError(t, err, "cmdSystem should succeed even if stop fails")
-	assert.True(t, result.MediaChanged, "MediaChanged should be true")
-
-	mockPlatform.AssertExpectations(t)
-}
-
-// TestCmdSystem_MenuLaunchFails verifies error handling when menu launch fails
-func TestCmdSystem_MenuLaunchFails(t *testing.T) {
-	t.Parallel()
-
-	mockPlatform := mocks.NewMockPlatform()
-	cfg := &config.Instance{}
-
-	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
-	mockPlatform.On("LaunchSystem", cfg, "menu").Return(assert.AnError).Once()
-
-	env := platforms.CmdEnv{
-		Cmd: parser.Command{
-			Name:    "launch.system",
-			Args:    []string{"menu"},
-			AdvArgs: map[string]string{},
-		},
-		Cfg: cfg,
-	}
-
-	result, err := cmdSystem(mockPlatform, env)
-
-	require.Error(t, err, "cmdSystem should return error when LaunchSystem fails")
-	assert.Contains(t, err.Error(), "failed to launch system 'menu'")
+	require.Error(t, err, "cmdSystem should return error when ReturnToMenu fails")
+	assert.Contains(t, err.Error(), "failed to return to menu")
 	assert.True(t, result.MediaChanged, "MediaChanged should still be true")
 
 	mockPlatform.AssertExpectations(t)
@@ -187,8 +149,8 @@ func TestCmdSystem_MenuCaseInsensitive(t *testing.T) {
 			mockPlatform := mocks.NewMockPlatform()
 			cfg := &config.Instance{}
 
-			mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
-			mockPlatform.On("LaunchSystem", cfg, menuVariant).Return(nil).Once()
+			// Mock ReturnToMenu - should work for all case variants
+			mockPlatform.On("ReturnToMenu").Return(nil).Once()
 
 			env := platforms.CmdEnv{
 				Cmd: parser.Command{

@@ -48,6 +48,7 @@ const (
 
 type Platform struct {
 	clock          clockwork.Clock
+	cfg            *config.Instance
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
@@ -106,12 +107,13 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
-	_ *config.Instance,
+	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
 	_ *database.Database,
 ) error {
+	p.cfg = cfg
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
 
@@ -216,8 +218,17 @@ func (*Platform) Settings() platforms.Settings {
 	}
 }
 
-func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
+func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
+
+	// Check if Kodi is the active launcher
+	activeMedia := p.activeMedia()
+	if activeMedia != nil && isKodiLauncher(activeMedia.LauncherID) {
+		// Use Kodi-specific stopping mechanism with reason-based behavior
+		return p.stopKodi(p.cfg, reason)
+	}
+
+	// Use EmulationStation API for games/emulators
 	tries := 0
 	maxTries := 10
 
@@ -261,12 +272,16 @@ func (p *Platform) StopActiveLauncher(_ platforms.StopIntent) error {
 	return errors.New("stop active launcher: failed to stop launcher")
 }
 
-func (*Platform) ReturnToMenu() error {
-	// No menu concept on this platform
-	return nil
+func (p *Platform) ReturnToMenu() error {
+	// Stop the active launcher (Kodi, game, or emulator) to return to EmulationStation menu
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
-func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
+func (p *Platform) LaunchSystem(_ *config.Instance, systemID string) error {
+	if strings.EqualFold(systemID, "menu") {
+		return p.ReturnToMenu()
+	}
+
 	return errors.New("launching systems is not supported")
 }
 
@@ -305,6 +320,77 @@ func (p *Platform) shouldKeepRunningInstance(cfg *config.Instance, newLauncher *
 	return false
 }
 
+// isKodiLauncher checks if the given launcher ID is a Kodi launcher
+// TODO: shouldn't be hardcoding this list
+func isKodiLauncher(launcherID string) bool {
+	kodiLaunchers := []string{
+		"KodiLocal", "KodiMovie", "KodiTV", "KodiMusic",
+		"KodiSong", "KodiAlbum", "KodiArtist", "KodiTVShow",
+	}
+	for _, id := range kodiLaunchers {
+		if launcherID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// stopKodi stops Kodi based on the stop intent:
+// - StopForMenu: Stop playback only, keep Kodi running (return to Kodi main menu)
+// - StopForPreemption: Quit Kodi entirely (launching a game or different app)
+func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) error {
+	client := kodi.NewClient(cfg)
+
+	// If stopping to return to menu (e.g., stop command or launch.system:menu),
+	// just stop playback but keep Kodi running ("Kodi mode" stays active)
+	if reason == platforms.StopForMenu {
+		log.Info().Msg("stopping Kodi playback (Kodi mode stays active)")
+		if err := client.Stop(); err != nil {
+			return fmt.Errorf("failed to stop Kodi playback: %w", err)
+		}
+		// Don't clear activeMedia - Kodi is still running and we're still in "Kodi mode"
+		log.Info().Msg("Kodi playback stopped, returned to Kodi main menu")
+		return nil
+	}
+
+	// StopForPreemption: Launching a game or different app, quit Kodi entirely
+	log.Info().Msg("quitting Kodi (exiting Kodi mode)")
+
+	// Try graceful quit via JSON-RPC with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Quit(ctx); err == nil {
+		log.Info().Msg("Kodi stopped gracefully via JSON-RPC")
+		p.setActiveMedia(nil)
+
+		// Also clear the tracked process since Kodi exited gracefully
+		p.processMu.Lock()
+		p.trackedProcess = nil
+		p.processMu.Unlock()
+
+		return nil
+	}
+
+	log.Debug().Msg("JSON-RPC quit failed, attempting process kill")
+
+	// Fallback: kill the tracked process
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+
+	if p.trackedProcess != nil {
+		if err := p.trackedProcess.Kill(); err != nil {
+			log.Warn().Err(err).Msg("failed to kill Kodi process")
+			return fmt.Errorf("failed to stop Kodi: %w", err)
+		}
+		log.Info().Msg("Kodi process killed")
+		p.trackedProcess = nil
+	}
+
+	p.setActiveMedia(nil)
+	return nil
+}
+
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
 ) error {
@@ -331,6 +417,11 @@ func (p *Platform) LaunchMedia(
 				return err
 			}
 			time.Sleep(2500 * time.Millisecond)
+		} else {
+			// We're keeping the running instance (e.g., switching between Kodi movies)
+			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
+			log.Info().Msg("keeping running instance, clearing old active media before switching")
+			p.setActiveMedia(nil)
 		}
 	}
 

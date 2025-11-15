@@ -69,6 +69,14 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
+func (m *MockKodiClient) Quit(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Quit error: %w", err)
+	}
+	return nil
+}
+
 func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	args := m.Called(ctx)
 	if players, ok := args.Get(0).([]Player); ok {

@@ -96,6 +96,9 @@ const (
 	// Playlist Management (for collections)
 	APIMethodPlaylistClear APIMethod = "Playlist.Clear"
 	APIMethodPlaylistAdd   APIMethod = "Playlist.Add"
+
+	// Application Control
+	APIMethodApplicationQuit APIMethod = "Application.Quit"
 )
 
 // APIPayload represents a Kodi JSON-RPC request

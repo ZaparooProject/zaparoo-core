@@ -63,12 +63,17 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	systemID := env.Cmd.Args[0]
 
-	// For menu, explicitly stop active launcher before launching menu core
-	// This ensures a clean transition on all platforms
+	// For menu, use ReturnToMenu() instead of LaunchSystem
+	// This ensures proper handling across all platforms (stops active launcher and returns to main menu)
 	if strings.EqualFold(systemID, "menu") {
-		if err := pl.StopActiveLauncher(platforms.StopForPreemption); err != nil {
-			log.Warn().Err(err).Msg("failed to stop active launcher before launching menu")
+		if err := pl.ReturnToMenu(); err != nil {
+			return platforms.CmdResult{
+				MediaChanged: true,
+			}, fmt.Errorf("failed to return to menu: %w", err)
 		}
+		return platforms.CmdResult{
+			MediaChanged: true,
+		}, nil
 	}
 
 	if err := pl.LaunchSystem(env.Cfg, systemID); err != nil {

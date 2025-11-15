@@ -160,6 +160,12 @@ func (c *Client) Stop() error {
 	return nil
 }
 
+// Quit gracefully exits Kodi application
+func (c *Client) Quit(ctx context.Context) error {
+	_, err := c.APIRequest(ctx, APIMethodApplicationQuit, nil)
+	return err
+}
+
 // GetActivePlayers retrieves all active players in Kodi
 func (c *Client) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	result, err := c.APIRequest(ctx, APIMethodPlayerGetActivePlayers, nil)
