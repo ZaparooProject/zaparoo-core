@@ -4,17 +4,38 @@ A README for AI coding agents working on Zaparoo Core.
 
 ## Project Overview
 
-Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 8 reader types, includes cross-platform audio feedback via beep, and features a custom ZapScript language for automation.
+Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 10 reader types, includes cross-platform audio feedback via beep, and features a custom ZapScript language for automation.
 
-**Tech Stack**: Go 1.24.6+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, beep/v2 (audio), testify/mock, sqlmock, afero
+**Tech Stack**: Go 1.24.9+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, beep/v2 (audio), testify/mock, sqlmock, afero
 
 **Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
 
 ## Development Guidelines
 
+### Do
+
+- **Write tests for all new code** - comprehensive coverage required
+- **Use `task lint-fix`** to resolve all linting and formatting issues
+- **Keep diffs small and focused** - one concern per change
+- **Use file-scoped commands** (tests, formatting) for faster feedback
+- **Reference existing patterns** before writing new code - consistency matters
+- **Use zerolog for all logging** - standard `log` and `fmt.Println` are not allowed
+- **Use filepath.Join** for all path construction - ensures cross-platform compatibility
+- **Handle all errors explicitly** - use golangci-lint's error handling checks
+- **Default to small components** - prefer focused modules over monolithic files
+
+### Don't
+
+- ❌ Use standard `log` or `fmt.Println` (use zerolog instead)
+- ❌ Run file-level golangci-lint (use `task lint-fix` or package-level commands)
+- ❌ Add new dependencies without discussion
+- ❌ Run full test suite unless needed (prefer file-scoped: `go test ./pkg/specific/`)
+- ❌ Skip writing tests for new features or bug fixes
+- ❌ Make large, unfocused diffs - keep changes small and targeted
+
 ### Code Quality
 
-- **Use Go 1.24.6+** with Go modules enabled
+- **Use Go 1.24.9+** with Go modules enabled
 - **Write tests for all new features and bug fixes** (see TESTING.md) - high test coverage is required
 - **Use table-driven tests** with subtests for multiple scenarios
 - **Handle all errors explicitly** - use golangci-lint's error handling checks
@@ -71,9 +92,15 @@ go test -run TestSpecificFunction ./pkg/api/
 # Test with race detection
 go test -race ./pkg/service/tokens/
 
-# Lint specific files (much faster than full project lint)
-golangci-lint run --fix pkg/config/config.go
-golangci-lint run pkg/service/
+# Lint and format - ALWAYS prefer task commands
+task lint-fix                          # PREFERRED: Full project lint with auto-fixes
+
+# Package-level linting (only when file-scoped is needed)
+golangci-lint run --fix pkg/service/   # Package level OK
+golangci-lint run pkg/database/        # Package level OK
+
+# ❌ NEVER use file-level golangci-lint - not well supported
+# golangci-lint run pkg/config/config.go  # DON'T DO THIS
 
 # Run single test by name
 go test -run TestTokenProcessing ./pkg/service/
@@ -82,14 +109,14 @@ task test -- -run TestTokenProcessing ./pkg/service/
 # Run tests with verbose output
 task test -- -v ./pkg/api/
 
-# Format specific files
+# Format specific files (when you only need formatting)
 gofumpt -w pkg/config/config.go
 
 # Security scan specific package
 govulncheck ./pkg/api/...
 ```
 
-### Project-wide commands (slower, use sparingly)
+### Project-wide commands
 
 ```bash
 # Full test suite with race detection
@@ -104,22 +131,28 @@ task vulncheck
 # Nil-pointer analysis
 task nilcheck
 
-# Clean build artifacts
-task clean
-
-# Download and view logs from running Zaparoo instance
-task get-logs
-
-# Build for current platform
-task build
-
-# Platform-specific builds
-GOOS=linux GOARCH=amd64 task build
-GOOS=windows GOARCH=amd64 task build
-GOARCH=arm task build  # For MiSTer
+# Platform-specific build examples
+task linux:build-amd64
+task windows:build-amd64
+task mister:build-arm
+task batocera:build-arm64
 ```
 
-**Important**: Always prefer file-scoped commands during development. Only run full project commands when explicitly requested or before final commit.
+## When Stuck
+
+**Don't guess - ask for help or gather more information first.**
+
+- **Ask clarifying questions** - Get requirements clear before coding
+- **Propose a plan first** - Outline approach, then implement
+- **Use extended thinking** - For complex problems, think through the solution systematically
+- **Reference existing patterns** - Check similar code in the codebase for consistency
+- **Consult TESTING.md** - For comprehensive testing guidance
+- **Check pkg/testing/examples/** - For real-world test patterns
+- **Look at git history** - `git log -p filename` shows how code evolved
+- **Use subagents** - Delegate exploration and verification tasks when appropriate
+- **Keep scope focused** - Small, well-defined changes are easier to review and debug
+
+**Remember**: It's better to ask than to make incorrect assumptions. The project values correctness over speed.
 
 ## Project Structure
 
@@ -225,94 +258,27 @@ task test -- ./pkg/service/...      # Specific package
 
 ## Test File Organization
 
-### Philosophy
-
 Follow Go community best practices: **big files aren't necessarily bad**. The Go standard library has test files with 6,000+ lines, and Kubernetes has test files with 26,000+ lines. Organize tests by **what makes sense for the code**, not arbitrary file size limits.
 
 ### When to Create Separate Test Files
 
-Create a new test file when:
-
-1. **Testing a distinct feature** - Separate test file for each major feature/component
-   - Example: `batch_inserter_test.go` tests batch insertion
-   - Example: `slug_cache_test.go` tests slug caching
-
-2. **Integration vs unit tests** - Keep integration tests in same file or use `_integration_test.go` suffix
-   - Example: `mediadb_integration_test.go` - full database integration tests
-   - Example: `sql_launch_command_test.go` - both unit tests (with mocks) and integration tests together
-
-3. **Distinct error scenarios** - Group related error/edge case tests
-   - Example: `concurrent_operations_test.go` - concurrency-specific tests
-   - Example: `transaction_concurrency_test.go` - transaction lifecycle tests
-
-4. **Regression tests** - Document specific bugs that were fixed
-   - Example: `column_mismatch_regression_test.go` - specific schema bug fixes
-
-### When to Consolidate Test Files
-
-Consolidate tests into a single file when:
-
-1. **Tiny related files** - Multiple small (<200 line) files testing the same component
-   - ❌ Before: `batch_inserter_test.go` (506 lines) + `batch_inserter_dependencies_test.go` (226 lines)
-   - ✅ After: `batch_inserter_test.go` (732 lines) - all batch inserter tests together
-
-2. **Unit + integration for same feature** - Combine if testing the same narrow functionality
-   - ❌ Before: `sql_launch_command_test.go` (256 lines) + `sql_launch_command_integration_test.go` (132 lines)
-   - ✅ After: `sql_launch_command_test.go` (388 lines) - unit tests with mocks + integration test
-
-3. **Artificial splits** - Files split just for file size reasons without clear feature boundaries
+1. **Testing a distinct feature** - `batch_inserter_test.go`, `slug_cache_test.go`
+2. **Integration vs unit tests** - Use `_integration_test.go` suffix or combine in same file for smaller suites
+3. **Distinct error scenarios** - `concurrent_operations_test.go`, `transaction_concurrency_test.go`
+4. **Regression tests** - Document specific bugs: `column_mismatch_regression_test.go`
 
 ### File Size Guidelines
 
-- **Small files (<200 lines)**: Fine, but consider if it should be merged with related tests
-- **Medium files (200-1,000 lines)**: Ideal range for most test files
-- **Large files (1,000-2,500 lines)**: Perfectly acceptable if testing a cohesive feature
-- **Very large files (2,500+ lines)**: OK if it makes sense (see Go stdlib), but consider if natural split points exist
+- **Small (<200 lines)**: Consider merging with related tests
+- **Medium (200-1,000 lines)**: Ideal range
+- **Large (1,000-2,500 lines)**: Perfectly acceptable if cohesive
+- **Very large (2,500+ lines)**: OK if it makes sense (see Go stdlib)
 
-### Naming Conventions
+### Key Principle
 
-1. **Feature tests**: `{feature}_test.go`
-   - `batch_inserter_test.go`, `slug_cache_test.go`, `optimization_test.go`
+**Focus on cohesion over file size** - Keep related tests together. Split only when there's a clear feature/concern separation. The goal is **easy to find, easy to understand** tests - not perfect file sizes.
 
-2. **Integration tests**: `{feature}_integration_test.go` or include in main test file
-   - `mediadb_integration_test.go` - large integration suite
-   - `sql_launch_command_test.go` - unit + integration together (preferred for smaller suites)
-
-3. **Regression tests**: `{issue}_regression_test.go` or descriptive name
-   - `column_mismatch_regression_test.go`
-   - `cache_self_healing_test.go`
-
-4. **Concurrency tests**: `{feature}_concurrency_test.go` or `concurrent_{feature}_test.go`
-   - `transaction_concurrency_test.go`
-   - `concurrent_operations_test.go`
-
-### Package Examples
-
-Good organization example (`pkg/database/mediadb/`):
-
-```
-mediadb/
-├── batch_inserter_test.go          (732 lines - all batch inserter tests)
-├── cache_self_healing_test.go      (499 lines - cache healing feature)
-├── concurrent_operations_test.go   (524 lines - optimization concurrency)
-├── mediadb_integration_test.go     (1,282 lines - main integration suite)
-├── optimization_test.go            (660 lines - background optimization)
-├── slug_cache_test.go              (752 lines - slug caching)
-├── sql_launch_command_test.go      (388 lines - unit + integration)
-├── sql_search_test.go              (672 lines - search operations)
-├── sql_test.go                     (1,165 lines - general SQL operations)
-└── ... (7 more focused test files)
-```
-
-### General Guidelines
-
-1. **Start with related tests together** - split only when there's a clear need
-2. **Keep related things close** - Tests for the same feature should be in the same file
-3. **Focus on cohesion over file size** - If it's testing one thing, keep it together
-4. **Look for natural boundaries** - Split only when there's a clear feature/concern separation
-5. **Consistency within a package** - Similar features should have similar test organization
-
-**Remember**: The goal is **easy to find, easy to understand** tests - not perfect file sizes.
+**See TESTING.md** for detailed examples, naming conventions, and package organization patterns.
 
 ## Code Style & Standards
 
@@ -394,19 +360,20 @@ Look at recent commits with `git log --oneline -20` to match the style.
 
 ### Before committing
 
+**ALWAYS run these commands in order:**
+
 ```bash
-# 1. Run lint-fix
+# 1. Fix all linting and formatting issues (REQUIRED)
 task lint-fix
 
-# 2. Run tests
+# 2. Run all tests with race detection (REQUIRED)
 task test
 
 # 3. Check for vulnerabilities (for security-sensitive changes)
 task vulncheck
-
-# 4. Verify license headers on new files
-golangci-lint run
 ```
+
+**Note**: `task lint-fix` handles all linting, formatting, and license header checks automatically. You should not need to run golangci-lint manually.
 
 ### Commit checklist
 
@@ -426,7 +393,8 @@ golangci-lint run
 
 - Read any files in the repository
 - Run file-scoped tests: `go test ./pkg/specific/`
-- Run file-scoped linting: `golangci-lint run pkg/specific/`
+- Run `task lint-fix` to fix linting and formatting issues
+- Run package-level linting: `golangci-lint run pkg/specific/`
 - Format files: `gofumpt -w file.go`
 - View git history: `git log`, `git diff`
 - Run vulnerability checks: `govulncheck ./...`
@@ -442,16 +410,6 @@ golangci-lint run
 - Modifying configuration schema (SchemaVersion)
 - Adding new platform support
 - Changing API contract (breaking changes)
-
-## When Stuck
-
-- **Ask clarifying questions** - get requirements clear before coding
-- **Propose a plan first** - outline approach before implementing
-- **Reference existing patterns** - check similar code in the codebase
-- **Consult TESTING.md** - for testing questions
-- **Check pkg/testing/examples/** - for testing patterns
-- **Look at git history** - `git log -p filename` shows evolution
-- **Keep scope focused** - small, well-defined changes are easier to review
 
 ## API & Architecture Notes
 
@@ -482,9 +440,9 @@ Each platform has its own entry point in `cmd/{platform}/` with platform-specifi
 
 ### Reader Auto-Detection
 
-8 supported reader types auto-detect by default:
+10 supported reader types auto-detect by default:
 
-- acr122pcsc, file, libnfc, opticaldrive, pn532, pn532uart, simpleserial, tty2oled
+- acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, pn532uart, simpleserial, tty2oled
 
 ## Additional Resources
 
