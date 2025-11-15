@@ -52,9 +52,13 @@ type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
+	stopTracker    func() error
+	lastKnownGame  *models.ActiveMedia
 	kbd            linuxinput.Keyboard
 	gpd            linuxinput.Gamepad
 	processMu      sync.RWMutex
+	trackerMu      sync.RWMutex
+	kodiActive     bool
 }
 
 func (*Platform) ID() string {
@@ -173,14 +177,34 @@ func (p *Platform) StartPost(
 
 	if running {
 		p.setActiveMedia(game)
+		// Initialize lastKnownGame with startup state
+		p.trackerMu.Lock()
+		p.lastKnownGame = game
+		p.trackerMu.Unlock()
 	} else {
 		p.setActiveMedia(nil)
+	}
+
+	// Start background game tracker
+	stopTracker, err := p.startGameTracker(setActiveMedia)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to start background game tracker")
+	} else {
+		p.stopTracker = stopTracker
+		log.Info().Msg("background game tracker started")
 	}
 
 	return nil
 }
 
 func (p *Platform) Stop() error {
+	// Stop the background tracker if running
+	if p.stopTracker != nil {
+		if err := p.stopTracker(); err != nil {
+			log.Warn().Err(err).Msg("error stopping game tracker")
+		}
+	}
+
 	err := p.kbd.Close()
 	if err != nil {
 		log.Warn().Err(err).Msg("error closing keyboard")
@@ -221,9 +245,13 @@ func (*Platform) Settings() platforms.Settings {
 func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 	log.Info().Msg("stopping active launcher")
 
-	// Check if Kodi is the active launcher
+	// Check if Kodi is the active launcher (either launched via Zaparoo or detected externally)
 	activeMedia := p.activeMedia()
-	if activeMedia != nil && isKodiLauncher(activeMedia.LauncherID) {
+	p.trackerMu.RLock()
+	kodiActive := p.kodiActive
+	p.trackerMu.RUnlock()
+
+	if activeMedia != nil && (isKodiLauncher(activeMedia.LauncherID) || kodiActive) {
 		// Use Kodi-specific stopping mechanism with reason-based behavior
 		return p.stopKodi(p.cfg, reason)
 	}
@@ -265,6 +293,12 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 			p.trackedProcess = nil
 		}
 		p.processMu.Unlock()
+
+		// Clear tracking state
+		p.trackerMu.Lock()
+		p.kodiActive = false
+		p.lastKnownGame = nil
+		p.trackerMu.Unlock()
 
 		p.setActiveMedia(nil)
 		return nil
@@ -362,6 +396,13 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 
 	if err := client.Quit(ctx); err == nil {
 		log.Info().Msg("Kodi stopped gracefully via JSON-RPC")
+
+		// Clear tracking state since Kodi is fully quitting
+		p.trackerMu.Lock()
+		p.kodiActive = false
+		p.lastKnownGame = nil
+		p.trackerMu.Unlock()
+
 		p.setActiveMedia(nil)
 
 		// Also clear the tracked process since Kodi exited gracefully
@@ -386,6 +427,12 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 		log.Info().Msg("Kodi process killed")
 		p.trackedProcess = nil
 	}
+
+	// Clear tracking state since Kodi is fully quitting
+	p.trackerMu.Lock()
+	p.kodiActive = false
+	p.lastKnownGame = nil
+	p.trackerMu.Unlock()
 
 	p.setActiveMedia(nil)
 	return nil
@@ -437,6 +484,11 @@ func (p *Platform) LaunchMedia(
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
+
+	// Update Kodi tracking state for background tracker
+	p.trackerMu.Lock()
+	p.kodiActive = isKodiLauncher(launcher.ID)
+	p.trackerMu.Unlock()
 
 	return nil
 }

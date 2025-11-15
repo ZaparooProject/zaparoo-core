@@ -2054,3 +2054,103 @@ func TestConvertRomanNumerals_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeEpisodeFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "1x02_format",
+			input:    "Attack on Titan - 1x02 - That Day",
+			expected: "Attack on Titan - s01e02 - That Day",
+		},
+		{
+			name:     "S01E02_format",
+			input:    "Attack on Titan - S01E02 - That Day",
+			expected: "Attack on Titan - s01e02 - That Day",
+		},
+		{
+			name:     "s1e2_format_lowercase_no_padding",
+			input:    "Breaking Bad - s1e2 - Gray Matter",
+			expected: "Breaking Bad - s01e02 - Gray Matter",
+		},
+		{
+			name:     "3X15_format_uppercase",
+			input:    "The Wire - 3X15 - Middle Ground",
+			expected: "The Wire - s03e15 - Middle Ground",
+		},
+		{
+			name:     "multiple_episodes",
+			input:    "Show - 1x01 and 1x02 - Titles",
+			expected: "Show - s01e01 and s01e02 - Titles",
+		},
+		{
+			name:     "no_episode_format",
+			input:    "Just a Regular Title",
+			expected: "Just a Regular Title",
+		},
+		{
+			name:     "episode_only_no_season",
+			input:    "Show - Episode 5",
+			expected: "Show - Episode 5",
+		},
+		{
+			name:     "double_digit_season_episode",
+			input:    "Show - 12x34 - Title",
+			expected: "Show - s12e34 - Title",
+		},
+		{
+			name:     "with_period_separator",
+			input:    "Show - 1x02. That Day",
+			expected: "Show - s01e02. That Day",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := NormalizeEpisodeFormat(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestSlugifyEpisodeFormats tests that different episode formats produce matching slugs
+func TestSlugifyEpisodeFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input1 string
+		input2 string
+	}{
+		{
+			name:   "1x02_vs_S01E02",
+			input1: "Attack on Titan - 1x02 - That Day",
+			input2: "Attack on Titan - S01E02 - That Day",
+		},
+		{
+			name:   "3x15_vs_S03E15",
+			input1: "Breaking Bad - 3x15 - Ozymandias",
+			input2: "Breaking Bad - S03E15 - Ozymandias",
+		},
+		{
+			name:   "with_different_subtitles",
+			input1: "Show - 1x05 - Gray Matter",
+			input2: "Show - S01E05 - Gray Matter (extended)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			slug1 := SlugifyString(tt.input1)
+			slug2 := SlugifyString(tt.input2)
+			assert.Equal(t, slug1, slug2, "Slugs should match for different episode formats")
+		})
+	}
+}

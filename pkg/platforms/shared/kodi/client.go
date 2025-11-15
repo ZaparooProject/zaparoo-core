@@ -182,6 +182,36 @@ func (c *Client) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	return players, nil
 }
 
+// GetPlayerItem retrieves the currently playing item for a specific player
+func (c *Client) GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, error) {
+	params := PlayerGetItemParams{
+		PlayerID: playerID,
+		Properties: []string{
+			"title",
+			"file",
+			"artist",
+			"album",
+			"showtitle",
+			"season",
+			"episode",
+			"year",
+		},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodPlayerGetItem, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var response PlayerGetItemResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetPlayerItem response: %w", err)
+	}
+
+	return &response.Item, nil
+}
+
 // GetMovies retrieves all movies from Kodi's library
 func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, nil)

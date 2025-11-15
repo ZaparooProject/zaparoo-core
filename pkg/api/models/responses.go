@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/google/uuid"
 )
 
@@ -156,13 +157,26 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if a.SystemName != with.SystemName {
 		return false
 	}
-	if a.Path != with.Path {
-		return false
+
+	// Compare names by slugifying them to handle minor formatting differences
+	// (e.g., "Game Name" vs "game-name" are considered equal)
+	slugA := slugs.SlugifyString(a.Name)
+	slugB := slugs.SlugifyString(with.Name)
+
+	// If names match (after slugification), consider them equal regardless of path
+	// This handles cases where launcher uses virtual paths (kodi-episode://123)
+	// but tracker detects real paths (smb://server/file.mkv)
+	if slugA == slugB {
+		return true
 	}
-	if a.Name != with.Name {
-		return false
+
+	// If names don't match, require exact path match for equality
+	// (different content that happens to have same system)
+	if a.Path == with.Path {
+		return true
 	}
-	return true
+
+	return false
 }
 
 type VersionResponse struct {

@@ -369,3 +369,13 @@ func MaybeJSON(data []byte) bool {
 	}
 	return false
 }
+
+// PadNumber formats a number with leading zeros to the specified width.
+// Examples:
+//   - PadNumber(5, 2) → "05"
+//   - PadNumber(42, 4) → "0042"
+//   - PadNumber(123, 2) → "123"
+func PadNumber(num, width int) string {
+	format := fmt.Sprintf("%%0%dd", width)
+	return fmt.Sprintf(format, num)
+}

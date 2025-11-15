@@ -380,6 +380,11 @@ func TestStartPost_NoRunningGame(t *testing.T) {
 	// Should not error
 	require.NoError(t, err)
 
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
+
 	// Should set media to nil when no game running
 	assert.Nil(t, capturedMedia, "Should set active media to nil when no game running")
 }
@@ -416,6 +421,11 @@ func TestStartPost_WithRunningGame(t *testing.T) {
 
 	// Should not error
 	require.NoError(t, err)
+
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
 
 	// Should set active media with proper fields
 	require.NotNil(t, capturedMedia, "Should set active media when game is running")
@@ -500,6 +510,11 @@ func TestLaunchMedia_SetsActiveMediaWithTimestamp(t *testing.T) {
 	// Initialize platform (need setActiveMedia function)
 	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
 	require.NoError(t, err)
+
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
 
 	// Note: We can't actually test LaunchMedia because it requires ES API running game
 	// But we've verified the constructor is used in DoLaunch (in pkg/helpers/paths.go)

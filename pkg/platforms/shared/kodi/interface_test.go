@@ -22,6 +22,7 @@ package kodi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -88,6 +89,21 @@ func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, e
 		return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
 	}
 	return nil, nil
+}
+
+func (m *MockKodiClient) GetPlayerItem(ctx context.Context, playerID int) (*kodi.PlayerItem, error) {
+	args := m.Called(ctx, playerID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetPlayerItem error: %w", err)
+	}
+	if args.Get(0) == nil {
+		return nil, errors.New("mock GetPlayerItem: no item configured")
+	}
+	item, ok := args.Get(0).(*kodi.PlayerItem)
+	if !ok {
+		return nil, errors.New("mock GetPlayerItem: type assertion failed")
+	}
+	return item, nil
 }
 
 func (m *MockKodiClient) GetMovies(ctx context.Context) ([]kodi.Movie, error) {

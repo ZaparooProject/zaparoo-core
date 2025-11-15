@@ -47,6 +47,9 @@ type KodiClient interface {
 	// GetActivePlayers retrieves all active players in Kodi
 	GetActivePlayers(ctx context.Context) ([]Player, error)
 
+	// GetPlayerItem retrieves the currently playing item for a specific player
+	GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, error)
+
 	// GetMovies retrieves all movies from Kodi's library
 	GetMovies(ctx context.Context) ([]Movie, error)
 
