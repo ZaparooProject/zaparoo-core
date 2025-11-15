@@ -23,6 +23,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -212,6 +213,11 @@ func TestInstallService(t *testing.T) {
 
 func TestInstallDesktop(t *testing.T) {
 	// Cannot use t.Parallel() - tests modify shared XDG paths
+
+	// Skip on Windows - Unix file permissions don't work the same way
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Linux-specific test on Windows")
+	}
 
 	// Skip if running as root (cannot test non-root requirement)
 	if os.Geteuid() == 0 {
