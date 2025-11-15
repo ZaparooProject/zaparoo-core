@@ -16,7 +16,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
@@ -133,6 +133,32 @@ func launch(pl platforms.Platform, coreID string) func(*config.Instance, string)
 			return nil, fmt.Errorf("failed to set active game: %w", err)
 		}
 		return nil, nil
+	}
+}
+
+// arcadePlatform is a small interface for platforms that support arcade setname caching.
+type arcadePlatform interface {
+	SetArcadeCardLaunch(setname string)
+}
+
+// launchArcade provides a specialized launch function for the Arcade system.
+// It handles MRA file parsing and setname caching before delegating to the generic launch logic.
+func launchArcade(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
+	genericLauncher := launch(pl, coreID)
+
+	return func(cfg *config.Instance, path string) (*os.Process, error) {
+		if strings.HasSuffix(strings.ToLower(path), ".mra") {
+			if arcadePl, ok := pl.(arcadePlatform); ok {
+				mra, err := mgls.ReadMRA(path)
+				if err != nil {
+					log.Warn().Err(err).Str("path", path).Msg("failed to parse MRA for setname caching")
+				} else if mra.SetName != "" {
+					arcadePl.SetArcadeCardLaunch(mra.SetName)
+				}
+			}
+		}
+
+		return genericLauncher(cfg, path)
 	}
 }
 
@@ -441,7 +467,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Extract game target ID from virtual path: scummvm://targetid/Game Name
-		targetID, err := helpers.ExtractSchemeID(path, shared.SchemeScummVM)
+		targetID, err := virtualpath.ExtractSchemeID(path, shared.SchemeScummVM)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract ScummVM target ID from path: %w", err)
 		}
@@ -1457,7 +1483,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			SystemID:   systemdefs.SystemArcade,
 			Folders:    []string{"_Arcade"},
 			Extensions: []string{".mra"},
-			Launch:     launch(pl, systemdefs.SystemArcade),
+			Launch:     launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,

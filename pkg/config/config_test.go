@@ -431,7 +431,7 @@ func TestLaunchersDefaultServerURL(t *testing.T) {
 		{
 			name: "ServerURL field can be empty",
 			launcherCfg: LaunchersDefault{
-				Launcher:   "KodiLocal",
+				Launcher:   "KodiLocalVideo",
 				InstallDir: "/usr/bin/kodi",
 				ServerURL:  "",
 			},

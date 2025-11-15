@@ -380,7 +380,7 @@ const (
 	SystemVideo       = "Video"
 	SystemAudio       = "Audio"
 	SystemMovie       = "Movie"
-	SystemTV          = "TV"
+	SystemTVEpisode   = "TVEpisode"
 	SystemTVShow      = "TVShow"
 	SystemMusic       = "Music"
 	SystemMusicArtist = "MusicArtist"
@@ -1108,9 +1108,10 @@ var Systems = map[string]System{
 		ID:    SystemMovie,
 		Slugs: []string{"movies", "film", "cinema"},
 	},
-	SystemTV: {
-		ID:    SystemTV,
-		Slugs: []string{"television", "tvchannel"},
+	SystemTVEpisode: {
+		ID:      SystemTVEpisode,
+		Aliases: []string{"TV"},
+		Slugs:   []string{"television", "tvchannel"},
 	},
 	SystemTVShow: {
 		ID:    SystemTVShow,

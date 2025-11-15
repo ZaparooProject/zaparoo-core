@@ -635,13 +635,38 @@ func PopulateScanStateForSelectiveIndexing(
 	}
 	ss.TagsIndex = int(maxTagID)
 
-	// For selective indexing, use empty maps instead of pre-loading non-reindexed systems.
-	// This is safe because cache keys are system-scoped (e.g., "nes:mario" vs "snes:mario"),
-	// so data from other systems cannot collide with the systems being reindexed.
-	// TruncateSystems() already removed all target system data via CASCADE, and the max ID
-	// queries above ensure DBID continuity. The cache only needs to prevent duplicates
-	// within the current indexing session for the systems being reindexed.
-	ss.SystemIDs = make(map[string]int)
+	// For selective indexing, pre-populate SystemIDs to avoid cache key collisions.
+	// IMPORTANT: SystemIDs cache keys are NOT system-scoped (just "pc", "nes", etc).
+	// On platforms like Batocera, multiple folders map to the same SystemID (e.g., 50+ folders → "pc").
+	// Empty SystemIDs map causes cache collisions when processing these folders.
+	//
+	// TitleIDs and MediaIDs can remain empty because:
+	// - Their cache keys ARE system-scoped (e.g., "nes:mario" vs "snes:mario")
+	// - TruncateSystems() CASCADE deleted all data for reindexed systems
+	// - Only prevents duplicates within the current indexing session
+	//
+	// TagTypeIDs and TagIDs can remain empty because:
+	// - They are global entities reused across all systems
+	// - Database UNIQUE constraints handle duplicates (SeedCanonicalTags uses non-batch mode)
+
+	// Check for cancellation before loading systems
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Pre-populate SystemIDs with existing systems (including those not being reindexed)
+	systems, err := db.GetAllSystems()
+	if err != nil {
+		return fmt.Errorf("failed to get existing systems for selective indexing: %w", err)
+	}
+	ss.SystemIDs = make(map[string]int, len(systems))
+	for _, system := range systems {
+		ss.SystemIDs[system.SystemID] = int(system.DBID)
+	}
+
+	// Keep other maps empty for performance (system-scoped keys or global with UNIQUE constraints)
 	ss.TagTypeIDs = make(map[string]int)
 	ss.TagIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)

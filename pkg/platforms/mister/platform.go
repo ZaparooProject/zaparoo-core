@@ -42,24 +42,32 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
+type arcadeCardLaunchCache struct {
+	timestamp time.Time
+	setname   string
+	mu        sync.RWMutex
+}
+
 type Platform struct {
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
-	setActiveMedia      func(*models.ActiveMedia)
-	textMap             map[string]string
+	trackedProcess      *os.Process
+	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
 	cmdMappings         map[string]func(platforms.Platform, *platforms.CmdEnv) (platforms.CmdResult, error)
 	lastScan            *tokens.Token
 	stopTracker         func() error
-	trackedProcess      *os.Process
+	setActiveMedia      func(*models.ActiveMedia)
 	activeMedia         func() *models.ActiveMedia
-	tracker             *tracker.Tracker
+	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
 	gpd                 linuxinput.Gamepad
 	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
+	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
 	processMu           sync.RWMutex
 	platformMu          sync.Mutex
@@ -312,6 +320,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    misterconfig.DataDir,
 		ConfigDir:  misterconfig.DataDir,
 		TempDir:    misterconfig.TempDir,
+		LogDir:     misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }
@@ -519,39 +528,20 @@ func (p *Platform) LaunchMedia(
 }
 
 func (p *Platform) KeyboardPress(arg string) error {
-	var names []string
-	if len(arg) > 1 {
-		arg = strings.TrimLeft(arg, "{")
-		arg = strings.TrimRight(arg, "}")
-		names = strings.Split(arg, "+")
-		for i, name := range names {
-			if len(name) > 1 {
-				names[i] = "{" + name + "}"
-			}
-		}
-	} else {
-		names = []string{arg}
+	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
+	if err != nil {
+		return fmt.Errorf("failed to parse key combo: %w", err)
 	}
 
-	codes := make([]int, 0, len(names))
-	for _, name := range names {
-		code, ok := linuxinput.ToKeyboardCode(name)
-		if !ok {
-			return fmt.Errorf("unknown keyboard key: %s", name)
-		}
-		codes = append(codes, code)
-	}
-
-	if len(codes) == 1 {
-		err := p.kbd.Press(codes[0])
-		if err != nil {
-			return fmt.Errorf("failed to press keyboard key: %w", err)
+	if isCombo {
+		if err := p.kbd.Combo(codes...); err != nil {
+			return fmt.Errorf("failed to press keyboard combo: %w", err)
 		}
 		return nil
 	}
-	err := p.kbd.Combo(codes...)
-	if err != nil {
-		return fmt.Errorf("failed to press keyboard combo: %w", err)
+
+	if err := p.kbd.Press(codes[0]); err != nil {
+		return fmt.Errorf("failed to press keyboard key: %w", err)
 	}
 	return nil
 }
@@ -845,4 +835,49 @@ func (p *Platform) ShowPicker(
 
 func (p *Platform) ConsoleManager() platforms.ConsoleManager {
 	return p.consoleManager
+}
+
+// SetArcadeCardLaunch caches the arcade setname when launching via card.
+func (p *Platform) SetArcadeCardLaunch(setname string) {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+	p.arcadeCardLaunch.setname = setname
+	p.arcadeCardLaunch.timestamp = time.Now()
+	log.Debug().
+		Str("setname", setname).
+		Msg("cached arcade card launch")
+}
+
+// CheckAndClearArcadeCardLaunch checks if the setname was recently launched via card.
+// Returns true if there's a match within the last 15 seconds, false otherwise.
+// Clears the cache after checking to prevent stale suppressions.
+func (p *Platform) CheckAndClearArcadeCardLaunch(setname string) bool {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+
+	// Check if cache is empty
+	if p.arcadeCardLaunch.setname == "" {
+		return false
+	}
+
+	// Check if setnames match
+	if p.arcadeCardLaunch.setname != setname {
+		return false
+	}
+
+	// Check if within time window (15 seconds)
+	elapsed := time.Since(p.arcadeCardLaunch.timestamp)
+	if elapsed > 15*time.Second {
+		// Cache is stale, clear it
+		p.arcadeCardLaunch.setname = ""
+		return false
+	}
+
+	// Match found - clear cache and return true
+	log.Debug().
+		Str("setname", setname).
+		Dur("elapsed", elapsed).
+		Msg("suppressing duplicate arcade notification")
+	p.arcadeCardLaunch.setname = ""
+	return true
 }

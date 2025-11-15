@@ -20,7 +20,9 @@
 package slugs
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -68,6 +70,11 @@ type pipelineContext struct {
 }
 
 var (
+	// Episode format regex matches both "1x02" and "S01E02" style formats
+	// Group 1 & 2: season/episode from "sXXeXX" format
+	// Group 3 & 4: season/episode from "XxXX" format
+	episodeFormatRegex = regexp.MustCompile(`(?i)(?:s(\d+)e(\d+)|(\d+)x(\d+))`)
+
 	editionSuffixRegex = regexp.MustCompile(
 		`(?i)\s+(version|edition|ausgabe|versione|edizione|versao|edicao|` +
 			`バージョン|エディション|ヴァージョン)$`,
@@ -291,6 +298,51 @@ func StripTrailingArticle(s string) string {
 		return strings.TrimSpace(s)
 	}
 	return s
+}
+
+// NormalizeEpisodeFormat converts various episode numbering formats to a canonical form.
+// Handles both "1x02" and "S01E02" style formats, normalizing them to "s01e02" (lowercase, zero-padded).
+//
+// Examples:
+//   - "Show - 1x02 - Title" → "Show - s01e02 - Title"
+//   - "Show - S01E02 - Title" → "Show - s01e02 - Title"
+//   - "Show - s1e2 - Title" → "Show - s01e02 - Title"
+//   - "Show - 3X15 - Title" → "Show - s03e15 - Title"
+//
+// This is Stage 6a of the normalization pipeline (inserted after trailing article removal,
+// before symbol/separator normalization).
+func NormalizeEpisodeFormat(s string) string {
+	return episodeFormatRegex.ReplaceAllStringFunc(s, func(match string) string {
+		parts := episodeFormatRegex.FindStringSubmatch(match)
+
+		var seasonStr, episodeStr string
+		switch {
+		case parts[1] != "" && parts[2] != "":
+			// Matched the "sXXeXX" format
+			seasonStr = parts[1]
+			episodeStr = parts[2]
+		case parts[3] != "" && parts[4] != "":
+			// Matched the "XxXX" format
+			seasonStr = parts[3]
+			episodeStr = parts[4]
+		default:
+			// This should not be reached if the regex matched, but it's safe to return the original match
+			return match
+		}
+
+		// Convert to int to remove any existing padding, then re-format with standard padding
+		season, err := strconv.Atoi(seasonStr)
+		if err != nil {
+			return match
+		}
+		episode, err := strconv.Atoi(episodeStr)
+		if err != nil {
+			return match
+		}
+
+		// Return the canonical format: lowercase "s" prefix, zero-padded to 2 digits
+		return fmt.Sprintf("s%02de%02d", season, episode)
+	})
 }
 
 // tokenizeNormalized extracts word tokens from a normalized string (after Stage 13).
@@ -948,6 +1000,11 @@ func normalizeInternal(input string) (string, *pipelineContext) {
 
 	// Stage 6: Trailing Article Removal
 	s = StripTrailingArticle(s)
+
+	// Stage 6a: Episode Format Normalization
+	// Normalize episode formats (1x02, S01E02) to canonical form (s01e02)
+	// This must happen BEFORE separator normalization to preserve episode markers
+	s = NormalizeEpisodeFormat(s)
 
 	// SEPARATOR & ABBREVIATION NORMALIZATION (Stages 7-9)
 	// Stage 7: Normalize Symbols and Separators (: _ - / \ , ; but NOT .)

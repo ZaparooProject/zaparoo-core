@@ -123,6 +123,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }

@@ -22,6 +22,7 @@ package mocks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
@@ -109,6 +110,15 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
+// Quit mocks gracefully exiting Kodi application
+func (m *MockKodiClient) Quit(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Quit error: %w", err)
+	}
+	return nil
+}
+
 // GetActivePlayers mocks retrieving all active players in Kodi
 func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, error) {
 	args := m.Called(ctx)
@@ -122,6 +132,22 @@ func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]kodi.Player, e
 		return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
 	}
 	return nil, nil
+}
+
+// GetPlayerItem mocks retrieving the currently playing item for a specific player
+func (m *MockKodiClient) GetPlayerItem(ctx context.Context, playerID int) (*kodi.PlayerItem, error) {
+	args := m.Called(ctx, playerID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetPlayerItem error: %w", err)
+	}
+	if args.Get(0) == nil {
+		return nil, errors.New("mock GetPlayerItem: no item configured")
+	}
+	item, ok := args.Get(0).(*kodi.PlayerItem)
+	if !ok {
+		return nil, errors.New("mock GetPlayerItem: type assertion failed")
+	}
+	return item, nil
 }
 
 // GetMovies mocks retrieving all movies from Kodi's library
@@ -248,7 +274,9 @@ func (m *MockKodiClient) SetupBasicMock() {
 	m.On("LaunchMovie", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("LaunchTVEpisode", mock.AnythingOfType("string")).Return(nil).Maybe()
 	m.On("Stop").Return(nil).Maybe()
+	m.On("Quit", mock.Anything).Return(nil).Maybe()
 	m.On("GetActivePlayers", mock.Anything).Return([]kodi.Player{}, nil).Maybe()
+	m.On("GetPlayerItem", mock.Anything, mock.AnythingOfType("int")).Return((*kodi.PlayerItem)(nil), nil).Maybe()
 	m.On("GetMovies", mock.Anything).Return([]kodi.Movie{}, nil).Maybe()
 	m.On("GetTVShows", mock.Anything).Return([]kodi.TVShow{}, nil).Maybe()
 	m.On("GetEpisodes", mock.Anything, mock.AnythingOfType("int")).Return([]kodi.Episode{}, nil).Maybe()

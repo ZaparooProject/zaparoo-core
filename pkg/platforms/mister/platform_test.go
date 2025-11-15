@@ -141,3 +141,117 @@ func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	// keyboard device, which requires uinput access. The function signature
 	// and presence is what matters for the platform to use it correctly.
 }
+
+func TestArcadeCardLaunchCache(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SetArcadeCardLaunch stores setname and timestamp", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("sf2")
+
+		// Verify setname was stored (indirectly via CheckAndClearArcadeCardLaunch)
+		result := p.CheckAndClearArcadeCardLaunch("sf2")
+		assert.True(t, result, "should match freshly cached setname")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false for empty cache", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		result := p.CheckAndClearArcadeCardLaunch("pacman")
+
+		assert.False(t, result, "should return false for empty cache")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false for mismatched setname", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("sf2")
+
+		result := p.CheckAndClearArcadeCardLaunch("pacman")
+		assert.False(t, result, "should return false for mismatched setname")
+
+		// Original setname should still be in cache
+		result2 := p.CheckAndClearArcadeCardLaunch("sf2")
+		assert.True(t, result2, "original setname should still be cached")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch clears cache on match", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("dkong")
+
+		// First check should match and clear
+		result1 := p.CheckAndClearArcadeCardLaunch("dkong")
+		assert.True(t, result1, "first check should match")
+
+		// Second check should return false (cache cleared)
+		result2 := p.CheckAndClearArcadeCardLaunch("dkong")
+		assert.False(t, result2, "second check should return false (cache cleared)")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch handles case sensitivity", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("StreetFighter2")
+
+		// Should match exactly
+		result := p.CheckAndClearArcadeCardLaunch("StreetFighter2")
+		assert.True(t, result, "should match exact case")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false and clears stale cache", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("mk2")
+
+		// Manually set timestamp to 16 seconds ago (past the 15 second window)
+		p.arcadeCardLaunch.mu.Lock()
+		p.arcadeCardLaunch.timestamp = p.arcadeCardLaunch.timestamp.Add(-16e9) // -16 seconds in nanoseconds
+		p.arcadeCardLaunch.mu.Unlock()
+
+		result := p.CheckAndClearArcadeCardLaunch("mk2")
+		assert.False(t, result, "should return false for stale cache (>15s)")
+
+		// Cache should be cleared
+		p.arcadeCardLaunch.mu.RLock()
+		cached := p.arcadeCardLaunch.setname
+		p.arcadeCardLaunch.mu.RUnlock()
+		assert.Empty(t, cached, "cache should be cleared after stale check")
+	})
+
+	t.Run("concurrent SetArcadeCardLaunch and CheckAndClearArcadeCardLaunch", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+
+		// Launch concurrent goroutines
+		const goroutines = 10
+		done := make(chan bool, goroutines)
+
+		for i := range goroutines {
+			go func(index int) {
+				if index%2 == 0 {
+					p.SetArcadeCardLaunch("concurrent")
+				} else {
+					_ = p.CheckAndClearArcadeCardLaunch("concurrent")
+				}
+				done <- true
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for range goroutines {
+			<-done
+		}
+
+		// Test should complete without race conditions
+		// (run with go test -race to verify)
+	})
+}

@@ -34,7 +34,7 @@ import (
 func HandleLogsDownload(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received logs download request")
 
-	logFilePath := filepath.Join(env.Platform.Settings().TempDir, config.LogFile)
+	logFilePath := filepath.Join(env.Platform.Settings().LogDir, config.LogFile)
 
 	//nolint:gosec // Safe: reads log files from controlled application directories
 	data, err := os.ReadFile(logFilePath)

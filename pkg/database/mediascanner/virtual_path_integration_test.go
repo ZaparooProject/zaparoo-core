@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -206,7 +207,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 			defer cleanup()
 
 			// Step 1: Create virtual path (simulating scanner)
-			virtualPath := helpers.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
+			virtualPath := virtualpath.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
 			t.Logf("Created virtual path: %s", virtualPath)
 
 			// Verify encoding happened if special chars present
@@ -269,7 +270,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 			t.Logf("Retrieved path from DB: %s", media.Path)
 
 			// Step 4: Extract ID (simulating launcher)
-			extractedID, err := helpers.ExtractSchemeID(media.Path, tc.scheme)
+			extractedID, err := virtualpath.ExtractSchemeID(media.Path, tc.scheme)
 			require.NoError(t, err, "ExtractSchemeID should succeed")
 			assert.Equal(t, tc.id, extractedID,
 				"Extracted ID should match original ID regardless of encoding in name")
@@ -308,7 +309,7 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 				title.Slug, title.SlugLength, title.SlugWordCount)
 
 			// Step 8: Round-trip verification - create path again and compare
-			recreatedPath := helpers.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
+			recreatedPath := virtualpath.CreateVirtualPath(tc.scheme, tc.id, tc.displayName)
 			assert.Equal(t, virtualPath, recreatedPath,
 				"Re-creating the same virtual path should produce identical encoding")
 		})

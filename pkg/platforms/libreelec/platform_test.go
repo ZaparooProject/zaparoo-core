@@ -31,16 +31,16 @@ func TestLibreELECHasKodiLaunchers(t *testing.T) {
 	var kodiLocal, kodiMovie, kodiTV *string
 	for _, launcher := range launchers {
 		switch launcher.ID {
-		case "KodiLocal":
+		case "KodiLocalVideo":
 			kodiLocal = &launcher.ID
 			assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 		case "KodiMovie":
 			kodiMovie = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMovie, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, shared.SchemeKodiMovie)
-		case "KodiTV":
+		case "KodiTVEpisode":
 			kodiTV = &launcher.ID
-			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, shared.SchemeKodiEpisode)
 		}
 	}
@@ -63,7 +63,7 @@ func TestLibreELECHasKodiMusicLauncher(t *testing.T) {
 	// Check for KodiMusic launcher
 	var kodiMusic *string
 	for _, launcher := range launchers {
-		if launcher.ID != "KodiMusic" {
+		if launcher.ID != "KodiLocalAudio" {
 			continue
 		}
 		kodiMusic = &launcher.ID

@@ -32,7 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	_ "github.com/mattn/go-sqlite3"
@@ -89,7 +89,7 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 
 		results = append(results, platforms.ScanResult{
 			Name:  name,
-			Path:  helpers.CreateVirtualPath(shared.SchemeLutris, slug, name),
+			Path:  virtualpath.CreateVirtualPath(shared.SchemeLutris, slug, name),
 			NoExt: true,
 		})
 	}
@@ -144,7 +144,7 @@ func NewLutrisLauncher() platforms.Launcher {
 		},
 		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 			// Extract game slug/id from lutris://game-slug format
-			slug, err := helpers.ExtractSchemeID(path, shared.SchemeLutris)
+			slug, err := virtualpath.ExtractSchemeID(path, shared.SchemeLutris)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract Lutris game slug from path: %w", err)
 			}

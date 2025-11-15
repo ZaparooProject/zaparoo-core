@@ -23,6 +23,7 @@ package linuxinput
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput/keyboardmap"
@@ -155,4 +156,62 @@ func (k *Gamepad) Combo(keys ...int) error {
 		}
 	}
 	return nil
+}
+
+// ParseKeyCombo parses a keyboard key argument string and returns the corresponding
+// key codes. It supports both single keys (e.g., "a", "{f9}") and combo keys with
+// the "+" delimiter (e.g., "{ctrl+q}", "{shift+a}").
+//
+// The function returns:
+//   - codes: slice of keyboard codes ready to be used with Press() or Combo()
+//   - isCombo: true if multiple keys detected (use Combo()), false for single key (use Press())
+//   - error: if any key name is unknown
+//
+// Examples:
+//   - ParseKeyCombo("a") -> [30], false, nil
+//   - ParseKeyCombo("{f9}") -> [67], false, nil
+//   - ParseKeyCombo("{ctrl+q}") -> [29, 16], true, nil
+//   - ParseKeyCombo("{shift+a}") -> [42, 30], true, nil
+func ParseKeyCombo(arg string) (codes []int, isCombo bool, err error) {
+	var names []string
+
+	// Parse combo syntax: {key1+key2+...} or single key
+	if len(arg) > 1 && arg[0] == '{' && arg[len(arg)-1] == '}' {
+		// Strip outer braces and split by +
+		inner := arg[1 : len(arg)-1]
+		parts := strings.Split(inner, "+")
+
+		if len(parts) > 1 {
+			// Combo detected - re-add braces to multi-char parts
+			names = make([]string, len(parts))
+			for i, part := range parts {
+				if len(part) > 1 {
+					names[i] = "{" + part + "}"
+				} else {
+					names[i] = part
+				}
+			}
+			isCombo = true
+		} else {
+			// Single key with braces
+			names = []string{arg}
+			isCombo = false
+		}
+	} else {
+		// Single key without braces
+		names = []string{arg}
+		isCombo = false
+	}
+
+	// Convert all names to codes
+	codes = make([]int, 0, len(names))
+	for _, name := range names {
+		code, ok := ToKeyboardCode(name)
+		if !ok {
+			return nil, false, fmt.Errorf("unknown keyboard key: %s", name)
+		}
+		codes = append(codes, code)
+	}
+
+	return codes, isCombo, nil
 }

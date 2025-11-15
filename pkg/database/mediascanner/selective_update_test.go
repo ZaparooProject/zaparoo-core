@@ -94,14 +94,22 @@ func TestSelectiveUpdate_EmptyCache(t *testing.T) {
 		TagsIndex:     0,
 	}
 
-	// This is the key function being tested - it should use EMPTY maps
+	// This is the key function being tested - it should pre-populate SystemIDs but keep other maps empty
 	err = PopulateScanStateForSelectiveIndexing(ctx, db, selectiveState, []string{"nes"})
 	require.NoError(t, err)
 
-	// Verify caches are empty (the optimization)
+	// Verify TitleIDs and MediaIDs are empty (performance optimization - system-scoped keys)
 	assert.Empty(t, selectiveState.TitleIDs, "TitleIDs cache should be empty for selective indexing")
 	assert.Empty(t, selectiveState.MediaIDs, "MediaIDs cache should be empty for selective indexing")
-	assert.Empty(t, selectiveState.SystemIDs, "SystemIDs cache should be empty for selective indexing")
+
+	// Verify SystemIDs is populated with existing systems (NOT empty - prevents cache collisions)
+	// After truncating NES, we should have SNES and Genesis still in the database
+	assert.NotEmpty(t, selectiveState.SystemIDs, "SystemIDs cache should be populated to prevent cache key collisions")
+	assert.Contains(t, selectiveState.SystemIDs, "snes", "SystemIDs should contain existing snes system")
+	assert.Contains(t, selectiveState.SystemIDs, "genesis", "SystemIDs should contain existing genesis system")
+	assert.NotContains(t, selectiveState.SystemIDs, "nes", "SystemIDs should not contain truncated nes system")
+
+	// TagTypeIDs and TagIDs can be empty (global entities with UNIQUE constraints)
 	assert.Empty(t, selectiveState.TagTypeIDs, "TagTypeIDs cache should be empty for selective indexing")
 	assert.Empty(t, selectiveState.TagIDs, "TagIDs cache should be empty for selective indexing")
 

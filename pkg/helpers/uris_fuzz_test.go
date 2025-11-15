@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 )
 
 // FuzzParseVirtualPathStr tests ParseVirtualPathStr with random inputs
@@ -52,13 +54,13 @@ func FuzzParseVirtualPathStr(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, virtualPath string) {
 		// Call the function - should never panic
-		result, err := ParseVirtualPathStr(virtualPath)
+		result, err := virtualpath.ParseVirtualPathStr(virtualPath)
 
 		// Property 1: If successful, scheme must be valid
 		if err == nil {
 			if result.Scheme != "" {
 				// Scheme should follow RFC 3986 rules
-				if !isValidScheme(result.Scheme) {
+				if !virtualpath.IsValidScheme(result.Scheme) {
 					t.Errorf("Invalid scheme accepted: %q", result.Scheme)
 				}
 			}
@@ -80,7 +82,7 @@ func FuzzParseVirtualPathStr(f *testing.F) {
 		}
 
 		// Property 4: If contains control chars, should reject
-		if containsControlChar(virtualPath) {
+		if virtualpath.ContainsControlChar(virtualPath) {
 			if err == nil && result.Scheme != "" {
 				t.Errorf("Should reject control characters: %q", virtualPath)
 			}
@@ -148,14 +150,14 @@ func FuzzDecodeURIIfNeeded(f *testing.F) {
 		}
 
 		// Property 5: Should preserve scheme if present and valid
-		if strings.Contains(uri, "://") && !containsControlChar(uri) {
+		if strings.Contains(uri, "://") && !virtualpath.ContainsControlChar(uri) {
 			schemeEnd := strings.Index(uri, "://")
 			schemeEnd2 := strings.Index(result, "://")
 			if schemeEnd >= 0 && schemeEnd2 >= 0 {
 				origScheme := strings.ToLower(uri[:schemeEnd])
 				resultScheme := strings.ToLower(result[:schemeEnd2])
 				// Only check if original scheme is valid
-				if isValidScheme(origScheme) {
+				if virtualpath.IsValidScheme(origScheme) {
 					if origScheme != resultScheme {
 						t.Errorf("Scheme changed: %q -> %q", origScheme, resultScheme)
 					}
@@ -314,7 +316,7 @@ func FuzzContainsControlChar(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Call function - should never panic
-		result := containsControlChar(s)
+		result := virtualpath.ContainsControlChar(s)
 
 		// Property: Manually verify the result
 		hasControl := false
@@ -350,7 +352,7 @@ func FuzzIsValidScheme(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, scheme string) {
 		// Call function - should never panic
-		result := isValidScheme(scheme)
+		result := virtualpath.IsValidScheme(scheme)
 
 		// Property 1: Empty should be invalid
 		if scheme == "" && result {

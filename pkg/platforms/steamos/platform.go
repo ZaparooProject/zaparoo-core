@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -130,6 +131,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }
@@ -282,7 +284,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
 				}
 
-				id, err := helpers.ExtractSchemeID(path, shared.SchemeSteam)
+				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeSteam)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
 				}

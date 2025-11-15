@@ -302,6 +302,42 @@ func TestLookupSystemAliases(t *testing.T) {
 	}
 }
 
+// TestTVEpisodeBackwardCompatibility verifies that the old "TV" system ID
+// still resolves correctly to TVEpisode for backward compatibility
+func TestTVEpisodeBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		wantID string
+	}{
+		{"TV alias (old ID)", "TV", "TVEpisode"},
+		{"TV lowercase", "tv", "TVEpisode"},
+		{"TVEpisode canonical", "TVEpisode", "TVEpisode"},
+		{"TVEpisode lowercase", "tvepisode", "TVEpisode"},
+		{"television slug", "television", "TVEpisode"},
+		{"tvchannel slug", "tvchannel", "TVEpisode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sys, err := LookupSystem(tt.input)
+			require.NoError(t, err, "LookupSystem(%q) should not error", tt.input)
+			require.NotNil(t, sys, "LookupSystem(%q) should return a system", tt.input)
+			assert.Equal(t, tt.wantID, sys.ID, "LookupSystem(%q) should resolve to %s", tt.input, tt.wantID)
+		})
+	}
+
+	// Verify that TV and TVEpisode resolve to the exact same system
+	tvSys, err := LookupSystem("TV")
+	require.NoError(t, err)
+	tvEpisodeSys, err := LookupSystem("TVEpisode")
+	require.NoError(t, err)
+	assert.Equal(t, tvEpisodeSys.ID, tvSys.ID, "TV and TVEpisode should resolve to the same system")
+	assert.Contains(t, tvSys.Aliases, "TV", "TVEpisode system should have 'TV' as an alias")
+}
+
 // TestLookupSystemNaturalLanguage verifies natural language lookups using manufacturer prefixes
 func TestLookupSystemNaturalLanguage(t *testing.T) {
 	t.Parallel()

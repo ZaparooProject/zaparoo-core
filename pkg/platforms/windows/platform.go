@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
@@ -125,6 +126,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }
@@ -531,7 +533,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
 				}
 
-				id, err := helpers.ExtractSchemeID(path, shared.SchemeSteam)
+				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeSteam)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
 				}
@@ -561,7 +563,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					path = strings.Replace(path, "flashpoint://run/", "flashpoint://", 1)
 				}
 
-				id, err := helpers.ExtractSchemeID(path, shared.SchemeFlashpoint)
+				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeFlashpoint)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract Flashpoint game ID from path: %w", err)
 				}
@@ -585,7 +587,11 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				cmd := exec.CommandContext(context.Background(), "cmd", "/c", "start", path)
+				cmd := exec.CommandContext(context.Background(),
+					"cmd", "/c",
+					"start",
+					path,
+				)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				err := cmd.Start()
 				if err != nil {
@@ -685,7 +691,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 
 				for _, game := range lbXML.Games {
 					results = append(results, platforms.ScanResult{
-						Path:  helpers.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
+						Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
 						Name:  game.Title,
 						NoExt: true,
 					})
@@ -704,7 +710,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					return nil, errors.New("CLI_Launcher not found")
 				}
 
-				id, err := helpers.ExtractSchemeID(path, shared.SchemeLaunchBox)
+				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeLaunchBox)
 				if err != nil {
 					return nil, fmt.Errorf("failed to extract LaunchBox game ID from path: %w", err)
 				}

@@ -60,7 +60,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	// Create two test launchers with the same SystemID but different IDs
 	launcher1 := platforms.Launcher{
 		ID:       "TestLauncher1",
-		SystemID: systemdefs.SystemTV,
+		SystemID: systemdefs.SystemTVEpisode,
 		Scanner: func(_ context.Context, _ *config.Instance, _ string,
 			_ []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
@@ -73,7 +73,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 
 	launcher2 := platforms.Launcher{
 		ID:       "TestLauncher2",
-		SystemID: systemdefs.SystemTV, // Same system ID as launcher1
+		SystemID: systemdefs.SystemTVEpisode, // Same system ID as launcher1
 		Scanner: func(_ context.Context, _ *config.Instance, _ string,
 			_ []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
@@ -108,7 +108,7 @@ func TestMultipleScannersForSameSystemID(t *testing.T) {
 	}()
 
 	// Run the media indexer
-	systems := []systemdefs.System{{ID: systemdefs.SystemTV}}
+	systems := []systemdefs.System{{ID: systemdefs.SystemTVEpisode}}
 	_, err = NewNamesIndex(context.Background(), platform, cfg, systems, db, func(IndexStatus) {})
 	require.NoError(t, err)
 

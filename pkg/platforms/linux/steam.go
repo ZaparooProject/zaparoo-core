@@ -34,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -118,7 +119,7 @@ func NewSteamLauncher() platforms.Launcher {
 				path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
 			}
 
-			id, err := helpers.ExtractSchemeID(path, shared.SchemeSteam)
+			id, err := virtualpath.ExtractSchemeID(path, shared.SchemeSteam)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
 			}

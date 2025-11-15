@@ -36,14 +36,14 @@ func TestKodiLocalLauncherExists(t *testing.T) {
 	// Look for KodiLocal launcher
 	var kodiLocal *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiLocal" {
+		if launchers[i].ID == "KodiLocalVideo" {
 			kodiLocal = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiLocal, "KodiLocal launcher should exist")
-	assert.Equal(t, "KodiLocal", kodiLocal.ID)
+	require.NotNil(t, kodiLocal, "KodiLocalVideo launcher should exist")
+	assert.Equal(t, "KodiLocalVideo", kodiLocal.ID)
 	assert.Equal(t, systemdefs.SystemVideo, kodiLocal.SystemID)
 	assert.Contains(t, kodiLocal.Folders, "videos")
 	assert.Contains(t, kodiLocal.Extensions, ".mp4")
@@ -63,10 +63,10 @@ func TestKodiLocalLaunchesVideoFiles(t *testing.T) {
 
 	launchers := platform.Launchers(cfg)
 
-	// Find KodiLocal launcher
+	// Find KodiLocalVideo launcher
 	var kodiLocal *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiLocal" {
+		if launchers[i].ID == "KodiLocalVideo" {
 			kodiLocal = &launchers[i]
 			break
 		}
@@ -121,15 +121,15 @@ func TestKodiTVLauncherExists(t *testing.T) {
 	// Look for KodiTV launcher
 	var kodiTV *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiTV" {
+		if launchers[i].ID == "KodiTVEpisode" {
 			kodiTV = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiTV, "KodiTV launcher should exist")
-	assert.Equal(t, "KodiTV", kodiTV.ID)
-	assert.Equal(t, systemdefs.SystemTV, kodiTV.SystemID)
+	require.NotNil(t, kodiTV, "KodiTVEpisode launcher should exist")
+	assert.Equal(t, "KodiTVEpisode", kodiTV.ID)
+	assert.Equal(t, systemdefs.SystemTVEpisode, kodiTV.SystemID)
 	assert.Contains(t, kodiTV.Schemes, shared.SchemeKodiEpisode)
 }
 
@@ -147,14 +147,14 @@ func TestKodiMusicLauncherExists(t *testing.T) {
 	// Look for KodiMusic launcher
 	var kodiMusic *platforms.Launcher
 	for i := range launchers {
-		if launchers[i].ID == "KodiMusic" {
+		if launchers[i].ID == "KodiLocalAudio" {
 			kodiMusic = &launchers[i]
 			break
 		}
 	}
 
-	require.NotNil(t, kodiMusic, "KodiMusic launcher should exist")
-	assert.Equal(t, "KodiMusic", kodiMusic.ID)
+	require.NotNil(t, kodiMusic, "KodiLocalAudio launcher should exist")
+	assert.Equal(t, "KodiLocalAudio", kodiMusic.ID)
 	assert.Equal(t, systemdefs.SystemMusic, kodiMusic.SystemID)
 	assert.Contains(t, kodiMusic.Extensions, ".mp3")
 	assert.Contains(t, kodiMusic.Extensions, ".flac")
@@ -264,9 +264,9 @@ func TestCommanderX16SystemImplemented(t *testing.T) {
 	assert.Contains(t, commanderX16Launcher.Folders, "commanderx16")
 }
 
-// TestBatoceraGameLaunchersSkipFilesystemScan tests that Batocera game launchers
-// have SkipFilesystemScan set to true since they use gamelist.xml via custom Scanner
-func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
+// TestBatoceraGameLaunchersUseBuiltInScanner tests that Batocera game launchers
+// use the built-in filesystem scanner + Scanner to add metadata (Pattern A)
+func TestBatoceraGameLaunchersUseBuiltInScanner(t *testing.T) {
 	t.Parallel()
 	platform := &Platform{}
 	cfg := &config.Instance{}
@@ -278,10 +278,10 @@ func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
 	for _, launcher := range launchers {
 		// Skip non-game launchers
 		if launcher.ID == "Generic" ||
-			launcher.ID == "KodiLocal" ||
+			launcher.ID == "KodiLocalVideo" ||
 			launcher.ID == "KodiMovie" ||
-			launcher.ID == "KodiTV" ||
-			launcher.ID == "KodiMusic" ||
+			launcher.ID == "KodiTVEpisode" ||
+			launcher.ID == "KodiLocalAudio" ||
 			launcher.ID == "KodiSong" ||
 			launcher.ID == "KodiAlbum" ||
 			launcher.ID == "KodiArtist" ||
@@ -291,11 +291,22 @@ func TestBatoceraGameLaunchersSkipFilesystemScan(t *testing.T) {
 
 		gameSystemLaunchers = append(gameSystemLaunchers, launcher.ID)
 
-		// EXPECTED: Batocera game system launchers should skip filesystem scanning
-		// ACTUAL (before fix): SkipFilesystemScan is false (default)
-		// This test will FAIL until we set SkipFilesystemScan = true on these launchers
-		assert.True(t, launcher.SkipFilesystemScan,
-			"Batocera game launcher %s should skip filesystem scanning (uses gamelist.xml)", launcher.ID)
+		// Batocera game launchers should use built-in scanner + Scanner to add metadata
+		// SkipFilesystemScan should be false (or default) to enable built-in scanning
+		assert.False(t, launcher.SkipFilesystemScan,
+			"Batocera game launcher %s should use built-in filesystem scanner", launcher.ID)
+
+		// Should have Scanner function to add gamelist.xml metadata
+		assert.NotNil(t, launcher.Scanner,
+			"Batocera game launcher %s should have Scanner to add metadata", launcher.ID)
+
+		// Should have Extensions defined (for built-in scanner to use)
+		assert.NotEmpty(t, launcher.Extensions,
+			"Batocera game launcher %s should have Extensions defined", launcher.ID)
+
+		// Should have Folders defined (for built-in scanner to use)
+		assert.NotEmpty(t, launcher.Folders,
+			"Batocera game launcher %s should have Folders defined", launcher.ID)
 	}
 
 	// Verify we found some game system launchers to test
@@ -312,7 +323,7 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 	launchers := platform.Launchers(cfg)
 
 	// Find Kodi library launchers that should have SkipFilesystemScan=true
-	kodiLibraryLaunchers := []string{"KodiMovie", "KodiTV", "KodiAlbum", "KodiArtist", "KodiTVShow", "KodiSong"}
+	kodiLibraryLaunchers := []string{"KodiMovie", "KodiTVEpisode", "KodiAlbum", "KodiArtist", "KodiTVShow", "KodiSong"}
 	foundKodiLaunchers := make(map[string]bool)
 
 	for _, launcher := range launchers {
@@ -327,7 +338,7 @@ func TestKodiLaunchersAreIncluded(t *testing.T) {
 		}
 
 		// File-based Kodi launchers should allow filesystem scanning
-		if launcher.ID == "KodiLocal" || launcher.ID == "KodiMusic" {
+		if launcher.ID == "KodiLocalVideo" || launcher.ID == "KodiLocalAudio" {
 			assert.False(t, launcher.SkipFilesystemScan,
 				"Kodi file launcher %s should allow filesystem scanning", launcher.ID)
 		}
@@ -369,6 +380,11 @@ func TestStartPost_NoRunningGame(t *testing.T) {
 	// Should not error
 	require.NoError(t, err)
 
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
+
 	// Should set media to nil when no game running
 	assert.Nil(t, capturedMedia, "Should set active media to nil when no game running")
 }
@@ -405,6 +421,11 @@ func TestStartPost_WithRunningGame(t *testing.T) {
 
 	// Should not error
 	require.NoError(t, err)
+
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
 
 	// Should set active media with proper fields
 	require.NotNil(t, capturedMedia, "Should set active media when game is running")
@@ -490,8 +511,331 @@ func TestLaunchMedia_SetsActiveMediaWithTimestamp(t *testing.T) {
 	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
 	require.NoError(t, err)
 
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
+
 	// Note: We can't actually test LaunchMedia because it requires ES API running game
 	// But we've verified the constructor is used in DoLaunch (in pkg/helpers/paths.go)
 	// and that DoLaunch properly creates ActiveMedia with timestamps
 	// This test documents the integration point for future testing
+}
+
+// TestShouldKeepRunningInstance tests the shouldKeepRunningInstance function
+func TestShouldKeepRunningInstance(t *testing.T) {
+	t.Parallel()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	tests := []struct {
+		newLauncher       *platforms.Launcher
+		name              string
+		activeLauncherID  string
+		description       string
+		activeMediaExists bool
+		expectedResult    bool
+	}{
+		{
+			name: "new launcher without running instance",
+			newLauncher: &platforms.Launcher{
+				ID:                  "GenericGame",
+				UsesRunningInstance: "", // Empty = starts its own process
+			},
+			activeLauncherID:  "KodiAlbum",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when new launcher starts its own process",
+		},
+		{
+			name: "no active media",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiSong",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "",
+			activeMediaExists: false,
+			expectedResult:    false,
+			description:       "Should not keep running when there's no active media",
+		},
+		{
+			name: "both launchers use same instance - kodi to kodi",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiSong",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "KodiAlbum",
+			activeMediaExists: true,
+			expectedResult:    true,
+			description:       "Should keep running when both use same Kodi instance",
+		},
+		{
+			name: "current launcher uses different instance",
+			newLauncher: &platforms.Launcher{
+				ID:                  "KodiMovie",
+				UsesRunningInstance: platforms.InstanceKodi,
+			},
+			activeLauncherID:  "GenericGame",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when current launcher uses different instance",
+		},
+		{
+			name: "same launcher id different instances",
+			newLauncher: &platforms.Launcher{
+				ID:                  "TestLauncher",
+				UsesRunningInstance: "plex", // Different instance
+			},
+			activeLauncherID:  "TestLauncher",
+			activeMediaExists: true,
+			expectedResult:    false,
+			description:       "Should kill when same launcher ID but different instances (hypothetical)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create platform
+			platform := &Platform{}
+
+			// Set up active media state
+			var currentActiveMedia *models.ActiveMedia
+			if tt.activeMediaExists {
+				currentActiveMedia = &models.ActiveMedia{
+					LauncherID: tt.activeLauncherID,
+					SystemID:   systemdefs.SystemVideo,
+					Path:       "/test/path",
+					Name:       "Test Media",
+				}
+			}
+
+			// Set the activeMedia function
+			platform.activeMedia = func() *models.ActiveMedia {
+				return currentActiveMedia
+			}
+
+			// Call shouldKeepRunningInstance
+			result := platform.shouldKeepRunningInstance(cfg, tt.newLauncher)
+
+			// Assert result
+			assert.Equal(t, tt.expectedResult, result, tt.description)
+		})
+	}
+}
+
+// TestIsKodiLauncher tests the isKodiLauncher helper function
+func TestIsKodiLauncher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		launcherID string
+		name       string
+		expected   bool
+	}{
+		{
+			name:       "KodiLocalVideo is a Kodi launcher",
+			launcherID: "KodiLocalVideo",
+			expected:   true,
+		},
+		{
+			name:       "KodiMovie is a Kodi launcher",
+			launcherID: "KodiMovie",
+			expected:   true,
+		},
+		{
+			name:       "KodiTVEpisode is a Kodi launcher",
+			launcherID: "KodiTVEpisode",
+			expected:   true,
+		},
+		{
+			name:       "KodiLocalAudio is a Kodi launcher",
+			launcherID: "KodiLocalAudio",
+			expected:   true,
+		},
+		{
+			name:       "KodiSong is a Kodi launcher",
+			launcherID: "KodiSong",
+			expected:   true,
+		},
+		{
+			name:       "KodiAlbum is a Kodi launcher",
+			launcherID: "KodiAlbum",
+			expected:   true,
+		},
+		{
+			name:       "KodiArtist is a Kodi launcher",
+			launcherID: "KodiArtist",
+			expected:   true,
+		},
+		{
+			name:       "KodiTVShow is a Kodi launcher",
+			launcherID: "KodiTVShow",
+			expected:   true,
+		},
+		{
+			name:       "Generic is not a Kodi launcher",
+			launcherID: "Generic",
+			expected:   false,
+		},
+		{
+			name:       "NES is not a Kodi launcher",
+			launcherID: "NES",
+			expected:   false,
+		},
+		{
+			name:       "Empty string is not a Kodi launcher",
+			launcherID: "",
+			expected:   false,
+		},
+		{
+			name:       "Partial match 'Kodi' is not a Kodi launcher",
+			launcherID: "Kodi",
+			expected:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isKodiLauncher(tt.launcherID)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestStopActiveLauncher_WithKodiActive tests that StopActiveLauncher correctly
+// detects when Kodi is active and delegates to stopKodi with the appropriate reason.
+// This is an integration test that verifies the Kodi mode behavior without mocking.
+func TestStopActiveLauncher_WithKodiActive(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	tests := []struct {
+		name              string
+		activeLauncherID  string
+		description       string
+		reason            platforms.StopIntent
+		shouldCallStopAPI bool
+	}{
+		{
+			name:              "StopForMenu with Kodi active",
+			reason:            platforms.StopForMenu,
+			activeLauncherID:  "KodiMovie",
+			shouldCallStopAPI: true,
+			description:       "Should attempt to stop Kodi playback when returning to menu",
+		},
+		{
+			name:              "StopForPreemption with Kodi active",
+			reason:            platforms.StopForPreemption,
+			activeLauncherID:  "KodiTVEpisode",
+			shouldCallStopAPI: true,
+			description:       "Should attempt to quit Kodi when launching a different app",
+		},
+		{
+			name:              "StopForMenu with non-Kodi launcher",
+			reason:            platforms.StopForMenu,
+			activeLauncherID:  "NES",
+			shouldCallStopAPI: false,
+			description:       "Should use ES API for non-Kodi launchers",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup mock ES API server
+			mockESAPI := helpers.NewMockESAPIServer(t)
+			if !tt.shouldCallStopAPI {
+				// For non-Kodi launchers, ES API will be called
+				mockESAPI.WithNoRunningGame()
+			}
+
+			fs := helpers.NewMemoryFS()
+			cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+			require.NoError(t, err)
+
+			platform := &Platform{
+				cfg: cfg,
+			}
+
+			// Set up active media state
+			var currentActiveMedia *models.ActiveMedia
+			if tt.activeLauncherID != "" {
+				currentActiveMedia = &models.ActiveMedia{
+					LauncherID: tt.activeLauncherID,
+					SystemID:   systemdefs.SystemVideo,
+					Path:       "/test/path",
+					Name:       "Test Media",
+					Started:    time.Now(),
+				}
+			}
+
+			platform.activeMedia = func() *models.ActiveMedia {
+				return currentActiveMedia
+			}
+
+			platform.setActiveMedia = func(media *models.ActiveMedia) {
+				currentActiveMedia = media
+			}
+
+			// Call StopActiveLauncher with the specified reason
+			err = platform.StopActiveLauncher(tt.reason)
+
+			// The important thing is that the function doesn't panic and handles
+			// the flow correctly based on the reason parameter. We can't verify
+			// which exact Kodi method was called without mocking, but we can verify
+			// the function executes the right code path (Kodi vs ES API)
+
+			// For StopForMenu with Kodi, client.Stop() will be called (Player.Stop API)
+			// For StopForPreemption with Kodi, client.Quit() will be called (Application.Quit API)
+			// Both will fail to connect since Kodi isn't running, but that's expected in tests
+
+			// Verify no panic occurred - the test reaching here means success
+			if tt.shouldCallStopAPI {
+				// For Kodi launchers: StopForMenu succeeds (just stops playback),
+				// StopForPreemption may fail if Kodi can't be reached
+				// We don't assert error state since it depends on network/Kodi availability
+				t.Logf("StopActiveLauncher completed for Kodi launcher with reason %v: %v", tt.reason, err)
+			}
+		})
+	}
+}
+
+// TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu tests that ReturnToMenu
+// correctly passes StopForMenu intent to StopActiveLauncher
+func TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu(t *testing.T) {
+	// Note: Not using t.Parallel() because MockESAPIServer binds to hardcoded port 1234
+
+	// Setup mock ES API server
+	mockESAPI := helpers.NewMockESAPIServer(t)
+	mockESAPI.WithNoRunningGame()
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{
+		cfg: cfg,
+	}
+
+	// Set no active media
+	platform.activeMedia = func() *models.ActiveMedia {
+		return nil
+	}
+
+	platform.setActiveMedia = func(_ *models.ActiveMedia) {
+		// No-op for this test
+	}
+
+	// Call ReturnToMenu - it should internally call StopActiveLauncher(platforms.StopForMenu)
+	// We can't directly verify the reason parameter without refactoring,
+	// but we verify the function executes without panicking
+	err = platform.ReturnToMenu()
+
+	// With no active media, StopActiveLauncher will check for games via ES API
+	// The mock returns "NO GAME RUNNING" which is handled gracefully
+	// The important thing is no panic occurred
+	assert.NoError(t, err, "ReturnToMenu should handle no active media gracefully")
 }

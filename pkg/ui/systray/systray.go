@@ -113,7 +113,7 @@ func systrayOnReady(
 						notify("Error opening Web UI.")
 					}
 				case <-mOpenLog.ClickedCh:
-					logPath := filepath.Join(pl.Settings().TempDir, config.LogFile)
+					logPath := filepath.Join(pl.Settings().LogDir, config.LogFile)
 					//nolint:gosec // Safe: opens system file manager with internal log path
 					err := exec.CommandContext(context.Background(), openCmd, logPath).Start()
 					if err != nil {

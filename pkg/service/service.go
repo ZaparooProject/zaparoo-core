@@ -243,7 +243,7 @@ func Start(
 	go checkAndResumeOptimization(db, st.Notifications)
 
 	log.Info().Msg("starting API service")
-	apiNotifications, _ := notifBroker.Subscribe(50)
+	apiNotifications, _ := notifBroker.Subscribe(100)
 	go api.Start(pl, cfg, st, itq, db, apiNotifications)
 
 	log.Info().Msg("starting publishers")

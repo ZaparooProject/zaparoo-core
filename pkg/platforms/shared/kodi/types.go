@@ -83,6 +83,7 @@ type APIMethod string
 const (
 	APIMethodPlayerOpen              APIMethod = "Player.Open"
 	APIMethodPlayerGetActivePlayers  APIMethod = "Player.GetActivePlayers"
+	APIMethodPlayerGetItem           APIMethod = "Player.GetItem"
 	APIMethodPlayerStop              APIMethod = "Player.Stop"
 	APIMethodVideoLibraryGetMovies   APIMethod = "VideoLibrary.GetMovies"
 	APIMethodVideoLibraryGetTVShows  APIMethod = "VideoLibrary.GetTVShows"
@@ -96,6 +97,9 @@ const (
 	// Playlist Management (for collections)
 	APIMethodPlaylistClear APIMethod = "Playlist.Clear"
 	APIMethodPlaylistAdd   APIMethod = "Playlist.Add"
+
+	// Application Control
+	APIMethodApplicationQuit APIMethod = "Application.Quit"
 )
 
 // APIPayload represents a Kodi JSON-RPC request
@@ -221,4 +225,29 @@ type FilterRule struct {
 // AudioLibraryGetSongsParams represents parameters for AudioLibrary.GetSongs API method
 type AudioLibraryGetSongsParams struct {
 	Filter *FilterRule `json:"filter,omitempty"`
+}
+
+// PlayerGetItemParams represents parameters for Player.GetItem API method
+type PlayerGetItemParams struct {
+	Properties []string `json:"properties"`
+	PlayerID   int      `json:"playerid"`
+}
+
+// PlayerItem represents the currently playing item
+type PlayerItem struct {
+	Label     string   `json:"label"`
+	Type      string   `json:"type"`
+	File      string   `json:"file,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Album     string   `json:"album,omitempty"`
+	ShowTitle string   `json:"showtitle,omitempty"`
+	Artist    []string `json:"artist,omitempty"`
+	Season    int      `json:"season,omitempty"`
+	Episode   int      `json:"episode,omitempty"`
+	Year      int      `json:"year,omitempty"`
+}
+
+// PlayerGetItemResponse represents the response from Player.GetItem
+type PlayerGetItemResponse struct {
+	Item PlayerItem `json:"item"`
 }

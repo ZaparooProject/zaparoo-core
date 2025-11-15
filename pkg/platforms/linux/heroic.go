@@ -32,7 +32,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -126,7 +126,7 @@ func scanHeroicLibraryFile(filePath, jsonKey string) ([]platforms.ScanResult, er
 
 		results = append(results, platforms.ScanResult{
 			Name:  game.Title,
-			Path:  helpers.CreateVirtualPath(shared.SchemeHeroic, game.AppName, game.Title),
+			Path:  virtualpath.CreateVirtualPath(shared.SchemeHeroic, game.AppName, game.Title),
 			NoExt: true,
 		})
 	}
@@ -174,7 +174,7 @@ func NewHeroicLauncher() platforms.Launcher {
 		},
 		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
 			// Extract game app name from heroic://appName format
-			appName, err := helpers.ExtractSchemeID(path, shared.SchemeHeroic)
+			appName, err := virtualpath.ExtractSchemeID(path, shared.SchemeHeroic)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract Heroic game name from path: %w", err)
 			}
