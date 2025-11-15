@@ -477,10 +477,19 @@ func broadcastNotifications(
 			}
 
 			// TODO: this will not work with encryption
-			err = session.Broadcast(data)
-			if err != nil {
-				log.Error().Err(err).Msg("broadcasting notification")
-			}
+			// Broadcast asynchronously to prevent blocking the notification consumer.
+			// This decouples fast channel consumption from slow WebSocket I/O.
+			// Note: This may result in out-of-order delivery to clients if one broadcast
+			// takes longer than another. For most notification types (progress updates,
+			// status changes), this is acceptable. If strict ordering becomes critical
+			// (e.g., for media.started/stopped sequences), consider using a worker pool
+			// with a single worker or implement per-client message queuing.
+			go func(msgData []byte) {
+				err := session.Broadcast(msgData)
+				if err != nil {
+					log.Error().Err(err).Msg("broadcasting notification")
+				}
+			}(data)
 		}
 	}
 }
