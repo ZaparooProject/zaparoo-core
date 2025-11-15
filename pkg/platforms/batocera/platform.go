@@ -493,14 +493,21 @@ func (p *Platform) LaunchMedia(
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
-	code, ok := linuxinput.ToKeyboardCode(name)
-	if !ok {
-		return fmt.Errorf("unknown keyboard key: %s", name)
-	}
-	err := p.kbd.Press(code)
+func (p *Platform) KeyboardPress(arg string) error {
+	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
 	if err != nil {
-		return fmt.Errorf("failed to press keyboard key %s: %w", name, err)
+		return fmt.Errorf("failed to parse key combo: %w", err)
+	}
+
+	if isCombo {
+		if err := p.kbd.Combo(codes...); err != nil {
+			return fmt.Errorf("failed to press keyboard combo: %w", err)
+		}
+		return nil
+	}
+
+	if err := p.kbd.Press(codes[0]); err != nil {
+		return fmt.Errorf("failed to press keyboard key: %w", err)
 	}
 	return nil
 }

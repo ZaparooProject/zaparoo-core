@@ -528,39 +528,20 @@ func (p *Platform) LaunchMedia(
 }
 
 func (p *Platform) KeyboardPress(arg string) error {
-	var names []string
-	if len(arg) > 1 {
-		arg = strings.TrimLeft(arg, "{")
-		arg = strings.TrimRight(arg, "}")
-		names = strings.Split(arg, "+")
-		for i, name := range names {
-			if len(name) > 1 {
-				names[i] = "{" + name + "}"
-			}
-		}
-	} else {
-		names = []string{arg}
+	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
+	if err != nil {
+		return fmt.Errorf("failed to parse key combo: %w", err)
 	}
 
-	codes := make([]int, 0, len(names))
-	for _, name := range names {
-		code, ok := linuxinput.ToKeyboardCode(name)
-		if !ok {
-			return fmt.Errorf("unknown keyboard key: %s", name)
-		}
-		codes = append(codes, code)
-	}
-
-	if len(codes) == 1 {
-		err := p.kbd.Press(codes[0])
-		if err != nil {
-			return fmt.Errorf("failed to press keyboard key: %w", err)
+	if isCombo {
+		if err := p.kbd.Combo(codes...); err != nil {
+			return fmt.Errorf("failed to press keyboard combo: %w", err)
 		}
 		return nil
 	}
-	err := p.kbd.Combo(codes...)
-	if err != nil {
-		return fmt.Errorf("failed to press keyboard combo: %w", err)
+
+	if err := p.kbd.Press(codes[0]); err != nil {
+		return fmt.Errorf("failed to press keyboard key: %w", err)
 	}
 	return nil
 }
