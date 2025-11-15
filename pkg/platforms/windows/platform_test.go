@@ -40,10 +40,10 @@ func TestWindowsHasKodiLocalLauncher(t *testing.T) {
 	platform := &Platform{}
 	launchers := platform.Launchers(cfg)
 
-	// Check for KodiLocal launcher
+	// Check for KodiLocalVideo launcher
 	var kodiLocal *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiLocal" {
+		if launcher.ID == "KodiLocalVideo" {
 			kodiLocal = &launcher.ID
 			assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp4")
@@ -51,7 +51,7 @@ func TestWindowsHasKodiLocalLauncher(t *testing.T) {
 		}
 	}
 
-	require.NotNil(t, kodiLocal, "KodiLocal launcher should exist")
+	require.NotNil(t, kodiLocal, "KodiLocalVideo launcher should exist")
 }
 
 func TestWindowsHasAllKodiLaunchers(t *testing.T) {

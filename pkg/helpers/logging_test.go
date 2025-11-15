@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -109,7 +110,7 @@ func TestEnsureDirectories(t *testing.T) {
 			assert.True(t, logInfo.IsDir(), "LogDir should be a directory")
 
 			// Verify permissions (on Unix-like systems)
-			if os.Getenv("GOOS") != "windows" {
+			if runtime.GOOS != "windows" {
 				assert.Equal(t, os.FileMode(0o750), tempInfo.Mode().Perm(), "TempDir should have 0750 permissions")
 				assert.Equal(t, os.FileMode(0o750), logInfo.Mode().Perm(), "LogDir should have 0750 permissions")
 			}
