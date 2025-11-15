@@ -30,7 +30,7 @@ const (
 	timesToPoll               = 1
 	periodBetweenPolls        = 250 * time.Millisecond
 	periodBetweenLoop         = 250 * time.Millisecond
-	autoConnStr               = "libnfc_auto:"
+	autoConnStr               = "libnfcauto:"
 	maxMifareClassic1KSectors = 16
 	defaultWriteTimeoutTries  = 4 * 30 // ~30 seconds
 )
