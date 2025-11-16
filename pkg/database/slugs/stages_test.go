@@ -606,8 +606,8 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 	}
 }
 
-// TestSlugifyStringContextReuse tests that SlugifyString properly reuses cached context
-func TestSlugifyStringContextReuse(t *testing.T) {
+// TestSlugifyContextReuse tests that Slugify properly reuses cached context
+func TestSlugifyContextReuse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -657,7 +657,7 @@ func TestSlugifyStringContextReuse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expectedSlug, result, "Slugified result mismatch")
 
 			// Verify the internal context was used correctly by checking

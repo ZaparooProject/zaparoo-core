@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 // return ?, ?,... based on count
@@ -65,19 +66,46 @@ func buildMediaQueryWhereClause(query *database.MediaQuery) (whereClause string,
 
 	// PathGlob - match against slugified titles for fuzzy search
 	if query.PathGlob != "" {
-		// Search terms are slugified to match the database's Slug field.
-		// This provides fuzzy matching: spaces/punctuation are ignored,
-		// making searches more forgiving (e.g., "mega man" finds "Megaman")
-		var parts []string
-		for _, part := range strings.Split(query.PathGlob, "*") {
-			if part != "" {
-				// Slugify search parts to match how titles are stored
-				parts = append(parts, slugs.SlugifyString(part))
+		// Collect unique MediaTypes from the systems being queried
+		uniqueMediaTypes := make(map[slugs.MediaType]struct{})
+		for _, systemID := range query.Systems {
+			if system, err := systemdefs.GetSystem(systemID); err == nil {
+				uniqueMediaTypes[system.GetMediaType()] = struct{}{}
 			}
 		}
-		for _, part := range parts {
-			whereConditions = append(whereConditions, "MediaTitles.Slug LIKE ?")
-			args = append(args, "%"+part+"%")
+		// Default to Game if no systems specified
+		if len(uniqueMediaTypes) == 0 {
+			uniqueMediaTypes[slugs.MediaTypeGame] = struct{}{}
+		}
+
+		// Generate slug variants for each glob part
+		for _, part := range strings.Split(query.PathGlob, "*") {
+			if part == "" {
+				continue
+			}
+
+			seenVariants := make(map[string]struct{})
+			orConditions := make([]string, 0, len(uniqueMediaTypes)*2)
+
+			// Generate slug variant for each MediaType present
+			for mediaType := range uniqueMediaTypes {
+				slugVariant := slugs.Slugify(mediaType, part)
+				if slugVariant != "" {
+					if _, exists := seenVariants[slugVariant]; !exists {
+						seenVariants[slugVariant] = struct{}{}
+						orConditions = append(orConditions, "MediaTitles.Slug LIKE ?")
+						args = append(args, "%"+slugVariant+"%")
+						// Also search SecondarySlug
+						orConditions = append(orConditions, "MediaTitles.SecondarySlug LIKE ?")
+						args = append(args, "%"+slugVariant+"%")
+					}
+				}
+			}
+
+			// Add OR group for this part
+			if len(orConditions) > 0 {
+				whereConditions = append(whereConditions, "("+strings.Join(orConditions, " OR ")+")")
+			}
 		}
 	}
 

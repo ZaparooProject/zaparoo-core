@@ -91,8 +91,8 @@ func TestSlugConflicts_AllDATs(t *testing.T) {
 				continue
 			}
 
-			// SlugifyString handles all normalization internally including metadata stripping
-			slug := slugs.SlugifyString(originalName)
+			// Slugify handles all normalization internally including metadata stripping
+			slug := slugs.Slugify(MediaTypeGame, originalName)
 			key := fmt.Sprintf("%s/%s", systemID, slug)
 
 			entry := DATEntry{
@@ -213,7 +213,7 @@ func TestSlugConflicts_AllDATs(t *testing.T) {
 
 // lightNormalizeToWords performs a minimal normalization for analysis.
 // It lowercases and extracts alphanumeric words, but crucially, it does NOT
-// strip brackets or other metadata that SlugifyString removes. This allows
+// strip brackets or other metadata that Slugify removes. This allows
 // us to see the words that were lost during slugification.
 func lightNormalizeToWords(s string) []string {
 	// A simple regex to find sequences of letters and numbers.
@@ -952,7 +952,7 @@ func TestRomanNumeralI_AllDATs(t *testing.T) {
 			titlesWithI++
 
 			// Generate slug
-			slug := slugs.SlugifyString(originalName)
+			slug := slugs.Slugify(MediaTypeGame, originalName)
 
 			// Analyze the conversion
 			analysis := analyzeIConversion(originalName, slug, systemID, datFileName)

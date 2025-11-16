@@ -423,7 +423,7 @@ func TestPlusSymbolNormalization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Plus symbol normalization failed")
 		})
 	}
@@ -533,7 +533,7 @@ func TestIntegratedNewNormalizations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Integrated normalization failed")
 		})
 	}
@@ -573,7 +573,7 @@ func TestNewNormalizationsWithMetadata(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Normalization with metadata failed")
 		})
 	}
@@ -595,8 +595,8 @@ func TestNewNormalizationsIdempotency(t *testing.T) {
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
-			first := SlugifyString(input)
-			second := SlugifyString(first)
+			first := Slugify(MediaTypeGame, input)
+			second := Slugify(MediaTypeGame, first)
 			assert.Equal(t, first, second, "New normalizations should maintain idempotency")
 		})
 	}
@@ -821,7 +821,7 @@ func TestPunctuationNormalizationIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Punctuation normalization integration failed")
 		})
 	}
@@ -842,8 +842,8 @@ func TestPunctuationNormalizationIdempotency(t *testing.T) {
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
-			first := SlugifyString(input)
-			second := SlugifyString(first)
+			first := Slugify(MediaTypeGame, input)
+			second := Slugify(MediaTypeGame, first)
 			assert.Equal(t, first, second, "Punctuation normalization should maintain idempotency")
 		})
 	}

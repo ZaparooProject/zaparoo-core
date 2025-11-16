@@ -139,9 +139,10 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// Priority: advanced args > canonical tags > filename tags
 	tagFilters := titles.MergeTagFilters(autoExtractedTags, advArgsTagFilters)
 
-	// Slugify the game name (SlugifyString handles metadata stripping in Stage 4)
+	// Slugify the game name with media-type-aware normalization
 	// e.g., "Sonic Spinball (USA) (year:1994)" → "sonicspinball"
-	slug := slugs.SlugifyString(gameName)
+	// For TV shows: "Breaking Bad - S01E02" and "Breaking Bad - 1x02" → same slug
+	slug := slugs.Slugify(system.GetMediaType(), gameName)
 	if slug == "" {
 		return platforms.CmdResult{}, fmt.Errorf("game name slugified to empty string: %s", gameName)
 	}
@@ -172,7 +173,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	}
 
 	// Generate match info once for secondary/main title strategies
-	matchInfo := titles.GenerateMatchInfo(gameName)
+	matchInfo := titles.GenerateMatchInfo(system.GetMediaType(), gameName)
 
 	// Track the best candidate found across all strategies
 	type candidate struct {
@@ -259,7 +260,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TrySecondaryTitleExact(
-			ctx, mediadb, system.ID, slug, matchInfo, nil)
+			ctx, mediadb, system.ID, slug, matchInfo, nil, system.GetMediaType())
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("secondary title exact match failed: %w", strategyErr)
 		}
@@ -285,7 +286,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// 3. Damerau-Levenshtein tie-breaking (transposition handling)
 	if bestCandidate == nil {
 		fuzzyResult, strategyErr := titles.TryAdvancedFuzzyMatching(
-			ctx, mediadb, system.ID, gameName, slug, nil)
+			ctx, mediadb, system.ID, gameName, slug, nil, system.GetMediaType())
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("advanced fuzzy matching failed: %w", strategyErr)
 		}
@@ -310,7 +311,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TryMainTitleOnly(
-			ctx, mediadb, system.ID, slug, matchInfo, nil)
+			ctx, mediadb, system.ID, slug, matchInfo, nil, system.GetMediaType())
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("main title only search failed: %w", strategyErr)
 		}
@@ -336,7 +337,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		var strategyErr error
 		var resolvedStrategy string
 		results, resolvedStrategy, strategyErr = titles.TryProgressiveTrim(
-			ctx, mediadb, system.ID, gameName, slug, nil)
+			ctx, mediadb, system.ID, gameName, slug, nil, system.GetMediaType())
 		if strategyErr != nil {
 			return platforms.CmdResult{}, fmt.Errorf("progressive trim strategy failed: %w", strategyErr)
 		}

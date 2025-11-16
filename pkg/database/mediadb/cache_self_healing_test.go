@@ -59,7 +59,7 @@ func TestGetSystemTagsCached_AutoPopulate_Integration(t *testing.T) {
 	// Create media with tags
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -138,7 +138,7 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -189,7 +189,7 @@ func TestPopulateSystemTagsCacheForSystems_Integration(t *testing.T) {
 
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       slugs.SlugifyString("Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
@@ -272,7 +272,7 @@ func TestPopulateSystemTagsCacheForSystems_UpdateExisting_Integration(t *testing
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -375,7 +375,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -413,7 +413,7 @@ func TestPopulateSystemTagsCacheForSystems_NoInterference_Integration(t *testing
 
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       slugs.SlugifyString("Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)

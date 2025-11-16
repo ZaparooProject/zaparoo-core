@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/matcher"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -49,6 +50,7 @@ func TryMainTitleOnly(
 	slug string,
 	matchInfo GameMatchInfo,
 	tagFilters []database.TagFilter,
+	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	// Search using the main title slug (not the full slug)
 	mainSlug := matchInfo.MainTitleSlug
@@ -69,7 +71,7 @@ func TryMainTitleOnly(
 	var partialMatches []database.SearchResultWithCursor
 
 	for _, result := range results {
-		dbMatchInfo := GenerateMatchInfo(result.Name)
+		dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 
 		// Exact match: Query has secondary title, DB doesn't - DB's full slug matches query's main title
 		if dbMatchInfo.CanonicalSlug == mainSlug && !dbMatchInfo.HasSecondaryTitle {
@@ -132,6 +134,7 @@ func TrySecondaryTitleExact(
 	slug string,
 	matchInfo GameMatchInfo,
 	tagFilters []database.TagFilter,
+	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	// Determine search slug: use secondary title slug if input has one, otherwise use full slug
 	var searchSlug string
@@ -153,7 +156,7 @@ func TrySecondaryTitleExact(
 		// Post-filter: only keep DB entries WITHOUT secondary title
 		var filtered []database.SearchResultWithCursor
 		for _, result := range exactResults {
-			dbMatchInfo := GenerateMatchInfo(result.Name)
+			dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 			if !dbMatchInfo.HasSecondaryTitle {
 				filtered = append(filtered, result)
 			}
@@ -184,7 +187,7 @@ func TrySecondaryTitleExact(
 		// Post-filter: only keep DB entries WITH secondary title
 		var filtered []database.SearchResultWithCursor
 		for _, result := range partialResults {
-			dbMatchInfo := GenerateMatchInfo(result.Name)
+			dbMatchInfo := GenerateMatchInfo(mediaType, result.Name)
 			if dbMatchInfo.HasSecondaryTitle {
 				filtered = append(filtered, result)
 			}
@@ -217,6 +220,7 @@ func TryAdvancedFuzzyMatching(
 	gameName string,
 	slug string,
 	tagFilters []database.TagFilter,
+	mediaType slugs.MediaType,
 ) (FuzzyMatchResult, error) {
 	if len(slug) < MinSlugLengthForFuzzy {
 		return FuzzyMatchResult{}, nil
@@ -226,7 +230,7 @@ func TryAdvancedFuzzyMatching(
 
 	// Generate metadata for the query to build pre-filter parameters
 	// This uses the exact same slugification and tokenization as the indexed data
-	metadata := mediadb.GenerateSlugWithMetadata(gameName)
+	metadata := mediadb.GenerateSlugWithMetadata(mediaType, gameName)
 
 	// Build pre-filter query with tolerance thresholds:
 	// ±3 characters for edit distance, ±1 word for token count
@@ -350,10 +354,11 @@ func TryProgressiveTrim(
 	gameName string,
 	slug string,
 	tagFilters []database.TagFilter,
+	mediaType slugs.MediaType,
 ) ([]database.SearchResultWithCursor, string, error) {
 	log.Info().Msgf("all advanced strategies failed, trying progressive truncation as last resort")
 	const maxTrimDepth = 3
-	candidates := GenerateProgressiveTrimCandidates(gameName, maxTrimDepth)
+	candidates := GenerateProgressiveTrimCandidates(mediaType, gameName, maxTrimDepth)
 
 	if len(candidates) == 0 {
 		return nil, "", nil

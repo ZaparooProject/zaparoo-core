@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -287,7 +288,8 @@ func TestVirtualPath_EndToEndFlow(t *testing.T) {
 			t.Logf("PathInfo.Name (decoded): %s", pathInfo.Name)
 
 			// Step 6: Verify slugification uses decoded name
-			slug := helpers.SlugifyPath(media.Path)
+			filename := helpers.FilenameFromPath(media.Path)
+			slug := slugs.Slugify(slugs.MediaTypeGame, filename)
 			assert.NotContains(t, slug, "%",
 				"Slug should not contain percent encoding")
 			assert.Contains(t, slug, tc.expectedSlugPart,

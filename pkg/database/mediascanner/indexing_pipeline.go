@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -41,6 +42,15 @@ import (
 type PathFragmentKey struct {
 	Path                string
 	FilenameTags        bool
+	StripLeadingNumbers bool
+}
+
+// PathFragmentParams contains parameters for GetPathFragments.
+type PathFragmentParams struct {
+	Config              *config.Instance
+	Path                string
+	SystemID            string
+	NoExt               bool
 	StripLeadingNumbers bool
 }
 
@@ -83,7 +93,13 @@ func AddMediaPath(
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
 ) (titleIndex, mediaIndex int, err error) {
-	pf := GetPathFragments(cfg, path, noExt, stripLeadingNumbers)
+	pf := GetPathFragments(PathFragmentParams{
+		Config:              cfg,
+		Path:                path,
+		NoExt:               noExt,
+		StripLeadingNumbers: stripLeadingNumbers,
+		SystemID:            systemID,
+	})
 
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
@@ -108,8 +124,14 @@ func AddMediaPath(
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
 
+		// Look up mediaType for consistent slugification
+		mediaType := slugs.MediaTypeGame // Default
+		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
+
 		// Generate slug metadata for fuzzy matching prefilter
-		metadata := mediadb.GenerateSlugWithMetadata(pf.Title)
+		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
 
 		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
@@ -682,20 +704,20 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumbers bool) MediaPathFragments {
+func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
-	if helpers.ReURI.MatchString(path) {
-		f.Path = path
+	if helpers.ReURI.MatchString(params.Path) {
+		f.Path = params.Path
 	} else {
 		// Clean and normalize to forward slashes for cross-platform consistency
-		f.Path = filepath.ToSlash(filepath.Clean(path))
+		f.Path = filepath.ToSlash(filepath.Clean(params.Path))
 	}
 
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually
-	if helpers.ReURI.MatchString(path) {
+	if helpers.ReURI.MatchString(params.Path) {
 		// For URIs, FilenameFromPath returns the decoded last path segment, which may include an extension for http/s
 		f.FileName = helpers.FilenameFromPath(f.Path)
 
@@ -721,8 +743,8 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 		}
 	} else {
 		fileBase := filepath.Base(f.Path)
-		// Skip extension extraction if noExt is true or extract normally
-		if noExt {
+		// Skip extension extraction if params.NoExt is true or extract normally
+		if params.NoExt {
 			f.Ext = ""
 		} else {
 			f.Ext = strings.ToLower(filepath.Ext(f.Path))
@@ -733,8 +755,18 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
-	f.Title = tags.ParseTitleFromFilename(f.FileName, stripLeadingNumbers)
-	f.Slug = slugs.SlugifyString(f.Title)
+	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+
+	// Look up the media type for this system to enable media-type-aware slugification
+	mediaType := slugs.MediaTypeGame // Default to Game
+	if params.SystemID != "" {
+		if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+			mediaType = system.GetMediaType()
+		}
+	}
+
+	// Use media-type-aware slugification for TV shows, movies, music, etc.
+	f.Slug = slugs.Slugify(mediaType, f.Title)
 
 	// For non-Latin titles that don't produce a slug, store the lowercase
 	// original title. This ensures Slug is never empty while the search
@@ -744,7 +776,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
-	if cfg == nil || cfg.FilenameTags() {
+	if params.Config == nil || params.Config.FilenameTags() {
 		f.Tags = getTagsFromFileName(f.FileName)
 	} else {
 		f.Tags = []string{}

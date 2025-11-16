@@ -24,6 +24,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/google/uuid"
 )
 
@@ -158,10 +159,25 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 		return false
 	}
 
+	// Get the MediaType from each system
+	mediaTypeA := slugs.MediaTypeGame // Default
+	if a.SystemID != "" {
+		if system, err := systemdefs.GetSystem(a.SystemID); err == nil {
+			mediaTypeA = system.GetMediaType()
+		}
+	}
+
+	mediaTypeB := slugs.MediaTypeGame // Default
+	if with.SystemID != "" {
+		if system, err := systemdefs.GetSystem(with.SystemID); err == nil {
+			mediaTypeB = system.GetMediaType()
+		}
+	}
+
 	// Compare names by slugifying them to handle minor formatting differences
-	// (e.g., "Game Name" vs "game-name" are considered equal)
-	slugA := slugs.SlugifyString(a.Name)
-	slugB := slugs.SlugifyString(with.Name)
+	// (e.g., "Game Name" vs "game-name", "S01E02" vs "1x02" are considered equal)
+	slugA := slugs.Slugify(mediaTypeA, a.Name)
+	slugB := slugs.Slugify(mediaTypeB, with.Name)
 
 	// If names match (after slugification), consider them equal regardless of path
 	// This handles cases where launcher uses virtual paths (kodi-episode://123)

@@ -173,7 +173,7 @@ func TestMediaDB_BulkInsert_Integration(t *testing.T) {
 	// Test media title insertion
 	mediaTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Test Game"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game"),
 		Name:       "Test Game",
 	}
 
@@ -275,7 +275,7 @@ func TestMediaDB_SearchMediaPathExact_Integration(t *testing.T) {
 	for _, game := range testGames {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       slugs.SlugifyString(game.name),
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, game.name),
 			Name:       game.name,
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
@@ -337,7 +337,7 @@ func TestMediaDB_RandomGame_Integration(t *testing.T) {
 	for i := 1; i <= 10; i++ {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game "+string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
@@ -401,7 +401,7 @@ func TestMediaDB_CacheInvalidation_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Test Game"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game"),
 		Name:       "Test Game",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -471,7 +471,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       helpers.SlugifyPath("/roms/nes/game.nes"), // Must match the path's filename slug
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/nes/game.nes")),
 		Name:       "NES Game",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -495,7 +495,7 @@ func TestMediaDB_TruncateSystems_Integration(t *testing.T) {
 
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       helpers.SlugifyPath("/roms/snes/game.sfc"), // Must match the path's filename slug
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, helpers.FilenameFromPath("/roms/snes/game.sfc")),
 		Name:       "SNES Game",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
@@ -590,7 +590,7 @@ func TestMediaDB_TagsWorkflow_Integration(t *testing.T) {
 	// Create media with tags
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Super Mario Bros"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -709,7 +709,7 @@ func TestMediaDB_ConcurrentReads_Integration(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		title := database.MediaTitle{
 			SystemDBID: insertedSystem.DBID,
-			Slug:       slugs.SlugifyString("Test Game " + string(rune('0'+i))),
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game "+string(rune('0'+i))),
 			Name:       "Test Game " + string(rune('0'+i)),
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
@@ -859,7 +859,7 @@ func TestMediaDB_SearchMediaBySlug_Integration(t *testing.T) {
 	for _, game := range testGames {
 		title := database.MediaTitle{
 			SystemDBID: game.systemDBID,
-			Slug:       slugs.SlugifyString(game.name),
+			Slug:       slugs.Slugify(slugs.MediaTypeGame, game.name),
 			Name:       game.name,
 		}
 		insertedTitle, titleErr := mediaDB.InsertMediaTitle(&title)
@@ -1027,7 +1027,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -1077,7 +1077,7 @@ func TestMediaDB_CacheInvalidation_OnInsert_Integration(t *testing.T) {
 	// Insert a new media title (outside transaction to trigger invalidation)
 	newTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	_, err = mediaDB.InsertMediaTitle(&newTitle)
@@ -1116,7 +1116,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -1148,7 +1148,7 @@ func TestMediaDB_CacheInvalidation_OnTransaction_Integration(t *testing.T) {
 	// Insert should NOT invalidate cache during transaction
 	newTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	_, err = mediaDB.InsertMediaTitle(&newTitle)
@@ -1204,7 +1204,7 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 	// Add media for both systems
 	nesTitle := database.MediaTitle{
 		SystemDBID: insertedNES.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedNESTitle, err := mediaDB.InsertMediaTitle(&nesTitle)
@@ -1220,7 +1220,7 @@ func TestMediaDB_TruncateSystems_SlugCacheInvalidation_Integration(t *testing.T)
 
 	snesTitle := database.MediaTitle{
 		SystemDBID: insertedSNES.DBID,
-		Slug:       slugs.SlugifyString("Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	insertedSNESTitle, err := mediaDB.InsertMediaTitle(&snesTitle)
@@ -1290,7 +1290,7 @@ func TestMediaDB_Truncate_AllCachesCleared_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Mario"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Mario"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)

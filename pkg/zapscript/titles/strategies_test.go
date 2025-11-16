@@ -180,6 +180,7 @@ func TestTryMainTitleOnly(t *testing.T) {
 				tt.slug,
 				tt.matchInfo,
 				nil,
+				"Game",
 			)
 
 			if tt.shouldError {
@@ -395,6 +396,7 @@ func TestTrySecondaryTitleExact(t *testing.T) {
 				tt.slug,
 				tt.matchInfo,
 				nil,
+				"Game",
 			)
 
 			if tt.shouldError {
@@ -522,6 +524,7 @@ func TestTryAdvancedFuzzyMatching(t *testing.T) {
 				tt.gameName,
 				tt.slug,
 				nil,
+				"Game",
 			)
 
 			if tt.shouldError {
@@ -630,6 +633,7 @@ func TestTryProgressiveTrim(t *testing.T) {
 				tt.gameName,
 				tt.slug,
 				nil,
+				"Game",
 			)
 
 			if tt.shouldError {

@@ -173,6 +173,38 @@ func TestActiveMedia_Equal(t *testing.T) {
 			},
 			expected: true, // Same because S01E05 format matches after slugification
 		},
+		{
+			name: "different MediaTypes - Game vs TVShow - should not match",
+			a: &ActiveMedia{
+				SystemID:   "PS2",
+				SystemName: "PlayStation 2",
+				Path:       "/games/inception.iso",
+				Name:       "Inception",
+			},
+			b: &ActiveMedia{
+				SystemID:   "TVShow",
+				SystemName: "TV Show",
+				Path:       "kodi-show://456/Inception",
+				Name:       "Inception",
+			},
+			expected: false, // Different systems (and different MediaTypes) should not match
+		},
+		{
+			name: "different MediaTypes - Game vs Movie with episode-like title",
+			a: &ActiveMedia{
+				SystemID:   "NES",
+				SystemName: "NES",
+				Path:       "/games/lost-s01e01.nes",
+				Name:       "Lost - S01E01",
+			},
+			b: &ActiveMedia{
+				SystemID:   "TVEpisode",
+				SystemName: "TV Episode",
+				Path:       "kodi-episode://789/Lost%20-%20S01E01",
+				Name:       "Lost - S01E01 - Pilot",
+			},
+			expected: false, // Different systems despite having similar episode-like title
+		},
 	}
 
 	for _, tt := range tests {

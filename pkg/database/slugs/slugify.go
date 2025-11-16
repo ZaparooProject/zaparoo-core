@@ -31,7 +31,30 @@ import (
 	"golang.org/x/text/width"
 )
 
-// SlugifyString converts a game title to a normalized slug for cross-platform matching.
+// MediaType categorizes the type of media content being slugified.
+// This determines which media-specific parsing rules are applied before slugification.
+type MediaType string
+
+const (
+	// MediaTypeGame represents gaming systems (consoles, computers, arcade).
+	MediaTypeGame MediaType = "Game"
+	// MediaTypeMovie represents film and movie content.
+	MediaTypeMovie MediaType = "Movie"
+	// MediaTypeTVShow represents TV episodes and shows.
+	MediaTypeTVShow MediaType = "TVShow"
+	// MediaTypeMusic represents music and song content.
+	MediaTypeMusic MediaType = "Music"
+	// MediaTypeImage represents image files.
+	MediaTypeImage MediaType = "Image"
+	// MediaTypeAudio represents general audio content (audiobooks, podcasts).
+	MediaTypeAudio MediaType = "Audio"
+	// MediaTypeVideo represents general video content (music videos).
+	MediaTypeVideo MediaType = "Video"
+	// MediaTypeApplication represents application/software content.
+	MediaTypeApplication MediaType = "Application"
+)
+
+// Slugify converts a media title to a normalized slug for cross-platform matching.
 //
 // 14-Stage Normalization Pipeline:
 //   Stage 1: Width Normalization - Fullwidth→Halfwidth (ASCII), Halfwidth→Fullwidth (CJK)
@@ -54,10 +77,10 @@ import (
 //   Stage 14: Final Slugification - Multi-script aware character filtering
 //
 // This function is deterministic and idempotent:
-//   SlugifyString(SlugifyString(x)) == SlugifyString(x)
+//   Slugify(mt, Slugify(mt, x)) == Slugify(mt, x)
 //
 // Example:
-//   SlugifyString("The Legend of Zelda: Ocarina of Time (USA) [!]")
+//   Slugify(MediaTypeGame, "The Legend of Zelda: Ocarina of Time (USA) [!]")
 //   → "legendofzeldaocarinaoftime"
 
 // pipelineContext caches computed values across normalization stages to reduce redundant work.
@@ -400,7 +423,7 @@ func tokenizeNormalized(s string) []string {
 // to ensure metadata is computed from the EXACT same tokenization that produces the slug.
 //
 // Use this function when you need both the slug and token-based metadata (e.g., word count).
-// For simple slug generation, use SlugifyString() instead.
+// For simple slug generation, use Slugify() instead.
 //
 // Example:
 //
@@ -418,7 +441,7 @@ func SlugifyWithTokens(input string) SlugifyResult {
 	tokens := tokenizeNormalized(s)
 
 	// Stage 14: Apply final character filtering to create slug
-	// This is the existing Stage 14 logic from SlugifyString()
+	// This is the existing Stage 14 logic from Slugify()
 	asciiSlug := nonAlphanumRegex.ReplaceAllString(s, "")
 	unicodeSlug := nonAlphanumKeepUnicodeRegex.ReplaceAllString(s, "")
 
@@ -442,17 +465,30 @@ func SlugifyWithTokens(input string) SlugifyResult {
 	}
 }
 
-// SlugifyString converts a game title to a normalized slug for cross-platform matching.
-// This is a convenience wrapper around SlugifyWithTokens that only returns the slug.
+// Slugify applies media-type-aware parsing before slugification.
+// It normalizes media titles based on their type (TV shows, movies, music, etc.)
+// to ensure consistent matching across different format variations.
 //
-// For the full 14-stage normalization pipeline documentation, see SlugifyWithTokens.
+// Media type should be a string matching one of the MediaType constants from systemdefs:
+// "TVShow", "Movie", "Music", "Audio", "Video", "Game", "Image", "Application"
+//
+// For TV shows, this normalizes episode markers:
+//
+//	"Show - S01E02 - Title" and "Show - 1x02 - Title" both normalize to the same slug
+//
+// For other media types, parsing is applied based on the type, or the title
+// passes through to the standard slugification pipeline.
 //
 // Example:
 //
-//	SlugifyString("The Legend of Zelda: Ocarina of Time (USA) [!]")
-//	→ "legendofzeldaocarinaoftime"
-func SlugifyString(input string) string {
-	result := SlugifyWithTokens(input)
+//	Slugify(MediaTypeTVShow, "Breaking Bad - S01E02 - Gray Matter")
+//	→ same as Slugify(MediaTypeTVShow, "Breaking Bad - 1x02 - Gray Matter")
+func Slugify(mediaType MediaType, input string) string {
+	// Apply media-type-specific parsing before slugification
+	normalized := ParseWithMediaType(input, string(mediaType))
+
+	// Run through the standard 14-stage slugification pipeline
+	result := SlugifyWithTokens(normalized)
 	return result.Slug
 }
 
@@ -910,7 +946,7 @@ func isLatinWordCharForRoman(r rune) bool {
 
 // NormalizeToWords converts a game title to a normalized form with preserved word boundaries.
 // This function runs Stages 1-13 of the normalization pipeline (all stages from normalizeInternal)
-// but STOPS before Stage 14 (final character filtering in SlugifyString).
+// but STOPS before Stage 14 (final character filtering in Slugify).
 //
 // The result preserves spaces between words, enabling word-level operations like:
 //   - Token-based similarity matching
@@ -924,7 +960,7 @@ func isLatinWordCharForRoman(r rune) bool {
 //	→ "legend of zelda ocarina of time"
 //	→ []string{"legend", "of", "zelda", "ocarina", "of", "time"}
 //
-// Note: For database queries and slug matching, use SlugifyString() instead.
+// Note: For database queries and slug matching, use Slugify() instead.
 // This function is for scoring and ranking operations only.
 func NormalizeToWords(input string) []string {
 	s, _ := normalizeInternal(input)
@@ -940,7 +976,7 @@ func NormalizeToWords(input string) []string {
 // This function enables optimizations across stages by caching computed values like
 // ASCII checks, script detection, and word arrays.
 //
-// The returned context can be reused in the final stage (SlugifyString) to avoid
+// The returned context can be reused in the final stage (Slugify) to avoid
 // redundant work like re-detecting the script type or re-checking for ASCII.
 //
 // 13-Stage Normalization Pipeline (execution order):
@@ -964,7 +1000,7 @@ func NormalizeToWords(input string) []string {
 // correctly when separators are converted to spaces.
 //
 // Returns the normalized string with preserved spaces, lowercase text, and optimization context.
-// Final character filtering (Stage 14 in SlugifyString) is applied separately by calling function.
+// Final character filtering (Stage 14 in Slugify) is applied separately by calling function.
 func normalizeInternal(input string) (string, *pipelineContext) {
 	ctx := &pipelineContext{}
 	s := strings.TrimSpace(input)

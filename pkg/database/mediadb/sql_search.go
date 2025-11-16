@@ -27,7 +27,7 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	slugsutil "github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -226,7 +226,7 @@ func sqlSearchMediaPathParts(
 	ctx context.Context,
 	db *sql.DB,
 	systems []systemdefs.System,
-	parts []string,
+	variantGroups [][]string,
 ) ([]database.SearchResult, error) {
 	results := make([]database.SearchResult, 0, 250)
 
@@ -234,20 +234,44 @@ func sqlSearchMediaPathParts(
 		return nil, errors.New("no systems provided for media search")
 	}
 
-	// search for anything in systems on blank query
-	if len(parts) == 0 {
-		parts = []string{""}
-	}
-
+	// Build system ID args
 	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
-	for _, p := range parts {
-		args = append(args, "%"+p+"%")
+
+	// Build AND-of-ORs WHERE clause for variant groups
+	groupClauses := make([]string, 0, len(variantGroups))
+	variantArgs := make([]any, 0, len(variantGroups)*4)
+
+	for _, variants := range variantGroups {
+		if len(variants) == 0 {
+			continue
+		}
+
+		orConditions := make([]string, 0, len(variants)*2)
+
+		// Add OR conditions for each slug variant
+		for _, variant := range variants {
+			orConditions = append(orConditions, "MediaTitles.Slug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+
+			// Also search SecondarySlug
+			orConditions = append(orConditions, "MediaTitles.SecondarySlug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+		}
+
+		// Combine OR conditions for this part into a group
+		groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
 	}
 
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	// If no variant groups (shouldn't happen), search for anything
+	variantCondition := ""
+	if len(groupClauses) > 0 {
+		variantCondition = " AND " + strings.Join(groupClauses, " AND ")
+	}
+
+	//nolint:gosec // Safe: WHERE clause built from sanitized components
 	stmt, err := db.PrepareContext(ctx, `
 		select
 			Systems.SystemID,
@@ -259,9 +283,8 @@ func sqlSearchMediaPathParts(
 			on MediaTitles.DBID = Media.MediaTitleDBID
 		where Systems.SystemID IN (`+
 		prepareVariadic("?", ",", len(systems))+
-		`)
-		and `+
-		prepareVariadic(" MediaTitles.Slug like ? ", " and ", len(parts))+
+		`)`+
+		variantCondition+
 		` LIMIT 250
 	`)
 	if err != nil {
@@ -273,9 +296,11 @@ func sqlSearchMediaPathParts(
 		}
 	}()
 
-	rows, err := stmt.QueryContext(ctx,
-		args...,
-	)
+	// Assemble final args: systems → variants
+	finalArgs := append([]any(nil), args...)      // System IDs
+	finalArgs = append(finalArgs, variantArgs...) // Variant args
+
+	rows, err := stmt.QueryContext(ctx, finalArgs...)
 	if err != nil {
 		return results, fmt.Errorf("failed to execute media path parts search query: %w", err)
 	}
@@ -306,36 +331,69 @@ func sqlSearchMediaWithFilters(
 	ctx context.Context,
 	db *sql.DB,
 	systems []systemdefs.System,
-	parts []string,
+	variantGroups [][]string,
+	rawWords []string,
 	tags []database.TagFilter,
 	letter *string,
 	cursor *int64,
 	limit int,
-	searchByName bool,
+	includeName bool,
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, limit)
 	if len(systems) == 0 {
 		return nil, errors.New("no systems provided for media search")
 	}
 
-	// Search for anything in systems on blank query
-	if len(parts) == 0 {
-		parts = []string{""}
-	}
-
+	// Build system ID args
 	args := make([]any, 0)
 	for _, sys := range systems {
 		args = append(args, sys.ID)
 	}
-	for _, p := range parts {
-		args = append(args, "%"+p+"%")
+
+	// Build AND-of-ORs WHERE clause for variant groups
+	// Each word gets OR'd across its slug variants (and optionally Name)
+	// Then all words are AND'd together
+	groupClauses := make([]string, 0, len(variantGroups))
+	variantArgs := make([]any, 0, len(variantGroups)*4) // Estimate: ~4 variants per word
+
+	for wordIdx, variants := range variantGroups {
+		if len(variants) == 0 {
+			continue
+		}
+
+		orConditions := make([]string, 0, len(variants)*2+1)
+
+		// Add OR conditions for each slug variant
+		for _, variant := range variants {
+			orConditions = append(orConditions, "MediaTitles.Slug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+
+			// Also search SecondarySlug (already indexed, helps with title decomposition)
+			orConditions = append(orConditions, "MediaTitles.SecondarySlug LIKE ?")
+			variantArgs = append(variantArgs, "%"+variant+"%")
+		}
+
+		// Include Name search for this word if needed (non-Latin or includeName flag)
+		if includeName && wordIdx < len(rawWords) && rawWords[wordIdx] != "" {
+			orConditions = append(orConditions, "MediaTitles.Name LIKE ?")
+			variantArgs = append(variantArgs, "%"+rawWords[wordIdx]+"%")
+		}
+
+		// Combine OR conditions for this word into a group
+		groupClauses = append(groupClauses, "("+strings.Join(orConditions, " OR ")+")")
+	}
+
+	// If no variant groups (empty query), search for anything
+	variantCondition := ""
+	if len(groupClauses) > 0 {
+		variantCondition = " AND " + strings.Join(groupClauses, " AND ")
 	}
 
 	// Add cursor condition if provided
 	cursorCondition := ""
 	if cursor != nil {
 		cursorCondition = " AND Media.DBID > ? "
-		args = append(args, *cursor)
+		variantArgs = append(variantArgs, *cursor)
 	}
 
 	tagFilterClauses, tagFilterArgs := BuildTagFilterSQL(tags)
@@ -359,19 +417,11 @@ func sqlSearchMediaWithFilters(
 		case len(letterValue) == 1 && letterValue >= "A" && letterValue <= "Z":
 			// Filter for games starting with specific letter
 			letterFilterCondition = " AND UPPER(SUBSTR(MediaTitles.Name, 1, 1)) = ? "
-			args = append(args, letterValue)
+			variantArgs = append(variantArgs, letterValue)
 		}
 	}
 
-	// Two-query approach to avoid expensive GROUP BY temporary B-trees
-	// Query 1: Get media items without tags (fast, no GROUP BY)
-	// Search field: use Name for non-Latin queries, Slug for normalized Latin queries
-	searchField := "MediaTitles.Slug"
-	if searchByName {
-		searchField = "MediaTitles.Name"
-	}
-
-	//nolint:gosec // Safe: prepareVariadic only generates SQL placeholders like "?, ?, ?", no user data interpolated
+	//nolint:gosec // Safe: WHERE clause built from sanitized components, no direct user input interpolation
 	mediaQuery := `
 		SELECT
 			Systems.SystemID,
@@ -383,15 +433,16 @@ func sqlSearchMediaWithFilters(
 		INNER JOIN Media ON MediaTitles.DBID = Media.MediaTitleDBID
 		WHERE Systems.SystemID IN (` +
 		prepareVariadic("?", ",", len(systems)) +
-		`)
-		AND ` +
-		prepareVariadic(" "+searchField+" like ? ", " and ", len(parts)) +
+		`)` +
+		variantCondition +
 		cursorCondition +
 		tagFilterCondition +
 		letterFilterCondition +
 		` LIMIT ?`
 
-	mediaArgs := append([]any(nil), args...)        // Copy args
+	// Assemble final args: systems → variants → tag filters → limit
+	mediaArgs := append([]any(nil), args...)        // System IDs
+	mediaArgs = append(mediaArgs, variantArgs...)   // Variant args (includes cursor, letter if present)
 	mediaArgs = append(mediaArgs, tagFilterArgs...) // Add tag filter args
 	mediaArgs = append(mediaArgs, limit)
 
@@ -444,8 +495,15 @@ func sqlSearchMediaBySlug(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
+
+	// Lookup mediaType for the system to ensure consistent slugification
+	mediaType := slugs.MediaTypeGame // Default
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+
 	// Slugify the input slug to match how slugs are stored in the database
-	slugified := slugsutil.SlugifyString(slug)
+	slugified := slugs.Slugify(mediaType, slug)
 	args = append(args, systemID, slugified)
 
 	whereConditions := []string{
@@ -525,8 +583,15 @@ func sqlSearchMediaBySecondarySlug(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
+
+	// Lookup mediaType for the system to ensure consistent slugification
+	mediaType := slugs.MediaTypeGame // Default
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+
 	// Slugify the input secondary slug to match how slugs are stored in the database
-	slugified := slugsutil.SlugifyString(secondarySlug)
+	slugified := slugs.Slugify(mediaType, secondarySlug)
 	args = append(args, systemID, slugified)
 
 	whereConditions := []string{
@@ -606,8 +671,15 @@ func sqlSearchMediaBySlugPrefix(
 ) ([]database.SearchResultWithCursor, error) {
 	results := make([]database.SearchResultWithCursor, 0, 10)
 	args := make([]any, 0, 2+len(tags)*2)
+
+	// Lookup mediaType for the system to ensure consistent slugification
+	mediaType := slugs.MediaTypeGame // Default
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+
 	// Slugify the input slug prefix to match how slugs are stored in the database
-	slugified := slugsutil.SlugifyString(slugPrefix)
+	slugified := slugs.Slugify(mediaType, slugPrefix)
 	args = append(args, systemID, slugified+"%")
 
 	whereConditions := []string{
@@ -692,10 +764,16 @@ func sqlSearchMediaBySlugIn(
 		return results, nil
 	}
 
+	// Lookup mediaType for the system to ensure consistent slugification
+	mediaType := slugs.MediaTypeGame // Default
+	if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+		mediaType = system.GetMediaType()
+	}
+
 	// Slugify all input slugs to match how slugs are stored in the database
 	slugified := make([]string, 0, len(slugList))
 	for _, slug := range slugList {
-		s := slugsutil.SlugifyString(slug)
+		s := slugs.Slugify(mediaType, slug)
 		if s != "" {
 			slugified = append(slugified, s)
 		}
