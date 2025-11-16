@@ -20,6 +20,7 @@
 package slugs
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,25 +184,30 @@ func TestParseTVShow_SpecialEpisodes(t *testing.T) {
 	}
 }
 
-// TestParseTVShow_NoEpisodeMarker tests that titles without episode markers pass through unchanged
+// TestParseTVShow_NoEpisodeMarker tests that ParseTVShow normalizes titles even without episode markers
+// (article stripping and title splitting still applies)
 func TestParseTVShow_NoEpisodeMarker(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		input string
+		name     string
+		input    string
+		expected string
 	}{
 		{
-			name:  "Just show name",
-			input: "Breaking Bad",
+			name:     "Just show name",
+			input:    "Breaking Bad",
+			expected: "Breaking Bad",
 		},
 		{
-			name:  "Show with season only",
-			input: "Breaking Bad - Season 1",
+			name:     "Show with season only",
+			input:    "Breaking Bad - Season 1",
+			expected: "Breaking Bad Season 1", // " - " removed by SplitAndStripArticles
 		},
 		{
-			name:  "Show with description",
-			input: "Breaking Bad - The Complete Series",
+			name:     "Show with description",
+			input:    "Breaking Bad - The Complete Series",
+			expected: "Breaking Bad Complete Series", // Split on " - ", "The" stripped from secondary title
 		},
 	}
 
@@ -210,9 +216,8 @@ func TestParseTVShow_NoEpisodeMarker(t *testing.T) {
 			t.Parallel()
 
 			result := ParseTVShow(tt.input)
-			// Without episode markers, input should remain unchanged
-			assert.Equal(t, tt.input, result,
-				"Titles without episode markers should pass through unchanged")
+			assert.Equal(t, tt.expected, result,
+				"ParseTVShow should normalize titles (article stripping, title splitting)")
 		})
 	}
 }
@@ -240,10 +245,10 @@ func TestParseWithMediaType(t *testing.T) {
 			wantHave:  "s01e02",
 		},
 		{
-			name:      "Game title (no parsing)",
+			name:      "Game title (calls ParseGame)",
 			input:     "Super Mario Bros",
 			mediaType: "Game",
-			wantHave:  "Super Mario Bros",
+			wantHave:  "super mario brothers", // ParseGame expands "Bros" -> "brothers"
 		},
 		{
 			name:      "Movie title (no parsing yet)",
@@ -302,6 +307,367 @@ func TestParseTVShow_DelimiterVariations(t *testing.T) {
 			result := ParseTVShow(tt.input)
 			assert.Contains(t, result, tt.wantHave,
 				"Episode marker should normalize regardless of delimiter style")
+		})
+	}
+}
+
+// TestParseGame_BracketStripping tests that metadata brackets are removed
+func TestParseGame_BracketStripping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string // All should normalize to same result
+	}{
+		{
+			name:  "USA region code",
+			input: "Sonic (USA)",
+			wantMatch: []string{
+				"Sonic",
+				"Sonic [!]",
+				"Sonic {Europe}",
+			},
+		},
+		{
+			name:  "Multiple brackets",
+			input: "The Legend of Zelda (USA) [!]",
+			wantMatch: []string{
+				"The Legend of Zelda",
+				"The Legend of Zelda (USA)",
+				"The Legend of Zelda [!]",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseGame(variant)
+				assert.Equal(t, result, variantResult,
+					"After bracket stripping, results should match:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseGame_EditionVersionStripping tests edition and version suffix removal
+func TestParseGame_EditionVersionStripping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Version suffix",
+			input:    "Pokemon Red Version",
+			expected: "pokemon red",
+		},
+		{
+			name:     "Edition suffix",
+			input:    "Game Special Edition",
+			expected: "game special",
+		},
+		{
+			name:     "Version number",
+			input:    "Street Fighter II v2.0",
+			expected: "street fighter 2",
+		},
+		{
+			name:     "Keeps special modifiers",
+			input:    "Game Deluxe Edition",
+			expected: "game deluxe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseGame_AbbreviationExpansion tests abbreviation expansion
+func TestParseGame_AbbreviationExpansion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Bros expansion",
+			input:    "Super Mario Bros.",
+			expected: "super mario brothers",
+		},
+		{
+			name:     "vs expansion",
+			input:    "Mario vs Donkey Kong",
+			expected: "mario versus donkey kong",
+		},
+		{
+			name:     "Dr expansion",
+			input:    "Dr. Mario",
+			expected: "doctor mario",
+		},
+		{
+			name:     "Jr expansion",
+			input:    "Donkey Kong Jr.",
+			expected: "donkey kong junior",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseGame_NumberWordExpansion tests number word expansion
+func TestParseGame_NumberWordExpansion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "One to 1",
+			input:    "Game One",
+			expected: "game 1",
+		},
+		{
+			name:     "Two to 2",
+			input:    "Street Fighter Two",
+			expected: "street fighter 2",
+		},
+		{
+			name:     "Three to 3",
+			input:    "Crash Bandicoot Three",
+			expected: "crash bandicoot 3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseGame_OrdinalNormalization tests ordinal suffix removal
+func TestParseGame_OrdinalNormalization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "2nd to 2",
+			input:    "Street Fighter 2nd Impact",
+			expected: "street fighter 2 impact",
+		},
+		{
+			name:     "3rd to 3",
+			input:    "3rd Strike",
+			expected: "3 strike",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseGame_RomanNumeralConversion tests roman numeral to arabic conversion
+func TestParseGame_RomanNumeralConversion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "VII to 7",
+			input:    "Final Fantasy VII",
+			expected: "final fantasy 7",
+		},
+		{
+			name:     "II to 2",
+			input:    "Street Fighter II",
+			expected: "street fighter 2",
+		},
+		{
+			name:     "III to 3",
+			input:    "Super Mario Bros. III",
+			expected: "super mario brothers 3",
+		},
+		{
+			name:     "X preserved (Mega Man)",
+			input:    "Mega Man X",
+			expected: "mega man x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseGame_FullPipeline tests the complete parsing pipeline
+func TestParseGame_FullPipeline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Complex game title with all transformations",
+			input:    "Super Mario Bros. III (USA) [!] Edition",
+			expected: "super mario brothers 3",
+		},
+		{
+			name:     "Street Fighter with version and roman numeral",
+			input:    "Street Fighter II v2.0",
+			expected: "street fighter 2",
+		},
+		{
+			name:     "Final Fantasy with region and roman numeral",
+			input:    "Final Fantasy VII (USA)",
+			expected: "final fantasy 7",
+		},
+		{
+			name:     "Game with abbreviations and number words",
+			input:    "Dr. Mario vs. Donkey Kong Jr. Two",
+			expected: "doctor mario versus donkey kong junior 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			assert.Equal(t, tt.expected, result,
+				"Full pipeline should apply all transformations correctly")
+		})
+	}
+}
+
+// TestParseGame_CrossFormatMatching tests that different format variations match
+func TestParseGame_CrossFormatMatching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string
+	}{
+		{
+			name:  "Super Mario Bros variations",
+			input: "Super Mario Bros.",
+			wantMatch: []string{
+				"Super Mario Brothers",
+				"Super Mario Bros",
+				"SUPER MARIO BROS.",
+			},
+		},
+		{
+			name:  "Final Fantasy VII variations",
+			input: "Final Fantasy VII",
+			wantMatch: []string{
+				"Final Fantasy 7",
+				"Final Fantasy vii",
+				"FINAL FANTASY VII",
+			},
+		},
+		{
+			name:  "Street Fighter II variations",
+			input: "Street Fighter II",
+			wantMatch: []string{
+				"Street Fighter 2",
+				"Street Fighter Two",
+				"Street Fighter 2nd",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseGame(variant)
+				assert.Equal(t, result, variantResult,
+					"Variations should normalize to same result:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseGame_NoTransformations tests titles that don't need any transformations
+func TestParseGame_NoTransformations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "Simple title",
+			input: "Sonic",
+		},
+		{
+			name:  "Title with numbers",
+			input: "Game 123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseGame(tt.input)
+			expected := strings.ToLower(tt.input)
+			assert.Equal(t, expected, result,
+				"Simple titles should only be lowercased")
 		})
 	}
 }

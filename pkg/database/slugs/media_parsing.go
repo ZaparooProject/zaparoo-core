@@ -34,38 +34,60 @@ var (
 )
 
 // ParseTVShow normalizes TV show titles to a canonical format.
-// Handles various episode number formats and reorders components to:
-// "Show Name - s##e## - Episode Title"
+// Handles various episode number formats and strips metadata brackets.
 //
-// Supported formats:
+// Transformations applied (in order):
+//  1. Split titles and strip articles: "The Show: Episode Title" → "Show Episode Title"
+//  2. Strip trailing articles: "Show, The" → "Show"
+//  3. Strip metadata brackets: [720p], (extended), etc. → removed
+//  4. Normalize episode formats: S01E02, 1x02 → s01e02
+//
+// Supported episode formats:
 // - S01E02, s01e02 (uppercase/lowercase)
 // - 1x02, 01x02 (with or without zero-padding)
 // - S01E01-E02, S01E01E02 (multi-episode)
 // - Various delimiter variations (-, ., _, space)
 //
-// Component ordering:
-// - "Show - S01E02 - Title" (canonical, no change)
-// - "S01E02 - Show - Title" → "Show - s01e02 - Title"
-// - "Show - Title - S01E02" → "Show - s01e02 - Title"
+// Examples:
+//   - "Show - S01E02 [720p]" → "Show - s01e02"
+//   - "Show - 1x02 - Title (extended)" → "Show - s01e02 - Title"
 func ParseTVShow(title string) string {
-	// First, normalize the episode format (S01E02 or 1x02 → s##e##)
-	normalized := title
+	s := title
 
+	// Normalize width first so fullwidth separators are detected by SplitAndStripArticles
+	// This converts "：" (fullwidth colon) to ":" (ASCII colon)
+	s = NormalizeWidth(s)
+	s = strings.TrimSpace(s)
+
+	// MUST happen first: Split titles and strip articles
+	// This preserves separators like ":" and "," which are needed for splitting
+	s = SplitAndStripArticles(s)
+	s = strings.TrimSpace(s)
+
+	// Strip trailing articles (also needs "," intact)
+	s = StripTrailingArticle(s)
+	s = strings.TrimSpace(s)
+
+	// Strip metadata brackets (quality tags, edition markers, format info)
+	s = StripMetadataBrackets(s)
+	s = strings.TrimSpace(s)
+
+	// Normalize the episode format (S01E02 or 1x02 → s##e##)
 	// Check for standard S##E## format
-	if match := tvEpisodePattern.FindStringSubmatchIndex(normalized); match != nil {
-		normalized = normalizeTVEpisodeFormat(normalized, match, false)
+	if match := tvEpisodePattern.FindStringSubmatchIndex(s); match != nil {
+		s = normalizeTVEpisodeFormat(s, match, false)
 	}
 
 	// Check for alternative #x## format
-	if match := tvEpisodeAltPattern.FindStringSubmatchIndex(normalized); match != nil {
-		normalized = normalizeTVEpisodeFormat(normalized, match, true)
+	if match := tvEpisodeAltPattern.FindStringSubmatchIndex(s); match != nil {
+		s = normalizeTVEpisodeFormat(s, match, true)
 	}
 
 	// TODO: Component reordering - detect and reorder to canonical format
 	// This would involve parsing out show name, episode marker, and episode title,
 	// then reassembling in canonical order.
 
-	return normalized
+	return s
 }
 
 // normalizeTVEpisodeFormat converts episode markers to canonical lowercase s##e## format.
@@ -102,13 +124,97 @@ func normalizeTVEpisodeFormat(input string, matchIndices []int, _ bool) string {
 	return strings.Replace(input, fullMatch, canonical, 1)
 }
 
+// ParseGame normalizes game titles by applying game-specific transformations.
+// This handles common game title patterns and variations to ensure consistent matching.
+//
+// Transformations applied (in order):
+//  1. Split titles and strip articles: "The Zelda: Link's Awakening" → "Zelda Link's Awakening"
+//  2. Strip trailing articles: "Legend, The" → "Legend"
+//  3. Strip metadata brackets: (USA), [!], {Europe}, <Beta> → removed
+//  4. Strip edition/version suffixes: "Edition", "Version", v1.0 → removed
+//  5. Normalize separators: Convert periods to spaces (for abbreviation matching)
+//  6. Expand abbreviations: "Bros" → "brothers", "vs" → "versus", "Dr" → "doctor"
+//  7. Expand number words: "one" → "1", "two" → "2"
+//  8. Normalize ordinals: "1st" → "1", "2nd" → "2"
+//  9. Convert roman numerals: "VII" → "7", "II" → "2" (preserves "X" for games like Mega Man X)
+//
+// Examples:
+//   - "Super Mario Bros. III (USA) [!]" → "super mario brothers 3"
+//   - "Street Fighter II Version" → "street fighter 2"
+//   - "Mega Man X" → "mega man x" (X preserved)
+//   - "Final Fantasy VII" → "final fantasy 7"
+func ParseGame(title string) string {
+	s := title
+
+	// Normalize width first so fullwidth separators are detected by SplitAndStripArticles
+	// This converts "：" (fullwidth colon) to ":" (ASCII colon)
+	s = NormalizeWidth(s)
+	s = strings.TrimSpace(s)
+
+	// MUST happen first: Split titles and strip articles
+	// This preserves separators like ":" and "," which are needed for splitting
+	s = SplitAndStripArticles(s)
+	s = strings.TrimSpace(s)
+
+	// Strip trailing articles (also needs "," intact)
+	s = StripTrailingArticle(s)
+	s = strings.TrimSpace(s)
+
+	// Strip metadata brackets (region codes, dump info, tags)
+	s = StripMetadataBrackets(s)
+	s = strings.TrimSpace(s)
+
+	// Strip edition and version suffixes
+	s = StripEditionAndVersionSuffixes(s)
+	s = strings.TrimSpace(s)
+
+	// Trim trailing separators before abbreviation expansion
+	// This ensures "Bros-" → "Bros" so abbreviation matching works
+	s = strings.TrimRight(s, "-:;.,_/\\ ")
+
+	// Normalize symbols and separators (BUT NOT commas - needed for trailing articles)
+	// This is similar to NormalizeSymbolsAndSeparators but preserves commas
+	// Conjunction normalization
+	s = strings.ReplaceAll(s, " & ", " and ")
+	s = strings.ReplaceAll(s, "&", " and ")
+	s = strings.ReplaceAll(s, " + ", " and ")
+	s = strings.ReplaceAll(s, "+", " plus ")
+	// Separator normalization (: _ / \ ; but NOT commas)
+	s = strings.ReplaceAll(s, ":", " ")
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "/", " ")
+	s = strings.ReplaceAll(s, "\\", " ")
+	s = strings.ReplaceAll(s, ";", " ")
+	// Convert periods to spaces
+	s = strings.ReplaceAll(s, ".", " ")
+	s = strings.TrimSpace(s)
+
+	// Expand common abbreviations
+	s = ExpandAbbreviations(s)
+
+	// Expand number words
+	s = ExpandNumberWords(s)
+
+	// Normalize ordinals
+	s = NormalizeOrdinals(s)
+
+	// Convert roman numerals (includes lowercasing)
+	s = ConvertRomanNumerals(s)
+
+	return s
+}
+
 // ParseWithMediaType is the entry point for media-type-aware parsing.
 // It delegates to the appropriate parser based on media type.
-// mediaType should be one of: "TVShow", "Movie", "Music", "Audio", "Video", "Game", "Image"
+// Each parser applies media-specific normalization BEFORE the universal pipeline.
+//
+// mediaType should be one of: "TVShow", "Movie", "Music", "Audio", "Video", "Game", "Image", "Application"
 func ParseWithMediaType(title, mediaType string) string {
 	switch mediaType {
 	case "TVShow":
 		return ParseTVShow(title)
+	case "Game":
+		return ParseGame(title)
 	case "Movie":
 		// TODO: Implement ParseMovie
 		return title
@@ -121,8 +227,8 @@ func ParseWithMediaType(title, mediaType string) string {
 	case "Video":
 		// TODO: Implement ParseVideo (music videos)
 		return title
-	case "Game", "Image", "Application":
-		// No special parsing needed for games, images, and applications
+	case "Image", "Application":
+		// No special parsing needed for images and applications
 		return title
 	default:
 		return title
