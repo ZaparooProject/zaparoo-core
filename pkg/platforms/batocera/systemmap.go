@@ -171,7 +171,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"catacomb": {
 		SystemID:   systemdefs.SystemDOS,
-		Extensions: []string{".catacomb"},
+		Extensions: []string{".game"},
 	},
 	"cave3rd": {
 		SystemID:   systemdefs.SystemArcade,
@@ -235,11 +235,11 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"dice": {
 		SystemID:   systemdefs.SystemDICE,
-		Extensions: []string{".dice"},
+		Extensions: []string{".zip", ".dmy"},
 	},
 	"doom3": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".boom3"},
+		Extensions: []string{".d3"},
 	},
 	"dos": {
 		SystemID:   systemdefs.SystemDOS,
@@ -251,7 +251,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"dxx-rebirth": {
 		SystemID:   systemdefs.SystemDOS,
-		Extensions: []string{".dxx"},
+		Extensions: []string{".d1x", ".d2x"},
 	},
 	"easyrpg": {
 		SystemID:   systemdefs.SystemPC,
@@ -314,7 +314,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"fury": {
 		SystemID:   systemdefs.SystemDOS,
-		Extensions: []string{".fury"},
+		Extensions: []string{".grp"},
 	},
 	"gaelco": {
 		SystemID:   systemdefs.SystemGaelco,
@@ -370,7 +370,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"gong": {
 		SystemID:   systemdefs.SystemArcade,
-		Extensions: []string{".gong"},
+		Extensions: []string{".game"},
 	},
 	"gp32": {
 		SystemID:   systemdefs.SystemGP32,
@@ -394,7 +394,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"hurrican": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".hurrican"},
+		Extensions: []string{".game"},
 	},
 	"imageviewer": {
 		SystemID:   systemdefs.SystemImage,
@@ -441,8 +441,12 @@ var SystemMap = map[string]SystemInfo{
 		Extensions: []string{".mgw", ".zip", ".7z"},
 	},
 	"library": {
-		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".library"},
+		SystemID: systemdefs.SystemPC,
+		Extensions: []string{
+			".jpg", ".jpeg", ".png", ".bmp", ".psd", ".tga", ".gif", ".hdr", ".pic", ".ppm", ".pgm",
+			".mkv", ".pdf", ".mp4", ".avi", ".webm", ".cbz", ".mp3", ".wav", ".ogg", ".flac",
+			".mod", ".xm", ".stm", ".s3m", ".far", ".it", ".669", ".mtm",
+		},
 	},
 	"lindbergh": {
 		SystemID:   systemdefs.SystemLindbergh,
@@ -887,7 +891,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"raze": {
 		SystemID:   systemdefs.SystemDOS,
-		Extensions: []string{".grp", ".rff"},
+		Extensions: []string{".raze"},
 	},
 	"recordings": {
 		SystemID:   systemdefs.SystemVideo,
@@ -915,7 +919,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"sonic-mania": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".sonicmania"},
+		Extensions: []string{".sman"},
 	},
 	"sonicretro": {
 		SystemID:   systemdefs.SystemGenesis,
@@ -955,7 +959,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"tyrian": {
 		SystemID:   systemdefs.SystemDOS,
-		Extensions: []string{".tyrian"},
+		Extensions: []string{".game"},
 	},
 	"uqm": {
 		SystemID:   systemdefs.SystemPC,
