@@ -43,9 +43,18 @@ var (
 	sceneSourceRegex  = regexp.MustCompile(
 		`(?i)\b(bluray|bdrip|brrip|webrip|web-dl|webdl|hdtv|dvdrip|bdremux|remux|hdcam|cam|telesync|ts|tc)\b`,
 	)
-	sceneCodecRegex = regexp.MustCompile(`(?i)\b(x264|x265|h\.?264|h\.?265|hevc|xvid|avc|10bit|8bit)\b`)
+	sceneCodecRegex = regexp.MustCompile(`(?i)\b(x264|x265|h\.?264|h\.?265|hevc|xvid|avc|vc-1|10bit|8bit)\b`)
 	sceneAudioRegex = regexp.MustCompile(
-		`(?i)\b(ac3|aac|dts|dd5\.1|dd7\.1|atmos|truehd|ddp5\.1|ddp2\.0|aac2\.0)\b`,
+		`(?i)\b(` +
+			`dts-hd\.?ma\.?[257]\.[01]|dts-hd\.?ma|` + // DTS-HD MA with optional channels
+			`dts-hd\.?hra\.?[257]\.[01]|dts-hd\.?hra|` + // DTS-HD HRA with optional channels
+			`dts-hd|dts-es|dts-x|dts\.?[257]\.[01]|dts|` + // DTS variants
+			`truehd\.?[257]\.[01]|truehd|` + // TrueHD with optional channels
+			`ddp?[257]\.[01]|dd\+?|ddp|` + // Dolby Digital Plus (DDP5.1, DD5.1, DD+)
+			`aac[257]\.[01]|aac|ac3|` + // AAC with optional channels (AAC2.0)
+			`flac|pcm|lpcm|` +
+			`atmos|ma|hra|es|` + // Audio descriptors
+			`[257]\.[01]|5\.1|7\.1|2\.0)\b`, // Standalone channel configs
 	)
 	sceneTagsRegex = regexp.MustCompile(
 		`(?i)\b(proper|repack|internal|limited|extended|unrated|directors?\.?cut|remastered|multi|korsub)\b`,
@@ -55,6 +64,12 @@ var (
 	//   - Dates like "-15" (starts with digit)
 	//   - Episode markers like "-S01E02" or "-E001" (second char is digit)
 	sceneGroupRegex = regexp.MustCompile(`-(?i)[A-Z]{2}[A-Z0-9]*$`)
+
+	// Movie-specific scene release tag patterns
+	// HDR tags: HDR, HDR10, HDR10+, Dolby Vision, HLG
+	sceneHDRRegex = regexp.MustCompile(`(?i)\b(hdr|hdr10|hdr10plus|hdr10\+|dv|dolby\.?vision|hlg)\b`)
+	// 3D tags: 3D, HSBS (Half Side-by-Side), HOU (Half Over-Under), SBS, OU
+	scene3DRegex = regexp.MustCompile(`(?i)\b(3d|hsbs|hou|half-sbs|half-ou|sbs|ou)\b`)
 )
 
 // periodRequiredAbbreviations maps period-required abbreviations to their expansions

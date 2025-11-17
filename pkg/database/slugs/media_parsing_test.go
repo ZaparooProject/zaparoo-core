@@ -251,10 +251,10 @@ func TestParseWithMediaType(t *testing.T) {
 			wantHave:  "super mario brothers", // ParseGame expands "Bros" -> "brothers"
 		},
 		{
-			name:      "Movie title (no parsing yet)",
+			name:      "Movie title (calls ParseMovie)",
 			input:     "The Matrix (1999)",
 			mediaType: MediaTypeMovie,
-			wantHave:  "The Matrix (1999)",
+			wantHave:  "Matrix", // ParseMovie strips articles and years in parentheses
 		},
 	}
 
@@ -1113,6 +1113,772 @@ func TestParseTVShow_SceneGroupRegexRegression(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := ParseTVShow(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_YearExtraction tests year extraction from various formats
+func TestParseMovie_YearExtraction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Parentheses format (highest priority - Plex/Kodi standard)
+		{
+			name:     "year in parentheses",
+			input:    "The Matrix (1999)",
+			expected: "Matrix",
+		},
+		{
+			name:     "year in parentheses with quality",
+			input:    "Avatar (2009) 1080p",
+			expected: "Avatar",
+		},
+
+		// Bracket format
+		{
+			name:     "year in brackets",
+			input:    "Inception [2010]",
+			expected: "Inception",
+		},
+		{
+			name:     "year in brackets with metadata",
+			input:    "Movie Name [2024] [Remastered]",
+			expected: "Movie Name",
+		},
+
+		// Dot-separated format (scene releases)
+		// Note: Bare years (not in brackets) are kept in slug
+		{
+			name:     "year with dots scene release",
+			input:    "The.Matrix.1999.1080p.BluRay",
+			expected: "Matrix 1999",
+		},
+		{
+			name:     "year dots full scene release",
+			input:    "Avatar.2009.Extended.1080p.BluRay.x264-GROUP",
+			expected: "Avatar 2009 Extended",
+		},
+
+		// Bare year format
+		// Note: Bare years (not in brackets) are kept in slug
+		{
+			name:     "bare year at end",
+			input:    "Blade Runner 1982",
+			expected: "Blade Runner 1982",
+		},
+		{
+			name:     "bare year in middle",
+			input:    "The Dark Knight 2008 IMAX",
+			expected: "Dark Knight 2008 IMAX",
+		},
+
+		// Multiple years (pick first)
+		{
+			name:     "multiple years pick first",
+			input:    "Blade Runner (1982) (2007 Final Cut)",
+			expected: "Blade Runner",
+		},
+
+		// Missing year
+		{
+			name:     "no year present",
+			input:    "The Matrix",
+			expected: "Matrix",
+		},
+		{
+			name:     "no year with quality",
+			input:    "Avatar 1080p BluRay",
+			expected: "Avatar",
+		},
+
+		// Year validation (reject invalid years)
+		{
+			name:     "reject too old year",
+			input:    "Movie (1800)",
+			expected: "Movie", // Year kept as-is if invalid
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_SceneReleaseTags tests removal of scene release quality/source tags
+func TestParseMovie_SceneReleaseTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Quality tags
+		{
+			name:     "720p quality tag",
+			input:    "Movie (2024) 720p",
+			expected: "Movie",
+		},
+		{
+			name:     "1080p quality tag",
+			input:    "The Matrix (1999) 1080p",
+			expected: "Matrix",
+		},
+		{
+			name:     "4K quality tag",
+			input:    "Avatar (2009) 4K",
+			expected: "Avatar",
+		},
+		{
+			name:     "2160p UHD tag",
+			input:    "Film (2020) 2160p UHD",
+			expected: "Film",
+		},
+
+		// Source tags
+		{
+			name:     "BluRay source",
+			input:    "Movie.2024.BluRay.x264",
+			expected: "Movie 2024",
+		},
+		{
+			name:     "WEB-DL source",
+			input:    "Film.2020.WEB-DL.1080p",
+			expected: "Film 2020",
+		},
+		{
+			name:     "HDTV source",
+			input:    "Show.Movie.2019.HDTV.720p",
+			expected: "Show Movie 2019",
+		},
+		{
+			name:     "Remux source",
+			input:    "Movie (2024) Remux 2160p",
+			expected: "Movie",
+		},
+
+		// Codec tags
+		{
+			name:     "x264 codec",
+			input:    "Movie.2024.1080p.x264",
+			expected: "Movie 2024",
+		},
+		{
+			name:     "x265 HEVC codec",
+			input:    "Film.2020.2160p.x265.HEVC",
+			expected: "Film 2020",
+		},
+		{
+			name:     "H.264 codec",
+			input:    "Movie (2024) H.264 1080p",
+			expected: "Movie",
+		},
+		{
+			name:     "10bit codec",
+			input:    "Film.2020.10bit.x265",
+			expected: "Film 2020",
+		},
+
+		// Audio tags
+		{
+			name:     "DTS audio",
+			input:    "Matrix.1999.DTS.5.1",
+			expected: "Matrix 1999",
+		},
+		{
+			name:     "Atmos audio",
+			input:    "Movie (2024) Atmos DD7.1",
+			expected: "Movie",
+		},
+		{
+			name:     "TrueHD audio",
+			input:    "Film.2020.TrueHD.7.1",
+			expected: "Film 2020",
+		},
+		{
+			name:     "AAC audio",
+			input:    "Movie (2024) AAC2.0",
+			expected: "Movie",
+		},
+
+		// HDR tags
+		{
+			name:     "HDR10 tag",
+			input:    "Movie.2024.2160p.HDR10",
+			expected: "Movie 2024",
+		},
+		{
+			name:     "Dolby Vision tag",
+			input:    "Film.2020.DV.HDR10Plus",
+			expected: "Film 2020",
+		},
+		{
+			name:     "Dolby.Vision with dot",
+			input:    "Movie (2024) Dolby.Vision 4K",
+			expected: "Movie",
+		},
+
+		// 3D tags
+		{
+			name:     "3D tag",
+			input:    "Avatar (2009) 3D 1080p",
+			expected: "Avatar",
+		},
+		{
+			name:     "HSBS half side-by-side",
+			input:    "Movie.2024.3D.HSBS.1080p",
+			expected: "Movie 2024",
+		},
+		{
+			name:     "Half-SBS tag",
+			input:    "Film (2020) Half-SBS 1080p",
+			expected: "Film",
+		},
+
+		// Multiple tags
+		{
+			name:     "full scene release",
+			input:    "The.Dark.Knight.2008.1080p.BluRay.x264.DTS.5.1-GROUP",
+			expected: "Dark Knight 2008",
+		},
+		{
+			name:     "complex scene release",
+			input:    "Movie.2024.REMASTERED.2160p.WEB-DL.DV.HDR10.HEVC.DDP5.1.Atmos-RELEASE",
+			expected: "Movie 2024 REMASTERED",
+		},
+		{
+			name:     "3D with HDR",
+			input:    "Avatar.2009.3D.HSBS.1080p.BluRay.x264.DTS.HDR10",
+			expected: "Avatar 2009",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_EditionMarkers tests that edition suffix words are stripped while qualifiers are kept
+func TestParseMovie_EditionMarkers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "director's cut",
+			input:    "Blade Runner (1982) Director's Cut",
+			expected: "Blade Runner  Director's",
+		},
+		{
+			name:     "directors cut no apostrophe",
+			input:    "Movie (2024) Directors Cut",
+			expected: "Movie  Directors",
+		},
+		{
+			name:     "extended edition",
+			input:    "Lord of the Rings (2001) Extended Edition",
+			expected: "Lord of the Rings  Extended",
+		},
+		{
+			name:     "extended only",
+			input:    "Avatar (2009) Extended",
+			expected: "Avatar  Extended",
+		},
+		{
+			name:     "theatrical cut",
+			input:    "Film (2020) Theatrical Cut",
+			expected: "Film  Theatrical",
+		},
+		{
+			name:     "unrated edition",
+			input:    "Movie (2024) Unrated",
+			expected: "Movie  Unrated",
+		},
+		{
+			name:     "final cut",
+			input:    "Blade Runner (1982) Final Cut",
+			expected: "Blade Runner  Final",
+		},
+		{
+			name:     "ultimate edition",
+			input:    "Film (2020) Ultimate Edition",
+			expected: "Film  Ultimate",
+		},
+		{
+			name:     "special edition",
+			input:    "Star Wars (1977) Special Edition",
+			expected: "Star Wars  Special",
+		},
+		{
+			name:     "remastered",
+			input:    "The Matrix (1999) Remastered",
+			expected: "Matrix  Remastered",
+		},
+		{
+			name:     "IMAX edition",
+			input:    "Dark Knight (2008) IMAX Edition",
+			expected: "Dark Knight  IMAX",
+		},
+		{
+			name:     "IMAX only",
+			input:    "Movie (2024) IMAX",
+			expected: "Movie  IMAX",
+		},
+		{
+			name:     "collector's edition",
+			input:    "Film (2020) Collector's Edition",
+			expected: "Film  Collector's",
+		},
+		{
+			name:     "anniversary edition",
+			input:    "Movie (1999) Anniversary Edition",
+			expected: "Movie  Anniversary",
+		},
+		{
+			name:     "edition in brackets",
+			input:    "Blade Runner (1982) [Director's Cut]",
+			expected: "Blade Runner",
+		},
+		{
+			name:     "multiple editions",
+			input:    "Movie (2024) Extended Unrated Director's Cut",
+			expected: "Movie  Extended Unrated Director's",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_ArticleHandling tests leading and trailing article removal
+func TestParseMovie_ArticleHandling(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Leading articles
+		{
+			name:     "leading the",
+			input:    "The Matrix (1999)",
+			expected: "Matrix",
+		},
+		{
+			name:     "leading a",
+			input:    "A Beautiful Mind (2001)",
+			expected: "Beautiful Mind",
+		},
+		{
+			name:     "leading an",
+			input:    "An American Tail (1986)",
+			expected: "American Tail",
+		},
+
+		// Trailing articles
+		{
+			name:     "trailing the",
+			input:    "King, The (2019)",
+			expected: "King",
+		},
+		{
+			name:     "matrix the",
+			input:    "Matrix, The (1999)",
+			expected: "Matrix",
+		},
+
+		// Both leading and trailing
+		{
+			name:     "the movie the",
+			input:    "The Movie, The (2024)",
+			expected: "Movie",
+		},
+
+		// With subtitles
+		{
+			name:     "the with subtitle",
+			input:    "The Legend of Zelda: Breath of the Wild (2017)",
+			expected: "Legend of Zelda Breath of the Wild",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_CrossFormatMatching tests ParseMovie output for various formats
+func TestParseMovie_CrossFormatMatching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Matrix variants
+		{
+			name:     "Matrix standard",
+			input:    "The Matrix (1999)",
+			expected: "Matrix",
+		},
+		{
+			name:     "Matrix scene release",
+			input:    "The.Matrix.1999.1080p.BluRay.x264.DTS-WAF",
+			expected: "Matrix 1999",
+		},
+		{
+			name:     "Matrix with quality",
+			input:    "Matrix (1999) 720p",
+			expected: "Matrix",
+		},
+		{
+			name:     "Matrix brackets",
+			input:    "The Matrix [1999]",
+			expected: "Matrix",
+		},
+		{
+			name:     "Matrix trailing article",
+			input:    "Matrix, The (1999)",
+			expected: "Matrix",
+		},
+		{
+			name:     "Matrix bare year with Remastered",
+			input:    "The Matrix 1999 Remastered",
+			expected: "Matrix 1999 Remastered",
+		},
+
+		// Avatar variants
+		{
+			name:     "Avatar standard",
+			input:    "Avatar (2009)",
+			expected: "Avatar",
+		},
+		{
+			name:     "Avatar scene with Extended",
+			input:    "Avatar.2009.Extended.Edition.1080p.BluRay.x264-GROUP",
+			expected: "Avatar 2009 Extended",
+		},
+		{
+			name:     "Avatar with Extended",
+			input:    "Avatar (2009) Extended",
+			expected: "Avatar  Extended",
+		},
+		{
+			name:     "Avatar brackets Extended",
+			input:    "Avatar [2009] [Extended]",
+			expected: "Avatar",
+		},
+		{
+			name:     "Avatar bare year 3D",
+			input:    "Avatar 2009 3D HSBS",
+			expected: "Avatar 2009",
+		},
+
+		// Blade Runner variants
+		{
+			name:     "Blade Runner standard",
+			input:    "Blade Runner (1982)",
+			expected: "Blade Runner",
+		},
+		{
+			name:     "Blade Runner Director's Cut",
+			input:    "Blade Runner (1982) Director's Cut",
+			expected: "Blade Runner  Director's",
+		},
+		{
+			name:     "Blade Runner Final Cut",
+			input:    "Blade Runner (1982) Final Cut",
+			expected: "Blade Runner  Final",
+		},
+		{
+			name:     "Blade Runner Theatrical",
+			input:    "Blade Runner (1982) Theatrical",
+			expected: "Blade Runner  Theatrical",
+		},
+		{
+			name:     "Blade Runner scene release",
+			input:    "Blade.Runner.1982.1080p.BluRay.x264-RELEASE",
+			expected: "Blade Runner 1982",
+		},
+		{
+			name:     "Blade Runner brackets Director's Cut",
+			input:    "Blade Runner [1982] [Director's Cut]",
+			expected: "Blade Runner",
+		},
+
+		// Dark Knight variants
+		{
+			name:     "Dark Knight standard",
+			input:    "The Dark Knight (2008)",
+			expected: "Dark Knight",
+		},
+		{
+			name:     "Dark Knight scene REMASTERED",
+			input:    "The.Dark.Knight.2008.REMASTERED.1080p.BluRay.x264.DTS-GROUP",
+			expected: "Dark Knight 2008 REMASTERED",
+		},
+		{
+			name:     "Dark Knight trailing article",
+			input:    "Dark Knight, The (2008)",
+			expected: "Dark Knight",
+		},
+		{
+			name:     "Dark Knight with IMAX",
+			input:    "The Dark Knight (2008) IMAX",
+			expected: "Dark Knight  IMAX",
+		},
+		{
+			name:     "Dark Knight brackets",
+			input:    "The Dark Knight [2008]",
+			expected: "Dark Knight",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_RealWorldExamples tests real-world naming from Plex, Kodi, and scene releases
+func TestParseMovie_RealWorldExamples(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Plex naming convention
+		{
+			name:     "plex standard",
+			input:    "Avatar (2009)",
+			expected: "Avatar",
+		},
+		{
+			name:     "plex with edition",
+			input:    "Blade Runner (1982) {edition-Director's Cut}",
+			expected: "Blade Runner",
+		},
+		{
+			name:     "plex with imdb id",
+			input:    "The Matrix (1999) {imdb-tt0133093}",
+			expected: "Matrix",
+		},
+		{
+			name:     "plex with tmdb id",
+			input:    "Inception (2010) {tmdb-27205}",
+			expected: "Inception",
+		},
+
+		// Kodi naming convention
+		{
+			name:     "kodi standard",
+			input:    "The Dark Knight (2008)",
+			expected: "Dark Knight",
+		},
+		{
+			name:     "kodi with brackets",
+			input:    "Avatar [2009]",
+			expected: "Avatar",
+		},
+
+		// Scene releases
+		{
+			name:     "scene basic",
+			input:    "The.Matrix.1999.1080p.BluRay.x264.DTS-WAF",
+			expected: "Matrix 1999",
+		},
+		{
+			name:     "scene with extended",
+			input:    "Avatar.2009.Extended.Edition.1080p.BluRay.x264-GROUP",
+			expected: "Avatar 2009 Extended",
+		},
+		{
+			name:     "scene complex",
+			input:    "The.Dark.Knight.2008.REMASTERED.1080p.BluRay.x264.DTS.5.1.PROPER-GROUP",
+			expected: "Dark Knight 2008 REMASTERED",
+		},
+		{
+			name:     "scene 4K HDR",
+			input:    "Movie.2024.2160p.WEB-DL.DV.HDR10.HEVC-GROUP",
+			expected: "Movie 2024",
+		},
+		{
+			name:     "scene 3D",
+			input:    "Avatar.2009.3D.HSBS.1080p.BluRay.x264-RELEASE",
+			expected: "Avatar 2009",
+		},
+
+		// Radarr/Sonarr outputs
+		{
+			name:     "radarr naming",
+			input:    "The Movie Title (2010) [Bluray-1080p Proper][DV HDR10][DTS 5.1][x264]-RlsGrp",
+			expected: "Movie Title",
+		},
+		{
+			name:     "radarr with edition",
+			input:    "Blade Runner (1982) {edition-Final Cut} [Bluray-2160p][DV][TrueHD 7.1][x265]-GROUP",
+			expected: "Blade Runner",
+		},
+
+		// Edge cases
+		{
+			name:     "multiple spaces and dots",
+			input:    "The...Matrix...1999...1080p",
+			expected: "Matrix   1999",
+		},
+		{
+			name:     "mixed case",
+			input:    "ThE MaTrIx (1999)",
+			expected: "MaTrIx",
+		},
+		{
+			name:     "trailing garbage",
+			input:    "Movie (2024) 1080p BluRay x264 DTS-HD MA 5.1-GROUP",
+			expected: "Movie     -",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_IDTagStripping tests that IMDb and TMDb ID tags are stripped
+func TestParseMovie_IDTagStripping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "imdb tag curly braces",
+			input:    "The Matrix (1999) {imdb-tt0133093}",
+			expected: "Matrix",
+		},
+		{
+			name:     "tmdb tag curly braces",
+			input:    "Inception (2010) {tmdb-27205}",
+			expected: "Inception",
+		},
+		{
+			name:     "imdbid tag square brackets",
+			input:    "Avatar (2009) [imdbid-tt0499549]",
+			expected: "Avatar",
+		},
+		{
+			name:     "tmdbid tag square brackets",
+			input:    "Blade Runner (1982) [tmdbid-78]",
+			expected: "Blade Runner",
+		},
+		{
+			name:     "multiple id tags",
+			input:    "Movie (2024) {imdb-tt1234567} {tmdb-12345}",
+			expected: "Movie",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMovie_EdgeCases tests edge cases and potential parsing issues
+func TestParseMovie_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only whitespace",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "only year",
+			input:    "(2024)",
+			expected: "",
+		},
+		{
+			name:     "year only no parens",
+			input:    "2024",
+			expected: "2024",
+		},
+		{
+			name:     "no year just title",
+			input:    "Some Movie",
+			expected: "Some Movie",
+		},
+		{
+			name:     "special characters",
+			input:    "Movie: The Beginning (2024)",
+			expected: "Movie Beginning",
+		},
+		{
+			name:     "numbers in title",
+			input:    "2001: A Space Odyssey (1968)",
+			expected: "2001 Space Odyssey",
+		},
+		{
+			name:     "very long title",
+			input:    strings.Repeat("Very Long Movie Title ", 10) + "(2024)",
+			expected: strings.TrimSpace(strings.Repeat("Very Long Movie Title ", 10)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMovie(tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
