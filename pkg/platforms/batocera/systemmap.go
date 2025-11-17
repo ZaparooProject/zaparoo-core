@@ -498,7 +498,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"mrboom": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".mrboom"},
+		Extensions: []string{".libretro"},
 	},
 	"msu-md": {
 		SystemID:   systemdefs.SystemGenesisMSU,
@@ -863,7 +863,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"ports": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".port"},
+		Extensions: []string{".sh", ".squashfs"},
 	},
 	"prboom": {
 		SystemID:   systemdefs.SystemDOS,
@@ -875,15 +875,15 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"quake": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".pak"},
+		Extensions: []string{".quake"},
 	},
 	"quake2": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".pak"},
+		Extensions: []string{".quake2", ".zip", ".7zip"},
 	},
 	"quake3": {
 		SystemID:   systemdefs.SystemPC,
-		Extensions: []string{".pk3"},
+		Extensions: []string{".quake3"},
 	},
 	"raze": {
 		SystemID:   systemdefs.SystemDOS,
