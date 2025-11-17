@@ -131,3 +131,77 @@ func TestExtensionFormatConsistency(t *testing.T) {
 		})
 	}
 }
+
+// TestBatoceraOfficialExtensions tests that extensions match Batocera's official es_systems.yml config.
+// These were verified against batocera-linux/batocera.linux repository at
+// package/batocera/emulationstation/batocera-es-system/es_systems.yml
+func TestBatoceraOfficialExtensions(t *testing.T) {
+	t.Parallel()
+
+	// Define expected extensions from Batocera's official configuration
+	// This ensures our extensions match what Batocera actually uses
+	expectedExtensions := map[string][]string{
+		// Port/Engine systems
+		"ports":       {".sh", ".squashfs"},
+		"mrboom":      {".libretro"},
+		"quake":       {".quake"},
+		"quake2":      {".quake2", ".zip", ".7zip"},
+		"quake3":      {".quake3"},
+		"sonic-mania": {".sman"},
+		"catacomb":    {".game"},
+		"fury":        {".grp"},
+		"hurrican":    {".game"},
+		"dxx-rebirth": {".d1x", ".d2x"},
+		"gong":        {".game"},
+
+		// Specialized systems
+		"dice":   {".zip", ".dmy"},
+		"doom3":  {".d3"},
+		"raze":   {".raze"},
+		"tyrian": {".game"},
+		"library": {
+			".jpg", ".jpeg", ".png", ".bmp", ".psd", ".tga", ".gif", ".hdr", ".pic", ".ppm", ".pgm",
+			".mkv", ".pdf", ".mp4", ".avi", ".webm", ".cbz", ".mp3", ".wav", ".ogg", ".flac",
+			".mod", ".xm", ".stm", ".s3m", ".far", ".it", ".669", ".mtm",
+		},
+
+		// Modern console systems
+		"ps2":     {".iso", ".mdf", ".nrg", ".bin", ".img", ".dump", ".gz", ".cso", ".chd", ".m3u"},
+		"ps3":     {".ps3", ".psn", ".squashfs"},
+		"psvita":  {".zip", ".psvita"},
+		"switch":  {".xci", ".nsp"},
+		"wiiu":    {".wua", ".wup", ".wud", ".wux", ".rpx", ".squashfs", ".wuhb"},
+		"xbox360": {".iso", ".xex", ".xbox360", ".zar"},
+	}
+
+	for systemName, expectedExts := range expectedExtensions {
+		t.Run(systemName, func(t *testing.T) {
+			t.Parallel()
+
+			system, exists := SystemMap[systemName]
+			assert.True(t, exists, "System %s should exist in SystemMap", systemName)
+
+			if !exists {
+				return
+			}
+
+			// Verify all expected extensions are present
+			for _, expectedExt := range expectedExts {
+				assert.Contains(t, system.Extensions, expectedExt,
+					"System %s should have extension %s according to Batocera official config",
+					systemName, expectedExt)
+			}
+
+			// Verify no unexpected extensions are present
+			for _, actualExt := range system.Extensions {
+				assert.Contains(t, expectedExts, actualExt,
+					"System %s has unexpected extension %s (not in Batocera official config)",
+					systemName, actualExt)
+			}
+
+			// Verify exact match (same count and content)
+			assert.ElementsMatch(t, expectedExts, system.Extensions,
+				"System %s extensions should exactly match Batocera official config", systemName)
+		})
+	}
+}
