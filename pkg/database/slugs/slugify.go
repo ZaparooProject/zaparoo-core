@@ -300,7 +300,7 @@ func tokenizeNormalized(s string) []string {
 //	result.Tokens → []string{"legend", "of", "zelda", "ocarina", "of", "time"}
 func SlugifyWithTokens(mediaType MediaType, input string) SlugifyResult {
 	// Apply media-type-specific parsing before slugification
-	normalized := ParseWithMediaType(input, string(mediaType))
+	normalized := ParseWithMediaType(mediaType, input)
 
 	// Run Stages 1-13 of normalization (via existing normalizeInternal)
 	s, ctx := normalizeInternal(normalized)

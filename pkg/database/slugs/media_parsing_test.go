@@ -229,31 +229,31 @@ func TestParseWithMediaType(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		mediaType string
+		mediaType MediaType
 		wantHave  string
 	}{
 		{
 			name:      "TV show with S01E02",
 			input:     "Show - S01E02 - Title",
-			mediaType: "TVShow",
+			mediaType: MediaTypeTVShow,
 			wantHave:  "s01e02",
 		},
 		{
 			name:      "TV show with 1x02",
 			input:     "Show - 1x02 - Title",
-			mediaType: "TVShow",
+			mediaType: MediaTypeTVShow,
 			wantHave:  "s01e02",
 		},
 		{
 			name:      "Game title (calls ParseGame)",
 			input:     "Super Mario Bros",
-			mediaType: "Game",
+			mediaType: MediaTypeGame,
 			wantHave:  "super mario brothers", // ParseGame expands "Bros" -> "brothers"
 		},
 		{
 			name:      "Movie title (no parsing yet)",
 			input:     "The Matrix (1999)",
-			mediaType: "Movie",
+			mediaType: MediaTypeMovie,
 			wantHave:  "The Matrix (1999)",
 		},
 	}
@@ -262,7 +262,7 @@ func TestParseWithMediaType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := ParseWithMediaType(tt.input, tt.mediaType)
+			result := ParseWithMediaType(tt.mediaType, tt.input)
 			assert.Contains(t, result, tt.wantHave,
 				"Parsed result should contain %q", tt.wantHave)
 		})
