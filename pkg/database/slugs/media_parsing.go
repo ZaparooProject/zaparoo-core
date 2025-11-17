@@ -38,10 +38,20 @@ func ParseWithMediaType(mediaType MediaType, title string) string {
 	case MediaTypeMusic:
 		return ParseMusic(title)
 	case MediaTypeAudio:
-		// TODO: Implement ParseAudiobook/ParsePodcast in media_parsing_audio.go
+		// TODO: Implement ParseAudio in media_parsing_audio.go
+		// Future work needed:
+		//   - Audiobooks: Extract chapter/part numbers, strip "Unabridged"/"Abridged" markers
+		//   - Podcasts: Normalize episode numbers, strip date formats
+		//   - General: Strip narrator names if in metadata format
+		// Example: "Book Title (Unabridged) - Chapter 1" → "Book Title Chapter 1"
 		return title
 	case MediaTypeVideo:
 		// TODO: Implement ParseVideo in media_parsing_video.go
+		// Future work needed:
+		//   - Music videos: Normalize "Artist - Song (Official Video)" formats
+		//   - Strip quality tags (1080p, 4K, etc.) similar to movies
+		//   - Handle "feat." and artist collaborations
+		// Example: "Artist - Song Title (Official Music Video) [4K]" → "Artist Song Title"
 		return title
 	case MediaTypeImage, MediaTypeApplication:
 		// No special parsing needed for images and applications

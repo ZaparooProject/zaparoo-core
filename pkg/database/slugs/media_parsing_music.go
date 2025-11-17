@@ -44,6 +44,9 @@ var (
 
 	// Disc/CD numbers: CD1, CD2, Disc1, Disc2, Disc 1, Disc 2
 	musicDiscRegex = regexp.MustCompile(`(?i)\b(cd|disc)\s*\d{1,2}\b`)
+
+	// Multiple consecutive spaces
+	multipleSpacesRegex = regexp.MustCompile(`\s+`)
 )
 
 // ParseMusic normalizes music album titles to a canonical format.
@@ -116,11 +119,10 @@ func ParseMusic(title string) string {
 	s = StripTrailingArticle(s)
 	s = strings.TrimSpace(s)
 
-	// 8. Collapse multiple spaces into single spaces
-	// This is needed after separator normalization and article stripping
-	for strings.Contains(s, "  ") {
-		s = strings.ReplaceAll(s, "  ", " ")
-	}
+	// 8. Collapse multiple consecutive spaces into single spaces
+	// This is needed after separator normalization and tag stripping
+	s = multipleSpacesRegex.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
 
 	return s
 }

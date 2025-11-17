@@ -340,45 +340,11 @@ func reorderTVComponents(s string) string {
 		return marker
 	}
 
-	// Heuristic for identifying show name vs episode title:
-	// - Show name is typically LONGEST or contains more words
-	// - Episode titles tend to be shorter or more descriptive
-	// - If only one component, it's the show name
-	showName := ""
+	// Simple positional logic: first component is show name, rest is episode title
+	showName := nonEmpty[0]
 	episodeTitle := ""
-
-	switch len(nonEmpty) {
-	case 1:
-		showName = nonEmpty[0]
-	case 2:
-		// Two components: pick the longer one as show name
-		if len(nonEmpty[0]) >= len(nonEmpty[1]) {
-			showName = nonEmpty[0]
-			episodeTitle = nonEmpty[1]
-		} else {
-			showName = nonEmpty[1]
-			episodeTitle = nonEmpty[0]
-		}
-	default:
-		// Multiple components: longest is likely the show name
-		longest := 0
-		longestIdx := 0
-		for i, comp := range nonEmpty {
-			if len(comp) > longest {
-				longest = len(comp)
-				longestIdx = i
-			}
-		}
-		showName = nonEmpty[longestIdx]
-
-		// Everything else is episode title
-		var titleParts []string
-		for i, comp := range nonEmpty {
-			if i != longestIdx {
-				titleParts = append(titleParts, comp)
-			}
-		}
-		episodeTitle = strings.Join(titleParts, " ")
+	if len(nonEmpty) > 1 {
+		episodeTitle = strings.Join(nonEmpty[1:], " ")
 	}
 
 	// Reassemble in canonical order: show marker title
