@@ -577,9 +577,10 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 			expectedScriptCache: false, // After width normalization, becomes ASCII
 		},
 		{
-			name:                "Complex game title with abbreviations",
-			input:               "Street Fighter II: The World Warrior",
-			expectedNormalized:  "street fighter ii  the world warrior", // Article stripping now in ParseGame, not normalizeInternal
+			name:  "Complex game title with abbreviations",
+			input: "Street Fighter II: The World Warrior",
+			// Article stripping now in ParseGame, not normalizeInternal
+			expectedNormalized:  "street fighter ii  the world warrior",
 			expectedASCII:       true,
 			expectedScript:      ScriptLatin,
 			expectedScriptCache: false,

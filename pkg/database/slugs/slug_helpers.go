@@ -37,6 +37,24 @@ var (
 	versionSuffixRegex   = regexp.MustCompile(`\s+v[.]?(?:\d{1,3}(?:[.]\d{1,4})*|[IVX]{1,5})$`)
 	ordinalSuffixRegex   = regexp.MustCompile(`\b(\d+)(?:st|nd|rd|th)\b`)
 	trailingArticleRegex = regexp.MustCompile(`(?i),\s*the\s*($|[\s:\-\(\[])`)
+
+	// Scene release tag patterns for TV shows
+	sceneQualityRegex = regexp.MustCompile(`(?i)\b(480p|576p|720p|1080p|2160p|4k|hd|sd|uhd)\b`)
+	sceneSourceRegex  = regexp.MustCompile(
+		`(?i)\b(bluray|bdrip|brrip|webrip|web-dl|webdl|hdtv|dvdrip|bdremux|remux|hdcam|cam|telesync|ts|tc)\b`,
+	)
+	sceneCodecRegex = regexp.MustCompile(`(?i)\b(x264|x265|h\.?264|h\.?265|hevc|xvid|avc|10bit|8bit)\b`)
+	sceneAudioRegex = regexp.MustCompile(
+		`(?i)\b(ac3|aac|dts|dd5\.1|dd7\.1|atmos|truehd|ddp5\.1|ddp2\.0|aac2\.0)\b`,
+	)
+	sceneTagsRegex = regexp.MustCompile(
+		`(?i)\b(proper|repack|internal|limited|extended|unrated|directors?\.?cut|remastered|multi|korsub)\b`,
+	)
+	// Scene group regex: matches trailing groups like "-GROUP", "-RELEASE", etc.
+	// Requires at least 2 consecutive letters (case-insensitive) to avoid matching:
+	//   - Dates like "-15" (starts with digit)
+	//   - Episode markers like "-S01E02" or "-E001" (second char is digit)
+	sceneGroupRegex = regexp.MustCompile(`-(?i)[A-Z]{2}[A-Z0-9]*$`)
 )
 
 // periodRequiredAbbreviations maps period-required abbreviations to their expansions
@@ -329,7 +347,10 @@ func ConvertRomanNumerals(s string) string {
 			atWordBoundary = false
 		}
 		// Also check if the NEXT character is a Latin diacritic (for cases like "Václav")
-		if i < len(runeSlice)-1 && unicode.Is(unicode.Latin, runeSlice[i+1]) && !isLatinWordCharForRoman(runeSlice[i+1]) {
+		nextCharIsLatinDiacritic := i < len(runeSlice)-1 &&
+			unicode.Is(unicode.Latin, runeSlice[i+1]) &&
+			!isLatinWordCharForRoman(runeSlice[i+1])
+		if nextCharIsLatinDiacritic {
 			atWordBoundary = false
 		}
 
@@ -415,6 +436,39 @@ func StripLeadingArticle(s string) string {
 	return s
 }
 
+// SplitTitle splits a title into main and secondary parts based on common delimiters.
+// This is a public API function used by other packages for metadata processing.
+//
+// Delimiter priority (highest to lowest): ":", " - ", "'s "
+// Note: For "'s " delimiter, the "'s" is retained in the main title.
+//
+// Returns:
+//   - mainTitle: The primary part of the title
+//   - secondaryTitle: The secondary part (subtitle)
+//   - hasSecondary: Whether a secondary title was found
+//
+// Examples:
+//   - "The Legend of Zelda: Link's Awakening" → ("The Legend of Zelda", "Link's Awakening", true)
+//   - "Super Mario Bros." → ("Super Mario Bros.", "", false)
+//   - "Game - Subtitle" → ("Game", "Subtitle", true)
+func SplitTitle(title string) (mainTitle, secondaryTitle string, hasSecondary bool) {
+	cleaned := strings.TrimSpace(title)
+
+	// Delimiter priority: ":" highest, then " - ", then "'s "
+	if idx := strings.Index(cleaned, ":"); idx != -1 {
+		return strings.TrimSpace(cleaned[:idx]), strings.TrimSpace(cleaned[idx+1:]), true
+	}
+	if idx := strings.Index(cleaned, " - "); idx != -1 {
+		return strings.TrimSpace(cleaned[:idx]), strings.TrimSpace(cleaned[idx+3:]), true
+	}
+	if idx := strings.Index(cleaned, "'s "); idx != -1 {
+		// Retain "'s" in the main title
+		return strings.TrimSpace(cleaned[:idx+2]), strings.TrimSpace(cleaned[idx+3:]), true
+	}
+
+	return cleaned, "", false
+}
+
 // SplitAndStripArticles splits a title into main and secondary parts, then strips leading articles from both.
 // This combines title splitting and article removal into a single operation.
 //
@@ -428,28 +482,7 @@ func StripLeadingArticle(s string) string {
 //
 // This function is shared by all media parsers to ensure consistent article handling.
 func SplitAndStripArticles(s string) string {
-	cleaned := strings.TrimSpace(s)
-
-	// Delimiter priority: ":" highest, then " - ", then "'s "
-	var mainTitle, secondaryTitle string
-	var hasSecondary bool
-
-	if idx := strings.Index(cleaned, ":"); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+1:])
-		hasSecondary = true
-	} else if idx := strings.Index(cleaned, " - "); idx != -1 {
-		mainTitle = strings.TrimSpace(cleaned[:idx])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		hasSecondary = true
-	} else if idx := strings.Index(cleaned, "'s "); idx != -1 {
-		// Retain "'s" in the main title
-		mainTitle = strings.TrimSpace(cleaned[:idx+2])
-		secondaryTitle = strings.TrimSpace(cleaned[idx+3:])
-		hasSecondary = true
-	} else {
-		mainTitle = cleaned
-	}
+	mainTitle, secondaryTitle, hasSecondary := SplitTitle(s)
 
 	mainTitle = StripLeadingArticle(mainTitle)
 
@@ -475,4 +508,104 @@ func StripTrailingArticle(s string) string {
 		return strings.TrimSpace(s)
 	}
 	return s
+}
+
+// StripSceneTags removes scene release tags commonly found in TV show filenames.
+// Scene releases use specific tags to indicate quality, source, codec, audio, and release group.
+// This function strips all such tags to normalize titles for matching.
+//
+// Removed tags include:
+//   - Quality: 480p, 720p, 1080p, 2160p, 4K, HD, SD, UHD
+//   - Source: BluRay, BDRip, BRRip, WEBRip, WEB-DL, HDTV, DVDRip, etc.
+//   - Codec: x264, x265, H.264, H.265, HEVC, XviD, AVC, 10bit, 8bit
+//   - Audio: AC3, AAC, DTS, DD5.1, DD7.1, Atmos, TrueHD, etc.
+//   - Other: PROPER, REPACK, INTERNAL, LIMITED, EXTENDED, UNRATED, Director's Cut, etc.
+//   - Group: Trailing release group tag (e.g., "-GROUP")
+//
+// Useful for:
+//   - TV shows: "Show.Name.S01E02.1080p.BluRay.x264-GROUP" → "Show Name S01E02"
+//   - Movies: "Movie.Name.2024.720p.WEB-DL.AAC2.0.H.264-RELEASE" → "Movie Name 2024"
+//
+// Examples:
+//   - "Breaking.Bad.S01E02.1080p.BluRay.x264-GROUP" → "Breaking Bad S01E02"
+//   - "Show.S01E02.720p.WEB-DL.AAC2.0.H.264" → "Show S01E02"
+//   - "Episode.4K.HDR.Atmos.PROPER" → "Episode"
+func StripSceneTags(s string) string {
+	// Strip quality tags
+	s = sceneQualityRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	// Strip source tags
+	s = sceneSourceRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	// Strip codec tags
+	s = sceneCodecRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	// Strip audio tags
+	s = sceneAudioRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	// Strip misc tags (PROPER, REPACK, etc.)
+	s = sceneTagsRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	// Strip trailing group tag (e.g., "-GROUP" at the end)
+	s = sceneGroupRegex.ReplaceAllString(s, "")
+	s = strings.TrimSpace(s)
+
+	return s
+}
+
+// NormalizeDotSeparators converts dot separators to spaces, commonly used in scene release filenames.
+// Scene releases typically use dots to separate words: "Show.Name.S01E02.mkv"
+// This function converts those dots to spaces for better normalization.
+//
+// Note: Preserves dots in:
+//   - Dates (e.g., "2024.01.15" stays as-is for date parsing)
+//   - Episode markers like "S01.E02" (preserved for episode format normalization)
+//
+// Note: Does NOT preserve generic numeric decimals (e.g., "5.1" → "5 1").
+// However, known scene tags like "DD5.1", "AAC2.0", "H.264" are stripped by
+// StripSceneTags() before this function runs, so they never reach here.
+//
+// Useful for:
+//   - TV shows: "Show.Name.S01E02" → "Show Name S01E02"
+//   - Movies: "Movie.Name.2024" → "Movie Name 2024"
+//
+// Examples:
+//   - "Breaking.Bad.S01E02" → "Breaking Bad S01E02"
+//   - "Attack.on.Titan.1x02" → "Attack on Titan 1x02"
+//   - "Show.Episode.Title" → "Show Episode Title"
+//   - "Show.2024.01.15" → "Show 2024.01.15" (date preserved)
+func NormalizeDotSeparators(s string) string {
+	// Use regex-based approach to preserve dots in specific contexts:
+	// 1. Episode markers: S\d+\.E\d+ (e.g., S01.E02)
+	// 2. Dates: \d{2,4}\.\d{2}\.\d{2,4} (e.g., 2024.01.15)
+	// 3. Numbers: \d+\.\d+ (e.g., 5.1, H.264 - but these get stripped by scene tags anyway)
+
+	// Use Unicode Private Use Area characters as placeholders (U+E000, U+E001)
+	// These are guaranteed to never appear in normal text
+	const (
+		episodeDotPlaceholder = "\uE000" // U+E000 - Private Use Area
+		dateDotPlaceholder    = "\uE001" // U+E001 - Private Use Area
+	)
+
+	// Protect episode markers (S01.E02 → S01<U+E000>E02)
+	episodeDotPattern := regexp.MustCompile(`(?i)(S\d+)(\.)(E\d+)`)
+	s = episodeDotPattern.ReplaceAllString(s, "${1}"+episodeDotPlaceholder+"${3}")
+
+	// Protect dates (both YYYY.MM.DD and DD.MM.YYYY formats)
+	dateDotPattern := regexp.MustCompile(`(\d{2,4})(\.(\d{2})\.(\d{2,4}))`)
+	s = dateDotPattern.ReplaceAllString(s, "${1}"+dateDotPlaceholder+"${3}"+dateDotPlaceholder+"${4}")
+
+	// Now replace all remaining dots with spaces
+	s = strings.ReplaceAll(s, ".", " ")
+
+	// Restore protected dots
+	s = strings.ReplaceAll(s, episodeDotPlaceholder, ".")
+	s = strings.ReplaceAll(s, dateDotPlaceholder, ".")
+
+	return strings.TrimSpace(s)
 }

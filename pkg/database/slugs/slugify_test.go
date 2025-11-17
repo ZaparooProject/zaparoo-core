@@ -1374,9 +1374,10 @@ func TestSlugifyRegression_AsciiFastPath(t *testing.T) {
 			expected: "supermarioworld",
 		},
 		{
-			name:     "pure_ascii_multiple_separators",
-			input:    "Game: The_Subtitle-Edition",
-			expected: "gamethesubtitleedition", // "The_" not stripped (StripLeadingArticle requires space), "Edition" stripped
+			name:  "pure_ascii_multiple_separators",
+			input: "Game: The_Subtitle-Edition",
+			// "The_" not stripped (StripLeadingArticle requires space), "Edition" stripped
+			expected: "gamethesubtitleedition",
 		},
 		{
 			name:     "pure_ascii_empty_after_stripping",

@@ -671,3 +671,449 @@ func TestParseGame_NoTransformations(t *testing.T) {
 		})
 	}
 }
+
+// TestParseTVShow_SceneReleaseTags tests scene release tag stripping
+func TestParseTVShow_SceneReleaseTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string // All should produce same slug
+	}{
+		{
+			name:  "Scene release with quality and codec",
+			input: "Breaking.Bad.S01E02.1080p.BluRay.x264-GROUP",
+			wantMatch: []string{
+				"Breaking Bad - S01E02",
+				"Breaking.Bad.S01E02.720p.WEB-DL.AAC2.0.H.264",
+				"Breaking Bad - 1x02",
+			},
+		},
+		{
+			name:  "Multiple scene tags",
+			input: "Show.Name.S01E02.720p.WEB-DL.AAC2.0.H.264-RELEASE",
+			wantMatch: []string{
+				"Show Name - S01E02",
+				"Show.Name.S01E02.1080p.BluRay.x265-DIFFERENT",
+			},
+		},
+		{
+			name:  "Scene tags with PROPER/REPACK",
+			input: "Episode.S01E02.1080p.PROPER.REPACK.HDTV.x264",
+			wantMatch: []string{
+				"Episode - S01E02",
+				"Episode.S01E02",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseTVShow(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseTVShow(variant)
+				assert.Equal(t, result, variantResult,
+					"Scene tags should be stripped for matching:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseTVShow_DotSeparators tests dot normalization for scene releases
+func TestParseTVShow_DotSeparators(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string
+	}{
+		{
+			name:  "Dot-separated show name",
+			input: "Show.Name.S01E02",
+			wantMatch: []string{
+				"Show Name - S01E02",
+				"Show Name S01E02",
+			},
+		},
+		{
+			name:  "Dot-separated with episode title",
+			input: "Breaking.Bad.S01E02.Gray.Matter",
+			wantMatch: []string{
+				"Breaking Bad - S01E02 - Gray Matter",
+				"Breaking Bad S01E02 Gray Matter",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseTVShow(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseTVShow(variant)
+				// Should normalize to similar structure
+				assert.Contains(t, result, "s01e02", "Should contain normalized episode marker")
+				assert.Contains(t, variantResult, "s01e02", "Variant should contain normalized episode marker")
+			}
+		})
+	}
+}
+
+// TestParseTVShow_ExtendedEpisodeFormats tests additional episode format patterns
+func TestParseTVShow_ExtendedEpisodeFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string
+	}{
+		{
+			name:  "S01.E02 dot separator format",
+			input: "Show - S01.E02",
+			wantMatch: []string{
+				"Show - S01E02",
+				"Show - 1x02",
+			},
+		},
+		{
+			name:  "S01_E02 underscore separator format",
+			input: "Show - S01_E02",
+			wantMatch: []string{
+				"Show - S01E02",
+				"Show - s01e02",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseTVShow(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseTVShow(variant)
+				assert.Equal(t, result, variantResult,
+					"Extended formats should normalize:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseTVShow_DateBasedEpisodes tests date-based episode support for daily shows
+func TestParseTVShow_DateBasedEpisodes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string // All should produce same canonical date
+	}{
+		{
+			name:  "YYYY-MM-DD format",
+			input: "The Daily Show - 2024-01-15",
+			wantMatch: []string{
+				"The Daily Show - 15-01-2024",
+				"The Daily Show - 2024.01.15",
+				"The Daily Show - 15.01.2024",
+			},
+		},
+		{
+			name:  "DD-MM-YYYY format",
+			input: "Show - 15-01-2024",
+			wantMatch: []string{
+				"Show - 2024-01-15",
+				"Show - 2024.01.15",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseTVShow(tt.input)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseTVShow(variant)
+				assert.Equal(t, result, variantResult,
+					"Dates should normalize to canonical format:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseTVShow_AbsoluteNumbering tests anime absolute numbering support
+func TestParseTVShow_AbsoluteNumbering(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantHave  string
+		wantMatch []string
+	}{
+		{
+			name:     "Episode ### format",
+			input:    "One Piece - Episode 001",
+			wantHave: "e001",
+			wantMatch: []string{
+				"One Piece - Ep 001",
+				"One Piece - Ep001",
+				"One Piece - E001",
+			},
+		},
+		{
+			name:     "Hash format",
+			input:    "Naruto - #150",
+			wantHave: "e150",
+			wantMatch: []string{
+				"Naruto - Episode 150",
+				"Naruto - Ep 150",
+			},
+		},
+		{
+			name:     "Leading number format",
+			input:    "001 - Show Name - Title",
+			wantHave: "e001",
+			wantMatch: []string{
+				"Show Name - Episode 001 - Title",
+				"Show Name - Ep001 - Title",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ParseTVShow(tt.input)
+			assert.Contains(t, result, tt.wantHave,
+				"Should contain absolute episode marker %s in %q", tt.wantHave, result)
+
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseTVShow(variant)
+				assert.Equal(t, result, variantResult,
+					"Absolute numbering should normalize:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}
+
+// TestParseTVShow_ComponentReordering tests component reordering for consistent slug generation
+func TestParseTVShow_ComponentReordering(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		wantOrder string
+		inputs    []string
+		wantHave  []string
+	}{
+		{
+			name: "Episode marker in different positions",
+			inputs: []string{
+				"S01E02 - Attack on Titan - That Day",
+				"Attack on Titan - S01E02 - That Day",
+				"Attack on Titan - That Day - S01E02",
+			},
+			wantHave:  []string{"Attack on Titan", "s01e02", "That Day"},
+			wantOrder: "show marker title",
+		},
+		{
+			name: "Episode marker with show name only",
+			inputs: []string{
+				"S01E02 - Breaking Bad",
+				"Breaking Bad - S01E02",
+			},
+			wantHave:  []string{"Breaking Bad", "s01e02"},
+			wantOrder: "show marker",
+		},
+		{
+			name: "Date-based episode reordering",
+			inputs: []string{
+				"2024-01-15 - Daily Show",
+				"Daily Show - 2024-01-15",
+			},
+			wantHave:  []string{"Daily Show", "2024-01-15"},
+			wantOrder: "show marker",
+		},
+		{
+			name: "Absolute numbering reordering",
+			inputs: []string{
+				"Episode 001 - One Piece - I'm Luffy",
+				"One Piece - Episode 001 - I'm Luffy",
+				"One Piece - I'm Luffy - Episode 001",
+			},
+			wantHave:  []string{"One Piece", "e001", "I'm Luffy"},
+			wantOrder: "show marker title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// All inputs should produce the same result
+			var results []string
+			for _, input := range tt.inputs {
+				result := ParseTVShow(input)
+				results = append(results, result)
+
+				// Check that all required substrings are present
+				for _, substring := range tt.wantHave {
+					assert.Contains(t, result, substring,
+						"Result should contain %q: %q", substring, result)
+				}
+			}
+
+			// All results should be equal (component reordering ensures consistency)
+			for i := 1; i < len(results); i++ {
+				assert.Equal(t, results[0], results[i],
+					"All inputs should produce same slug:\n  Input 1: %q → %q\n  Input %d: %q → %q",
+					tt.inputs[0], results[0], i+1, tt.inputs[i], results[i])
+			}
+		})
+	}
+}
+
+// TestParseTVShow_RealWorldIntegration tests real-world formats end-to-end
+func TestParseTVShow_RealWorldIntegration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		inputs []string // All should produce same or very similar slugs
+	}{
+		{
+			name: "Scene release variations WITHOUT episode titles",
+			inputs: []string{
+				"Breaking.Bad.S01E02.1080p.BluRay.x264-GROUP",
+				"Breaking Bad - S01E02",
+				"Breaking Bad - 1x02",
+				"S01E02 - Breaking Bad",
+				"Breaking.Bad.S01E02.720p.WEB-DL.AAC2.0.H.264-OTHER",
+			},
+		},
+		{
+			name: "Scene release WITH episode title (title preserved)",
+			inputs: []string{
+				"Breaking Bad - S01E02 - Gray Matter",
+				"Breaking Bad - 1x02 - Gray Matter",
+				"S01E02 - Breaking Bad - Gray Matter",
+				"Breaking.Bad.S01E02.Gray.Matter",
+			},
+		},
+		{
+			name: "Anime absolute numbering variations",
+			inputs: []string{
+				"One Piece - Episode 001",
+				"One Piece - Ep001",
+				"One Piece - E001",
+				"One Piece #001",
+				"001 - One Piece",
+				"Episode 001 - One Piece",
+			},
+		},
+		{
+			name: "Daily show variations",
+			inputs: []string{
+				"The Daily Show - 2024-01-15",
+				"Daily Show - 15-01-2024",
+				"The Daily Show - 2024.01.15",
+				"2024-01-15 - The Daily Show",
+			},
+		},
+		{
+			name: "Batocera issue (original bug)",
+			inputs: []string{
+				"Attack on Titan - S01E02 - That Day",
+				"Attack on Titan - 1x02 - That Day",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// All inputs should produce the same result
+			var results []string
+			for _, input := range tt.inputs {
+				result := ParseTVShow(input)
+				results = append(results, result)
+			}
+
+			// All results should be equal
+			for i := 1; i < len(results); i++ {
+				assert.Equal(t, results[0], results[i],
+					"All variations should produce same slug:\n  Input 1: %q → %q\n  Input %d: %q → %q",
+					tt.inputs[0], results[0], i+1, tt.inputs[i], results[i])
+			}
+		})
+	}
+}
+
+// TestParseTVShow_SceneGroupRegexRegression ensures scene group regex never strips episode markers.
+// This is a regression test for a bug where "-S01E02" at the end of a title would be
+// incorrectly matched as a scene group and stripped, causing loss of episode information.
+func TestParseTVShow_SceneGroupRegexRegression(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "bare dash before episode marker",
+			input:    "ShowName-S01E02",
+			expected: "ShowName s01e02",
+		},
+		{
+			name:     "lowercase episode marker",
+			input:    "ShowName-s01e02",
+			expected: "ShowName s01e02",
+		},
+		{
+			name:     "absolute numbering with E prefix",
+			input:    "Anime-E001",
+			expected: "Anime e001",
+		},
+		{
+			name:     "scene release with episode and group",
+			input:    "Show.S01E02.1080p-RELEASE",
+			expected: "Show s01e02", // 1080p and RELEASE both stripped by scene tags
+		},
+		{
+			name:     "episode marker should be preserved and normalized",
+			input:    "Show-S01E02-RELEASE",
+			expected: "Show s01e02",
+		},
+		{
+			name:     "scene group without episode",
+			input:    "Movie Name-RELEASE",
+			expected: "Movie Name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseTVShow(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

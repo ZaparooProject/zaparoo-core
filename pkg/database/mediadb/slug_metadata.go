@@ -56,12 +56,14 @@ type SlugMetadata struct {
 //	metadata.SlugWordCount → 6 (token count: legend, of, zelda, ocarina, of, time)
 //	metadata.SecondarySlug → "ocarinaoftime" (secondary title after colon)
 func GenerateSlugWithMetadata(mediaType slugs.MediaType, input string) SlugMetadata {
-	// Run slugification and get the tokens that were ACTUALLY used
-	result := slugs.SlugifyWithTokens(input)
-
-	// Extract secondary title if present (e.g., "Some Game: The Next Gen" → "The Next Gen")
+	// Extract secondary title from ORIGINAL input before parsing
+	// (parsing may remove delimiters needed for splitting)
 	cleaned := slugs.StripLeadingArticle(input)
 	_, secondaryTitle, hasSecondary := slugs.SplitTitle(cleaned)
+
+	// Run slugification with media-type-aware parsing and get the tokens
+	// SlugifyWithTokens now applies ParseWithMediaType internally
+	result := slugs.SlugifyWithTokens(mediaType, input)
 
 	metadata := SlugMetadata{
 		Slug:          result.Slug,
@@ -69,7 +71,7 @@ func GenerateSlugWithMetadata(mediaType slugs.MediaType, input string) SlugMetad
 		SlugWordCount: computeWordCount(result.Slug, result.Tokens),
 	}
 
-	// If there's a secondary title, slugify it and store separately
+	// If there's a secondary title, slugify it WITH media-type parsing
 	if hasSecondary && secondaryTitle != "" {
 		secondaryTitle = slugs.StripLeadingArticle(secondaryTitle)
 		metadata.SecondarySlug = slugs.Slugify(mediaType, secondaryTitle)

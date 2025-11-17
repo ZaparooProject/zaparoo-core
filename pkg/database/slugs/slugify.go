@@ -236,7 +236,6 @@ func NormalizeUnicode(s string, ctx *pipelineContext) string {
 	return normalizeByScript(s, script)
 }
 
-
 // tokenizeNormalized extracts word tokens from a normalized string (after Stage 13).
 // Shared by both NormalizeToWords and SlugifyWithTokens to ensure consistency.
 //
@@ -299,9 +298,12 @@ func tokenizeNormalized(s string) []string {
 //	result := SlugifyWithTokens("The Legend of Zelda: Ocarina of Time (USA)")
 //	result.Slug   → "legendofzeldaocarinaoftime"
 //	result.Tokens → []string{"legend", "of", "zelda", "ocarina", "of", "time"}
-func SlugifyWithTokens(input string) SlugifyResult {
+func SlugifyWithTokens(mediaType MediaType, input string) SlugifyResult {
+	// Apply media-type-specific parsing before slugification
+	normalized := ParseWithMediaType(input, string(mediaType))
+
 	// Run Stages 1-13 of normalization (via existing normalizeInternal)
-	s, ctx := normalizeInternal(input)
+	s, ctx := normalizeInternal(normalized)
 	if s == "" {
 		return SlugifyResult{Slug: "", Tokens: []string{}}
 	}
@@ -353,14 +355,10 @@ func SlugifyWithTokens(input string) SlugifyResult {
 //	Slugify(MediaTypeTVShow, "Breaking Bad - S01E02 - Gray Matter")
 //	→ same as Slugify(MediaTypeTVShow, "Breaking Bad - 1x02 - Gray Matter")
 func Slugify(mediaType MediaType, input string) string {
-	// Apply media-type-specific parsing before slugification
-	normalized := ParseWithMediaType(input, string(mediaType))
-
-	// Run through the standard 14-stage slugification pipeline
-	result := SlugifyWithTokens(normalized)
+	// Run through the media-type-aware slugification pipeline
+	result := SlugifyWithTokens(mediaType, input)
 	return result.Slug
 }
-
 
 // NormalizeSymbolsAndSeparators converts conjunctions and separators to normalized forms.
 // Handles conjunctions: "&", " + ", " 'n' " variants → "and"

@@ -277,7 +277,7 @@ func TryAdvancedFuzzyMatching(
 	// Sub-strategy 3a: Token signature matching (word-order independent)
 	// Uses original game names (not slugs) to preserve word boundaries
 	log.Info().Msg("trying token signature matching")
-	tokenMatches := matcher.FindTokenSignatureMatches(gameName, candidateTitles)
+	tokenMatches := matcher.FindTokenSignatureMatches(mediaType, gameName, candidateTitles)
 
 	if len(tokenMatches) > 0 {
 		log.Debug().Int("count", len(tokenMatches)).Msg("found token signature matches")

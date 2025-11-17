@@ -69,8 +69,9 @@ func (s *System) GetMediaType() MediaType {
 }
 
 // Lazy initialization for system lookup map
+// Maps lookup keys (lowercase IDs, slugs, etc.) to system IDs for resolution
 var (
-	lookupMap     map[string]*System
+	lookupMap     map[string]string
 	lookupMapOnce sync.Once
 	errLookupMap  error
 )
@@ -107,7 +108,7 @@ func GetSystem(id string) (*System, error) {
 // and custom slugs. It detects and reports collisions at initialization time.
 func buildLookupMap() error {
 	lookupMapOnce.Do(func() {
-		lookupMap = make(map[string]*System)
+		lookupMap = make(map[string]string)
 		keyOwner := make(map[string]string) // Track which system owns each key for collision detection
 
 		addKey := func(key, systemID, sourceType string) {
@@ -129,9 +130,8 @@ func buildLookupMap() error {
 			}
 
 			keyOwner[key] = systemID
-			// Get pointer to the system in the Systems map
-			sys := Systems[systemID]
-			lookupMap[key] = &sys
+			// Store system ID for later resolution via Systems map
+			lookupMap[key] = systemID
 		}
 
 		// Process all systems in a deterministic order
@@ -177,16 +177,20 @@ func LookupSystem(id string) (*System, error) {
 
 	// Step 1: Try case-insensitive match (fast path for exact/alias matches)
 	lowerID := strings.ToLower(id)
-	if system, ok := lookupMap[lowerID]; ok {
-		return system, nil
+	if systemID, ok := lookupMap[lowerID]; ok {
+		// Resolve system ID to actual System from canonical map
+		system := Systems[systemID]
+		return &system, nil
 	}
 
 	// Step 2: Try slugified match (natural language path)
 	slugifiedID := slugs.Slugify(slugs.MediaTypeGame, id)
 	if slugifiedID != lowerID {
 		// Only check if slugification changed the string
-		if system, ok := lookupMap[slugifiedID]; ok {
-			return system, nil
+		if systemID, ok := lookupMap[slugifiedID]; ok {
+			// Resolve system ID to actual System from canonical map
+			system := Systems[systemID]
+			return &system, nil
 		}
 	}
 
