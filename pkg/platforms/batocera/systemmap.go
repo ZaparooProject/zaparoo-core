@@ -629,11 +629,11 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"psvita": {
 		SystemID:   systemdefs.SystemVita,
-		Extensions: []string{".vpk", ".mai"},
+		Extensions: []string{".zip", ".psvita"},
 	},
 	"ps3": {
 		SystemID:   systemdefs.SystemPS3,
-		Extensions: []string{".ps3", ".ps3dir"},
+		Extensions: []string{".ps3", ".psn", ".squashfs"},
 	},
 	"ps4": {
 		SystemID:   systemdefs.SystemPS4,
@@ -649,7 +649,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"ps2": {
 		SystemID:   systemdefs.SystemPS2,
-		Extensions: []string{".iso", ".mdf", ".nrg", ".bin", ".img", ".dump", ".gz", ".cso", ".chd"},
+		Extensions: []string{".iso", ".mdf", ".nrg", ".bin", ".img", ".dump", ".gz", ".cso", ".chd", ".m3u"},
 	},
 	"pv1000": {
 		SystemID:   systemdefs.SystemCasioPV1000,
@@ -735,7 +735,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"switch": {
 		SystemID:   systemdefs.SystemSwitch,
-		Extensions: []string{".nsp", ".xci", ".nca", ".nro"},
+		Extensions: []string{".xci", ".nsp"},
 	},
 	"thomson": {
 		SystemID:   systemdefs.SystemThomson,
@@ -779,7 +779,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"wiiu": {
 		SystemID:   systemdefs.SystemWiiU,
-		Extensions: []string{".wud", ".wux", ".rpx"},
+		Extensions: []string{".wua", ".wup", ".wud", ".wux", ".rpx", ".squashfs", ".wuhb"},
 	},
 	"wswan": {
 		SystemID:   systemdefs.SystemWonderSwan,
@@ -807,7 +807,7 @@ var SystemMap = map[string]SystemInfo{
 	},
 	"xbox360": {
 		SystemID:   systemdefs.SystemXbox360,
-		Extensions: []string{".iso", ".xex", ".god"},
+		Extensions: []string{".iso", ".xex", ".xbox360", ".zar"},
 	},
 	"xash3d_fwgs": {
 		SystemID:   systemdefs.SystemPC,
