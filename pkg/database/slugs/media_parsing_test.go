@@ -1883,3 +1883,471 @@ func TestParseMovie_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestParseMusic_SceneReleaseFormats tests that music scene release formats are properly normalized
+func TestParseMusic_SceneReleaseFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "scene release with dots - FLAC",
+			input:    "Pink.Floyd-The.Wall-1979-CD-FLAC-GROUP",
+			expected: "Pink Floyd The Wall 1979",
+		},
+		{
+			name:     "scene release with dots - MP3 V0",
+			input:    "The.Beatles-Abbey.Road-1969-CD-MP3-V0-GROUP",
+			expected: "Beatles Abbey Road 1969",
+		},
+		{
+			name:     "scene release - WEB source",
+			input:    "Artist.Name-Album.Title-2024-WEB-FLAC-GROUP",
+			expected: "Artist Name Album Title 2024",
+		},
+		{
+			name:     "scene release - Vinyl source",
+			input:    "Miles.Davis-Kind.of.Blue-1959-Vinyl-FLAC-24bit-96kHz-GROUP",
+			expected: "Miles Davis Kind of Blue 1959",
+		},
+		{
+			name:     "scene release - multiple quality tags",
+			input:    "Artist-Album-2020-CD-FLAC-24bit-88.2khz-GROUP",
+			expected: "Artist Album 2020",
+		},
+		{
+			name:     "scene release with underscores",
+			input:    "The_Beatles-Abbey_Road-1969-CD-FLAC-GROUP",
+			expected: "Beatles Abbey Road 1969",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_UserFriendlyFormats tests that user-friendly music naming formats work correctly
+func TestParseMusic_UserFriendlyFormats(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "artist dash album with year in parens",
+			input:    "The Beatles - Abbey Road (1969)",
+			expected: "Beatles Abbey Road",
+		},
+		{
+			name:     "artist dash album with year in brackets",
+			input:    "Pink Floyd - The Wall [1979]",
+			expected: "Pink Floyd The Wall",
+		},
+		{
+			name:     "artist dash album no year",
+			input:    "Miles Davis - Kind of Blue",
+			expected: "Miles Davis Kind of Blue",
+		},
+		{
+			name:     "artist dash album with quality tag",
+			input:    "Radiohead - OK Computer (1997) [FLAC 24bit 96kHz]",
+			expected: "Radiohead OK Computer",
+		},
+		{
+			name:     "album only with year",
+			input:    "Abbey Road (1969)",
+			expected: "Abbey Road",
+		},
+		{
+			name:     "album only no year",
+			input:    "Kind of Blue",
+			expected: "Kind of Blue",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_VariousArtists tests that Various Artists compilations are normalized correctly
+func TestParseMusic_VariousArtists(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "VA short form",
+			input:    "VA - Best of 2024",
+			expected: "VA Best of 2024",
+		},
+		{
+			name:     "V.A. with periods",
+			input:    "V.A. - Compilation Album",
+			expected: "V A Compilation Album",
+		},
+		{
+			name:     "Various Artists full",
+			input:    "Various Artists - Greatest Hits (2024)",
+			expected: "Various Artists Greatest Hits",
+		},
+		{
+			name:     "Various short form",
+			input:    "Various - Dance Music 2024",
+			expected: "Various Dance Music 2024",
+		},
+		{
+			name:     "VA scene release",
+			input:    "VA-Best.of.2024-WEB-FLAC-GROUP",
+			expected: "VA Best of 2024",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_EditionQualifiers tests that edition qualifiers are preserved
+func TestParseMusic_EditionQualifiers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "remastered edition",
+			input:    "The Beatles - Abbey Road (1969) Remastered",
+			expected: "Beatles Abbey Road Remastered",
+		},
+		{
+			name:     "deluxe edition",
+			input:    "Pink Floyd - The Wall (1979) Deluxe Edition",
+			expected: "Pink Floyd The Wall Deluxe Edition",
+		},
+		{
+			name:     "limited edition",
+			input:    "Artist - Album (2024) Limited Edition",
+			expected: "Artist Album Limited Edition",
+		},
+		{
+			name:     "expanded edition",
+			input:    "Miles Davis - Kind of Blue (1959) Expanded Edition",
+			expected: "Miles Davis Kind of Blue Expanded Edition",
+		},
+		{
+			name:     "anniversary edition",
+			input:    "Album Title (2000) 25th Anniversary Edition",
+			expected: "Album Title 25th Anniversary Edition",
+		},
+		{
+			name:     "multiple qualifiers",
+			input:    "Artist - Album (2020) Deluxe Remastered Edition",
+			expected: "Artist Album Deluxe Remastered Edition",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_DiscNumbers tests that disc numbers are stripped correctly
+func TestParseMusic_DiscNumbers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "CD1 format",
+			input:    "The Beatles - Abbey Road (1969) CD1",
+			expected: "Beatles Abbey Road",
+		},
+		{
+			name:     "CD2 format",
+			input:    "Pink Floyd - The Wall (1979) CD2",
+			expected: "Pink Floyd The Wall",
+		},
+		{
+			name:     "Disc 1 with space",
+			input:    "Artist - Album (2024) Disc 1",
+			expected: "Artist Album",
+		},
+		{
+			name:     "Disc 2 with space",
+			input:    "Miles Davis - Kind of Blue Disc 2",
+			expected: "Miles Davis Kind of Blue",
+		},
+		{
+			name:     "disc1 lowercase",
+			input:    "Album Title (2020) disc1",
+			expected: "Album Title",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_ArticleStripping tests that leading and trailing articles are stripped
+func TestParseMusic_ArticleStripping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "leading article The",
+			input:    "The Beatles - The Abbey Road",
+			expected: "Beatles The Abbey Road",
+		},
+		{
+			name:     "leading article A",
+			input:    "Artist - A New Beginning",
+			expected: "Artist A New Beginning",
+		},
+		{
+			name:     "trailing article",
+			input:    "Artist - Album, The",
+			expected: "Artist Album",
+		},
+		{
+			name:     "both leading and trailing",
+			input:    "The Artist - The Album, The",
+			expected: "Artist The Album",
+		},
+		{
+			name:     "article in middle preserved",
+			input:    "Artist - The Middle Album",
+			expected: "Artist The Middle Album",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_RealWorldExamples tests with real-world music naming examples
+func TestParseMusic_RealWorldExamples(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Pink Floyd - The Wall",
+			input:    "Pink Floyd - The Wall (1979)",
+			expected: "Pink Floyd The Wall",
+		},
+		{
+			name:     "The Beatles - Abbey Road",
+			input:    "The Beatles - Abbey Road (1969)",
+			expected: "Beatles Abbey Road",
+		},
+		{
+			name:     "Miles Davis - Kind of Blue",
+			input:    "Miles Davis - Kind of Blue (1959)",
+			expected: "Miles Davis Kind of Blue",
+		},
+		{
+			name:     "Radiohead - OK Computer",
+			input:    "Radiohead - OK Computer (1997)",
+			expected: "Radiohead OK Computer",
+		},
+		{
+			name:     "Led Zeppelin - IV",
+			input:    "Led Zeppelin - IV (1971)",
+			expected: "Led Zeppelin IV",
+		},
+		{
+			name:     "The Dark Side of the Moon",
+			input:    "Pink Floyd - The Dark Side of the Moon (1973)",
+			expected: "Pink Floyd The Dark Side of the Moon",
+		},
+		{
+			name:     "Fleetwood Mac - Rumours",
+			input:    "Fleetwood Mac - Rumours (1977)",
+			expected: "Fleetwood Mac Rumours",
+		},
+		{
+			name:     "Nirvana - Nevermind",
+			input:    "Nirvana - Nevermind (1991)",
+			expected: "Nirvana Nevermind",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_EdgeCases tests edge cases and corner scenarios
+func TestParseMusic_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "only whitespace",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "only year",
+			input:    "(1979)",
+			expected: "",
+		},
+		{
+			name:     "year only no parens",
+			input:    "1979",
+			expected: "1979",
+		},
+		{
+			name:     "album with numbers in title",
+			input:    "Artist - 1984 (1984)",
+			expected: "Artist 1984",
+		},
+		{
+			name:     "album with year in name",
+			input:    "Various Artists - Best of 2024 (2024)",
+			expected: "Various Artists Best of 2024",
+		},
+		{
+			name:     "very long title",
+			input:    strings.Repeat("Very Long Album Title ", 10) + "(2024)",
+			expected: strings.TrimSpace(strings.Repeat("Very Long Album Title ", 10)),
+		},
+		{
+			name:     "special characters in title",
+			input:    "Artist - Album: The Beginning (2024)",
+			expected: "Artist Album: The Beginning",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseMusic(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestParseMusic_FormatNormalization tests that similar formats normalize consistently
+// Note: Conservative implementation keeps artist names and bare years from scene releases,
+// so perfect cross-format matching isn't expected. This tests what DOES match.
+func TestParseMusic_FormatNormalization(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantMatch []string // All these should produce the same normalized output
+	}{
+		{
+			name:  "Abbey Road user-friendly formats match",
+			input: "The Beatles - Abbey Road (1969)",
+			wantMatch: []string{
+				"Beatles - Abbey Road [1969]",
+				"Beatles - Abbey Road (1969) [FLAC]",
+				"The Beatles - Abbey Road",
+			},
+		},
+		{
+			name:  "Abbey Road scene formats match",
+			input: "The.Beatles-Abbey.Road-1969-CD-FLAC-GROUP",
+			wantMatch: []string{
+				"Beatles-Abbey.Road-1969-WEB-MP3-V0-GROUP",
+			},
+		},
+		{
+			name:  "The Wall user-friendly formats match",
+			input: "Pink Floyd - The Wall (1979)",
+			wantMatch: []string{
+				"Pink Floyd - The Wall [1979]",
+			},
+		},
+		{
+			name:  "The Wall scene formats match",
+			input: "Pink.Floyd-The.Wall-1979-CD-FLAC-GROUP",
+			wantMatch: []string{
+				"Pink.Floyd-The.Wall-1979-Vinyl-FLAC-24bit-96kHz-GROUP",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Parse the input
+			result := ParseMusic(tt.input)
+
+			// Parse all variations that should match
+			for _, variant := range tt.wantMatch {
+				variantResult := ParseMusic(variant)
+
+				// After normalization, they should all be the same
+				assert.Equal(t, result, variantResult,
+					"Normalized formats should match:\n  Input: %q → %q\n  Variant: %q → %q",
+					tt.input, result, variant, variantResult)
+			}
+		})
+	}
+}

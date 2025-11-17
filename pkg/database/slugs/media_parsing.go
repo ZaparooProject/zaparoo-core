@@ -36,8 +36,7 @@ func ParseWithMediaType(mediaType MediaType, title string) string {
 	case MediaTypeMovie:
 		return ParseMovie(title)
 	case MediaTypeMusic:
-		// TODO: Implement ParseMusic in media_parsing_music.go
-		return title
+		return ParseMusic(title)
 	case MediaTypeAudio:
 		// TODO: Implement ParseAudiobook/ParsePodcast in media_parsing_audio.go
 		return title
