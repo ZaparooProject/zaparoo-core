@@ -92,7 +92,7 @@ func TestSlugConflicts_AllDATs(t *testing.T) {
 			}
 
 			// Slugify handles all normalization internally including metadata stripping
-			slug := slugs.Slugify(MediaTypeGame, originalName)
+			slug := slugs.Slugify(slugs.MediaTypeGame, originalName)
 			key := fmt.Sprintf("%s/%s", systemID, slug)
 
 			entry := DATEntry{
@@ -952,7 +952,7 @@ func TestRomanNumeralI_AllDATs(t *testing.T) {
 			titlesWithI++
 
 			// Generate slug
-			slug := slugs.Slugify(MediaTypeGame, originalName)
+			slug := slugs.Slugify(slugs.MediaTypeGame, originalName)
 
 			// Analyze the conversion
 			analysis := analyzeIConversion(originalName, slug, systemID, datFileName)
