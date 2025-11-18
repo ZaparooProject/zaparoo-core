@@ -67,7 +67,7 @@ func TestLibreELECHasKodiMusicLauncher(t *testing.T) {
 			continue
 		}
 		kodiMusic = &launcher.ID
-		assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+		assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 		assert.Contains(t, launcher.Extensions, ".mp3")
 		assert.Contains(t, launcher.Extensions, ".flac")
 		break
@@ -91,7 +91,7 @@ func TestLibreELECHasKodiSongLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiSong" {
 			kodiSong = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 			assert.Contains(t, launcher.Schemes, shared.SchemeKodiSong)
 			break
 		}

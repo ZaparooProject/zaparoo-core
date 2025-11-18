@@ -155,7 +155,7 @@ func TestKodiMusicLauncherExists(t *testing.T) {
 
 	require.NotNil(t, kodiMusic, "KodiLocalAudio launcher should exist")
 	assert.Equal(t, "KodiLocalAudio", kodiMusic.ID)
-	assert.Equal(t, systemdefs.SystemMusic, kodiMusic.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicTrack, kodiMusic.SystemID)
 	assert.Contains(t, kodiMusic.Extensions, ".mp3")
 	assert.Contains(t, kodiMusic.Extensions, ".flac")
 }
@@ -180,7 +180,7 @@ func TestKodiCollectionLaunchersExist(t *testing.T) {
 	// Check KodiSong launcher
 	kodiSong, exists := foundLaunchers["KodiSong"]
 	require.True(t, exists, "KodiSong launcher should exist")
-	assert.Equal(t, systemdefs.SystemMusic, kodiSong.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicTrack, kodiSong.SystemID)
 	assert.Contains(t, kodiSong.Schemes, shared.SchemeKodiSong)
 
 	// Check KodiAlbum launcher

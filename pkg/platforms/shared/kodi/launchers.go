@@ -100,7 +100,7 @@ func NewKodiTVLauncher() platforms.Launcher {
 func NewKodiMusicLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                  "KodiLocalAudio",
-		SystemID:            systemdefs.SystemMusic,
+		SystemID:            systemdefs.SystemMusicTrack,
 		Folders:             []string{"music"},
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
 		Extensions: []string{
@@ -189,7 +189,7 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 func NewKodiSongLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:                  "KodiSong",
-		SystemID:            systemdefs.SystemMusic,
+		SystemID:            systemdefs.SystemMusicTrack,
 		Schemes:             []string{shared.SchemeKodiSong},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC

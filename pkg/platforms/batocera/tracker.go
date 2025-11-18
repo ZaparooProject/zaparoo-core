@@ -174,7 +174,7 @@ func (p *Platform) checkKodiPlaybackStatus() *models.ActiveMedia {
 	case "episode":
 		systemID = systemdefs.SystemTVEpisode
 	case "song":
-		systemID = systemdefs.SystemMusic
+		systemID = systemdefs.SystemMusicTrack
 	case "musicvideo":
 		systemID = systemdefs.SystemVideo
 	case "channel":
@@ -182,7 +182,7 @@ func (p *Platform) checkKodiPlaybackStatus() *models.ActiveMedia {
 	default:
 		// Fallback: use player type to determine category
 		if player.Type == "audio" {
-			systemID = systemdefs.SystemMusic
+			systemID = systemdefs.SystemMusicTrack
 		} else {
 			systemID = systemdefs.SystemVideo
 		}

@@ -80,7 +80,7 @@ func TestNewKodiSongLauncher(t *testing.T) {
 	launcher := NewKodiSongLauncher()
 
 	assert.Equal(t, "KodiSong", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 	assert.Equal(t, []string{shared.SchemeKodiSong}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	// Scanner will be tested when scanners are implemented
@@ -94,7 +94,7 @@ func TestNewKodiMusicLauncher(t *testing.T) {
 	launcher := NewKodiMusicLauncher()
 
 	assert.Equal(t, "KodiLocalAudio", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 	assert.Contains(t, launcher.Folders, "music")
 	assert.Contains(t, launcher.Extensions, ".mp3")
 	assert.Contains(t, launcher.Extensions, ".flac")
