@@ -395,6 +395,32 @@ func (p *Platform) stopKodi(cfg *config.Instance, reason platforms.StopIntent) e
 	defer cancel()
 
 	if err := client.Quit(ctx); err == nil {
+		log.Debug().Msg("Kodi quit command sent successfully, verifying process termination")
+
+		// Verify the process has actually terminated by polling
+		const pollInterval = 250 * time.Millisecond
+		const maxAttempts = 20 // 20 * 250ms = 5 seconds
+		processTerminated := false
+
+		for attempt := range maxAttempts {
+			p.processMu.RLock()
+			trackedProc := p.trackedProcess
+			p.processMu.RUnlock()
+
+			if !helpers.IsProcessRunning(trackedProc) {
+				processTerminated = true
+				log.Debug().Msgf("Kodi process terminated after %d polling attempts", attempt+1)
+				break
+			}
+
+			log.Debug().Msgf("Kodi process still running, polling attempt %d/%d", attempt+1, maxAttempts)
+			time.Sleep(pollInterval)
+		}
+
+		if !processTerminated {
+			return errors.New("kodi process did not terminate within 5 seconds after quit command")
+		}
+
 		log.Info().Msg("Kodi stopped gracefully via JSON-RPC")
 
 		// Clear tracking state since Kodi is fully quitting
@@ -461,9 +487,11 @@ func (p *Platform) LaunchMedia(
 			log.Info().Msg("exiting current media")
 			err = p.StopActiveLauncher(platforms.StopForPreemption)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to stop active launcher: %w", err)
 			}
-			time.Sleep(2500 * time.Millisecond)
+			// Brief delay to allow EmulationStation to settle
+			// (Kodi stop already includes process verification polling)
+			time.Sleep(500 * time.Millisecond)
 		} else {
 			// We're keeping the running instance (e.g., switching between Kodi movies)
 			// Clear the old activeMedia first to trigger media.stopped, then DoLaunch will set the new one
