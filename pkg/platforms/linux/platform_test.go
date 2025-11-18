@@ -99,7 +99,7 @@ func TestLinuxHasKodiMusicLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiLocalAudio" {
 			kodiMusic = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp3")
 			break
 		}

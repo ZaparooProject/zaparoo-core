@@ -23,6 +23,8 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 //go:embed _app
@@ -53,6 +55,13 @@ type SystemMetadata struct {
 
 func GetSystemMetadata(system string) (SystemMetadata, error) {
 	var metadata SystemMetadata
+
+	// Resolve any aliases to the canonical system ID
+	// This ensures backward compatibility when systems are renamed (e.g., Music → MusicTrack)
+	resolvedSystem, err := systemdefs.LookupSystem(system)
+	if err == nil && resolvedSystem != nil {
+		system = resolvedSystem.ID
+	}
 
 	data, err := Systems.ReadFile("systems/" + system + ".json")
 	if err != nil {

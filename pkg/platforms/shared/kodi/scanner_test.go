@@ -314,8 +314,14 @@ func TestScanSongs(t *testing.T) {
 
 	// Mock songs data
 	expectedSongs := []Song{
-		{ID: 123, Label: "Bohemian Rhapsody", Artist: "Queen", AlbumID: 456, Duration: 355},
-		{ID: 124, Label: "Stairway to Heaven", Artist: "Led Zeppelin", AlbumID: 457, Duration: 482},
+		{
+			ID: 123, Label: "Bohemian Rhapsody", Artist: "Queen",
+			Album: "A Night at the Opera", AlbumID: 456, Duration: 355,
+		},
+		{
+			ID: 124, Label: "Stairway to Heaven", Artist: "Led Zeppelin",
+			Album: "Led Zeppelin IV", AlbumID: 457, Duration: 482,
+		},
 	}
 
 	// Set up mock expectation
@@ -329,11 +335,15 @@ func TestScanSongs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 
-	assert.Equal(t, "Queen - Bohemian Rhapsody", results[0].Name)
-	assert.Equal(t, "kodi-song://123/Queen%20-%20Bohemian%20Rhapsody", results[0].Path)
+	assert.Equal(t, "Queen - A Night at the Opera - Bohemian Rhapsody", results[0].Name)
+	assert.Equal(t,
+		"kodi-song://123/Queen%20-%20A%20Night%20at%20the%20Opera%20-%20Bohemian%20Rhapsody",
+		results[0].Path)
 
-	assert.Equal(t, "Led Zeppelin - Stairway to Heaven", results[1].Name)
-	assert.Equal(t, "kodi-song://124/Led%20Zeppelin%20-%20Stairway%20to%20Heaven", results[1].Path)
+	assert.Equal(t, "Led Zeppelin - Led Zeppelin IV - Stairway to Heaven", results[1].Name)
+	assert.Equal(t,
+		"kodi-song://124/Led%20Zeppelin%20-%20Led%20Zeppelin%20IV%20-%20Stairway%20to%20Heaven",
+		results[1].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)

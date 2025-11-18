@@ -410,7 +410,7 @@ const (
 	SystemMovie       = "Movie"
 	SystemTVEpisode   = "TVEpisode"
 	SystemTVShow      = "TVShow"
-	SystemMusic       = "Music"
+	SystemMusicTrack  = "MusicTrack"
 	SystemMusicArtist = "MusicArtist"
 	SystemMusicAlbum  = "MusicAlbum"
 	SystemImage       = "Image"
@@ -1150,8 +1150,9 @@ var Systems = map[string]System{
 		Slugs:     []string{"tvshows", "tvseries"},
 		MediaType: MediaTypeTVShow,
 	},
-	SystemMusic: {
-		ID:        SystemMusic,
+	SystemMusicTrack: {
+		ID:        SystemMusicTrack,
+		Aliases:   []string{"Music"},
 		Slugs:     []string{"musicfile", "song", "songs"},
 		MediaType: MediaTypeMusic,
 	},

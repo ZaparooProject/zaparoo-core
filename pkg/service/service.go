@@ -398,38 +398,35 @@ func startPublishers(
 	cfg *config.Instance,
 	notifChan <-chan models.Notification,
 ) ([]*publishers.MQTTPublisher, context.CancelFunc) {
+	activePublishers := make([]*publishers.MQTTPublisher, 0)
+
 	mqttConfigs := cfg.GetMQTTPublishers()
-	if len(mqttConfigs) == 0 {
-		return nil, func() {}
-	}
+	if len(mqttConfigs) > 0 {
+		for _, mqttCfg := range mqttConfigs {
+			// Skip if explicitly disabled (nil = enabled by default)
+			if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
+				continue
+			}
 
-	activePublishers := make([]*publishers.MQTTPublisher, 0, len(mqttConfigs))
+			log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
 
-	for _, mqttCfg := range mqttConfigs {
-		// Skip if explicitly disabled (nil = enabled by default)
-		if mqttCfg.Enabled != nil && !*mqttCfg.Enabled {
-			continue
+			publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
+			if err := publisher.Start(); err != nil {
+				log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
+				continue
+			}
+
+			activePublishers = append(activePublishers, publisher)
 		}
-
-		log.Info().Msgf("starting MQTT publisher: %s (topic: %s)", mqttCfg.Broker, mqttCfg.Topic)
-
-		publisher := publishers.NewMQTTPublisher(mqttCfg.Broker, mqttCfg.Topic, mqttCfg.Filter)
-		if err := publisher.Start(); err != nil {
-			log.Error().Err(err).Msgf("failed to start MQTT publisher for %s", mqttCfg.Broker)
-			continue
-		}
-
-		activePublishers = append(activePublishers, publisher)
 	}
 
-	if len(activePublishers) == 0 {
-		return nil, func() {}
+	if len(activePublishers) > 0 {
+		log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
 	}
 
-	log.Info().Msgf("started %d MQTT publisher(s)", len(activePublishers))
-
-	// Start a single fan-out goroutine to broadcast notifications to all publishers
-	// Derived from service context so it automatically stops when service stops
+	// CRITICAL: Always start the drain goroutine, even if there are no active publishers.
+	// The notifChan MUST be consumed or it will fill up and block the notification system.
+	// If there are no publishers, notifications are simply discarded after being consumed.
 	ctx, cancel := context.WithCancel(st.GetContext())
 	go func() {
 		for {
@@ -443,6 +440,7 @@ func startPublishers(
 					return
 				}
 				// Publish to all active publishers sequentially
+				// If no publishers, notification is simply discarded
 				// Timeout in Publish() prevents blocking indefinitely
 				for _, pub := range activePublishers {
 					if err := pub.Publish(notif); err != nil {

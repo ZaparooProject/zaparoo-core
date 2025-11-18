@@ -918,18 +918,20 @@ func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
 			"result": map[string]any{
 				"songs": []map[string]any{
 					{
-						"songid":   123,
-						"label":    "Test Song 1",
-						"albumid":  456,
-						"artist":   "Test Artist",
-						"duration": 240,
+						"songid":        123,
+						"label":         "Test Song 1",
+						"albumid":       456,
+						"displayartist": "Test Artist",
+						"album":         "Test Album",
+						"duration":      240,
 					},
 					{
-						"songid":   124,
-						"label":    "Test Song 2",
-						"albumid":  456,
-						"artist":   "Test Artist",
-						"duration": 180,
+						"songid":        124,
+						"label":         "Test Song 2",
+						"albumid":       456,
+						"displayartist": "Test Artist",
+						"album":         "Test Album",
+						"duration":      180,
 					},
 				},
 			},
@@ -951,12 +953,23 @@ func TestClient_GetSongs_MakesCorrectAPICall(t *testing.T) {
 	assert.Equal(t, "AudioLibrary.GetSongs", receivedPayload["method"])
 	assert.Equal(t, "2.0", receivedPayload["jsonrpc"])
 
+	// Verify properties were requested
+	params, ok := receivedPayload["params"].(map[string]any)
+	require.True(t, ok, "Params should be present")
+	properties, ok := params["properties"].([]any)
+	require.True(t, ok, "Properties should be present in params")
+	assert.Contains(t, properties, "displayartist", "Should request displayartist property")
+	assert.Contains(t, properties, "title", "Should request title property")
+	assert.Contains(t, properties, "album", "Should request album property")
+	assert.Contains(t, properties, "albumid", "Should request albumid property")
+
 	// Verify the songs were parsed correctly
 	require.Len(t, songs, 2)
 	assert.Equal(t, 123, songs[0].ID)
 	assert.Equal(t, "Test Song 1", songs[0].Label)
 	assert.Equal(t, 456, songs[0].AlbumID)
 	assert.Equal(t, "Test Artist", songs[0].Artist)
+	assert.Equal(t, "Test Album", songs[0].Album)
 	assert.Equal(t, 240, songs[0].Duration)
 }
 
@@ -1027,16 +1040,16 @@ func TestClient_GetAlbums_MakesCorrectAPICall(t *testing.T) {
 			"result": map[string]any{
 				"albums": []map[string]any{
 					{
-						"albumid": 456,
-						"label":   "Test Album 1",
-						"artist":  "Test Artist 1",
-						"year":    2020,
+						"albumid":       456,
+						"label":         "Test Album 1",
+						"displayartist": "Test Artist 1",
+						"year":          2020,
 					},
 					{
-						"albumid": 457,
-						"label":   "Test Album 2",
-						"artist":  "Test Artist 2",
-						"year":    2021,
+						"albumid":       457,
+						"label":         "Test Album 2",
+						"displayartist": "Test Artist 2",
+						"year":          2021,
 					},
 				},
 			},

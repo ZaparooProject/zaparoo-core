@@ -338,6 +338,41 @@ func TestTVEpisodeBackwardCompatibility(t *testing.T) {
 	assert.Contains(t, tvSys.Aliases, "TV", "TVEpisode system should have 'TV' as an alias")
 }
 
+func TestMusicTrackBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		wantID string
+	}{
+		{"Music alias (old ID)", "Music", "MusicTrack"},
+		{"Music lowercase", "music", "MusicTrack"},
+		{"MusicTrack canonical", "MusicTrack", "MusicTrack"},
+		{"MusicTrack lowercase", "musictrack", "MusicTrack"},
+		{"musicfile slug", "musicfile", "MusicTrack"},
+		{"song slug", "song", "MusicTrack"},
+		{"songs slug", "songs", "MusicTrack"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sys, err := LookupSystem(tt.input)
+			require.NoError(t, err, "LookupSystem(%q) should not error", tt.input)
+			require.NotNil(t, sys, "LookupSystem(%q) should return a system", tt.input)
+			assert.Equal(t, tt.wantID, sys.ID, "LookupSystem(%q) should resolve to %s", tt.input, tt.wantID)
+		})
+	}
+
+	// Verify that Music and MusicTrack resolve to the exact same system
+	musicSys, err := LookupSystem("Music")
+	require.NoError(t, err)
+	musicTrackSys, err := LookupSystem("MusicTrack")
+	require.NoError(t, err)
+	assert.Equal(t, musicTrackSys.ID, musicSys.ID, "Music and MusicTrack should resolve to the same system")
+	assert.Contains(t, musicSys.Aliases, "Music", "MusicTrack system should have 'Music' as an alias")
+}
+
 // TestLookupSystemNaturalLanguage verifies natural language lookups using manufacturer prefixes
 func TestLookupSystemNaturalLanguage(t *testing.T) {
 	t.Parallel()
@@ -674,7 +709,7 @@ func TestMediaTypeSystems(t *testing.T) {
 		{SystemMovie, MediaTypeMovie},
 		{SystemTVEpisode, MediaTypeTVShow},
 		{SystemTVShow, MediaTypeTVShow},
-		{SystemMusic, MediaTypeMusic},
+		{SystemMusicTrack, MediaTypeMusic},
 		{SystemMusicArtist, MediaTypeMusic},
 		{SystemMusicAlbum, MediaTypeMusic},
 		{SystemImage, MediaTypeImage},

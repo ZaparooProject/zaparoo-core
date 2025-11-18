@@ -214,7 +214,11 @@ func (c *Client) GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, 
 
 // GetMovies retrieves all movies from Kodi's library
 func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
-	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, nil)
+	params := VideoLibraryGetMoviesParams{
+		Properties: []string{"title", "file"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, params)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +234,11 @@ func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 
 // GetTVShows retrieves all TV shows from Kodi's library
 func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
-	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, nil)
+	params := VideoLibraryGetTVShowsParams{
+		Properties: []string{"title"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, params)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +255,8 @@ func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
 // GetEpisodes retrieves all episodes for a specific TV show from Kodi's library
 func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error) {
 	params := VideoLibraryGetEpisodesParams{
-		TVShowID: tvShowID,
+		TVShowID:   tvShowID,
+		Properties: []string{"title", "file", "tvshowid", "season", "episode"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetEpisodes, params)
@@ -266,7 +275,11 @@ func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, erro
 
 // GetSongs retrieves all songs from Kodi's library
 func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
-	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, nil)
+	params := AudioLibraryGetSongsParams{
+		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +295,11 @@ func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
 
 // GetAlbums retrieves all albums from Kodi's library
 func (c *Client) GetAlbums(ctx context.Context) ([]Album, error) {
-	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetAlbums, nil)
+	params := AudioLibraryGetAlbumsParams{
+		Properties: []string{"title", "displayartist", "year"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetAlbums, params)
 	if err != nil {
 		return nil, err
 	}
@@ -298,6 +315,7 @@ func (c *Client) GetAlbums(ctx context.Context) ([]Album, error) {
 
 // GetArtists retrieves all artists from Kodi's library
 func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
+	// No properties needed - we only use the default "label" field
 	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetArtists, nil)
 	if err != nil {
 		return nil, err
