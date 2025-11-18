@@ -1,3 +1,5 @@
+//go:build windows
+
 /*
 Zaparoo Core
 Copyright (c) 2025 The Zaparoo Project Contributors.
@@ -19,8 +21,6 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-//go:build windows
-
 package helpers
 
 import (
@@ -38,14 +38,19 @@ func IsProcessRunning(proc *os.Process) bool {
 		return false
 	}
 
+	// PIDs must be positive and fit in uint32
+	if proc.Pid < 0 {
+		return false
+	}
+
 	// Open process handle with PROCESS_QUERY_LIMITED_INFORMATION access
 	// This is the minimum access required to query process information
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(proc.Pid))
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(proc.Pid)) //nolint:gosec // PID validated above
 	if err != nil {
 		// If we can't open the process, it's not running (or we don't have permissions)
 		return false
 	}
-	defer windows.CloseHandle(handle)
+	defer func() { _ = windows.CloseHandle(handle) }()
 
 	// Query exit code
 	var exitCode uint32
