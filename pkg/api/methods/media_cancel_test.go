@@ -404,6 +404,12 @@ Loop:
 		assert.False(t, statusInstance.isRunning(), "Status should be cleared after completion")
 	}
 
+	// Wait for the indexing goroutine to fully complete (including optimization)
+	// before cleanup runs to avoid "attempt to write a readonly database" errors
+	require.Eventually(t, func() bool {
+		return !statusInstance.isRunning()
+	}, 5*time.Second, 50*time.Millisecond, "indexing and optimization did not complete")
+
 	// Drain any remaining notifications to prevent goroutine leak
 	go func() {
 		for n := range notifications {
