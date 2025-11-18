@@ -227,6 +227,13 @@ func processTokenQueue(
 
 			log.Info().Msgf("processing token: %v", t)
 
+			// Play success sound immediately on scan success
+			if cfg.AudioFeedback() {
+				if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
+					log.Warn().Msgf("error playing success sound: %s", audioErr)
+				}
+			}
+
 			err := platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
@@ -252,16 +259,10 @@ func processTokenQueue(
 					log.Error().Err(err).Msgf("error launching token")
 				}
 
-				// Play audio feedback based on launch result
-				if cfg.AudioFeedback() {
-					if err == nil {
-						if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
-							log.Warn().Msgf("error playing success sound: %s", audioErr)
-						}
-					} else {
-						if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-							log.Warn().Msgf("error playing fail sound: %s", audioErr)
-						}
+				// Play fail sound only if ZapScript fails
+				if cfg.AudioFeedback() && err != nil {
+					if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
+						log.Warn().Msgf("error playing fail sound: %s", audioErr)
 					}
 				}
 
