@@ -99,7 +99,7 @@ func ScanSongs(
 	}
 
 	for _, song := range songs {
-		name := song.Artist + " - " + song.Label
+		name := song.Artist + " - " + song.Album + " - " + song.Label
 		results = append(results, platforms.ScanResult{
 			Name:  name,
 			Path:  virtualpath.CreateVirtualPath(shared.SchemeKodiSong, fmt.Sprintf("%d", song.ID), name),

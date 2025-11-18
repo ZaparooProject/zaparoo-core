@@ -56,7 +56,8 @@ type Episode struct {
 type Song struct {
 	Label    string `json:"label"`
 	File     string `json:"file,omitempty"`
-	Artist   string `json:"artist"`
+	Artist   string `json:"displayartist"` // Use displayartist (string) instead of artist (array)
+	Album    string `json:"album"`
 	ID       int    `json:"songid"`
 	AlbumID  int    `json:"albumid"`
 	Duration int    `json:"duration"`
@@ -65,7 +66,7 @@ type Song struct {
 // Album represents an album in Kodi's library
 type Album struct {
 	Label  string `json:"label"`
-	Artist string `json:"artist"`
+	Artist string `json:"displayartist"` // Use displayartist (string) instead of artist (array)
 	ID     int    `json:"albumid"`
 	Year   int    `json:"year"`
 }
@@ -165,7 +166,8 @@ type VideoLibraryGetTVShowsResponse struct {
 
 // VideoLibraryGetEpisodesParams represents parameters for VideoLibrary.GetEpisodes API method
 type VideoLibraryGetEpisodesParams struct {
-	TVShowID int `json:"tvshowid"`
+	Properties []string `json:"properties,omitempty"`
+	TVShowID   int      `json:"tvshowid"`
 }
 
 // VideoLibraryGetEpisodesResponse represents the response from VideoLibrary.GetEpisodes
@@ -186,6 +188,26 @@ type AudioLibraryGetAlbumsResponse struct {
 // AudioLibraryGetArtistsResponse represents the response from AudioLibrary.GetArtists
 type AudioLibraryGetArtistsResponse struct {
 	Artists []Artist `json:"artists"`
+}
+
+// VideoLibraryGetMoviesParams represents parameters for VideoLibrary.GetMovies API method
+type VideoLibraryGetMoviesParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// VideoLibraryGetTVShowsParams represents parameters for VideoLibrary.GetTVShows API method
+type VideoLibraryGetTVShowsParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// AudioLibraryGetAlbumsParams represents parameters for AudioLibrary.GetAlbums API method
+type AudioLibraryGetAlbumsParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// AudioLibraryGetArtistsParams represents parameters for AudioLibrary.GetArtists API method
+type AudioLibraryGetArtistsParams struct {
+	Properties []string `json:"properties,omitempty"`
 }
 
 // PlaylistClearParams represents parameters for Playlist.Clear API method
@@ -224,7 +246,8 @@ type FilterRule struct {
 
 // AudioLibraryGetSongsParams represents parameters for AudioLibrary.GetSongs API method
 type AudioLibraryGetSongsParams struct {
-	Filter *FilterRule `json:"filter,omitempty"`
+	Filter     *FilterRule `json:"filter,omitempty"`
+	Properties []string    `json:"properties,omitempty"`
 }
 
 // PlayerGetItemParams represents parameters for Player.GetItem API method
