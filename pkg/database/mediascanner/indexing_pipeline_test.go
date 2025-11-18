@@ -582,7 +582,13 @@ func TestGetPathFragments_VirtualPathsWithEncoding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := GetPathFragments(nil, tc.path, tc.noExt, false)
+			result := GetPathFragments(PathFragmentParams{
+				Config:              nil,
+				Path:                tc.path,
+				NoExt:               tc.noExt,
+				StripLeadingNumbers: false,
+				SystemID:            "",
+			})
 
 			assert.Equal(t, tc.expectedFrag.Path, result.Path,
 				"Path should be preserved as-is (with encoding): %s", tc.description)
@@ -670,11 +676,23 @@ func TestGetPathFragments_MalformedVirtualPaths(t *testing.T) {
 
 			if tc.shouldPanic {
 				assert.Panics(t, func() {
-					GetPathFragments(nil, tc.path, tc.noExt, false)
+					GetPathFragments(PathFragmentParams{
+						Config:              nil,
+						Path:                tc.path,
+						NoExt:               tc.noExt,
+						StripLeadingNumbers: false,
+						SystemID:            "",
+					})
 				}, tc.description)
 			} else {
 				assert.NotPanics(t, func() {
-					result := GetPathFragments(nil, tc.path, tc.noExt, false)
+					result := GetPathFragments(PathFragmentParams{
+						Config:              nil,
+						Path:                tc.path,
+						NoExt:               tc.noExt,
+						StripLeadingNumbers: false,
+						SystemID:            "",
+					})
 					t.Logf("Handled malformed path gracefully: %s → fileName=%q",
 						tc.path, result.FileName)
 				}, tc.description)
@@ -722,8 +740,20 @@ func TestGetPathFragments_VirtualPathsVsRegularPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			virtualResult := GetPathFragments(nil, tc.virtualPath, true, false)
-			regularResult := GetPathFragments(nil, tc.regularPath, false, false)
+			virtualResult := GetPathFragments(PathFragmentParams{
+				Config:              nil,
+				Path:                tc.virtualPath,
+				NoExt:               true,
+				StripLeadingNumbers: false,
+				SystemID:            "",
+			})
+			regularResult := GetPathFragments(PathFragmentParams{
+				Config:              nil,
+				Path:                tc.regularPath,
+				NoExt:               false,
+				StripLeadingNumbers: false,
+				SystemID:            "",
+			})
 
 			if tc.expectDifferentSlug {
 				assert.NotEqual(t, virtualResult.Slug, regularResult.Slug,

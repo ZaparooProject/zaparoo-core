@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -143,7 +144,7 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	// ============================================================
 
 	addGame := func(systemDBID int64, name, path string, tagDBIDs ...int64) {
-		metadata := mediadb.GenerateSlugWithMetadata(name)
+		metadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, name)
 		title := database.MediaTitle{
 			SystemDBID:    systemDBID,
 			Slug:          metadata.Slug,
@@ -1619,7 +1620,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add EarthBound - simple title with NULL SecondarySlug
-	earthboundMetadata := mediadb.GenerateSlugWithMetadata("EarthBound")
+	earthboundMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "EarthBound")
 	earthboundTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          earthboundMetadata.Slug,
@@ -1647,7 +1648,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add Zombies Ate My Neighbors - another simple title with NULL SecondarySlug
-	zombiesMetadata := mediadb.GenerateSlugWithMetadata("Zombies Ate My Neighbors")
+	zombiesMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Zombies Ate My Neighbors")
 	zombiesTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          zombiesMetadata.Slug,
@@ -1674,7 +1675,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Also add "Zombies" (short title) to test progressive trim fallback
-	zombiesShortMetadata := mediadb.GenerateSlugWithMetadata("Zombies")
+	zombiesShortMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Zombies")
 	zombiesShortTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          zombiesShortMetadata.Slug,
@@ -1764,7 +1765,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Test 3: Verify pre-filter actually returns candidates with NULL SecondarySlug
 	t.Run("prefilter_returns_candidates_with_null_secondary_slug", func(t *testing.T) {
 		// Query pre-filter for "earthbond" range
-		metadata := mediadb.GenerateSlugWithMetadata("Earthbond")
+		metadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Earthbond")
 
 		minLength := metadata.SlugLength - 3
 		if minLength < 0 {

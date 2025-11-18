@@ -26,7 +26,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
@@ -309,11 +308,6 @@ func FilenameFromPath(p string) string {
 	}
 	r, _ := strings.CutSuffix(b, e)
 	return r
-}
-
-func SlugifyPath(filePath string) string {
-	fn := FilenameFromPath(filePath)
-	return slugs.SlugifyString(fn)
 }
 
 // IsValidExtension checks if a file extension contains only valid characters

@@ -22,6 +22,7 @@ package titles
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -142,7 +143,7 @@ func TestGenerateMatchInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := GenerateMatchInfo(tt.input)
+			result := GenerateMatchInfo(slugs.MediaTypeGame, tt.input)
 
 			assert.Equal(t, tt.expectedCanonicalSlug, result.CanonicalSlug, "canonical slug mismatch")
 			assert.Equal(t, tt.expectedMainTitleSlug, result.MainTitleSlug, "main title slug mismatch")
@@ -244,7 +245,7 @@ func TestGenerateProgressiveTrimCandidates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := GenerateProgressiveTrimCandidates(tt.input, tt.maxDepth)
+			result := GenerateProgressiveTrimCandidates(slugs.MediaTypeGame, tt.input, tt.maxDepth)
 
 			assert.Len(t, result, tt.expectedCount, "candidate count mismatch")
 
@@ -289,7 +290,7 @@ func TestGenerateProgressiveTrimCandidatesWordCount(t *testing.T) {
 	input := "Super Mario World Special Edition"
 	maxDepth := 3
 
-	result := GenerateProgressiveTrimCandidates(input, maxDepth)
+	result := GenerateProgressiveTrimCandidates(slugs.MediaTypeGame, input, maxDepth)
 
 	// Verify word counts decrease
 	for i := 0; i < len(result); i += 2 { // Check every exact match
@@ -306,7 +307,7 @@ func TestGenerateProgressiveTrimCandidatesNoDuplicates(t *testing.T) {
 	input := "Super Mario World Special Fun Game"
 	maxDepth := 5
 
-	result := GenerateProgressiveTrimCandidates(input, maxDepth)
+	result := GenerateProgressiveTrimCandidates(slugs.MediaTypeGame, input, maxDepth)
 
 	// Each slug appears exactly twice: once as exact match, once as prefix match
 	// Verify no duplicate exact+prefix pairs

@@ -22,6 +22,7 @@ package mediadb
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,7 +76,7 @@ func TestSlugMetadata(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			metadata := GenerateSlugWithMetadata(tt.input)
+			metadata := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.input)
 
 			assert.Equal(t, tt.wantSlug, metadata.Slug, "Slug mismatch")
 			assert.Equal(t, tt.wantLength, metadata.SlugLength, "SlugLength mismatch")
@@ -117,7 +118,7 @@ func TestCJKBigrams(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			metadata := GenerateSlugWithMetadata(tt.input)
+			metadata := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.input)
 			assert.Equal(t, tt.wantBigrams, metadata.SlugWordCount, "CJK bigram count mismatch")
 		})
 	}
@@ -143,8 +144,8 @@ func TestMetadataConsistency(t *testing.T) {
 			t.Parallel()
 
 			// Generate metadata twice - results must be identical
-			meta1 := GenerateSlugWithMetadata(tt.input)
-			meta2 := GenerateSlugWithMetadata(tt.input)
+			meta1 := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.input)
+			meta2 := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.input)
 
 			assert.Equal(t, meta1.Slug, meta2.Slug, "Inconsistent slugs")
 			assert.Equal(t, meta1.SlugLength, meta2.SlugLength, "Inconsistent lengths")
@@ -202,8 +203,8 @@ func TestToleranceThresholds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			queryMeta := GenerateSlugWithMetadata(tt.query)
-			candMeta := GenerateSlugWithMetadata(tt.candidate)
+			queryMeta := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.query)
+			candMeta := GenerateSlugWithMetadata(slugs.MediaTypeGame, tt.candidate)
 
 			lengthDiff := queryMeta.SlugLength - candMeta.SlugLength
 			if lengthDiff < 0 {
@@ -220,6 +221,106 @@ func TestToleranceThresholds(t *testing.T) {
 			passesFilter := lengthMatch && wordMatch
 
 			assert.Equal(t, tt.shouldMatch, passesFilter, "Pre-filter match mismatch")
+		})
+	}
+}
+
+// TestGenerateSlugWithMetadata_DifferentMediaTypes verifies that
+// different MediaTypes produce appropriately parsed slugs and metadata.
+// This is critical for the multi-MediaType search architecture.
+func TestGenerateSlugWithMetadata_DifferentMediaTypes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		input             string
+		mediaType         slugs.MediaType
+		expectedSlug      string
+		expectedSecondary string
+		description       string
+	}{
+		{
+			name:              "game_title_no_secondary",
+			mediaType:         slugs.MediaTypeGame,
+			input:             "Super Mario Bros",
+			expectedSlug:      "supermariobrothers",
+			expectedSecondary: "",
+			description:       "Game title with basic normalization, no secondary title",
+		},
+		{
+			name:              "game_with_secondary_title",
+			mediaType:         slugs.MediaTypeGame,
+			input:             "The Legend of Zelda: Ocarina of Time",
+			expectedSlug:      "legendofzeldaocarinaoftime",
+			expectedSecondary: "ocarinaoftime",
+			description:       "Game with secondary title after colon",
+		},
+		{
+			name:              "tvshow_episode_with_dash_separator",
+			mediaType:         slugs.MediaTypeTVShow,
+			input:             "Breaking Bad - 1x02 - Gray Matter",
+			expectedSlug:      "breakingbads01e02graymatter",
+			expectedSecondary: "graymatters01e02", // Secondary is reordered: "Gray Matter s01e02"
+			description:       "TV episode with dash separator, 1x02 normalized to s01e02",
+		},
+		{
+			name:              "tvshow_episode_s01e05_with_subtitle",
+			mediaType:         slugs.MediaTypeTVShow,
+			input:             "Attack on Titan - S01E05 - First Battle",
+			expectedSlug:      "attackontitans01e05firstbattle",
+			expectedSecondary: "firstbattles01e05", // Secondary is reordered: "First Battle s01e05"
+			description:       "TV episode with S01E05 format and subtitle",
+		},
+		// TODO: Re-enable when ParseMovie is implemented
+		// {
+		// 	name:              "movie_with_year_no_secondary",
+		// 	mediaType:         slugs.MediaTypeMovie,
+		// 	input:             "The Matrix (1999)",
+		// 	expectedSlug:      "matrix",
+		// 	expectedSecondary: "",
+		// 	description:       "Movie with year in parentheses (stripped), no secondary title",
+		// },
+		{
+			name:              "game_episode_like_with_dash",
+			mediaType:         slugs.MediaTypeGame,
+			input:             "Lost - S01E01",
+			expectedSlug:      "losts01e01",
+			expectedSecondary: "s01e01", // After dash
+			description:       "Game with dash separator, episode-like title not normalized for Game type",
+		},
+		// TODO: Re-enable when ParseMusic is implemented
+		// {
+		// 	name:              "music_with_dash_separator",
+		// 	mediaType:         slugs.MediaTypeMusic,
+		// 	input:             "The Beatles - Hey Jude",
+		// 	expectedSlug:      "beatlesheyjude",
+		// 	expectedSecondary: "heyjude", // After dash
+		// 	description:       "Music title with dash separator between artist and song",
+		// },
+		{
+			name:              "tvshow_vs_game_same_episode_title",
+			mediaType:         slugs.MediaTypeGame,
+			input:             "Breaking Bad - 1x02",
+			expectedSlug:      "breakingbad1x02", // Game type does NOT normalize episode formats
+			expectedSecondary: "1x02",            // Episode format preserved for games
+			description:       "Game type with episode-like title preserves format (not normalized)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			metadata := GenerateSlugWithMetadata(tt.mediaType, tt.input)
+
+			assert.Equal(t, tt.expectedSlug, metadata.Slug,
+				"Slug mismatch for %s (MediaType: %s)", tt.description, tt.mediaType)
+			assert.Equal(t, tt.expectedSecondary, metadata.SecondarySlug,
+				"SecondarySlug mismatch for %s (MediaType: %s)", tt.description, tt.mediaType)
+
+			// Verify metadata has reasonable values
+			assert.Positive(t, metadata.SlugLength, "SlugLength should be positive")
+			assert.Positive(t, metadata.SlugWordCount, "SlugWordCount should be positive")
 		})
 	}
 }

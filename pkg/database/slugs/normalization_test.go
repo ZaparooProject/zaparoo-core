@@ -25,344 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestNormalizeOrdinals tests the ordinal number normalization functionality.
-// Ordinals (1st, 2nd, 3rd, 4th, etc.) should be converted to their base numbers (1, 2, 3, 4).
-// This allows "Street Fighter 2nd Impact" and "Street Fighter II Impact" to both
-// normalize to "street fighter 2 impact".
-func TestNormalizeOrdinals(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		// Basic ordinals
-		{
-			name:     "first",
-			input:    "1st Place",
-			expected: "1 Place",
-		},
-		{
-			name:     "second",
-			input:    "2nd Edition",
-			expected: "2 Edition",
-		},
-		{
-			name:     "third",
-			input:    "3rd Strike",
-			expected: "3 Strike",
-		},
-		{
-			name:     "fourth",
-			input:    "4th Dimension",
-			expected: "4 Dimension",
-		},
-		{
-			name:     "fifth",
-			input:    "5th Element",
-			expected: "5 Element",
-		},
-		{
-			name:     "tenth",
-			input:    "10th Anniversary",
-			expected: "10 Anniversary",
-		},
-		{
-			name:     "eleventh",
-			input:    "11th Hour",
-			expected: "11 Hour",
-		},
-		{
-			name:     "twelfth",
-			input:    "12th Man",
-			expected: "12 Man",
-		},
-		{
-			name:     "thirteenth",
-			input:    "13th Floor",
-			expected: "13 Floor",
-		},
-		{
-			name:     "twenty_first",
-			input:    "21st Century",
-			expected: "21 Century",
-		},
-		{
-			name:     "twenty_second",
-			input:    "22nd Street",
-			expected: "22 Street",
-		},
-		{
-			name:     "twenty_third",
-			input:    "23rd Precinct",
-			expected: "23 Precinct",
-		},
-		{
-			name:     "hundredth",
-			input:    "100th Game",
-			expected: "100 Game",
-		},
-
-		// Game-specific examples
-		{
-			name:     "street_fighter_2nd_impact",
-			input:    "Street Fighter 2nd Impact",
-			expected: "Street Fighter 2 Impact",
-		},
-		{
-			name:     "super_mario_bros_2nd_edition",
-			input:    "Super Mario Bros 2nd Edition",
-			expected: "Super Mario Bros 2 Edition",
-		},
-		{
-			name:     "resident_evil_4th_survivor",
-			input:    "Resident Evil 4th Survivor",
-			expected: "Resident Evil 4 Survivor",
-		},
-		{
-			name:     "the_7th_saga",
-			input:    "The 7th Saga",
-			expected: "The 7 Saga",
-		},
-
-		// Edge cases
-		{
-			name:     "multiple_ordinals",
-			input:    "1st to 3rd Place",
-			expected: "1 to 3 Place",
-		},
-		{
-			name:     "ordinal_at_end",
-			input:    "Game 21st",
-			expected: "Game 21",
-		},
-		{
-			name:     "ordinal_at_start",
-			input:    "1st Game",
-			expected: "1 Game",
-		},
-		{
-			name:     "no_ordinals",
-			input:    "Plain Title",
-			expected: "Plain Title",
-		},
-		{
-			name:     "ordinal_followed_by_punctuation",
-			input:    "21st: The Beginning",
-			expected: "21: The Beginning",
-		},
-
-		// Should NOT match (no word boundary)
-		{
-			name:     "not_ordinal_within_word",
-			input:    "test1st",
-			expected: "test1st",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := NormalizeOrdinals(tt.input)
-			assert.Equal(t, tt.expected, result, "NormalizeOrdinals failed")
-		})
-	}
-}
-
-// TestExpandAbbreviations tests abbreviation expansion functionality.
-// This ensures "vs" → "versus", "bros" → "brothers", "dr" → "doctor", "vol" → "volume",
-// "pt" → "part", "ft" → "featuring", and "feat." → "featuring" (period required).
-func TestExpandAbbreviations(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		// vs/versus
-		{
-			name:     "vs_no_period",
-			input:    "Mario vs Donkey Kong",
-			expected: "Mario versus Donkey Kong",
-		},
-		{
-			name:     "vs_with_period",
-			input:    "Mario vs. Donkey Kong",
-			expected: "Mario versus Donkey Kong",
-		},
-		{
-			name:     "vs_uppercase",
-			input:    "Mario VS Donkey Kong",
-			expected: "Mario versus Donkey Kong",
-		},
-		{
-			name:     "vs_mixed_case",
-			input:    "Mario Vs Donkey Kong",
-			expected: "Mario versus Donkey Kong",
-		},
-
-		// bros/brothers
-		{
-			name:     "bros_no_period",
-			input:    "Super Mario Bros",
-			expected: "Super Mario brothers",
-		},
-		{
-			name:     "bros_with_period",
-			input:    "Super Mario Bros.",
-			expected: "Super Mario brothers",
-		},
-		{
-			name:     "bros_uppercase",
-			input:    "Super Mario BROS",
-			expected: "Super Mario brothers",
-		},
-
-		// dr/doctor
-		{
-			name:     "dr_no_period",
-			input:    "Dr Mario",
-			expected: "doctor Mario",
-		},
-		{
-			name:     "dr_with_period",
-			input:    "Dr. Mario",
-			expected: "doctor Mario",
-		},
-		{
-			name:     "dr_uppercase",
-			input:    "DR MARIO",
-			expected: "doctor MARIO",
-		},
-
-		// mr/mister
-		{
-			name:     "mr_no_period",
-			input:    "Mr Do",
-			expected: "mister Do",
-		},
-		{
-			name:     "mr_with_period",
-			input:    "Mr. Do",
-			expected: "mister Do",
-		},
-
-		// vol/volume
-		{
-			name:     "vol_no_period",
-			input:    "Game Vol 2",
-			expected: "Game volume 2",
-		},
-		{
-			name:     "vol_with_period",
-			input:    "Series Vol. 3",
-			expected: "Series volume 3",
-		},
-		{
-			name:     "vol_uppercase",
-			input:    "Collection VOL 1",
-			expected: "Collection volume 1",
-		},
-
-		// pt/part
-		{
-			name:     "pt_no_period",
-			input:    "Game Pt 2",
-			expected: "Game part 2",
-		},
-		{
-			name:     "pt_with_period",
-			input:    "Episode Pt. 3",
-			expected: "Episode part 3",
-		},
-		{
-			name:     "pt_uppercase",
-			input:    "Story PT 1",
-			expected: "Story part 1",
-		},
-
-		// ft/featuring
-		{
-			name:     "ft_no_period",
-			input:    "Song ft Artist",
-			expected: "Song featuring Artist",
-		},
-		{
-			name:     "ft_with_period",
-			input:    "Track ft. Singer",
-			expected: "Track featuring Singer",
-		},
-		{
-			name:     "ft_uppercase",
-			input:    "Music FT Band",
-			expected: "Music featuring Band",
-		},
-
-		// feat./featuring (period required)
-		{
-			name:     "feat_with_period",
-			input:    "Song feat. Artist",
-			expected: "Song featuring Artist",
-		},
-		{
-			name:     "feat_uppercase_with_period",
-			input:    "Track FEAT. Singer",
-			expected: "Track featuring Singer",
-		},
-		{
-			name:     "feat_without_period_not_expanded",
-			input:    "A great feat",
-			expected: "A great feat", // Should NOT expand - "feat" is a real word
-		},
-
-		// Multiple abbreviations
-		{
-			name:     "multiple_abbreviations",
-			input:    "Dr Mario vs Mr Do Bros",
-			expected: "doctor Mario versus mister Do brothers",
-		},
-
-		// Should NOT expand (not standalone words)
-		{
-			name:     "vs_within_word",
-			input:    "versus",
-			expected: "versus", // Correctly doesn't expand - "versus" is a complete word, not abbreviated "vs"
-		},
-		{
-			name:     "bros_within_word",
-			input:    "ambros",
-			expected: "ambros",
-		},
-
-		// Edge cases
-		{
-			name:     "abbreviation_at_start",
-			input:    "vs The World",
-			expected: "versus The World",
-		},
-		{
-			name:     "abbreviation_at_end",
-			input:    "Super Mario Bros",
-			expected: "Super Mario brothers",
-		},
-		{
-			name:     "no_abbreviations",
-			input:    "Plain Game Title",
-			expected: "Plain Game Title",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := ExpandAbbreviations(tt.input)
-			assert.Equal(t, tt.expected, result, "ExpandAbbreviations failed")
-		})
-	}
-}
-
 // TestPlusSymbolNormalization tests the plus symbol normalization functionality.
 // This ensures "Game+" → "Game plus" and "Mario Kart 8+" → "Mario Kart 8 plus".
 func TestPlusSymbolNormalization(t *testing.T) {
@@ -423,7 +85,7 @@ func TestPlusSymbolNormalization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Plus symbol normalization failed")
 		})
 	}
@@ -533,7 +195,7 @@ func TestIntegratedNewNormalizations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Integrated normalization failed")
 		})
 	}
@@ -573,7 +235,7 @@ func TestNewNormalizationsWithMetadata(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Normalization with metadata failed")
 		})
 	}
@@ -595,8 +257,8 @@ func TestNewNormalizationsIdempotency(t *testing.T) {
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
-			first := SlugifyString(input)
-			second := SlugifyString(first)
+			first := Slugify(MediaTypeGame, input)
+			second := Slugify(MediaTypeGame, first)
 			assert.Equal(t, first, second, "New normalizations should maintain idempotency")
 		})
 	}
@@ -821,7 +483,7 @@ func TestPunctuationNormalizationIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Punctuation normalization integration failed")
 		})
 	}
@@ -842,8 +504,8 @@ func TestPunctuationNormalizationIdempotency(t *testing.T) {
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
-			first := SlugifyString(input)
-			second := SlugifyString(first)
+			first := Slugify(MediaTypeGame, input)
+			second := Slugify(MediaTypeGame, first)
 			assert.Equal(t, first, second, "Punctuation normalization should maintain idempotency")
 		})
 	}

@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -978,7 +979,7 @@ func TestRandSeq(t *testing.T) {
 	})
 }
 
-func TestSlugifyPath(t *testing.T) {
+func TestFilenameFromPath_WithSlugify(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1034,7 +1035,7 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "extension_with_space",
 			input:    "/games/test. ext",
-			expected: "testext", // Space is removed by SlugifyString
+			expected: "testext", // Space is removed by Slugify
 		},
 		{
 			name:     "hidden_file",
@@ -1051,8 +1052,9 @@ func TestSlugifyPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyPath(tt.input)
-			assert.Equal(t, tt.expected, result, "SlugifyPath result mismatch")
+			filename := FilenameFromPath(tt.input)
+			result := slugs.Slugify(slugs.MediaTypeGame, filename)
+			assert.Equal(t, tt.expected, result, "Slugified filename mismatch")
 		})
 	}
 }

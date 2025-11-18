@@ -289,7 +289,7 @@ func TestMediaDB_GetLaunchCommandForMedia_Integration(t *testing.T) {
 	// Insert MediaTitle with year tag
 	marioTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Super Mario Bros."),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros."),
 		Name:       "Super Mario Bros.",
 	}
 	insertedMarioTitle, err := mediaDB.InsertMediaTitle(&marioTitle)
@@ -323,7 +323,7 @@ func TestMediaDB_GetLaunchCommandForMedia_Integration(t *testing.T) {
 	// Insert MediaTitle without year tag
 	zeldaTitle := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("The Legend of Zelda"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "The Legend of Zelda"),
 		Name:       "The Legend of Zelda",
 	}
 	insertedZeldaTitle, err := mediaDB.InsertMediaTitle(&zeldaTitle)

@@ -36,17 +36,42 @@ import (
 // This list also contains some basic heuristics which, given a file path, can
 // be used to attempt to associate a file with a system.
 
+// MediaType alias for slugs.MediaType to avoid forcing all systemdefs users to import slugs.
+// The canonical definition is in the slugs package.
+type MediaType = slugs.MediaType
+
+// Re-export MediaType constants from slugs package for convenience.
+const (
+	MediaTypeGame        = slugs.MediaTypeGame
+	MediaTypeMovie       = slugs.MediaTypeMovie
+	MediaTypeTVShow      = slugs.MediaTypeTVShow
+	MediaTypeMusic       = slugs.MediaTypeMusic
+	MediaTypeImage       = slugs.MediaTypeImage
+	MediaTypeAudio       = slugs.MediaTypeAudio
+	MediaTypeVideo       = slugs.MediaTypeVideo
+	MediaTypeApplication = slugs.MediaTypeApplication
+)
+
 type System struct {
 	ID        string
+	MediaType MediaType
 	Aliases   []string
 	Fallbacks []string
-	// Pre-defined slug variations for natural language matching (manufacturer prefixes, regional names, etc.)
-	Slugs []string
+	Slugs     []string
+}
+
+// GetMediaType returns the media type for this system, defaulting to MediaTypeGame if not set.
+func (s *System) GetMediaType() MediaType {
+	if s.MediaType == "" {
+		return MediaTypeGame
+	}
+	return s.MediaType
 }
 
 // Lazy initialization for system lookup map
+// Maps lookup keys (lowercase IDs, slugs, etc.) to system IDs for resolution
 var (
-	lookupMap     map[string]*System
+	lookupMap     map[string]string
 	lookupMapOnce sync.Once
 	errLookupMap  error
 )
@@ -83,7 +108,7 @@ func GetSystem(id string) (*System, error) {
 // and custom slugs. It detects and reports collisions at initialization time.
 func buildLookupMap() error {
 	lookupMapOnce.Do(func() {
-		lookupMap = make(map[string]*System)
+		lookupMap = make(map[string]string)
 		keyOwner := make(map[string]string) // Track which system owns each key for collision detection
 
 		addKey := func(key, systemID, sourceType string) {
@@ -105,9 +130,8 @@ func buildLookupMap() error {
 			}
 
 			keyOwner[key] = systemID
-			// Get pointer to the system in the Systems map
-			sys := Systems[systemID]
-			lookupMap[key] = &sys
+			// Store system ID for later resolution via Systems map
+			lookupMap[key] = systemID
 		}
 
 		// Process all systems in a deterministic order
@@ -123,11 +147,11 @@ func buildLookupMap() error {
 			}
 
 			// 3. Add slugified ID (auto-derived)
-			addKey(slugs.SlugifyString(system.ID), system.ID, "Slug(ID)")
+			addKey(slugs.Slugify(slugs.MediaTypeGame, system.ID), system.ID, "Slug(ID)")
 
 			// 4. Add slugified aliases (auto-derived)
 			for _, alias := range system.Aliases {
-				addKey(slugs.SlugifyString(alias), system.ID, "Slug(Alias)")
+				addKey(slugs.Slugify(slugs.MediaTypeGame, alias), system.ID, "Slug(Alias)")
 			}
 
 			// 5. Add custom slugs
@@ -153,16 +177,20 @@ func LookupSystem(id string) (*System, error) {
 
 	// Step 1: Try case-insensitive match (fast path for exact/alias matches)
 	lowerID := strings.ToLower(id)
-	if system, ok := lookupMap[lowerID]; ok {
-		return system, nil
+	if systemID, ok := lookupMap[lowerID]; ok {
+		// Resolve system ID to actual System from canonical map
+		system := Systems[systemID]
+		return &system, nil
 	}
 
 	// Step 2: Try slugified match (natural language path)
-	slugifiedID := slugs.SlugifyString(id)
+	slugifiedID := slugs.Slugify(slugs.MediaTypeGame, id)
 	if slugifiedID != lowerID {
 		// Only check if slugification changed the string
-		if system, ok := lookupMap[slugifiedID]; ok {
-			return system, nil
+		if systemID, ok := lookupMap[slugifiedID]; ok {
+			// Resolve system ID to actual System from canonical map
+			system := Systems[systemID]
+			return &system, nil
 		}
 	}
 
@@ -1097,41 +1125,50 @@ var Systems = map[string]System{
 		Slugs: []string{"seganaomi2"},
 	},
 	SystemVideo: {
-		ID:    SystemVideo,
-		Slugs: []string{"videos", "videofile"},
+		ID:        SystemVideo,
+		Slugs:     []string{"videos", "videofile"},
+		MediaType: MediaTypeVideo,
 	},
 	SystemAudio: {
-		ID:    SystemAudio,
-		Slugs: []string{"audiofile"},
+		ID:        SystemAudio,
+		Slugs:     []string{"audiofile"},
+		MediaType: MediaTypeAudio,
 	},
 	SystemMovie: {
-		ID:    SystemMovie,
-		Slugs: []string{"movies", "film", "cinema"},
+		ID:        SystemMovie,
+		Slugs:     []string{"movies", "film", "cinema"},
+		MediaType: MediaTypeMovie,
 	},
 	SystemTVEpisode: {
-		ID:      SystemTVEpisode,
-		Aliases: []string{"TV"},
-		Slugs:   []string{"television", "tvchannel"},
+		ID:        SystemTVEpisode,
+		Aliases:   []string{"TV"},
+		Slugs:     []string{"television", "tvchannel"},
+		MediaType: MediaTypeTVShow,
 	},
 	SystemTVShow: {
-		ID:    SystemTVShow,
-		Slugs: []string{"tvshows", "tvseries"},
+		ID:        SystemTVShow,
+		Slugs:     []string{"tvshows", "tvseries"},
+		MediaType: MediaTypeTVShow,
 	},
 	SystemMusic: {
-		ID:    SystemMusic,
-		Slugs: []string{"musicfile", "song", "songs"},
+		ID:        SystemMusic,
+		Slugs:     []string{"musicfile", "song", "songs"},
+		MediaType: MediaTypeMusic,
 	},
 	SystemMusicArtist: {
-		ID:    SystemMusicArtist,
-		Slugs: []string{"musician", "musicians", "band", "bands"},
+		ID:        SystemMusicArtist,
+		Slugs:     []string{"musician", "musicians", "band", "bands"},
+		MediaType: MediaTypeMusic,
 	},
 	SystemMusicAlbum: {
-		ID:    SystemMusicAlbum,
-		Slugs: []string{"lp", "album", "albums"},
+		ID:        SystemMusicAlbum,
+		Slugs:     []string{"lp", "album", "albums"},
+		MediaType: MediaTypeMusic,
 	},
 	SystemImage: {
-		ID:    SystemImage,
-		Slugs: []string{"picture", "pictures", "photo", "photos", "images"},
+		ID:        SystemImage,
+		Slugs:     []string{"picture", "pictures", "photo", "photos", "images"},
+		MediaType: MediaTypeImage,
 	},
 	SystemJ2ME: {
 		ID:    SystemJ2ME,

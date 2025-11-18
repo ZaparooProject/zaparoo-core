@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSlugifyString_Cyrillic(t *testing.T) {
+func TestSlugify_Cyrillic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -63,13 +63,13 @@ func TestSlugifyString_Cyrillic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Greek(t *testing.T) {
+func TestSlugify_Greek(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -102,13 +102,13 @@ func TestSlugifyString_Greek(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Indic(t *testing.T) {
+func TestSlugify_Indic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -151,13 +151,13 @@ func TestSlugifyString_Indic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Arabic(t *testing.T) {
+func TestSlugify_Arabic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -195,13 +195,13 @@ func TestSlugifyString_Arabic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Hebrew(t *testing.T) {
+func TestSlugify_Hebrew(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -229,13 +229,13 @@ func TestSlugifyString_Hebrew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Thai(t *testing.T) {
+func TestSlugify_Thai(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -263,13 +263,13 @@ func TestSlugifyString_Thai(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Amharic(t *testing.T) {
+func TestSlugify_Amharic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -297,13 +297,13 @@ func TestSlugifyString_Amharic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
 
-func TestSlugifyString_Turkish(t *testing.T) {
+func TestSlugify_Turkish(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -331,7 +331,7 @@ func TestSlugifyString_Turkish(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

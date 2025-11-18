@@ -203,13 +203,13 @@ func TestNoSlugCollisions(t *testing.T) {
 	for sysID, sys := range Systems {
 		keys := []string{
 			strings.ToLower(sys.ID),
-			slugs.SlugifyString(sys.ID),
+			slugs.Slugify(slugs.MediaTypeGame, sys.ID),
 		}
 
 		for _, alias := range sys.Aliases {
 			keys = append(keys,
 				strings.ToLower(alias),
-				slugs.SlugifyString(alias),
+				slugs.Slugify(slugs.MediaTypeGame, alias),
 			)
 		}
 
@@ -491,14 +491,14 @@ func TestNoRedundantSlugs(t *testing.T) {
 		autoDerived := make(map[string]bool)
 
 		// Add slugified ID
-		slugifiedID := slugs.SlugifyString(sys.ID)
+		slugifiedID := slugs.Slugify(slugs.MediaTypeGame, sys.ID)
 		if slugifiedID != "" {
 			autoDerived[slugifiedID] = true
 		}
 
 		// Add slugified aliases
 		for _, alias := range sys.Aliases {
-			slugifiedAlias := slugs.SlugifyString(alias)
+			slugifiedAlias := slugs.Slugify(slugs.MediaTypeGame, alias)
 			if slugifiedAlias != "" {
 				autoDerived[slugifiedAlias] = true
 			}
@@ -629,5 +629,134 @@ func BenchmarkLookupSystemSlug(b *testing.B) {
 func BenchmarkLookupSystemAlias(b *testing.B) {
 	for range b.N {
 		_, _ = LookupSystem("MegaDrive")
+	}
+}
+
+// TestAllSystemsHaveMediaType verifies that all systems have a valid MediaType
+func TestAllSystemsHaveMediaType(t *testing.T) {
+	t.Parallel()
+
+	for systemID, system := range Systems {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			// GetMediaType should always return a valid MediaType (never empty)
+			mediaType := system.GetMediaType()
+			assert.NotEmpty(t, mediaType, "System %s should have a MediaType (via GetMediaType)", systemID)
+
+			// MediaType should be one of the defined constants
+			validTypes := map[MediaType]bool{
+				MediaTypeGame:   true,
+				MediaTypeMovie:  true,
+				MediaTypeTVShow: true,
+				MediaTypeMusic:  true,
+				MediaTypeImage:  true,
+				MediaTypeAudio:  true,
+				MediaTypeVideo:  true,
+			}
+			assert.True(t, validTypes[mediaType],
+				"System %s has invalid MediaType %q, must be one of: Game, Movie, TVShow, Music, Image, Audio, Video",
+				systemID, mediaType)
+		})
+	}
+}
+
+// TestMediaTypeSystems verifies that media-specific systems have correct MediaType
+func TestMediaTypeSystems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		systemID string
+		wantType MediaType
+	}{
+		{SystemVideo, MediaTypeVideo},
+		{SystemAudio, MediaTypeAudio},
+		{SystemMovie, MediaTypeMovie},
+		{SystemTVEpisode, MediaTypeTVShow},
+		{SystemTVShow, MediaTypeTVShow},
+		{SystemMusic, MediaTypeMusic},
+		{SystemMusicArtist, MediaTypeMusic},
+		{SystemMusicAlbum, MediaTypeMusic},
+		{SystemImage, MediaTypeImage},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.systemID, func(t *testing.T) {
+			t.Parallel()
+
+			system, err := GetSystem(tt.systemID)
+			require.NoError(t, err, "System %s should exist", tt.systemID)
+
+			// Check explicit MediaType field
+			assert.Equal(t, tt.wantType, system.MediaType,
+				"System %s should have MediaType %s", tt.systemID, tt.wantType)
+
+			// Check GetMediaType method
+			assert.Equal(t, tt.wantType, system.GetMediaType(),
+				"System %s GetMediaType() should return %s", tt.systemID, tt.wantType)
+		})
+	}
+}
+
+// TestGameSystemsDefaultToGame verifies that game/console systems default to MediaTypeGame
+func TestGameSystemsDefaultToGame(t *testing.T) {
+	t.Parallel()
+
+	// Test a selection of well-known game systems
+	gameSystems := []string{
+		SystemNES,
+		SystemSNES,
+		SystemGenesis,
+		SystemPSX,
+		SystemPS2,
+		SystemNintendo64,
+		SystemGameboy,
+		SystemGBA,
+		SystemGameCube,
+		SystemDreamcast,
+		SystemAtari2600,
+		SystemAmiga,
+		SystemC64,
+		SystemDOS,
+		SystemArcade,
+	}
+
+	for _, systemID := range gameSystems {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			system, err := GetSystem(systemID)
+			require.NoError(t, err, "System %s should exist", systemID)
+
+			// GetMediaType should return Game (either explicit or default)
+			assert.Equal(t, MediaTypeGame, system.GetMediaType(),
+				"Game system %s should have MediaType Game", systemID)
+		})
+	}
+}
+
+// TestMediaTypeStringValues verifies that MediaType constants have expected string values
+func TestMediaTypeStringValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mediaType MediaType
+		wantStr   string
+	}{
+		{MediaTypeGame, "Game"},
+		{MediaTypeMovie, "Movie"},
+		{MediaTypeTVShow, "TVShow"},
+		{MediaTypeMusic, "Music"},
+		{MediaTypeImage, "Image"},
+		{MediaTypeAudio, "Audio"},
+		{MediaTypeVideo, "Video"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantStr, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantStr, string(tt.mediaType),
+				"MediaType constant should have correct string value")
+		})
 	}
 }

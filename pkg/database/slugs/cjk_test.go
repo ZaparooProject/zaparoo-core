@@ -25,9 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestSlugifyString_CJKPreservation tests the intelligent hybrid slug generation
+// TestSlugify_CJKPreservation tests the intelligent hybrid slug generation
 // that preserves CJK characters when appropriate while preferring ASCII for mixed titles.
-func TestSlugifyString_CJKPreservation(t *testing.T) {
+func TestSlugify_CJKPreservation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -163,14 +163,14 @@ func TestSlugifyString_CJKPreservation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
-			assert.Equal(t, tt.expected, result, "SlugifyString result mismatch")
+			result := Slugify(MediaTypeGame, tt.input)
+			assert.Equal(t, tt.expected, result, "Slugify result mismatch")
 		})
 	}
 }
 
-// TestSlugifyString_WidthNormalization specifically tests fullwidth/halfwidth conversion
-func TestSlugifyString_WidthNormalization(t *testing.T) {
+// TestSlugify_WidthNormalization specifically tests fullwidth/halfwidth conversion
+func TestSlugify_WidthNormalization(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -208,15 +208,15 @@ func TestSlugifyString_WidthNormalization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Width normalization failed")
 		})
 	}
 }
 
-// TestSlugifyString_MixedLanguageMatchingCompatibility tests that mixed-language
+// TestSlugify_MixedLanguageMatchingCompatibility tests that mixed-language
 // titles produce predictable ASCII slugs for matching
-func TestSlugifyString_MixedLanguageMatchingCompatibility(t *testing.T) {
+func TestSlugify_MixedLanguageMatchingCompatibility(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -248,7 +248,7 @@ func TestSlugifyString_MixedLanguageMatchingCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, tt.description)
 		})
 	}
@@ -299,8 +299,8 @@ func TestNormalizeToWords_CJKSupport(t *testing.T) {
 	}
 }
 
-// TestSlugifyString_Idempotency ensures the function remains idempotent with CJK support
-func TestSlugifyString_Idempotency_CJK(t *testing.T) {
+// TestSlugify_Idempotency ensures the function remains idempotent with CJK support
+func TestSlugify_Idempotency_CJK(t *testing.T) {
 	t.Parallel()
 
 	inputs := []string{
@@ -314,9 +314,9 @@ func TestSlugifyString_Idempotency_CJK(t *testing.T) {
 	for _, input := range inputs {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
-			first := SlugifyString(input)
-			second := SlugifyString(first)
-			assert.Equal(t, first, second, "SlugifyString should be idempotent")
+			first := Slugify(MediaTypeGame, input)
+			second := Slugify(MediaTypeGame, first)
+			assert.Equal(t, first, second, "Slugify should be idempotent")
 		})
 	}
 }

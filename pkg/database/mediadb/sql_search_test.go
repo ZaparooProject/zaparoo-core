@@ -455,9 +455,11 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	systems := []systemdefs.System{{ID: "nes"}}
-	parts := []string{"mario"}
+	variantGroups := [][]string{{"mario"}} // Single word with single variant
+	rawWords := []string{"mario"}
 	tags := []database.TagFilter{}
 	limit := 10
+	includeName := false
 
 	// Mock the main media query
 	mediaRows := sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
@@ -465,7 +467,7 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 
 	mock.ExpectPrepare(`SELECT.*FROM Systems.*WHERE Systems.SystemID IN`).
 		ExpectQuery().
-		WithArgs("nes", "%mario%", limit).
+		WithArgs("nes", "%mario%", "%mario%", limit). // Slug LIKE, SecondarySlug LIKE
 		WillReturnRows(mediaRows)
 
 	// Mock the tags query
@@ -479,7 +481,7 @@ func TestSqlSearchMediaWithFilters_IntegrationWithTags(t *testing.T) {
 		WillReturnRows(tagRows)
 
 	results, err := sqlSearchMediaWithFilters(
-		context.Background(), db, systems, parts, tags, nil, nil, limit, false,
+		context.Background(), db, systems, variantGroups, rawWords, tags, nil, nil, limit, includeName,
 	)
 	require.NoError(t, err)
 	require.Len(t, results, 1)

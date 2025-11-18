@@ -47,15 +47,18 @@ type GameMatchInfo struct {
 // It detects secondary titles (using colon, " - ", or "'s " delimiters), leading articles,
 // and generates slugs for both the full title and its components.
 //
+// The mediaType parameter should match the MediaType of the system being queried,
+// ensuring consistent slugification between indexing and resolution.
+//
 // Example:
 //
-//	info := GenerateMatchInfo("The Legend of Zelda: Link's Awakening")
+//	info := GenerateMatchInfo(slugs.MediaTypeGame, "The Legend of Zelda: Link's Awakening")
 //	// info.CanonicalSlug = "legendofzeldalinksawakening"
 //	// info.MainTitleSlug = "legendofzelda"
 //	// info.SecondaryTitleSlug = "linksawakening"
 //	// info.HasSecondaryTitle = true
 //	// info.HasLeadingArticle = true
-func GenerateMatchInfo(title string) GameMatchInfo {
+func GenerateMatchInfo(mediaType slugs.MediaType, title string) GameMatchInfo {
 	info := GameMatchInfo{
 		OriginalInput: title,
 	}
@@ -69,11 +72,11 @@ func GenerateMatchInfo(title string) GameMatchInfo {
 
 	if info.HasSecondaryTitle {
 		secondaryTitle = slugs.StripLeadingArticle(secondaryTitle)
-		info.MainTitleSlug = slugs.SlugifyString(mainTitle)
-		info.SecondaryTitleSlug = slugs.SlugifyString(secondaryTitle)
+		info.MainTitleSlug = slugs.Slugify(mediaType, mainTitle)
+		info.SecondaryTitleSlug = slugs.Slugify(mediaType, secondaryTitle)
 		info.CanonicalSlug = info.MainTitleSlug + info.SecondaryTitleSlug
 	} else {
-		info.CanonicalSlug = slugs.SlugifyString(mainTitle)
+		info.CanonicalSlug = slugs.Slugify(mediaType, mainTitle)
 		info.MainTitleSlug = info.CanonicalSlug
 	}
 
@@ -92,15 +95,20 @@ type ProgressiveTrimCandidate struct {
 // This handles overly-verbose queries by removing words from the end one at a time.
 // Useful for matching long descriptive titles against shorter canonical names.
 //
+// The mediaType parameter should match the MediaType of the system being queried,
+// ensuring consistent slugification between indexing and resolution.
+//
 // Example:
 //
-//	GenerateProgressiveTrimCandidates("Super Mario World Special Edition", 3)
+//	GenerateProgressiveTrimCandidates(slugs.MediaTypeGame, "Super Mario World Special Edition", 3)
 //	// Returns candidates for:
 //	// - "Super Mario World Special Edition" (full)
 //	// - "Super Mario World Special"
 //	// - "Super Mario World"
 //	// - "Super Mario" (stopped - only 3 iterations with maxDepth=3)
-func GenerateProgressiveTrimCandidates(title string, maxDepth int) []ProgressiveTrimCandidate {
+func GenerateProgressiveTrimCandidates(
+	mediaType slugs.MediaType, title string, maxDepth int,
+) []ProgressiveTrimCandidate {
 	cleaned := strings.TrimSpace(title)
 
 	cleaned = slugs.StripMetadataBrackets(cleaned)
@@ -127,7 +135,7 @@ func GenerateProgressiveTrimCandidates(title string, maxDepth int) []Progressive
 		}
 
 		trimmedTitle := strings.Join(remainingWords, " ")
-		slug := slugs.SlugifyString(trimmedTitle)
+		slug := slugs.Slugify(mediaType, trimmedTitle)
 
 		if len(slug) < minProgressiveTrimSlugLength {
 			break

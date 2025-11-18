@@ -68,12 +68,9 @@ func (d *windowsMountDetector) Unmounts() <-chan string {
 }
 
 func (d *windowsMountDetector) Start() error {
-	// Initialize COM
-	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		return fmt.Errorf("failed to initialize COM: %w", err)
-	}
-
 	// Start WMI event watcher
+	// Note: COM initialization happens in the watchVolumeChanges goroutine
+	// to ensure it's initialized and uninitialized on the same thread
 	d.wg.Add(1)
 	go d.watchVolumeChanges()
 
@@ -84,7 +81,6 @@ func (d *windowsMountDetector) Stop() {
 	d.stopOnce.Do(func() {
 		close(d.stopChan)
 		d.wg.Wait()
-		ole.CoUninitialize()
 		close(d.events)
 		close(d.unmounts)
 	})

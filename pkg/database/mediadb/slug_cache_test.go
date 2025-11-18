@@ -565,7 +565,7 @@ func TestGetMediaByDBID_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Super Mario Bros"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Super Mario Bros"),
 		Name:       "Super Mario Bros",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -652,7 +652,7 @@ func TestGetMediaByDBID_NoTags_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Test Game"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game"),
 		Name:       "Test Game",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
@@ -717,7 +717,7 @@ func TestSlugCache_CascadeDelete_Integration(t *testing.T) {
 
 	title := database.MediaTitle{
 		SystemDBID: insertedSystem.DBID,
-		Slug:       slugs.SlugifyString("Test Game"),
+		Slug:       slugs.Slugify(slugs.MediaTypeGame, "Test Game"),
 		Name:       "Test Game",
 	}
 	insertedTitle, err := mediaDB.InsertMediaTitle(&title)
