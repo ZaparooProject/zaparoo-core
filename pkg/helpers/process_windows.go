@@ -19,12 +19,17 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+//go:build windows
+
 package helpers
 
 import (
 	"os"
-	"syscall"
+
+	"golang.org/x/sys/windows"
 )
+
+const stillActive = 259 // STILL_ACTIVE exit code for running processes
 
 // IsProcessRunning checks if a process is still running.
 // Returns false if the process is nil or has terminated.
@@ -33,9 +38,23 @@ func IsProcessRunning(proc *os.Process) bool {
 		return false
 	}
 
-	// Send signal 0 to check if process exists without affecting it
-	// If the process is running, this returns nil
-	// If the process doesn't exist, this returns an error
-	err := proc.Signal(syscall.Signal(0))
-	return err == nil
+	// Open process handle with PROCESS_QUERY_LIMITED_INFORMATION access
+	// This is the minimum access required to query process information
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(proc.Pid))
+	if err != nil {
+		// If we can't open the process, it's not running (or we don't have permissions)
+		return false
+	}
+	defer windows.CloseHandle(handle)
+
+	// Query exit code
+	var exitCode uint32
+	err = windows.GetExitCodeProcess(handle, &exitCode)
+	if err != nil {
+		// If we can't get the exit code, assume process is not running
+		return false
+	}
+
+	// STILL_ACTIVE (259) means the process is still running
+	return exitCode == stillActive
 }

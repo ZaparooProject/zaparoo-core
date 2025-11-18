@@ -25,12 +25,33 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// getShortLivedCommand returns a command that exits immediately with code 0.
+func getShortLivedCommand(ctx context.Context) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		// cmd /c exit 0 exits immediately with code 0
+		return exec.CommandContext(ctx, "cmd", "/c", "exit", "0")
+	}
+	// 'true' command exits immediately with code 0 on Unix
+	return exec.CommandContext(ctx, "true")
+}
+
+// getLongRunningCommand returns a command that runs for ~10 seconds.
+func getLongRunningCommand(ctx context.Context) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		// ping with count 11 runs for ~10 seconds (1 second per ping)
+		return exec.CommandContext(ctx, "ping", "-n", "11", "127.0.0.1")
+	}
+	// sleep for 10 seconds on Unix
+	return exec.CommandContext(ctx, "sleep", "10")
+}
 
 func TestIsProcessRunning(t *testing.T) {
 	t.Parallel()
@@ -57,7 +78,7 @@ func TestIsProcessRunning(t *testing.T) {
 
 		// Start a process that immediately exits
 		ctx := context.Background()
-		cmd := exec.CommandContext(ctx, "true") // 'true' command exits immediately with code 0
+		cmd := getShortLivedCommand(ctx)
 		err := cmd.Start()
 		require.NoError(t, err)
 
@@ -79,9 +100,9 @@ func TestIsProcessRunning(t *testing.T) {
 	t.Run("long-running process returns true", func(t *testing.T) {
 		t.Parallel()
 
-		// Start a process that sleeps for a while
+		// Start a process that runs for a while
 		ctx := context.Background()
-		cmd := exec.CommandContext(ctx, "sleep", "10")
+		cmd := getLongRunningCommand(ctx)
 		err := cmd.Start()
 		require.NoError(t, err)
 
