@@ -34,7 +34,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -574,32 +573,51 @@ func DoLaunch(params *LaunchParams) error {
 		}
 	}
 
-	systemMeta, err := assets.GetSystemMetadata(params.Launcher.SystemID)
-	if err != nil {
-		log.Warn().Err(err).Msgf("no system metadata for: %s", params.Launcher.SystemID)
-	}
-
-	// Try to get clean display name from database first
+	// For launchers without SystemID (e.g., LaunchBox), try to look it up from MediaDB
+	systemID := params.Launcher.SystemID
 	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Name, false)
+
 	if params.DB != nil && params.DB.MediaDB != nil {
-		systems := []systemdefs.System{{ID: params.Launcher.SystemID}}
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(systems, params.Path)
-		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
-			displayName = results[0].Name
-			log.Debug().Str("path", params.Path).Msg("using indexed display name")
-		} else {
-			log.Debug().Str("path", params.Path).Msg("media not indexed, using filename")
+		// Search without system filter to find what system this path belongs to
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(nil, params.Path)
+		if searchErr == nil && len(results) > 0 {
+			// Use the system from indexed media if Launcher.SystemID is empty
+			if systemID == "" && results[0].SystemID != "" {
+				systemID = results[0].SystemID
+			}
+			// Use the indexed display name if available
+			if results[0].Name != "" {
+				displayName = results[0].Name
+			}
 		}
 	}
 
+	// If we still don't have a SystemID, skip setting ActiveMedia
+	if systemID == "" {
+		log.Debug().Msg("skipping DoLaunch ActiveMedia - no SystemID available")
+		return nil
+	}
+
+	systemMeta, err := assets.GetSystemMetadata(systemID)
+	if err != nil {
+		log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
+	}
+
 	// Set active media immediately (non-blocking for all lifecycle modes)
-	params.SetActiveMedia(models.NewActiveMedia(
-		params.Launcher.SystemID,
+	activeMedia := models.NewActiveMedia(
+		systemID,
 		systemMeta.Name,
 		params.Path,
 		displayName,
 		params.Launcher.ID,
-	))
+	)
+
+	log.Info().Msgf(
+		"DoLaunch setting ActiveMedia: SystemID='%s', SystemName='%s', Path='%s', Name='%s', LauncherID='%s'",
+		activeMedia.SystemID, activeMedia.SystemName, activeMedia.Path, activeMedia.Name, activeMedia.LauncherID,
+	)
+
+	params.SetActiveMedia(activeMedia)
 
 	return nil
 }
