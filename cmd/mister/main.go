@@ -201,9 +201,11 @@ func run() error {
 	if !svc.Running() {
 		startErr := svc.Start()
 		if startErr != nil {
-			log.Error().Err(startErr).Msg("could not start service")
+			log.Error().Err(startErr).Msg("failed to auto-start service")
+			// Continue to TUI anyway - user can see service status and try to start manually
+		} else {
+			time.Sleep(1 * time.Second)
 		}
-		time.Sleep(1 * time.Second)
 	}
 
 	// display main info gui

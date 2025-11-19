@@ -39,7 +39,15 @@ import (
 
 func buildTheInstallRequestApp() (*tview.Application, error) {
 	var startup misterstartup.Startup
+
+	// Load existing startup file before modifying
+	err := startup.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load startup file: %w", err)
+	}
+
 	app := tview.NewApplication()
+
 	// create the main modal
 	modal := tview.NewModal()
 	modal.SetTitle("Autostart Service").
@@ -52,14 +60,18 @@ func buildTheInstallRequestApp() (*tview.Application, error) {
 			case "Yes":
 				err := startup.AddService("mrext/" + config.AppName)
 				if err != nil {
+					log.Error().Err(err).Msg("failed to add service to startup")
 					_, _ = fmt.Fprintf(os.Stderr, "Error adding to startup: %v\n", err)
-					os.Exit(1)
+					app.Stop()
+					return
 				}
 				if len(startup.Entries) > 0 {
 					err = startup.Save()
 					if err != nil {
+						log.Error().Err(err).Msg("failed to save startup file")
 						_, _ = fmt.Fprintf(os.Stderr, "Error saving startup: %v\n", err)
-						os.Exit(1)
+						app.Stop()
+						return
 					}
 				}
 				app.Stop()
@@ -90,7 +102,7 @@ func tryAddStartup() error {
 	if !startup.Exists("mrext/" + config.AppName) {
 		err := tui.BuildAndRetry(buildTheInstallRequestApp)
 		if err != nil {
-			log.Error().Msgf("failed to build app: %s", err)
+			return fmt.Errorf("failed to show startup prompt: %w", err)
 		}
 	}
 
