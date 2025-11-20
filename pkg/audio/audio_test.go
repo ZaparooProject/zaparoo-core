@@ -265,3 +265,72 @@ func TestPlayWAVFile(t *testing.T) {
 // 2. Testing it would require sleep-based timing which is flaky and slow
 // 3. The callback mechanism is provided by beep.Seq() which we trust
 // 4. We test the error path cleanup in TestPlayWAV (immediate Close on error)
+
+func TestPlayWAV_CancellationBehavior(t *testing.T) {
+	t.Parallel()
+
+	// This test verifies that playing a new sound cancels the previous sound
+	// by checking that the generation counter increments
+
+	// Reset global state for this test
+	playbackMu.Lock()
+	initialGen := playbackGen
+	playbackMu.Unlock()
+
+	// Play first sound
+	mock1 := &mockReadCloser{
+		reader: bytes.NewReader(validWAVHeader()),
+	}
+	err := PlayWAV(mock1)
+	require.NoError(t, err)
+
+	// Verify generation incremented
+	playbackMu.Lock()
+	gen1 := playbackGen
+	playbackMu.Unlock()
+	assert.Equal(t, initialGen+1, gen1, "first playback should increment generation")
+
+	// Play second sound (should cancel first)
+	mock2 := &mockReadCloser{
+		reader: bytes.NewReader(validWAVHeader()),
+	}
+	err = PlayWAV(mock2)
+	require.NoError(t, err)
+
+	// Verify generation incremented again
+	playbackMu.Lock()
+	gen2 := playbackGen
+	playbackMu.Unlock()
+	assert.Equal(t, gen1+1, gen2, "second playback should increment generation")
+	assert.Equal(t, initialGen+2, gen2, "two playbacks should increment generation by 2")
+}
+
+func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {
+	t.Parallel()
+
+	// Similar test for PlayWAVBytes to ensure it also supports cancellation
+
+	playbackMu.Lock()
+	initialGen := playbackGen
+	playbackMu.Unlock()
+
+	// Play first sound
+	err := PlayWAVBytes(validWAVHeader())
+	require.NoError(t, err)
+
+	// Verify generation incremented
+	playbackMu.Lock()
+	gen1 := playbackGen
+	playbackMu.Unlock()
+	assert.Greater(t, gen1, initialGen, "first playback should increment generation")
+
+	// Play second sound (should cancel first)
+	err = PlayWAVBytes(validWAVHeader())
+	require.NoError(t, err)
+
+	// Verify generation incremented again
+	playbackMu.Lock()
+	gen2 := playbackGen
+	playbackMu.Unlock()
+	assert.Greater(t, gen2, gen1, "second playback should increment generation")
+}

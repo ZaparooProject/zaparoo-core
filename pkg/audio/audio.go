@@ -24,6 +24,7 @@ package audio
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -42,10 +43,20 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var (
+	// currentCancel cancels the currently playing sound
+	currentCancel context.CancelFunc
+	// playbackGen tracks the generation of the current playback
+	playbackGen uint64
+	// playbackMu protects access to currentCancel and playbackGen
+	playbackMu sync.Mutex
+)
+
 // PlayWAV plays a WAV audio stream from an io.ReadCloser asynchronously.
 // The function returns immediately after starting playback.
 // The reader will be closed after playback completes.
 // The audio device is created, used, and released for each playback.
+// If another sound is already playing, it will be cancelled and replaced by this sound.
 func PlayWAV(r io.ReadCloser) error {
 	// Decode WAV stream
 	streamer, format, err := wav.Decode(r)
@@ -59,6 +70,17 @@ func PlayWAV(r io.ReadCloser) error {
 	// Resample to 48000 Hz for compatibility with HDMI audio and systems like MiSTer
 	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
 
+	// Cancel any currently playing sound and set up new cancellation
+	playbackMu.Lock()
+	if currentCancel != nil {
+		currentCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	currentCancel = cancel
+	playbackGen++
+	thisGen := playbackGen
+	playbackMu.Unlock()
+
 	// Play asynchronously in a goroutine
 	go func() {
 		defer func() {
@@ -68,10 +90,19 @@ func PlayWAV(r io.ReadCloser) error {
 			if err := r.Close(); err != nil {
 				log.Warn().Err(err).Msg("failed to close audio reader")
 			}
+			// Clear current cancel if this is still the active playback
+			playbackMu.Lock()
+			if playbackGen == thisGen {
+				currentCancel = nil
+			}
+			playbackMu.Unlock()
 		}()
 
-		if err := playWAVWithMalgo(resampled); err != nil {
-			log.Warn().Err(err).Msg("failed to play audio")
+		if err := playWAVWithMalgo(ctx, resampled); err != nil {
+			// Don't log errors if playback was cancelled
+			if ctx.Err() != context.Canceled {
+				log.Warn().Err(err).Msg("failed to play audio")
+			}
 			return
 		}
 
@@ -105,6 +136,7 @@ func PlayWAVFile(path string) error {
 // Supports WAV, MP3, OGG (Vorbis), and FLAC formats.
 // The function returns immediately after starting playback.
 // Format is detected by file extension.
+// If another sound is already playing, it will be cancelled and replaced by this sound.
 func PlayFile(path string) error {
 	// Open audio file
 	//nolint:gosec // G304: Potential file inclusion via variable path - callers are responsible for path sanitization
@@ -145,6 +177,17 @@ func PlayFile(path string) error {
 	// Resample to 48000 Hz for compatibility with HDMI audio and systems like MiSTer
 	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
 
+	// Cancel any currently playing sound and set up new cancellation
+	playbackMu.Lock()
+	if currentCancel != nil {
+		currentCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	currentCancel = cancel
+	playbackGen++
+	thisGen := playbackGen
+	playbackMu.Unlock()
+
 	// Play asynchronously in a goroutine
 	go func() {
 		defer func() {
@@ -154,10 +197,19 @@ func PlayFile(path string) error {
 			if err := f.Close(); err != nil {
 				log.Warn().Err(err).Msg("failed to close audio file")
 			}
+			// Clear current cancel if this is still the active playback
+			playbackMu.Lock()
+			if playbackGen == thisGen {
+				currentCancel = nil
+			}
+			playbackMu.Unlock()
 		}()
 
-		if err := playWAVWithMalgo(resampled); err != nil {
-			log.Warn().Err(err).Msg("failed to play audio")
+		if err := playWAVWithMalgo(ctx, resampled); err != nil {
+			// Don't log errors if playback was cancelled
+			if ctx.Err() != context.Canceled {
+				log.Warn().Err(err).Msg("failed to play audio")
+			}
 			return
 		}
 
@@ -169,15 +221,16 @@ func PlayFile(path string) error {
 
 // playWAVWithMalgo plays audio using malgo with proper device lifecycle management.
 // The device is initialized, used, and released within this function.
-func playWAVWithMalgo(streamer beep.Streamer) error {
+// Playback will be interrupted if ctx is cancelled.
+func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer) error {
 	// Create malgo context
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize malgo context: %w", err)
 	}
 	defer func() {
-		_ = ctx.Uninit()
-		ctx.Free()
+		_ = malgoCtx.Uninit()
+		malgoCtx.Free()
 	}()
 
 	// Configure device for 48kHz, F32, 2ch (stereo)
@@ -205,6 +258,15 @@ func playWAVWithMalgo(streamer beep.Streamer) error {
 
 		if finished {
 			return
+		}
+
+		// Check if context was cancelled
+		select {
+		case <-ctx.Done():
+			finished = true
+			close(done)
+			return
+		default:
 		}
 
 		// Allocate buffer if needed or if too small
@@ -241,7 +303,7 @@ func playWAVWithMalgo(streamer beep.Streamer) error {
 	}
 
 	// Initialize device
-	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
+	device, err := malgo.InitDevice(malgoCtx.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: onSamples,
 	})
 	if err != nil {
@@ -254,12 +316,27 @@ func playWAVWithMalgo(streamer beep.Streamer) error {
 		return fmt.Errorf("failed to start audio device: %w", err)
 	}
 
-	// Wait for playback to complete
-	<-done
+	// Wait for playback to complete or context cancellation
+	select {
+	case <-done:
+		// Playback completed normally
+	case <-ctx.Done():
+		// Context cancelled - mark as finished
+		mu.Lock()
+		if !finished {
+			finished = true
+		}
+		mu.Unlock()
+	}
 
 	// Stop playback
 	if err := device.Stop(); err != nil {
 		log.Warn().Err(err).Msg("failed to stop audio device")
+	}
+
+	// Return context error if cancelled, otherwise nil
+	if ctx.Err() == context.Canceled {
+		return context.Canceled
 	}
 
 	return nil
