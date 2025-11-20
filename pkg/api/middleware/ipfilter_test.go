@@ -80,6 +80,24 @@ func TestNewIPFilter(t *testing.T) {
 			expectedNets:  0,
 			expectedAddrs: 2,
 		},
+		{
+			name:          "IP with port (port stripped)",
+			allowedIPs:    []string{"192.168.1.1:7497"},
+			expectedNets:  0,
+			expectedAddrs: 1,
+		},
+		{
+			name:          "IPv6 with port (port stripped)",
+			allowedIPs:    []string{"[::1]:8080"},
+			expectedNets:  0,
+			expectedAddrs: 1,
+		},
+		{
+			name:          "mixed IPs with and without ports",
+			allowedIPs:    []string{"192.168.1.1:7497", "10.0.0.5", "172.16.0.1:9000"},
+			expectedNets:  0,
+			expectedAddrs: 3,
+		},
 	}
 
 	for _, tt := range tests {
@@ -189,6 +207,24 @@ func TestIPFilter_IsAllowed(t *testing.T) {
 			name:       "invalid remote addr",
 			allowedIPs: []string{"192.168.1.1"},
 			remoteAddr: "invalid",
+			expected:   false,
+		},
+		{
+			name:       "config has IP with port, connection allowed",
+			allowedIPs: []string{"192.168.1.1:7497"},
+			remoteAddr: "192.168.1.1:12345",
+			expected:   true,
+		},
+		{
+			name:       "config has IPv6 with port, connection allowed",
+			allowedIPs: []string{"[::1]:8080"},
+			remoteAddr: "[::1]:9999",
+			expected:   true,
+		},
+		{
+			name:       "config has IP with port, different IP blocked",
+			allowedIPs: []string{"192.168.1.1:7497"},
+			remoteAddr: "192.168.1.2:12345",
 			expected:   false,
 		},
 	}

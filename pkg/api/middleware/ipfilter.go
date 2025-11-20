@@ -44,6 +44,11 @@ func NewIPFilter(allowedIPs []string) *IPFilter {
 
 	// Parse and categorize allowed IPs
 	for _, ipStr := range allowedIPs {
+		// Clean input if user pasted an address with port (e.g., "192.168.1.1:7497")
+		if host, _, err := net.SplitHostPort(ipStr); err == nil {
+			ipStr = host
+		}
+
 		// Try parsing as CIDR first
 		if _, network, err := net.ParseCIDR(ipStr); err == nil {
 			filter.allowedNets = append(filter.allowedNets, network)
@@ -111,7 +116,8 @@ func HTTPIPFilterMiddleware(filter *IPFilter) func(http.Handler) http.Handler {
 					host = r.RemoteAddr
 				}
 
-				log.Warn().
+				// Use Debug level to prevent log flooding from blocked IPs
+				log.Debug().
 					Str("ip", host).
 					Str("path", r.URL.Path).
 					Str("method", r.Method).
