@@ -47,18 +47,27 @@ func (*gooseZerologAdapter) Fatalf(format string, v ...any) {
 // It locks access to goose's global state to prevent race conditions
 // between multiple databases setting their migration filesystems.
 func MigrateUp(db *sql.DB, migrationFiles embed.FS, migrationDir string) error {
+	log.Debug().Msg("waiting for migration mutex")
 	migrationMutex.Lock()
-	defer migrationMutex.Unlock()
+	log.Debug().Msg("migration mutex acquired")
+	defer func() {
+		migrationMutex.Unlock()
+		log.Debug().Msg("migration mutex released")
+	}()
 
+	log.Debug().Msg("setting up goose logger")
 	// Set custom logger to redirect goose output to zerolog
 	goose.SetLogger(&gooseZerologAdapter{})
 
+	log.Debug().Msg("setting goose base filesystem")
 	goose.SetBaseFS(migrationFiles)
 
+	log.Debug().Msg("setting goose dialect to sqlite")
 	if err := goose.SetDialect("sqlite"); err != nil {
 		return fmt.Errorf("error setting goose dialect: %w", err)
 	}
 
+	log.Debug().Str("migration_dir", migrationDir).Msg("running goose up migrations")
 	if err := goose.Up(db, migrationDir); err != nil {
 		return fmt.Errorf("error running migrations up: %w", err)
 	}

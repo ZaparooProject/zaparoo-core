@@ -251,8 +251,7 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 
-			// Mock normal operation
-			statusInstance.indexing = false
+			ClearIndexingStatus()
 			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 

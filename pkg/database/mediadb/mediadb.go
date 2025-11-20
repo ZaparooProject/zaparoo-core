@@ -156,33 +156,41 @@ func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
 func (db *MediaDB) Open() error {
 	exists := true
 	dbPath := db.GetDBPath()
+	log.Debug().Str("path", dbPath).Msg("checking if media database file exists")
+
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
+		log.Debug().Msg("media database file does not exist, creating directory")
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
-			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
+			return fmt.Errorf("failed to create media database directory: %w", mkdirErr)
 		}
 	}
+
+	log.Debug().Msg("opening media database connection")
 	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("failed to open media database: %w", err)
 	}
 	db.sql = sqlInstance
 
 	if !exists {
+		log.Debug().Msg("media database is new, allocating schema")
 		err = db.Allocate()
 		if err != nil {
 			return err
 		}
 	}
 
+	log.Debug().Msg("running media database PRAGMA optimize")
 	// Run PRAGMA optimize after database is opened and potentially allocated
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA optimize;")
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
 	}
 
+	log.Debug().Msg("running media database WAL checkpoint")
 	// Run WAL checkpoint on startup to clean up any orphaned WAL from crashes
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 	if err != nil {

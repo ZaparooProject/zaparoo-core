@@ -62,15 +62,9 @@ func getTokens(ctx context.Context, cfg *config.Instance) (models.TokensResponse
 
 func setupButtonNavigation(
 	app *tview.Application,
-	svcRunning bool,
 	buttons ...*tview.Button,
 ) {
 	for i, button := range buttons {
-		if !svcRunning {
-			button.SetDisabled(true)
-			continue
-		}
-
 		prevIndex := (i - 1 + len(buttons)) % len(buttons)
 		nextIndex := (i + 1) % len(buttons)
 
@@ -114,7 +108,7 @@ func BuildMainPage(
 	if svcRunning {
 		svcStatus = "RUNNING"
 	} else {
-		svcStatus = "NOT RUNNING\nThe Zaparoo Core service may not have started. Check logs for more information."
+		svcStatus = "NOT RUNNING\nThe Zaparoo Core service may not have started. Check Logs for more information."
 	}
 
 	ip := helpers.GetLocalIP()
@@ -236,11 +230,11 @@ func BuildMainPage(
 		helpText.SetText("Manage settings for Core service.")
 	})
 
-	exportButton := tview.NewButton("Export log").SetSelectedFunc(func() {
+	exportButton := tview.NewButton("Logs").SetSelectedFunc(func() {
 		BuildExportLogModal(pl, app, pages, logDestPath, logDestName)
 	})
 	exportButton.SetFocusFunc(func() {
-		helpText.SetText("Export Core log file for support.")
+		helpText.SetText("View and export Core log file.")
 	})
 
 	exitButton := tview.NewButton("Exit").SetSelectedFunc(func() {
@@ -254,18 +248,29 @@ func BuildMainPage(
 		}
 	})
 
-	setupButtonNavigation(
-		app,
-		svcRunning,
-		searchButton,
-		writeButton,
-		updateDBButton,
-		settingsButton,
-		exportButton,
-		exitButton,
-	)
-	if !svcRunning {
-		exitButton.SetDisabled(false)
+	if svcRunning {
+		// Service running: navigate all buttons
+		setupButtonNavigation(
+			app,
+			searchButton,
+			writeButton,
+			updateDBButton,
+			settingsButton,
+			exportButton,
+			exitButton,
+		)
+	} else {
+		// Service down: only navigate Logs and Exit
+		setupButtonNavigation(
+			app,
+			exportButton,
+			exitButton,
+		)
+		// Disable the other buttons
+		searchButton.SetDisabled(true)
+		writeButton.SetDisabled(true)
+		updateDBButton.SetDisabled(true)
+		settingsButton.SetDisabled(true)
 	}
 
 	main.AddItem(tview.NewTextView(), 1, 1, false)

@@ -90,7 +90,7 @@ var BaseDefaults = Values{
 		},
 	},
 	Service: Service{
-		APIPort: 7497,
+		APIPort: DefaultAPIPort,
 	},
 	Groovy: Groovy{
 		GmcProxyEnabled:        false,
