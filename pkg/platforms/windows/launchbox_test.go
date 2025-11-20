@@ -159,9 +159,9 @@ func TestLaunchBoxPlatformMappingReverse(t *testing.T) {
 	}
 
 	tests := []struct {
-		platform       string
-		expectedSysID  string
-		exists         bool
+		platform      string
+		expectedSysID string
+		exists        bool
 	}{
 		{"Nintendo Entertainment System", systemdefs.SystemNES, true},
 		{"Super Nintendo Entertainment System", systemdefs.SystemSNES, true},

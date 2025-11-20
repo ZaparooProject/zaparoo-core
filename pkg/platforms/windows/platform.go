@@ -59,10 +59,10 @@ import (
 )
 
 type Platform struct {
+	processMu         sync.RWMutex
 	activeMedia       func() *models.ActiveMedia
 	setActiveMedia    func(*models.ActiveMedia)
 	trackedProcess    *os.Process
-	processMu         sync.RWMutex
 	launchBoxPipe     *LaunchBoxPipeServer
 	launchBoxPipeLock sync.Mutex
 }

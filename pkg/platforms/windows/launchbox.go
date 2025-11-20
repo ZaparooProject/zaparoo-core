@@ -301,11 +301,11 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
+	connMu         sync.Mutex
 	listener       net.Listener
 	conn           net.Conn
-	connMu         sync.Mutex
-	writer         *bufio.Writer
 	ctx            context.Context
+	writer         *bufio.Writer
 	cancel         context.CancelFunc
 	onGameStarted  func(id, title, platform, path string)
 	onGameExited   func(id, title string)
@@ -381,7 +381,7 @@ func (s *LaunchBoxPipeServer) LaunchGame(gameID string) error {
 	defer s.connMu.Unlock()
 
 	if s.writer == nil {
-		return fmt.Errorf("LaunchBox plugin not connected")
+		return errors.New("LaunchBox plugin not connected")
 	}
 
 	cmd := pluginCommand{
@@ -419,7 +419,7 @@ func (s *LaunchBoxPipeServer) sendPing() error {
 	defer s.connMu.Unlock()
 
 	if s.writer == nil {
-		return fmt.Errorf("writer not available")
+		return errors.New("writer not available")
 	}
 
 	cmd := pluginCommand{
@@ -517,7 +517,7 @@ func (s *LaunchBoxPipeServer) handleConnection(conn net.Conn) {
 		}
 
 		// Check for errors (ignore EOF and closed connection)
-		if err := scanner.Err(); err != nil && err != io.EOF {
+		if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 			log.Warn().Err(err).Msg("error reading from LaunchBox pipe")
 		}
 	}()
@@ -599,7 +599,7 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 	pipe := NewLaunchBoxPipeServer()
 
 	// Set event handlers
-	pipe.SetGameStartedHandler(func(id, title, platform, path string) {
+	pipe.SetGameStartedHandler(func(id, title, platform, _ string) {
 		// Convert LaunchBox platform name to Zaparoo system ID
 		systemID, ok := lbSysMapReverse[platform]
 		if !ok {
@@ -634,7 +634,7 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		p.setActiveMedia(activeMedia)
 	})
 
-	pipe.SetGameExitedHandler(func(id, title string) {
+	pipe.SetGameExitedHandler(func(_, title string) {
 		log.Info().Msgf("LaunchBox game stopped: %s", title)
 		p.setActiveMedia(nil)
 	})
@@ -751,7 +751,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 				return nil, fmt.Errorf("failed to send launch command to LaunchBox: %w", err)
 			}
 
-			return nil, nil //nolint:nilnil // LaunchBox plugin manages process lifecycle
+			return nil, nil
 		},
 	}
 }

@@ -238,7 +238,7 @@ func createRetroBatLauncher(systemFolder, systemID, retroBatDir string) platform
 			}
 
 			log.Info().Str("path", path).Msg("game launched successfully via ES API")
-			return nil, nil //nolint:nilnil // API launches don't return a process handle
+			return nil, nil
 		},
 		Kill: func(_ *config.Instance) error {
 			// API-only approach for proper RetroBat integration
@@ -250,7 +250,7 @@ func createRetroBatLauncher(systemFolder, systemID, retroBatDir string) platform
 
 			// Try to kill via API with retries (like Batocera does)
 			maxRetries := 3
-			for i := 0; i < maxRetries; i++ {
+			for i := range maxRetries {
 				err := esapi.APIEmuKill()
 				if err == nil {
 					log.Info().Msg("emulator killed successfully via ES API")
