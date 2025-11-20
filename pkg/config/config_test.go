@@ -538,9 +538,9 @@ func TestGetMQTTPublishers(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		config   Values
 		name     string
 		expected []MQTTPublisher
+		config   Values
 	}{
 		{
 			name: "empty publishers",
