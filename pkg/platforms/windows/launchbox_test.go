@@ -25,8 +25,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 func TestPluginEventJSONSerialization(t *testing.T) {
@@ -38,8 +40,9 @@ func TestPluginEventJSONSerialization(t *testing.T) {
 		expected pluginEvent
 	}{
 		{
-			name:    "MediaStarted event",
-			jsonStr: `{"Event":"MediaStarted","Id":"abc123","Title":"Test Game","Platform":"Nintendo Entertainment System","ApplicationPath":"C:\\Games\\game.nes"}`,
+			name: "MediaStarted event",
+			jsonStr: `{"Event":"MediaStarted","Id":"abc123","Title":"Test Game",` +
+				`"Platform":"Nintendo Entertainment System","ApplicationPath":"C:\\Games\\game.nes"}`,
 			expected: pluginEvent{
 				Event:           "MediaStarted",
 				ID:              "abc123",
@@ -75,7 +78,7 @@ func TestPluginEventJSONSerialization(t *testing.T) {
 
 			var event pluginEvent
 			err := json.Unmarshal([]byte(tt.jsonStr), &event)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.expected, event)
 		})
 	}
@@ -111,7 +114,7 @@ func TestPluginCommandJSONSerialization(t *testing.T) {
 			t.Parallel()
 
 			data, err := json.Marshal(tt.command)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.JSONEq(t, tt.expected, string(data))
 		})
 	}
@@ -197,6 +200,6 @@ func TestLaunchBoxPipeServerLaunchGameNotConnected(t *testing.T) {
 
 	server := NewLaunchBoxPipeServer()
 	err := server.LaunchGame("test-id")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }

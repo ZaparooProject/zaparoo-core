@@ -200,7 +200,7 @@ func getRetroBatSystemMapping() map[string]string {
 }
 
 // createRetroBatLauncher creates a launcher for a specific RetroBat system
-func createRetroBatLauncher(systemFolder, systemID, retroBatDir string) platforms.Launcher {
+func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 fmt.Sprintf("RetroBat%s", systemID),
 		SystemID:           systemID,
@@ -234,7 +234,10 @@ func createRetroBatLauncher(systemFolder, systemID, retroBatDir string) platform
 			log.Debug().Str("path", path).Msg("launching game via EmulationStation API")
 			err := esapi.APILaunch(path)
 			if err != nil {
-				return nil, fmt.Errorf("RetroBat API request failed: %w. Ensure HTTP Server is enabled in RetroBat System Settings", err)
+				return nil, fmt.Errorf(
+					"RetroBat API request failed: %w. Ensure HTTP Server is enabled in RetroBat System Settings",
+					err,
+				)
 			}
 
 			log.Info().Str("path", path).Msg("game launched successfully via ES API")
@@ -271,7 +274,11 @@ func createRetroBatLauncher(systemFolder, systemID, retroBatDir string) platform
 				}
 			}
 
-			return fmt.Errorf("failed to kill game via RetroBat API after %d retries. Ensure HTTP Server is enabled in RetroBat System Settings", maxRetries)
+			return fmt.Errorf(
+				"failed to kill game via RetroBat API after %d retries. "+
+					"Ensure HTTP Server is enabled in RetroBat System Settings",
+				maxRetries,
+			)
 		},
 		Scanner: func(
 			_ context.Context,

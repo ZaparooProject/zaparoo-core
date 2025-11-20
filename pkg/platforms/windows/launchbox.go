@@ -52,6 +52,8 @@ const (
 )
 
 // Plugin message types (matches C# plugin JSON structure)
+//
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
 type pluginEvent struct {
 	Event           string `json:"Event"`
 	ID              string `json:"Id,omitempty"`
@@ -60,6 +62,7 @@ type pluginEvent struct {
 	ApplicationPath string `json:"ApplicationPath,omitempty"`
 }
 
+//nolint:tagliatelle // JSON tags must match C# plugin structure (PascalCase)
 type pluginCommand struct {
 	Command string `json:"Command"`
 	ID      string `json:"Id,omitempty"`
@@ -301,15 +304,15 @@ func findLaunchBoxDir(cfg *config.Instance) (string, error) {
 
 // LaunchBoxPipeServer manages named pipe communication with the LaunchBox plugin
 type LaunchBoxPipeServer struct {
-	connMu         sync.Mutex
-	listener       net.Listener
-	conn           net.Conn
-	ctx            context.Context
-	writer         *bufio.Writer
-	cancel         context.CancelFunc
 	onGameStarted  func(id, title, platform, path string)
 	onGameExited   func(id, title string)
 	onWriteRequest func(id, title, platform string)
+	listener       net.Listener
+	conn           net.Conn
+	ctx            context.Context
+	cancel         context.CancelFunc
+	writer         *bufio.Writer
+	connMu         sync.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server
@@ -639,7 +642,7 @@ func (p *Platform) initLaunchBoxPipe(cfg *config.Instance) {
 		p.setActiveMedia(nil)
 	})
 
-	pipe.SetWriteRequestHandler(func(id, title, platform string) {
+	pipe.SetWriteRequestHandler(func(id, title, _ string) {
 		text := virtualpath.CreateVirtualPath("launchbox", id, title)
 		log.Info().Msgf("LaunchBox write request: %s", text)
 
