@@ -663,9 +663,9 @@ func TestAPIPort(t *testing.T) {
 			expected: 8080,
 		},
 		{
-			name:     "zero port",
+			name:     "zero port returns default",
 			apiPort:  0,
-			expected: 0,
+			expected: 7497,
 		},
 	}
 
