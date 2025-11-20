@@ -128,8 +128,8 @@ var lbSysMap = map[string]string{
 	systemdefs.SystemArcadia: "Emerson Arcadia 2001",
 	// "Enterprise",                      // No Zaparoo system
 	systemdefs.SystemAdventureVision: "Entex Adventure Vision",
-	systemdefs.SystemSuperVision:     "Epoch Super Cassette Vision",
-	systemdefs.SystemGamePocket:      "Epoch Game Pocket Computer",
+	// "Epoch Super Cassette Vision",     // No Zaparoo system
+	systemdefs.SystemGamePocket: "Epoch Game Pocket Computer",
 	// "Exelvision EXL 100",              // No Zaparoo system
 	// "Exidy Sorcerer",                  // No Zaparoo system
 	systemdefs.SystemChannelF:  "Fairchild Channel F",
@@ -147,7 +147,6 @@ var lbSysMap = map[string]string{
 	// "Linux",                           // No Zaparoo system
 	systemdefs.SystemOdyssey2: "Magnavox Odyssey 2",
 	// "Magnavox Odyssey",                // No Zaparoo system
-	systemdefs.SystemAquarius: "Mattel Aquarius",
 	// "Mattel HyperScan",                // No Zaparoo system
 	systemdefs.SystemIntellivision: "Mattel Intellivision",
 	systemdefs.SystemMegaDuck:      "Mega Duck",
