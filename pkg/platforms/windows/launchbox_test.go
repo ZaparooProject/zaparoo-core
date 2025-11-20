@@ -25,10 +25,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 func TestPluginEventJSONSerialization(t *testing.T) {
