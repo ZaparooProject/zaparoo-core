@@ -23,6 +23,8 @@ import (
 	"regexp"
 )
 
+const DefaultAPIPort = 7497
+
 type Service struct {
 	DeviceID       string   `toml:"device_id"`
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
@@ -46,6 +48,9 @@ type MQTTPublisher struct {
 func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.vals.Service.APIPort == 0 {
+		return DefaultAPIPort
+	}
 	return c.vals.Service.APIPort
 }
 

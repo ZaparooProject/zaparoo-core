@@ -82,11 +82,13 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 		UserDB:  nil,
 	}
 
+	log.Debug().Msg("opening media database")
 	mediaDB, err := mediadb.OpenMediaDB(ctx, pl)
 	if err != nil {
 		return db, fmt.Errorf("failed to open media database: %w", err)
 	}
 
+	log.Debug().Msg("running media database migrations")
 	err = mediaDB.MigrateUp()
 	if err != nil {
 		return db, fmt.Errorf("error migrating mediadb: %w", err)
@@ -94,11 +96,13 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 
 	db.MediaDB = mediaDB
 
+	log.Debug().Msg("opening user database")
 	userDB, err := userdb.OpenUserDB(ctx, pl)
 	if err != nil {
 		return db, fmt.Errorf("failed to open user database: %w", err)
 	}
 
+	log.Debug().Msg("running user database migrations")
 	err = userDB.MigrateUp()
 	if err != nil {
 		return db, fmt.Errorf("error migrating userdb: %w", err)
@@ -107,6 +111,7 @@ func makeDatabase(ctx context.Context, pl platforms.Platform) (*database.Databas
 	db.UserDB = userDB
 
 	// migrate old boltdb mappings if required
+	log.Debug().Msg("checking for boltdb migration")
 	err = boltmigration.MaybeMigrate(pl, userDB)
 	if err != nil {
 		log.Error().Err(err).Msg("error migrating old boltdb mappings")

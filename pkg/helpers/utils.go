@@ -348,6 +348,21 @@ func IsServiceRunning(cfg *config.Instance) bool {
 	return true
 }
 
+// WaitForAPI waits for the service API to become available.
+// Returns true if API became available, false if timeout reached.
+func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {
+	deadline := time.Now().Add(maxWaitTime)
+
+	for time.Now().Before(deadline) {
+		if IsServiceRunning(cfg) {
+			return true
+		}
+		time.Sleep(checkInterval)
+	}
+
+	return false
+}
+
 func IsTruthy(s string) bool {
 	return strings.EqualFold(s, "true") || strings.EqualFold(s, "yes")
 }
