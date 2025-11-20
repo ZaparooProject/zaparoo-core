@@ -28,7 +28,7 @@ const DefaultAPIPort = 7497
 
 type Service struct {
 	DeviceID       string   `toml:"device_id"`
-	APIListen      string   `toml:"api_listen"`
+	APIListen      string   `toml:"api_listen,omitempty"`
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
