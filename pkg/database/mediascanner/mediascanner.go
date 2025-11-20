@@ -246,6 +246,13 @@ func GetFiles(
 				return filepath.SkipDir
 			}
 			visited[key] = struct{}{}
+
+			// Check for .zaparooignore marker file
+			markerPath := filepath.Join(path, ".zaparooignore")
+			if _, statErr := os.Stat(markerPath); statErr == nil {
+				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
+				return filepath.SkipDir
+			}
 		}
 
 		// handle symlinked directories
