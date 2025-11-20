@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/zerolog/log"
 )
 
 var ErrNullSQL = errors.New("UserDB is not connected")
@@ -53,22 +54,33 @@ func OpenUserDB(ctx context.Context, pl platforms.Platform) (*UserDB, error) {
 func (db *UserDB) Open() error {
 	exists := true
 	dbPath := db.GetDBPath()
+	log.Debug().Str("path", dbPath).Msg("checking if database file exists")
+
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
+		log.Debug().Msg("database file does not exist, creating directory")
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
 			return fmt.Errorf("failed to create directory for database: %w", mkdirErr)
 		}
 	}
+
+	log.Debug().Msg("opening user database connection")
 	sqlInstance, err := sql.Open("sqlite3", dbPath+sqliteConnParams)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("failed to open user database: %w", err)
 	}
 	db.sql = sqlInstance
+
 	if !exists {
-		return db.Allocate()
+		log.Debug().Msg("user database is new, allocating schema")
+		err := db.Allocate()
+		if err != nil {
+			return err
+		}
 	}
+
 	return nil
 }
 
