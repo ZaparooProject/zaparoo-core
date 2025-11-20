@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -41,6 +42,42 @@ import (
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 )
+
+// NormalizePathForComparison normalizes a path for cross-platform comparison.
+// On Windows: converts to forward slashes and lowercases (case-insensitive filesystem)
+// On Linux/macOS: only converts to forward slashes (preserves case for case-sensitive filesystems)
+// This handles paths from databases (forward slashes) vs filepath.Join (OS-specific slashes).
+func NormalizePathForComparison(path string) string {
+	p := filepath.ToSlash(filepath.Clean(path))
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// PathHasPrefix checks if path is within root directory, handling separator boundaries correctly.
+// This avoids the prefix bug where "c:/roms2/game.bin" would incorrectly match root "c:/roms".
+func PathHasPrefix(path, root string) bool {
+	normPath := NormalizePathForComparison(path)
+	normRoot := NormalizePathForComparison(root)
+
+	// Handle exact match
+	if normPath == normRoot {
+		return true
+	}
+
+	// Handle empty root - only match if both are empty
+	if normRoot == "" {
+		return false
+	}
+
+	// Ensure root ends with separator to avoid "roms" matching "roms2"
+	if !strings.HasSuffix(normRoot, "/") {
+		normRoot += "/"
+	}
+
+	return strings.HasPrefix(normPath, normRoot)
+}
 
 // PathIsLauncher returns true if a given path matches against any of the
 // criteria defined in a launcher.
@@ -75,11 +112,10 @@ func PathIsLauncher(
 	// check for data dir media folder
 	inDataDir := false
 	if l.SystemID != "" {
-		// Cache DataDir result (now cached internally)
+		// Cache DataDir result
 		dataDir := DataDir(pl)
-		// Build zaparooMedia path once and lowercase it
-		zaparooMedia := strings.ToLower(filepath.Join(dataDir, config.MediaDir, l.SystemID))
-		if strings.HasPrefix(lp, zaparooMedia) {
+		zaparooMedia := filepath.Join(dataDir, config.MediaDir, l.SystemID)
+		if PathHasPrefix(path, zaparooMedia) {
 			inDataDir = true
 		}
 	}
@@ -89,19 +125,15 @@ func PathIsLauncher(
 		inRoot := false
 		isAbs := false
 
-		// Get root dirs once and pre-lowercase
 		rootDirs := pl.RootDirs(cfg)
 
 		for _, root := range rootDirs {
-			lowerRoot := strings.ToLower(root)
 			if inRoot {
 				break
 			}
 			for _, folder := range l.Folders {
-				// Build full path from pre-lowered parts to avoid repeated ToLower on the whole string
-				lowerFolder := strings.ToLower(folder)
-				fullPath := filepath.Join(lowerRoot, lowerFolder)
-				if strings.HasPrefix(lp, fullPath) {
+				fullPath := filepath.Join(root, folder)
+				if PathHasPrefix(path, fullPath) {
 					inRoot = true
 					break
 				}
@@ -111,9 +143,7 @@ func PathIsLauncher(
 		if !inRoot {
 			for _, folder := range l.Folders {
 				if filepath.IsAbs(folder) {
-					// Lowercase once per absolute folder
-					lowerFolder := strings.ToLower(folder)
-					if strings.HasPrefix(lp, lowerFolder) {
+					if PathHasPrefix(path, folder) {
 						isAbs = true
 						break
 					}
