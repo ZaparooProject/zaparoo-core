@@ -77,99 +77,196 @@ type launchBoxGame struct {
 
 // lbSysMap maps Zaparoo system IDs to LaunchBox platform names
 var lbSysMap = map[string]string{
-	systemdefs.System3DO:               "3DO Interactive Multiplayer",
-	systemdefs.SystemAmiga:             "Commodore Amiga",
-	systemdefs.SystemAmstrad:           "Amstrad CPC",
-	systemdefs.SystemAndroid:           "Android",
-	systemdefs.SystemArcade:            "Arcade",
-	systemdefs.SystemAtari2600:         "Atari 2600",
-	systemdefs.SystemAtari5200:         "Atari 5200",
-	systemdefs.SystemAtari7800:         "Atari 7800",
-	systemdefs.SystemJaguar:            "Atari Jaguar",
-	systemdefs.SystemJaguarCD:          "Atari Jaguar CD",
-	systemdefs.SystemAtariLynx:         "Atari Lynx",
-	systemdefs.SystemAtariXEGS:         "Atari XEGS",
-	systemdefs.SystemColecoVision:      "ColecoVision",
-	systemdefs.SystemC64:               "Commodore 64",
-	systemdefs.SystemIntellivision:     "Mattel Intellivision",
-	systemdefs.SystemIOS:               "Apple iOS",
-	systemdefs.SystemMacOS:             "Apple Mac OS",
-	systemdefs.SystemXbox:              "Microsoft Xbox",
-	systemdefs.SystemXbox360:           "Microsoft Xbox 360",
-	systemdefs.SystemXboxOne:           "Microsoft Xbox One",
+	systemdefs.System3DO:           "3DO Interactive Multiplayer",
+	systemdefs.SystemAcornAtom:     "Acorn Atom",
+	systemdefs.SystemAcornElectron: "Acorn Electron",
+	systemdefs.SystemArchimedes:    "Acorn Archimedes",
+	// "APF Imagination Machine",         // No Zaparoo system
+	// "Aamber Pegasus",                  // No Zaparoo system
+	systemdefs.SystemAliceMC10: "Matra and Hachette Alice",
+	systemdefs.SystemAmiga:     "Commodore Amiga",
+	systemdefs.SystemAmigaCD32: "Commodore Amiga CD32",
+	systemdefs.SystemAmstrad:   "Amstrad CPC",
+	// "Amstrad GX4000",                  // No Zaparoo system
+	systemdefs.SystemAndroid: "Android",
+	systemdefs.SystemApogee:  "Apogee BK-01",
+	systemdefs.SystemAppleII: "Apple II",
+	// "Apple IIGS",                      // No Zaparoo system
+	systemdefs.SystemIOS:       "Apple iOS",
+	systemdefs.SystemMacOS:     "Apple Mac OS",
+	systemdefs.SystemAquarius:  "Mattel Aquarius",
+	systemdefs.SystemArcade:    "Arcade",
+	systemdefs.SystemArduboy:   "Arduboy",
+	systemdefs.SystemAtari2600: "Atari 2600",
+	systemdefs.SystemAtari5200: "Atari 5200",
+	systemdefs.SystemAtari7800: "Atari 7800",
+	systemdefs.SystemAtari800:  "Atari 800",
+	systemdefs.SystemJaguar:    "Atari Jaguar",
+	systemdefs.SystemJaguarCD:  "Atari Jaguar CD",
+	systemdefs.SystemAtariLynx: "Atari Lynx",
+	systemdefs.SystemAtariST:   "Atari ST",
+	systemdefs.SystemAtariXEGS: "Atari XEGS",
+	systemdefs.SystemAstrocade: "Bally Astrocade",
+	// "Bandai Super Vision 8000",        // No Zaparoo system
+	systemdefs.SystemBBCMicro: "BBC Microcomputer System",
+	// "Camputers Lynx",                  // No Zaparoo system
+	systemdefs.SystemCasioPV1000: "Casio PV-1000",
+	// "Casio Loopy",                     // No Zaparoo system
+	systemdefs.SystemColecoAdam:   "Coleco ADAM",
+	systemdefs.SystemColecoVision: "ColecoVision",
+	systemdefs.SystemC64:          "Commodore 64",
+	// "Commodore 128",                   // No Zaparoo system
+	// "Commodore CDTV",                  // No Zaparoo system
+	// "Commodore MAX Machine",           // No Zaparoo system
+	systemdefs.SystemPET2001: "Commodore PET",
+	systemdefs.SystemC16:     "Commodore Plus 4",
+	systemdefs.SystemVIC20:   "Commodore VIC-20",
+	// "Dragon 32/64",                    // No Zaparoo system
+	// "EACA EG2000 Colour Genie",        // No Zaparoo system
+	// "Elektor TV Games Computer",       // No Zaparoo system
+	systemdefs.SystemBK0011M: "Elektronika BK",
+	systemdefs.SystemArcadia: "Emerson Arcadia 2001",
+	// "Enterprise",                      // No Zaparoo system
+	systemdefs.SystemAdventureVision: "Entex Adventure Vision",
+	systemdefs.SystemSuperVision:     "Epoch Super Cassette Vision",
+	systemdefs.SystemGamePocket:      "Epoch Game Pocket Computer",
+	// "Exelvision EXL 100",              // No Zaparoo system
+	// "Exidy Sorcerer",                  // No Zaparoo system
+	systemdefs.SystemChannelF:  "Fairchild Channel F",
+	systemdefs.SystemFM7:       "Fujitsu FM-7",
+	systemdefs.SystemFMTowns:   "Fujitsu FM Towns Marty",
+	systemdefs.SystemSuperACan: "Funtech Super Acan",
+	// "Game Wave Family Entertainment System", // No Zaparoo system
+	systemdefs.SystemGP32: "GamePark GP32",
+	// "GameWave",                        // No Zaparoo system
+	systemdefs.SystemVectrex:    "GCE Vectrex",
+	systemdefs.SystemGameMaster: "Hartung Game Master",
+	// "Hector HRX",                      // No Zaparoo system
+	systemdefs.SystemVC4000:  "Interton VC 4000",
+	systemdefs.SystemJupiter: "Jupiter Ace",
+	// "Linux",                           // No Zaparoo system
+	systemdefs.SystemOdyssey2: "Magnavox Odyssey 2",
+	// "Magnavox Odyssey",                // No Zaparoo system
+	systemdefs.SystemAquarius: "Mattel Aquarius",
+	// "Mattel HyperScan",                // No Zaparoo system
+	systemdefs.SystemIntellivision: "Mattel Intellivision",
+	systemdefs.SystemMegaDuck:      "Mega Duck",
+	// "Memotech MTX512",                 // No Zaparoo system
+	systemdefs.SystemDOS:      "MS-DOS",
+	systemdefs.SystemMSX:      "Microsoft MSX",
+	systemdefs.SystemMSX2:     "Microsoft MSX2",
+	systemdefs.SystemMSX2Plus: "Microsoft MSX2+",
+	systemdefs.SystemXbox:     "Microsoft Xbox",
+	systemdefs.SystemXbox360:  "Microsoft Xbox 360",
+	systemdefs.SystemXboxOne:  "Microsoft Xbox One",
+	systemdefs.SystemSeriesXS: "Microsoft Xbox Series X/S",
+	// "MUGEN",                           // No Zaparoo system
+	systemdefs.SystemNamco22:        "Namco System 22",
+	systemdefs.SystemPC88:           "NEC PC-8801",
+	systemdefs.SystemPC98:           "NEC PC-9801",
+	systemdefs.SystemPCFX:           "NEC PC-FX",
+	systemdefs.SystemTurboGrafx16:   "NEC TurboGrafx-16",
+	systemdefs.SystemTurboGrafx16CD: "NEC TurboGrafx-CD",
+	systemdefs.System3DS:            "Nintendo 3DS",
+	systemdefs.SystemNintendo64:     "Nintendo 64",
+	// "Nintendo 64DD",                   // Part of Nintendo64 system
+	systemdefs.SystemNDS:          "Nintendo DS",
+	systemdefs.SystemNES:          "Nintendo Entertainment System",
+	systemdefs.SystemFDS:          "Nintendo Famicom Disk System",
+	systemdefs.SystemGameboy:      "Nintendo Game Boy",
+	systemdefs.SystemGBA:          "Nintendo Game Boy Advance",
+	systemdefs.SystemGameboyColor: "Nintendo Game Boy Color",
+	systemdefs.SystemGameNWatch:   "Nintendo Game & Watch",
+	systemdefs.SystemGameCube:     "Nintendo GameCube",
+	systemdefs.SystemPokemonMini:  "Nintendo Pokemon Mini",
+	// "Nintendo Satellaview",            // No Zaparoo system
+	systemdefs.SystemSwitch: "Nintendo Switch",
+	// "Nintendo Switch 2",               // No Zaparoo system (future platform)
+	systemdefs.SystemVirtualBoy: "Nintendo Virtual Boy",
+	systemdefs.SystemWii:        "Nintendo Wii",
+	systemdefs.SystemWiiU:       "Nintendo Wii U",
+	systemdefs.SystemNGage:      "Nokia N-Gage",
+	// "Nuon",                            // No Zaparoo system
+	// "OpenBOR",                         // No Zaparoo system
+	systemdefs.SystemOric:         "Oric Atmos",
+	systemdefs.SystemMultivision:  "Othello Multivision",
+	systemdefs.SystemOuya:         "Ouya",
+	systemdefs.SystemSuperGrafx:   "PC Engine SuperGrafx",
+	systemdefs.SystemCDI:          "Philips CD-i",
+	systemdefs.SystemVideopacPlus: "Philips Videopac+",
+	// "Philips VG 5000",                 // No Zaparoo system
+	systemdefs.SystemPico8: "PICO-8",
+	// "Pinball",                         // No Zaparoo system
+	// "RCA Studio II",                   // No Zaparoo system
+	systemdefs.SystemSAMCoupe:   "SAM Coupé",
+	systemdefs.SystemAtomiswave: "Sammy Atomiswave",
+	systemdefs.SystemScummVM:    "ScummVM",
+	systemdefs.SystemSega32X:    "Sega 32X",
+	systemdefs.SystemMegaCD:     "Sega CD",
+	// "Sega CD 32X",                     // No Zaparoo system
+	systemdefs.SystemDreamcast: "Sega Dreamcast",
+	// "Sega Dreamcast VMU",              // No Zaparoo system
+	systemdefs.SystemGameGear:     "Sega Game Gear",
+	systemdefs.SystemGenesis:      "Sega Genesis",
+	systemdefs.SystemHikaru:       "Sega Hikaru",
+	systemdefs.SystemMasterSystem: "Sega Master System",
+	systemdefs.SystemModel1:       "Sega Model 1",
+	systemdefs.SystemModel2:       "Sega Model 2",
+	systemdefs.SystemModel3:       "Sega Model 3",
+	systemdefs.SystemNAOMI:        "Sega Naomi",
+	systemdefs.SystemNAOMI2:       "Sega Naomi 2",
+	// "Sega Pico",                       // No Zaparoo system
+	systemdefs.SystemSaturn: "Sega Saturn",
+	// "Sega SC-3000",                    // No Zaparoo system
+	systemdefs.SystemSG1000: "Sega SG-1000",
+	// "Sega ST-V",                       // No Zaparoo system
+	// "Sega System 16",                  // No Zaparoo system
+	// "Sega System 32",                  // No Zaparoo system
+	systemdefs.SystemTriforce: "Sega Triforce",
+	systemdefs.SystemX1:       "Sharp X1",
+	// "Sharp MZ-2500",                   // No Zaparoo system
+	systemdefs.SystemX68000:     "Sharp X68000",
+	systemdefs.SystemZX81:       "Sinclair ZX-81",
+	systemdefs.SystemZXSpectrum: "Sinclair ZX Spectrum",
+	systemdefs.SystemNeoGeo:     "SNK Neo Geo AES",
+	systemdefs.SystemNeoGeoCD:   "SNK Neo Geo CD",
+	// "SNK Neo Geo MVS",                 // Part of NeoGeo system
 	systemdefs.SystemNeoGeoPocket:      "SNK Neo Geo Pocket",
 	systemdefs.SystemNeoGeoPocketColor: "SNK Neo Geo Pocket Color",
-	systemdefs.SystemNeoGeo:            "SNK Neo Geo AES",
-	systemdefs.System3DS:               "Nintendo 3DS",
-	systemdefs.SystemNintendo64:        "Nintendo 64",
-	systemdefs.SystemNDS:               "Nintendo DS",
-	systemdefs.SystemNES:               "Nintendo Entertainment System",
-	systemdefs.SystemGameboy:           "Nintendo Game Boy",
-	systemdefs.SystemGBA:               "Nintendo Game Boy Advance",
-	systemdefs.SystemGameboyColor:      "Nintendo Game Boy Color",
-	systemdefs.SystemGameCube:          "Nintendo GameCube",
-	systemdefs.SystemVirtualBoy:        "Nintendo Virtual Boy",
-	systemdefs.SystemWii:               "Nintendo Wii",
-	systemdefs.SystemWiiU:              "Nintendo Wii U",
-	systemdefs.SystemOuya:              "Ouya",
-	systemdefs.SystemCDI:               "Philips CD-i",
-	systemdefs.SystemSega32X:           "Sega 32X",
-	systemdefs.SystemMegaCD:            "Sega CD",
-	systemdefs.SystemDreamcast:         "Sega Dreamcast",
-	systemdefs.SystemGameGear:          "Sega Game Gear",
-	systemdefs.SystemGenesis:           "Sega Genesis",
-	systemdefs.SystemMasterSystem:      "Sega Master System",
-	systemdefs.SystemSaturn:            "Sega Saturn",
-	systemdefs.SystemZXSpectrum:        "Sinclair ZX Spectrum",
+	systemdefs.SystemSordM5:            "Sord M5",
 	systemdefs.SystemPSX:               "Sony Playstation",
 	systemdefs.SystemPS2:               "Sony Playstation 2",
 	systemdefs.SystemPS3:               "Sony Playstation 3",
 	systemdefs.SystemPS4:               "Sony Playstation 4",
-	systemdefs.SystemVita:              "Sony Playstation Vita",
-	systemdefs.SystemPSP:               "Sony PSP",
-	systemdefs.SystemSNES:              "Super Nintendo Entertainment System",
-	systemdefs.SystemTurboGrafx16:      "NEC TurboGrafx-16",
-	systemdefs.SystemWonderSwan:        "WonderSwan",
-	systemdefs.SystemWonderSwanColor:   "WonderSwan Color",
-	systemdefs.SystemOdyssey2:          "Magnavox Odyssey 2",
-	systemdefs.SystemChannelF:          "Fairchild Channel F",
-	systemdefs.SystemBBCMicro:          "BBC Microcomputer System",
-	systemdefs.SystemGameCom:           "Tiger Game.com",
-	systemdefs.SystemOric:              "Oric Atmos",
-	systemdefs.SystemAcornElectron:     "Acorn Electron",
-	systemdefs.SystemAdventureVision:   "Entex Adventure Vision",
-	systemdefs.SystemAquarius:          "Mattel Aquarius",
-	systemdefs.SystemJupiter:           "Jupiter Ace",
-	systemdefs.SystemSAMCoupe:          "SAM Coupé",
-	systemdefs.SystemAstrocade:         "Bally Astrocade",
-	systemdefs.SystemArcadia:           "Emerson Arcadia 2001",
-	systemdefs.SystemSG1000:            "Sega SG-1000",
-	systemdefs.SystemSuperVision:       "Epoch Super Cassette Vision",
-	systemdefs.SystemMSX:               "Microsoft MSX",
-	systemdefs.SystemDOS:               "MS-DOS",
-	systemdefs.SystemPC:                "Windows",
-	systemdefs.SystemAtari800:          "Atari 800",
-	systemdefs.SystemAcornAtom:         "Acorn Atom",
-	systemdefs.SystemAppleII:           "Apple II",
-	systemdefs.SystemCasioPV1000:       "Casio PV-1000",
-	systemdefs.SystemVectrex:           "GCE Vectrex",
-	systemdefs.SystemMegaDuck:          "Mega Duck",
-	systemdefs.SystemX68000:            "Sharp X68000",
-	systemdefs.SystemTRS80:             "Tandy TRS-80",
-	systemdefs.SystemSordM5:            "Sord M5",
-	systemdefs.SystemTI994A:            "Texas Instruments TI 99/4A",
-	systemdefs.SystemCreatiVision:      "VTech CreatiVision",
-	systemdefs.SystemFDS:               "Nintendo Famicom Disk System",
-	systemdefs.SystemSuperGrafx:        "PC Engine SuperGrafx",
-	systemdefs.SystemTurboGrafx16CD:    "NEC TurboGrafx-CD",
-	systemdefs.SystemGameNWatch:        "Nintendo Game & Watch",
-	systemdefs.SystemNeoGeoCD:          "SNK Neo Geo CD",
-	systemdefs.SystemPokemonMini:       "Nintendo Pokemon Mini",
-	systemdefs.SystemVector06C:         "Vector-06C",
-	systemdefs.SystemTomyTutor:         "Tomy Tutor",
-	systemdefs.SystemSwitch:            "Nintendo Switch",
 	systemdefs.SystemPS5:               "Sony Playstation 5",
-	systemdefs.SystemSeriesXS:          "Microsoft Xbox Series X/S",
+	systemdefs.SystemVita:              "Sony Playstation Vita",
+	// "Sony PocketStation",              // No Zaparoo system
+	systemdefs.SystemPSP: "Sony PSP",
+	// "Sony PSP Minis",                  // No Zaparoo system
+	systemdefs.SystemSpectravideo: "Spectravideo",
+	systemdefs.SystemSNES:         "Super Nintendo Entertainment System",
+	// "Taito Type X",                    // No Zaparoo system
+	systemdefs.SystemTRS80: "Tandy TRS-80",
+	// "Tapwave Zodiac",                  // No Zaparoo system
+	systemdefs.SystemTI994A:    "Texas Instruments TI 99/4A",
+	systemdefs.SystemGameCom:   "Tiger Game.com",
+	systemdefs.SystemTomyTutor: "Tomy Tutor",
+	// "TRS-80 Color Computer",           // SystemCoCo2 exists but name doesn't match well
+	// "Uzebox",                          // No Zaparoo system
+	systemdefs.SystemVector06C:    "Vector-06C",
+	systemdefs.SystemCreatiVision: "VTech CreatiVision",
+	systemdefs.SystemSocrates:     "VTech Socrates",
+	systemdefs.SystemVSmile:       "VTech V.Smile",
+	// "WASM-4",                          // No Zaparoo system
+	systemdefs.SystemSuperVision: "Watara Supervision",
+	// "Web Browser",                     // No Zaparoo system
+	systemdefs.SystemPC: "Windows",
+	// "Windows 3.X",                     // No Zaparoo system
+	systemdefs.SystemWonderSwan:      "WonderSwan",
+	systemdefs.SystemWonderSwanColor: "WonderSwan Color",
+	// "WoW Action Max",                  // No Zaparoo system
+	// "XaviXPORT",                       // No Zaparoo system
+	// "ZiNc",                            // No Zaparoo system
 }
 
 func findLaunchBoxDir(cfg *config.Instance) (string, error) {
