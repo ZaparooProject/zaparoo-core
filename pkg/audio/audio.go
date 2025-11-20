@@ -29,10 +29,15 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gen2brain/malgo"
 	"github.com/gopxl/beep/v2"
+	"github.com/gopxl/beep/v2/flac"
+	"github.com/gopxl/beep/v2/mp3"
+	"github.com/gopxl/beep/v2/vorbis"
 	"github.com/gopxl/beep/v2/wav"
 	"github.com/rs/zerolog/log"
 )
@@ -94,6 +99,72 @@ func PlayWAVFile(path string) error {
 
 	log.Debug().Str("path", path).Msg("started audio playback")
 	return PlayWAV(f)
+}
+
+// PlayFile plays an audio file from a file path asynchronously.
+// Supports WAV, MP3, OGG (Vorbis), and FLAC formats.
+// The function returns immediately after starting playback.
+// Format is detected by file extension.
+func PlayFile(path string) error {
+	// Open audio file
+	//nolint:gosec // G304: Potential file inclusion via variable path - callers are responsible for path sanitization
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open audio file: %w", err)
+	}
+
+	// Detect format by extension
+	ext := strings.ToLower(filepath.Ext(path))
+
+	var streamer beep.StreamSeekCloser
+	var format beep.Format
+
+	switch ext {
+	case ".wav":
+		streamer, format, err = wav.Decode(f)
+	case ".mp3":
+		streamer, format, err = mp3.Decode(f)
+	case ".ogg":
+		streamer, format, err = vorbis.Decode(f)
+	case ".flac":
+		streamer, format, err = flac.Decode(f)
+	default:
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close file after unsupported format detection")
+		}
+		return fmt.Errorf("unsupported audio format: %s (supported: .wav, .mp3, .ogg, .flac)", ext)
+	}
+
+	if err != nil {
+		if closeErr := f.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close audio file on decode error")
+		}
+		return fmt.Errorf("failed to decode audio file: %w", err)
+	}
+
+	// Resample to 48000 Hz for compatibility with HDMI audio and systems like MiSTer
+	resampled := beep.Resample(4, format.SampleRate, beep.SampleRate(48000), streamer)
+
+	// Play asynchronously in a goroutine
+	go func() {
+		defer func() {
+			if err := streamer.Close(); err != nil {
+				log.Warn().Err(err).Msg("failed to close audio streamer")
+			}
+			if err := f.Close(); err != nil {
+				log.Warn().Err(err).Msg("failed to close audio file")
+			}
+		}()
+
+		if err := playWAVWithMalgo(resampled); err != nil {
+			log.Warn().Err(err).Msg("failed to play audio")
+			return
+		}
+
+		log.Debug().Str("path", path).Msg("completed audio playback")
+	}()
+
+	return nil
 }
 
 // playWAVWithMalgo plays audio using malgo with proper device lifecycle management.

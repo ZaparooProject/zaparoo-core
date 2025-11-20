@@ -286,12 +286,19 @@ func readerManager(
 	readerTicker := time.NewTicker(1 * time.Second)
 
 	playFail := func() {
-		if !cfg.AudioFeedback() {
-			return
-		}
 		if time.Since(lastError) > 1*time.Second {
-			if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-				log.Warn().Msgf("error playing fail sound: %s", audioErr)
+			if path, enabled := cfg.FailSoundPath(helpers.DataDir(pl)); enabled {
+				if path == "" {
+					// Use embedded default sound
+					if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
+						log.Warn().Msgf("error playing fail sound: %s", audioErr)
+					}
+				} else {
+					// Use custom sound file
+					if audioErr := audio.PlayFile(path); audioErr != nil {
+						log.Warn().Str("path", path).Msgf("error playing custom fail sound: %s", audioErr)
+					}
+				}
 			}
 		}
 	}

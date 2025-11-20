@@ -46,6 +46,7 @@ const (
 )
 
 type Values struct {
+	Audio        Audio     `toml:"audio,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	Media        Media     `toml:"media,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
@@ -55,12 +56,13 @@ type Values struct {
 	Groovy       Groovy    `toml:"groovy,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
-	Audio        Audio     `toml:"audio,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`
 }
 
 type Audio struct {
-	ScanFeedback bool `toml:"scan_feedback,omitempty"`
+	SuccessSound *string `toml:"success_sound,omitempty"`
+	FailSound    *string `toml:"fail_sound,omitempty"`
+	ScanFeedback bool    `toml:"scan_feedback,omitempty"`
 }
 
 type ZapScript struct {
@@ -306,6 +308,64 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Audio.ScanFeedback = enabled
+}
+
+// SuccessSoundPath returns the resolved path to the success sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) SuccessSoundPath(dataDir string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// nil = use embedded default
+	if c.vals.Audio.SuccessSound == nil {
+		return "", true
+	}
+
+	// empty string = disabled
+	if *c.vals.Audio.SuccessSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.SuccessSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
+}
+
+// FailSoundPath returns the resolved path to the fail sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) FailSoundPath(dataDir string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// nil = use embedded default
+	if c.vals.Audio.FailSound == nil {
+		return "", true
+	}
+
+	// empty string = disabled
+	if *c.vals.Audio.FailSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.FailSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
 func (c *Instance) DebugLogging() bool {
