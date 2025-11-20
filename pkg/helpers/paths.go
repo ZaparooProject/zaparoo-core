@@ -329,8 +329,13 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 				continue
 			}
 
+			// Non-Steam games require a "Big Picture ID" (BPID) for launching.
+			// BPID = (AppId << 32) | 0x02000000
+			// This converts the 32-bit shortcut AppId to the 64-bit ID Steam uses for shortcuts.
+			bpid := (uint64(shortcut.AppId) << 32) | 0x02000000
+
 			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", bpid), shortcut.AppName),
 				Name:  shortcut.AppName,
 				NoExt: true,
 			})
