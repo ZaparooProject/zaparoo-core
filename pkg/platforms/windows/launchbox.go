@@ -225,12 +225,12 @@ var lbSysMap = map[string]string{
 	systemdefs.SystemTriforce: "Sega Triforce",
 	systemdefs.SystemX1:       "Sharp X1",
 	// "Sharp MZ-2500",                   // No Zaparoo system
-	systemdefs.SystemX68000:     "Sharp X68000",
-	systemdefs.SystemZX81:       "Sinclair ZX-81",
-	systemdefs.SystemZXSpectrum: "Sinclair ZX Spectrum",
-	systemdefs.SystemNeoGeo:     "SNK Neo Geo AES",
-	systemdefs.SystemNeoGeoCD:   "SNK Neo Geo CD",
-	// "SNK Neo Geo MVS",                 // Part of NeoGeo system
+	systemdefs.SystemX68000:            "Sharp X68000",
+	systemdefs.SystemZX81:              "Sinclair ZX-81",
+	systemdefs.SystemZXSpectrum:        "Sinclair ZX Spectrum",
+	systemdefs.SystemNeoGeoAES:         "SNK Neo Geo AES",
+	systemdefs.SystemNeoGeoMVS:         "SNK Neo Geo MVS",
+	systemdefs.SystemNeoGeoCD:          "SNK Neo Geo CD",
 	systemdefs.SystemNeoGeoPocket:      "SNK Neo Geo Pocket",
 	systemdefs.SystemNeoGeoPocketColor: "SNK Neo Geo Pocket Color",
 	systemdefs.SystemSordM5:            "Sord M5",

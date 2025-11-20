@@ -248,6 +248,8 @@ const (
 	SystemMegaDuck          = "MegaDuck"
 	SystemNDS               = "NDS"
 	SystemNeoGeo            = "NeoGeo"
+	SystemNeoGeoAES         = "NeoGeoAES"
+	SystemNeoGeoMVS         = "NeoGeoMVS"
 	SystemNeoGeoCD          = "NeoGeoCD"
 	SystemNeoGeoPocket      = "NeoGeoPocket"
 	SystemNeoGeoPocketColor = "NeoGeoPocketColor"
@@ -588,8 +590,19 @@ var Systems = map[string]System{
 		Slugs:   []string{"ndsl", "ndsi", "dsi", "dslite", "dsixl"},
 	},
 	SystemNeoGeo: {
-		ID:    SystemNeoGeo,
-		Slugs: []string{"snk", "snkneogeo", "aes", "mvs", "neogeoaes", "neogeomvs"},
+		ID:        SystemNeoGeo,
+		Slugs:     []string{"snkneogeo", "neogeo"},
+		Fallbacks: []string{SystemNeoGeoAES, SystemNeoGeoMVS},
+	},
+	SystemNeoGeoAES: {
+		ID:        SystemNeoGeoAES,
+		Slugs:     []string{"aes", "neogeoaes"},
+		Fallbacks: []string{SystemNeoGeo, SystemNeoGeoMVS},
+	},
+	SystemNeoGeoMVS: {
+		ID:        SystemNeoGeoMVS,
+		Slugs:     []string{"mvs", "neogeomvs"},
+		Fallbacks: []string{SystemNeoGeo, SystemNeoGeoAES},
 	},
 	SystemNeoGeoCD: {
 		ID:        SystemNeoGeoCD,
