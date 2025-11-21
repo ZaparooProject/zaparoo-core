@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -38,24 +39,26 @@ import (
 )
 
 // findRetroBatDir attempts to locate the RetroBat installation directory
+// and returns the path with the actual filesystem case to prevent case-sensitivity
+// issues with EmulationStation's path comparisons.
 func findRetroBatDir(cfg *config.Instance) (string, error) {
 	// Check user-configured directory first
 	if def, ok := cfg.LookupLauncherDefaults("RetroBat"); ok && def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
-			log.Debug().Msgf("using user-configured RetroBat directory: %s", def.InstallDir)
-			return def.InstallDir, nil
+		if normalizedPath, err := mediascanner.FindPath(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured RetroBat directory: %s", normalizedPath)
+			return normalizedPath, nil
 		}
 		log.Warn().Msgf("user-configured RetroBat directory not found: %s", def.InstallDir)
 	}
 
 	// Common RetroBat installation paths
 	paths := []string{
-		`C:\Retrobat`,
-		`D:\Retrobat`,
-		`E:\Retrobat`,
-		`C:\Program Files\Retrobat`,
-		`C:\Program Files (x86)\Retrobat`,
-		`C:\Games\Retrobat`,
+		`C:\RetroBat`,
+		`D:\RetroBat`,
+		`E:\RetroBat`,
+		`C:\Program Files\RetroBat`,
+		`C:\Program Files (x86)\RetroBat`,
+		`C:\Games\RetroBat`,
 	}
 
 	for _, path := range paths {
@@ -63,6 +66,11 @@ func findRetroBatDir(cfg *config.Instance) (string, error) {
 			// Verify it looks like a RetroBat installation by checking for key files
 			retroBatExe := filepath.Join(path, "retrobat.exe")
 			if _, err := os.Stat(retroBatExe); err == nil {
+				// Use FindPath to get the actual filesystem case
+				if normalizedPath, err := mediascanner.FindPath(path); err == nil {
+					return normalizedPath, nil
+				}
+				// Fallback to original path if FindPath fails (shouldn't happen)
 				return path, nil
 			}
 			log.Debug().Msgf("directory exists at %s but retrobat.exe not found", path)
@@ -206,7 +214,6 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 		SystemID:           systemID,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 		Test: func(cfg *config.Instance, path string) bool {
-			// Check if path is within this RetroBat system directory
 			retroBatDir, err := findRetroBatDir(cfg)
 			if err != nil {
 				return false
@@ -226,25 +233,20 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 			return false
 		},
 		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-			// API-only approach for proper RetroBat integration
 			if !isRetroBatRunning() {
-				return nil, errors.New("RetroBat is not running. Please start RetroBat first")
+				return nil, errors.New("RetroBat is not running")
 			}
 
 			log.Debug().Str("path", path).Msg("launching game via EmulationStation API")
 			err := esapi.APILaunch(path)
 			if err != nil {
-				return nil, fmt.Errorf(
-					"RetroBat API request failed: %w. Ensure HTTP Server is enabled in RetroBat System Settings",
-					err,
-				)
+				return nil, fmt.Errorf("RetroBat API request failed: %w", err)
 			}
 
 			log.Info().Str("path", path).Msg("game launched successfully via ES API")
 			return nil, nil
 		},
 		Kill: func(_ *config.Instance) error {
-			// API-only approach for proper RetroBat integration
 			if !isRetroBatRunning() {
 				return errors.New("RetroBat is not running")
 			}
@@ -260,7 +262,6 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 					return nil
 				}
 
-				// Handle timeout gracefully
 				if errors.Is(err, context.DeadlineExceeded) {
 					log.Debug().Msg("ES API timeout, assuming kill succeeded")
 					return nil
@@ -268,17 +269,12 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 
 				log.Debug().Err(err).Msgf("ES API kill attempt %d/%d failed", i+1, maxRetries)
 
-				// Add delay between retries (except after last attempt)
 				if i < maxRetries-1 {
 					time.Sleep(500 * time.Millisecond)
 				}
 			}
 
-			return fmt.Errorf(
-				"failed to kill game via RetroBat API after %d retries. "+
-					"Ensure HTTP Server is enabled in RetroBat System Settings",
-				maxRetries,
-			)
+			return fmt.Errorf("failed to kill game via RetroBat API after %d retries", maxRetries)
 		},
 		Scanner: func(
 			_ context.Context,
@@ -323,7 +319,6 @@ func getRetroBatLaunchers(cfg *config.Instance) []platforms.Launcher {
 	}
 
 	// Always register launchers if RetroBat directory is found
-	// Launch uses EmulationStation API for proper integration
 	log.Info().Msgf("found RetroBat at %s, registering launchers", retroBatDir)
 
 	systemMapping := getRetroBatSystemMapping()
