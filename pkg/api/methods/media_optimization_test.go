@@ -173,12 +173,14 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 	// Both indexing and optimization are "running"
 	mockMediaDB.On("GetOptimizationStatus").Return("running", nil)
 
-	// Set indexing as active
-	statusInstance.indexing = true
-	statusInstance.totalSteps = 10
-	statusInstance.currentStep = 5
-	statusInstance.currentDesc = "Indexing files"
-	statusInstance.totalFiles = 1000
+	// Set indexing as active - use set() to avoid data race
+	statusInstance.set(indexingStatusVals{
+		indexing:    true,
+		totalSteps:  10,
+		currentStep: 5,
+		currentDesc: "Indexing files",
+		totalFiles:  1000,
+	})
 
 	db := &database.Database{
 		MediaDB: mockMediaDB,
