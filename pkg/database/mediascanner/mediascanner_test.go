@@ -1135,7 +1135,7 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 // TestZaparooignoreMarker tests that directories containing a .zaparooignore file
 // are skipped during media scanning along with all their subdirectories.
 func TestZaparooignoreMarker(t *testing.T) {
-	t.Parallel()
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 
 	tests := []struct {
 		name          string
@@ -1231,7 +1231,7 @@ func TestZaparooignoreMarker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
 
 			// Create a temporary directory for this test
 			rootDir := t.TempDir()
