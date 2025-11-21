@@ -62,3 +62,25 @@ tasks:
       - task: build-installer
         vars:
           BUILD_ARCH: "386"
+
+  build-launchbox-plugin:
+    desc: Build LaunchBox plugin DLL using Docker
+    dir: scripts/windows/launchbox-plugin
+    vars:
+      OUTPUT_DIR: "{{.ROOT_DIR}}/_build/windows_amd64"
+      PLUGIN_FOLDER: "Zaparoo LaunchBox Integration"
+    status:
+      - test -f "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}.zip"
+    cmds:
+      - |
+        if [ ! -f "lib/Unbroken.LaunchBox.Plugins.dll" ]; then
+          echo "Error: lib/Unbroken.LaunchBox.Plugins.dll not found"
+          echo "Copy from LaunchBox installation: LaunchBox/Core/Unbroken.LaunchBox.Plugins.dll"
+          exit 1
+        fi
+      - docker build --target build -t zaparoo-launchbox-plugin "{{.ROOT_DIR}}/scripts/windows/launchbox-plugin"
+      - docker create --name zaparoo-launchbox-plugin-temp zaparoo-launchbox-plugin /bin/true
+      - mkdir -p "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}"
+      - docker cp zaparoo-launchbox-plugin-temp:/build/ZaparooLaunchBoxPlugin.dll "{{.OUTPUT_DIR}}/{{.PLUGIN_FOLDER}}/"
+      - docker rm zaparoo-launchbox-plugin-temp
+      - cd "{{.OUTPUT_DIR}}" && zip -r "{{.PLUGIN_FOLDER}}.zip" "{{.PLUGIN_FOLDER}}"

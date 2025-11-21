@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -34,7 +35,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -42,6 +42,42 @@ import (
 	"github.com/andygrunwald/vdf"
 	"github.com/rs/zerolog/log"
 )
+
+// NormalizePathForComparison normalizes a path for cross-platform comparison.
+// On Windows: converts to forward slashes and lowercases (case-insensitive filesystem)
+// On Linux/macOS: only converts to forward slashes (preserves case for case-sensitive filesystems)
+// This handles paths from databases (forward slashes) vs filepath.Join (OS-specific slashes).
+func NormalizePathForComparison(path string) string {
+	p := filepath.ToSlash(filepath.Clean(path))
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// PathHasPrefix checks if path is within root directory, handling separator boundaries correctly.
+// This avoids the prefix bug where "c:/roms2/game.bin" would incorrectly match root "c:/roms".
+func PathHasPrefix(path, root string) bool {
+	normPath := NormalizePathForComparison(path)
+	normRoot := NormalizePathForComparison(root)
+
+	// Handle exact match
+	if normPath == normRoot {
+		return true
+	}
+
+	// Handle empty root - only match if both are empty
+	if normRoot == "" {
+		return false
+	}
+
+	// Ensure root ends with separator to avoid "roms" matching "roms2"
+	if !strings.HasSuffix(normRoot, "/") {
+		normRoot += "/"
+	}
+
+	return strings.HasPrefix(normPath, normRoot)
+}
 
 // PathIsLauncher returns true if a given path matches against any of the
 // criteria defined in a launcher.
@@ -76,11 +112,10 @@ func PathIsLauncher(
 	// check for data dir media folder
 	inDataDir := false
 	if l.SystemID != "" {
-		// Cache DataDir result (now cached internally)
+		// Cache DataDir result
 		dataDir := DataDir(pl)
-		// Build zaparooMedia path once and lowercase it
-		zaparooMedia := strings.ToLower(filepath.Join(dataDir, config.MediaDir, l.SystemID))
-		if strings.HasPrefix(lp, zaparooMedia) {
+		zaparooMedia := filepath.Join(dataDir, config.MediaDir, l.SystemID)
+		if PathHasPrefix(path, zaparooMedia) {
 			inDataDir = true
 		}
 	}
@@ -90,19 +125,15 @@ func PathIsLauncher(
 		inRoot := false
 		isAbs := false
 
-		// Get root dirs once and pre-lowercase
 		rootDirs := pl.RootDirs(cfg)
 
 		for _, root := range rootDirs {
-			lowerRoot := strings.ToLower(root)
 			if inRoot {
 				break
 			}
 			for _, folder := range l.Folders {
-				// Build full path from pre-lowered parts to avoid repeated ToLower on the whole string
-				lowerFolder := strings.ToLower(folder)
-				fullPath := filepath.Join(lowerRoot, lowerFolder)
-				if strings.HasPrefix(lp, fullPath) {
+				fullPath := filepath.Join(root, folder)
+				if PathHasPrefix(path, fullPath) {
 					inRoot = true
 					break
 				}
@@ -112,9 +143,7 @@ func PathIsLauncher(
 		if !inRoot {
 			for _, folder := range l.Folders {
 				if filepath.IsAbs(folder) {
-					// Lowercase once per absolute folder
-					lowerFolder := strings.ToLower(folder)
-					if strings.HasPrefix(lp, lowerFolder) {
+					if PathHasPrefix(path, folder) {
 						isAbs = true
 						break
 					}
@@ -330,8 +359,13 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 				continue
 			}
 
+			// Non-Steam games require a "Big Picture ID" (BPID) for launching.
+			// BPID = (AppId << 32) | 0x02000000
+			// This converts the 32-bit shortcut AppId to the 64-bit ID Steam uses for shortcuts.
+			bpid := (uint64(shortcut.AppId) << 32) | 0x02000000
+
 			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", shortcut.AppId), shortcut.AppName),
+				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", bpid), shortcut.AppName),
 				Name:  shortcut.AppName,
 				NoExt: true,
 			})
@@ -574,32 +608,51 @@ func DoLaunch(params *LaunchParams) error {
 		}
 	}
 
-	systemMeta, err := assets.GetSystemMetadata(params.Launcher.SystemID)
-	if err != nil {
-		log.Warn().Err(err).Msgf("no system metadata for: %s", params.Launcher.SystemID)
-	}
-
-	// Try to get clean display name from database first
+	// For launchers without SystemID (e.g., LaunchBox), try to look it up from MediaDB
+	systemID := params.Launcher.SystemID
 	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Name, false)
+
 	if params.DB != nil && params.DB.MediaDB != nil {
-		systems := []systemdefs.System{{ID: params.Launcher.SystemID}}
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(systems, params.Path)
-		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
-			displayName = results[0].Name
-			log.Debug().Str("path", params.Path).Msg("using indexed display name")
-		} else {
-			log.Debug().Str("path", params.Path).Msg("media not indexed, using filename")
+		// Search without system filter to find what system this path belongs to
+		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(nil, params.Path)
+		if searchErr == nil && len(results) > 0 {
+			// Use the system from indexed media if Launcher.SystemID is empty
+			if systemID == "" && results[0].SystemID != "" {
+				systemID = results[0].SystemID
+			}
+			// Use the indexed display name if available
+			if results[0].Name != "" {
+				displayName = results[0].Name
+			}
 		}
 	}
 
+	// If we still don't have a SystemID, skip setting ActiveMedia
+	if systemID == "" {
+		log.Debug().Msg("skipping DoLaunch ActiveMedia - no SystemID available")
+		return nil
+	}
+
+	systemMeta, err := assets.GetSystemMetadata(systemID)
+	if err != nil {
+		log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
+	}
+
 	// Set active media immediately (non-blocking for all lifecycle modes)
-	params.SetActiveMedia(models.NewActiveMedia(
-		params.Launcher.SystemID,
+	activeMedia := models.NewActiveMedia(
+		systemID,
 		systemMeta.Name,
 		params.Path,
 		displayName,
 		params.Launcher.ID,
-	))
+	)
+
+	log.Info().Msgf(
+		"DoLaunch setting ActiveMedia: SystemID='%s', SystemName='%s', Path='%s', Name='%s', LauncherID='%s'",
+		activeMedia.SystemID, activeMedia.SystemName, activeMedia.Path, activeMedia.Name, activeMedia.LauncherID,
+	)
+
+	params.SetActiveMedia(activeMedia)
 
 	return nil
 }

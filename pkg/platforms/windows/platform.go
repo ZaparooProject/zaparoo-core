@@ -23,10 +23,8 @@ package windows
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,10 +59,12 @@ import (
 )
 
 type Platform struct {
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	processMu      sync.RWMutex
+	activeMedia       func() *models.ActiveMedia
+	setActiveMedia    func(*models.ActiveMedia)
+	trackedProcess    *os.Process
+	launchBoxPipe     *LaunchBoxPipeServer
+	processMu         sync.RWMutex
+	launchBoxPipeLock sync.Mutex
 }
 
 func (*Platform) ID() string {
@@ -98,7 +98,7 @@ func (*Platform) StartPre(_ *config.Instance) error {
 }
 
 func (p *Platform) StartPost(
-	_ *config.Instance,
+	cfg *config.Instance,
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
@@ -106,10 +106,22 @@ func (p *Platform) StartPost(
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+
+	// Initialize LaunchBox pipe server if LaunchBox is installed
+	p.initLaunchBoxPipe(cfg)
+
 	return nil
 }
 
-func (*Platform) Stop() error {
+func (p *Platform) Stop() error {
+	// Stop LaunchBox named pipe server
+	p.launchBoxPipeLock.Lock()
+	if p.launchBoxPipe != nil {
+		p.launchBoxPipe.Stop()
+		p.launchBoxPipe = nil
+	}
+	p.launchBoxPipeLock.Unlock()
+
 	return nil
 }
 
@@ -217,201 +229,6 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
-var lbSysMap = map[string]string{
-	systemdefs.System3DO:               "3DO Interactive Multiplayer",
-	systemdefs.SystemAmiga:             "Commodore Amiga",
-	systemdefs.SystemAmstrad:           "Amstrad CPC",
-	systemdefs.SystemAndroid:           "Android",
-	systemdefs.SystemArcade:            "Arcade",
-	systemdefs.SystemAtari2600:         "Atari 2600",
-	systemdefs.SystemAtari5200:         "Atari 5200",
-	systemdefs.SystemAtari7800:         "Atari 7800",
-	systemdefs.SystemJaguar:            "Atari Jaguar",
-	systemdefs.SystemJaguarCD:          "Atari Jaguar CD",
-	systemdefs.SystemAtariLynx:         "Atari Lynx",
-	systemdefs.SystemAtariXEGS:         "Atari XEGS",
-	systemdefs.SystemColecoVision:      "ColecoVision",
-	systemdefs.SystemC64:               "Commodore 64",
-	systemdefs.SystemIntellivision:     "Mattel Intellivision",
-	systemdefs.SystemIOS:               "Apple iOS",
-	systemdefs.SystemMacOS:             "Apple Mac OS",
-	systemdefs.SystemXbox:              "Microsoft Xbox",
-	systemdefs.SystemXbox360:           "Microsoft Xbox 360",
-	systemdefs.SystemXboxOne:           "Microsoft Xbox One",
-	systemdefs.SystemNeoGeoPocket:      "SNK Neo Geo Pocket",
-	systemdefs.SystemNeoGeoPocketColor: "SNK Neo Geo Pocket Color",
-	systemdefs.SystemNeoGeo:            "SNK Neo Geo AES",
-	systemdefs.System3DS:               "Nintendo 3DS",
-	systemdefs.SystemNintendo64:        "Nintendo 64",
-	systemdefs.SystemNDS:               "Nintendo DS",
-	systemdefs.SystemNES:               "Nintendo Entertainment System",
-	systemdefs.SystemGameboy:           "Nintendo Game Boy",
-	systemdefs.SystemGBA:               "Nintendo Game Boy Advance",
-	systemdefs.SystemGameboyColor:      "Nintendo Game Boy Color",
-	systemdefs.SystemGameCube:          "Nintendo GameCube",
-	systemdefs.SystemVirtualBoy:        "Nintendo Virtual Boy",
-	systemdefs.SystemWii:               "Nintendo Wii",
-	systemdefs.SystemWiiU:              "Nintendo Wii U",
-	systemdefs.SystemOuya:              "Ouya",
-	systemdefs.SystemCDI:               "Philips CD-i",
-	systemdefs.SystemSega32X:           "Sega 32X",
-	systemdefs.SystemMegaCD:            "Sega CD",
-	systemdefs.SystemDreamcast:         "Sega Dreamcast",
-	systemdefs.SystemGameGear:          "Sega Game Gear",
-	systemdefs.SystemGenesis:           "Sega Genesis",
-	systemdefs.SystemMasterSystem:      "Sega Master System",
-	systemdefs.SystemSaturn:            "Sega Saturn",
-	systemdefs.SystemZXSpectrum:        "Sinclair ZX Spectrum",
-	systemdefs.SystemPSX:               "Sony Playstation",
-	systemdefs.SystemPS2:               "Sony Playstation 2",
-	systemdefs.SystemPS3:               "Sony Playstation 3",
-	systemdefs.SystemPS4:               "Sony Playstation 4",
-	systemdefs.SystemVita:              "Sony Playstation Vita",
-	systemdefs.SystemPSP:               "Sony PSP",
-	systemdefs.SystemSNES:              "Super Nintendo Entertainment System",
-	systemdefs.SystemTurboGrafx16:      "NEC TurboGrafx-16",
-	systemdefs.SystemWonderSwan:        "WonderSwan",
-	systemdefs.SystemWonderSwanColor:   "WonderSwan Color",
-	systemdefs.SystemOdyssey2:          "Magnavox Odyssey 2",
-	systemdefs.SystemChannelF:          "Fairchild Channel F",
-	systemdefs.SystemBBCMicro:          "BBC Microcomputer System",
-	// systemdefs.REPLACE: "Memotech MTX512",
-	// systemdefs.REPLACE: "Camputers Lynx",
-	systemdefs.SystemGameCom:       "Tiger Game.com",
-	systemdefs.SystemOric:          "Oric Atmos",
-	systemdefs.SystemAcornElectron: "Acorn Electron",
-	// systemdefs.REPLACE: "Dragon 32/64",
-	systemdefs.SystemAdventureVision: "Entex Adventure Vision",
-	// systemdefs.REPLACE: "APF Imagination Machine",
-	systemdefs.SystemAquarius: "Mattel Aquarius",
-	systemdefs.SystemJupiter:  "Jupiter Ace",
-	systemdefs.SystemSAMCoupe: "SAM Coupé",
-	// systemdefs.REPLACE: "Enterprise",
-	// systemdefs.REPLACE: "EACA EG2000 Colour Genie",
-	// systemdefs.REPLACE: "Acorn Archimedes",
-	// systemdefs.REPLACE: "Tapwave Zodiac",
-	// systemdefs.REPLACE: "Atari ST",
-	systemdefs.SystemAstrocade: "Bally Astrocade",
-	// systemdefs.REPLACE: "Magnavox Odyssey",
-	systemdefs.SystemArcadia:     "Emerson Arcadia 2001",
-	systemdefs.SystemSG1000:      "Sega SG-1000",
-	systemdefs.SystemSuperVision: "Epoch Super Cassette Vision",
-	systemdefs.SystemMSX:         "Microsoft MSX",
-	systemdefs.SystemDOS:         "MS-DOS",
-	systemdefs.SystemPC:          "Windows",
-	// systemdefs.REPLACE: "Web Browser",
-	// systemdefs.REPLACE: "Sega Model 2",
-	// systemdefs.REPLACE: "Namco System 22",
-	// systemdefs.REPLACE: "Sega Model 3",
-	// systemdefs.REPLACE: "Sega System 32",
-	// systemdefs.REPLACE: "Sega System 16",
-	// systemdefs.REPLACE: "Sammy Atomiswave",
-	// systemdefs.REPLACE: "Sega Naomi",
-	// systemdefs.REPLACE: "Sega Naomi 2",
-	systemdefs.SystemAtari800: "Atari 800",
-	// systemdefs.REPLACE: "Sega Model 1",
-	// systemdefs.REPLACE: "Sega Pico",
-	systemdefs.SystemAcornAtom: "Acorn Atom",
-	// systemdefs.REPLACE: "Amstrad GX4000",
-	systemdefs.SystemAppleII: "Apple II",
-	// systemdefs.REPLACE: "Apple IIGS",
-	// systemdefs.REPLACE: "Casio Loopy",
-	systemdefs.SystemCasioPV1000: "Casio PV-1000",
-	// systemdefs.REPLACE: "Coleco ADAM",
-	// systemdefs.REPLACE: "Commodore 128",
-	// systemdefs.REPLACE: "Commodore Amiga CD32",
-	// systemdefs.REPLACE: "Commodore CDTV",
-	// systemdefs.REPLACE: "Commodore Plus 4",
-	// systemdefs.REPLACE: "Commodore VIC-20",
-	// systemdefs.REPLACE: "Fujitsu FM Towns Marty",
-	systemdefs.SystemVectrex: "GCE Vectrex",
-	// systemdefs.REPLACE: "Nuon",
-	systemdefs.SystemMegaDuck: "Mega Duck",
-	systemdefs.SystemX68000:   "Sharp X68000",
-	systemdefs.SystemTRS80:    "Tandy TRS-80",
-	// systemdefs.REPLACE: "Elektronika BK",
-	// systemdefs.REPLACE: "Epoch Game Pocket Computer",
-	// systemdefs.REPLACE: "Funtech Super Acan",
-	// systemdefs.REPLACE: "GamePark GP32",
-	// systemdefs.REPLACE: "Hartung Game Master",
-	// systemdefs.REPLACE: "Interton VC 4000",
-	// systemdefs.REPLACE: "MUGEN",
-	// systemdefs.REPLACE: "OpenBOR",
-	// systemdefs.REPLACE: "Philips VG 5000",
-	// systemdefs.REPLACE: "Philips Videopac+",
-	// systemdefs.REPLACE: "RCA Studio II",
-	// systemdefs.REPLACE: "ScummVM",
-	// systemdefs.REPLACE: "Sega Dreamcast VMU",
-	// systemdefs.REPLACE: "Sega SC-3000",
-	// systemdefs.REPLACE: "Sega ST-V",
-	// systemdefs.REPLACE: "Sinclair ZX-81",
-	systemdefs.SystemSordM5: "Sord M5",
-	systemdefs.SystemTI994A: "Texas Instruments TI 99/4A",
-	// systemdefs.REPLACE: "Pinball",
-	systemdefs.SystemCreatiVision: "VTech CreatiVision",
-	// systemdefs.REPLACE: "Watara Supervision",
-	// systemdefs.REPLACE: "WoW Action Max",
-	// systemdefs.REPLACE: "ZiNc",
-	systemdefs.SystemFDS: "Nintendo Famicom Disk System",
-	// systemdefs.REPLACE: "NEC PC-FX",
-	systemdefs.SystemSuperGrafx:     "PC Engine SuperGrafx",
-	systemdefs.SystemTurboGrafx16CD: "NEC TurboGrafx-CD",
-	// systemdefs.REPLACE: "TRS-80 Color Computer",
-	systemdefs.SystemGameNWatch: "Nintendo Game & Watch",
-	systemdefs.SystemNeoGeoCD:   "SNK Neo Geo CD",
-	// systemdefs.REPLACE: "Nintendo Satellaview",
-	// systemdefs.REPLACE: "Taito Type X",
-	// systemdefs.REPLACE: "XaviXPORT",
-	// systemdefs.REPLACE: "Mattel HyperScan",
-	// systemdefs.REPLACE: "Game Wave Family Entertainment System",
-	// systemdefs.SystemSega32X: "Sega CD 32X",
-	// systemdefs.REPLACE: "Aamber Pegasus",
-	// systemdefs.REPLACE: "Apogee BK-01",
-	// systemdefs.REPLACE: "Commodore MAX Machine",
-	// systemdefs.REPLACE: "Commodore PET",
-	// systemdefs.REPLACE: "Exelvision EXL 100",
-	// systemdefs.REPLACE: "Exidy Sorcerer",
-	// systemdefs.REPLACE: "Fujitsu FM-7",
-	// systemdefs.REPLACE: "Hector HRX",
-	// systemdefs.REPLACE: "Matra and Hachette Alice",
-	// systemdefs.REPLACE: "Microsoft MSX2",
-	// systemdefs.REPLACE: "Microsoft MSX2+",
-	// systemdefs.REPLACE: "NEC PC-8801",
-	// systemdefs.REPLACE: "NEC PC-9801",
-	// systemdefs.REPLACE: "Nintendo 64DD",
-	systemdefs.SystemPokemonMini: "Nintendo Pokemon Mini",
-	// systemdefs.REPLACE: "Othello Multivision",
-	// systemdefs.REPLACE: "VTech Socrates",
-	systemdefs.SystemVector06C: "Vector-06C",
-	systemdefs.SystemTomyTutor: "Tomy Tutor",
-	// systemdefs.REPLACE: "Spectravideo",
-	// systemdefs.REPLACE: "Sony PSP Minis",
-	// systemdefs.REPLACE: "Sony PocketStation",
-	// systemdefs.REPLACE: "Sharp X1",
-	// systemdefs.REPLACE: "Sharp MZ-2500",
-	// systemdefs.REPLACE: "Sega Triforce",
-	// systemdefs.REPLACE: "Sega Hikaru",
-	// systemdefs.SystemNeoGeo: "SNK Neo Geo MVS",
-	systemdefs.SystemSwitch: "Nintendo Switch",
-	// systemdefs.REPLACE: "Windows 3.X",
-	// systemdefs.REPLACE: "Nokia N-Gage",
-	// systemdefs.REPLACE: "GameWave",
-	// systemdefs.REPLACE: "Linux",
-	systemdefs.SystemPS5: "Sony Playstation 5",
-	// systemdefs.REPLACE: "PICO-8",
-	// systemdefs.REPLACE: "VTech V.Smile",
-	systemdefs.SystemSeriesXS: "Microsoft Xbox Series X/S",
-}
-
-type LaunchBox struct {
-	Games []LaunchBoxGame `xml:"Game"`
-}
-
-type LaunchBoxGame struct {
-	Title string `xml:"Title"`
-	ID    string `xml:"ID"`
-}
-
 func findSteamDir(cfg *config.Instance) string {
 	const fallbackPath = "C:\\Program Files (x86)\\Steam"
 
@@ -453,37 +270,6 @@ func findSteamDir(cfg *config.Instance) string {
 
 	log.Debug().Msgf("Steam registry detection failed, using fallback: %s", fallbackPath)
 	return fallbackPath
-}
-
-func findLaunchBoxDir(cfg *config.Instance) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	dirs := []string{
-		filepath.Join(home, "LaunchBox"),
-		filepath.Join(home, "Documents", "LaunchBox"),
-		filepath.Join(home, "My Games", "LaunchBox"),
-		"C:\\Program Files (x86)\\LaunchBox",
-		"C:\\Program Files\\LaunchBox",
-		"C:\\LaunchBox",
-		"D:\\LaunchBox",
-		"E:\\LaunchBox",
-	}
-
-	def, ok := cfg.LookupLauncherDefaults("LaunchBox")
-	if ok && def.InstallDir != "" {
-		dirs = append([]string{def.InstallDir}, dirs...)
-	}
-
-	for _, dir := range dirs {
-		if _, err := os.Stat(dir); err == nil {
-			return dir, nil
-		}
-	}
-
-	return "", errors.New("launchbox directory not found")
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
@@ -637,90 +423,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return nil, nil //nolint:nilnil // Script launches don't return a process handle
 			},
 		},
-		{
-			ID:      "LaunchBox",
-			Schemes: []string{shared.SchemeLaunchBox},
-			Scanner: func(
-				_ context.Context,
-				cfg *config.Instance,
-				systemId string,
-				results []platforms.ScanResult,
-			) ([]platforms.ScanResult, error) {
-				lbSys, ok := lbSysMap[systemId]
-				if !ok {
-					return results, nil
-				}
-
-				lbDir, err := findLaunchBoxDir(cfg)
-				if err != nil {
-					return results, err
-				}
-
-				platformsDir := filepath.Join(lbDir, "Data", "Platforms")
-				if _, statErr := os.Stat(lbDir); os.IsNotExist(statErr) {
-					return results, errors.New("LaunchBox platforms dir not found")
-				}
-
-				xmlPath := filepath.Join(platformsDir, lbSys+".xml")
-				if _, statErr := os.Stat(xmlPath); os.IsNotExist(statErr) {
-					log.Debug().Msgf("LaunchBox platform xml not found: %s", xmlPath)
-					return results, nil
-				}
-
-				//nolint:gosec // Safe: reads game database XML files from controlled directories
-				xmlFile, err := os.Open(xmlPath)
-				if err != nil {
-					return results, fmt.Errorf("failed to open XML file %s: %w", xmlPath, err)
-				}
-				defer func(xmlFile *os.File) {
-					if closeErr := xmlFile.Close(); closeErr != nil {
-						log.Warn().Err(closeErr).Msg("error closing xml file")
-					}
-				}(xmlFile)
-
-				data, err := io.ReadAll(xmlFile)
-				if err != nil {
-					return results, fmt.Errorf("failed to read XML file: %w", err)
-				}
-
-				var lbXML LaunchBox
-				err = xml.Unmarshal(data, &lbXML)
-				if err != nil {
-					return results, fmt.Errorf("failed to unmarshal XML: %w", err)
-				}
-
-				for _, game := range lbXML.Games {
-					results = append(results, platforms.ScanResult{
-						Path:  virtualpath.CreateVirtualPath(shared.SchemeLaunchBox, game.ID, game.Title),
-						Name:  game.Title,
-						NoExt: true,
-					})
-				}
-
-				return results, nil
-			},
-			Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
-				lbDir, err := findLaunchBoxDir(cfg)
-				if err != nil {
-					return nil, err
-				}
-
-				cliLauncher := filepath.Join(lbDir, "ThirdParty", "CLI_Launcher", "CLI_Launcher.exe")
-				if _, statErr := os.Stat(cliLauncher); os.IsNotExist(statErr) {
-					return nil, errors.New("CLI_Launcher not found")
-				}
-
-				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeLaunchBox)
-				if err != nil {
-					return nil, fmt.Errorf("failed to extract LaunchBox game ID from path: %w", err)
-				}
-
-				//nolint:gosec // Safe: cliLauncher is validated file path, id comes from internal game database
-				cmd := exec.CommandContext(context.Background(), cliLauncher, "launch_by_id", id)
-				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				return nil, cmd.Start()
-			},
-		},
+		p.NewLaunchBoxLauncher(),
 	}
 
 	// Add RetroBat launchers if available
