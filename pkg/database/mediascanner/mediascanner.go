@@ -115,9 +115,9 @@ func FindPath(path string) (string, error) {
 
 	// Get relative path (everything after volume/root)
 	relPath := absPath[len(volume):]
-	if volume == "" && absPath != "" && absPath[0] == filepath.Separator {
-		// Unix: skip leading separator
-		relPath = absPath[1:]
+	// Skip leading separator (both Unix "/" and Windows "\" after volume)
+	if relPath != "" && (relPath[0] == '/' || relPath[0] == '\\') {
+		relPath = relPath[1:]
 	}
 
 	// Split into components and normalize each

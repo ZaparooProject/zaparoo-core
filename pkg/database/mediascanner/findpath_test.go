@@ -489,40 +489,33 @@ func TestFindPath_VeryDeepStructure(t *testing.T) {
 func TestFindPath_RootPaths(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		path      string
-		shouldRun bool
-	}{
-		{
-			name:      "Unix root",
-			path:      "/",
-			shouldRun: true,
-		},
-		{
-			name:      "Current directory",
-			path:      ".",
-			shouldRun: true,
-		},
-	}
+	// Test Unix root (skip on Windows)
+	t.Run("Unix root", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Skipping Unix root test on Windows")
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !tt.shouldRun {
-				t.Skip()
-			}
+		result, err := FindPath("/")
+		if err != nil {
+			t.Logf("Root path not accessible: %v", err)
+			return
+		}
 
-			result, err := FindPath(tt.path)
-			if err != nil {
-				// Some roots might not be accessible, that's ok
-				t.Logf("Path %s not accessible: %v", tt.path, err)
-				return
-			}
+		assert.True(t, filepath.IsAbs(result), "Root path should be absolute")
+		_, statErr := os.Stat(result)
+		assert.NoError(t, statErr, "Returned path should exist")
+	})
 
-			// If successful, verify it's absolute and exists
-			assert.True(t, filepath.IsAbs(result), "Root path should be absolute")
-			_, statErr := os.Stat(result)
-			assert.NoError(t, statErr, "Returned path should exist")
-		})
-	}
+	// Test current directory
+	t.Run("Current directory", func(t *testing.T) {
+		result, err := FindPath(".")
+		if err != nil {
+			t.Logf("Current directory not accessible: %v", err)
+			return
+		}
+
+		assert.True(t, filepath.IsAbs(result), "Current directory should resolve to absolute")
+		_, statErr := os.Stat(result)
+		assert.NoError(t, statErr, "Returned path should exist")
+	})
 }
