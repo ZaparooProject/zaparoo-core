@@ -560,6 +560,38 @@ var Systems = map[string]Core{
 			},
 		},
 	},
+	"NeoGeoPocket": {
+		ID:      "NeoGeoPocket",
+		SetName: "NeoGeoPocket",
+		RBF:     "_Arcade/JTNGP",
+		Slots: []Slot{
+			{
+				Label: "ROM",
+				Exts:  []string{".ngp"},
+				Mgl: &MGLParams{
+					Delay:  2,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	},
+	"NeoGeoPocketColor": {
+		ID:      "NeoGeoPocketColor",
+		SetName: "JTNGPC",
+		RBF:     "_Arcade/JTNGPC",
+		Slots: []Slot{
+			{
+				Label: "ROM",
+				Exts:  []string{".ngc"},
+				Mgl: &MGLParams{
+					Delay:  2,
+					Method: "f",
+					Index:  1,
+				},
+			},
+		},
+	},
 	"NES": {
 		ID:  "NES",
 		RBF: "_Console/NES",
