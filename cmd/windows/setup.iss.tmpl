@@ -35,15 +35,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "runonstartup"; Description: "Run Zaparoo Core on startup"; GroupDescription: "Startup options:"
-Name: "addtopath"; Description: "Add Zaparoo Core to PATH"; GroupDescription: "System:"
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "ZaparooCore"; ValueData: """{app}\Zaparoo.exe"""; \
   Tasks: runonstartup; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-  ValueData: "{olddata};{app}"; Tasks: addtopath; \
-  Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Files]
 Source: "{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -57,25 +53,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent
+Filename: "{app}\README.txt"; Description: "View README"; Flags: shellexec postinstall skipifsilent unchecked
 
 [UninstallRun]
 Filename: "taskkill.exe"; Parameters: "/F /IM ""{#MyAppExeName}"""; Flags: runhidden; RunOnceId: "KillService"
 
 [CustomMessages]
 LaunchAfterInstall=&Launch Zaparoo Core after installation
-
-[Code]
-function NeedsAddPath(Param: string): boolean;
-var
-  OrigPath: string;
-begin
-  if not RegQueryStringValue(HKEY_CURRENT_USER,
-    'Environment',
-    'Path', OrigPath)
-  then begin
-    Result := True;
-    exit;
-  end;
-  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
-end;

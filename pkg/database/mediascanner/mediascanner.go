@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -79,31 +80,112 @@ type PathResult struct {
 	System systemdefs.System
 }
 
-// FindPath case-insensitively finds a file/folder at a path.
+// FindPath case-insensitively finds a file/folder at a path and returns the actual filesystem case.
+// On case-insensitive filesystems (Windows, macOS), this ensures we get the real case from the filesystem
+// rather than preserving the input case, which prevents case-mismatch issues during string comparisons.
+//
+// This function recursively normalizes the entire path from root to leaf to ensure all components
+// match the actual filesystem case.
+//
+// Special handling:
+//   - Linux: Prefers exact match before case-insensitive match (handles File.txt vs file.txt)
+//   - Windows: Handles 8.3 short names (PROGRA~1) via fallback to os.Stat
+//   - All platforms: Works with symlinks, UNC paths, network drives
 func FindPath(path string) (string, error) {
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	// Check if path exists first
+	if _, err := os.Stat(path); err != nil {
+		return "", fmt.Errorf("path does not exist: %s", path)
 	}
 
-	parent := filepath.Dir(path)
-	name := filepath.Base(path)
-
-	files, err := os.ReadDir(parent)
+	// Get absolute path to ensure we have a complete path
+	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("failed to read directory %s: %w", parent, err)
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	for _, file := range files {
-		target := file.Name()
+	// Extract volume (Windows: "C:", UNC: "\\server\share", Unix: "")
+	volume := filepath.VolumeName(absPath)
 
-		if len(target) != len(name) {
-			continue
-		} else if strings.EqualFold(target, name) {
-			return filepath.Join(parent, target), nil
+	// Start building result from volume/root
+	currentPath := volume
+	if currentPath == "" {
+		// Unix absolute path - start from root
+		if filepath.IsAbs(absPath) {
+			currentPath = string(filepath.Separator)
+		}
+	} else {
+		// Windows: ensure volume ends with separator (C: -> C:\)
+		// filepath.Join("C:", "Users") -> "C:Users" (relative, wrong!)
+		// filepath.Join("C:\", "Users") -> "C:\Users" (absolute, correct!)
+		if !strings.HasSuffix(currentPath, string(filepath.Separator)) {
+			currentPath += string(filepath.Separator)
 		}
 	}
 
-	return "", fmt.Errorf("file match not found: %s", path)
+	// Get relative path (everything after volume)
+	relPath := absPath[len(volume):]
+
+	// Clean leading separators to ensure clean split
+	// Handles both "\" from "C:\Users" and "/" from mixed-slash paths
+	relPath = strings.TrimLeft(relPath, "/\\")
+
+	// Split into components and normalize each
+	parts := strings.Split(relPath, string(filepath.Separator))
+
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+
+		entries, err := os.ReadDir(currentPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read directory %s: %w", currentPath, err)
+		}
+
+		found := false
+
+		// On case-sensitive filesystems (Linux), prefer exact match first
+		// This prevents File.txt and file.txt ambiguity
+		if runtime.GOOS == "linux" {
+			for _, entry := range entries {
+				if entry.Name() == part {
+					currentPath = filepath.Join(currentPath, entry.Name())
+					found = true
+					break
+				}
+			}
+		}
+
+		// Fallback to case-insensitive match (or first attempt on Windows/macOS)
+		if !found {
+			for _, entry := range entries {
+				if strings.EqualFold(entry.Name(), part) {
+					currentPath = filepath.Join(currentPath, entry.Name())
+					found = true
+					break
+				}
+			}
+		}
+
+		// Handle 8.3 short names on Windows (PROGRA~1)
+		// If component not found via ReadDir but path exists via Stat,
+		// it might be a short name or special filesystem entry
+		if !found {
+			targetCheck := filepath.Join(currentPath, part)
+			if _, err := os.Stat(targetCheck); err == nil {
+				// Path exists but wasn't found in directory listing
+				// Accept the component as-is (likely 8.3 short name)
+				currentPath = targetCheck
+				found = true
+			}
+		}
+
+		if !found {
+			return "", fmt.Errorf("component %s not found in %s", part, currentPath)
+		}
+	}
+
+	return currentPath, nil
 }
 
 func GetSystemPaths(

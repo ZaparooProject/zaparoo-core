@@ -86,8 +86,8 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 
-			// Set indexing status
-			statusInstance.indexing = tt.indexing
+			// Set indexing status - use setRunning() to avoid data race
+			statusInstance.setRunning(tt.indexing)
 
 			if tt.optimizationStatus == "running" && !tt.indexing {
 				// Database exists but is optimizing

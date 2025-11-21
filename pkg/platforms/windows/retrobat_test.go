@@ -53,14 +53,20 @@ func TestGetRetroBatSystemMapping(t *testing.T) {
 	t.Parallel()
 	mapping := getRetroBatSystemMapping()
 
-	// Test some common systems with correct uppercase values
-	assert.Equal(t, "SNES", mapping["snes"])
-	assert.Equal(t, "NES", mapping["nes"])
-	assert.Equal(t, "Genesis", mapping["genesis"])
-	assert.Equal(t, "PSX", mapping["psx"])
+	// Test some common systems with correct folder names and system IDs
+	assert.Equal(t, systemdefs.SystemSNES, mapping["snes"])
+	assert.Equal(t, systemdefs.SystemNES, mapping["nes"])
+	assert.Equal(t, systemdefs.SystemGenesis, mapping["megadrive"]) // RetroBat uses "megadrive" folder
+	assert.Equal(t, systemdefs.SystemPSX, mapping["psx"])
+	assert.Equal(t, systemdefs.SystemGameCube, mapping["gamecube"]) // Not "gc"
+	assert.Equal(t, systemdefs.SystemAtariLynx, mapping["lynx"])    // Not "atarilynx"
+	assert.Equal(t, systemdefs.SystemWii, mapping["wii"])
+	assert.Equal(t, systemdefs.SystemSwitch, mapping["switch"])
+	assert.Equal(t, systemdefs.SystemPS3, mapping["ps3"])
+	assert.Equal(t, systemdefs.SystemXbox, mapping["xbox"])
 
-	// Ensure we have a reasonable number of systems
-	assert.Greater(t, len(mapping), 20, "Should have more than 20 system mappings")
+	// Ensure we have comprehensive system mappings (60+ systems)
+	assert.Greater(t, len(mapping), 60, "Should have more than 60 system mappings")
 }
 
 func TestCreateRetroBatLauncher(t *testing.T) {
@@ -74,7 +80,7 @@ func TestCreateRetroBatLauncher(t *testing.T) {
 
 	assert.Equal(t, "RetroBatSNES", launcher.ID)
 	assert.Equal(t, "SNES", launcher.SystemID)
-	assert.Equal(t, []string{filepath.Join("roms", "snes")}, launcher.Folders)
+	assert.Empty(t, launcher.Folders) // RetroBat launchers use custom Test function, not Folders
 	assert.True(t, launcher.SkipFilesystemScan)
 
 	// Test functions are not nil
@@ -146,8 +152,8 @@ func TestRetroBatSystemMappingIntegrity(t *testing.T) {
 	t.Parallel()
 	mapping := getRetroBatSystemMapping()
 
-	// Test that we have a reasonable number of systems
-	assert.GreaterOrEqual(t, len(mapping), 20, "Should have at least 20 systems in RetroBat mapping")
+	// Test that we have a comprehensive number of systems
+	assert.GreaterOrEqual(t, len(mapping), 60, "Should have at least 60 systems in RetroBat mapping")
 
 	// Test that system folder names are valid (lowercase, no spaces for RetroBat compatibility)
 	for systemFolder := range mapping {
@@ -180,17 +186,21 @@ func TestRetroBatCommonSystemsExist(t *testing.T) {
 	t.Parallel()
 	mapping := getRetroBatSystemMapping()
 
-	// Test that common gaming systems are mapped
+	// Test that common gaming systems are mapped (using actual RetroBat folder names)
 	commonSystems := []string{
 		"nes",
 		"snes",
-		"genesis",
+		"megadrive", // RetroBat uses "megadrive" not "genesis"
 		"n64",
+		"gamecube", // RetroBat uses "gamecube" not "gc"
+		"wii",
 		"psx",
+		"ps2",
 		"gba",
 		"gb",
-		"arcade",
+		"mame",
 		"atari2600",
+		"dreamcast",
 	}
 
 	for _, system := range commonSystems {
@@ -244,49 +254,7 @@ func TestAllRetroBatSystemsHaveValidStructure(t *testing.T) {
 
 // isValidSystemID checks if a system ID exists in the systemdefs package
 func isValidSystemID(systemID string) bool {
-	// Check against known systemdefs constants
-	// This is a simple validation that covers the main systems
-	switch systemID {
-	case systemdefs.System3DO,
-		systemdefs.SystemAmiga,
-		systemdefs.SystemAmstrad,
-		systemdefs.SystemArcade,
-		systemdefs.SystemAtari2600,
-		systemdefs.SystemAtari5200,
-		systemdefs.SystemAtari7800,
-		systemdefs.SystemAtariLynx,
-		systemdefs.SystemAtariST,
-		systemdefs.SystemC64,
-		systemdefs.SystemDreamcast,
-		systemdefs.SystemFDS,
-		systemdefs.SystemGameGear,
-		systemdefs.SystemGameboy,
-		systemdefs.SystemGBA,
-		systemdefs.SystemGameboyColor,
-		systemdefs.SystemGameCube,
-		systemdefs.SystemGenesis,
-		systemdefs.SystemMasterSystem,
-		systemdefs.SystemMSX,
-		systemdefs.SystemNintendo64,
-		systemdefs.SystemNDS,
-		systemdefs.SystemNeoGeo,
-		systemdefs.SystemNeoGeoCD,
-		systemdefs.SystemNES,
-		systemdefs.SystemNeoGeoPocket,
-		systemdefs.SystemNeoGeoPocketColor,
-		systemdefs.SystemPC,
-		systemdefs.SystemTurboGrafx16,
-		systemdefs.SystemTurboGrafx16CD,
-		systemdefs.SystemPokemonMini,
-		systemdefs.SystemPSX,
-		systemdefs.SystemPS2,
-		systemdefs.SystemSaturn,
-		systemdefs.SystemSNES,
-		systemdefs.SystemVirtualBoy,
-		systemdefs.SystemWonderSwan,
-		systemdefs.SystemWonderSwanColor:
-		return true
-	default:
-		return false
-	}
+	// Use systemdefs.GetSystem to check if the system exists
+	_, err := systemdefs.GetSystem(systemID)
+	return err == nil
 }

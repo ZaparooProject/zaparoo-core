@@ -7,6 +7,7 @@
 package batocera
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -838,4 +840,147 @@ func TestReturnToMenu_CallsStopActiveLauncherWithStopForMenu(t *testing.T) {
 	// The mock returns "NO GAME RUNNING" which is handled gracefully
 	// The important thing is no panic occurred
 	assert.NoError(t, err, "ReturnToMenu should handle no active media gracefully")
+}
+
+// TestStartPost_ESAPIUnavailable tests that StartPost handles ES API unavailability gracefully
+func TestStartPost_ESAPIUnavailable(t *testing.T) {
+	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running
+	// No mock ES API server - API will be unavailable (connection refused)
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{
+		clock: clockwork.NewRealClock(), // Initialize clock to avoid nil pointer
+	}
+
+	var capturedMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		capturedMedia = media
+	}
+
+	activeMedia := func() *models.ActiveMedia {
+		return capturedMedia
+	}
+
+	// StartPost should handle ES API unavailability gracefully with warning
+	err = platform.StartPost(cfg, nil, activeMedia, setActiveMedia, nil)
+
+	// Should not error - should handle gracefully with warning
+	require.NoError(t, err)
+
+	// Cleanup background tracker
+	if platform.stopTracker != nil {
+		_ = platform.stopTracker()
+	}
+
+	// Should set media to nil when API unavailable
+	assert.Nil(t, capturedMedia, "Should set active media to nil when ES API unavailable")
+}
+
+// TestLaunchMedia_ESAPIUnavailable tests that LaunchMedia handles ES API unavailability gracefully
+// This is a regression test for the bug where Kodi media couldn't be launched when ES API was down
+func TestLaunchMedia_ESAPIUnavailable(t *testing.T) {
+	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running
+	// No mock ES API server - API will be unavailable (connection refused)
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Set up platform with minimal initialization
+	platform := &Platform{
+		cfg:   cfg,
+		clock: clockwork.NewRealClock(),
+	}
+
+	var capturedMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		capturedMedia = media
+	}
+
+	activeMedia := func() *models.ActiveMedia {
+		return capturedMedia
+	}
+
+	platform.activeMedia = activeMedia
+	platform.setActiveMedia = setActiveMedia
+
+	// Create a test database
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Track if ES API check passed
+	esAPICheckPassed := false
+
+	// Create a Kodi launcher with a mock Launch function
+	launcher := &platforms.Launcher{
+		ID:       "KodiAlbum",
+		SystemID: systemdefs.SystemMusicAlbum,
+		Schemes:  []string{"kodi-album"},
+		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+			// If we get here, the ES API check passed!
+			esAPICheckPassed = true
+			// Return a mock process (we don't actually launch anything)
+			return &os.Process{Pid: 12345}, nil
+		},
+	}
+
+	// LaunchMedia should handle ES API unavailability gracefully
+	// It should log a warning and proceed with the launch (assuming no game is running)
+	err = platform.LaunchMedia(cfg, "kodi-album://47/Weather", launcher, db)
+
+	// Should not error - ES API check should pass gracefully
+	require.NoError(t, err, "Launch should succeed when ES API is unavailable")
+
+	// Verify that the ES API check was passed (Launch function was called)
+	assert.True(t, esAPICheckPassed, "ES API check should pass gracefully, allowing launch to proceed")
+}
+
+// TestStopActiveLauncher_ESAPIUnavailable tests that StopActiveLauncher handles ES API unavailability gracefully
+// This is a regression test for the bug where stopping launchers failed when ES API was down
+func TestStopActiveLauncher_ESAPIUnavailable(t *testing.T) {
+	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running
+	// No mock ES API server - API will be unavailable (connection refused)
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	platform := &Platform{
+		cfg:   cfg,
+		clock: clockwork.NewRealClock(),
+	}
+
+	// Set up active media state (non-Kodi launcher)
+	currentActiveMedia := &models.ActiveMedia{
+		LauncherID: "NES",
+		SystemID:   systemdefs.SystemNES,
+		Path:       "/test/path",
+		Name:       "Test Game",
+		Started:    time.Now(),
+	}
+
+	platform.activeMedia = func() *models.ActiveMedia {
+		return currentActiveMedia
+	}
+
+	mediaClearedCount := 0
+	platform.setActiveMedia = func(media *models.ActiveMedia) {
+		if media == nil {
+			mediaClearedCount++
+		}
+		currentActiveMedia = media
+	}
+
+	// StopActiveLauncher should handle ES API unavailability gracefully
+	err = platform.StopActiveLauncher(platforms.StopForMenu)
+
+	// Should not return error - ES API unavailability should be handled gracefully
+	// The killLauncher function should assume kill succeeded when ES API is down
+	require.NoError(t, err, "Should handle ES API unavailability gracefully")
+
+	// Media should be cleared (because kill succeeded gracefully)
+	assert.Equal(t, 1, mediaClearedCount, "Should clear active media after graceful kill")
 }

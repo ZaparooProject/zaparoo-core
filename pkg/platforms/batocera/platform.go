@@ -265,12 +265,16 @@ func (p *Platform) StopActiveLauncher(reason platforms.StopIntent) error {
 		log.Debug().Msgf("trying to kill launcher: try #%d", tries+1)
 		err := esapi.APIEmuKill()
 		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("failed to kill emulator: %w", err)
+			// ES API might be unavailable - log and check if we can verify it's killed
+			log.Debug().Err(err).Msg("failed to send kill command to ES API")
 		}
 
 		_, running, err := esapi.APIRunningGame()
 		if err != nil {
-			return fmt.Errorf("failed to check running game status: %w", err)
+			// ES API is unavailable - assume kill succeeded
+			log.Warn().Err(err).Msg("ES API unavailable, assuming kill succeeded")
+			killed = true
+			break
 		} else if !running {
 			killed = true
 			break
@@ -480,8 +484,12 @@ func (p *Platform) LaunchMedia(
 	// exit current media if one is running
 	_, running, err := esapi.APIRunningGame()
 	if err != nil {
-		return fmt.Errorf("failed to check running game status: %w", err)
-	} else if running {
+		// ES API is unavailable - log warning and assume nothing is running
+		log.Warn().Err(err).Msg("ES API unavailable, assuming no game is running")
+		running = false
+	}
+
+	if running {
 		// Check if we should preserve the running app (e.g., both launchers use same Kodi instance)
 		if !p.shouldKeepRunningInstance(cfg, launcher) {
 			log.Info().Msg("exiting current media")
