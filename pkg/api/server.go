@@ -680,7 +680,15 @@ func Start(
 	db *database.Database,
 	notifications <-chan models.Notification,
 ) {
+	// Extract port from listen address or use default
 	port := cfg.APIPort()
+	listenAddr := cfg.APIListen()
+	if _, portStr, err := net.SplitHostPort(listenAddr); err == nil && portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
 	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
 	baseOrigins = append(baseOrigins, allowedOrigins...)
 	baseOrigins = append(baseOrigins,
@@ -705,6 +713,9 @@ func Start(
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
 
+	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs())
+
+	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
@@ -770,7 +781,7 @@ func Start(
 	})
 
 	server := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.APIPort()),
+		Addr:              cfg.APIListen(),
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -779,8 +790,8 @@ func Start(
 	serverReady := make(chan struct{})
 
 	go func() {
-		log.Info().Msgf("starting HTTP server on port %d", cfg.APIPort())
-		log.Debug().Msg("HTTP server goroutine started, attempting to bind to port")
+		log.Info().Msgf("starting HTTP server on %s", cfg.APIListen())
+		log.Debug().Msg("HTTP server goroutine started, attempting to bind")
 
 		// Create a listener to ensure we can bind to the port before continuing
 		lc := &net.ListenConfig{}

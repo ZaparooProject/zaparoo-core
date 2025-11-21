@@ -21,15 +21,18 @@ package config
 
 import (
 	"regexp"
+	"strconv"
 )
 
 const DefaultAPIPort = 7497
 
 type Service struct {
 	DeviceID       string   `toml:"device_id"`
+	APIListen      string   `toml:"api_listen,omitempty"`
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
+	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
 	APIPort        int        `toml:"api_port"`
 }
@@ -70,4 +73,19 @@ func (c *Instance) GetMQTTPublishers() []MQTTPublisher {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.Publishers.MQTT
+}
+
+func (c *Instance) APIListen() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Service.APIListen == "" {
+		return ":" + strconv.Itoa(c.APIPort())
+	}
+	return c.vals.Service.APIListen
+}
+
+func (c *Instance) AllowedIPs() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.AllowedIPs
 }

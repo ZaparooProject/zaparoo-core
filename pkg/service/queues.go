@@ -27,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -228,9 +229,17 @@ func processTokenQueue(
 			log.Info().Msgf("processing token: %v", t)
 
 			// Play success sound immediately on scan success
-			if cfg.AudioFeedback() {
-				if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
-					log.Warn().Msgf("error playing success sound: %s", audioErr)
+			if path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform)); enabled {
+				if path == "" {
+					// Use embedded default sound
+					if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
+						log.Warn().Msgf("error playing success sound: %s", audioErr)
+					}
+				} else {
+					// Use custom sound file
+					if audioErr := audio.PlayFile(path); audioErr != nil {
+						log.Warn().Str("path", path).Msgf("error playing custom success sound: %s", audioErr)
+					}
 				}
 			}
 
@@ -260,9 +269,19 @@ func processTokenQueue(
 				}
 
 				// Play fail sound only if ZapScript fails
-				if cfg.AudioFeedback() && err != nil {
-					if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-						log.Warn().Msgf("error playing fail sound: %s", audioErr)
+				if err != nil {
+					if path, enabled := cfg.FailSoundPath(helpers.DataDir(platform)); enabled {
+						if path == "" {
+							// Use embedded default sound
+							if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
+								log.Warn().Msgf("error playing fail sound: %s", audioErr)
+							}
+						} else {
+							// Use custom sound file
+							if audioErr := audio.PlayFile(path); audioErr != nil {
+								log.Warn().Str("path", path).Msgf("error playing custom fail sound: %s", audioErr)
+							}
+						}
 					}
 				}
 

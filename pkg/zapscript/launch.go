@@ -340,6 +340,22 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		path = installPath
 	}
 
+	// Apply system defaults from system advanced arg if no explicit launcher specified
+	if env.Cmd.AdvArgs["launcher"] == "" && env.Cmd.AdvArgs["system"] != "" {
+		systemID := env.Cmd.AdvArgs["system"]
+		system, lookupErr := systemdefs.LookupSystem(systemID)
+		if lookupErr != nil {
+			log.Warn().Err(lookupErr).Str("system", systemID).
+				Msg("system arg provided but lookup failed - falling back to auto-detection")
+		} else {
+			if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+				log.Debug().Str("system", system.ID).Str("launcher", systemDefaults.Launcher).
+					Msg("applying system default launcher from system arg")
+				env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+			}
+		}
+	}
+
 	launch, err := getAltLauncher(pl, env)
 	if err != nil {
 		return platforms.CmdResult{}, err

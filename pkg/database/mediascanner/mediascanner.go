@@ -217,6 +217,7 @@ func GetSystemPaths(
 		for _, folder := range rootFolders {
 			gf, err := FindPath(folder)
 			if err != nil {
+				log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
 				continue
 			}
 
@@ -224,6 +225,8 @@ func GetSystemPaths(
 				systemFolder := filepath.Join(gf, folder)
 				path, err := FindPath(systemFolder)
 				if err != nil {
+					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
+						Msg("skipping system folder - not found or inaccessible")
 					continue
 				}
 
@@ -240,6 +243,8 @@ func GetSystemPaths(
 				systemFolder := folder
 				path, err := FindPath(systemFolder)
 				if err != nil {
+					log.Debug().Err(err).Str("path", systemFolder).Str("system", system.ID).
+						Msg("skipping absolute path - not found or inaccessible")
 					continue
 				}
 				matches = append(matches, PathResult{
@@ -323,6 +328,13 @@ func GetFiles(
 				return filepath.SkipDir
 			}
 			visited[key] = struct{}{}
+
+			// Check for .zaparooignore marker file
+			markerPath := filepath.Join(path, ".zaparooignore")
+			if _, statErr := os.Stat(markerPath); statErr == nil {
+				log.Info().Str("path", path).Msg("skipping directory with .zaparooignore marker")
+				return filepath.SkipDir
+			}
 		}
 
 		// handle symlinked directories

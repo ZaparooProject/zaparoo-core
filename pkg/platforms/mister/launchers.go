@@ -878,6 +878,20 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Launch:     launch(pl, systemdefs.SystemNeoGeoCD),
 		},
 		{
+			ID:         systemdefs.SystemNeoGeoPocket,
+			SystemID:   systemdefs.SystemNeoGeoPocket,
+			Folders:    []string{"NGP"},
+			Extensions: []string{".ngp"},
+			Launch:     launch(pl, systemdefs.SystemNeoGeoPocket),
+		},
+		{
+			ID:         systemdefs.SystemNeoGeoPocketColor,
+			SystemID:   systemdefs.SystemNeoGeoPocketColor,
+			Folders:    []string{"NGPC"},
+			Extensions: []string{".ngc"},
+			Launch:     launch(pl, systemdefs.SystemNeoGeoPocketColor),
+		},
+		{
 			ID:         systemdefs.SystemNES,
 			SystemID:   systemdefs.SystemNES,
 			Folders:    []string{"NES"},

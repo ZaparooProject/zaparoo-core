@@ -22,6 +22,8 @@ package mediascanner
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -1128,4 +1130,192 @@ func TestNewNamesIndex_TransactionCoverage(t *testing.T) {
 		"Should use 1 transaction for tag seeding when no files to process")
 
 	mockMediaDB.AssertExpectations(t)
+}
+
+// TestZaparooignoreMarker tests that directories containing a .zaparooignore file
+// are skipped during media scanning along with all their subdirectories.
+func TestZaparooignoreMarker(t *testing.T) {
+	// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+	tests := []struct {
+		name          string
+		setupDirs     map[string]bool // map of directory paths to whether they should have .zaparooignore
+		setupFiles    []string        // list of test files to create
+		expectedFiles []string        // list of files that should be found
+		expectedSkip  []string        // list of files that should be skipped
+	}{
+		{
+			name: "skip directory with zaparooignore marker",
+			setupDirs: map[string]bool{
+				"normal":  false,
+				"ignored": true,
+			},
+			setupFiles: []string{
+				"normal/game1.nes",
+				"normal/game2.nes",
+				"ignored/game3.nes",
+				"ignored/game4.nes",
+			},
+			expectedFiles: []string{
+				"normal/game1.nes",
+				"normal/game2.nes",
+			},
+			expectedSkip: []string{
+				"ignored/game3.nes",
+				"ignored/game4.nes",
+			},
+		},
+		{
+			name: "skip nested subdirectories under ignored directory",
+			setupDirs: map[string]bool{
+				"normal":          false,
+				"ignored":         true,
+				"ignored/subdir1": false,
+				"ignored/subdir2": false,
+				"normal/subdir":   false,
+			},
+			setupFiles: []string{
+				"normal/game1.nes",
+				"normal/subdir/game2.nes",
+				"ignored/game3.nes",
+				"ignored/subdir1/game4.nes",
+				"ignored/subdir2/game5.nes",
+			},
+			expectedFiles: []string{
+				"normal/game1.nes",
+				"normal/subdir/game2.nes",
+			},
+			expectedSkip: []string{
+				"ignored/game3.nes",
+				"ignored/subdir1/game4.nes",
+				"ignored/subdir2/game5.nes",
+			},
+		},
+		{
+			name: "multiple ignored directories",
+			setupDirs: map[string]bool{
+				"normal":   false,
+				"ignored1": true,
+				"ignored2": true,
+			},
+			setupFiles: []string{
+				"normal/game1.nes",
+				"ignored1/game2.nes",
+				"ignored2/game3.nes",
+			},
+			expectedFiles: []string{
+				"normal/game1.nes",
+			},
+			expectedSkip: []string{
+				"ignored1/game2.nes",
+				"ignored2/game3.nes",
+			},
+		},
+		{
+			name: "no zaparooignore markers - all files scanned",
+			setupDirs: map[string]bool{
+				"dir1": false,
+				"dir2": false,
+			},
+			setupFiles: []string{
+				"dir1/game1.nes",
+				"dir2/game2.nes",
+			},
+			expectedFiles: []string{
+				"dir1/game1.nes",
+				"dir2/game2.nes",
+			},
+			expectedSkip: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Cannot use t.Parallel() - modifies shared GlobalLauncherCache
+
+			// Create a temporary directory for this test
+			rootDir := t.TempDir()
+
+			// Create directory structure
+			for dir, hasMarker := range tt.setupDirs {
+				dirPath := filepath.Join(rootDir, dir)
+				err := os.MkdirAll(dirPath, 0o750)
+				require.NoError(t, err, "failed to create directory: %s", dir)
+
+				// Create .zaparooignore marker if needed
+				if hasMarker {
+					markerPath := filepath.Join(dirPath, ".zaparooignore")
+					err := os.WriteFile(markerPath, []byte(""), 0o600)
+					require.NoError(t, err, "failed to create .zaparooignore in: %s", dir)
+				}
+			}
+
+			// Create test files
+			for _, file := range tt.setupFiles {
+				filePath := filepath.Join(rootDir, file)
+				err := os.WriteFile(filePath, []byte("test content"), 0o600)
+				require.NoError(t, err, "failed to create test file: %s", file)
+			}
+
+			// Create config
+			fs := testhelpers.NewMemoryFS()
+			cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+			require.NoError(t, err)
+
+			// Create a test launcher for NES that accepts .nes files
+			launcher := platforms.Launcher{
+				ID:         "TestNESLauncher",
+				SystemID:   systemdefs.SystemNES,
+				Extensions: []string{".nes"},
+			}
+
+			// Create mock platform that returns our launcher
+			platform := mocks.NewMockPlatform()
+			platform.On("ID").Return("test-platform")
+			platform.On("Settings").Return(platforms.Settings{})
+			platform.On("Launchers", mock.AnythingOfType("*config.Instance")).Return([]platforms.Launcher{launcher})
+
+			// Initialize launcher cache
+			testLauncherCacheMutex.Lock()
+			originalCache := helpers.GlobalLauncherCache
+			testCache := &helpers.LauncherCache{}
+			testCache.Initialize(platform, cfg)
+			helpers.GlobalLauncherCache = testCache
+			defer func() {
+				helpers.GlobalLauncherCache = originalCache
+				testLauncherCacheMutex.Unlock()
+			}()
+
+			// Call GetFiles using NES system ID
+			ctx := context.Background()
+			files, err := GetFiles(ctx, cfg, platform, systemdefs.SystemNES, rootDir)
+			require.NoError(t, err, "GetFiles should not fail")
+
+			// Convert results to map for easier checking
+			foundFiles := make(map[string]bool)
+			for _, filePath := range files {
+				// Make path relative to rootDir for comparison
+				relPath := filePath[len(rootDir)+1:] // +1 to skip path separator
+				// Normalize path separators for cross-platform comparison
+				relPath = filepath.ToSlash(relPath)
+				foundFiles[relPath] = true
+			}
+
+			// Verify expected files were found
+			for _, expectedFile := range tt.expectedFiles {
+				assert.True(t, foundFiles[expectedFile],
+					"expected file should be found: %s", expectedFile)
+			}
+
+			// Verify skipped files were NOT found
+			for _, skippedFile := range tt.expectedSkip {
+				assert.False(t, foundFiles[skippedFile],
+					"file should have been skipped: %s", skippedFile)
+			}
+
+			// Verify total count matches expectations
+			assert.Len(t, foundFiles, len(tt.expectedFiles),
+				"total number of found files should match expected count")
+		})
+	}
 }
