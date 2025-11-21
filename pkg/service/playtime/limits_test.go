@@ -31,6 +31,203 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsClockReliable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		time time.Time
+		name string
+		want bool
+	}{
+		{
+			name: "year 2025 - reliable",
+			time: time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "year 2024 - reliable (release year)",
+			time: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			want: true,
+		},
+		{
+			name: "year 2023 - unreliable (before release)",
+			time: time.Date(2023, 12, 31, 23, 59, 59, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "year 1970 - unreliable (epoch)",
+			time: time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC),
+			want: false,
+		},
+		{
+			name: "year 2000 - unreliable",
+			time: time.Date(2000, 6, 15, 12, 0, 0, 0, time.UTC),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isClockReliable(tt.time)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBuildRuleContext_UnreliableClock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clock year 1970 - sets ClockReliable to false", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := helpers.NewMockUserDBI()
+		// Should NOT call GetMediaHistory when clock unreliable
+
+		db := &database.Database{
+			UserDB: mockDB,
+		}
+
+		cfg := &config.Instance{}
+
+		// Session started at epoch
+		sessionStart := time.Date(1970, 1, 1, 10, 0, 0, 0, time.UTC)
+		currentTime := time.Date(1970, 1, 1, 11, 0, 0, 0, time.UTC)
+
+		fakeClock := clockwork.NewFakeClockAt(currentTime)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+
+		ctx, err := tm.buildRuleContext(sessionStart)
+
+		require.NoError(t, err)
+		assert.False(t, ctx.ClockReliable, "clock should be unreliable for year 1970")
+		assert.Equal(t, time.Hour, ctx.SessionDuration, "session duration should still be calculated")
+		assert.Equal(t, time.Duration(0), ctx.DailyUsageToday, "daily usage should be 0 when clock unreliable")
+
+		// DB should not have been queried
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("clock year 2025 - sets ClockReliable to true", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := helpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{}, nil)
+
+		db := &database.Database{
+			UserDB: mockDB,
+		}
+
+		cfg := &config.Instance{}
+
+		sessionStart := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+		currentTime := time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)
+
+		fakeClock := clockwork.NewFakeClockAt(currentTime)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+
+		// Session started with reliable clock
+		tm.mu.Lock()
+		tm.sessionStartReliable = true
+		tm.mu.Unlock()
+
+		ctx, err := tm.buildRuleContext(sessionStart)
+
+		require.NoError(t, err)
+		assert.True(t, ctx.ClockReliable, "clock should be reliable for year 2025")
+		assert.Equal(t, time.Hour, ctx.SessionDuration)
+
+		// DB should have been queried
+		mockDB.AssertExpectations(t)
+	})
+}
+
+func TestBuildRuleContext_ClockHealing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("session starts at 1970, clock heals to 2025 mid-session", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := helpers.NewMockUserDBI()
+		// Should NOT query DB - session started unreliable
+
+		db := &database.Database{
+			UserDB: mockDB,
+		}
+
+		cfg := &config.Instance{}
+
+		// Session started at 1970, 10:00
+		sessionStart := time.Date(1970, 1, 1, 10, 0, 0, 0, time.UTC)
+		fakeClock := clockwork.NewFakeClockAt(sessionStart)
+
+		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+
+		// Simulate OnMediaStarted at 1970
+		tm.mu.Lock()
+		tm.sessionStart = sessionStart
+		tm.sessionStartReliable = false // Clock was unreliable at session start
+		tm.mu.Unlock()
+
+		// 5 minutes later, NTP syncs - clock jumps to 2025
+		// (We can't simulate wall clock jumps with fakeClock, but the monotonic time advances)
+		fakeClock.Advance(5 * time.Minute) // Monotonic advances 5 minutes
+
+		// Manually test what would happen if clock healed
+		// Since sessionStartReliable was false, daily should still be disabled
+
+		ctx, err := tm.buildRuleContext(sessionStart)
+
+		require.NoError(t, err)
+		assert.False(t, ctx.ClockReliable, "should remain unreliable - session started unreliably")
+		assert.Equal(t, 5*time.Minute, ctx.SessionDuration, "session duration correct via monotonic")
+		assert.Equal(t, time.Duration(0), ctx.DailyUsageToday, "daily disabled for this session")
+
+		mockDB.AssertExpectations(t)
+	})
+
+	t.Run("both clocks reliable with safety clamp", func(t *testing.T) {
+		t.Parallel()
+
+		mockDB := helpers.NewMockUserDBI()
+		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{}, nil)
+
+		db := &database.Database{
+			UserDB: mockDB,
+		}
+
+		cfg := &config.Instance{}
+
+		// Session started yesterday at 11 PM
+		sessionStart := time.Date(2025, 1, 14, 23, 0, 0, 0, time.UTC)
+		currentTime := time.Date(2025, 1, 15, 0, 30, 0, 0, time.UTC) // 12:30 AM today
+
+		fakeClock := clockwork.NewFakeClockAt(currentTime)
+		tm := NewLimitsManager(db, nil, cfg, fakeClock)
+
+		// Mark session start as reliable
+		tm.mu.Lock()
+		tm.sessionStartReliable = true
+		tm.mu.Unlock()
+
+		ctx, err := tm.buildRuleContext(sessionStart)
+
+		require.NoError(t, err)
+		assert.True(t, ctx.ClockReliable, "both clocks reliable")
+		assert.Equal(t, 90*time.Minute, ctx.SessionDuration, "total session: 1.5 hours")
+
+		// Due to safety clamp, even though sessionStartToday would be midnight (30 min),
+		// and the Before() check triggers, sessionDurationToday should be clamped to sessionDuration
+		// Actually wait - the midnight logic sets sessionStartToday = midnight = 00:00
+		// So sessionDurationToday = 00:30 - 00:00 = 30 minutes
+		// This is LESS than sessionDuration (90 min), so no clamp needed
+		assert.Equal(t, 30*time.Minute, ctx.DailyUsageToday, "only 30 min counts toward today")
+
+		mockDB.AssertExpectations(t)
+	})
+}
+
 func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +361,11 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 			fakeClock := clockwork.NewFakeClockAt(tt.currentTime)
 			tm := NewLimitsManager(db, nil, cfg, fakeClock)
 
+			// Mark session start as reliable for these tests
+			tm.mu.Lock()
+			tm.sessionStartReliable = true
+			tm.mu.Unlock()
+
 			// Build rule context
 			ctx, err := tm.buildRuleContext(tt.sessionStart)
 
@@ -197,6 +399,30 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 			currentSessionDur: 45 * time.Minute,
 			historicalEntries: []database.MediaHistoryEntry{},
 			wantDailyUsage:    45 * time.Minute,
+		},
+		{
+			name:              "active session in DB should be skipped (prevents double-counting)",
+			todayStart:        time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+			currentSessionDur: 30 * time.Minute,
+			historicalEntries: []database.MediaHistoryEntry{
+				// Previous completed session today
+				{
+					DBID:      2,
+					StartTime: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+					EndTime:   timePtr(time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC)),
+					PlayTime:  3600, // 1 hour
+				},
+				// Active session (EndTime = nil) - should be SKIPPED to avoid double-count
+				{
+					DBID:      3,
+					StartTime: time.Date(2025, 1, 15, 14, 0, 0, 0, time.UTC),
+					EndTime:   nil,  // Still running
+					PlayTime:  1800, // 30 minutes (same as currentSessionDur)
+				},
+			},
+			// Should be: 1 hour (completed) + 30 min (current) = 90 minutes
+			// NOT: 1 hour + 30 min (from DB) + 30 min (current) = 2 hours
+			wantDailyUsage: 90 * time.Minute,
 		},
 		{
 			name:              "historical session exactly at midnight boundary",
@@ -243,6 +469,11 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 			// Create LimitsManager
 			cfg := &config.Instance{}
 			tm := NewLimitsManager(db, nil, cfg, clockwork.NewRealClock())
+
+			// Mark session start as reliable
+			tm.mu.Lock()
+			tm.sessionStartReliable = true
+			tm.mu.Unlock()
 
 			// Calculate daily usage
 			dailyUsage, err := tm.calculateDailyUsage(tt.todayStart, tt.currentSessionDur)

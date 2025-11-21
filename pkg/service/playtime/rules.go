@@ -45,6 +45,11 @@ type RuleContext struct {
 
 	// DailyUsageToday is the total time used today (including current session)
 	DailyUsageToday time.Duration
+
+	// ClockReliable indicates whether the system clock is trustworthy.
+	// False when clock appears to be unset (e.g., year < 2024) or has jumped suspiciously.
+	// Daily limits are only enforced when ClockReliable is true.
+	ClockReliable bool
 }
 
 // SessionLimitRule enforces a maximum time per gaming session.
@@ -74,6 +79,14 @@ type DailyLimitRule struct {
 // Evaluate checks if today's total usage has exceeded the daily limit.
 func (r *DailyLimitRule) Evaluate(ctx RuleContext) (allowed bool, remaining time.Duration, reason string) {
 	if r.Limit == 0 {
+		return true, 0, ""
+	}
+
+	// Graceful degradation: If system clock is unreliable (e.g., year is 1970),
+	// we cannot accurately enforce daily limits. Skip enforcement to avoid
+	// punishing users with legitimate clock issues (offline boot, no RTC chip).
+	// Session limits still provide protection in this scenario.
+	if !ctx.ClockReliable {
 		return true, 0, ""
 	}
 

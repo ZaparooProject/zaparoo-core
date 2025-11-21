@@ -169,6 +169,69 @@ func TestDailyLimitRule_Evaluate(t *testing.T) {
 				CurrentTime:     time.Now(),
 				SessionDuration: 0,
 				DailyUsageToday: tt.dailyUsageToday,
+				ClockReliable:   true,
+			}
+
+			allowed, remaining, reason := rule.Evaluate(ctx)
+
+			assert.Equal(t, tt.wantAllowed, allowed, "allowed mismatch")
+			assert.Equal(t, tt.wantRemaining, remaining, "remaining mismatch")
+			assert.Equal(t, tt.wantReason, reason, "reason mismatch")
+		})
+	}
+}
+
+func TestDailyLimitRule_UnreliableClock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		wantReason    string
+		limit         time.Duration
+		dailyUsage    time.Duration
+		wantRemaining time.Duration
+		clockReliable bool
+		wantAllowed   bool
+	}{
+		{
+			name:          "unreliable clock - daily limit bypassed even when exceeded",
+			limit:         2 * time.Hour,
+			dailyUsage:    3 * time.Hour, // Would normally block
+			clockReliable: false,
+			wantAllowed:   true, // Allowed due to unreliable clock
+			wantRemaining: 0,
+			wantReason:    "",
+		},
+		{
+			name:          "unreliable clock - no enforcement regardless of usage",
+			limit:         2 * time.Hour,
+			dailyUsage:    10 * time.Hour,
+			clockReliable: false,
+			wantAllowed:   true,
+			wantRemaining: 0,
+			wantReason:    "",
+		},
+		{
+			name:          "reliable clock - normal enforcement",
+			limit:         2 * time.Hour,
+			dailyUsage:    3 * time.Hour,
+			clockReliable: true,
+			wantAllowed:   false,
+			wantRemaining: 0,
+			wantReason:    "daily",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rule := &DailyLimitRule{Limit: tt.limit}
+			ctx := RuleContext{
+				CurrentTime:     time.Now(),
+				SessionDuration: 0,
+				DailyUsageToday: tt.dailyUsage,
+				ClockReliable:   tt.clockReliable,
 			}
 
 			allowed, remaining, reason := rule.Evaluate(ctx)
@@ -251,6 +314,7 @@ func TestRuleContext_MultipleScenarios(t *testing.T) {
 				CurrentTime:     time.Now(),
 				SessionDuration: tt.sessionDuration,
 				DailyUsageToday: tt.dailyUsageToday,
+				ClockReliable:   true,
 			}
 
 			sessionAllowed, sessionRemaining, sessionReason := sessionRule.Evaluate(ctx)

@@ -38,19 +38,26 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// MinReliableYear is the earliest year considered valid for the system clock.
+	// Zaparoo Core v2 was released in 2024 - any earlier date indicates an unset clock.
+	MinReliableYear = 2024
+)
+
 // LimitsManager enforces time limits and warnings for gameplay sessions.
 type LimitsManager struct {
-	sessionStart      time.Time
-	platform          platforms.Platform
-	clock             clockwork.Clock
-	ctx               context.Context
-	db                *database.Database
-	cfg               *config.Instance
-	cancel            context.CancelFunc
-	notificationsSend chan<- models.Notification
-	warningsGiven     map[time.Duration]bool
-	mu                sync.Mutex
-	subscriptionID    int
+	sessionStart         time.Time
+	platform             platforms.Platform
+	clock                clockwork.Clock
+	ctx                  context.Context
+	db                   *database.Database
+	cfg                  *config.Instance
+	cancel               context.CancelFunc
+	notificationsSend    chan<- models.Notification
+	warningsGiven        map[time.Duration]bool
+	subscriptionID       int
+	mu                   sync.Mutex
+	sessionStartReliable bool
 }
 
 // NewLimitsManager creates a new LimitsManager instance.
@@ -138,11 +145,19 @@ func (tm *LimitsManager) OnMediaStarted() {
 	}
 
 	tm.mu.Lock()
-	tm.sessionStart = tm.clock.Now()
+	now := tm.clock.Now()
+	tm.sessionStart = now
+	tm.sessionStartReliable = isClockReliable(now)
 	tm.warningsGiven = make(map[time.Duration]bool)
 	tm.mu.Unlock()
 
-	log.Info().Msg("playtime: session started, beginning time monitoring")
+	if tm.sessionStartReliable {
+		log.Info().Msg("playtime: session started, beginning time monitoring")
+	} else {
+		log.Warn().
+			Int("year", now.Year()).
+			Msg("playtime: session started with unreliable clock - daily limits disabled for this session")
+	}
 
 	// Start the check loop
 	go tm.checkLoop()
@@ -159,6 +174,7 @@ func (tm *LimitsManager) OnMediaStopped() {
 
 	log.Info().Msg("playtime: session stopped, ending time monitoring")
 	tm.sessionStart = time.Time{}
+	tm.sessionStartReliable = false
 	tm.warningsGiven = make(map[time.Duration]bool)
 }
 
@@ -243,33 +259,80 @@ func (tm *LimitsManager) checkLimits() {
 	}
 }
 
+// isClockReliable checks if the system clock appears to be set correctly.
+// Returns false if the clock is clearly wrong (e.g., year < 2024).
+// This handles MiSTer's lack of RTC chip - clock often resets to epoch on boot.
+func isClockReliable(t time.Time) bool {
+	return t.Year() >= MinReliableYear
+}
+
 // buildRuleContext creates a RuleContext from current state.
 func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, error) {
 	now := tm.clock.Now()
+
+	// Session duration is always valid - uses monotonic clock via time.Sub()
+	// This is immune to NTP jumps, clock resets, and manual time changes.
 	sessionDuration := now.Sub(sessionStart)
 
-	// Get start of today for daily usage calculation
-	year, month, day := now.Date()
-	todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+	// Check if BOTH clocks are trustworthy for daily limit enforcement
+	tm.mu.Lock()
+	sessionStartWasReliable := tm.sessionStartReliable
+	tm.mu.Unlock()
 
-	// Calculate how much of the current session counts toward today
-	sessionStartToday := sessionStart
-	if sessionStart.Before(todayStart) {
-		// Session started yesterday - only count time after midnight
-		sessionStartToday = todayStart
-	}
-	sessionDurationToday := now.Sub(sessionStartToday)
+	currentClockReliable := isClockReliable(now)
+	bothClocksReliable := sessionStartWasReliable && currentClockReliable
 
-	// Calculate today's total usage from MediaHistory
-	dailyUsage, err := tm.calculateDailyUsage(todayStart, sessionDurationToday)
-	if err != nil {
-		return RuleContext{}, fmt.Errorf("failed to calculate daily usage: %w", err)
+	var dailyUsage time.Duration
+	if bothClocksReliable {
+		// Both clocks appear valid - calculate daily usage normally
+		year, month, day := now.Date()
+		todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+
+		// Calculate how much of the current session counts toward today
+		sessionStartToday := sessionStart
+		if sessionStart.Before(todayStart) {
+			// Session started yesterday - only count time after midnight
+			sessionStartToday = todayStart
+		}
+		sessionDurationToday := now.Sub(sessionStartToday)
+
+		// Safety clamp: Session duration today cannot exceed total session duration.
+		// This prevents math errors when clock jumps (e.g., 1970 → 2025 mid-session).
+		if sessionDurationToday > sessionDuration {
+			sessionDurationToday = sessionDuration
+		}
+
+		// Calculate today's total usage from MediaHistory
+		usage, err := tm.calculateDailyUsage(todayStart, sessionDurationToday)
+		if err != nil {
+			return RuleContext{}, fmt.Errorf("failed to calculate daily usage: %w", err)
+		}
+		dailyUsage = usage
+	} else {
+		// Clock unreliable - skip daily usage calculation.
+		// DailyLimitRule will skip enforcement when ClockReliable is false.
+		// This provides graceful degradation: session limits still work.
+		dailyUsage = 0
+
+		if !sessionStartWasReliable {
+			// Session started with bad clock - daily disabled for entire session
+			log.Debug().
+				Int("year", now.Year()).
+				Msg("playtime: daily limits disabled - session started with unreliable clock")
+		} else if !currentClockReliable {
+			// Clock became unreliable during session - log once at debug level
+			// (checkLimits runs every minute, so we avoid log spam)
+			log.Debug().
+				Int("year", now.Year()).
+				Msg("playtime: system clock appears unreliable, daily limits disabled (session limits still active)")
+		}
 	}
 
 	return RuleContext{
 		CurrentTime:     now,
 		SessionDuration: sessionDuration,
 		DailyUsageToday: dailyUsage,
+		ClockReliable:   bothClocksReliable,
 	}, nil
 }
 
@@ -315,7 +378,14 @@ func (tm *LimitsManager) calculateDailyUsage(
 				}
 				// Note: Current session is handled separately via currentSessionDuration
 			} else {
-				// Entry started today - count full PlayTime
+				// Entry started today
+				if entry.EndTime == nil {
+					// Active session (still running) - skip it.
+					// We calculate current session precisely via currentSessionDuration parameter.
+					// Including it here would double-count the current session.
+					continue
+				}
+				// Completed session - count full PlayTime
 				totalUsage += time.Duration(entry.PlayTime) * time.Second
 			}
 
