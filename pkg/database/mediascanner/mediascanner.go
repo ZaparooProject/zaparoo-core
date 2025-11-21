@@ -108,17 +108,26 @@ func FindPath(path string) (string, error) {
 
 	// Start building result from volume/root
 	currentPath := volume
-	if currentPath == "" && filepath.IsAbs(absPath) {
+	if currentPath == "" {
 		// Unix absolute path - start from root
-		currentPath = string(filepath.Separator)
+		if filepath.IsAbs(absPath) {
+			currentPath = string(filepath.Separator)
+		}
+	} else {
+		// Windows: ensure volume ends with separator (C: -> C:\)
+		// filepath.Join("C:", "Users") -> "C:Users" (relative, wrong!)
+		// filepath.Join("C:\", "Users") -> "C:\Users" (absolute, correct!)
+		if !strings.HasSuffix(currentPath, string(filepath.Separator)) {
+			currentPath += string(filepath.Separator)
+		}
 	}
 
-	// Get relative path (everything after volume/root)
+	// Get relative path (everything after volume)
 	relPath := absPath[len(volume):]
-	// Skip leading separator (both Unix "/" and Windows "\" after volume)
-	if relPath != "" && (relPath[0] == '/' || relPath[0] == '\\') {
-		relPath = relPath[1:]
-	}
+
+	// Clean leading separators to ensure clean split
+	// Handles both "\" from "C:\Users" and "/" from mixed-slash paths
+	relPath = strings.TrimLeft(relPath, "/\\")
 
 	// Split into components and normalize each
 	parts := strings.Split(relPath, string(filepath.Separator))
