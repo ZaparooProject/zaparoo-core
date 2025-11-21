@@ -49,6 +49,7 @@ type Values struct {
 	Audio        Audio     `toml:"audio,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	Media        Media     `toml:"media,omitempty"`
+	Playtime     Playtime  `toml:"playtime,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
@@ -62,6 +63,7 @@ type Values struct {
 type Audio struct {
 	SuccessSound *string `toml:"success_sound,omitempty"`
 	FailSound    *string `toml:"fail_sound,omitempty"`
+	LimitSound   *string `toml:"limit_sound,omitempty"`
 	ScanFeedback bool    `toml:"scan_feedback,omitempty"`
 }
 
@@ -358,6 +360,35 @@ func (c *Instance) FailSoundPath(dataDir string) (string, bool) {
 	}
 
 	path := *c.vals.Audio.FailSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
+}
+
+// LimitSoundPath returns the resolved path to the limit sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) LimitSoundPath(dataDir string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// nil = use embedded default
+	if c.vals.Audio.LimitSound == nil {
+		return "", true
+	}
+
+	// empty string = disabled
+	if *c.vals.Audio.LimitSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.LimitSound
 
 	// absolute path = use as-is
 	if filepath.IsAbs(path) {

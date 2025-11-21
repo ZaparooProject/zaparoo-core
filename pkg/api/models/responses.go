@@ -110,6 +110,15 @@ type TokenResponse struct {
 	Data     string    `json:"data"`
 }
 
+type PlaytimeLimitReachedParams struct {
+	Reason string `json:"reason"`
+}
+
+type PlaytimeLimitWarningParams struct {
+	Interval  string `json:"interval"`
+	Remaining string `json:"remaining"`
+}
+
 type IndexingStatusResponse struct {
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
 	CurrentStep        *int    `json:"currentStep,omitempty"`

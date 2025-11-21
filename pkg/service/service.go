@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -146,10 +147,10 @@ func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
 	}
 
 	// Cleanup old media history entries if retention is configured
-	mediaHistoryDays := cfg.MediaHistory()
-	if mediaHistoryDays > 0 {
-		log.Info().Msgf("cleaning up media history older than %d days", mediaHistoryDays)
-		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(mediaHistoryDays)
+	playtimeRetention := cfg.PlaytimeRetention()
+	if playtimeRetention > 0 {
+		log.Info().Msgf("cleaning up media history older than %d days", playtimeRetention)
+		rowsDeleted, cleanupErr := db.UserDB.CleanupMediaHistory(playtimeRetention)
 		switch {
 		case cleanupErr != nil:
 			log.Error().Err(cleanupErr).Msg("error cleaning up media history")
@@ -203,6 +204,13 @@ func Start(
 
 	// Perform all history cleanup operations
 	cleanupHistoryOnStartup(cfg, db)
+
+	// Initialize playtime limits system
+	if cfg.PlaytimeLimitsEnabled() {
+		log.Info().Msg("initializing playtime limits")
+		limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
+		limitsManager.Start(notifBroker, st.Notifications)
+	}
 
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {

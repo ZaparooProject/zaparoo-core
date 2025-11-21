@@ -26,14 +26,21 @@ import (
 )
 
 const (
-	NotificationReadersConnected    = "readers.added"
-	NotificationReadersDisconnected = "readers.removed"
-	NotificationRunning             = "running"
-	NotificationTokensAdded         = "tokens.added"
-	NotificationTokensRemoved       = "tokens.removed"
-	NotificationStopped             = "media.stopped"
-	NotificationStarted             = "media.started"
-	NotificationMediaIndexing       = "media.indexing" // TODO: rename to generating
+	NotificationReadersConnected     = "readers.added"
+	NotificationReadersDisconnected  = "readers.removed"
+	NotificationRunning              = "running"
+	NotificationTokensAdded          = "tokens.added"
+	NotificationTokensRemoved        = "tokens.removed"
+	NotificationStopped              = "media.stopped"
+	NotificationStarted              = "media.started"
+	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
+	NotificationPlaytimeLimitReached = "playtime.limit.reached"
+	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+)
+
+const (
+	PlaytimeLimitReasonSession = "session"
+	PlaytimeLimitReasonDaily   = "daily"
 )
 
 const (
