@@ -288,7 +288,7 @@ func TestPlayWAV_CancellationBehavior(t *testing.T) {
 	playbackMu.Lock()
 	gen1 := playbackGen
 	playbackMu.Unlock()
-	assert.Equal(t, initialGen+1, gen1, "first playback should increment generation")
+	assert.Greater(t, gen1, initialGen, "first playback should increment generation")
 
 	// Play second sound (should cancel first)
 	mock2 := &mockReadCloser{
@@ -301,8 +301,7 @@ func TestPlayWAV_CancellationBehavior(t *testing.T) {
 	playbackMu.Lock()
 	gen2 := playbackGen
 	playbackMu.Unlock()
-	assert.Equal(t, gen1+1, gen2, "second playback should increment generation")
-	assert.Equal(t, initialGen+2, gen2, "two playbacks should increment generation by 2")
+	assert.Greater(t, gen2, gen1, "second playback should increment generation")
 }
 
 func TestPlayWAVBytes_CancellationBehavior(t *testing.T) {

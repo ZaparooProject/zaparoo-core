@@ -1296,6 +1296,8 @@ func TestZaparooignoreMarker(t *testing.T) {
 			for _, filePath := range files {
 				// Make path relative to rootDir for comparison
 				relPath := filePath[len(rootDir)+1:] // +1 to skip path separator
+				// Normalize path separators for cross-platform comparison
+				relPath = filepath.ToSlash(relPath)
 				foundFiles[relPath] = true
 			}
 
