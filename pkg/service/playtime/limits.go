@@ -248,8 +248,20 @@ func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, 
 	now := tm.clock.Now()
 	sessionDuration := now.Sub(sessionStart)
 
+	// Get start of today for daily usage calculation
+	year, month, day := now.Date()
+	todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+
+	// Calculate how much of the current session counts toward today
+	sessionStartToday := sessionStart
+	if sessionStart.Before(todayStart) {
+		// Session started yesterday - only count time after midnight
+		sessionStartToday = todayStart
+	}
+	sessionDurationToday := now.Sub(sessionStartToday)
+
 	// Calculate today's total usage from MediaHistory
-	dailyUsage, err := tm.calculateDailyUsage(now, sessionDuration)
+	dailyUsage, err := tm.calculateDailyUsage(todayStart, sessionDurationToday)
 	if err != nil {
 		return RuleContext{}, fmt.Errorf("failed to calculate daily usage: %w", err)
 	}
@@ -263,13 +275,9 @@ func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, 
 
 // calculateDailyUsage queries the database for today's total play time.
 func (tm *LimitsManager) calculateDailyUsage(
-	now time.Time,
+	todayStart time.Time,
 	currentSessionDuration time.Duration,
 ) (time.Duration, error) {
-	// Get start of today
-	year, month, day := now.Date()
-	todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
-
 	// Query media history for today
 	// Note: GetMediaHistory uses pagination, so we need to fetch all entries
 	var totalUsage time.Duration
@@ -287,14 +295,31 @@ func (tm *LimitsManager) calculateDailyUsage(
 		}
 
 		for i := range entries {
-			if entries[i].StartTime.Before(todayStart) {
-				// We've gone past today's entries
+			entry := &entries[i]
+
+			// If entry ended before today, skip it
+			if entry.EndTime != nil && entry.EndTime.Before(todayStart) {
+				// We've gone past today's entries (ordered DESC by DBID)
 				goto done
 			}
 
-			// Add this entry's play time
-			totalUsage += time.Duration(entries[i].PlayTime) * time.Second
-			lastID = int(entries[i].DBID)
+			// If entry started before today but ended today (or is still running),
+			// only count the portion that falls within today
+			if entry.StartTime.Before(todayStart) {
+				if entry.EndTime != nil {
+					// Completed session that spans midnight
+					playTimeToday := entry.EndTime.Sub(todayStart)
+					if playTimeToday > 0 {
+						totalUsage += playTimeToday
+					}
+				}
+				// Note: Current session is handled separately via currentSessionDuration
+			} else {
+				// Entry started today - count full PlayTime
+				totalUsage += time.Duration(entry.PlayTime) * time.Second
+			}
+
+			lastID = int(entry.DBID)
 		}
 
 		if len(entries) < limit {
@@ -304,7 +329,7 @@ func (tm *LimitsManager) calculateDailyUsage(
 	}
 
 done:
-	// Add current session duration
+	// Add current session duration (already clamped to today in buildRuleContext)
 	totalUsage += currentSessionDuration
 
 	return totalUsage, nil
