@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -135,13 +136,15 @@ func TestCmdLaunch_InvalidSystemArgFallsBackToAutoDetect(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
-	mockPlatform.On("LaunchMedia", cfg, "/absolute/path/game.bin",
+	// Use a platform-specific absolute path
+	absPath := filepath.Join(t.TempDir(), "game.bin")
+	mockPlatform.On("LaunchMedia", cfg, absPath,
 		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
 			Name: "launch",
-			Args: []string{"/absolute/path/game.bin"},
+			Args: []string{absPath},
 			AdvArgs: map[string]string{
 				"system": "invalidname", // Invalid system should log warning and fall back
 			},
