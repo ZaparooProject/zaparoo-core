@@ -591,17 +591,17 @@ var Systems = map[string]System{
 	},
 	SystemNeoGeo: {
 		ID:        SystemNeoGeo,
-		Slugs:     []string{"snkneogeo", "neogeo"},
+		Slugs:     []string{"snkneogeo"},
 		Fallbacks: []string{SystemNeoGeoAES, SystemNeoGeoMVS},
 	},
 	SystemNeoGeoAES: {
 		ID:        SystemNeoGeoAES,
-		Slugs:     []string{"aes", "neogeoaes"},
+		Slugs:     []string{"aes"},
 		Fallbacks: []string{SystemNeoGeo, SystemNeoGeoMVS},
 	},
 	SystemNeoGeoMVS: {
 		ID:        SystemNeoGeoMVS,
-		Slugs:     []string{"mvs", "neogeomvs"},
+		Slugs:     []string{"mvs"},
 		Fallbacks: []string{SystemNeoGeo, SystemNeoGeoAES},
 	},
 	SystemNeoGeoCD: {
