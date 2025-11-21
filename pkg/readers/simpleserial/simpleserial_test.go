@@ -267,7 +267,7 @@ func TestOpen_SetReadTimeoutError(t *testing.T) {
 	mockPort.TimeoutErr = assert.AnError
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -290,7 +290,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 	mockPort.ReadData = []byte("SCAN\tuid=test123\ttext=hello\n")
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -340,7 +340,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -380,7 +380,7 @@ func TestOpen_ReaderErrorWithoutActiveToken(t *testing.T) {
 	mockPort.ReadError = assert.AnError
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -423,7 +423,7 @@ func TestOpen_TokenTimeout(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -478,7 +478,7 @@ func TestOpen_MultipleTokens(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -539,7 +539,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
