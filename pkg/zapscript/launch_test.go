@@ -56,8 +56,11 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 		},
 	}
 
+	// Use a platform-specific absolute path
+	absPath := filepath.Join(t.TempDir(), "game.bin")
+
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{genesisLauncher})
-	mockPlatform.On("LaunchMedia", cfg, "/absolute/path/game.bin",
+	mockPlatform.On("LaunchMedia", cfg, absPath,
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "genesis-retroarch"
 		}),
@@ -66,7 +69,7 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
 			Name: "launch",
-			Args: []string{"/absolute/path/game.bin"},
+			Args: []string{absPath},
 			AdvArgs: map[string]string{
 				"system": "genesis",
 			},
@@ -103,8 +106,11 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 		},
 	}
 
+	// Use a platform-specific absolute path
+	absPath := filepath.Join(t.TempDir(), "game.bin")
+
 	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{explicitLauncher})
-	mockPlatform.On("LaunchMedia", cfg, "/absolute/path/game.bin",
+	mockPlatform.On("LaunchMedia", cfg, absPath,
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "genesis-explicit"
 		}),
@@ -113,7 +119,7 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
 			Name: "launch",
-			Args: []string{"/absolute/path/game.bin"},
+			Args: []string{absPath},
 			AdvArgs: map[string]string{
 				"system":   "genesis",
 				"launcher": "genesis-explicit", // Explicit launcher should win
@@ -166,13 +172,15 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
-	mockPlatform.On("LaunchMedia", cfg, "/absolute/path/game.bin",
+	// Use a platform-specific absolute path
+	absPath := filepath.Join(t.TempDir(), "game.bin")
+	mockPlatform.On("LaunchMedia", cfg, absPath,
 		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
 			Name: "launch",
-			Args: []string{"/absolute/path/game.bin"},
+			Args: []string{absPath},
 			AdvArgs: map[string]string{
 				"system": "genesis",
 			},
