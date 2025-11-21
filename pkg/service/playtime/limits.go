@@ -476,3 +476,94 @@ func (tm *LimitsManager) playWarningSound() {
 		}
 	}
 }
+
+// StatusInfo contains current playtime session and limit status.
+type StatusInfo struct {
+	SessionStarted   time.Time
+	WarningsGiven    []time.Duration
+	SessionDuration  time.Duration
+	SessionRemaining time.Duration
+	DailyUsageToday  time.Duration
+	DailyRemaining   time.Duration
+	SessionActive    bool
+	ClockReliable    bool
+}
+
+// GetStatus returns the current playtime session and limit status.
+// Returns nil if no session is active.
+func (tm *LimitsManager) GetStatus() *StatusInfo {
+	// Snapshot session state under lock, then release to avoid deadlock in buildRuleContext
+	tm.mu.Lock()
+	sessionStart := tm.sessionStart
+	if sessionStart.IsZero() {
+		tm.mu.Unlock()
+		return &StatusInfo{
+			SessionActive: false,
+			ClockReliable: isClockReliable(tm.clock.Now()),
+		}
+	}
+	tm.mu.Unlock()
+
+	// Build rule context (performs DB I/O and acquires its own locks)
+	ctx, err := tm.buildRuleContext(sessionStart)
+	if err != nil {
+		log.Error().Err(err).Msg("playtime: failed to build rule context for status")
+		return &StatusInfo{
+			SessionActive:   true,
+			SessionStarted:  sessionStart,
+			SessionDuration: tm.clock.Now().Sub(sessionStart),
+			ClockReliable:   false,
+		}
+	}
+
+	// Calculate session and daily remaining times separately
+	var sessionRemaining, dailyRemaining time.Duration
+	sessionLimit := tm.cfg.SessionLimit()
+	dailyLimit := tm.cfg.DailyLimit()
+
+	if sessionLimit > 0 {
+		sessionRemaining = sessionLimit - ctx.SessionDuration
+		if sessionRemaining < 0 {
+			sessionRemaining = 0
+		}
+	}
+
+	if dailyLimit > 0 && ctx.ClockReliable {
+		dailyRemaining = dailyLimit - ctx.DailyUsageToday
+		if dailyRemaining < 0 {
+			dailyRemaining = 0
+		}
+	}
+
+	// Re-acquire lock to safely read warningsGiven map
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	// Verify session didn't stop while we were unlocked
+	if tm.sessionStart.IsZero() || !tm.sessionStart.Equal(sessionStart) {
+		return &StatusInfo{
+			SessionActive: false,
+			ClockReliable: ctx.ClockReliable,
+		}
+	}
+
+	// Convert warningsGiven map to slice and sort for consistent ordering
+	warnings := make([]time.Duration, 0, len(tm.warningsGiven))
+	for interval := range tm.warningsGiven {
+		warnings = append(warnings, interval)
+	}
+	sort.Slice(warnings, func(i, j int) bool {
+		return warnings[i] > warnings[j] // Descending order (largest first)
+	})
+
+	return &StatusInfo{
+		SessionActive:    true,
+		SessionStarted:   sessionStart,
+		SessionDuration:  ctx.SessionDuration,
+		SessionRemaining: sessionRemaining,
+		DailyUsageToday:  ctx.DailyUsageToday,
+		DailyRemaining:   dailyRemaining,
+		ClockReliable:    ctx.ClockReliable,
+		WarningsGiven:    warnings,
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPlaytimeLimitsEnabled(t *testing.T) {
@@ -291,4 +292,264 @@ func TestPlaytimeRetention(t *testing.T) {
 
 func intPtr(i int) *int {
 	return &i
+}
+
+func TestSetPlaytimeLimitsEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		initial *bool
+		name    string
+		set     bool
+		want    bool
+	}{
+		{
+			name:    "set to true",
+			initial: nil,
+			set:     true,
+			want:    true,
+		},
+		{
+			name:    "set to false",
+			initial: boolPtr(true),
+			set:     false,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{
+							Enabled: tt.initial,
+						},
+					},
+				},
+			}
+
+			inst.SetPlaytimeLimitsEnabled(tt.set)
+			got := inst.PlaytimeLimitsEnabled()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSetDailyLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		duration  string
+		wantError bool
+		wantValue time.Duration
+	}{
+		{
+			name:      "valid duration",
+			duration:  "2h30m",
+			wantError: false,
+			wantValue: 2*time.Hour + 30*time.Minute,
+		},
+		{
+			name:      "empty string clears limit",
+			duration:  "",
+			wantError: false,
+			wantValue: 0,
+		},
+		{
+			name:      "invalid duration returns error",
+			duration:  "not-valid",
+			wantError: true,
+		},
+		{
+			name:      "valid hours only",
+			duration:  "3h",
+			wantError: false,
+			wantValue: 3 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{},
+					},
+				},
+			}
+
+			err := inst.SetDailyLimit(tt.duration)
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				got := inst.DailyLimit()
+				assert.Equal(t, tt.wantValue, got)
+			}
+		})
+	}
+}
+
+func TestSetSessionLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		duration  string
+		wantError bool
+		wantValue time.Duration
+	}{
+		{
+			name:      "valid duration",
+			duration:  "45m",
+			wantError: false,
+			wantValue: 45 * time.Minute,
+		},
+		{
+			name:      "empty string clears limit",
+			duration:  "",
+			wantError: false,
+			wantValue: 0,
+		},
+		{
+			name:      "invalid duration returns error",
+			duration:  "invalid",
+			wantError: true,
+		},
+		{
+			name:      "valid hours",
+			duration:  "1h",
+			wantError: false,
+			wantValue: 1 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{},
+					},
+				},
+			}
+
+			err := inst.SetSessionLimit(tt.duration)
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				got := inst.SessionLimit()
+				assert.Equal(t, tt.wantValue, got)
+			}
+		})
+	}
+}
+
+func TestSetWarningIntervals(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		intervals []string
+		wantValue []time.Duration
+		wantError bool
+	}{
+		{
+			name:      "valid intervals",
+			intervals: []string{"10m", "5m", "2m"},
+			wantError: false,
+			wantValue: []time.Duration{10 * time.Minute, 5 * time.Minute, 2 * time.Minute},
+		},
+		{
+			name:      "empty slice sets defaults",
+			intervals: []string{},
+			wantError: false,
+			wantValue: []time.Duration{5 * time.Minute, 2 * time.Minute, 1 * time.Minute},
+		},
+		{
+			name:      "invalid interval returns error",
+			intervals: []string{"10m", "not-valid", "2m"},
+			wantError: true,
+		},
+		{
+			name:      "mixed valid durations",
+			intervals: []string{"15m", "30s"},
+			wantError: false,
+			wantValue: []time.Duration{15 * time.Minute, 30 * time.Second},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{},
+					},
+				},
+			}
+
+			err := inst.SetWarningIntervals(tt.intervals)
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				got := inst.WarningIntervals()
+				assert.Equal(t, tt.wantValue, got)
+			}
+		})
+	}
+}
+
+func TestSetPlaytimeRetention(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		days int
+		want int
+	}{
+		{
+			name: "set to 30 days",
+			days: 30,
+			want: 30,
+		},
+		{
+			name: "set to 0 disables cleanup",
+			days: 0,
+			want: 0,
+		},
+		{
+			name: "set to 365 days",
+			days: 365,
+			want: 365,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{},
+				},
+			}
+
+			inst.SetPlaytimeRetention(tt.days)
+			got := inst.PlaytimeRetention()
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

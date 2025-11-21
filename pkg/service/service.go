@@ -206,9 +206,10 @@ func Start(
 	cleanupHistoryOnStartup(cfg, db)
 
 	// Initialize playtime limits system
+	var limitsManager *playtime.LimitsManager
 	if cfg.PlaytimeLimitsEnabled() {
 		log.Info().Msg("initializing playtime limits")
-		limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
+		limitsManager = playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
 		limitsManager.Start(notifBroker, st.Notifications)
 	}
 
@@ -257,7 +258,7 @@ func Start(
 
 	log.Info().Msg("starting API service")
 	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, apiNotifications)
+	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications)
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)

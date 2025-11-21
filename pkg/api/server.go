@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	chi "github.com/go-chi/chi/v5"
@@ -203,6 +204,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
 		models.MethodSettingsReload:       methods.HandleSettingsReload,
 		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
+		models.MethodPlaytimeLimits:       methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate: methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:             methods.HandlePlaytime,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -553,6 +557,7 @@ func handleWSMessage(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -577,13 +582,14 @@ func handleWSMessage(
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
-			ClientID:   session.Request.RemoteAddr,
+			Platform:      platform,
+			Config:        cfg,
+			State:         st,
+			Database:      db,
+			LimitsManager: limitsManager,
+			TokenQueue:    inTokenQueue,
+			IsLocal:       clientIP.IsLoopback(),
+			ClientID:      session.Request.RemoteAddr,
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -608,6 +614,7 @@ func handlePostRequest(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -625,13 +632,14 @@ func handlePostRequest(
 		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
-			ClientID:   r.RemoteAddr,
+			Platform:      platform,
+			Config:        cfg,
+			State:         st,
+			Database:      db,
+			LimitsManager: limitsManager,
+			TokenQueue:    inTokenQueue,
+			IsLocal:       clientIP.IsLoopback(),
+			ClientID:      r.RemoteAddr,
 		}
 
 		var respBody []byte
@@ -678,6 +686,7 @@ func Start(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 	notifications <-chan models.Notification,
 ) {
 	// Extract port from listen address or use default
@@ -748,7 +757,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: latest")
 		}
 	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -756,7 +765,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -764,11 +773,11 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager),
 	))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED

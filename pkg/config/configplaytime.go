@@ -20,6 +20,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -108,4 +109,70 @@ func (c *Instance) WarningIntervals() []time.Duration {
 		}
 	}
 	return intervals
+}
+
+// SetPlaytimeLimitsEnabled enables or disables playtime limits.
+func (c *Instance) SetPlaytimeLimitsEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Limits.Enabled = &enabled
+}
+
+// SetDailyLimit sets the daily time limit from a duration string (e.g., "2h30m").
+// Returns an error if the duration string is invalid.
+// Pass empty string to disable daily limit.
+func (c *Instance) SetDailyLimit(duration string) error {
+	if duration != "" {
+		_, err := time.ParseDuration(duration)
+		if err != nil {
+			return fmt.Errorf("invalid daily limit duration: %w", err)
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Limits.Daily = duration
+	return nil
+}
+
+// SetSessionLimit sets the session time limit from a duration string (e.g., "45m").
+// Returns an error if the duration string is invalid.
+// Pass empty string to disable session limit.
+func (c *Instance) SetSessionLimit(duration string) error {
+	if duration != "" {
+		_, err := time.ParseDuration(duration)
+		if err != nil {
+			return fmt.Errorf("invalid session limit duration: %w", err)
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Limits.Session = duration
+	return nil
+}
+
+// SetWarningIntervals sets the warning intervals from duration strings (e.g., ["10m", "5m", "2m"]).
+// Returns an error if any duration string is invalid.
+// Pass empty slice to use defaults [5m, 2m, 1m].
+func (c *Instance) SetWarningIntervals(intervals []string) error {
+	// Validate all intervals before applying
+	for _, interval := range intervals {
+		if interval != "" {
+			_, err := time.ParseDuration(interval)
+			if err != nil {
+				return fmt.Errorf("invalid warning interval: %w", err)
+			}
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Limits.Warnings = intervals
+	return nil
+}
+
+// SetPlaytimeRetention sets the number of days to retain play time history.
+// Pass 0 to disable cleanup.
+func (c *Instance) SetPlaytimeRetention(days int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Retention = &days
 }

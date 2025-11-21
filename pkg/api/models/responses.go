@@ -62,6 +62,26 @@ type SettingsResponse struct {
 	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
 }
 
+type PlaytimeLimitsResponse struct {
+	Daily     *string  `json:"daily,omitempty"`
+	Session   *string  `json:"session,omitempty"`
+	Retention *int     `json:"retention,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
+	Enabled   bool     `json:"enabled"`
+}
+
+type PlaytimeStatusResponse struct {
+	SessionStarted   *string  `json:"sessionStarted,omitempty"`
+	SessionDuration  *string  `json:"sessionDuration,omitempty"`
+	SessionRemaining *string  `json:"sessionRemaining,omitempty"`
+	DailyUsageToday  *string  `json:"dailyUsageToday,omitempty"`
+	DailyRemaining   *string  `json:"dailyRemaining,omitempty"`
+	WarningsGiven    []string `json:"warningsGiven,omitempty"`
+	SessionActive    bool     `json:"sessionActive"`
+	ClockReliable    bool     `json:"clockReliable"`
+	LimitsEnabled    bool     `json:"limitsEnabled"`
+}
+
 type System struct {
 	ReleaseDate  *string `json:"releaseDate,omitempty"`
 	Manufacturer *string `json:"manufacturer,omitempty"`
