@@ -140,3 +140,93 @@ func TestCreateRules(t *testing.T) {
 		})
 	}
 }
+
+func TestSetEnabled(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		initial bool
+		set     bool
+		want    bool
+	}{
+		{
+			name:    "enable from disabled",
+			initial: false,
+			set:     true,
+			want:    true,
+		},
+		{
+			name:    "disable from enabled",
+			initial: true,
+			set:     false,
+			want:    false,
+		},
+		{
+			name:    "enable when already enabled",
+			initial: true,
+			set:     true,
+			want:    true,
+		},
+		{
+			name:    "disable when already disabled",
+			initial: false,
+			set:     false,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
+
+			tm := NewLimitsManager(nil, nil, cfg, nil)
+			tm.enabled = tt.initial
+
+			tm.SetEnabled(tt.set)
+
+			got := tm.IsEnabled()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsSessionActive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		sessionStartZero bool
+		want             bool
+	}{
+		{
+			name:             "no active session",
+			sessionStartZero: true,
+			want:             false,
+		},
+		{
+			name:             "active session",
+			sessionStartZero: false,
+			want:             true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
+
+			tm := NewLimitsManager(nil, nil, cfg, nil)
+
+			if !tt.sessionStartZero {
+				tm.sessionStart = tm.clock.Now()
+			}
+
+			got := tm.isSessionActive()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

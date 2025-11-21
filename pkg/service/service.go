@@ -205,12 +205,12 @@ func Start(
 	// Perform all history cleanup operations
 	cleanupHistoryOnStartup(cfg, db)
 
-	// Initialize playtime limits system
-	var limitsManager *playtime.LimitsManager
+	// Initialize playtime limits system (always create for runtime enable/disable)
+	log.Info().Msg("initializing playtime limits")
+	limitsManager := playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
+	limitsManager.Start(notifBroker, st.Notifications)
 	if cfg.PlaytimeLimitsEnabled() {
-		log.Info().Msg("initializing playtime limits")
-		limitsManager = playtime.NewLimitsManager(db, pl, cfg, clockwork.NewRealClock())
-		limitsManager.Start(notifBroker, st.Notifications)
+		limitsManager.SetEnabled(true)
 	}
 
 	// Set up the OnMediaStart hook

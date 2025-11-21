@@ -202,6 +202,11 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	if params.Enabled != nil {
 		log.Info().Bool("enabled", *params.Enabled).Msg("playtime limits update")
 		env.Config.SetPlaytimeLimitsEnabled(*params.Enabled)
+
+		// Apply immediately to running LimitsManager
+		if env.LimitsManager != nil {
+			env.LimitsManager.SetEnabled(*params.Enabled)
+		}
 	}
 
 	if params.Daily != nil {

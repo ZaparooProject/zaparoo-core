@@ -58,6 +58,8 @@ type LimitsManager struct {
 	subscriptionID       int
 	mu                   sync.Mutex
 	sessionStartReliable bool
+	enabledMu            sync.Mutex
+	enabled              bool
 }
 
 // NewLimitsManager creates a new LimitsManager instance.
@@ -80,6 +82,7 @@ func NewLimitsManager(
 		ctx:           ctx,
 		cancel:        cancel,
 		warningsGiven: make(map[time.Duration]bool),
+		enabled:       false, // Start disabled, caller must enable
 	}
 }
 
@@ -106,6 +109,34 @@ func (tm *LimitsManager) Start(broker Broker, notificationsSend chan<- models.No
 // Stop shuts down the LimitsManager.
 func (tm *LimitsManager) Stop() {
 	tm.cancel()
+}
+
+// SetEnabled enables or disables limit enforcement at runtime.
+// If disabling mid-session, stops the current session tracking.
+func (tm *LimitsManager) SetEnabled(enabled bool) {
+	tm.enabledMu.Lock()
+	tm.enabled = enabled
+	tm.enabledMu.Unlock()
+
+	// If disabling mid-session, clean up the session
+	if !enabled && tm.isSessionActive() {
+		log.Warn().Msg("playtime: limits disabled mid-session, stopping tracking")
+		tm.OnMediaStopped()
+	}
+}
+
+// IsEnabled returns whether limits are currently enforced.
+func (tm *LimitsManager) IsEnabled() bool {
+	tm.enabledMu.Lock()
+	defer tm.enabledMu.Unlock()
+	return tm.enabled
+}
+
+// isSessionActive returns true if a session is currently being tracked.
+func (tm *LimitsManager) isSessionActive() bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return !tm.sessionStart.IsZero()
 }
 
 // handleNotifications processes notification events from the broker.
@@ -198,6 +229,11 @@ func (tm *LimitsManager) checkLoop() {
 
 // checkLimits evaluates all rules and handles warnings/limits.
 func (tm *LimitsManager) checkLimits() {
+	// Respect both config and runtime enabled state
+	if !tm.cfg.PlaytimeLimitsEnabled() || !tm.IsEnabled() {
+		return
+	}
+
 	tm.mu.Lock()
 	if tm.sessionStart.IsZero() {
 		tm.mu.Unlock()
