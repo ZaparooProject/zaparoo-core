@@ -138,8 +138,19 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 		return false, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	latestFile := contents[len(contents)-1]
-	latestSha := latestFile.Sha
+	// Find the ArcadeDatabase.csv file in the contents
+	var arcadeDbFile *GithubContentsItem
+	for i := range contents {
+		if contents[i].Name == config2.ArcadeDbFile && contents[i].Type == "file" {
+			arcadeDbFile = &contents[i]
+			break
+		}
+	}
+	if arcadeDbFile == nil {
+		return false, fmt.Errorf("file %s not found in repository", config2.ArcadeDbFile)
+	}
+
+	latestSha := arcadeDbFile.Sha
 
 	localSha, err := getGitBlobSha1(arcadeDBPath)
 	if err == nil && localSha == latestSha {
@@ -148,7 +159,7 @@ func UpdateArcadeDb(pl platforms.Platform) (bool, error) {
 
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, latestFile.DownloadURL, http.NoBody)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, arcadeDbFile.DownloadURL, http.NoBody)
 	if err != nil {
 		return false, fmt.Errorf("failed to create download request: %w", err)
 	}

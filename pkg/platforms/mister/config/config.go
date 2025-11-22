@@ -15,7 +15,7 @@ const (
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
 	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Zaparoo token, not credentials
 	DataDir            = SDRootDir + "/zaparoo"
-	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
+	ArcadeDbURL        = "https://api.github.com/repos/MiSTer-devel/ArcadeDatabase_MiSTer/contents"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
 	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
