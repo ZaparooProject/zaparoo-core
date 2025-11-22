@@ -741,8 +741,28 @@ func TestMightBeTitle(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "has extension - might be slug (file check runs first)",
+			name:     "has valid file extension - is a path not title",
 			input:    "snes/game.smc",
+			expected: false,
+		},
+		{
+			name:     "path with zip extension",
+			input:    "MAME/games/mslug.zip",
+			expected: false,
+		},
+		{
+			name:     "complex path with valid extension - gbc",
+			input:    "GameboyColor/@Game Boy Color SMDB 2022-05-12.zip/1 GBC US - A-L/Alone in the Dark (USA).gbc",
+			expected: false,
+		},
+		{
+			name:     "invalid extension with space - treated as title",
+			input:    "System/file.other thing",
+			expected: true,
+		},
+		{
+			name:     "invalid extension with dash - treated as title",
+			input:    "System/file.test-file",
 			expected: true,
 		},
 		{
@@ -758,6 +778,11 @@ func TestMightBeTitle(t *testing.T) {
 		{
 			name:     "asterisk in middle of title - not slug (Q*bert)",
 			input:    "atari2600/Q*bert",
+			expected: false,
+		},
+		{
+			name:     "windows backslash path",
+			input:    "SNES/roms\\mario.smc",
 			expected: false,
 		},
 		{
