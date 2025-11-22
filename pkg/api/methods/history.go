@@ -72,14 +72,14 @@ func HandleHistory(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		Entries: make([]models.HistoryResponseEntry, len(entries)),
 	}
 
-	for i, e := range entries {
+	for i := range entries {
 		resp.Entries[i] = models.HistoryResponseEntry{
-			Time:    e.Time,
-			Type:    e.Type,
-			UID:     e.TokenID,
-			Text:    e.TokenValue,
-			Data:    e.TokenData,
-			Success: e.Success,
+			Time:    entries[i].Time,
+			Type:    entries[i].Type,
+			UID:     entries[i].TokenID,
+			Text:    entries[i].TokenValue,
+			Data:    entries[i].TokenData,
+			Success: entries[i].Success,
 		}
 	}
 

@@ -77,7 +77,7 @@ func TestRunTrackedProcess_InvalidCommand(t *testing.T) {
 		pl.consoleManager.mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(ctx, pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
 
 	// Should get an error from starting invalid command
 	require.Error(t, err)
@@ -112,7 +112,7 @@ func TestRunTrackedProcess_QuickExit(t *testing.T) {
 		pl.consoleManager.mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(ctx, pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
 
 	// Should start successfully
 	require.NoError(t, err)
@@ -128,7 +128,10 @@ func TestRunTrackedProcess_QuickExit(t *testing.T) {
 	assert.True(t, called, "Restore function should be called after process exits")
 
 	// Verify tracked process was cleared
-	assert.Nil(t, pl.trackedProcess)
+	pl.processMu.RLock()
+	trackedProc := pl.trackedProcess
+	pl.processMu.RUnlock()
+	assert.Nil(t, trackedProc)
 }
 
 func TestRunTrackedProcess_CancelledContext(t *testing.T) {
@@ -138,10 +141,7 @@ func TestRunTrackedProcess_CancelledContext(t *testing.T) {
 		consoleManager: newConsoleManager(&Platform{}),
 	}
 
-	// Create context that will be cancelled during execution
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Create a command that would run (use background context for command)
+	// Create a command that would run
 	cmd := exec.CommandContext(context.Background(), "sleep", "10")
 
 	var restoreCalled bool
@@ -152,26 +152,25 @@ func TestRunTrackedProcess_CancelledContext(t *testing.T) {
 		mu.Unlock()
 	}
 
-	process, err := runTrackedProcess(ctx, pl, cmd, restoreFunc, "test")
+	process, err := runTrackedProcess(pl, cmd, restoreFunc, "test")
 
 	// Should start successfully
 	require.NoError(t, err)
 	require.NotNil(t, process)
 
-	// Cancel the launcher context (simulating launcher supersession)
-	cancel()
-
 	// Kill the process so cleanup goroutine runs
 	_ = process.Kill()
 
-	// Wait for cleanup goroutine to detect cancellation
+	// Wait for cleanup goroutine to complete
 	time.Sleep(100 * time.Millisecond)
 
-	// Restore should NOT be called because launcher context was cancelled
+	// Restore MUST be called even when the launcher is preempted
+	// This is CRITICAL: console state (VT, cursor, video mode) must be restored
+	// regardless of whether the launcher was superseded by a new launch
 	mu.Lock()
 	called := restoreCalled
 	mu.Unlock()
-	assert.False(t, called, "Restore should not be called when launcher context is cancelled")
+	assert.True(t, called, "Restore must always be called (fixes black screen bug)")
 }
 
 func TestSetupConsoleEnvironment_CancelledContext(t *testing.T) {
