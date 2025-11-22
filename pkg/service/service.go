@@ -285,7 +285,7 @@ func Start(
 	go readerManager(pl, cfg, st, db, itq, lsq, plq)
 
 	log.Info().Msg("starting input token queue manager")
-	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq)
+	go processTokenQueue(pl, cfg, st, itq, db, lsq, plq, limitsManager)
 
 	log.Info().Msg("running platform post start")
 	err = pl.StartPost(cfg, st.LauncherManager(), st.ActiveMedia, st.SetActiveMedia, db)

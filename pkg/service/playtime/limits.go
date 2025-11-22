@@ -19,6 +19,20 @@
 
 package playtime
 
+// KNOWN EDGE CASES / TODO:
+//
+// 1. System Sleep/Hibernate:
+//    If a game is running when the system sleeps (laptop lid close, hibernate),
+//    using wall-clock time (Now - StartTime) will count sleep hours as playtime.
+//    Fix: Detect OS sleep/wake events and pause timers, OR ensure monotonic clock
+//    excludes suspension time (most OS wall clocks include it).
+//
+// 2. Time Zone Manipulation:
+//    A user could change the system clock backward (e.g., set time to yesterday)
+//    to bypass daily limits or extend session time.
+//    Fix: If online, verify time against NTP server. If offline, detect large
+//    backward time jumps using monotonic uptime and invalidate suspicious sessions.
+
 import (
 	"context"
 	"fmt"
@@ -42,24 +56,55 @@ const (
 	// MinReliableYear is the earliest year considered valid for the system clock.
 	// Zaparoo Core v2 was released in 2024 - any earlier date indicates an unset clock.
 	MinReliableYear = 2024
+
+	// DefaultSessionResetTimeout is the default idle time before a session resets.
+	// After this period of inactivity, the next game launch starts a fresh session.
+	DefaultSessionResetTimeout = 20 * time.Minute
+
+	// MinimumViableSession is the minimum time a session should run before being stoppable.
+	// If remaining time < this value, the launch is blocked entirely rather than starting
+	// a game that will be immediately killed.
+	MinimumViableSession = 2 * time.Minute
 )
+
+// SessionState represents the current state of a playtime session.
+type SessionState int
+
+const (
+	// StateReset indicates no active session, cumulative time is zero.
+	StateReset SessionState = iota
+	// StateActive indicates a game is currently running and time is being tracked.
+	StateActive
+	// StateCooldown indicates no game is running, but session may continue if another
+	// game launches within the session reset timeout period.
+	StateCooldown
+)
+
+// String returns the string representation of the session state.
+func (s SessionState) String() string {
+	return [...]string{"reset", "active", "cooldown"}[s]
+}
 
 // LimitsManager enforces time limits and warnings for gameplay sessions.
 type LimitsManager struct {
-	sessionStart         time.Time
-	platform             platforms.Platform
-	clock                clockwork.Clock
-	ctx                  context.Context
-	db                   *database.Database
-	cfg                  *config.Instance
-	cancel               context.CancelFunc
-	notificationsSend    chan<- models.Notification
-	warningsGiven        map[time.Duration]bool
-	subscriptionID       int
-	mu                   sync.Mutex
-	sessionStartReliable bool
-	enabledMu            sync.Mutex
-	enabled              bool
+	sessionStart          time.Time
+	lastStopTime          time.Time
+	platform              platforms.Platform
+	clock                 clockwork.Clock
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	cfg                   *config.Instance
+	db                    *database.Database
+	notificationsSend     chan<- models.Notification
+	warningsGiven         map[time.Duration]bool
+	state                 SessionState
+	sessionResetTimeout   time.Duration
+	sessionCumulativeTime time.Duration
+	subscriptionID        int
+	mu                    sync.Mutex
+	enabledMu             sync.Mutex
+	sessionStartReliable  bool
+	enabled               bool
 }
 
 // NewLimitsManager creates a new LimitsManager instance.
@@ -75,14 +120,16 @@ func NewLimitsManager(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &LimitsManager{
-		db:            db,
-		platform:      platform,
-		cfg:           cfg,
-		clock:         clock,
-		ctx:           ctx,
-		cancel:        cancel,
-		warningsGiven: make(map[time.Duration]bool),
-		enabled:       false, // Start disabled, caller must enable
+		state:               StateReset,
+		db:                  db,
+		platform:            platform,
+		cfg:                 cfg,
+		clock:               clock,
+		ctx:                 ctx,
+		cancel:              cancel,
+		warningsGiven:       make(map[time.Duration]bool),
+		sessionResetTimeout: DefaultSessionResetTimeout,
+		enabled:             false, // Start disabled, caller must enable
 	}
 }
 
@@ -139,6 +186,20 @@ func (tm *LimitsManager) isSessionActive() bool {
 	return !tm.sessionStart.IsZero()
 }
 
+// transitionTo transitions the session state machine to a new state and logs the transition.
+// Caller must hold tm.mu lock.
+func (tm *LimitsManager) transitionTo(newState SessionState) {
+	oldState := tm.state
+	tm.state = newState
+
+	if oldState != newState {
+		log.Info().
+			Str("from", oldState.String()).
+			Str("to", newState.String()).
+			Msg("playtime: state transition")
+	}
+}
+
 // handleNotifications processes notification events from the broker.
 func (tm *LimitsManager) handleNotifications(notifChan <-chan models.Notification, broker Broker) {
 	log.Debug().Msg("playtime: notification handler started")
@@ -177,14 +238,46 @@ func (tm *LimitsManager) OnMediaStarted() {
 
 	tm.mu.Lock()
 	now := tm.clock.Now()
+
+	// Check if we need to transition from cooldown to reset based on timeout
+	if tm.state == StateCooldown {
+		idleDuration := now.Sub(tm.lastStopTime)
+		if idleDuration >= tm.sessionResetTimeout {
+			log.Info().
+				Dur("idle", idleDuration).
+				Dur("timeout", tm.sessionResetTimeout).
+				Msg("playtime: idle timeout reached")
+			tm.transitionTo(StateReset)
+		}
+	}
+
+	// Handle game start based on current state
+	switch tm.state {
+	case StateReset:
+		// Starting fresh session
+		tm.sessionCumulativeTime = 0
+		log.Info().Msg("playtime: starting new session")
+
+	case StateCooldown:
+		// Resuming session after game switch (within timeout)
+		log.Info().
+			Dur("cumulative", tm.sessionCumulativeTime).
+			Msg("playtime: resuming session after game switch")
+
+	case StateActive:
+		// Already active - this shouldn't normally happen, but handle gracefully
+		log.Warn().Msg("playtime: game started while already active")
+	}
+
+	// Transition to active state
+	tm.transitionTo(StateActive)
+
 	tm.sessionStart = now
 	tm.sessionStartReliable = isClockReliable(now)
 	tm.warningsGiven = make(map[time.Duration]bool)
 	tm.mu.Unlock()
 
-	if tm.sessionStartReliable {
-		log.Info().Msg("playtime: session started, beginning time monitoring")
-	} else {
+	if !tm.sessionStartReliable {
 		log.Warn().
 			Int("year", now.Year()).
 			Msg("playtime: session started with unreliable clock - daily limits disabled for this session")
@@ -199,19 +292,34 @@ func (tm *LimitsManager) OnMediaStopped() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	if tm.sessionStart.IsZero() {
+	if tm.state != StateActive {
+		// Only stop if we're actually active
 		return
 	}
 
-	log.Info().Msg("playtime: session stopped, ending time monitoring")
-	tm.sessionStart = time.Time{}
+	// Calculate how long this game was played and add to cumulative session time
+	now := tm.clock.Now()
+	gameDuration := now.Sub(tm.sessionStart)
+	tm.sessionCumulativeTime += gameDuration
+	tm.lastStopTime = now
+
+	log.Info().
+		Dur("game_duration", gameDuration).
+		Dur("session_cumulative", tm.sessionCumulativeTime).
+		Msg("playtime: game stopped")
+
+	// Transition to COOLDOWN state (session not reset yet, waiting for timeout)
+	tm.transitionTo(StateCooldown)
+
+	tm.sessionStart = time.Time{} // Mark no active game
 	tm.sessionStartReliable = false
 	tm.warningsGiven = make(map[time.Duration]bool)
 }
 
 // checkLoop runs periodic checks for time limits.
+// Checks every 30 seconds to ensure warnings 1-minute warnings are not skipped.
 func (tm *LimitsManager) checkLoop() {
-	ticker := tm.clock.NewTicker(1 * time.Minute)
+	ticker := tm.clock.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	// Immediate check
@@ -306,15 +414,21 @@ func isClockReliable(t time.Time) bool {
 func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, error) {
 	now := tm.clock.Now()
 
-	// Session duration is always valid - uses monotonic clock via time.Sub()
-	// This is immune to NTP jumps, clock resets, and manual time changes.
-	sessionDuration := now.Sub(sessionStart)
+	// Session duration includes:
+	// 1. sessionCumulativeTime: Total time from all previous games in this session
+	// 2. Current game duration: Time since this game started
+	// Uses monotonic clock via time.Sub() - immune to NTP jumps, clock resets, manual changes
+	currentGameDuration := now.Sub(sessionStart)
 
-	// Check if BOTH clocks are trustworthy for daily limit enforcement
 	tm.mu.Lock()
+	cumulativeTime := tm.sessionCumulativeTime
 	sessionStartWasReliable := tm.sessionStartReliable
 	tm.mu.Unlock()
 
+	// Total session duration = previous games + current game
+	sessionDuration := cumulativeTime + currentGameDuration
+
+	// Check if BOTH clocks are trustworthy for daily limit enforcement
 	currentClockReliable := isClockReliable(now)
 	bothClocksReliable := sessionStartWasReliable && currentClockReliable
 
@@ -515,6 +629,7 @@ func (tm *LimitsManager) playWarningSound() {
 
 // StatusInfo contains current playtime session and limit status.
 type StatusInfo struct {
+	State            string // Current session state ("reset", "active", "cooldown")
 	SessionStarted   time.Time
 	WarningsGiven    []time.Duration
 	SessionDuration  time.Duration
@@ -531,9 +646,11 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 	// Snapshot session state under lock, then release to avoid deadlock in buildRuleContext
 	tm.mu.Lock()
 	sessionStart := tm.sessionStart
+	currentState := tm.state
 	if sessionStart.IsZero() {
 		tm.mu.Unlock()
 		return &StatusInfo{
+			State:         currentState.String(),
 			SessionActive: false,
 			ClockReliable: isClockReliable(tm.clock.Now()),
 		}
@@ -545,6 +662,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 	if err != nil {
 		log.Error().Err(err).Msg("playtime: failed to build rule context for status")
 		return &StatusInfo{
+			State:           currentState.String(),
 			SessionActive:   true,
 			SessionStarted:  sessionStart,
 			SessionDuration: tm.clock.Now().Sub(sessionStart),
@@ -571,13 +689,14 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 	}
 
-	// Re-acquire lock to safely read warningsGiven map
+	// Re-acquire lock to safely read warningsGiven map and state
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
 	// Verify session didn't stop while we were unlocked
 	if tm.sessionStart.IsZero() || !tm.sessionStart.Equal(sessionStart) {
 		return &StatusInfo{
+			State:         tm.state.String(),
 			SessionActive: false,
 			ClockReliable: ctx.ClockReliable,
 		}
@@ -593,6 +712,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 	})
 
 	return &StatusInfo{
+		State:            tm.state.String(),
 		SessionActive:    true,
 		SessionStarted:   sessionStart,
 		SessionDuration:  ctx.SessionDuration,
@@ -602,4 +722,109 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		ClockReliable:    ctx.ClockReliable,
 		WarningsGiven:    warnings,
 	}
+}
+
+// CheckBeforeLaunch checks if launching new media would exceed daily or session limits.
+// Returns an error if:
+// - Daily or session limit is already exceeded
+// - Remaining time < MinimumViableSession (prevents launching games that will be immediately killed)
+// This implements the preventive check strategy - block launches before they start rather than
+// trying to stop games immediately after they launch.
+func (tm *LimitsManager) CheckBeforeLaunch() error {
+	// Check if limits are enabled (both config and runtime)
+	if !tm.cfg.PlaytimeLimitsEnabled() || !tm.IsEnabled() {
+		return nil
+	}
+
+	dailyLimit := tm.cfg.DailyLimit()
+	sessionLimit := tm.cfg.SessionLimit()
+
+	// If no limits configured, allow launch
+	if dailyLimit == 0 && sessionLimit == 0 {
+		return nil
+	}
+
+	now := tm.clock.Now()
+
+	// Check daily limit (requires reliable clock)
+	var dailyRemaining time.Duration
+	if dailyLimit > 0 {
+		if !isClockReliable(now) {
+			log.Warn().
+				Int("year", now.Year()).
+				Msg("playtime: clock unreliable, skipping daily limit check")
+		} else {
+			// Calculate today's usage
+			year, month, day := now.Date()
+			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+
+			usage, err := tm.calculateDailyUsage(todayStart, 0)
+			if err != nil {
+				return fmt.Errorf("failed to check daily usage: %w", err)
+			}
+
+			dailyRemaining = dailyLimit - usage
+
+			// Already over daily limit - block immediately
+			if dailyRemaining <= 0 {
+				log.Warn().
+					Dur("usage", usage).
+					Dur("limit", dailyLimit).
+					Msg("playtime: daily limit already reached, blocking launch")
+				return fmt.Errorf("daily playtime limit reached (%s / %s)", usage, dailyLimit)
+			}
+
+			// Minimum viable session check for daily limit
+			if dailyRemaining < MinimumViableSession {
+				log.Warn().
+					Dur("remaining", dailyRemaining).
+					Dur("minimum", MinimumViableSession).
+					Msg("playtime: insufficient daily time remaining for viable session, blocking launch")
+				return fmt.Errorf(
+					"insufficient daily time remaining (%s left, need %s min)",
+					dailyRemaining,
+					MinimumViableSession,
+				)
+			}
+		}
+	}
+
+	// Check session limit (doesn't require clock reliability)
+	var sessionRemaining time.Duration
+	if sessionLimit > 0 {
+		tm.mu.Lock()
+		cumulativeTime := tm.sessionCumulativeTime
+		tm.mu.Unlock()
+
+		sessionRemaining = sessionLimit - cumulativeTime
+
+		// Already over session limit - block immediately
+		if sessionRemaining <= 0 {
+			log.Warn().
+				Dur("cumulative", cumulativeTime).
+				Dur("limit", sessionLimit).
+				Msg("playtime: session limit already reached, blocking launch")
+			return fmt.Errorf("session playtime limit reached (%s / %s)", cumulativeTime, sessionLimit)
+		}
+
+		// Minimum viable session check for session limit
+		if sessionRemaining < MinimumViableSession {
+			log.Warn().
+				Dur("remaining", sessionRemaining).
+				Dur("minimum", MinimumViableSession).
+				Msg("playtime: insufficient session time remaining for viable session, blocking launch")
+			return fmt.Errorf(
+				"insufficient session time remaining (%s left, need %s min)",
+				sessionRemaining,
+				MinimumViableSession,
+			)
+		}
+	}
+
+	log.Debug().
+		Dur("daily_remaining", dailyRemaining).
+		Dur("session_remaining", sessionRemaining).
+		Msg("playtime: pre-launch check passed")
+
+	return nil
 }

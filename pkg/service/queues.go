@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -30,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
@@ -213,6 +216,7 @@ func processTokenQueue(
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plq chan *playlists.Playlist,
+	limitsManager *playtime.LimitsManager,
 ) {
 	for {
 		select {
@@ -254,6 +258,40 @@ func processTokenQueue(
 				TokenID:    t.UID,
 				TokenValue: t.Text,
 				TokenData:  t.Data,
+			}
+
+			// Check playtime limits before launching
+			if limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
+				log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
+
+				// Send playtime limit notification
+				notifications.PlaytimeLimitReached(st.Notifications, models.PlaytimeLimitReachedParams{
+					Reason: "daily",
+				})
+
+				// Play limit sound
+				if path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform)); enabled {
+					if path == "" {
+						// Use embedded default sound
+						if audioErr := audio.PlayWAVBytes(assets.LimitSound); audioErr != nil {
+							log.Warn().Msgf("error playing limit sound: %s", audioErr)
+						}
+					} else {
+						// Use custom sound file
+						if audioErr := audio.PlayFile(path); audioErr != nil {
+							log.Warn().Str("path", path).Msgf("error playing custom limit sound: %s", audioErr)
+						}
+					}
+				}
+
+				// Add to history as failed
+				he.Success = false
+				if histErr := db.UserDB.AddHistory(&he); histErr != nil {
+					log.Error().Err(histErr).Msgf("error adding history")
+				}
+
+				// Skip launch
+				continue
 			}
 
 			// launch tokens in a separate thread
