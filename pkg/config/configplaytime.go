@@ -32,10 +32,11 @@ type Playtime struct {
 
 // PlaytimeLimits configures time limits and warnings for gameplay sessions.
 type PlaytimeLimits struct {
-	Enabled  *bool    `toml:"enabled,omitempty"`
-	Daily    string   `toml:"daily,omitempty"`
-	Session  string   `toml:"session,omitempty"`
-	Warnings []string `toml:"warnings,omitempty,multiline"`
+	Enabled      *bool    `toml:"enabled,omitempty"`
+	Daily        string   `toml:"daily,omitempty"`
+	Session      string   `toml:"session,omitempty"`
+	SessionReset *string  `toml:"session_reset,omitempty"`
+	Warnings     []string `toml:"warnings,omitempty,multiline"`
 }
 
 // PlaytimeRetention returns the number of days to retain play time history.
@@ -175,4 +176,37 @@ func (c *Instance) SetPlaytimeRetention(days int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Playtime.Retention = &days
+}
+
+// SessionResetTimeout returns the idle timeout before a session resets.
+// Returns 20 minutes by default if not configured (nil).
+// Returns 0 if explicitly set to "0" (no timeout, session never resets).
+func (c *Instance) SessionResetTimeout() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Playtime.Limits.SessionReset == nil {
+		return 20 * time.Minute // Default: 20 minutes
+	}
+	d, err := time.ParseDuration(*c.vals.Playtime.Limits.SessionReset)
+	if err != nil {
+		return 20 * time.Minute // Fallback to default on parse error
+	}
+	return d
+}
+
+// SetSessionResetTimeout sets the idle timeout before a session resets (e.g., "20m", "1h", "0").
+// Returns an error if the duration string is invalid.
+// Pass nil to use default (20 minutes).
+// Pass "0" to disable session reset timeout.
+func (c *Instance) SetSessionResetTimeout(duration *string) error {
+	if duration != nil && *duration != "" {
+		_, err := time.ParseDuration(*duration)
+		if err != nil {
+			return fmt.Errorf("invalid session reset timeout duration: %w", err)
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Playtime.Limits.SessionReset = duration
+	return nil
 }

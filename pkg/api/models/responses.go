@@ -63,11 +63,12 @@ type SettingsResponse struct {
 }
 
 type PlaytimeLimitsResponse struct {
-	Daily     *string  `json:"daily,omitempty"`
-	Session   *string  `json:"session,omitempty"`
-	Retention *int     `json:"retention,omitempty"`
-	Warnings  []string `json:"warnings,omitempty"`
-	Enabled   bool     `json:"enabled"`
+	Daily        *string  `json:"daily,omitempty"`
+	Session      *string  `json:"session,omitempty"`
+	SessionReset *string  `json:"sessionReset,omitempty"`
+	Retention    *int     `json:"retention,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+	Enabled      bool     `json:"enabled"`
 }
 
 type PlaytimeStatusResponse struct {

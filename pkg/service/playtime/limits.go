@@ -59,7 +59,7 @@ const (
 	// MinimumViableSession is the minimum time a session should run before being stoppable.
 	// If remaining time < this value, the launch is blocked entirely rather than starting
 	// a game that will be immediately killed.
-	MinimumViableSession = 2 * time.Minute
+	MinimumViableSession = 1 * time.Minute
 )
 
 // SessionState represents the current state of a playtime session.
@@ -115,6 +115,12 @@ func NewLimitsManager(
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Get session reset timeout from config
+	// 0 means disabled (session never resets)
+	// Non-zero positive duration means reset after that idle time
+	sessionResetTimeout := cfg.SessionResetTimeout()
+
 	return &LimitsManager{
 		state:               StateReset,
 		db:                  db,
@@ -124,7 +130,7 @@ func NewLimitsManager(
 		ctx:                 ctx,
 		cancel:              cancel,
 		warningsGiven:       make(map[time.Duration]bool),
-		sessionResetTimeout: DefaultSessionResetTimeout,
+		sessionResetTimeout: sessionResetTimeout,
 		enabled:             false, // Start disabled, caller must enable
 	}
 }
@@ -236,7 +242,8 @@ func (tm *LimitsManager) OnMediaStarted() {
 	now := tm.clock.Now()
 
 	// Check if we need to transition from cooldown to reset based on timeout
-	if tm.state == StateCooldown {
+	// Skip check if sessionResetTimeout is 0 (disabled - session never auto-resets)
+	if tm.state == StateCooldown && tm.sessionResetTimeout > 0 {
 		idleDuration := now.Sub(tm.lastStopTime)
 		if idleDuration >= tm.sessionResetTimeout {
 			log.Info().

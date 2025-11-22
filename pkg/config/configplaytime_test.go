@@ -553,3 +553,137 @@ func TestSetPlaytimeRetention(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionResetTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reset *string
+		name  string
+		want  time.Duration
+	}{
+		{
+			name:  "nil returns 20 minute default",
+			reset: nil,
+			want:  20 * time.Minute,
+		},
+		{
+			name:  "zero disables session reset",
+			reset: stringPtr("0"),
+			want:  0,
+		},
+		{
+			name:  "valid duration in minutes",
+			reset: stringPtr("15m"),
+			want:  15 * time.Minute,
+		},
+		{
+			name:  "valid duration in hours",
+			reset: stringPtr("1h"),
+			want:  1 * time.Hour,
+		},
+		{
+			name:  "invalid duration returns default",
+			reset: stringPtr("invalid"),
+			want:  20 * time.Minute,
+		},
+		{
+			name:  "complex duration",
+			reset: stringPtr("30m"),
+			want:  30 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{
+							SessionReset: tt.reset,
+						},
+					},
+				},
+			}
+
+			got := inst.SessionResetTimeout()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSetSessionResetTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		duration  *string
+		name      string
+		wantValue time.Duration
+		wantError bool
+	}{
+		{
+			name:      "valid duration",
+			duration:  stringPtr("15m"),
+			wantError: false,
+			wantValue: 15 * time.Minute,
+		},
+		{
+			name:      "zero disables timeout",
+			duration:  stringPtr("0"),
+			wantError: false,
+			wantValue: 0,
+		},
+		{
+			name:      "nil resets to default",
+			duration:  nil,
+			wantError: false,
+			wantValue: 20 * time.Minute,
+		},
+		{
+			name:      "invalid duration returns error",
+			duration:  stringPtr("not-valid"),
+			wantError: true,
+		},
+		{
+			name:      "valid hours",
+			duration:  stringPtr("2h"),
+			wantError: false,
+			wantValue: 2 * time.Hour,
+		},
+		{
+			name:      "empty string is valid (same as nil)",
+			duration:  stringPtr(""),
+			wantError: false,
+			wantValue: 20 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			inst := &Instance{
+				vals: Values{
+					Playtime: Playtime{
+						Limits: PlaytimeLimits{},
+					},
+				},
+			}
+
+			err := inst.SetSessionResetTimeout(tt.duration)
+			if tt.wantError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				got := inst.SessionResetTimeout()
+				assert.Equal(t, tt.wantValue, got)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
+}

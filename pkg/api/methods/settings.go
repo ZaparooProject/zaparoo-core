@@ -152,6 +152,7 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 	enabled := env.Config.PlaytimeLimitsEnabled()
 	daily := env.Config.DailyLimit()
 	session := env.Config.SessionLimit()
+	sessionReset := env.Config.SessionResetTimeout()
 	warnings := env.Config.WarningIntervals()
 	retention := env.Config.PlaytimeRetention()
 
@@ -171,6 +172,10 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 		sessionStr := session.String()
 		resp.Session = &sessionStr
 	}
+
+	// Always include session reset (even if 0 or default)
+	resetStr := sessionReset.String()
+	resp.SessionReset = &resetStr
 
 	// Convert warning durations to strings
 	for _, w := range warnings {
@@ -222,6 +227,14 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		err = env.Config.SetSessionLimit(*params.Session)
 		if err != nil {
 			return nil, fmt.Errorf("invalid session limit duration: %w", err)
+		}
+	}
+
+	if params.SessionReset != nil {
+		log.Info().Str("session_reset", *params.SessionReset).Msg("playtime limits update")
+		err = env.Config.SetSessionResetTimeout(params.SessionReset)
+		if err != nil {
+			return nil, fmt.Errorf("invalid session reset duration: %w", err)
 		}
 	}
 
