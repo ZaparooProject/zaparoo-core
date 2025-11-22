@@ -287,38 +287,68 @@ func processTokenQueue(
 				CreatedAt:      now,
 			}
 
-			// Check playtime limits before launching
-			if limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
-				log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
+			// Parse script early to check if playtime limits apply
+			// Only block media-launching commands, not utility commands (execute, delay, echo, etc.)
+			mappedValue, hasMapping := getMapping(cfg, db, platform, t)
+			scriptText := t.Text
+			if hasMapping {
+				scriptText = mappedValue
+			}
 
-				// Send playtime limit notification
-				notifications.PlaytimeLimitReached(st.Notifications, models.PlaytimeLimitReachedParams{
-					Reason: "daily",
-				})
+			reader := parser.NewParser(scriptText)
+			script, parseErr := reader.ParseScript()
+			if parseErr != nil {
+				log.Error().Err(parseErr).Msg("failed to parse script for playtime check")
+				// Continue anyway - the error will be caught in runTokenZapScript
+			}
 
-				// Play limit sound
-				if path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform)); enabled {
-					if path == "" {
-						// Use embedded default sound
-						if audioErr := audio.PlayWAVBytes(assets.LimitSound); audioErr != nil {
-							log.Warn().Msgf("error playing limit sound: %s", audioErr)
-						}
-					} else {
-						// Use custom sound file
-						if audioErr := audio.PlayFile(path); audioErr != nil {
-							log.Warn().Str("path", path).Msgf("error playing custom limit sound: %s", audioErr)
-						}
+			// Check if any command in the script launches media
+			hasMediaLaunchCmd := false
+			if parseErr == nil {
+				for _, cmd := range script.Cmds {
+					if zapscript.IsMediaLaunchingCommand(cmd.Name) {
+						hasMediaLaunchCmd = true
+						break
 					}
 				}
+			}
 
-				// Add to history as failed
-				he.Success = false
-				if histErr := db.UserDB.AddHistory(&he); histErr != nil {
-					log.Error().Err(histErr).Msgf("error adding history")
+			// Only check playtime limits if the script contains media-launching commands
+			if hasMediaLaunchCmd {
+				if limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
+					log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
+
+					// Send playtime limit notification
+					notifications.PlaytimeLimitReached(st.Notifications, models.PlaytimeLimitReachedParams{
+						Reason: models.PlaytimeLimitReasonDaily,
+					})
+
+					// Play limit sound
+					if path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform)); enabled {
+						if path == "" {
+							// Use embedded default sound
+							if audioErr := audio.PlayWAVBytes(assets.LimitSound); audioErr != nil {
+								log.Warn().Msgf("error playing limit sound: %s", audioErr)
+							}
+						} else {
+							// Use custom sound file
+							if audioErr := audio.PlayFile(path); audioErr != nil {
+								log.Warn().Str("path", path).Msgf("error playing custom limit sound: %s", audioErr)
+							}
+						}
+					}
+
+					// Add to history as failed
+					he.Success = false
+					if histErr := db.UserDB.AddHistory(&he); histErr != nil {
+						log.Error().Err(histErr).Msgf("error adding history")
+					}
+
+					// Skip launch
+					continue
 				}
-
-				// Skip launch
-				continue
+			} else {
+				log.Debug().Msg("script contains no media-launching commands, bypassing playtime limit check")
 			}
 
 			// launch tokens in a separate thread
