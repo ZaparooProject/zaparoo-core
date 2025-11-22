@@ -60,9 +60,11 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 
 	// Session info (available during active and cooldown states)
 	if status.State != "reset" {
-		// Session started timestamp (ISO8601)
-		startedStr := status.SessionStarted.Format("2006-01-02T15:04:05Z07:00")
-		resp.SessionStarted = &startedStr
+		// Session started timestamp (only if not zero - cooldown has no current game)
+		if !status.SessionStarted.IsZero() {
+			startedStr := status.SessionStarted.Format("2006-01-02T15:04:05Z07:00")
+			resp.SessionStarted = &startedStr
+		}
 
 		// Session duration (total time in session)
 		durationStr := status.SessionDuration.String()

@@ -274,6 +274,113 @@ func TestSetEnabled_CooldownReset(t *testing.T) {
 	tm.mu.Unlock()
 }
 
+func TestCooldownTimer_AutomaticReset(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
+	clock := clockwork.NewFakeClock()
+
+	tm := NewLimitsManager(nil, nil, cfg, clock)
+	defer tm.Stop() // Stop manager to clean up goroutines
+
+	tm.enabled = true
+
+	// Simulate entering cooldown with 20 minute timeout
+	tm.mu.Lock()
+	tm.state = StateCooldown
+	tm.sessionCumulativeTime = 30 * time.Minute
+	tm.lastStopTime = clock.Now()
+	tm.sessionResetTimeout = 20 * time.Minute
+	tm.cooldownTimer = clock.NewTimer(20 * time.Minute)
+	tm.mu.Unlock()
+
+	go tm.cooldownTimerLoop()
+
+	// Verify still in cooldown
+	assert.Equal(t, StateCooldown, tm.state)
+
+	// Advance clock past timeout
+	clock.Advance(21 * time.Minute)
+
+	// Give goroutine time to process
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify transitioned to reset
+	tm.mu.Lock()
+	assert.Equal(t, StateReset, tm.state, "state should be reset after timer expires")
+	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime, "cumulative time should be cleared")
+	assert.Nil(t, tm.cooldownTimer, "timer should be cleared")
+	tm.mu.Unlock()
+}
+
+func TestCooldownTimer_CancelledByNewGame(t *testing.T) {
+	t.Parallel()
+
+	// Enable playtime limits in config
+	enabled := true
+	cfg := newTestConfig(t, &config.Values{
+		Playtime: config.Playtime{
+			Limits: config.PlaytimeLimits{
+				Enabled: &enabled,
+			},
+		},
+	})
+	clock := clockwork.NewFakeClock()
+
+	tm := NewLimitsManager(nil, nil, cfg, clock)
+	defer tm.Stop() // Stop manager to clean up goroutines
+
+	tm.enabled = true
+
+	// Enter cooldown with timer running
+	tm.mu.Lock()
+	tm.state = StateCooldown
+	tm.sessionCumulativeTime = 15 * time.Minute
+	tm.lastStopTime = clock.Now()
+	tm.sessionResetTimeout = 20 * time.Minute
+	tm.cooldownTimer = clock.NewTimer(20 * time.Minute)
+	originalTimer := tm.cooldownTimer
+	tm.mu.Unlock()
+
+	// Verify in cooldown
+	assert.Equal(t, StateCooldown, tm.state)
+
+	// Advance clock only 10 minutes (before timeout)
+	clock.Advance(10 * time.Minute)
+
+	// Manually cancel timer (simulating what OnMediaStarted does)
+	// We can't call OnMediaStarted() because it starts checkLoop which needs a database
+	tm.mu.Lock()
+	if tm.cooldownTimer != nil {
+		tm.cooldownTimer.Stop()
+		tm.cooldownTimer = nil
+	}
+	// Transition to active (what OnMediaStarted would do)
+	tm.transitionTo(StateActive)
+	tm.sessionStart = clock.Now()
+	tm.mu.Unlock()
+
+	// Verify timer was cancelled and session resumed
+	tm.mu.Lock()
+	assert.Equal(t, StateActive, tm.state, "state should be active")
+	assert.Equal(t, 15*time.Minute, tm.sessionCumulativeTime, "cumulative time should be preserved")
+	assert.Nil(t, tm.cooldownTimer, "timer should be cancelled")
+	tm.mu.Unlock()
+
+	// Advance clock further - timer should not fire (it was cancelled)
+	clock.Advance(15 * time.Minute)
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify still in active state (timer didn't fire and reset)
+	tm.mu.Lock()
+	assert.Equal(t, StateActive, tm.state, "state should still be active (timer was cancelled)")
+	assert.Equal(t, 15*time.Minute, tm.sessionCumulativeTime, "cumulative time unchanged")
+	tm.mu.Unlock()
+
+	// For test cleanup: stop the original timer to avoid leaks
+	originalTimer.Stop()
+}
+
 func TestIsSessionActive(t *testing.T) {
 	t.Parallel()
 

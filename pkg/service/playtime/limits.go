@@ -88,11 +88,12 @@ type LimitsManager struct {
 	platform              platforms.Platform
 	clock                 clockwork.Clock
 	ctx                   context.Context
-	cancel                context.CancelFunc
-	cfg                   *config.Instance
+	cooldownTimer         clockwork.Timer
+	warningsGiven         map[time.Duration]bool
 	db                    *database.Database
 	notificationsSend     chan<- models.Notification
-	warningsGiven         map[time.Duration]bool
+	cfg                   *config.Instance
+	cancel                context.CancelFunc
 	state                 SessionState
 	sessionResetTimeout   time.Duration
 	sessionCumulativeTime time.Duration
@@ -171,6 +172,13 @@ func (tm *LimitsManager) SetEnabled(enabled bool) {
 	// If disabling, reset the session completely (clear cooldown state)
 	if !enabled {
 		tm.mu.Lock()
+		// Cancel cooldown timer if running
+		if tm.cooldownTimer != nil {
+			tm.cooldownTimer.Stop()
+			tm.cooldownTimer = nil
+			log.Debug().Msg("playtime: cancelled cooldown timer (limits disabled)")
+		}
+
 		if tm.state != StateReset {
 			log.Info().Msg("playtime: limits disabled, resetting session state")
 			tm.transitionTo(StateReset)
@@ -252,17 +260,11 @@ func (tm *LimitsManager) OnMediaStarted() {
 	tm.mu.Lock()
 	now := tm.clock.Now()
 
-	// Check if we need to transition from cooldown to reset based on timeout
-	// Skip check if sessionResetTimeout is 0 (disabled - session never auto-resets)
-	if tm.state == StateCooldown && tm.sessionResetTimeout > 0 {
-		idleDuration := now.Sub(tm.lastStopTime)
-		if idleDuration >= tm.sessionResetTimeout {
-			log.Info().
-				Dur("idle", idleDuration).
-				Dur("timeout", tm.sessionResetTimeout).
-				Msg("playtime: idle timeout reached")
-			tm.transitionTo(StateReset)
-		}
+	// Cancel cooldown timer if it exists
+	if tm.cooldownTimer != nil {
+		tm.cooldownTimer.Stop()
+		tm.cooldownTimer = nil
+		log.Debug().Msg("playtime: cancelled cooldown timer (new game starting)")
 	}
 
 	// Handle game start based on current state
@@ -331,6 +333,43 @@ func (tm *LimitsManager) OnMediaStopped() {
 	tm.sessionStartMono = time.Time{} // Clear monotonic start
 	tm.sessionStartReliable = false
 	tm.warningsGiven = make(map[time.Duration]bool)
+
+	// Start cooldown timer if timeout is configured
+	if tm.sessionResetTimeout > 0 {
+		tm.cooldownTimer = tm.clock.NewTimer(tm.sessionResetTimeout)
+		go tm.cooldownTimerLoop()
+	}
+}
+
+// cooldownTimerLoop waits for the cooldown timer to expire and transitions to reset.
+func (tm *LimitsManager) cooldownTimerLoop() {
+	tm.mu.Lock()
+	timer := tm.cooldownTimer
+	tm.mu.Unlock()
+
+	if timer == nil {
+		return
+	}
+
+	select {
+	case <-timer.Chan():
+		// Timer expired - transition to reset
+		tm.mu.Lock()
+		if tm.state == StateCooldown {
+			log.Info().
+				Dur("timeout", tm.sessionResetTimeout).
+				Msg("playtime: cooldown timer expired, resetting session")
+			tm.transitionTo(StateReset)
+			tm.sessionCumulativeTime = 0
+			tm.lastStopTime = time.Time{}
+			tm.cooldownTimer = nil
+		}
+		tm.mu.Unlock()
+
+	case <-tm.ctx.Done():
+		// Manager stopping
+		return
+	}
 }
 
 // checkLoop runs periodic checks for time limits.
@@ -664,9 +703,9 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// State: Cooldown (session exists but no game running)
 	if currentState == StateCooldown {
-		// Calculate cooldown remaining
+		// Calculate cooldown remaining (timer will handle the actual transition)
 		var cooldownRemaining time.Duration
-		if resetTimeout > 0 {
+		if resetTimeout > 0 && !lastStop.IsZero() {
 			elapsed := now.Sub(lastStop)
 			cooldownRemaining = resetTimeout - elapsed
 			if cooldownRemaining < 0 {
@@ -687,8 +726,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 
 		// For daily remaining, we need to calculate today's total usage
-		// This requires DB query, so we'll skip it during cooldown for simplicity
-		// (daily remaining is less relevant when no game is running)
 		if dailyLimit > 0 {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
@@ -701,10 +738,12 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			}
 		}
 
+		// Note: sessionStart is zero during cooldown (no current game)
+		// Don't include SessionStarted in response - it's not meaningful
 		return &StatusInfo{
 			State:                 StateCooldown.String(),
 			SessionActive:         false,
-			SessionStarted:        sessionStart,
+			SessionStarted:        time.Time{}, // Zero time - will be omitted from API response
 			SessionDuration:       cumulativeTime,
 			SessionCumulativeTime: cumulativeTime,
 			SessionRemaining:      sessionRemaining,
