@@ -852,7 +852,8 @@ func TestStartPost_ESAPIUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	platform := &Platform{
-		clock: clockwork.NewRealClock(), // Initialize clock to avoid nil pointer
+		clock:             clockwork.NewRealClock(), // Initialize clock to avoid nil pointer
+		maxStartupRetries: 2,                        // Reduce retries for test speed (2 retries = ~4s instead of 26s)
 	}
 
 	var capturedMedia *models.ActiveMedia
