@@ -72,15 +72,17 @@ type PlaytimeLimitsResponse struct {
 }
 
 type PlaytimeStatusResponse struct {
-	SessionStarted   *string  `json:"sessionStarted,omitempty"`
-	SessionDuration  *string  `json:"sessionDuration,omitempty"`
-	SessionRemaining *string  `json:"sessionRemaining,omitempty"`
-	DailyUsageToday  *string  `json:"dailyUsageToday,omitempty"`
-	DailyRemaining   *string  `json:"dailyRemaining,omitempty"`
-	WarningsGiven    []string `json:"warningsGiven,omitempty"`
-	SessionActive    bool     `json:"sessionActive"`
-	ClockReliable    bool     `json:"clockReliable"`
-	LimitsEnabled    bool     `json:"limitsEnabled"`
+	SessionStarted        *string `json:"sessionStarted,omitempty"`
+	SessionDuration       *string `json:"sessionDuration,omitempty"`
+	SessionCumulativeTime *string `json:"sessionCumulativeTime,omitempty"`
+	SessionRemaining      *string `json:"sessionRemaining,omitempty"`
+	SessionResetTimeout   *string `json:"sessionResetTimeout,omitempty"`
+	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
+	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
+	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
+	State                 string  `json:"state"`
+	SessionActive         bool    `json:"sessionActive"`
+	LimitsEnabled         bool    `json:"limitsEnabled"`
 }
 
 type System struct {

@@ -618,48 +618,110 @@ func (tm *LimitsManager) playWarningSound() {
 
 // StatusInfo contains current playtime session and limit status.
 type StatusInfo struct {
-	State            string // Current session state ("reset", "active", "cooldown")
-	SessionStarted   time.Time
-	WarningsGiven    []time.Duration
-	SessionDuration  time.Duration
-	SessionRemaining time.Duration
-	DailyUsageToday  time.Duration
-	DailyRemaining   time.Duration
-	SessionActive    bool
-	ClockReliable    bool
+	SessionStarted        time.Time
+	State                 string
+	SessionDuration       time.Duration
+	SessionCumulativeTime time.Duration
+	SessionRemaining      time.Duration
+	SessionResetTimeout   time.Duration
+	CooldownRemaining     time.Duration
+	DailyUsageToday       time.Duration
+	DailyRemaining        time.Duration
+	SessionActive         bool
 }
 
 // GetStatus returns the current playtime session and limit status.
-// Returns nil if no session is active.
+// Always returns a StatusInfo struct with current state information.
 func (tm *LimitsManager) GetStatus() *StatusInfo {
-	// Snapshot session state under lock, then release to avoid deadlock in buildRuleContext
+	// Snapshot session state under lock
 	tm.mu.Lock()
 	sessionStart := tm.sessionStart
 	currentState := tm.state
-	if sessionStart.IsZero() {
-		tm.mu.Unlock()
-		return &StatusInfo{
-			State:         currentState.String(),
-			SessionActive: false,
-			ClockReliable: helpers.IsClockReliable(tm.clock.Now()),
-		}
-	}
+	cumulativeTime := tm.sessionCumulativeTime
+	lastStop := tm.lastStopTime
+	resetTimeout := tm.sessionResetTimeout
 	tm.mu.Unlock()
 
+	now := tm.clock.Now()
+
+	// State: Reset (no session exists)
+	if currentState == StateReset {
+		return &StatusInfo{
+			State:               StateReset.String(),
+			SessionActive:       false,
+			SessionResetTimeout: resetTimeout,
+		}
+	}
+
+	// State: Cooldown (session exists but no game running)
+	if currentState == StateCooldown {
+		// Calculate cooldown remaining
+		var cooldownRemaining time.Duration
+		if resetTimeout > 0 {
+			elapsed := now.Sub(lastStop)
+			cooldownRemaining = resetTimeout - elapsed
+			if cooldownRemaining < 0 {
+				cooldownRemaining = 0
+			}
+		}
+
+		// Calculate remaining times based on cumulative time
+		var sessionRemaining, dailyRemaining time.Duration
+		sessionLimit := tm.cfg.SessionLimit()
+		dailyLimit := tm.cfg.DailyLimit()
+
+		if sessionLimit > 0 {
+			sessionRemaining = sessionLimit - cumulativeTime
+			if sessionRemaining < 0 {
+				sessionRemaining = 0
+			}
+		}
+
+		// For daily remaining, we need to calculate today's total usage
+		// This requires DB query, so we'll skip it during cooldown for simplicity
+		// (daily remaining is less relevant when no game is running)
+		if dailyLimit > 0 {
+			year, month, day := now.Date()
+			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+			usage, err := tm.calculateDailyUsage(todayStart, 0)
+			if err == nil {
+				dailyRemaining = dailyLimit - usage
+				if dailyRemaining < 0 {
+					dailyRemaining = 0
+				}
+			}
+		}
+
+		return &StatusInfo{
+			State:                 StateCooldown.String(),
+			SessionActive:         false,
+			SessionStarted:        sessionStart,
+			SessionDuration:       cumulativeTime,
+			SessionCumulativeTime: cumulativeTime,
+			SessionRemaining:      sessionRemaining,
+			SessionResetTimeout:   resetTimeout,
+			CooldownRemaining:     cooldownRemaining,
+			DailyUsageToday:       0, // Skip during cooldown
+			DailyRemaining:        dailyRemaining,
+		}
+	}
+
+	// State: Active (game is running)
 	// Build rule context (performs DB I/O and acquires its own locks)
 	ctx, err := tm.buildRuleContext(sessionStart)
 	if err != nil {
 		log.Error().Err(err).Msg("playtime: failed to build rule context for status")
 		return &StatusInfo{
-			State:           currentState.String(),
-			SessionActive:   true,
-			SessionStarted:  sessionStart,
-			SessionDuration: tm.clock.Now().Sub(sessionStart),
-			ClockReliable:   false,
+			State:                 StateActive.String(),
+			SessionActive:         true,
+			SessionStarted:        sessionStart,
+			SessionDuration:       now.Sub(sessionStart),
+			SessionCumulativeTime: cumulativeTime,
+			SessionResetTimeout:   resetTimeout,
 		}
 	}
 
-	// Calculate session and daily remaining times separately
+	// Calculate session and daily remaining times
 	var sessionRemaining, dailyRemaining time.Duration
 	sessionLimit := tm.cfg.SessionLimit()
 	dailyLimit := tm.cfg.DailyLimit()
@@ -678,38 +740,30 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 	}
 
-	// Re-acquire lock to safely read warningsGiven map and state
+	// Re-acquire lock to verify session didn't stop while we were unlocked
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	// Verify session didn't stop while we were unlocked
 	if tm.sessionStart.IsZero() || !tm.sessionStart.Equal(sessionStart) {
+		// Session stopped while we were calculating - return cooldown/reset state
 		return &StatusInfo{
-			State:         tm.state.String(),
-			SessionActive: false,
-			ClockReliable: ctx.ClockReliable,
+			State:               tm.state.String(),
+			SessionActive:       false,
+			SessionResetTimeout: resetTimeout,
 		}
 	}
 
-	// Convert warningsGiven map to slice and sort for consistent ordering
-	warnings := make([]time.Duration, 0, len(tm.warningsGiven))
-	for interval := range tm.warningsGiven {
-		warnings = append(warnings, interval)
-	}
-	sort.Slice(warnings, func(i, j int) bool {
-		return warnings[i] > warnings[j] // Descending order (largest first)
-	})
-
 	return &StatusInfo{
-		State:            tm.state.String(),
-		SessionActive:    true,
-		SessionStarted:   sessionStart,
-		SessionDuration:  ctx.SessionDuration,
-		SessionRemaining: sessionRemaining,
-		DailyUsageToday:  ctx.DailyUsageToday,
-		DailyRemaining:   dailyRemaining,
-		ClockReliable:    ctx.ClockReliable,
-		WarningsGiven:    warnings,
+		State:                 StateActive.String(),
+		SessionActive:         true,
+		SessionStarted:        sessionStart,
+		SessionDuration:       ctx.SessionDuration,
+		SessionCumulativeTime: cumulativeTime,
+		SessionRemaining:      sessionRemaining,
+		SessionResetTimeout:   resetTimeout,
+		CooldownRemaining:     0, // Not in cooldown
+		DailyUsageToday:       ctx.DailyUsageToday,
+		DailyRemaining:        dailyRemaining,
 	}
 }
 

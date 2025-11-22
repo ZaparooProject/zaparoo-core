@@ -37,31 +37,46 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 	}
 
 	if status == nil {
-		// No limits manager or no active session
+		// No limits manager - return reset state
 		return models.PlaytimeStatusResponse{
+			State:         "reset",
 			SessionActive: false,
-			ClockReliable: true,
 			LimitsEnabled: env.Config.PlaytimeLimitsEnabled(),
 		}, nil
 	}
 
 	// Build response
 	resp := models.PlaytimeStatusResponse{
+		State:         status.State,
 		SessionActive: status.SessionActive,
-		ClockReliable: status.ClockReliable,
 		LimitsEnabled: env.Config.PlaytimeLimitsEnabled(),
-		WarningsGiven: make([]string, 0, len(status.WarningsGiven)),
 	}
 
-	// Add optional fields if session is active
-	if status.SessionActive {
+	// Session reset timeout (always include)
+	if status.SessionResetTimeout > 0 {
+		timeoutStr := status.SessionResetTimeout.String()
+		resp.SessionResetTimeout = &timeoutStr
+	}
+
+	// Cooldown remaining (only during cooldown)
+	if status.CooldownRemaining > 0 {
+		remainingStr := status.CooldownRemaining.String()
+		resp.CooldownRemaining = &remainingStr
+	}
+
+	// Session info (available during active and cooldown states)
+	if status.State != "reset" {
 		// Session started timestamp (ISO8601)
 		startedStr := status.SessionStarted.Format("2006-01-02T15:04:05Z07:00")
 		resp.SessionStarted = &startedStr
 
-		// Session duration
+		// Session duration (total time in session)
 		durationStr := status.SessionDuration.String()
 		resp.SessionDuration = &durationStr
+
+		// Session cumulative time
+		cumulativeStr := status.SessionCumulativeTime.String()
+		resp.SessionCumulativeTime = &cumulativeStr
 
 		// Session remaining time
 		if status.SessionRemaining > 0 {
@@ -69,22 +84,17 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 			resp.SessionRemaining = &remainingStr
 		}
 
-		// Daily usage
-		if status.DailyUsageToday > 0 {
-			usageStr := status.DailyUsageToday.String()
-			resp.DailyUsageToday = &usageStr
-		}
-
-		// Daily remaining time (only if clock is reliable)
-		if status.DailyRemaining > 0 && status.ClockReliable {
+		// Daily remaining time
+		if status.DailyRemaining > 0 {
 			remainingStr := status.DailyRemaining.String()
 			resp.DailyRemaining = &remainingStr
 		}
+	}
 
-		// Warnings given
-		for _, warning := range status.WarningsGiven {
-			resp.WarningsGiven = append(resp.WarningsGiven, warning.String())
-		}
+	// Daily usage (only during active state when we have accurate data)
+	if status.SessionActive && status.DailyUsageToday > 0 {
+		usageStr := status.DailyUsageToday.String()
+		resp.DailyUsageToday = &usageStr
 	}
 
 	return resp, nil
