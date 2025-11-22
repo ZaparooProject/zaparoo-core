@@ -126,15 +126,15 @@ func createConsoleRestoreFunc(pl *Platform, cm platforms.ConsoleManager) func() 
 // runTrackedProcess manages the lifecycle of a console-based launcher process.
 // This function handles:
 //   - Starting the process non-blocking
-//   - Tracking the process for StopActiveLauncher
-//   - Cleanup goroutine with sophisticated exit handling:
-//   - Staleness detection (launcher context cancelled)
-//   - Signal detection (SIGKILL/SIGTERM from preemption)
-//   - Crash handling (non-zero exit without signal)
-//   - Natural completion (zero exit code)
+//   - Tracking the process and cleanup completion channel for StopActiveLauncher
+//   - Cleanup goroutine that ALWAYS runs restoreFunc regardless of preemption
+//   - Signaling cleanup completion via channel for synchronization
+//
+// The cleanup goroutine runs restoreFunc unconditionally because console state
+// (VT mode, cursor, video mode) must be restored even if the launcher was preempted.
+// StopActiveLauncher waits on the completion channel before starting a new launcher.
 //
 // Parameters:
-//   - launcherCtx: Context from launcherManager for staleness detection
 //   - pl: Platform instance for process tracking
 //   - cmd: Prepared exec.Cmd (not yet started)
 //   - restoreFunc: Cleanup function (from createConsoleRestoreFunc)
@@ -144,15 +144,18 @@ func createConsoleRestoreFunc(pl *Platform, cm platforms.ConsoleManager) func() 
 //
 // This function is reusable for any console-based launcher.
 func runTrackedProcess(
-	launcherCtx context.Context,
 	pl *Platform,
 	cmd *exec.Cmd,
 	restoreFunc func(),
 	logPrefix string,
 ) (*os.Process, error) {
+	// Create cleanup completion channel BEFORE starting process
+	done := make(chan struct{})
+
 	// Redirect stdin/stdout to /dev/null to prevent console text interference
 	devNull, devErr := os.OpenFile("/dev/null", os.O_RDWR, 0)
 	if devErr != nil {
+		close(done) // Signal immediate completion on error
 		restoreFunc()
 		return nil, fmt.Errorf("failed to open /dev/null: %w", devErr)
 	}
@@ -167,6 +170,7 @@ func runTrackedProcess(
 	// Capture stderr for logging
 	stderrPipe, pipeErr := cmd.StderrPipe()
 	if pipeErr != nil {
+		close(done) // Signal immediate completion on error
 		restoreFunc()
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", pipeErr)
 	}
@@ -185,39 +189,38 @@ func runTrackedProcess(
 
 	// Start process non-blocking
 	if err := cmd.Start(); err != nil {
+		close(done) // Signal immediate completion on error
 		restoreFunc()
 		return nil, fmt.Errorf("failed to start %s: %w", logPrefix, err)
 	}
 
-	// Track process so it can be killed by StopActiveLauncher
-	pl.SetTrackedProcess(cmd.Process)
+	// Track process and completion channel together BEFORE cleanup goroutine starts
+	pl.setTrackedProcessWithCleanup(cmd.Process, done)
 
 	// Cleanup in goroutine (non-blocking)
 	go func() {
+		// Signal completion when this goroutine exits, no matter what happens
+		defer close(done)
+
 		waitErr := cmd.Wait()
 		log.Debug().Msgf("%s: process exited, waitErr=%v", logPrefix, waitErr)
-
-		// Check if launcher context is stale (new launcher started)
-		if launcherCtx.Err() != nil {
-			log.Warn().
-				Err(launcherCtx.Err()).
-				Msgf("%s cleanup cancelled - launcher superseded", logPrefix)
-			return
-		}
 
 		// Handle different exit scenarios
 		if waitErr != nil {
 			// Process exited with error (crash, SIGTERM, or SIGKILL)
-			// For crashes, we do full cleanup (menu launch, cursor restore)
-			// For SIGTERM/SIGKILL, VT deallocation happens in StopActiveLauncher
 			log.Info().Err(waitErr).Msgf("%s exited with error", logPrefix)
 		} else {
 			// Process completed normally (exit code 0)
 			log.Info().Msgf("%s completed normally", logPrefix)
 		}
 
-		pl.SetTrackedProcess(nil)
-		restoreFunc() // Full cleanup (menu launch, cursor restore)
+		// CRITICAL: Always run cleanup for console launchers
+		// Console state (VT, cursor, video mode) must be restored regardless
+		// of whether the context was cancelled or the process was preempted
+		restoreFunc()
+
+		// Clear tracked process after cleanup completes
+		pl.clearTrackedProcess()
 	}()
 
 	return cmd.Process, nil

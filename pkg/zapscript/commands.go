@@ -96,6 +96,41 @@ var cmdMap = map[string]func(
 	models.ZapScriptCmdGet:      cmdHTTPGet, // DEPRECATED
 }
 
+// IsMediaLaunchingCommand returns true if the command launches media and should be subject to playtime limits.
+// This includes all launch.* commands, most playlist commands (play/next/prev/goto/load/open), and mister.mgl.
+func IsMediaLaunchingCommand(cmdName string) bool {
+	switch cmdName {
+	// Launch commands
+	case models.ZapScriptCmdLaunch,
+		models.ZapScriptCmdLaunchSystem,
+		models.ZapScriptCmdLaunchRandom,
+		models.ZapScriptCmdLaunchSearch,
+		models.ZapScriptCmdLaunchTitle:
+		return true
+
+	// Playlist commands that launch or load media
+	case models.ZapScriptCmdPlaylistPlay,
+		models.ZapScriptCmdPlaylistNext,
+		models.ZapScriptCmdPlaylistPrevious,
+		models.ZapScriptCmdPlaylistGoto,
+		models.ZapScriptCmdPlaylistLoad,
+		models.ZapScriptCmdPlaylistOpen:
+		return true
+
+	// MiSTer MGL launches games
+	case models.ZapScriptCmdMisterMGL:
+		return true
+
+	// Deprecated aliases
+	case models.ZapScriptCmdRandom, // alias for launch.random
+		models.ZapScriptCmdSystem: // alias for launch.system
+		return true
+
+	default:
+		return false
+	}
+}
+
 //nolint:gocritic // single-use parameter in command handler
 func forwardCmd(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
 	result, err := pl.ForwardCmd(&env)

@@ -198,43 +198,53 @@ Requests from the local device are allowed without restriction. Remote requests 
 
 ## Methods
 
-Methods are used to execute actions and request data back from the API. The current API provides **21 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
+Methods are used to execute actions and request data back from the API. The current API provides **26 methods** across core functionality areas. See the [API Methods](./methods) page for detailed definitions and examples of each method.
 
-| ID                   | Description                                                                           |
-| :------------------- | :------------------------------------------------------------------------------------ |
-| run                  | Run supplied ZapScript.                                                               |
-| stop                 | Kill any active launcher, if possible.                                                |
-| tokens               | List active tokens.                                                                   |
-| tokens.history       | Return a list of the latest token launches.                                           |
-| media                | Return status and statistics about media database.                                    |
-| media.active         | Return the currently active (now playing) media.                                      |
-| media.active.update  | Update the currently active media information.                                        |
-| media.search         | Query the media database and return all matching indexed media.                       |
-| media.generate       | Start a new media database index.                                                     |
-| systems              | List all currently indexed systems.                                                   |
-| settings             | List current configuration settings.                                                  |
-| settings.update      | Update one or more settings in-memory and save changes to disk.                       |
-| settings.reload      | Reload settings from disk.                                                            |
-| mappings             | List all mappings.                                                                    |
-| mappings.new         | Create a new mapping.                                                                 |
-| mappings.update      | Change an existing mapping.                                                           |
-| mappings.delete      | Delete an existing mapping.                                                           |
-| mappings.reload      | Reload mappings from disk.                                                            |
-| readers.write        | Attempt to write given text to the first available write-capable reader, if possible. |
-| readers.write.cancel | Cancel any active write operation.                                                    |
-| version              | Return server's current version and platform.                                         |
+| ID                              | Description                                                                           |
+| :------------------------------ | :------------------------------------------------------------------------------------ |
+| run                             | Run supplied ZapScript.                                                               |
+| stop                            | Kill any active launcher, if possible.                                                |
+| tokens                          | List active tokens.                                                                   |
+| tokens.history                  | Return a list of the latest token launches.                                           |
+| media                           | Return status and statistics about media database.                                    |
+| media.active                    | Return the currently active (now playing) media.                                      |
+| media.active.update             | Update the currently active media information.                                        |
+| media.search                    | Query the media database and return all matching indexed media.                       |
+| media.tags                      | Query available tags for filtering media search results.                              |
+| media.generate                  | Start a new media database index.                                                     |
+| media.generate.cancel           | Cancel any currently running media database indexing operation.                       |
+| playtime                        | Query current playtime session status and usage statistics.                           |
+| systems                         | List all currently indexed systems.                                                   |
+| settings                        | List current configuration settings.                                                  |
+| settings.update                 | Update one or more settings in-memory and save changes to disk.                       |
+| settings.reload                 | Reload settings from disk.                                                            |
+| settings.logs.download          | Download the current log file as base64-encoded content.                              |
+| settings.playtime.limits        | Get current playtime limit configuration.                                             |
+| settings.playtime.limits.update | Update playtime limit settings.                                                       |
+| mappings                        | List all mappings.                                                                    |
+| mappings.new                    | Create a new mapping.                                                                 |
+| mappings.update                 | Change an existing mapping.                                                           |
+| mappings.delete                 | Delete an existing mapping.                                                           |
+| mappings.reload                 | Reload mappings from disk.                                                            |
+| readers                         | List all currently connected readers and their capabilities.                          |
+| readers.write                   | Attempt to write given text to the first available write-capable reader, if possible. |
+| readers.write.cancel            | Cancel any active write operation.                                                    |
+| launchers.refresh               | Refresh the internal launcher cache, forcing a reload of launcher configurations.     |
+| version                         | Return server's current version and platform.                                         |
 
 ## Notifications
 
 Notifications let a server or client know an event has occurred. See the [API Notifications](./notifications) page for detailed definitions and examples of each notification.
 
-| ID              | Description                                          |
-| :-------------- | :--------------------------------------------------- |
-| running         | New ZapScript has been added to the launch queue.    |
-| readers.added   | A new reader was connected to the server.            |
-| readers.removed | A connected reader was disconnected from the server. |
-| tokens.added    | A new token detected by a reader.                    |
-| tokens.removed  | A token was removed.                                 |
-| media.started   | New media was started on server.                     |
-| media.stopped   | Media has stopped on server.                         |
-| media.indexing  | The state of the indexing process has changed.       |
+| ID                     | Description                                                                       |
+| :--------------------- | :-------------------------------------------------------------------------------- |
+| running                | New ZapScript has been added to the launch queue.                                 |
+| readers.added          | A new reader was connected to the server.                                         |
+| readers.removed        | A connected reader was disconnected from the server.                              |
+| tokens.added           | A new token detected by a reader.                                                 |
+| tokens.removed         | A token was removed.                                                              |
+| media.started          | New media was started on server.                                                  |
+| media.stopped          | Media has stopped on server.                                                      |
+| media.indexing         | The state of the indexing or optimization process has changed.                    |
+| playtime.limit.reached | A playtime limit (session or daily) has been reached and enforced.                |
+| playtime.limit.warning | A playtime warning notification sent at configured intervals before limit reached. |

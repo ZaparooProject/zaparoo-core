@@ -55,6 +55,7 @@ type Platform struct {
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
 	trackedProcess      *os.Process
+	processDone         chan struct{} // Signals when tracked process cleanup completes
 	tracker             *tracker.Tracker
 	uidMap              map[string]string
 	stopMappingsWatcher func() error
@@ -284,6 +285,22 @@ func (p *Platform) SetTrackedProcess(proc *os.Process) {
 	p.trackedProcess = proc
 }
 
+// setTrackedProcessWithCleanup sets the tracked process and its cleanup completion channel
+func (p *Platform) setTrackedProcessWithCleanup(proc *os.Process, done chan struct{}) {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	p.trackedProcess = proc
+	p.processDone = done
+}
+
+// clearTrackedProcess clears both the tracked process and its cleanup channel
+func (p *Platform) clearTrackedProcess() {
+	p.processMu.Lock()
+	defer p.processMu.Unlock()
+	p.trackedProcess = nil
+	p.processDone = nil
+}
+
 func (p *Platform) ScanHook(token *tokens.Token) error {
 	f, err := os.Create(misterconfig.TokenReadFile)
 	if err != nil {
@@ -333,9 +350,19 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.stopIntent = intent
 	p.processMu.Unlock()
 
+	// Check if we have a tracked process before attempting to stop it
+	p.processMu.Lock()
+	hadTrackedProcess := p.trackedProcess != nil
+	p.processMu.Unlock()
+
 	// Invalidate old launcher context ONLY for preemption (new launcher starting)
+	// EXCEPT for console launchers which need cleanup goroutine to run
 	// For StopForMenu and StopForConsoleReset, we need cleanup to run to unlock VT
-	if intent == platforms.StopForPreemption {
+	cancelContextNow := intent == platforms.StopForPreemption && !hadTrackedProcess
+
+	// Console launchers (video/ScummVM): delay context cancellation until after cleanup
+
+	if cancelContextNow {
 		if p.launcherManager != nil {
 			p.launcherManager.NewContext()
 		}
@@ -345,11 +372,6 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 	p.platformMu.Lock()
 	customKill := p.lastLauncher.Kill
 	p.platformMu.Unlock()
-
-	// Check if we have a tracked process before attempting to stop it
-	p.processMu.Lock()
-	hadTrackedProcess := p.trackedProcess != nil
-	p.processMu.Unlock()
 
 	// Use custom Kill if defined (e.g., keyboard input for ScummVM)
 	if customKill != nil {
@@ -429,6 +451,32 @@ func (p *Platform) StopActiveLauncher(intent platforms.StopIntent) error {
 			}
 		} else {
 			log.Debug().Msg("tracked process existed - cleanup goroutine will call ReturnToMenu")
+		}
+	}
+
+	// For console launchers during preemption, wait for cleanup to complete
+	// before cancelling context. This ensures console state (VT, cursor, video mode)
+	// is properly cleaned up before the new launcher starts.
+	if intent == platforms.StopForPreemption && hadTrackedProcess {
+		// Get the cleanup completion channel
+		p.processMu.Lock()
+		done := p.processDone
+		p.processMu.Unlock()
+
+		if done != nil {
+			log.Debug().Msg("waiting for console launcher cleanup to complete")
+			select {
+			case <-done:
+				log.Debug().Msg("console launcher cleanup completed")
+			case <-time.After(2 * time.Second):
+				// Safety valve: don't hang if process becomes a zombie
+				log.Warn().Msg("timeout waiting for console cleanup (2s)")
+			}
+		}
+
+		// Now invalidate the launcher context to prevent any further operations
+		if p.launcherManager != nil {
+			p.launcherManager.NewContext()
 		}
 	}
 

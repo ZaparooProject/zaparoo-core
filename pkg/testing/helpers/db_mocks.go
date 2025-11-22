@@ -312,6 +312,18 @@ func (m *MockUserDBI) CleanupMediaHistory(retentionDays int) (int64, error) {
 	return rowsDeleted, nil
 }
 
+func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {
+	args := m.Called(bootUUID, trueBootTime)
+	rowsHealed, ok := args.Get(0).(int64)
+	if !ok {
+		rowsHealed = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsHealed, fmt.Errorf("mock UserDBI heal timestamps failed: %w", err)
+	}
+	return rowsHealed, nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock

@@ -31,6 +31,7 @@ require (
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
+	github.com/mackerelio/go-osstat v0.2.6
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.2.1

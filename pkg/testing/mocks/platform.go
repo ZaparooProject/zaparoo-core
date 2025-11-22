@@ -116,12 +116,6 @@ func (m *MockPlatform) RootDirs(cfg *config.Instance) []string {
 	return []string{}
 }
 
-// NormalizePath converts a path to a normalized form for the platform
-func (m *MockPlatform) NormalizePath(cfg *config.Instance, path string) string {
-	args := m.Called(cfg, path)
-	return args.String(0)
-}
-
 // StopActiveLauncher kills/exits the currently running launcher process
 func (m *MockPlatform) StopActiveLauncher(intent platforms.StopIntent) error {
 	args := m.Called(intent)

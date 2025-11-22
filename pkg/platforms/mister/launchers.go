@@ -431,7 +431,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 		restoreFunc := createConsoleRestoreFunc(pl, cm)
 
 		// Start process and manage lifecycle
-		return runTrackedProcess(launcherCtx, pl, cmd, restoreFunc, "fvp")
+		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
 	}
 }
 
@@ -523,7 +523,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Start process and manage lifecycle (wraps with nice/setsid)
-		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithMIDI, "scummvm")
+		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm")
 	}
 }
 

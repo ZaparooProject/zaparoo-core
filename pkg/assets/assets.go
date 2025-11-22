@@ -42,6 +42,12 @@ var SuccessSound []byte
 //go:embed sounds/fail.wav
 var FailSound []byte
 
+// LimitSound CogFireStudios (https://freesound.org/people/CogFireStudios/sounds/636679/)
+// Licence: CC0 1.0 Universal (CC0 1.0) Public Domain Dedication
+//
+//go:embed sounds/limit.wav
+var LimitSound []byte
+
 //go:embed systems/*
 var Systems embed.FS
 

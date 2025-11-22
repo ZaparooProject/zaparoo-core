@@ -25,58 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMediaHistory(t *testing.T) {
-	t.Parallel()
-
-	threeSixtyFive := 365
-	ninety := 90
-	zero := 0
-
-	tests := []struct {
-		mediaHistory *int
-		name         string
-		expected     int
-	}{
-		{
-			name:         "nil returns default 365 days",
-			mediaHistory: nil,
-			expected:     365,
-		},
-		{
-			name:         "explicit 90 days",
-			mediaHistory: &ninety,
-			expected:     90,
-		},
-		{
-			name:         "explicit 365 days",
-			mediaHistory: &threeSixtyFive,
-			expected:     365,
-		},
-		{
-			name:         "zero (unlimited)",
-			mediaHistory: &zero,
-			expected:     0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := &Instance{
-				vals: Values{
-					Media: Media{
-						MediaHistory: tt.mediaHistory,
-					},
-				},
-			}
-
-			result := cfg.MediaHistory()
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestFilenameTags(t *testing.T) {
 	t.Parallel()
 

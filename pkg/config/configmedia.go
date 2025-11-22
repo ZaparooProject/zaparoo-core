@@ -21,7 +21,6 @@ package config
 
 type Media struct {
 	FilenameTags   *bool    `toml:"filename_tags,omitempty"`
-	MediaHistory   *int     `toml:"media_history,omitempty"`
 	DefaultRegions []string `toml:"default_regions,omitempty,multiline"`
 	DefaultLangs   []string `toml:"default_langs,omitempty,multiline"`
 }
@@ -65,15 +64,4 @@ func (c *Instance) DefaultLangs() []string {
 		return []string{"en"}
 	}
 	return c.vals.Media.DefaultLangs
-}
-
-// MediaHistory returns the number of days to retain media history.
-// Returns 0 if cleanup is disabled, or 365 (1 year) by default.
-func (c *Instance) MediaHistory() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.vals.Media.MediaHistory == nil {
-		return 365 // Default: keep 365 days (1 year) of media history
-	}
-	return *c.vals.Media.MediaHistory
 }

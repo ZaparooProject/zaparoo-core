@@ -23,17 +23,21 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
+	"github.com/google/uuid"
+	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
 )
 
@@ -143,12 +147,25 @@ func launchPlaylistMedia(
 		log.Error().Err(err).Msgf("error launching token")
 	}
 
+	now := time.Now()
+	systemUptime, uptimeErr := uptime.Get()
+	if uptimeErr != nil {
+		log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
+		systemUptime = 0
+	}
+	monotonicStart := int64(systemUptime.Seconds())
+
 	he := database.HistoryEntry{
-		Time:       t.ScanTime,
-		Type:       t.Type,
-		TokenID:    t.UID,
-		TokenValue: t.Text,
-		TokenData:  t.Data,
+		ID:             uuid.New().String(),
+		Time:           t.ScanTime,
+		Type:           t.Type,
+		TokenID:        t.UID,
+		TokenValue:     t.Text,
+		TokenData:      t.Data,
+		ClockReliable:  helpers.IsClockReliable(now),
+		BootUUID:       st.BootUUID(),
+		MonotonicStart: monotonicStart,
+		CreatedAt:      now,
 	}
 	he.Success = err == nil
 	err = db.UserDB.AddHistory(&he)
@@ -213,6 +230,7 @@ func processTokenQueue(
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plq chan *playlists.Playlist,
+	limitsManager *playtime.LimitsManager,
 ) {
 	for {
 		select {
@@ -229,31 +247,86 @@ func processTokenQueue(
 			log.Info().Msgf("processing token: %v", t)
 
 			// Play success sound immediately on scan success
-			if path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform)); enabled {
-				if path == "" {
-					// Use embedded default sound
-					if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
-						log.Warn().Msgf("error playing success sound: %s", audioErr)
-					}
-				} else {
-					// Use custom sound file
-					if audioErr := audio.PlayFile(path); audioErr != nil {
-						log.Warn().Str("path", path).Msgf("error playing custom success sound: %s", audioErr)
-					}
-				}
-			}
+			path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform))
+			helpers.PlayConfiguredSound(path, enabled, assets.SuccessSound, "success")
 
 			err := platform.ScanHook(&t)
 			if err != nil {
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}
 
+			now := time.Now()
+			systemUptime, uptimeErr := uptime.Get()
+			if uptimeErr != nil {
+				log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
+				systemUptime = 0
+			}
+			monotonicStart := int64(systemUptime.Seconds())
+
 			he := database.HistoryEntry{
-				Time:       t.ScanTime,
-				Type:       t.Type,
-				TokenID:    t.UID,
-				TokenValue: t.Text,
-				TokenData:  t.Data,
+				ID:             uuid.New().String(),
+				Time:           t.ScanTime,
+				Type:           t.Type,
+				TokenID:        t.UID,
+				TokenValue:     t.Text,
+				TokenData:      t.Data,
+				ClockReliable:  helpers.IsClockReliable(now),
+				BootUUID:       st.BootUUID(),
+				MonotonicStart: monotonicStart,
+				CreatedAt:      now,
+			}
+
+			// Parse script early to check if playtime limits apply
+			// Only block media-launching commands, not utility commands (execute, delay, echo, etc.)
+			mappedValue, hasMapping := getMapping(cfg, db, platform, t)
+			scriptText := t.Text
+			if hasMapping {
+				scriptText = mappedValue
+			}
+
+			reader := parser.NewParser(scriptText)
+			script, parseErr := reader.ParseScript()
+			if parseErr != nil {
+				log.Error().Err(parseErr).Msg("failed to parse script for playtime check")
+				// Continue anyway - the error will be caught in runTokenZapScript
+			}
+
+			// Check if any command in the script launches media
+			hasMediaLaunchCmd := false
+			if parseErr == nil {
+				for _, cmd := range script.Cmds {
+					if zapscript.IsMediaLaunchingCommand(cmd.Name) {
+						hasMediaLaunchCmd = true
+						break
+					}
+				}
+			}
+
+			// Only check playtime limits if the script contains media-launching commands
+			if hasMediaLaunchCmd {
+				if limitErr := limitsManager.CheckBeforeLaunch(); limitErr != nil {
+					log.Warn().Err(limitErr).Msg("playtime: launch blocked by daily limit")
+
+					// Send playtime limit notification
+					notifications.PlaytimeLimitReached(st.Notifications, models.PlaytimeLimitReachedParams{
+						Reason: models.PlaytimeLimitReasonDaily,
+					})
+
+					// Play limit sound
+					path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform))
+					helpers.PlayConfiguredSound(path, enabled, assets.LimitSound, "limit")
+
+					// Add to history as failed
+					he.Success = false
+					if histErr := db.UserDB.AddHistory(&he); histErr != nil {
+						log.Error().Err(histErr).Msgf("error adding history")
+					}
+
+					// Skip launch
+					continue
+				}
+			} else {
+				log.Debug().Msg("script contains no media-launching commands, bypassing playtime limit check")
 			}
 
 			// launch tokens in a separate thread
@@ -270,19 +343,8 @@ func processTokenQueue(
 
 				// Play fail sound only if ZapScript fails
 				if err != nil {
-					if path, enabled := cfg.FailSoundPath(helpers.DataDir(platform)); enabled {
-						if path == "" {
-							// Use embedded default sound
-							if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-								log.Warn().Msgf("error playing fail sound: %s", audioErr)
-							}
-						} else {
-							// Use custom sound file
-							if audioErr := audio.PlayFile(path); audioErr != nil {
-								log.Warn().Str("path", path).Msgf("error playing custom fail sound: %s", audioErr)
-							}
-						}
-					}
+					path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
+					helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
 				}
 
 				he.Success = err == nil

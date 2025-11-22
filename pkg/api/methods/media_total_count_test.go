@@ -81,7 +81,7 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)

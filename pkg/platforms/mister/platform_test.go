@@ -23,8 +23,10 @@ package mister
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -32,6 +34,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockLauncherManager is a minimal mock for testing
+type mockLauncherManager struct{}
+
+func (*mockLauncherManager) GetContext() context.Context {
+	return context.Background()
+}
+
+func (*mockLauncherManager) NewContext() context.Context {
+	return context.Background()
+}
 
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	t.Parallel()
@@ -140,6 +153,52 @@ func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	// Note: We can't actually test keyboard input without initializing the
 	// keyboard device, which requires uinput access. The function signature
 	// and presence is what matters for the platform to use it correctly.
+}
+
+func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.launcherManager = &mockLauncherManager{}
+	p.setActiveMedia = func(_ *models.ActiveMedia) {} // Required by StopActiveLauncher
+
+	// Simulate a tracked process with cleanup channel
+	done := make(chan struct{})
+	p.processMu.Lock()
+	p.trackedProcess = &os.Process{Pid: 99999} // Fake PID
+	p.processDone = done
+	p.processMu.Unlock()
+
+	// Track when StopActiveLauncher returns
+	stopReturned := make(chan struct{})
+
+	// Call StopActiveLauncher in goroutine
+	go func() {
+		_ = p.StopActiveLauncher(platforms.StopForPreemption)
+		close(stopReturned)
+	}()
+
+	// Give it a moment to start waiting
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify StopActiveLauncher hasn't returned yet (should be blocked on channel)
+	select {
+	case <-stopReturned:
+		t.Fatal("StopActiveLauncher returned before cleanup completed")
+	default:
+		// Good - still waiting
+	}
+
+	// Now signal cleanup completion
+	close(done)
+
+	// StopActiveLauncher should now return
+	select {
+	case <-stopReturned:
+		// Good - returned after cleanup
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("StopActiveLauncher did not return after cleanup completed")
+	}
 }
 
 func TestArcadeCardLaunchCache(t *testing.T) {

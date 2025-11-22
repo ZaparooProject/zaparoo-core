@@ -48,18 +48,19 @@ const (
 )
 
 type Platform struct {
-	clock          clockwork.Clock
-	cfg            *config.Instance
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	stopTracker    func() error
-	lastKnownGame  *models.ActiveMedia
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
-	processMu      sync.RWMutex
-	trackerMu      sync.RWMutex
-	kodiActive     bool
+	clock             clockwork.Clock
+	cfg               *config.Instance
+	activeMedia       func() *models.ActiveMedia
+	setActiveMedia    func(*models.ActiveMedia)
+	trackedProcess    *os.Process
+	stopTracker       func() error
+	lastKnownGame     *models.ActiveMedia
+	kbd               linuxinput.Keyboard
+	gpd               linuxinput.Gamepad
+	processMu         sync.RWMutex
+	trackerMu         sync.RWMutex
+	kodiActive        bool
+	maxStartupRetries int // For testing: reduces retry count to speed up ES API unavailability tests
 }
 
 func (*Platform) ID() string {
@@ -124,7 +125,10 @@ func (p *Platform) StartPost(
 	p.setActiveMedia = setActiveMedia
 
 	// Try to check for running game with retries during startup
-	maxRetries := 10
+	maxRetries := p.maxStartupRetries
+	if maxRetries == 0 {
+		maxRetries = 10 // Default: 10 retries for production
+	}
 	baseDelay := 100 * time.Millisecond
 	var game *models.ActiveMedia
 	running := false

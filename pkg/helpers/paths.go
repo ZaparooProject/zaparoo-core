@@ -26,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -43,16 +42,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// NormalizePathForComparison normalizes a path for cross-platform comparison.
-// On Windows: converts to forward slashes and lowercases (case-insensitive filesystem)
-// On Linux/macOS: only converts to forward slashes (preserves case for case-sensitive filesystems)
-// This handles paths from databases (forward slashes) vs filepath.Join (OS-specific slashes).
+// NormalizePathForComparison normalizes a path for cross-platform case-insensitive comparison.
+// Converts to forward slashes and lowercases for consistent matching across all platforms.
+// This handles paths from databases (forward slashes) vs filepath.Join (OS-specific slashes),
+// and ensures case-insensitive matching works for FAT32/exFAT filesystems on all platforms.
 func NormalizePathForComparison(path string) string {
 	p := filepath.ToSlash(filepath.Clean(path))
-	if runtime.GOOS == "windows" {
-		return strings.ToLower(p)
-	}
-	return p
+	return strings.ToLower(p)
 }
 
 // PathHasPrefix checks if path is within root directory, handling separator boundaries correctly.
@@ -178,7 +174,6 @@ func PathIsLauncher(
 }
 
 // MatchSystemFile returns true if a given path is for a given system.
-// This function now uses the launcher cache for O(1) system lookup instead of O(n*m).
 func MatchSystemFile(
 	cfg *config.Instance,
 	pl platforms.Platform,

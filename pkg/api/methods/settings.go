@@ -143,3 +143,119 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	}
 	return NoContent{}, nil
 }
+
+//nolint:gocritic // single-use parameter in API handler
+func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received playtime limits request")
+
+	// Get current config values
+	enabled := env.Config.PlaytimeLimitsEnabled()
+	daily := env.Config.DailyLimit()
+	session := env.Config.SessionLimit()
+	sessionReset := env.Config.SessionResetTimeout()
+	warnings := env.Config.WarningIntervals()
+	retention := env.Config.PlaytimeRetention()
+
+	// Build response with optional fields
+	resp := models.PlaytimeLimitsResponse{
+		Enabled:  enabled,
+		Warnings: make([]string, 0, len(warnings)),
+	}
+
+	// Convert durations to strings for response
+	if daily > 0 {
+		dailyStr := daily.String()
+		resp.Daily = &dailyStr
+	}
+
+	if session > 0 {
+		sessionStr := session.String()
+		resp.Session = &sessionStr
+	}
+
+	// Always include session reset (even if 0 or default)
+	resetStr := sessionReset.String()
+	resp.SessionReset = &resetStr
+
+	// Convert warning durations to strings
+	for _, w := range warnings {
+		resp.Warnings = append(resp.Warnings, w.String())
+	}
+
+	if retention > 0 {
+		resp.Retention = &retention
+	}
+
+	return resp, nil
+}
+
+//nolint:gocritic // single-use parameter in API handler
+func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
+	log.Info().Msg("received playtime limits update request")
+
+	if len(env.Params) == 0 {
+		return nil, ErrMissingParams
+	}
+
+	var params models.UpdatePlaytimeLimitsParams
+	err := json.Unmarshal(env.Params, &params)
+	if err != nil {
+		return nil, ErrInvalidParams
+	}
+
+	// Update each parameter if provided
+	if params.Enabled != nil {
+		log.Info().Bool("enabled", *params.Enabled).Msg("playtime limits update")
+		env.Config.SetPlaytimeLimitsEnabled(*params.Enabled)
+
+		// Apply immediately to running LimitsManager
+		if env.LimitsManager != nil {
+			env.LimitsManager.SetEnabled(*params.Enabled)
+		}
+	}
+
+	if params.Daily != nil {
+		log.Info().Str("daily", *params.Daily).Msg("playtime limits update")
+		err = env.Config.SetDailyLimit(*params.Daily)
+		if err != nil {
+			return nil, fmt.Errorf("invalid daily limit duration: %w", err)
+		}
+	}
+
+	if params.Session != nil {
+		log.Info().Str("session", *params.Session).Msg("playtime limits update")
+		err = env.Config.SetSessionLimit(*params.Session)
+		if err != nil {
+			return nil, fmt.Errorf("invalid session limit duration: %w", err)
+		}
+	}
+
+	if params.SessionReset != nil {
+		log.Info().Str("session_reset", *params.SessionReset).Msg("playtime limits update")
+		err = env.Config.SetSessionResetTimeout(params.SessionReset)
+		if err != nil {
+			return nil, fmt.Errorf("invalid session reset duration: %w", err)
+		}
+	}
+
+	if params.Warnings != nil {
+		log.Info().Strs("warnings", *params.Warnings).Msg("playtime limits update")
+		err = env.Config.SetWarningIntervals(*params.Warnings)
+		if err != nil {
+			return nil, fmt.Errorf("invalid warning intervals: %w", err)
+		}
+	}
+
+	if params.Retention != nil {
+		log.Info().Int("retention", *params.Retention).Msg("playtime limits update")
+		env.Config.SetPlaytimeRetention(*params.Retention)
+	}
+
+	// Save configuration to disk
+	err = env.Config.Save()
+	if err != nil {
+		return nil, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	return NoContent{}, nil
+}

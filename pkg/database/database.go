@@ -44,25 +44,46 @@ type Database struct {
  */
 
 type HistoryEntry struct {
-	Time       time.Time `json:"time"`
-	Type       string    `json:"type"`
-	TokenID    string    `json:"tokenId"`
-	TokenValue string    `json:"tokenValue"`
-	TokenData  string    `json:"tokenData"`
-	DBID       int64     `db:"DBID" json:"id"`
-	Success    bool      `json:"success"`
+	Time           time.Time  `json:"time"`
+	CreatedAt      time.Time  `json:"createdAt,omitempty"`
+	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
+	DeviceID       *string    `json:"deviceId,omitempty"`
+	BootUUID       string     `json:"bootUuid,omitempty"`
+	ID             string     `json:"uuid,omitempty"`
+	TokenData      string     `json:"tokenData"`
+	TokenValue     string     `json:"tokenValue"`
+	TokenID        string     `json:"tokenId"`
+	Type           string     `json:"type"`
+	DBID           int64      `db:"DBID" json:"id"`
+	MonotonicStart int64      `json:"monotonicStart,omitempty"`
+	Success        bool       `json:"success"`
+	ClockReliable  bool       `json:"clockReliable"`
+	IsDeleted      bool       `json:"isDeleted,omitempty"`
 }
 
 type MediaHistoryEntry struct {
-	StartTime  time.Time  `json:"startTime"`
-	EndTime    *time.Time `json:"endTime,omitempty"`
-	SystemID   string     `json:"systemId"`
-	SystemName string     `json:"systemName"`
-	MediaPath  string     `json:"mediaPath"`
-	MediaName  string     `json:"mediaName"`
-	LauncherID string     `json:"launcherId"`
-	DBID       int64      `db:"DBID" json:"id"`
-	PlayTime   int        `json:"playTime"`
+	StartTime      time.Time  `json:"startTime"`
+	UpdatedAt      time.Time  `json:"updatedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt,omitempty"`
+	EndTime        *time.Time `json:"endTime,omitempty"`
+	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
+	DeviceID       *string    `json:"deviceId,omitempty"`
+	BootUUID       string     `json:"bootUuid,omitempty"`
+	ClockSource    string     `json:"clockSource,omitempty"`
+	SystemID       string     `json:"systemId"`
+	ID             string     `json:"uuid,omitempty"`
+	LauncherID     string     `json:"launcherId"`
+	SystemName     string     `json:"systemName"`
+	MediaPath      string     `json:"mediaPath"`
+	MediaName      string     `json:"mediaName"`
+	DBID           int64      `db:"DBID" json:"id"`
+	WallDuration   int        `json:"wallDuration"`
+	DurationSec    int        `json:"durationSec"`
+	MonotonicStart int64      `json:"monotonicStart,omitempty"`
+	PlayTime       int        `json:"playTime"`
+	TimeSkewFlag   bool       `json:"timeSkewFlag"`
+	ClockReliable  bool       `json:"clockReliable"`
+	IsDeleted      bool       `json:"isDeleted,omitempty"`
 }
 
 type Mapping struct {
@@ -260,6 +281,7 @@ type UserDBI interface {
 	GetMediaHistory(lastID, limit int) ([]MediaHistoryEntry, error)
 	CloseHangingMediaHistory() error
 	CleanupMediaHistory(retentionDays int) (int64, error)
+	HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error)
 	AddMapping(m *Mapping) error
 	GetMapping(id int64) (Mapping, error)
 	DeleteMapping(id int64) error

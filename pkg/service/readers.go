@@ -25,7 +25,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -287,19 +286,8 @@ func readerManager(
 
 	playFail := func() {
 		if time.Since(lastError) > 1*time.Second {
-			if path, enabled := cfg.FailSoundPath(helpers.DataDir(pl)); enabled {
-				if path == "" {
-					// Use embedded default sound
-					if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-						log.Warn().Msgf("error playing fail sound: %s", audioErr)
-					}
-				} else {
-					// Use custom sound file
-					if audioErr := audio.PlayFile(path); audioErr != nil {
-						log.Warn().Str("path", path).Msgf("error playing custom fail sound: %s", audioErr)
-					}
-				}
-			}
+			path, enabled := cfg.FailSoundPath(helpers.DataDir(pl))
+			helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
 		}
 	}
 

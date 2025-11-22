@@ -22,6 +22,7 @@ package zapscript
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -390,7 +391,7 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 }
 
 // mightBeTitle checks if input might be a title format for routing purposes in cmdLaunch to cmdTitle.
-// It already assumes things like file extensions have been ruled out.
+// Returns false for paths with file extensions, wildcards, or Windows-style backslashes.
 func mightBeTitle(input string) bool {
 	valid, _, game := isValidTitleFormat(input)
 	if !valid {
@@ -407,7 +408,9 @@ func mightBeTitle(input string) bool {
 		return false
 	}
 
-	return true
+	// Game part should not contain file extensions (path indicator)
+	ext := filepath.Ext(game)
+	return !helpers.IsValidExtension(ext)
 }
 
 // isValidTitleFormat checks if the input string is valid title format for cmdTitle.

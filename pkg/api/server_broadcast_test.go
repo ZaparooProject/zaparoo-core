@@ -40,7 +40,7 @@ func TestBroadcastNotifications_AsyncBroadcastDoesNotBlockConsumer(t *testing.T)
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	defer st.StopService()
 
 	// Create notification channel with realistic buffer size (100)
@@ -100,7 +100,7 @@ func TestBroadcastNotifications_BufferSizeHandlesBurst(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	defer st.StopService()
 
 	// Create notification channel with production buffer size
@@ -161,7 +161,7 @@ func TestBroadcastNotifications_NoDeadlockUnderLoad(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	defer st.StopService()
 
 	notifications := make(chan models.Notification, 100)
@@ -228,7 +228,7 @@ func TestBroadcastNotifications_ConcurrentBroadcastsComplete(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	defer st.StopService()
 
 	notifications := make(chan models.Notification, 100)

@@ -37,15 +37,16 @@ import (
 type State struct {
 	platform         platforms.Platform
 	ctx              context.Context
-	activePlaylist   *playlists.Playlist
-	softwareToken    *tokens.Token
+	onMediaStartHook func(*models.ActiveMedia)
+	launcherManager  *LauncherManager
 	wroteToken       *tokens.Token
 	readers          map[string]readers.Reader
 	ctxCancelFunc    context.CancelFunc
 	activeMedia      *models.ActiveMedia
-	onMediaStartHook func(*models.ActiveMedia)
-	launcherManager  *LauncherManager
+	activePlaylist   *playlists.Playlist
+	softwareToken    *tokens.Token
 	Notifications    chan<- models.Notification
+	bootUUID         string
 	lastScanned      tokens.Token
 	activeToken      tokens.Token
 	mu               sync.RWMutex
@@ -53,7 +54,7 @@ type State struct {
 	runZapScript     bool
 }
 
-func NewState(platform platforms.Platform) (state *State, notificationCh <-chan models.Notification) {
+func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
 	ns := make(chan models.Notification, 100)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
@@ -64,6 +65,7 @@ func NewState(platform platforms.Platform) (state *State, notificationCh <-chan 
 		ctx:             ctx,
 		ctxCancelFunc:   ctxCancelFunc,
 		launcherManager: NewLauncherManager(),
+		bootUUID:        bootUUID,
 	}, ns
 }
 
@@ -322,4 +324,10 @@ func (s *State) GetContext() context.Context {
 
 func (s *State) LauncherManager() *LauncherManager {
 	return s.launcherManager
+}
+
+func (s *State) BootUUID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bootUUID
 }

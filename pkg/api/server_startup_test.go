@@ -60,7 +60,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			cfg, err := helpers.NewTestConfigWithPort(fs, configDir, testPort)
 			require.NoError(t, err)
 
-			st, notifications := state.NewState(platform)
+			st, notifications := state.NewState(platform, "test-boot-uuid")
 			defer st.StopService()
 
 			db := &database.Database{
@@ -73,7 +73,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 
 			// Start server in a separate goroutine
 			go func() {
-				Start(platform, cfg, st, tokenQueue, db, notifications)
+				Start(platform, cfg, st, tokenQueue, db, nil, notifications)
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -120,7 +120,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
 	require.NoError(t, err)
 
-	st, notifications := state.NewState(platform)
+	st, notifications := state.NewState(platform, "test-boot-uuid")
 	defer st.StopService()
 
 	db := &database.Database{
@@ -136,7 +136,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 
 	// Start both server and connection attempt simultaneously
 	go func() {
-		Start(platform, cfg, st, tokenQueue, db, notifications)
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications)
 	}()
 
 	// Immediately try to connect (no delay)
@@ -183,7 +183,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a state with a context that we can cancel
-	st, notifications := state.NewState(platform)
+	st, notifications := state.NewState(platform, "test-boot-uuid")
 	defer st.StopService()
 
 	// Cancel the state context immediately to test context cancellation during listen
@@ -205,7 +205,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, db, notifications)
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications)
 	}()
 
 	// Wait for completion or timeout

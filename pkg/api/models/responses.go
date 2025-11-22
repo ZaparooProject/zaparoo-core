@@ -62,6 +62,28 @@ type SettingsResponse struct {
 	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
 }
 
+type PlaytimeLimitsResponse struct {
+	Daily        *string  `json:"daily,omitempty"`
+	Session      *string  `json:"session,omitempty"`
+	SessionReset *string  `json:"sessionReset,omitempty"`
+	Retention    *int     `json:"retention,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+	Enabled      bool     `json:"enabled"`
+}
+
+type PlaytimeStatusResponse struct {
+	SessionStarted        *string `json:"sessionStarted,omitempty"`
+	SessionDuration       *string `json:"sessionDuration,omitempty"`
+	SessionCumulativeTime *string `json:"sessionCumulativeTime,omitempty"`
+	SessionRemaining      *string `json:"sessionRemaining,omitempty"`
+	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
+	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
+	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
+	State                 string  `json:"state"`
+	SessionActive         bool    `json:"sessionActive"`
+	LimitsEnabled         bool    `json:"limitsEnabled"`
+}
+
 type System struct {
 	ReleaseDate  *string `json:"releaseDate,omitempty"`
 	Manufacturer *string `json:"manufacturer,omitempty"`
@@ -108,6 +130,15 @@ type TokenResponse struct {
 	UID      string    `json:"uid"`
 	Text     string    `json:"text"`
 	Data     string    `json:"data"`
+}
+
+type PlaytimeLimitReachedParams struct {
+	Reason string `json:"reason"`
+}
+
+type PlaytimeLimitWarningParams struct {
+	Interval  string `json:"interval"`
+	Remaining string `json:"remaining"`
 }
 
 type IndexingStatusResponse struct {

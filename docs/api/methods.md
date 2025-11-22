@@ -981,6 +981,205 @@ None.
 }
 ```
 
+## Playtime
+
+### playtime
+
+Query current playtime session status and usage statistics.
+
+This method returns comprehensive information about the current playtime session, including active game time, cumulative session time, cooldown state, daily usage, and remaining time before limits are reached.
+
+**Session States:**
+- `reset` - No active session, ready to start new session
+- `active` - Game currently running, time being tracked
+- `cooldown` - Game stopped but session persists (within session reset timeout)
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key                   | Type    | Required | Description                                                                                           |
+| :-------------------- | :------ | :------- | :---------------------------------------------------------------------------------------------------- |
+| state                 | string  | Yes      | Current session state: `"reset"`, `"active"`, or `"cooldown"`.                                        |
+| sessionActive         | boolean | Yes      | Whether a game is currently running.                                                                  |
+| limitsEnabled         | boolean | Yes      | Whether playtime limits are currently enabled for enforcement.                                        |
+| sessionStarted        | string  | No       | ISO 8601 timestamp when current game started. Only present during `"active"` state.                   |
+| sessionDuration       | string  | No       | Total time in current session (Go duration format). Present during `"active"` and `"cooldown"` states. |
+| sessionCumulativeTime | string  | No       | Cumulative time from previous games in session. Present during `"active"` and `"cooldown"` states.    |
+| sessionRemaining      | string  | No       | Time remaining before session limit reached. Only present if session limit is configured.             |
+| cooldownRemaining     | string  | No       | Time until session auto-resets. Only present during `"cooldown"` state.                               |
+| dailyUsageToday       | string  | No       | Total playtime accumulated today. Only present during `"active"` state when data is available.        |
+| dailyRemaining        | string  | No       | Time remaining before daily limit reached. Only present if daily limit is configured.                 |
+
+**Note:** All duration fields use Go's duration format (e.g., `"1h30m45s"`, `"45m"`, `"2h"`).
+
+#### Examples
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "method": "playtime"
+}
+```
+
+##### Response (Reset State)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "state": "reset",
+    "sessionActive": false,
+    "limitsEnabled": true
+  }
+}
+```
+
+##### Response (Active Game with Limits)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "state": "active",
+    "sessionActive": true,
+    "limitsEnabled": true,
+    "sessionStarted": "2025-01-22T14:30:00Z",
+    "sessionDuration": "45m30s",
+    "sessionCumulativeTime": "15m",
+    "sessionRemaining": "14m30s",
+    "dailyUsageToday": "2h15m30s",
+    "dailyRemaining": "1h44m30s"
+  }
+}
+```
+
+##### Response (Cooldown State)
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "a1b2c3d4-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "state": "cooldown",
+    "sessionActive": false,
+    "limitsEnabled": true,
+    "sessionDuration": "45m30s",
+    "sessionCumulativeTime": "45m30s",
+    "cooldownRemaining": "12m30s"
+  }
+}
+```
+
+### settings.playtime.limits
+
+Get current playtime limit configuration.
+
+Returns all configured playtime limits including daily limits, session limits, session reset timeout, warning intervals, and retention settings.
+
+#### Parameters
+
+None.
+
+#### Result
+
+| Key          | Type     | Required | Description                                                                                                            |
+| :----------- | :------- | :------- | :--------------------------------------------------------------------------------------------------------------------- |
+| enabled      | boolean  | Yes      | Whether playtime limits are enabled for enforcement.                                                                   |
+| daily        | string   | No       | Daily playtime limit in Go duration format (e.g., `"4h"`). Omitted if not configured.                                 |
+| session      | string   | No       | Per-session playtime limit in Go duration format (e.g., `"1h"`). Omitted if not configured.                           |
+| sessionReset | string   | No       | Idle timeout before session auto-resets in Go duration format (e.g., `"20m"`). `"0s"` means session never resets.     |
+| warnings     | string[] | Yes      | List of time intervals when warnings are sent before limits reached (e.g., `["5m", "2m", "1m"]`). Empty array if none. |
+| retention    | number   | No       | Number of days to retain playtime history. Omitted if not configured.                                                  |
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5e-11ef-9c7b-020304050607",
+  "method": "settings.playtime.limits"
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "b2c3d4e5-7a5e-11ef-9c7b-020304050607",
+  "result": {
+    "enabled": true,
+    "daily": "4h",
+    "session": "1h",
+    "sessionReset": "20m",
+    "warnings": ["5m", "2m", "1m"],
+    "retention": 30
+  }
+}
+```
+
+### settings.playtime.limits.update
+
+Update playtime limit settings.
+
+This method updates one or more playtime limit configuration values in-memory and saves changes to disk. Only provided fields will be updated; omitted fields remain unchanged.
+
+#### Parameters
+
+An object containing any of the following optional keys:
+
+| Key          | Type     | Required | Description                                                                                                                        |
+| :----------- | :------- | :------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| enabled      | boolean  | No       | Enable or disable playtime limit enforcement.                                                                                      |
+| daily        | string   | No       | Daily playtime limit in Go duration format (e.g., `"4h"`, `"2h30m"`). Use `"0"` or `"0s"` to disable daily limit.                 |
+| session      | string   | No       | Per-session playtime limit in Go duration format (e.g., `"1h"`, `"45m"`). Use `"0"` or `"0s"` to disable session limit.           |
+| sessionReset | string   | No       | Idle timeout before session auto-resets in Go duration format (e.g., `"20m"`). Use `"0"` or `"0s"` for sessions that never reset. |
+| warnings     | string[] | No       | List of time intervals for warnings in Go duration format (e.g., `["10m", "5m", "1m"]`). Empty array disables warnings.           |
+| retention    | number   | No       | Number of days to retain playtime history. Use `0` for no retention limit.                                                        |
+
+**Important:** Duration strings must use Go duration format: combinations of hours (`h`), minutes (`m`), and seconds (`s`). Examples: `"1h"`, `"30m"`, `"1h30m"`, `"2h15m30s"`.
+
+#### Result
+
+Returns `null` on success.
+
+#### Example
+
+##### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5e-11ef-9c7b-020304050607",
+  "method": "settings.playtime.limits.update",
+  "params": {
+    "enabled": true,
+    "session": "1h",
+    "warnings": ["10m", "5m", "2m"]
+  }
+}
+```
+
+##### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "c3d4e5f6-7a5e-11ef-9c7b-020304050607",
+  "result": null
+}
+```
+
 ## Mappings
 
 Mappings are used to modify the contents of tokens before they're launched, based on different types of matching parameters. Stored mappings are queried before every launch and applied to the token if there's a match. This allows, for example, adding ZapScript to a read-only NFC tag based on its UID.

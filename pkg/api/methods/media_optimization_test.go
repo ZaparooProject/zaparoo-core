@@ -104,7 +104,7 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status calls
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, tt.optimizationStatusErr)
@@ -168,7 +168,7 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockUserDB := &helpers.MockUserDBI{}
 	mockPlatform := mocks.NewMockPlatform()
-	testState, _ := state.NewState(mockPlatform)
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Both indexing and optimization are "running"
 	mockMediaDB.On("GetOptimizationStatus").Return("running", nil)
@@ -248,7 +248,7 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
