@@ -67,7 +67,6 @@ func GetSystemUptime() (time.Duration, error) {
 		return 0, fmt.Errorf("uptime overflow: %d milliseconds exceeds maximum duration", uptimeMs)
 	}
 
-	//nolint:gosec // G115: overflow checked above
 	uptime := time.Duration(uptimeMs) * time.Millisecond
 
 	return uptime, nil
