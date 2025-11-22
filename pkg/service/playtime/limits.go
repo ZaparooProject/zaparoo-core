@@ -381,14 +381,14 @@ func (tm *LimitsManager) checkLimits() {
 	}
 
 	if !allowed {
-		// Time limit reached - stop the game
+		// Time limit reached - stop the game and return to menu
 		log.Warn().Str("reason", reason).Msg("playtime: time limit reached, stopping game")
 		notifications.PlaytimeLimitReached(tm.notificationsSend, models.PlaytimeLimitReachedParams{
 			Reason: reason,
 		})
 		tm.playWarningSound()
 
-		if err := tm.platform.StopActiveLauncher(platforms.StopForPreemption); err != nil {
+		if err := tm.platform.StopActiveLauncher(platforms.StopForMenu); err != nil {
 			log.Error().Err(err).Msg("playtime: failed to stop active launcher")
 		}
 
