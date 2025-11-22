@@ -26,6 +26,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,20 +38,32 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	now := time.Now()
 	entry := &database.MediaHistoryEntry{
-		StartTime:  time.Now(),
-		SystemID:   "nes",
-		SystemName: "Nintendo Entertainment System",
-		MediaPath:  "/games/mario.nes",
-		MediaName:  "Super Mario Bros.",
-		LauncherID: "retroarch",
-		PlayTime:   0,
+		ID:             "test-uuid",
+		StartTime:      now,
+		SystemID:       "nes",
+		SystemName:     "Nintendo Entertainment System",
+		MediaPath:      "/games/mario.nes",
+		MediaName:      "Super Mario Bros.",
+		LauncherID:     "retroarch",
+		PlayTime:       0,
+		BootUUID:       "test-boot-uuid",
+		MonotonicStart: 12345,
+		DurationSec:    0,
+		WallDuration:   0,
+		TimeSkewFlag:   false,
+		ClockReliable:  true,
+		ClockSource:    helpers.ClockSourceSystem,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	expectedDBID := int64(42)
 	mock.ExpectPrepare(`INSERT INTO MediaHistory.*VALUES`).
 		ExpectExec().
 		WithArgs(
+			entry.ID,
 			entry.StartTime.Unix(),
 			entry.SystemID,
 			entry.SystemName,
@@ -58,6 +71,16 @@ func TestSqlAddMediaHistory_Success(t *testing.T) {
 			entry.MediaName,
 			entry.LauncherID,
 			entry.PlayTime,
+			entry.BootUUID,
+			entry.MonotonicStart,
+			entry.DurationSec,
+			entry.WallDuration,
+			entry.TimeSkewFlag,
+			entry.ClockReliable,
+			entry.ClockSource,
+			entry.CreatedAt.Unix(),
+			entry.UpdatedAt.Unix(),
+			nil,
 		).
 		WillReturnResult(sqlmock.NewResult(expectedDBID, 1))
 
@@ -73,19 +96,31 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	now := time.Now()
 	entry := &database.MediaHistoryEntry{
-		StartTime:  time.Now(),
-		SystemID:   "nes",
-		SystemName: "Nintendo Entertainment System",
-		MediaPath:  "/games/mario.nes",
-		MediaName:  "Super Mario Bros.",
-		LauncherID: "retroarch",
-		PlayTime:   0,
+		ID:             "test-uuid",
+		StartTime:      now,
+		SystemID:       "nes",
+		SystemName:     "Nintendo Entertainment System",
+		MediaPath:      "/games/mario.nes",
+		MediaName:      "Super Mario Bros.",
+		LauncherID:     "retroarch",
+		PlayTime:       0,
+		BootUUID:       "test-boot-uuid",
+		MonotonicStart: 12345,
+		DurationSec:    0,
+		WallDuration:   0,
+		TimeSkewFlag:   false,
+		ClockReliable:  true,
+		ClockSource:    helpers.ClockSourceSystem,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	mock.ExpectPrepare(`INSERT INTO MediaHistory.*VALUES`).
 		ExpectExec().
 		WithArgs(
+			entry.ID,
 			entry.StartTime.Unix(),
 			entry.SystemID,
 			entry.SystemName,
@@ -93,6 +128,16 @@ func TestSqlAddMediaHistory_DatabaseError(t *testing.T) {
 			entry.MediaName,
 			entry.LauncherID,
 			entry.PlayTime,
+			entry.BootUUID,
+			entry.MonotonicStart,
+			entry.DurationSec,
+			entry.WallDuration,
+			entry.TimeSkewFlag,
+			entry.ClockReliable,
+			entry.ClockSource,
+			entry.CreatedAt.Unix(),
+			entry.UpdatedAt.Unix(),
+			nil,
 		).
 		WillReturnError(sqlmock.ErrCancelled)
 
@@ -114,7 +159,7 @@ func TestSqlUpdateMediaHistoryTime_Success(t *testing.T) {
 
 	mock.ExpectPrepare(`UPDATE MediaHistory SET PlayTime.*WHERE DBID`).
 		ExpectExec().
-		WithArgs(playTime, dbid).
+		WithArgs(playTime, playTime, sqlmock.AnyArg(), dbid).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = sqlUpdateMediaHistoryTime(context.Background(), db, dbid, playTime)
@@ -133,7 +178,7 @@ func TestSqlUpdateMediaHistoryTime_DatabaseError(t *testing.T) {
 
 	mock.ExpectPrepare(`UPDATE MediaHistory SET PlayTime.*WHERE DBID`).
 		ExpectExec().
-		WithArgs(playTime, dbid).
+		WithArgs(playTime, playTime, sqlmock.AnyArg(), dbid).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlUpdateMediaHistoryTime(context.Background(), db, dbid, playTime)
@@ -154,7 +199,7 @@ func TestSqlCloseMediaHistory_Success(t *testing.T) {
 
 	mock.ExpectPrepare(`UPDATE MediaHistory SET EndTime.*WHERE DBID`).
 		ExpectExec().
-		WithArgs(endTime.Unix(), playTime, dbid).
+		WithArgs(endTime.Unix(), playTime, playTime, sqlmock.AnyArg(), endTime.Unix(), dbid).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = sqlCloseMediaHistory(context.Background(), db, dbid, endTime, playTime)
@@ -174,7 +219,7 @@ func TestSqlCloseMediaHistory_DatabaseError(t *testing.T) {
 
 	mock.ExpectPrepare(`UPDATE MediaHistory SET EndTime.*WHERE DBID`).
 		ExpectExec().
-		WithArgs(endTime.Unix(), playTime, dbid).
+		WithArgs(endTime.Unix(), playTime, playTime, sqlmock.AnyArg(), endTime.Unix(), dbid).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlCloseMediaHistory(context.Background(), db, dbid, endTime, playTime)
@@ -191,20 +236,27 @@ func TestSqlGetMediaHistory_Success(t *testing.T) {
 
 	lastID := 0
 	limit := 10
-	startTime := time.Now().Add(-1 * time.Hour).Unix()
-	endTime := time.Now().Unix()
+	now := time.Now()
+	startTime := now.Add(-1 * time.Hour).Unix()
+	endTime := now.Unix()
 
 	rows := sqlmock.NewRows([]string{
-		"DBID", "StartTime", "EndTime", "SystemID", "SystemName",
+		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
+		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
 	}).
 		AddRow(
-			int64(1), startTime, endTime, "nes", "Nintendo Entertainment System",
+			int64(1), "uuid-1", startTime, endTime, "nes", "Nintendo Entertainment System",
 			"/games/mario.nes", "Super Mario Bros.", "retroarch", 3600,
+			"boot-1", int64(1000), 3600, 3600, false,
+			true, "system", startTime, startTime, nil,
 		).
 		AddRow(
-			int64(2), startTime, endTime, "snes", "Super Nintendo",
+			int64(2), "uuid-2", startTime, endTime, "snes", "Super Nintendo",
 			"/games/zelda.sfc", "The Legend of Zelda", "retroarch", 7200,
+			"boot-1", int64(2000), 7200, 7200, false,
+			true, "system", startTime, startTime, nil,
 		)
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).
@@ -231,8 +283,10 @@ func TestSqlGetMediaHistory_EmptyResult(t *testing.T) {
 	limit := 10
 
 	rows := sqlmock.NewRows([]string{
-		"DBID", "StartTime", "EndTime", "SystemID", "SystemName",
+		"DBID", "ID", "StartTime", "EndTime", "SystemID", "SystemName",
 		"MediaPath", "MediaName", "LauncherID", "PlayTime",
+		"BootUUID", "MonotonicStart", "DurationSec", "WallDuration", "TimeSkewFlag",
+		"ClockReliable", "ClockSource", "CreatedAt", "UpdatedAt", "DeviceID",
 	})
 
 	mock.ExpectPrepare(`SELECT.*FROM MediaHistory.*ORDER BY DBID DESC LIMIT`).

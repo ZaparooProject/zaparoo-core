@@ -38,18 +38,28 @@ func TestSqlAddHistory_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	now := time.Now()
 	entry := database.HistoryEntry{
-		Time:       time.Now(),
-		Type:       "nfc",
-		TokenID:    "test-token-id",
-		TokenValue: "test-value",
-		TokenData:  "test-data",
-		Success:    true,
+		ID:             "test-uuid",
+		Time:           now,
+		Type:           "nfc",
+		TokenID:        "test-token-id",
+		TokenValue:     "test-value",
+		TokenData:      "test-data",
+		Success:        true,
+		ClockReliable:  true,
+		BootUUID:       "test-boot-uuid",
+		MonotonicStart: 123,
+		CreatedAt:      now,
 	}
 
 	mock.ExpectPrepare(`insert into History.*values`).
 		ExpectExec().
-		WithArgs(entry.Time.Unix(), entry.Type, entry.TokenID, entry.TokenValue, entry.TokenData, entry.Success).
+		WithArgs(
+			entry.ID, entry.Time.Unix(), entry.Type, entry.TokenID,
+			entry.TokenValue, entry.TokenData, entry.Success,
+			entry.ClockReliable, entry.BootUUID, entry.MonotonicStart, entry.CreatedAt.Unix(), nil,
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err = sqlAddHistory(context.Background(), db, entry)
@@ -63,18 +73,28 @@ func TestSqlAddHistory_DatabaseError(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	now := time.Now()
 	entry := database.HistoryEntry{
-		Time:       time.Now(),
-		Type:       "nfc",
-		TokenID:    "test-token-id",
-		TokenValue: "test-value",
-		TokenData:  "test-data",
-		Success:    true,
+		ID:             "test-uuid",
+		Time:           now,
+		Type:           "nfc",
+		TokenID:        "test-token-id",
+		TokenValue:     "test-value",
+		TokenData:      "test-data",
+		Success:        true,
+		ClockReliable:  true,
+		BootUUID:       "test-boot-uuid",
+		MonotonicStart: 123,
+		CreatedAt:      now,
 	}
 
 	mock.ExpectPrepare(`insert into History.*values`).
 		ExpectExec().
-		WithArgs(entry.Time.Unix(), entry.Type, entry.TokenID, entry.TokenValue, entry.TokenData, entry.Success).
+		WithArgs(
+			entry.ID, entry.Time.Unix(), entry.Type, entry.TokenID,
+			entry.TokenValue, entry.TokenData, entry.Success,
+			entry.ClockReliable, entry.BootUUID, entry.MonotonicStart, entry.CreatedAt.Unix(), nil,
+		).
 		WillReturnError(sqlmock.ErrCancelled)
 
 	err = sqlAddHistory(context.Background(), db, entry)
@@ -89,31 +109,48 @@ func TestSqlGetHistoryWithOffset_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
+	now := time.Unix(1672531200, 0)
 	expectedEntries := []database.HistoryEntry{
 		{
-			DBID:       2,
-			Time:       time.Unix(1672531200, 0),
-			Type:       "nfc",
-			TokenID:    "token-2",
-			TokenValue: "value-2",
-			TokenData:  "data-2",
-			Success:    true,
+			DBID:           2,
+			ID:             "uuid-2",
+			Time:           now,
+			Type:           "nfc",
+			TokenID:        "token-2",
+			TokenValue:     "value-2",
+			TokenData:      "data-2",
+			Success:        true,
+			ClockReliable:  true,
+			BootUUID:       "boot-1",
+			MonotonicStart: 100,
+			CreatedAt:      now,
 		},
 		{
-			DBID:       1,
-			Time:       time.Unix(1672531100, 0),
-			Type:       "barcode",
-			TokenID:    "token-1",
-			TokenValue: "value-1",
-			TokenData:  "data-1",
-			Success:    false,
+			DBID:           1,
+			ID:             "uuid-1",
+			Time:           time.Unix(1672531100, 0),
+			Type:           "barcode",
+			TokenID:        "token-1",
+			TokenValue:     "value-1",
+			TokenData:      "data-1",
+			Success:        false,
+			ClockReliable:  true,
+			BootUUID:       "boot-1",
+			MonotonicStart: 50,
+			CreatedAt:      time.Unix(1672531100, 0),
 		},
 	}
 
-	rows := sqlmock.NewRows([]string{"DBID", "Time", "Type", "TokenID", "TokenValue", "TokenData", "Success"})
+	rows := sqlmock.NewRows([]string{
+		"DBID", "ID", "Time", "Type", "TokenID", "TokenValue", "TokenData",
+		"Success", "ClockReliable", "BootUUID", "MonotonicStart", "CreatedAt", "DeviceID",
+	})
 	for _, entry := range expectedEntries {
-		rows.AddRow(entry.DBID, entry.Time.Unix(), entry.Type, entry.TokenID,
-			entry.TokenValue, entry.TokenData, entry.Success)
+		rows.AddRow(
+			entry.DBID, entry.ID, entry.Time.Unix(), entry.Type, entry.TokenID,
+			entry.TokenValue, entry.TokenData, entry.Success,
+			entry.ClockReliable, entry.BootUUID, entry.MonotonicStart, entry.CreatedAt.Unix(), nil,
+		)
 	}
 
 	mock.ExpectPrepare(`select.*from History.*where DBID.*order by.*limit`).

@@ -31,7 +31,7 @@ import (
 func TestSetOnMediaStartHook(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
-	state, _ := NewState(mockPlatform)
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
 
 	// Test hook gets called when media starts from nil
 	var hookCalled bool
@@ -82,7 +82,7 @@ func TestSetOnMediaStartHook(t *testing.T) {
 func TestSetOnMediaStartHookMediaChange(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
-	state, _ := NewState(mockPlatform)
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
 
 	// Set initial media
 	initialMedia := &models.ActiveMedia{
@@ -133,7 +133,7 @@ func TestSetOnMediaStartHookMediaChange(t *testing.T) {
 func TestSetOnMediaStartHookNotCalledOnStop(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
-	state, _ := NewState(mockPlatform)
+	state, _ := NewState(mockPlatform, "test-boot-uuid")
 
 	// Set initial media
 	initialMedia := &models.ActiveMedia{

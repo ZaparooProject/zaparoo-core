@@ -623,7 +623,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			}
 
 			cfg := &config.Instance{}
-			appState, _ := state.NewState(mockPlatform)
+			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			env := requests.RequestEnv{
 				Platform: mockPlatform,

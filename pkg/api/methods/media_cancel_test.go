@@ -88,7 +88,7 @@ func TestHandleMediaGenerateCancel(t *testing.T) {
 			}
 
 			cfg := &config.Instance{}
-			appState, _ := state.NewState(mockPlatform)
+			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			env := requests.RequestEnv{
 				Platform: mockPlatform,
@@ -159,7 +159,7 @@ func TestMediaGenerateCancel_ConcurrentAccess(t *testing.T) {
 	}
 
 	cfg := &config.Instance{}
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Platform: mockPlatform,
@@ -255,7 +255,7 @@ func TestMediaGenerateCancel_StatusManagement(t *testing.T) {
 	}
 
 	cfg := &config.Instance{}
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Platform: mockPlatform,
@@ -327,7 +327,7 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.Instance{}
-	appState, notifications := state.NewState(mockPlatform)
+	appState, notifications := state.NewState(mockPlatform, "test-boot-uuid")
 
 	generateEnv := requests.RequestEnv{
 		Platform: mockPlatform,

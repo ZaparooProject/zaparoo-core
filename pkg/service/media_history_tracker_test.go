@@ -42,7 +42,7 @@ func TestMediaHistoryTracker_Listen_Started(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -103,7 +103,7 @@ func TestMediaHistoryTracker_Listen_Started_NoActiveMedia(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -137,7 +137,7 @@ func TestMediaHistoryTracker_Listen_Started_DatabaseError(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -185,7 +185,7 @@ func TestMediaHistoryTracker_Listen_Stopped(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -232,7 +232,7 @@ func TestMediaHistoryTracker_Listen_Stopped_NoActiveHistory(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -264,7 +264,7 @@ func TestMediaHistoryTracker_Listen_Stopped_DatabaseError(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -308,7 +308,7 @@ func TestMediaHistoryTracker_Listen_MultipleNotifications(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -374,7 +374,7 @@ func TestMediaHistoryTracker_UpdatePlayTime(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -431,7 +431,7 @@ func TestMediaHistoryTracker_UpdatePlayTime_NoActiveMedia(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -482,7 +482,7 @@ func TestMediaHistoryTracker_UpdatePlayTime_ContextCancellation(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{
@@ -525,7 +525,7 @@ func TestMediaHistoryTracker_ConcurrentAccess(t *testing.T) {
 	// Setup
 	mockPlatform := mocks.NewMockPlatform()
 	mockUserDB := &testhelpers.MockUserDBI{}
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	fakeClock := clockwork.NewFakeClock()
 
 	db := &database.Database{

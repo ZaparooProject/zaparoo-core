@@ -137,7 +137,7 @@ func TestWroteTokenState(t *testing.T) {
 
 			// Create mock platform for state initialization
 			mockPlatform := mocks.NewMockPlatform()
-			st, _ := state.NewState(mockPlatform)
+			st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Set the wrote token
 			st.SetWroteToken(tt.wroteToken)
@@ -385,7 +385,7 @@ func TestWroteTokenClearingAfterSkip(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	wroteToken := &tokens.Token{
 		UID:      "abc123",

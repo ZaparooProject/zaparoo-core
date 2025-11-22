@@ -53,10 +53,6 @@ import (
 )
 
 const (
-	// MinReliableYear is the earliest year considered valid for the system clock.
-	// Zaparoo Core v2 was released in 2024 - any earlier date indicates an unset clock.
-	MinReliableYear = 2024
-
 	// DefaultSessionResetTimeout is the default idle time before a session resets.
 	// After this period of inactivity, the next game launch starts a fresh session.
 	DefaultSessionResetTimeout = 20 * time.Minute
@@ -88,6 +84,7 @@ func (s SessionState) String() string {
 // LimitsManager enforces time limits and warnings for gameplay sessions.
 type LimitsManager struct {
 	sessionStart          time.Time
+	sessionStartMono      time.Time
 	lastStopTime          time.Time
 	platform              platforms.Platform
 	clock                 clockwork.Clock
@@ -273,7 +270,8 @@ func (tm *LimitsManager) OnMediaStarted() {
 	tm.transitionTo(StateActive)
 
 	tm.sessionStart = now
-	tm.sessionStartReliable = isClockReliable(now)
+	tm.sessionStartMono = time.Now() // Monotonic clock for accurate duration
+	tm.sessionStartReliable = helpers.IsClockReliable(now)
 	tm.warningsGiven = make(map[time.Duration]bool)
 	tm.mu.Unlock()
 
@@ -297,9 +295,10 @@ func (tm *LimitsManager) OnMediaStopped() {
 		return
 	}
 
-	// Calculate how long this game was played and add to cumulative session time
+	// Calculate how long this game was played using monotonic clock (accurate, handles sleep)
 	now := tm.clock.Now()
-	gameDuration := now.Sub(tm.sessionStart)
+	nowMono := time.Now()
+	gameDuration := nowMono.Sub(tm.sessionStartMono)
 	tm.sessionCumulativeTime += gameDuration
 	tm.lastStopTime = now
 
@@ -311,7 +310,8 @@ func (tm *LimitsManager) OnMediaStopped() {
 	// Transition to COOLDOWN state (session not reset yet, waiting for timeout)
 	tm.transitionTo(StateCooldown)
 
-	tm.sessionStart = time.Time{} // Mark no active game
+	tm.sessionStart = time.Time{}     // Mark no active game
+	tm.sessionStartMono = time.Time{} // Clear monotonic start
 	tm.sessionStartReliable = false
 	tm.warningsGiven = make(map[time.Duration]bool)
 }
@@ -350,7 +350,7 @@ func (tm *LimitsManager) checkLimits() {
 	sessionStart := tm.sessionStart
 	tm.mu.Unlock()
 
-	// Build rule context
+	// Build rule context (time.Sub automatically uses monotonic clock for accuracy)
 	ctx, err := tm.buildRuleContext(sessionStart)
 	if err != nil {
 		log.Error().Err(err).Msg("playtime: failed to build rule context")
@@ -403,21 +403,18 @@ func (tm *LimitsManager) checkLimits() {
 	}
 }
 
-// isClockReliable checks if the system clock appears to be set correctly.
-// Returns false if the clock is clearly wrong (e.g., year < 2024).
-// This handles MiSTer's lack of RTC chip - clock often resets to epoch on boot.
-func isClockReliable(t time.Time) bool {
-	return t.Year() >= MinReliableYear
-}
-
 // buildRuleContext creates a RuleContext from current state.
-func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, error) {
+func (tm *LimitsManager) buildRuleContext(
+	sessionStart time.Time,
+) (RuleContext, error) {
 	now := tm.clock.Now()
 
 	// Session duration includes:
 	// 1. sessionCumulativeTime: Total time from all previous games in this session
 	// 2. Current game duration: Time since this game started
-	// Uses monotonic clock via time.Sub() - immune to NTP jumps, clock resets, manual changes
+	// Note: Go's time.Sub() automatically uses monotonic clock when both Time values have it,
+	// which prevents sleep/hibernate from counting as playtime in production.
+	// In tests with fake clocks, this uses wall-clock time (which is fine for deterministic tests).
 	currentGameDuration := now.Sub(sessionStart)
 
 	tm.mu.Lock()
@@ -429,7 +426,7 @@ func (tm *LimitsManager) buildRuleContext(sessionStart time.Time) (RuleContext, 
 	sessionDuration := cumulativeTime + currentGameDuration
 
 	// Check if BOTH clocks are trustworthy for daily limit enforcement
-	currentClockReliable := isClockReliable(now)
+	currentClockReliable := helpers.IsClockReliable(now)
 	bothClocksReliable := sessionStartWasReliable && currentClockReliable
 
 	var dailyUsage time.Duration
@@ -652,7 +649,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		return &StatusInfo{
 			State:         currentState.String(),
 			SessionActive: false,
-			ClockReliable: isClockReliable(tm.clock.Now()),
+			ClockReliable: helpers.IsClockReliable(tm.clock.Now()),
 		}
 	}
 	tm.mu.Unlock()
@@ -749,7 +746,7 @@ func (tm *LimitsManager) CheckBeforeLaunch() error {
 	// Check daily limit (requires reliable clock)
 	var dailyRemaining time.Duration
 	if dailyLimit > 0 {
-		if !isClockReliable(now) {
+		if !helpers.IsClockReliable(now) {
 			log.Warn().
 				Int("year", now.Year()).
 				Msg("playtime: clock unreliable, skipping daily limit check")

@@ -109,8 +109,9 @@ func sqlCleanupHistory(ctx context.Context, db *sql.DB, retentionDays int) (int6
 func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry) error {
 	stmt, err := db.PrepareContext(ctx, `
 		insert into History(
-			Time, Type, TokenID, TokenValue, TokenData, Success
-		) values (?, ?, ?, ?, ?, ?);
+			ID, Time, Type, TokenID, TokenValue, TokenData, Success,
+			ClockReliable, BootUUID, MonotonicStart, CreatedAt, DeviceID
+		) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare history insert statement: %w", err)
@@ -120,13 +121,25 @@ func sqlAddHistory(ctx context.Context, db *sql.DB, entry database.HistoryEntry)
 			log.Warn().Err(closeErr).Msg("failed to close sql statement")
 		}
 	}()
+
+	var deviceID any
+	if entry.DeviceID != nil {
+		deviceID = *entry.DeviceID
+	}
+
 	_, err = stmt.ExecContext(ctx,
+		entry.ID,
 		entry.Time.Unix(),
 		entry.Type,
 		entry.TokenID,
 		entry.TokenValue,
 		entry.TokenData,
 		entry.Success,
+		entry.ClockReliable,
+		entry.BootUUID,
+		entry.MonotonicStart,
+		entry.CreatedAt.Unix(),
+		deviceID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to execute history insert: %w", err)
@@ -142,8 +155,9 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 	}
 
 	q, err := db.PrepareContext(ctx, `
-		select 
-		DBID, Time, Type, TokenID, TokenValue, TokenData, Success
+		select
+		DBID, ID, Time, Type, TokenID, TokenValue, TokenData, Success,
+		ClockReliable, BootUUID, MonotonicStart, CreatedAt, DeviceID
 		from History
 		where DBID < ?
 		order by DBID DESC
@@ -169,20 +183,39 @@ func sqlGetHistoryWithOffset(ctx context.Context, db *sql.DB, lastID int) ([]dat
 	}()
 	for rows.Next() {
 		row := database.HistoryEntry{}
-		var timeInt int64
+		var timeInt, createdAtInt int64
+		var id sql.NullString
+		var deviceID sql.NullString
+
 		scanErr := rows.Scan(
 			&row.DBID,
+			&id,
 			&timeInt,
 			&row.Type,
 			&row.TokenID,
 			&row.TokenValue,
 			&row.TokenData,
 			&row.Success,
+			&row.ClockReliable,
+			&row.BootUUID,
+			&row.MonotonicStart,
+			&createdAtInt,
+			&deviceID,
 		)
 		if scanErr != nil {
 			return list, fmt.Errorf("failed to scan history row: %w", scanErr)
 		}
+
+		if id.Valid {
+			row.ID = id.String
+		}
+		if deviceID.Valid {
+			deviceStr := deviceID.String
+			row.DeviceID = &deviceStr
+		}
+
 		row.Time = time.Unix(timeInt, 0)
+		row.CreatedAt = time.Unix(createdAtInt, 0)
 		list = append(list, row)
 	}
 	if err = rows.Err(); err != nil {

@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -146,12 +147,25 @@ func launchPlaylistMedia(
 		log.Error().Err(err).Msgf("error launching token")
 	}
 
+	now := time.Now()
+	uptime, uptimeErr := helpers.GetSystemUptime()
+	if uptimeErr != nil {
+		log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
+		uptime = 0
+	}
+	monotonicStart := int64(uptime.Seconds())
+
 	he := database.HistoryEntry{
-		Time:       t.ScanTime,
-		Type:       t.Type,
-		TokenID:    t.UID,
-		TokenValue: t.Text,
-		TokenData:  t.Data,
+		ID:             uuid.New().String(),
+		Time:           t.ScanTime,
+		Type:           t.Type,
+		TokenID:        t.UID,
+		TokenValue:     t.Text,
+		TokenData:      t.Data,
+		ClockReliable:  helpers.IsClockReliable(now),
+		BootUUID:       st.BootUUID(),
+		MonotonicStart: monotonicStart,
+		CreatedAt:      now,
 	}
 	he.Success = err == nil
 	err = db.UserDB.AddHistory(&he)
@@ -252,12 +266,25 @@ func processTokenQueue(
 				log.Error().Err(err).Msgf("error writing tmp scan result")
 			}
 
+			now := time.Now()
+			uptime, uptimeErr := helpers.GetSystemUptime()
+			if uptimeErr != nil {
+				log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
+				uptime = 0
+			}
+			monotonicStart := int64(uptime.Seconds())
+
 			he := database.HistoryEntry{
-				Time:       t.ScanTime,
-				Type:       t.Type,
-				TokenID:    t.UID,
-				TokenValue: t.Text,
-				TokenData:  t.Data,
+				ID:             uuid.New().String(),
+				Time:           t.ScanTime,
+				Type:           t.Type,
+				TokenID:        t.UID,
+				TokenValue:     t.Text,
+				TokenData:      t.Data,
+				ClockReliable:  helpers.IsClockReliable(now),
+				BootUUID:       st.BootUUID(),
+				MonotonicStart: monotonicStart,
+				CreatedAt:      now,
 			}
 
 			// Check playtime limits before launching

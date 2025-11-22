@@ -54,7 +54,7 @@ func TestApplicationStateTransitions(t *testing.T) {
 		{
 			name: "Set active playlist",
 			setupState: func() *state.State {
-				st, _ := state.NewState(mockPlatform)
+				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				return st
 			},
 			action: func(st *state.State) {
@@ -70,7 +70,7 @@ func TestApplicationStateTransitions(t *testing.T) {
 		{
 			name: "Clear active playlist",
 			setupState: func() *state.State {
-				st, _ := state.NewState(mockPlatform)
+				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				playlists := fixtures.SamplePlaylists()
 				st.SetActivePlaylist(playlists[0])
 				return st
@@ -86,7 +86,7 @@ func TestApplicationStateTransitions(t *testing.T) {
 		{
 			name: "Track reader connection status",
 			setupState: func() *state.State {
-				st, _ := state.NewState(mockPlatform)
+				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				return st
 			},
 			action: func(st *state.State) {
@@ -102,7 +102,7 @@ func TestApplicationStateTransitions(t *testing.T) {
 		{
 			name: "Update reader disconnection",
 			setupState: func() *state.State {
-				st, _ := state.NewState(mockPlatform)
+				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				mockReader := mocks.NewMockReader()
 				st.SetReader("nfc_reader", mockReader)
 				return st
@@ -119,7 +119,7 @@ func TestApplicationStateTransitions(t *testing.T) {
 		{
 			name: "Set active card token",
 			setupState: func() *state.State {
-				st, _ := state.NewState(mockPlatform)
+				st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 				return st
 			},
 			action: func(st *state.State) {
@@ -159,7 +159,7 @@ func TestConcurrentStateAccess(t *testing.T) {
 	t.Run("Readers connecting during token processing", func(t *testing.T) {
 		t.Parallel()
 		mockPlatform := mocks.NewMockPlatform()
-		st, _ := state.NewState(mockPlatform)
+		st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 		t.Cleanup(func() { st.StopService() })
 
 		var wg sync.WaitGroup
@@ -199,7 +199,7 @@ func TestConcurrentStateAccess(t *testing.T) {
 	t.Run("Playlist changes with reader updates", func(t *testing.T) {
 		t.Parallel()
 		mockPlatform := mocks.NewMockPlatform()
-		st, _ := state.NewState(mockPlatform)
+		st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 		t.Cleanup(func() { st.StopService() })
 
 		var wg sync.WaitGroup
@@ -287,7 +287,7 @@ func TestStateNotificationSystem(t *testing.T) {
 
 			// Create separate state instance for each test
 			mockPlatform := mocks.NewMockPlatform()
-			st, notificationChan := state.NewState(mockPlatform)
+			st, notificationChan := state.NewState(mockPlatform, "test-boot-uuid")
 			t.Cleanup(func() { st.StopService() })
 
 			// Collect notifications for this specific test
@@ -343,7 +343,7 @@ func TestStateNotificationSystem(t *testing.T) {
 func TestStateValidationAndErrorHandling(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { st.StopService() })
 
 	t.Run("Empty reader name handling", func(t *testing.T) {
@@ -387,7 +387,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		t.Parallel()
 		// Setup complete service environment with separate instances for this test
 		platform := mocks.NewMockPlatform()
-		st, _ := state.NewState(platform)
+		st, _ := state.NewState(platform, "test-boot-uuid")
 		t.Cleanup(func() { st.StopService() })
 
 		userDB := helpers.NewMockUserDBI()
@@ -460,7 +460,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 		t.Parallel()
 		// Setup complete service environment with separate instances for this test
 		platform := mocks.NewMockPlatform()
-		st, _ := state.NewState(platform)
+		st, _ := state.NewState(platform, "test-boot-uuid")
 		t.Cleanup(func() { st.StopService() })
 
 		// Start with connected reader and active token
@@ -495,7 +495,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 func TestPlaylistStateManagement(t *testing.T) {
 	t.Parallel()
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	t.Cleanup(func() { st.StopService() })
 	playlists := fixtures.SamplePlaylists()
 
@@ -532,7 +532,7 @@ func TestPlaylistStateManagement(t *testing.T) {
 
 		// Simulate loading state in new instance (would be done by actual implementation)
 		newMockPlatform := mocks.NewMockPlatform()
-		newState, _ := state.NewState(newMockPlatform)
+		newState, _ := state.NewState(newMockPlatform, "test-boot-uuid")
 		newState.SetActivePlaylist(savedPlaylist)
 
 		loadedPlaylist := newState.GetActivePlaylist()

@@ -25,7 +25,8 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestIsClockReliable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := isClockReliable(tt.time)
+			got := helpers.IsClockReliable(tt.time)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -82,7 +83,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 	t.Run("clock year 1970 - sets ClockReliable to false", func(t *testing.T) {
 		t.Parallel()
 
-		mockDB := helpers.NewMockUserDBI()
+		mockDB := testhelpers.NewMockUserDBI()
 		// Should NOT call GetMediaHistory when clock unreliable
 
 		db := &database.Database{
@@ -112,7 +113,7 @@ func TestBuildRuleContext_UnreliableClock(t *testing.T) {
 	t.Run("clock year 2025 - sets ClockReliable to true", func(t *testing.T) {
 		t.Parallel()
 
-		mockDB := helpers.NewMockUserDBI()
+		mockDB := testhelpers.NewMockUserDBI()
 		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{}, nil)
 
 		db := &database.Database{
@@ -149,7 +150,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 	t.Run("session starts at 1970, clock heals to 2025 mid-session", func(t *testing.T) {
 		t.Parallel()
 
-		mockDB := helpers.NewMockUserDBI()
+		mockDB := testhelpers.NewMockUserDBI()
 		// Should NOT query DB - session started unreliable
 
 		db := &database.Database{
@@ -190,7 +191,7 @@ func TestBuildRuleContext_ClockHealing(t *testing.T) {
 	t.Run("both clocks reliable with safety clamp", func(t *testing.T) {
 		t.Parallel()
 
-		mockDB := helpers.NewMockUserDBI()
+		mockDB := testhelpers.NewMockUserDBI()
 		mockDB.On("GetMediaHistory", 0, 100).Return([]database.MediaHistoryEntry{}, nil)
 
 		db := &database.Database{
@@ -344,7 +345,7 @@ func TestBuildRuleContext_MidnightRollover_CurrentSession(t *testing.T) {
 			t.Parallel()
 
 			// Setup mock database
-			mockDB := helpers.NewMockUserDBI()
+			mockDB := testhelpers.NewMockUserDBI()
 			mockDB.On("GetMediaHistory", 0, 100).Return(tt.historicalEntries, nil)
 
 			db := &database.Database{
@@ -459,7 +460,7 @@ func TestCalculateDailyUsage_EdgeCases(t *testing.T) {
 			t.Parallel()
 
 			// Setup mock database
-			mockDB := helpers.NewMockUserDBI()
+			mockDB := testhelpers.NewMockUserDBI()
 			mockDB.On("GetMediaHistory", 0, 100).Return(tt.historicalEntries, nil)
 
 			db := &database.Database{

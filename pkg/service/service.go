@@ -48,6 +48,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
 )
@@ -170,8 +171,12 @@ func Start(
 ) (func() error, error) {
 	log.Info().Msgf("version: %s", config.AppVersion)
 
+	// Generate boot UUID for this session (for timestamp healing on MiSTer)
+	bootUUID := uuid.New().String()
+	log.Info().Msgf("boot session UUID: %s", bootUUID)
+
 	// TODO: define the notifications chan here instead of in state
-	st, ns := state.NewState(pl) // global state, notification queue (source)
+	st, ns := state.NewState(pl, bootUUID) // global state, notification queue (source)
 
 	// Create and start notification broker to broadcast to all consumers
 	notifBroker := broker.NewBroker(st.GetContext(), ns)
@@ -276,6 +281,10 @@ func Start(
 	log.Info().Msg("starting media history PlayTime updater")
 	go historyTracker.updatePlayTime(st.GetContext())
 
+	// Start clock reliability monitor for timestamp healing (MiSTer NTP sync)
+	log.Info().Msg("starting clock reliability monitor")
+	go monitorClockAndHealTimestamps(st.GetContext(), db, bootUUID)
+
 	if cfg.GmcProxyEnabled() {
 		log.Info().Msg("starting GroovyMiSTer GMC Proxy service")
 		go groovyproxy.Start(cfg, st, itq)
@@ -313,15 +322,69 @@ func Start(
 	}, nil
 }
 
+// monitorClockAndHealTimestamps monitors the system clock and heals timestamps when NTP syncs.
+// This is critical for MiSTer devices that boot without RTC and initially show 1970 epoch time.
+// Once NTP syncs, we can mathematically reconstruct correct timestamps using monotonic uptime.
+func monitorClockAndHealTimestamps(ctx context.Context, db *database.Database, bootUUID string) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	healed := false
+	wasReliable := helpers.IsClockReliable(time.Now())
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			isReliable := helpers.IsClockReliable(now)
+
+			// Detect transition from unreliable → reliable (NTP sync event)
+			if !wasReliable && isReliable && !healed {
+				log.Info().Msg("clock became reliable (NTP sync detected), healing timestamps")
+
+				// Calculate true boot time: Current Time - System Uptime
+				uptime, err := helpers.GetSystemUptime()
+				if err != nil {
+					log.Error().Err(err).Msg("failed to get system uptime for timestamp healing")
+					wasReliable = isReliable
+					continue
+				}
+
+				trueBootTime := now.Add(-uptime)
+				log.Info().
+					Time("true_boot_time", trueBootTime).
+					Dur("uptime", uptime).
+					Msg("calculated true boot time")
+
+				// Heal all timestamps for this boot session
+				rowsHealed, healErr := db.UserDB.HealTimestamps(bootUUID, trueBootTime)
+				if healErr != nil {
+					log.Error().Err(healErr).Msg("failed to heal timestamps")
+				} else if rowsHealed > 0 {
+					log.Info().Int64("rows", rowsHealed).Msg("successfully healed timestamps")
+				}
+
+				healed = true
+			}
+
+			wasReliable = isReliable
+
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // mediaHistoryTracker encapsulates the state and logic for tracking media history.
 // It coordinates between the notification listener and the periodic PlayTime updater.
 type mediaHistoryTracker struct {
-	clock                 clockwork.Clock
-	currentMediaStartTime time.Time
-	st                    *state.State
-	db                    *database.Database
-	currentHistoryDBID    int64
-	mu                    sync.RWMutex
+	clock                     clockwork.Clock
+	currentMediaStartTime     time.Time
+	currentMediaStartTimeMono time.Time
+	st                        *state.State
+	db                        *database.Database
+	currentHistoryDBID        int64
+	mu                        sync.RWMutex
 }
 
 // listen processes media start/stop notifications and records them in the database.
@@ -332,14 +395,44 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 			// Media started - create new history entry
 			activeMedia := t.st.ActiveMedia()
 			if activeMedia != nil {
+				now := t.clock.Now()
+				nowMono := time.Now() // Monotonic clock for duration calculation
+
+				// Calculate system uptime for timestamp healing on MiSTer
+				uptime, uptimeErr := helpers.GetSystemUptime()
+				if uptimeErr != nil {
+					log.Warn().Err(uptimeErr).Msg("failed to get system uptime, using 0")
+					uptime = 0
+				}
+				monotonicStart := int64(uptime.Seconds())
+
+				// Determine clock reliability and source
+				clockReliable := helpers.IsClockReliable(now)
+				var clockSource string
+				if clockReliable {
+					clockSource = helpers.ClockSourceSystem
+				} else {
+					clockSource = helpers.ClockSourceEpoch
+				}
+
 				entry := &database.MediaHistoryEntry{
-					StartTime:  activeMedia.Started,
-					SystemID:   activeMedia.SystemID,
-					SystemName: activeMedia.SystemName,
-					MediaPath:  activeMedia.Path,
-					MediaName:  activeMedia.Name,
-					LauncherID: activeMedia.LauncherID,
-					PlayTime:   0,
+					ID:             uuid.New().String(),
+					StartTime:      activeMedia.Started,
+					SystemID:       activeMedia.SystemID,
+					SystemName:     activeMedia.SystemName,
+					MediaPath:      activeMedia.Path,
+					MediaName:      activeMedia.Name,
+					LauncherID:     activeMedia.LauncherID,
+					PlayTime:       0,
+					BootUUID:       t.st.BootUUID(),
+					MonotonicStart: monotonicStart,
+					DurationSec:    0,
+					WallDuration:   0,
+					TimeSkewFlag:   false,
+					ClockReliable:  clockReliable,
+					ClockSource:    clockSource,
+					CreatedAt:      now,
+					UpdatedAt:      now,
 				}
 				dbid, addErr := t.db.UserDB.AddMediaHistory(entry)
 				if addErr != nil {
@@ -348,6 +441,7 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 					t.mu.Lock()
 					t.currentHistoryDBID = dbid
 					t.currentMediaStartTime = activeMedia.Started
+					t.currentMediaStartTimeMono = nowMono
 					t.mu.Unlock()
 					log.Debug().Int64("dbid", dbid).Msg("created media history entry")
 				}
@@ -358,13 +452,26 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 			t.mu.Lock()
 			dbid := t.currentHistoryDBID
 			startTime := t.currentMediaStartTime
+			startTimeMono := t.currentMediaStartTimeMono
 			t.currentHistoryDBID = 0
 			t.currentMediaStartTime = time.Time{}
+			t.currentMediaStartTimeMono = time.Time{}
 			t.mu.Unlock()
 
 			if dbid != 0 {
 				endTime := t.clock.Now()
-				playTime := int(endTime.Sub(startTime).Seconds())
+
+				// Calculate duration - prefer monotonic if available, fall back to wall-clock
+				var playTime int
+				if !startTimeMono.IsZero() {
+					// Use monotonic clock (more accurate, handles sleep)
+					endTimeMono := time.Now()
+					playTime = int(endTimeMono.Sub(startTimeMono).Seconds())
+				} else {
+					// Fall back to wall-clock (for tests or if mono not initialized)
+					playTime = int(endTime.Sub(startTime).Seconds())
+				}
+
 				closeErr := t.db.UserDB.CloseMediaHistory(dbid, endTime, playTime)
 				if closeErr != nil {
 					log.Error().Err(closeErr).Int64("dbid", dbid).Msg("failed to close media history entry")
@@ -388,10 +495,25 @@ func (t *mediaHistoryTracker) updatePlayTime(ctx context.Context) {
 			t.mu.RLock()
 			dbid := t.currentHistoryDBID
 			startTime := t.currentMediaStartTime
+			startTimeMono := t.currentMediaStartTimeMono
 			t.mu.RUnlock()
 
 			if dbid != 0 {
-				playTime := int(t.clock.Since(startTime).Seconds())
+				// Calculate duration - prefer monotonic if available, fall back to wall-clock
+				var playTime int
+				switch {
+				case !startTimeMono.IsZero():
+					// Use monotonic clock (more accurate, handles sleep/hibernate)
+					nowMono := time.Now()
+					playTime = int(nowMono.Sub(startTimeMono).Seconds())
+				case !startTime.IsZero():
+					// Fall back to wall-clock (for tests or if mono not initialized)
+					playTime = int(t.clock.Since(startTime).Seconds())
+				default:
+					// No valid start time - skip update
+					continue
+				}
+
 				updateErr := t.db.UserDB.UpdateMediaHistoryTime(dbid, playTime)
 				if updateErr != nil {
 					log.Warn().Err(updateErr).Msg("failed to update media history play time")

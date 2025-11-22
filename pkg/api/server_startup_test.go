@@ -60,7 +60,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 			cfg, err := helpers.NewTestConfigWithPort(fs, configDir, testPort)
 			require.NoError(t, err)
 
-			st, notifications := state.NewState(platform)
+			st, notifications := state.NewState(platform, "test-boot-uuid")
 			defer st.StopService()
 
 			db := &database.Database{
@@ -120,7 +120,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	cfg, err := helpers.NewTestConfigWithPort(fs, configDir, 0)
 	require.NoError(t, err)
 
-	st, notifications := state.NewState(platform)
+	st, notifications := state.NewState(platform, "test-boot-uuid")
 	defer st.StopService()
 
 	db := &database.Database{
@@ -183,7 +183,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a state with a context that we can cancel
-	st, notifications := state.NewState(platform)
+	st, notifications := state.NewState(platform, "test-boot-uuid")
 	defer st.StopService()
 
 	// Cancel the state context immediately to test context cancellation during listen

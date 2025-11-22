@@ -146,7 +146,7 @@ func TestHandleMediaSearch_WithoutCursor(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
@@ -236,7 +236,7 @@ func TestHandleMediaSearch_WithCursor(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
@@ -287,7 +287,7 @@ func TestHandleMediaSearch_InvalidCursor(t *testing.T) {
 
 	// Create a minimal state for the test
 	mockPlatform := mocks.NewMockPlatform()
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params:   paramsJSON,
@@ -333,7 +333,7 @@ func TestHandleMediaTags_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
@@ -380,7 +380,7 @@ func TestHandleMediaTags_NoParams(t *testing.T) {
 	).Return(expectedTags, nil)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: []byte("{}"), // Empty params should still work
@@ -412,7 +412,7 @@ func TestHandleMediaSearch_WithLetterFiltering(t *testing.T) {
 	mockUserDB := &helpers.MockUserDBI{}
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockPlatform := mocks.NewMockPlatform()
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Test valid letter parameter
 	letter := "M"
@@ -481,7 +481,7 @@ func TestHandleMediaSearch_FullyBlankQuery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
@@ -549,7 +549,7 @@ func TestHandleMediaSearch_TagsOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
@@ -606,7 +606,7 @@ func TestHandleMediaSearch_SystemMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create state
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Params: paramsJSON,
