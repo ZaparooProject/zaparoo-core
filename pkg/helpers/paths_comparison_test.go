@@ -39,43 +39,43 @@ func TestNormalizePathForComparison(t *testing.T) {
 			name:            "forward slashes",
 			input:           "C:/RetroBat/roms/snes/game.sfc",
 			expectedWindows: "c:/retrobat/roms/snes/game.sfc",
-			expectedUnix:    "C:/RetroBat/roms/snes/game.sfc",
+			expectedUnix:    "c:/retrobat/roms/snes/game.sfc",
 		},
 		{
-			name:            "backslashes",
+			name:            "backslashes on windows",
 			input:           `C:\RetroBat\roms\snes\game.sfc`,
 			expectedWindows: "c:/retrobat/roms/snes/game.sfc",
-			expectedUnix:    `C:\RetroBat\roms\snes\game.sfc`, // Unix: backslashes are filename chars, preserved as-is
+			expectedUnix:    `c:\retrobat\roms\snes\game.sfc`, // Unix: backslashes are filename chars, preserved as-is
 		},
 		{
 			name:            "mixed slashes",
 			input:           `C:/RetroBat\roms/snes\game.sfc`,
 			expectedWindows: "c:/retrobat/roms/snes/game.sfc",
-			expectedUnix:    `C:/RetroBat\roms/snes\game.sfc`, // Unix: backslashes preserved
+			expectedUnix:    `c:/retrobat\roms/snes\game.sfc`, // Unix: backslashes preserved
 		},
 		{
 			name:            "trailing slash",
 			input:           "C:/RetroBat/roms/",
 			expectedWindows: "c:/retrobat/roms",
-			expectedUnix:    "C:/RetroBat/roms",
+			expectedUnix:    "c:/retrobat/roms",
 		},
 		{
 			name:            "dot segments",
 			input:           "C:/RetroBat/./roms/../roms/game.sfc",
 			expectedWindows: "c:/retrobat/roms/game.sfc",
-			expectedUnix:    "C:/RetroBat/roms/game.sfc",
+			expectedUnix:    "c:/retrobat/roms/game.sfc",
 		},
 		{
-			name:            "uppercase on windows lowercase on unix preserves",
+			name:            "uppercase normalized to lowercase",
 			input:           "C:/RETROBAT/ROMS/SNES/GAME.SFC",
 			expectedWindows: "c:/retrobat/roms/snes/game.sfc",
-			expectedUnix:    "C:/RETROBAT/ROMS/SNES/GAME.SFC",
+			expectedUnix:    "c:/retrobat/roms/snes/game.sfc",
 		},
 		{
 			name:            "unix absolute path",
 			input:           "/home/user/RetroBat/roms/snes/game.sfc",
 			expectedWindows: "/home/user/retrobat/roms/snes/game.sfc",
-			expectedUnix:    "/home/user/RetroBat/roms/snes/game.sfc",
+			expectedUnix:    "/home/user/retrobat/roms/snes/game.sfc",
 		},
 		{
 			name:            "relative path",
@@ -151,16 +151,16 @@ func TestPathHasPrefix(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "case difference on windows should match",
+			name:     "case difference should match (case-insensitive comparison)",
 			path:     "C:/RETROBAT/ROMS/SNES/game.sfc",
 			root:     "c:/retrobat/roms/snes",
-			expected: runtime.GOOS == "windows",
+			expected: true,
 		},
 		{
-			name:     "case difference on unix should NOT match",
+			name:     "case difference on unix paths should match (case-insensitive comparison)",
 			path:     "/home/user/RETROBAT/ROMS/SNES/game.sfc",
 			root:     "/home/user/retrobat/roms/snes",
-			expected: runtime.GOOS == "windows",
+			expected: true,
 		},
 		{
 			name:     "deeply nested path",
