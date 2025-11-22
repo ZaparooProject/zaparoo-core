@@ -22,7 +22,9 @@
 package helpers
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"syscall"
 	"time"
 	"unsafe"
@@ -49,13 +51,23 @@ func GetSystemUptime() (time.Duration, error) {
 	// Check if the call failed. Note: ret can legitimately be 0 immediately after boot.
 	// The actual error is indicated by callErr having a non-zero errno.
 	if callErr != nil {
-		if errno, ok := callErr.(syscall.Errno); ok && errno != 0 {
+		var errno syscall.Errno
+		if errors.As(callErr, &errno) && errno != 0 {
 			return 0, fmt.Errorf("GetTickCount64 failed: %w", callErr)
 		}
 	}
 
 	// Convert milliseconds to time.Duration
+	// GetTickCount64 returns ULONGLONG (uint64) - we need unsafe.Pointer for syscall return value conversion
+	//nolint:gosec // G103: unsafe required for syscall return value conversion from uintptr
 	uptimeMs := *(*uint64)(unsafe.Pointer(&ret))
+
+	// Check for overflow when converting to int64 (time.Duration is int64)
+	if uptimeMs > math.MaxInt64 {
+		return 0, fmt.Errorf("uptime overflow: %d milliseconds exceeds maximum duration", uptimeMs)
+	}
+
+	//nolint:gosec // G115: overflow checked above
 	uptime := time.Duration(uptimeMs) * time.Millisecond
 
 	return uptime, nil
