@@ -623,7 +623,6 @@ type StatusInfo struct {
 	SessionDuration       time.Duration
 	SessionCumulativeTime time.Duration
 	SessionRemaining      time.Duration
-	SessionResetTimeout   time.Duration
 	CooldownRemaining     time.Duration
 	DailyUsageToday       time.Duration
 	DailyRemaining        time.Duration
@@ -647,9 +646,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 	// State: Reset (no session exists)
 	if currentState == StateReset {
 		return &StatusInfo{
-			State:               StateReset.String(),
-			SessionActive:       false,
-			SessionResetTimeout: resetTimeout,
+			State:         StateReset.String(),
+			SessionActive: false,
 		}
 	}
 
@@ -699,7 +697,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionDuration:       cumulativeTime,
 			SessionCumulativeTime: cumulativeTime,
 			SessionRemaining:      sessionRemaining,
-			SessionResetTimeout:   resetTimeout,
 			CooldownRemaining:     cooldownRemaining,
 			DailyUsageToday:       0, // Skip during cooldown
 			DailyRemaining:        dailyRemaining,
@@ -717,7 +714,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionStarted:        sessionStart,
 			SessionDuration:       now.Sub(sessionStart),
 			SessionCumulativeTime: cumulativeTime,
-			SessionResetTimeout:   resetTimeout,
 		}
 	}
 
@@ -747,9 +743,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 	if tm.sessionStart.IsZero() || !tm.sessionStart.Equal(sessionStart) {
 		// Session stopped while we were calculating - return cooldown/reset state
 		return &StatusInfo{
-			State:               tm.state.String(),
-			SessionActive:       false,
-			SessionResetTimeout: resetTimeout,
+			State:         tm.state.String(),
+			SessionActive: false,
 		}
 	}
 
@@ -760,7 +755,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		SessionDuration:       ctx.SessionDuration,
 		SessionCumulativeTime: cumulativeTime,
 		SessionRemaining:      sessionRemaining,
-		SessionResetTimeout:   resetTimeout,
 		CooldownRemaining:     0, // Not in cooldown
 		DailyUsageToday:       ctx.DailyUsageToday,
 		DailyRemaining:        dailyRemaining,

@@ -76,7 +76,6 @@ type PlaytimeStatusResponse struct {
 	SessionDuration       *string `json:"sessionDuration,omitempty"`
 	SessionCumulativeTime *string `json:"sessionCumulativeTime,omitempty"`
 	SessionRemaining      *string `json:"sessionRemaining,omitempty"`
-	SessionResetTimeout   *string `json:"sessionResetTimeout,omitempty"`
 	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
 	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
 	DailyRemaining        *string `json:"dailyRemaining,omitempty"`

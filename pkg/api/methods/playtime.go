@@ -52,12 +52,6 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 		LimitsEnabled: env.Config.PlaytimeLimitsEnabled(),
 	}
 
-	// Session reset timeout (always include)
-	if status.SessionResetTimeout > 0 {
-		timeoutStr := status.SessionResetTimeout.String()
-		resp.SessionResetTimeout = &timeoutStr
-	}
-
 	// Cooldown remaining (only during cooldown)
 	if status.CooldownRemaining > 0 {
 		remainingStr := status.CooldownRemaining.String()
