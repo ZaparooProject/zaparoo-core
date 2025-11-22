@@ -17,41 +17,43 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-//go:build linux
+//go:build darwin
 
 package helpers
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
 // GetSystemUptime returns the duration since the system booted.
-// On Unix systems, this reads /proc/uptime which provides the uptime in seconds.
+// On macOS/Darwin, this uses sysctl to read kern.boottime.
 func GetSystemUptime() (time.Duration, error) {
-	// Read /proc/uptime which contains: "uptime idle_time"
-	data, err := os.ReadFile("/proc/uptime")
-	if err != nil {
-		return 0, fmt.Errorf("failed to read /proc/uptime: %w", err)
+	// Use sysctl to get kern.boottime
+	mib := []int32{syscall.CTL_KERN, syscall.KERN_BOOTTIME}
+	var bootTime syscall.Timeval
+	n := uintptr(unsafe.Sizeof(bootTime))
+
+	//nolint:gosec // G103: unsafe required for sysctl syscall
+	_, _, errno := syscall.Syscall6(
+		syscall.SYS___SYSCTL,
+		uintptr(unsafe.Pointer(&mib[0])),
+		uintptr(len(mib)),
+		uintptr(unsafe.Pointer(&bootTime)),
+		uintptr(unsafe.Pointer(&n)),
+		0,
+		0,
+	)
+
+	if errno != 0 {
+		return 0, fmt.Errorf("sysctl kern.boottime failed: %w", errno)
 	}
 
-	// Parse the first field (uptime in seconds)
-	fields := strings.Fields(string(data))
-	if len(fields) < 1 {
-		return 0, errors.New("invalid /proc/uptime format")
-	}
-
-	uptimeSeconds, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse uptime: %w", err)
-	}
-
-	// Convert to time.Duration
-	uptime := time.Duration(uptimeSeconds * float64(time.Second))
+	// Calculate uptime by subtracting boot time from current time
+	bootTimeGo := time.Unix(bootTime.Sec, int64(bootTime.Usec)*1000)
+	uptime := time.Since(bootTimeGo)
 
 	return uptime, nil
 }
