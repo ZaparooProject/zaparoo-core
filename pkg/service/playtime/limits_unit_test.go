@@ -21,8 +21,10 @@ package playtime
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -191,6 +193,85 @@ func TestSetEnabled(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestSetEnabled_SessionReset(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
+	clock := clockwork.NewFakeClock()
+
+	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm.enabled = true
+
+	// Simulate active session with cumulative time
+	tm.mu.Lock()
+	tm.state = StateActive
+	tm.sessionStart = clock.Now()
+	tm.sessionStartMono = time.Now()
+	tm.sessionCumulativeTime = 15 * time.Minute
+	tm.sessionStartReliable = true
+	tm.mu.Unlock()
+
+	// Verify session is active
+	assert.True(t, tm.isSessionActive())
+	assert.Equal(t, StateActive, tm.state)
+
+	// Disable limits - should reset session
+	tm.SetEnabled(false)
+
+	// Verify session was reset
+	tm.mu.Lock()
+	assert.Equal(t, StateReset, tm.state, "state should be reset")
+	assert.True(t, tm.sessionStart.IsZero(), "sessionStart should be cleared")
+	assert.True(t, tm.sessionStartMono.IsZero(), "sessionStartMono should be cleared")
+	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime, "cumulative time should be cleared")
+	assert.True(t, tm.lastStopTime.IsZero(), "lastStopTime should be cleared")
+	assert.False(t, tm.sessionStartReliable, "sessionStartReliable should be false")
+	tm.mu.Unlock()
+
+	// Verify not active anymore
+	assert.False(t, tm.isSessionActive())
+
+	// Re-enable - session should still be reset
+	tm.SetEnabled(true)
+
+	tm.mu.Lock()
+	assert.Equal(t, StateReset, tm.state, "state should remain reset after re-enabling")
+	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime, "cumulative time should still be 0")
+	tm.mu.Unlock()
+}
+
+func TestSetEnabled_CooldownReset(t *testing.T) {
+	t.Parallel()
+
+	cfg := newTestConfig(t, &config.Values{}) //nolint:exhaustruct // Default config is fine
+	clock := clockwork.NewFakeClock()
+
+	tm := NewLimitsManager(nil, nil, cfg, clock)
+	tm.enabled = true
+
+	// Simulate cooldown state with cumulative time
+	tm.mu.Lock()
+	tm.state = StateCooldown
+	tm.sessionStart = clock.Now().Add(-30 * time.Minute)
+	tm.sessionCumulativeTime = 30 * time.Minute
+	tm.lastStopTime = clock.Now()
+	tm.mu.Unlock()
+
+	// Verify in cooldown
+	assert.Equal(t, StateCooldown, tm.state)
+
+	// Disable limits - should reset session (clearing cooldown)
+	tm.SetEnabled(false)
+
+	// Verify session was reset
+	tm.mu.Lock()
+	assert.Equal(t, StateReset, tm.state, "state should be reset (cooldown cleared)")
+	assert.Equal(t, time.Duration(0), tm.sessionCumulativeTime, "cumulative time should be cleared")
+	assert.True(t, tm.sessionStart.IsZero(), "sessionStart should be cleared")
+	assert.True(t, tm.lastStopTime.IsZero(), "lastStopTime should be cleared")
+	tm.mu.Unlock()
 }
 
 func TestIsSessionActive(t *testing.T) {

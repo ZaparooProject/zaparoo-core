@@ -161,16 +161,27 @@ func (tm *LimitsManager) Stop() {
 }
 
 // SetEnabled enables or disables limit enforcement at runtime.
-// If disabling mid-session, stops the current session tracking.
+// When disabling, resets the session state completely (clears cooldown and cumulative time).
+// When re-enabling, session starts fresh but daily usage from history is still enforced.
 func (tm *LimitsManager) SetEnabled(enabled bool) {
 	tm.enabledMu.Lock()
 	tm.enabled = enabled
 	tm.enabledMu.Unlock()
 
-	// If disabling mid-session, clean up the session
-	if !enabled && tm.isSessionActive() {
-		log.Warn().Msg("playtime: limits disabled mid-session, stopping tracking")
-		tm.OnMediaStopped()
+	// If disabling, reset the session completely (clear cooldown state)
+	if !enabled {
+		tm.mu.Lock()
+		if tm.state != StateReset {
+			log.Info().Msg("playtime: limits disabled, resetting session state")
+			tm.transitionTo(StateReset)
+			tm.sessionStart = time.Time{}
+			tm.sessionStartMono = time.Time{}
+			tm.sessionCumulativeTime = 0
+			tm.lastStopTime = time.Time{}
+			tm.sessionStartReliable = false
+			tm.warningsGiven = make(map[time.Duration]bool)
+		}
+		tm.mu.Unlock()
 	}
 }
 
