@@ -26,7 +26,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -247,19 +246,8 @@ func processTokenQueue(
 			log.Info().Msgf("processing token: %v", t)
 
 			// Play success sound immediately on scan success
-			if path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform)); enabled {
-				if path == "" {
-					// Use embedded default sound
-					if audioErr := audio.PlayWAVBytes(assets.SuccessSound); audioErr != nil {
-						log.Warn().Msgf("error playing success sound: %s", audioErr)
-					}
-				} else {
-					// Use custom sound file
-					if audioErr := audio.PlayFile(path); audioErr != nil {
-						log.Warn().Str("path", path).Msgf("error playing custom success sound: %s", audioErr)
-					}
-				}
-			}
+			path, enabled := cfg.SuccessSoundPath(helpers.DataDir(platform))
+			helpers.PlayConfiguredSound(path, enabled, assets.SuccessSound, "success")
 
 			err := platform.ScanHook(&t)
 			if err != nil {
@@ -324,19 +312,8 @@ func processTokenQueue(
 					})
 
 					// Play limit sound
-					if path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform)); enabled {
-						if path == "" {
-							// Use embedded default sound
-							if audioErr := audio.PlayWAVBytes(assets.LimitSound); audioErr != nil {
-								log.Warn().Msgf("error playing limit sound: %s", audioErr)
-							}
-						} else {
-							// Use custom sound file
-							if audioErr := audio.PlayFile(path); audioErr != nil {
-								log.Warn().Str("path", path).Msgf("error playing custom limit sound: %s", audioErr)
-							}
-						}
-					}
+					path, enabled := cfg.LimitSoundPath(helpers.DataDir(platform))
+					helpers.PlayConfiguredSound(path, enabled, assets.LimitSound, "limit")
 
 					// Add to history as failed
 					he.Success = false
@@ -365,19 +342,8 @@ func processTokenQueue(
 
 				// Play fail sound only if ZapScript fails
 				if err != nil {
-					if path, enabled := cfg.FailSoundPath(helpers.DataDir(platform)); enabled {
-						if path == "" {
-							// Use embedded default sound
-							if audioErr := audio.PlayWAVBytes(assets.FailSound); audioErr != nil {
-								log.Warn().Msgf("error playing fail sound: %s", audioErr)
-							}
-						} else {
-							// Use custom sound file
-							if audioErr := audio.PlayFile(path); audioErr != nil {
-								log.Warn().Str("path", path).Msgf("error playing custom fail sound: %s", audioErr)
-							}
-						}
-					}
+					path, enabled := cfg.FailSoundPath(helpers.DataDir(platform))
+					helpers.PlayConfiguredSound(path, enabled, assets.FailSound, "fail")
 				}
 
 				he.Success = err == nil

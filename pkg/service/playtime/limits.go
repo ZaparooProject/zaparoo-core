@@ -43,7 +43,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/audio"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -607,21 +606,7 @@ func (tm *LimitsManager) handleWarnings(remaining time.Duration) {
 // playWarningSound plays an audio warning.
 func (tm *LimitsManager) playWarningSound() {
 	path, enabled := tm.cfg.LimitSoundPath(helpers.DataDir(tm.platform))
-	if !enabled {
-		return
-	}
-
-	if path == "" {
-		// Use embedded default sound
-		if err := audio.PlayWAVBytes(assets.LimitSound); err != nil {
-			log.Warn().Err(err).Msg("playtime: error playing limit sound")
-		}
-	} else {
-		// Use custom sound file
-		if err := audio.PlayFile(path); err != nil {
-			log.Warn().Str("path", path).Err(err).Msg("playtime: error playing custom limit sound")
-		}
-	}
+	helpers.PlayConfiguredSound(path, enabled, assets.LimitSound, "limit")
 }
 
 // StatusInfo contains current playtime session and limit status.
