@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/uuid"
+	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
 )
 
@@ -147,12 +148,12 @@ func launchPlaylistMedia(
 	}
 
 	now := time.Now()
-	uptime, uptimeErr := helpers.GetSystemUptime()
+	systemUptime, uptimeErr := uptime.Get()
 	if uptimeErr != nil {
 		log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
-		uptime = 0
+		systemUptime = 0
 	}
-	monotonicStart := int64(uptime.Seconds())
+	monotonicStart := int64(systemUptime.Seconds())
 
 	he := database.HistoryEntry{
 		ID:             uuid.New().String(),
@@ -255,12 +256,12 @@ func processTokenQueue(
 			}
 
 			now := time.Now()
-			uptime, uptimeErr := helpers.GetSystemUptime()
+			systemUptime, uptimeErr := uptime.Get()
 			if uptimeErr != nil {
 				log.Warn().Err(uptimeErr).Msg("failed to get system uptime for history entry, using 0")
-				uptime = 0
+				systemUptime = 0
 			}
-			monotonicStart := int64(uptime.Seconds())
+			monotonicStart := int64(systemUptime.Seconds())
 
 			he := database.HistoryEntry{
 				ID:             uuid.New().String(),

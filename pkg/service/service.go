@@ -50,6 +50,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
+	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
 )
 
@@ -343,17 +344,17 @@ func monitorClockAndHealTimestamps(ctx context.Context, db *database.Database, b
 				log.Info().Msg("clock became reliable (NTP sync detected), healing timestamps")
 
 				// Calculate true boot time: Current Time - System Uptime
-				uptime, err := helpers.GetSystemUptime()
+				systemUptime, err := uptime.Get()
 				if err != nil {
 					log.Error().Err(err).Msg("failed to get system uptime for timestamp healing")
 					wasReliable = isReliable
 					continue
 				}
 
-				trueBootTime := now.Add(-uptime)
+				trueBootTime := now.Add(-systemUptime)
 				log.Info().
 					Time("true_boot_time", trueBootTime).
-					Dur("uptime", uptime).
+					Dur("uptime", systemUptime).
 					Msg("calculated true boot time")
 
 				// Heal all timestamps for this boot session
@@ -399,12 +400,12 @@ func (t *mediaHistoryTracker) listen(notificationChan <-chan models.Notification
 				nowMono := time.Now() // Monotonic clock for duration calculation
 
 				// Calculate system uptime for timestamp healing on MiSTer
-				uptime, uptimeErr := helpers.GetSystemUptime()
+				systemUptime, uptimeErr := uptime.Get()
 				if uptimeErr != nil {
 					log.Warn().Err(uptimeErr).Msg("failed to get system uptime, using 0")
-					uptime = 0
+					systemUptime = 0
 				}
-				monotonicStart := int64(uptime.Seconds())
+				monotonicStart := int64(systemUptime.Seconds())
 
 				// Determine clock reliability and source
 				clockReliable := helpers.IsClockReliable(now)
