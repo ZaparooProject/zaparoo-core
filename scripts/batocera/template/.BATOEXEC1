@@ -1,11 +1,11 @@
 gamelist = ports
-<game>
-  <path>./Zaparoo.sh</path>
-  <name>Zaparoo</name>
-  <desc>Zaparoo Core - Launch media using physical objects like NFC cards</desc>
-  <image>./images/Zaparoo-image.png</image>
-  <developer>Zaparoo Project</developer>
-  <publisher>Zaparoo Project</publisher>
-  <genre>Tool</genre>
-  <players>1</players>
-</game>
+ <game>
+   <path>./Zaparoo.sh</path>
+   <name>Zaparoo</name>
+   <desc>Zaparoo Core - Launch media using physical objects like NFC cards</desc>
+   <image>./images/Zaparoo-image.png</image>
+   <developer>Zaparoo Project</developer>
+   <publisher>Zaparoo Project</publisher>
+   <genre>Tool</genre>
+   <players>1</players>
+ </game>
