@@ -45,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	chi "github.com/go-chi/chi/v5"
@@ -203,6 +204,9 @@ func NewMethodMap() *MethodMap {
 		models.MethodSettingsUpdate:       methods.HandleSettingsUpdate,
 		models.MethodSettingsReload:       methods.HandleSettingsReload,
 		models.MethodSettingsLogsDownload: methods.HandleLogsDownload,
+		models.MethodPlaytimeLimits:       methods.HandlePlaytimeLimits,
+		models.MethodPlaytimeLimitsUpdate: methods.HandlePlaytimeLimitsUpdate,
+		models.MethodPlaytime:             methods.HandlePlaytime,
 		// systems
 		models.MethodSystems: methods.HandleSystems,
 		// launchers
@@ -477,6 +481,10 @@ func broadcastNotifications(
 			}
 
 			// TODO: this will not work with encryption
+			// Broadcast synchronously to maintain strict notification ordering.
+			// This is critical for media.started/stopped sequences where order matters.
+			// The broadcastNotifications goroutine already runs async, so we don't need
+			// another level of async that would cause out-of-order delivery.
 			err = session.Broadcast(data)
 			if err != nil {
 				log.Error().Err(err).Msg("broadcasting notification")
@@ -549,6 +557,7 @@ func handleWSMessage(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 ) func(session *melody.Session, msg []byte) {
 	return func(session *melody.Session, msg []byte) {
 		defer func() {
@@ -573,13 +582,14 @@ func handleWSMessage(
 		rawIP := strings.SplitN(session.Request.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
-			ClientID:   session.Request.RemoteAddr,
+			Platform:      platform,
+			Config:        cfg,
+			State:         st,
+			Database:      db,
+			LimitsManager: limitsManager,
+			TokenQueue:    inTokenQueue,
+			IsLocal:       clientIP.IsLoopback(),
+			ClientID:      session.Request.RemoteAddr,
 		}
 
 		id, resp, rpcError := processRequestObject(methodMap, env, msg)
@@ -604,6 +614,7 @@ func handlePostRequest(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -621,13 +632,14 @@ func handlePostRequest(
 		rawIP := strings.SplitN(r.RemoteAddr, ":", 2)
 		clientIP := net.ParseIP(rawIP[0])
 		env := requests.RequestEnv{
-			Platform:   platform,
-			Config:     cfg,
-			State:      st,
-			Database:   db,
-			TokenQueue: inTokenQueue,
-			IsLocal:    clientIP.IsLoopback(),
-			ClientID:   r.RemoteAddr,
+			Platform:      platform,
+			Config:        cfg,
+			State:         st,
+			Database:      db,
+			LimitsManager: limitsManager,
+			TokenQueue:    inTokenQueue,
+			IsLocal:       clientIP.IsLoopback(),
+			ClientID:      r.RemoteAddr,
 		}
 
 		var respBody []byte
@@ -674,9 +686,18 @@ func Start(
 	st *state.State,
 	inTokenQueue chan<- tokens.Token,
 	db *database.Database,
+	limitsManager *playtime.LimitsManager,
 	notifications <-chan models.Notification,
 ) {
+	// Extract port from listen address or use default
 	port := cfg.APIPort()
+	listenAddr := cfg.APIListen()
+	if _, portStr, err := net.SplitHostPort(listenAddr); err == nil && portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
 	baseOrigins := make([]string, 0, len(allowedOrigins)+4)
 	baseOrigins = append(baseOrigins, allowedOrigins...)
 	baseOrigins = append(baseOrigins,
@@ -701,6 +722,9 @@ func Start(
 	rateLimiter := apimiddleware.NewIPRateLimiter()
 	rateLimiter.StartCleanup(st.GetContext())
 
+	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs())
+
+	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
 	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.NoCache)
@@ -733,7 +757,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: latest")
 		}
 	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -741,7 +765,7 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0")
 		}
 	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
 		err := session.HandleRequest(w, r)
@@ -749,11 +773,11 @@ func Start(
 			log.Error().Err(err).Msg("handling websocket request: v0.1")
 		}
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db))
+	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
-		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db),
+		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager),
 	))
 
 	r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
@@ -766,7 +790,7 @@ func Start(
 	})
 
 	server := &http.Server{
-		Addr:              ":" + strconv.Itoa(cfg.APIPort()),
+		Addr:              cfg.APIListen(),
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -775,8 +799,8 @@ func Start(
 	serverReady := make(chan struct{})
 
 	go func() {
-		log.Info().Msgf("starting HTTP server on port %d", cfg.APIPort())
-		log.Debug().Msg("HTTP server goroutine started, attempting to bind to port")
+		log.Info().Msgf("starting HTTP server on %s", cfg.APIListen())
+		log.Debug().Msg("HTTP server goroutine started, attempting to bind")
 
 		// Create a listener to ensure we can bind to the port before continuing
 		lc := &net.ListenConfig{}

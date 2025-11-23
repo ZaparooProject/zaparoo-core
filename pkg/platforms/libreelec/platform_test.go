@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,17 +31,17 @@ func TestLibreELECHasKodiLaunchers(t *testing.T) {
 	var kodiLocal, kodiMovie, kodiTV *string
 	for _, launcher := range launchers {
 		switch launcher.ID {
-		case "KodiLocal":
+		case "KodiLocalVideo":
 			kodiLocal = &launcher.ID
 			assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 		case "KodiMovie":
 			kodiMovie = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMovie, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiMovie)
-		case "KodiTV":
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiMovie)
+		case "KodiTVEpisode":
 			kodiTV = &launcher.ID
-			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiEpisode)
+			assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiEpisode)
 		}
 	}
 
@@ -63,11 +63,11 @@ func TestLibreELECHasKodiMusicLauncher(t *testing.T) {
 	// Check for KodiMusic launcher
 	var kodiMusic *string
 	for _, launcher := range launchers {
-		if launcher.ID != "KodiMusic" {
+		if launcher.ID != "KodiLocalAudio" {
 			continue
 		}
 		kodiMusic = &launcher.ID
-		assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+		assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 		assert.Contains(t, launcher.Extensions, ".mp3")
 		assert.Contains(t, launcher.Extensions, ".flac")
 		break
@@ -91,8 +91,8 @@ func TestLibreELECHasKodiSongLauncher(t *testing.T) {
 	for _, launcher := range launchers {
 		if launcher.ID == "KodiSong" {
 			kodiSong = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiSong)
+			assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiSong)
 			break
 		}
 	}
@@ -116,7 +116,7 @@ func TestLibreELECHasKodiAlbumLauncher(t *testing.T) {
 		if launcher.ID == "KodiAlbum" {
 			kodiAlbum = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMusicAlbum, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiAlbum)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiAlbum)
 			break
 		}
 	}
@@ -140,7 +140,7 @@ func TestLibreELECHasKodiArtistLauncher(t *testing.T) {
 		if launcher.ID == "KodiArtist" {
 			kodiArtist = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMusicArtist, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiArtist)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiArtist)
 			break
 		}
 	}
@@ -164,7 +164,7 @@ func TestLibreELECHasKodiTVShowLauncher(t *testing.T) {
 		if launcher.ID == "KodiTVShow" {
 			kodiTVShow = &launcher.ID
 			assert.Equal(t, systemdefs.SystemTVShow, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiShow)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiShow)
 			break
 		}
 	}

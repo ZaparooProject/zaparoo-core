@@ -94,13 +94,17 @@ func FindFuzzyMatches(query string, candidates []string, maxDistance int, minSim
 // IMPORTANT: Requires input with word boundaries (e.g., "Super Mario World"), not slugs.
 // Slugs have already lost word boundary information and will produce incorrect signatures.
 //
+// The mediaType parameter ensures media-type-specific parsing is applied (e.g., ParseGame for games),
+// matching the indexing pipeline used in GenerateSlugWithMetadata.
+//
 // Example:
 //
-//	GenerateTokenSignature("Super Mario World") → "mario_super_world"
-//	GenerateTokenSignature("Mario World Super") → "mario_super_world"
-func GenerateTokenSignature(gameName string) string {
+//	GenerateTokenSignature(slugs.MediaTypeGame, "Super Mario World") → "mario_super_world"
+//	GenerateTokenSignature(slugs.MediaTypeGame, "Mario World Super") → "mario_super_world"
+func GenerateTokenSignature(mediaType slugs.MediaType, gameName string) string {
 	// Slugify to get the normalized tokens (same pipeline as database indexing)
-	result := slugs.SlugifyWithTokens(gameName)
+	// This now applies media-type-specific parsing internally
+	result := slugs.SlugifyWithTokens(mediaType, gameName)
 
 	// Sort tokens alphabetically for order-independent matching
 	sort.Strings(result.Tokens)
@@ -113,13 +117,18 @@ func GenerateTokenSignature(gameName string) string {
 // This enables word-order independent matching: "Crystal Space Quest" matches "Quest Space Crystal".
 //
 // The query and candidates must have word boundaries (e.g., "Super Mario World"), not slugs.
+// The mediaType ensures consistent parsing between query and indexed candidates.
 // Returns the slugs of matched titles.
-func FindTokenSignatureMatches(queryName string, candidates []database.MediaTitle) []string {
-	querySignature := GenerateTokenSignature(queryName)
+func FindTokenSignatureMatches(
+	mediaType slugs.MediaType,
+	queryName string,
+	candidates []database.MediaTitle,
+) []string {
+	querySignature := GenerateTokenSignature(mediaType, queryName)
 
 	var matches []string
 	for _, candidate := range candidates {
-		candidateSignature := GenerateTokenSignature(candidate.Name)
+		candidateSignature := GenerateTokenSignature(mediaType, candidate.Name)
 
 		// Exact match ensures all tokens match (order-independent)
 		if candidateSignature == querySignature {

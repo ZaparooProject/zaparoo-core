@@ -59,8 +59,9 @@ func TestIDs(t *testing.T) {
 	reader := &SimpleSerialReader{}
 	ids := reader.IDs()
 
-	require.Len(t, ids, 1)
-	assert.Equal(t, "simple_serial", ids[0])
+	require.Len(t, ids, 2)
+	assert.Equal(t, "simpleserial", ids[0])
+	assert.Equal(t, "simple_serial", ids[1])
 }
 
 func TestDetect(t *testing.T) {
@@ -237,7 +238,7 @@ func TestParseLine(t *testing.T) {
 			assert.Equal(t, tt.expectedUID, token.UID)
 			assert.Equal(t, tt.expectedText, token.Text)
 			assert.Equal(t, tt.expectedFromAPI, token.FromAPI)
-			assert.Equal(t, "simple_serial:/dev/ttyUSB0", token.Source)
+			assert.Equal(t, "simpleserial:/dev/ttyUSB0", token.Source)
 		})
 	}
 }
@@ -266,7 +267,7 @@ func TestOpen_SetReadTimeoutError(t *testing.T) {
 	mockPort.TimeoutErr = assert.AnError
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -289,7 +290,7 @@ func TestOpen_SuccessfulConnection(t *testing.T) {
 	mockPort.ReadData = []byte("SCAN\tuid=test123\ttext=hello\n")
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -339,7 +340,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -365,7 +366,7 @@ func TestOpen_ReaderErrorWithActiveToken(t *testing.T) {
 	scan2 := testutils.AssertScanReceived(t, scanQueue, 500*time.Millisecond)
 	assert.Nil(t, scan2.Token, "token should be nil on reader error")
 	assert.True(t, scan2.ReaderError, "ReaderError should be true to prevent on_remove execution")
-	assert.Equal(t, "simple_serial:"+devicePath, scan2.Source)
+	assert.Equal(t, "simpleserial:"+devicePath, scan2.Source)
 
 	// Verify reader auto-closed after error
 	time.Sleep(50 * time.Millisecond)
@@ -379,7 +380,7 @@ func TestOpen_ReaderErrorWithoutActiveToken(t *testing.T) {
 	mockPort.ReadError = assert.AnError
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -422,7 +423,7 @@ func TestOpen_TokenTimeout(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -477,7 +478,7 @@ func TestOpen_MultipleTokens(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 
@@ -538,7 +539,7 @@ func TestOpen_DuplicateTokenIgnored(t *testing.T) {
 	}
 
 	reader := NewReader(&config.Instance{})
-	reader.portFactory = func(_ string, _ *serial.Mode) (SerialPort, error) {
+	reader.portFactory = func(_ string, _ *serial.Mode) (testutils.SerialPort, error) {
 		return mockPort, nil
 	}
 

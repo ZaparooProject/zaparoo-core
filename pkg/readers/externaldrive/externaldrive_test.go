@@ -83,7 +83,7 @@ func TestMetadata(t *testing.T) {
 	reader := &Reader{}
 	metadata := reader.Metadata()
 
-	assert.Equal(t, "external_drive", metadata.ID)
+	assert.Equal(t, "externaldrive", metadata.ID)
 	assert.Equal(t, "External drive reader (USB sticks, SD cards, external HDDs)", metadata.Description)
 	assert.False(t, metadata.DefaultEnabled, "Should be opt-in only")
 	assert.True(t, metadata.DefaultAutoDetect, "Should automatically detect mounted devices")
@@ -95,8 +95,9 @@ func TestIDs(t *testing.T) {
 	reader := &Reader{}
 	ids := reader.IDs()
 
-	require.Len(t, ids, 1)
-	assert.Equal(t, DriverID, ids[0])
+	require.Len(t, ids, 2)
+	assert.Equal(t, "externaldrive", ids[0])
+	assert.Equal(t, "external_drive", ids[1])
 }
 
 func TestCapabilities(t *testing.T) {

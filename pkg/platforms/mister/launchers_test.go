@@ -296,7 +296,11 @@ func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
 		process, err := launcherFunc(nil, path)
 		require.Error(t, err, "path %s should fail", path)
 		assert.Nil(t, process)
-		assert.Contains(t, err.Error(), "no ScummVM target ID specified")
+		// Error message can be either from ExtractSchemeID (malformed path) or from empty ID check
+		assert.True(t,
+			strings.Contains(err.Error(), "no ScummVM target ID specified") ||
+				strings.Contains(err.Error(), "failed to extract ScummVM target ID"),
+			"unexpected error message: %s", err.Error())
 	}
 }
 

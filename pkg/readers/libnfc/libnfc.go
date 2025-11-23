@@ -30,7 +30,7 @@ const (
 	timesToPoll               = 1
 	periodBetweenPolls        = 250 * time.Millisecond
 	periodBetweenLoop         = 250 * time.Millisecond
-	autoConnStr               = "libnfc_auto:"
+	autoConnStr               = "libnfcauto:"
 	maxMifareClassic1KSectors = 16
 	defaultWriteTimeoutTries  = 4 * 30 // ~30 seconds
 )
@@ -202,9 +202,13 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Translate legacy connection strings to libnfc format
 	switch r.mode {
 	case modeLegacyUART:
-		connStr = strings.Replace(connStr, "legacy_pn532_uart:", "pn532_uart:", 1)
+		connStr = strings.Replace(connStr, "legacypn532uart:", "pn532uart:", 1)
+		connStr = strings.Replace(connStr, "legacy_pn532_uart:", "pn532uart:", 1)
+		connStr = strings.Replace(connStr, "pn532_uart:", "pn532uart:", 1)
 	case modeLegacyI2C:
-		connStr = strings.Replace(connStr, "legacy_pn532_i2c:", "pn532_i2c:", 1)
+		connStr = strings.Replace(connStr, "legacypn532i2c:", "pn532i2c:", 1)
+		connStr = strings.Replace(connStr, "legacy_pn532_i2c:", "pn532i2c:", 1)
+		connStr = strings.Replace(connStr, "pn532_i2c:", "pn532i2c:", 1)
 	default:
 		// No translation needed for other modes
 	}
@@ -302,21 +306,21 @@ func (r *Reader) Metadata() readers.DriverMetadata {
 	switch r.mode {
 	case modeACR122Only:
 		return readers.DriverMetadata{
-			ID:                "libnfc_acr122",
+			ID:                "libnfcacr122",
 			DefaultEnabled:    true,
 			DefaultAutoDetect: true,
 			Description:       "LibNFC ACR122 USB NFC reader",
 		}
 	case modeLegacyUART:
 		return readers.DriverMetadata{
-			ID:                "legacy_pn532_uart",
+			ID:                "legacypn532uart",
 			DefaultEnabled:    true,
 			DefaultAutoDetect: false,
 			Description:       "Legacy PN532 UART reader via LibNFC",
 		}
 	case modeLegacyI2C:
 		return readers.DriverMetadata{
-			ID:                "legacy_pn532_i2c",
+			ID:                "legacypn532i2c",
 			DefaultEnabled:    true,
 			DefaultAutoDetect: false,
 			Description:       "Legacy PN532 I2C reader via LibNFC",
@@ -335,21 +339,27 @@ func (r *Reader) IDs() []string {
 	switch r.mode {
 	case modeACR122Only:
 		return []string{
+			"acr122usb",
 			"acr122_usb",
 		}
 	case modeLegacyUART:
 		return []string{
+			"legacypn532uart",
 			"legacy_pn532_uart",
 		}
 	case modeLegacyI2C:
 		return []string{
+			"legacypn532i2c",
 			"legacy_pn532_i2c",
 		}
 	default:
 		// Default behavior - all device types
 		return []string{
+			"pn532uart",
 			"pn532_uart",
+			"pn532i2c",
 			"pn532_i2c",
+			"acr122usb",
 			"acr122_usb",
 		}
 	}
@@ -371,15 +381,15 @@ func (r *Reader) Detect(connected []string) string {
 		// Only detect UART devices, return with legacy prefix
 		device := detectSerialReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532_uart: with legacy_pn532_uart:
-			return strings.Replace(device, "pn532_uart:", "legacy_pn532_uart:", 1)
+			// Replace pn532uart: with legacypn532uart:
+			return strings.Replace(device, "pn532uart:", "legacypn532uart:", 1)
 		}
 	case modeLegacyI2C:
 		// Only detect I2C devices, return with legacy prefix
 		device := detectI2CReaders(connected)
 		if device != "" && !helpers.Contains(connected, device) {
-			// Replace pn532_i2c: with legacy_pn532_i2c:
-			return strings.Replace(device, "pn532_i2c:", "legacy_pn532_i2c:", 1)
+			// Replace pn532i2c: with legacypn532i2c:
+			return strings.Replace(device, "pn532i2c:", "legacypn532i2c:", 1)
 		}
 	default:
 		// Default mode - detect UART/I2C serial devices
@@ -487,7 +497,7 @@ func detectSerialReaders(connected []string) string {
 	for _, device := range devices {
 		// the libnfc open is extremely disruptive to other devices, we want
 		// to minimise the number of times we try to open a device
-		connStr := "pn532_uart:" + device
+		connStr := "pn532uart:" + device
 
 		// ignore if device is in block list
 		serialCacheMu.RLock()
@@ -573,7 +583,7 @@ func detectI2CReaders(connected []string) string {
 			continue
 		}
 
-		connStr := "pn532_i2c:" + device
+		connStr := "pn532i2c:" + device
 
 		// ignore if device is in block list
 		i2cCacheMu.RLock()

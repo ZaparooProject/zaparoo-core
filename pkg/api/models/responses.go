@@ -23,15 +23,17 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/google/uuid"
 )
 
 type SearchResultMedia struct {
-	System        System             `json:"system"`
-	Name          string             `json:"name"`
-	Path          string             `json:"path"`
-	LaunchCommand string             `json:"launchCommand"`
-	Tags          []database.TagInfo `json:"tags"`
+	System    System             `json:"system"`
+	Name      string             `json:"name"`
+	Path      string             `json:"path"`
+	ZapScript string             `json:"zapScript"`
+	Tags      []database.TagInfo `json:"tags"`
 }
 
 type PaginationInfo struct {
@@ -58,6 +60,28 @@ type SettingsResponse struct {
 	DebugLogging            bool     `json:"debugLogging"`
 	AudioScanFeedback       bool     `json:"audioScanFeedback"`
 	ReadersAutoDetect       bool     `json:"readersAutoDetect"`
+}
+
+type PlaytimeLimitsResponse struct {
+	Daily        *string  `json:"daily,omitempty"`
+	Session      *string  `json:"session,omitempty"`
+	SessionReset *string  `json:"sessionReset,omitempty"`
+	Retention    *int     `json:"retention,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
+	Enabled      bool     `json:"enabled"`
+}
+
+type PlaytimeStatusResponse struct {
+	SessionStarted        *string `json:"sessionStarted,omitempty"`
+	SessionDuration       *string `json:"sessionDuration,omitempty"`
+	SessionCumulativeTime *string `json:"sessionCumulativeTime,omitempty"`
+	SessionRemaining      *string `json:"sessionRemaining,omitempty"`
+	CooldownRemaining     *string `json:"cooldownRemaining,omitempty"`
+	DailyUsageToday       *string `json:"dailyUsageToday,omitempty"`
+	DailyRemaining        *string `json:"dailyRemaining,omitempty"`
+	State                 string  `json:"state"`
+	SessionActive         bool    `json:"sessionActive"`
+	LimitsEnabled         bool    `json:"limitsEnabled"`
 }
 
 type System struct {
@@ -108,6 +132,15 @@ type TokenResponse struct {
 	Data     string    `json:"data"`
 }
 
+type PlaytimeLimitReachedParams struct {
+	Reason string `json:"reason"`
+}
+
+type PlaytimeLimitWarningParams struct {
+	Interval  string `json:"interval"`
+	Remaining string `json:"remaining"`
+}
+
 type IndexingStatusResponse struct {
 	TotalSteps         *int    `json:"totalSteps,omitempty"`
 	CurrentStep        *int    `json:"currentStep,omitempty"`
@@ -134,6 +167,18 @@ type ActiveMedia struct {
 	Name       string    `json:"mediaName"`
 }
 
+// NewActiveMedia creates a new ActiveMedia with the current timestamp.
+func NewActiveMedia(systemID, systemName, path, name, launcherID string) *ActiveMedia {
+	return &ActiveMedia{
+		Started:    time.Now(),
+		LauncherID: launcherID,
+		SystemID:   systemID,
+		SystemName: systemName,
+		Path:       path,
+		Name:       name,
+	}
+}
+
 func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if with == nil {
 		return false
@@ -144,13 +189,41 @@ func (a *ActiveMedia) Equal(with *ActiveMedia) bool {
 	if a.SystemName != with.SystemName {
 		return false
 	}
-	if a.Path != with.Path {
-		return false
+
+	// Get the MediaType from each system
+	mediaTypeA := slugs.MediaTypeGame // Default
+	if a.SystemID != "" {
+		if system, err := systemdefs.GetSystem(a.SystemID); err == nil {
+			mediaTypeA = system.GetMediaType()
+		}
 	}
-	if a.Name != with.Name {
-		return false
+
+	mediaTypeB := slugs.MediaTypeGame // Default
+	if with.SystemID != "" {
+		if system, err := systemdefs.GetSystem(with.SystemID); err == nil {
+			mediaTypeB = system.GetMediaType()
+		}
 	}
-	return true
+
+	// Compare names by slugifying them to handle minor formatting differences
+	// (e.g., "Game Name" vs "game-name", "S01E02" vs "1x02" are considered equal)
+	slugA := slugs.Slugify(mediaTypeA, a.Name)
+	slugB := slugs.Slugify(mediaTypeB, with.Name)
+
+	// If names match (after slugification), consider them equal regardless of path
+	// This handles cases where launcher uses virtual paths (kodi-episode://123)
+	// but tracker detects real paths (smb://server/file.mkv)
+	if slugA == slugB {
+		return true
+	}
+
+	// If names don't match, require exact path match for equality
+	// (different content that happens to have same system)
+	if a.Path == with.Path {
+		return true
+	}
+
+	return false
 }
 
 type VersionResponse struct {

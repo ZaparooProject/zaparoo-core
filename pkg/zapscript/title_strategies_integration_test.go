@@ -28,6 +28,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -143,7 +144,7 @@ func setupTestMediaDBWithAllGames(t *testing.T) (db *mediadb.MediaDB, cleanup fu
 	// ============================================================
 
 	addGame := func(systemDBID int64, name, path string, tagDBIDs ...int64) {
-		metadata := mediadb.GenerateSlugWithMetadata(name)
+		metadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, name)
 		title := database.MediaTitle{
 			SystemDBID:    systemDBID,
 			Slug:          metadata.Slug,
@@ -1359,18 +1360,20 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			advArgs: map[string]string{"tags": "-region:us"},
 		},
 		{
-			name:          "error_variant_proto_excluded",
-			input:         "Genesis/Plumber Quest Adventures Ultimate Edition",
-			expectedError: true,
-			description: "Prototype variant should be excluded by default variant filtering " +
-				"(only (Proto) exists in DB)",
+			name:             "single_variant_proto_now_selected",
+			input:            "Genesis/Plumber Quest Adventures Ultimate Edition",
+			expectedPath:     "/roms/genesis/Plumber Proto (USA).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Prototype variant is selected when it's the only match " +
+				"(Fix #2: single results bypass variant exclusion)",
 		},
 		{
-			name:          "error_only_beta_variant_exists",
-			input:         "Genesis/Lost Project",
-			expectedError: true,
-			description: "Game with ONLY beta variant and no release version should fail " +
-				"(variants excluded by default)",
+			name:             "single_variant_beta_now_selected",
+			input:            "Genesis/Lost Project",
+			expectedPath:     "/roms/genesis/Lost Project (Beta).md",
+			expectedStrategy: titles.StrategyExactMatch,
+			description: "Beta variant is selected when it's the only match " +
+				"(Fix #2: single results bypass variant exclusion)",
 		},
 		{
 			name:          "error_only_demo_and_beta_variants_exist",
@@ -1508,7 +1511,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			// Create mock platform for launch
 			mockPlatform := mocks.NewMockPlatform()
 			if !tt.expectedError {
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).
+				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 					Return(nil)
 			}
 
@@ -1617,7 +1620,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add EarthBound - simple title with NULL SecondarySlug
-	earthboundMetadata := mediadb.GenerateSlugWithMetadata("EarthBound")
+	earthboundMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "EarthBound")
 	earthboundTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          earthboundMetadata.Slug,
@@ -1645,7 +1648,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add Zombies Ate My Neighbors - another simple title with NULL SecondarySlug
-	zombiesMetadata := mediadb.GenerateSlugWithMetadata("Zombies Ate My Neighbors")
+	zombiesMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Zombies Ate My Neighbors")
 	zombiesTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          zombiesMetadata.Slug,
@@ -1672,7 +1675,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Also add "Zombies" (short title) to test progressive trim fallback
-	zombiesShortMetadata := mediadb.GenerateSlugWithMetadata("Zombies")
+	zombiesShortMetadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Zombies")
 	zombiesShortTitle := database.MediaTitle{
 		SystemDBID:    insertedSNES.DBID,
 		Slug:          zombiesShortMetadata.Slug,
@@ -1703,7 +1706,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold)
 	t.Run("typo_earthbond_matches_earthbound", func(t *testing.T) {
 		mockPlatform := mocks.NewMockPlatform()
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		cmd := parser.Command{
 			Name:    "launch.title",
@@ -1731,7 +1734,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Jaro-Winkler similarity: 0.99
 	t.Run("british_spelling_neighbours_matches_neighbors", func(t *testing.T) {
 		mockPlatform := mocks.NewMockPlatform()
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		cmd := parser.Command{
 			Name:    "launch.title",
@@ -1762,7 +1765,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Test 3: Verify pre-filter actually returns candidates with NULL SecondarySlug
 	t.Run("prefilter_returns_candidates_with_null_secondary_slug", func(t *testing.T) {
 		// Query pre-filter for "earthbond" range
-		metadata := mediadb.GenerateSlugWithMetadata("Earthbond")
+		metadata := mediadb.GenerateSlugWithMetadata(slugs.MediaTypeGame, "Earthbond")
 
 		minLength := metadata.SlugLength - 3
 		if minLength < 0 {

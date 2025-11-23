@@ -36,9 +36,12 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -46,6 +49,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -73,6 +77,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		rs232barcode.NewReader(cfg),
 		opticaldrive.NewReader(cfg),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
@@ -98,6 +103,7 @@ func (p *Platform) StartPost(
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	_ *database.Database,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -127,6 +133,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }
@@ -153,15 +160,13 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (*Platform) PlayAudio(_ string) error {
-	return nil
-}
-
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -173,7 +178,14 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err := helpers.DoLaunch(&helpers.LaunchParams{
+		Config:         cfg,
+		Platform:       p,
+		SetActiveMedia: p.setActiveMedia,
+		Launcher:       launcher,
+		Path:           path,
+		DB:             db,
+	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -240,7 +252,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		{
 			ID:       "Steam",
 			SystemID: systemdefs.SystemPC,
-			Schemes:  []string{"steam"},
+			Schemes:  []string{shared.SchemeSteam},
 			Scanner: func(
 				_ context.Context,
 				cfg *config.Instance,
@@ -268,15 +280,22 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				return results, nil
 			},
 			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				id := strings.TrimPrefix(path, "steam://")
-				id = strings.TrimPrefix(id, "rungameid/")
-				id = strings.SplitN(id, "/", 2)[0]
+				// Handle native Steam URL format: steam://rungameid/123
+				// Normalize to standard virtual path format: steam://123
+				if strings.HasPrefix(path, "steam://rungameid/") {
+					path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
+				}
 
-				if _, err := strconv.ParseUint(id, 10, 64); err != nil {
+				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeSteam)
+				if err != nil {
+					return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
+				}
+
+				if _, parseErr := strconv.ParseUint(id, 10, 64); parseErr != nil {
 					return nil, fmt.Errorf("invalid Steam game ID: %s", id)
 				}
 
-				err := exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
+				err = exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
 					context.Background(),
 					"steam",
 					"steam://rungameid/"+id,

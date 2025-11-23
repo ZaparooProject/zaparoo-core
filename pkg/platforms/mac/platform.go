@@ -14,6 +14,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -21,6 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -45,6 +47,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		pn532.NewReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		rs232barcode.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
@@ -69,6 +72,7 @@ func (p *Platform) StartPost(
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	_ *database.Database,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -98,6 +102,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }
@@ -124,15 +129,13 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (*Platform) PlayAudio(_ string) error {
-	return nil
-}
-
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -144,7 +147,14 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err := helpers.DoLaunch(&helpers.LaunchParams{
+		Config:         cfg,
+		Platform:       p,
+		SetActiveMedia: p.setActiveMedia,
+		Launcher:       launcher,
+		Path:           path,
+		DB:             db,
+	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}

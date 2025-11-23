@@ -46,8 +46,10 @@ const (
 )
 
 type Values struct {
-	Media        Media     `toml:"media,omitempty"`
+	Audio        Audio     `toml:"audio,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
+	Media        Media     `toml:"media,omitempty"`
+	Playtime     Playtime  `toml:"playtime,omitempty"`
 	ZapScript    ZapScript `toml:"zapscript,omitempty"`
 	Systems      Systems   `toml:"systems,omitempty"`
 	Mappings     Mappings  `toml:"mappings,omitempty"`
@@ -55,18 +57,14 @@ type Values struct {
 	Groovy       Groovy    `toml:"groovy,omitempty"`
 	Readers      Readers   `toml:"readers,omitempty"`
 	ConfigSchema int       `toml:"config_schema"`
-	Audio        Audio     `toml:"audio,omitempty"`
 	DebugLogging bool      `toml:"debug_logging"`
 }
 
 type Audio struct {
-	ScanFeedback bool `toml:"scan_feedback,omitempty"`
-}
-
-type Media struct {
-	FilenameTags   *bool    `toml:"filename_tags,omitempty"`
-	DefaultRegions []string `toml:"default_regions,omitempty,multiline"`
-	DefaultLangs   []string `toml:"default_langs,omitempty,multiline"`
+	SuccessSound *string `toml:"success_sound,omitempty"`
+	FailSound    *string `toml:"fail_sound,omitempty"`
+	LimitSound   *string `toml:"limit_sound,omitempty"`
+	ScanFeedback bool    `toml:"scan_feedback,omitempty"`
 }
 
 type ZapScript struct {
@@ -96,7 +94,7 @@ var BaseDefaults = Values{
 		},
 	},
 	Service: Service{
-		APIPort: 7497,
+		APIPort: DefaultAPIPort,
 	},
 	Groovy: Groovy{
 		GmcProxyEnabled:        false,
@@ -314,41 +312,91 @@ func (c *Instance) SetAudioFeedback(enabled bool) {
 	c.vals.Audio.ScanFeedback = enabled
 }
 
-func (c *Instance) FilenameTags() bool {
+// SuccessSoundPath returns the resolved path to the success sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) SuccessSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.Media.FilenameTags == nil {
-		return true
+
+	// nil = use embedded default
+	if c.vals.Audio.SuccessSound == nil {
+		return "", true
 	}
-	return *c.vals.Media.FilenameTags
+
+	// empty string = disabled
+	if *c.vals.Audio.SuccessSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.SuccessSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
-func (c *Instance) SetFilenameTags(enabled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.vals.Media.FilenameTags = &enabled
-}
-
-func (c *Instance) DefaultRegions() []string {
+// FailSoundPath returns the resolved path to the fail sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) FailSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(c.vals.Media.DefaultRegions) == 0 {
-		// TODO: raw strings for now to avoid import cycle
-		// TODO: should this auto-detect the locale?
-		return []string{"us", "world"}
+
+	// nil = use embedded default
+	if c.vals.Audio.FailSound == nil {
+		return "", true
 	}
-	return c.vals.Media.DefaultRegions
+
+	// empty string = disabled
+	if *c.vals.Audio.FailSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.FailSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
-func (c *Instance) DefaultLangs() []string {
+// LimitSoundPath returns the resolved path to the limit sound file and whether it's enabled.
+// Returns ("", true) if nil (use embedded default), ("", false) if disabled (empty string),
+// or (resolved_path, true) if a custom path is configured.
+// For relative paths, dataDir is used as the base (typically helpers.DataDir(pl)).
+func (c *Instance) LimitSoundPath(dataDir string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(c.vals.Media.DefaultLangs) == 0 {
-		// TODO: raw strings for now to avoid import cycle
-		// TODO: should this auto-detect the locale?
-		return []string{"en"}
+
+	// nil = use embedded default
+	if c.vals.Audio.LimitSound == nil {
+		return "", true
 	}
-	return c.vals.Media.DefaultLangs
+
+	// empty string = disabled
+	if *c.vals.Audio.LimitSound == "" {
+		return "", false
+	}
+
+	path := *c.vals.Audio.LimitSound
+
+	// absolute path = use as-is
+	if filepath.IsAbs(path) {
+		return path, true
+	}
+
+	// relative path = resolve to dataDir/assets/path
+	return filepath.Join(dataDir, AssetsDir, path), true
 }
 
 func (c *Instance) DebugLogging() bool {

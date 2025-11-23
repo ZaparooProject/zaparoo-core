@@ -20,6 +20,8 @@
 package readers
 
 import (
+	"strings"
+
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -75,4 +77,11 @@ type Reader interface {
 	Capabilities() []Capability
 	// OnMediaChange is called when the active media changes.
 	OnMediaChange(*models.ActiveMedia) error
+}
+
+// NormalizeDriverID removes underscores from driver IDs to provide backwards
+// compatibility with the legacy underscore format (e.g., "simple_serial").
+// This allows both "simple_serial" and "simpleserial" to work interchangeably.
+func NormalizeDriverID(id string) string {
+	return strings.ReplaceAll(id, "_", "")
 }

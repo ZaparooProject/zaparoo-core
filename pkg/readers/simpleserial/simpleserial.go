@@ -32,33 +32,15 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
 
-// SerialPort defines the interface for serial port operations (for mocking in tests).
-type SerialPort interface {
-	Read(p []byte) (n int, err error)
-	Close() error
-	SetReadTimeout(t time.Duration) error
-}
-
-// SerialPortFactory creates a serial port connection.
-type SerialPortFactory func(path string, mode *serial.Mode) (SerialPort, error)
-
-// DefaultSerialPortFactory is the default factory that opens real serial ports.
-func DefaultSerialPortFactory(path string, mode *serial.Mode) (SerialPort, error) {
-	port, err := serial.Open(path, mode)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open serial port: %w", err)
-	}
-	return port, nil
-}
-
 type SimpleSerialReader struct {
-	port        SerialPort
-	portFactory SerialPortFactory
+	port        testutils.SerialPort
+	portFactory testutils.SerialPortFactory
 	cfg         *config.Instance
 	lastToken   *tokens.Token
 	device      config.ReadersConnect
@@ -70,7 +52,7 @@ type SimpleSerialReader struct {
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
 	return &SimpleSerialReader{
 		cfg:         cfg,
-		portFactory: DefaultSerialPortFactory,
+		portFactory: testutils.DefaultSerialPortFactory,
 	}
 }
 
@@ -84,7 +66,7 @@ func (*SimpleSerialReader) Metadata() readers.DriverMetadata {
 }
 
 func (*SimpleSerialReader) IDs() []string {
-	return []string{"simple_serial"}
+	return []string{"simpleserial", "simple_serial"}
 }
 
 func (r *SimpleSerialReader) parseLine(line string) (*tokens.Token, error) {

@@ -539,7 +539,7 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 		{
 			name:                "ASCII string - caches ASCII check",
 			input:               "Super Mario Bros",
-			expectedNormalized:  "super mario brothers",
+			expectedNormalized:  "super mario bros",
 			expectedASCII:       true,
 			expectedScript:      ScriptLatin, // ASCII defaults to Latin
 			expectedScriptCache: false,       // ASCII fast path skips script detection
@@ -555,7 +555,7 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 		{
 			name:                "CJK text - caches both",
 			input:               "ドラゴンクエスト VII",
-			expectedNormalized:  "ドラゴンクエスト 7",
+			expectedNormalized:  "ドラゴンクエスト vii",
 			expectedASCII:       false,
 			expectedScript:      ScriptCJK,
 			expectedScriptCache: true,
@@ -563,7 +563,7 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 		{
 			name:                "Mixed text - caches both",
 			input:               "Final Fantasy VII",
-			expectedNormalized:  "final fantasy 7",
+			expectedNormalized:  "final fantasy vii",
 			expectedASCII:       true,
 			expectedScript:      ScriptLatin,
 			expectedScriptCache: false,
@@ -577,9 +577,10 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 			expectedScriptCache: false, // After width normalization, becomes ASCII
 		},
 		{
-			name:                "Complex game title with abbreviations",
-			input:               "Street Fighter II: The World Warrior",
-			expectedNormalized:  "street fighter 2 world warrior",
+			name:  "Complex game title with abbreviations",
+			input: "Street Fighter II: The World Warrior",
+			// Article stripping now in ParseGame, not normalizeInternal
+			expectedNormalized:  "street fighter ii  the world warrior",
 			expectedASCII:       true,
 			expectedScript:      ScriptLatin,
 			expectedScriptCache: false,
@@ -606,8 +607,8 @@ func TestNormalizeInternalContextCaching(t *testing.T) {
 	}
 }
 
-// TestSlugifyStringContextReuse tests that SlugifyString properly reuses cached context
-func TestSlugifyStringContextReuse(t *testing.T) {
+// TestSlugifyContextReuse tests that Slugify properly reuses cached context
+func TestSlugifyContextReuse(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -657,12 +658,14 @@ func TestSlugifyStringContextReuse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expectedSlug, result, "Slugified result mismatch")
 
 			// Verify the internal context was used correctly by checking
 			// that the result matches what we'd expect from the script type
-			normalized, ctx := normalizeInternal(tt.input)
+			// Note: ParseGame applies game-specific transformations first
+			parsed := ParseGame(tt.input)
+			normalized, ctx := normalizeInternal(parsed)
 			assert.NotNil(t, ctx, "Context should be created")
 
 			// For non-ASCII inputs, script should be cached
@@ -723,76 +726,11 @@ func TestContextNilVsPopulated(t *testing.T) {
 	}
 }
 
-// TestExpandWordsAndNumbersWithContext tests the combined word expansion function
-func TestExpandWordsAndNumbersWithContext(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "abbreviation expansion",
-			input:    "Street Fighter vs. Marvel",
-			expected: "Street Fighter versus Marvel",
-		},
-		{
-			name:     "number word expansion",
-			input:    "Final Fantasy seven",
-			expected: "Final Fantasy 7",
-		},
-		{
-			name:     "period to space conversion",
-			input:    "Game.Title.Here",
-			expected: "Game Title Here",
-		},
-		{
-			name:     "combined abbreviation and number",
-			input:    "Super Mario Bros. three",
-			expected: "Super Mario brothers 3",
-		},
-		{
-			name:     "period-required abbreviation",
-			input:    "feat. Artist",
-			expected: "featuring Artist",
-		},
-		{
-			name:     "multiple periods with numbers",
-			input:    "one.two.three",
-			expected: "1 2 3",
-		},
-		{
-			name:     "abbreviations without periods",
-			input:    "dr jekyll vs mr hyde",
-			expected: "doctor jekyll versus mister hyde",
-		},
-		{
-			name:     "number words with periods",
-			input:    "one. two. three.",
-			expected: "1 2 3",
-		},
-		{
-			name:     "no changes needed",
-			input:    "Simple Title",
-			expected: "Simple Title",
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			ctx := &pipelineContext{}
-			result := expandWordsAndNumbersWithContext(ctx, tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
+// TestExpandWordsAndNumbersWithContext has been removed
+// This functionality is now game-specific and integrated into ParseGame
+// Tests for abbreviation and number expansion are in:
+// - slug_helpers_test.go: TestExpandAbbreviations, TestExpandNumberWords
+// - media_parsing_test.go: TestParseGame_AbbreviationExpansion, TestParseGame_NumberWordExpansion
 
 // boolPtr is a helper to create bool pointers for test assertions
 func boolPtr(b bool) *bool {

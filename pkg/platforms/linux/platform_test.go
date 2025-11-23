@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +25,7 @@ func TestLinuxHasKodiLocalLauncher(t *testing.T) {
 	// Check for KodiLocal launcher
 	var kodiLocal *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiLocal" {
+		if launcher.ID == "KodiLocalVideo" {
 			kodiLocal = &launcher.ID
 			assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp4")
@@ -52,7 +52,7 @@ func TestLinuxHasKodiMovieLauncher(t *testing.T) {
 		if launcher.ID == "KodiMovie" {
 			kodiMovie = &launcher.ID
 			assert.Equal(t, systemdefs.SystemMovie, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiMovie)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiMovie)
 			break
 		}
 	}
@@ -70,13 +70,13 @@ func TestLinuxHasKodiTVLauncher(t *testing.T) {
 	platform := &Platform{}
 	launchers := platform.Launchers(cfg)
 
-	// Check for KodiTV launcher
+	// Check for KodiTVEpisode launcher
 	var kodiTV *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiTV" {
+		if launcher.ID == "KodiTVEpisode" {
 			kodiTV = &launcher.ID
-			assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
-			assert.Contains(t, launcher.Schemes, kodi.SchemeKodiEpisode)
+			assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
+			assert.Contains(t, launcher.Schemes, shared.SchemeKodiEpisode)
 			break
 		}
 	}
@@ -97,9 +97,9 @@ func TestLinuxHasKodiMusicLauncher(t *testing.T) {
 	// Check for KodiMusic launcher
 	var kodiMusic *string
 	for _, launcher := range launchers {
-		if launcher.ID == "KodiMusic" {
+		if launcher.ID == "KodiLocalAudio" {
 			kodiMusic = &launcher.ID
-			assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+			assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 			assert.Contains(t, launcher.Extensions, ".mp3")
 			break
 		}

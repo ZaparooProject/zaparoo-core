@@ -31,8 +31,10 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediadb"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
@@ -40,6 +42,15 @@ import (
 type PathFragmentKey struct {
 	Path                string
 	FilenameTags        bool
+	StripLeadingNumbers bool
+}
+
+// PathFragmentParams contains parameters for GetPathFragments.
+type PathFragmentParams struct {
+	Config              *config.Instance
+	Path                string
+	SystemID            string
+	NoExt               bool
 	StripLeadingNumbers bool
 }
 
@@ -82,7 +93,13 @@ func AddMediaPath(
 	stripLeadingNumbers bool,
 	cfg *config.Instance,
 ) (titleIndex, mediaIndex int, err error) {
-	pf := GetPathFragments(cfg, path, noExt, stripLeadingNumbers)
+	pf := GetPathFragments(PathFragmentParams{
+		Config:              cfg,
+		Path:                path,
+		NoExt:               noExt,
+		StripLeadingNumbers: stripLeadingNumbers,
+		SystemID:            systemID,
+	})
 
 	systemIndex := 0
 	if foundSystemIndex, ok := ss.SystemIDs[systemID]; !ok {
@@ -107,8 +124,14 @@ func AddMediaPath(
 		ss.TitlesIndex++
 		titleIndex = ss.TitlesIndex
 
+		// Look up mediaType for consistent slugification
+		mediaType := slugs.MediaTypeGame // Default
+		if system, err := systemdefs.GetSystem(systemID); err == nil && system != nil {
+			mediaType = system.GetMediaType()
+		}
+
 		// Generate slug metadata for fuzzy matching prefilter
-		metadata := mediadb.GenerateSlugWithMetadata(pf.Title)
+		metadata := mediadb.GenerateSlugWithMetadata(mediaType, pf.Title)
 
 		_, err := db.InsertMediaTitle(&database.MediaTitle{
 			DBID:          int64(titleIndex),
@@ -634,13 +657,38 @@ func PopulateScanStateForSelectiveIndexing(
 	}
 	ss.TagsIndex = int(maxTagID)
 
-	// For selective indexing, use empty maps instead of pre-loading non-reindexed systems.
-	// This is safe because cache keys are system-scoped (e.g., "nes:mario" vs "snes:mario"),
-	// so data from other systems cannot collide with the systems being reindexed.
-	// TruncateSystems() already removed all target system data via CASCADE, and the max ID
-	// queries above ensure DBID continuity. The cache only needs to prevent duplicates
-	// within the current indexing session for the systems being reindexed.
-	ss.SystemIDs = make(map[string]int)
+	// For selective indexing, pre-populate SystemIDs to avoid cache key collisions.
+	// IMPORTANT: SystemIDs cache keys are NOT system-scoped (just "pc", "nes", etc).
+	// On platforms like Batocera, multiple folders map to the same SystemID (e.g., 50+ folders → "pc").
+	// Empty SystemIDs map causes cache collisions when processing these folders.
+	//
+	// TitleIDs and MediaIDs can remain empty because:
+	// - Their cache keys ARE system-scoped (e.g., "nes:mario" vs "snes:mario")
+	// - TruncateSystems() CASCADE deleted all data for reindexed systems
+	// - Only prevents duplicates within the current indexing session
+	//
+	// TagTypeIDs and TagIDs can remain empty because:
+	// - They are global entities reused across all systems
+	// - Database UNIQUE constraints handle duplicates (SeedCanonicalTags uses non-batch mode)
+
+	// Check for cancellation before loading systems
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// Pre-populate SystemIDs with existing systems (including those not being reindexed)
+	systems, err := db.GetAllSystems()
+	if err != nil {
+		return fmt.Errorf("failed to get existing systems for selective indexing: %w", err)
+	}
+	ss.SystemIDs = make(map[string]int, len(systems))
+	for _, system := range systems {
+		ss.SystemIDs[system.SystemID] = int(system.DBID)
+	}
+
+	// Keep other maps empty for performance (system-scoped keys or global with UNIQUE constraints)
 	ss.TagTypeIDs = make(map[string]int)
 	ss.TagIDs = make(map[string]int)
 	ss.TitleIDs = make(map[string]int)
@@ -656,38 +704,69 @@ func PopulateScanStateForSelectiveIndexing(
 	return nil
 }
 
-func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumbers bool) MediaPathFragments {
+func GetPathFragments(params PathFragmentParams) MediaPathFragments {
 	f := MediaPathFragments{}
 
 	// don't clean the :// in custom scheme paths
-	if helpers.ReURI.MatchString(path) {
-		f.Path = path
+	if helpers.ReURI.MatchString(params.Path) {
+		f.Path = params.Path
 	} else {
 		// Clean and normalize to forward slashes for cross-platform consistency
-		f.Path = filepath.ToSlash(filepath.Clean(path))
+		f.Path = filepath.ToSlash(filepath.Clean(params.Path))
 	}
 
 	// Use FilenameFromPath for virtual paths to get URL-decoded names
 	// For regular paths, extract basename manually
-	if helpers.ReURI.MatchString(path) {
+	if helpers.ReURI.MatchString(params.Path) {
+		// For URIs, FilenameFromPath returns the decoded last path segment, which may include an extension for http/s
 		f.FileName = helpers.FilenameFromPath(f.Path)
-		f.Ext = "" // Virtual paths have no extension
+
+		// Check the scheme to decide if we should extract an extension
+		schemeEnd := strings.Index(f.Path, "://")
+		scheme := ""
+		if schemeEnd > 0 {
+			scheme = strings.ToLower(f.Path[:schemeEnd])
+		}
+
+		if platformsshared.IsStandardSchemeForDecoding(scheme) {
+			// For http/https, extract the extension for tag creation
+			// ParseTitleFromFilename will strip it from the display title later
+			ext := strings.ToLower(filepath.Ext(f.FileName))
+			if helpers.IsValidExtension(ext) {
+				f.Ext = ext
+			} else {
+				f.Ext = ""
+			}
+		} else {
+			// For custom schemes (steam, kodi, etc.), there is no extension
+			f.Ext = ""
+		}
 	} else {
 		fileBase := filepath.Base(f.Path)
-		// Skip extension extraction if noExt is true or extract normally
-		if noExt {
+		// Skip extension extraction if params.NoExt is true or extract normally
+		if params.NoExt {
 			f.Ext = ""
 		} else {
 			f.Ext = strings.ToLower(filepath.Ext(f.Path))
-			if helpers.HasSpace(f.Ext) {
+			if !helpers.IsValidExtension(f.Ext) {
 				f.Ext = ""
 			}
 		}
 		f.FileName, _ = strings.CutSuffix(fileBase, f.Ext)
 	}
 
-	f.Title = tags.ParseTitleFromFilename(f.FileName, stripLeadingNumbers)
-	f.Slug = slugs.SlugifyString(f.Title)
+	f.Title = tags.ParseTitleFromFilename(f.FileName, params.StripLeadingNumbers)
+
+	// Look up the media type for this system to enable media-type-aware slugification
+	mediaType := slugs.MediaTypeGame // Default to Game
+	if params.SystemID != "" {
+		if system, err := systemdefs.GetSystem(params.SystemID); err == nil {
+			mediaType = system.GetMediaType()
+		}
+	}
+
+	// Use media-type-aware slugification for TV shows, movies, music, etc.
+	f.Slug = slugs.Slugify(mediaType, f.Title)
 
 	// For non-Latin titles that don't produce a slug, store the lowercase
 	// original title. This ensures Slug is never empty while the search
@@ -697,7 +776,7 @@ func GetPathFragments(cfg *config.Instance, path string, noExt, stripLeadingNumb
 	}
 
 	// Extract tags from filename only if enabled in config (default to enabled for nil config)
-	if cfg == nil || cfg.FilenameTags() {
+	if params.Config == nil || params.Config.FilenameTags() {
 		f.Tags = getTagsFromFileName(f.FileName)
 	} else {
 		f.Tags = []string{}

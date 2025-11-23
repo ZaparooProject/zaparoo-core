@@ -148,6 +148,18 @@ func (m *MockUserDBI) GetHistory(lastID int) ([]database.HistoryEntry, error) {
 	return nil, nil
 }
 
+func (m *MockUserDBI) CleanupHistory(retentionDays int) (int64, error) {
+	args := m.Called(retentionDays)
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock UserDBI cleanup history failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
 func (m *MockUserDBI) AddMapping(mapping *database.Mapping) error {
 	args := m.Called(mapping)
 	if err := args.Error(0); err != nil {
@@ -238,6 +250,78 @@ func (m *MockUserDBI) UpdateZapLinkCache(url, zapscript string) error {
 func (m *MockUserDBI) GetZapLinkCache(url string) (string, error) {
 	args := m.Called(url)
 	return args.String(0), args.Error(1)
+}
+
+func (m *MockUserDBI) AddMediaHistory(entry *database.MediaHistoryEntry) (int64, error) {
+	args := m.Called(entry)
+	dbid, ok := args.Get(0).(int64)
+	if !ok {
+		dbid = 0
+	}
+	if err := args.Error(1); err != nil {
+		return dbid, fmt.Errorf("mock UserDBI add media history failed: %w", err)
+	}
+	return dbid, nil
+}
+
+func (m *MockUserDBI) UpdateMediaHistoryTime(dbid int64, playTime int) error {
+	args := m.Called(dbid, playTime)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI update media history time failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) CloseMediaHistory(dbid int64, endTime time.Time, playTime int) error {
+	args := m.Called(dbid, endTime, playTime)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI close media history failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) GetMediaHistory(lastID, limit int) ([]database.MediaHistoryEntry, error) {
+	args := m.Called(lastID, limit)
+	history, ok := args.Get(0).([]database.MediaHistoryEntry)
+	if !ok {
+		history = []database.MediaHistoryEntry{}
+	}
+	if err := args.Error(1); err != nil {
+		return history, fmt.Errorf("mock UserDBI get media history failed: %w", err)
+	}
+	return history, nil
+}
+
+func (m *MockUserDBI) CloseHangingMediaHistory() error {
+	args := m.Called()
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI close hanging media history failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) CleanupMediaHistory(retentionDays int) (int64, error) {
+	args := m.Called(retentionDays)
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock UserDBI cleanup media history failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
+func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (int64, error) {
+	args := m.Called(bootUUID, trueBootTime)
+	rowsHealed, ok := args.Get(0).(int64)
+	if !ok {
+		rowsHealed = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsHealed, fmt.Errorf("mock UserDBI heal timestamps failed: %w", err)
+	}
+	return rowsHealed, nil
 }
 
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock

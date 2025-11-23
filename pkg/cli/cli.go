@@ -257,7 +257,14 @@ func Setup(
 	defaultConfig config.Values,
 	writers []io.Writer,
 ) *config.Instance {
-	err := helpers.InitLogging(pl, writers)
+	// Ensure directories exist before logging initialization
+	err := helpers.EnsureDirectories(pl)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error creating directories: %v\n", err)
+		os.Exit(1)
+	}
+
+	err = helpers.InitLogging(pl, writers)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logging: %v\n", err)
 		os.Exit(1)

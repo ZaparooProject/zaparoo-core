@@ -95,7 +95,7 @@ func TestMetadata(t *testing.T) {
 		reader := NewACR122Reader(&config.Instance{})
 		metadata := reader.Metadata()
 
-		assert.Equal(t, "libnfc_acr122", metadata.ID)
+		assert.Equal(t, "libnfcacr122", metadata.ID)
 		assert.Equal(t, "LibNFC ACR122 USB NFC reader", metadata.Description)
 		assert.True(t, metadata.DefaultEnabled)
 		assert.True(t, metadata.DefaultAutoDetect)
@@ -107,7 +107,7 @@ func TestMetadata(t *testing.T) {
 		reader := NewLegacyUARTReader(&config.Instance{})
 		metadata := reader.Metadata()
 
-		assert.Equal(t, "legacy_pn532_uart", metadata.ID)
+		assert.Equal(t, "legacypn532uart", metadata.ID)
 		assert.Equal(t, "Legacy PN532 UART reader via LibNFC", metadata.Description)
 		assert.True(t, metadata.DefaultEnabled)
 		assert.False(t, metadata.DefaultAutoDetect)
@@ -119,7 +119,7 @@ func TestMetadata(t *testing.T) {
 		reader := NewLegacyI2CReader(&config.Instance{})
 		metadata := reader.Metadata()
 
-		assert.Equal(t, "legacy_pn532_i2c", metadata.ID)
+		assert.Equal(t, "legacypn532i2c", metadata.ID)
 		assert.Equal(t, "Legacy PN532 I2C reader via LibNFC", metadata.Description)
 		assert.True(t, metadata.DefaultEnabled)
 		assert.False(t, metadata.DefaultAutoDetect)
@@ -136,8 +136,11 @@ func TestIDs(t *testing.T) {
 		ids := reader.IDs()
 
 		expectedIDs := []string{
+			"pn532uart",
 			"pn532_uart",
+			"pn532i2c",
 			"pn532_i2c",
+			"acr122usb",
 			"acr122_usb",
 		}
 
@@ -151,6 +154,7 @@ func TestIDs(t *testing.T) {
 		ids := reader.IDs()
 
 		expectedIDs := []string{
+			"acr122usb",
 			"acr122_usb",
 		}
 
@@ -164,6 +168,7 @@ func TestIDs(t *testing.T) {
 		ids := reader.IDs()
 
 		expectedIDs := []string{
+			"legacypn532uart",
 			"legacy_pn532_uart",
 		}
 
@@ -177,6 +182,7 @@ func TestIDs(t *testing.T) {
 		ids := reader.IDs()
 
 		expectedIDs := []string{
+			"legacypn532i2c",
 			"legacy_pn532_i2c",
 		}
 

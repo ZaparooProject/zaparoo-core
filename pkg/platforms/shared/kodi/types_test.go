@@ -22,6 +22,7 @@ package kodi_test
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/stretchr/testify/assert"
 )
@@ -83,22 +84,22 @@ func TestAudioSchemeConstants(t *testing.T) {
 	}{
 		{
 			name:     "song scheme constant",
-			constant: kodi.SchemeKodiSong,
+			constant: shared.SchemeKodiSong,
 			expected: "kodi-song",
 		},
 		{
 			name:     "album scheme constant",
-			constant: kodi.SchemeKodiAlbum,
+			constant: shared.SchemeKodiAlbum,
 			expected: "kodi-album",
 		},
 		{
 			name:     "artist scheme constant",
-			constant: kodi.SchemeKodiArtist,
+			constant: shared.SchemeKodiArtist,
 			expected: "kodi-artist",
 		},
 		{
 			name:     "show scheme constant",
-			constant: kodi.SchemeKodiShow,
+			constant: shared.SchemeKodiShow,
 			expected: "kodi-show",
 		},
 	}

@@ -44,7 +44,7 @@ func TestMetadata(t *testing.T) {
 	reader := &PN532UARTReader{}
 	metadata := reader.Metadata()
 
-	assert.Equal(t, "legacy_pn532_uart", metadata.ID)
+	assert.Equal(t, "legacypn532uart", metadata.ID)
 	assert.Equal(t, "Legacy PN532 UART reader", metadata.Description)
 	assert.True(t, metadata.DefaultEnabled)
 	assert.False(t, metadata.DefaultAutoDetect)
@@ -56,8 +56,9 @@ func TestIDs(t *testing.T) {
 	reader := &PN532UARTReader{}
 	ids := reader.IDs()
 
-	require.Len(t, ids, 1)
-	assert.Equal(t, "legacy_pn532_uart", ids[0])
+	require.Len(t, ids, 2)
+	assert.Equal(t, "legacypn532uart", ids[0])
+	assert.Equal(t, "legacy_pn532_uart", ids[1])
 }
 
 func TestDetect(t *testing.T) {
@@ -66,8 +67,14 @@ func TestDetect(t *testing.T) {
 	reader := &PN532UARTReader{}
 	result := reader.Detect([]string{"any", "input"})
 
-	// Returns empty string as detection requires actual hardware
-	assert.Empty(t, result)
+	// Detect() scans for available serial ports and attempts hardware detection.
+	// On systems with serial hardware, it may return a device connection string.
+	// On systems without serial ports, it returns empty string.
+	// Both are valid outcomes depending on hardware availability.
+	if result != "" {
+		// If a device was detected, verify it has the correct format
+		assert.Contains(t, result, "legacypn532uart:")
+	}
 }
 
 func TestWrite_NotSupported(t *testing.T) {

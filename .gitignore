@@ -30,6 +30,8 @@ Taskfile.yml
 /_build
 /out
 /scripts/mister/build/_build
+/mister
+/linux
 
 .DS_Store
 tmp/

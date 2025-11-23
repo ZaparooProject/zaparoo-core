@@ -23,8 +23,10 @@ package mister
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -32,6 +34,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// mockLauncherManager is a minimal mock for testing
+type mockLauncherManager struct{}
+
+func (*mockLauncherManager) GetContext() context.Context {
+	return context.Background()
+}
+
+func (*mockLauncherManager) NewContext() context.Context {
+	return context.Background()
+}
 
 func TestStopActiveLauncher_CustomKill(t *testing.T) {
 	t.Parallel()
@@ -140,4 +153,164 @@ func TestScummVMLauncher_HasCustomKill(t *testing.T) {
 	// Note: We can't actually test keyboard input without initializing the
 	// keyboard device, which requires uinput access. The function signature
 	// and presence is what matters for the platform to use it correctly.
+}
+
+func TestStopActiveLauncher_WaitsForCleanup(t *testing.T) {
+	t.Parallel()
+
+	p := NewPlatform()
+	p.launcherManager = &mockLauncherManager{}
+	p.setActiveMedia = func(_ *models.ActiveMedia) {} // Required by StopActiveLauncher
+
+	// Simulate a tracked process with cleanup channel
+	done := make(chan struct{})
+	p.processMu.Lock()
+	p.trackedProcess = &os.Process{Pid: 99999} // Fake PID
+	p.processDone = done
+	p.processMu.Unlock()
+
+	// Track when StopActiveLauncher returns
+	stopReturned := make(chan struct{})
+
+	// Call StopActiveLauncher in goroutine
+	go func() {
+		_ = p.StopActiveLauncher(platforms.StopForPreemption)
+		close(stopReturned)
+	}()
+
+	// Give it a moment to start waiting
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify StopActiveLauncher hasn't returned yet (should be blocked on channel)
+	select {
+	case <-stopReturned:
+		t.Fatal("StopActiveLauncher returned before cleanup completed")
+	default:
+		// Good - still waiting
+	}
+
+	// Now signal cleanup completion
+	close(done)
+
+	// StopActiveLauncher should now return
+	select {
+	case <-stopReturned:
+		// Good - returned after cleanup
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("StopActiveLauncher did not return after cleanup completed")
+	}
+}
+
+func TestArcadeCardLaunchCache(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SetArcadeCardLaunch stores setname and timestamp", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("sf2")
+
+		// Verify setname was stored (indirectly via CheckAndClearArcadeCardLaunch)
+		result := p.CheckAndClearArcadeCardLaunch("sf2")
+		assert.True(t, result, "should match freshly cached setname")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false for empty cache", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		result := p.CheckAndClearArcadeCardLaunch("pacman")
+
+		assert.False(t, result, "should return false for empty cache")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false for mismatched setname", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("sf2")
+
+		result := p.CheckAndClearArcadeCardLaunch("pacman")
+		assert.False(t, result, "should return false for mismatched setname")
+
+		// Original setname should still be in cache
+		result2 := p.CheckAndClearArcadeCardLaunch("sf2")
+		assert.True(t, result2, "original setname should still be cached")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch clears cache on match", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("dkong")
+
+		// First check should match and clear
+		result1 := p.CheckAndClearArcadeCardLaunch("dkong")
+		assert.True(t, result1, "first check should match")
+
+		// Second check should return false (cache cleared)
+		result2 := p.CheckAndClearArcadeCardLaunch("dkong")
+		assert.False(t, result2, "second check should return false (cache cleared)")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch handles case sensitivity", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("StreetFighter2")
+
+		// Should match exactly
+		result := p.CheckAndClearArcadeCardLaunch("StreetFighter2")
+		assert.True(t, result, "should match exact case")
+	})
+
+	t.Run("CheckAndClearArcadeCardLaunch returns false and clears stale cache", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+		p.SetArcadeCardLaunch("mk2")
+
+		// Manually set timestamp to 16 seconds ago (past the 15 second window)
+		p.arcadeCardLaunch.mu.Lock()
+		p.arcadeCardLaunch.timestamp = p.arcadeCardLaunch.timestamp.Add(-16e9) // -16 seconds in nanoseconds
+		p.arcadeCardLaunch.mu.Unlock()
+
+		result := p.CheckAndClearArcadeCardLaunch("mk2")
+		assert.False(t, result, "should return false for stale cache (>15s)")
+
+		// Cache should be cleared
+		p.arcadeCardLaunch.mu.RLock()
+		cached := p.arcadeCardLaunch.setname
+		p.arcadeCardLaunch.mu.RUnlock()
+		assert.Empty(t, cached, "cache should be cleared after stale check")
+	})
+
+	t.Run("concurrent SetArcadeCardLaunch and CheckAndClearArcadeCardLaunch", func(t *testing.T) {
+		t.Parallel()
+
+		p := NewPlatform()
+
+		// Launch concurrent goroutines
+		const goroutines = 10
+		done := make(chan bool, goroutines)
+
+		for i := range goroutines {
+			go func(index int) {
+				if index%2 == 0 {
+					p.SetArcadeCardLaunch("concurrent")
+				} else {
+					_ = p.CheckAndClearArcadeCardLaunch("concurrent")
+				}
+				done <- true
+			}(i)
+		}
+
+		// Wait for all goroutines to complete
+		for range goroutines {
+			<-done
+		}
+
+		// Test should complete without race conditions
+		// (run with go test -race to verify)
+	})
 }

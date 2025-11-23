@@ -51,11 +51,22 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
+		req.Header.Set("Content-Type", "text/plain")
+		log.Debug().
+			Str("method", "POST").
+			Str("url", apiURL+path).
+			Str("contentType", "text/plain").
+			Str("body", body).
+			Msg("ES API request")
 	} else {
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL+path, http.NoBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
+		log.Debug().
+			Str("method", "GET").
+			Str("url", apiURL+path).
+			Msg("ES API request")
 	}
 
 	resp, err := client.Do(req)
@@ -76,7 +87,13 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	log.Debug().Msgf("response body %s: %s", path, string(respBody))
+	log.Debug().
+		Str("path", path).
+		Int("statusCode", resp.StatusCode).
+		Str("status", resp.Status).
+		Str("responseBody", string(respBody)).
+		Int("bodyLength", len(respBody)).
+		Msg("ES API response")
 
 	return respBody, nil
 }

@@ -5,8 +5,9 @@ go 1.24.9
 require (
 	fyne.io/systray v1.11.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/TimDeve/valve-vdf-binary v0.0.1
-	github.com/ZaparooProject/go-pn532 v0.8.2
+	github.com/ZaparooProject/go-pn532 v0.8.3
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
@@ -17,7 +18,7 @@ require (
 	github.com/expr-lang/expr v1.17.5
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.8.1
-	github.com/gen2brain/beeep v0.0.0-20240516210008-9c006672e7f4
+	github.com/gen2brain/malgo v0.11.24
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.1
 	github.com/go-ole/go-ole v1.3.0
@@ -25,10 +26,12 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.6.0
+	github.com/gopxl/beep/v2 v2.1.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/hbollon/go-edlib v1.7.0
 	github.com/hsanjuan/go-ndef v0.0.1
 	github.com/jonboulle/clockwork v0.5.0
+	github.com/mackerelio/go-osstat v0.2.6
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/nixinwang/dialog v0.0.0-20240524023314-b4bad92eff4d
 	github.com/olahol/melody v1.2.1
@@ -40,7 +43,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.4.0
-	golang.design/x/clipboard v0.7.0
+	golang.design/x/clipboard v0.7.1
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
 	golang.org/x/sys v0.36.0
 	golang.org/x/text v0.29.0
@@ -57,31 +60,34 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
-	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
+	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
+	github.com/icza/bitio v1.1.0 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
+	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
+	github.com/jfreymuth/vorbis v1.0.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/mewkiz/flac v1.0.12 // indirect
+	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
-	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
-	golang.org/x/exp/shiny v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
-	golang.org/x/image v0.20.0 // indirect
-	golang.org/x/mobile v0.0.0-20231127183840-76ac6878050a // indirect
+	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
+	golang.org/x/image v0.28.0 // indirect
+	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/term v0.35.0 // indirect

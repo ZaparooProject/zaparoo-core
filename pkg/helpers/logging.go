@@ -33,14 +33,27 @@ import (
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
-func InitLogging(pl platforms.Platform, writers []io.Writer) error {
+// EnsureDirectories creates the necessary directories for the application.
+// This should be called early during startup, before InitLogging.
+func EnsureDirectories(pl platforms.Platform) error {
+	// Create temp directory for PID files and other temporary files
 	err := os.MkdirAll(pl.Settings().TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
+	// Create log directory for persistent log files
+	err = os.MkdirAll(pl.Settings().LogDir, 0o750)
+	if err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	return nil
+}
+
+func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	logWriters := []io.Writer{&lumberjack.Logger{
-		Filename:   filepath.Join(pl.Settings().TempDir, config.LogFile),
+		Filename:   filepath.Join(pl.Settings().LogDir, config.LogFile),
 		MaxSize:    1,
 		MaxBackups: 2,
 	}}
@@ -52,7 +65,7 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
 	log.Logger = log.Output(io.MultiWriter(logWriters...)).
-		With().Timestamp().Caller().Logger()
+		With().Caller().Logger()
 
 	return nil
 }

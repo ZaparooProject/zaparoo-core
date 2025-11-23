@@ -33,9 +33,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -44,7 +42,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
 )
@@ -254,7 +251,9 @@ func RandomInt(maxVal int) (int, error) {
 	return int(n.Int64()), nil
 }
 
-func CopyFile(sourcePath, destPath string) error {
+// CopyFile copies a file from sourcePath to destPath.
+// Optional perm parameter sets file permissions (uses 0644 if not specified).
+func CopyFile(sourcePath, destPath string, perm ...os.FileMode) error {
 	//nolint:gosec // Safe: utility function for copying files with controlled paths
 	inputFile, err := os.Open(sourcePath)
 	if err != nil {
@@ -281,6 +280,16 @@ func CopyFile(sourcePath, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to sync file: %w", err)
 	}
+
+	// Set permissions if provided, otherwise use default 0644
+	fileMode := os.FileMode(0o644)
+	if len(perm) > 0 {
+		fileMode = perm[0]
+	}
+	if err := os.Chmod(destPath, fileMode); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
 	return nil
 }
 
@@ -324,92 +333,34 @@ func YesNoPrompt(label string, def bool) bool {
 	}
 }
 
-// CreateVirtualPath creates a properly encoded virtual path for media
-// Example: "kodi-show", "123", "Some Hot/Cold" -> "kodi-show://123/Some%20Hot%2FCold"
-func CreateVirtualPath(scheme, id, name string) string {
-	return fmt.Sprintf("%s://%s/%s", scheme, id, url.PathEscape(name))
-}
-
-// VirtualPathResult holds parsed virtual path components
-type VirtualPathResult struct {
-	Scheme string
-	ID     string
-	Name   string
-}
-
-// ParseVirtualPathStr parses a virtual path and returns its components with string ID
-func ParseVirtualPathStr(virtualPath string) (VirtualPathResult, error) {
-	var result VirtualPathResult
-	if !strings.Contains(virtualPath, "://") {
-		return result, errors.New("not a virtual path")
-	}
-
-	parts := strings.SplitN(virtualPath, "://", 2)
-	if len(parts) != 2 {
-		return result, errors.New("invalid virtual path format")
-	}
-
-	result.Scheme = parts[0]
-	idAndName := strings.SplitN(parts[1], "/", 2)
-	if len(idAndName) < 1 {
-		return result, errors.New("missing ID in virtual path")
-	}
-
-	result.ID = idAndName[0]
-	if len(idAndName) == 2 {
-		decoded, decodeErr := url.PathUnescape(idAndName[1])
-		if decodeErr == nil {
-			result.Name = decoded
-		} else {
-			result.Name = idAndName[1] // Fallback to undecoded
-		}
-	}
-
-	return result, nil
-}
-
-func FilenameFromPath(p string) string {
-	if p == "" {
-		return ""
-	}
-
-	// Try to parse as virtual path first
-	if strings.Contains(p, "://") {
-		result, err := ParseVirtualPathStr(p)
-		if err == nil && result.Name != "" {
-			return result.Name
-		}
-	}
-
-	// Regular file path - use existing logic
-	// Convert to forward slash format for consistent cross-platform parsing
-	// Replace backslashes with forward slashes to handle Windows paths on any OS
-	normalizedPath := strings.ReplaceAll(p, "\\", "/")
-	b := path.Base(normalizedPath)
-	e := path.Ext(normalizedPath)
-	if HasSpace(e) {
-		e = ""
-	}
-	r, _ := strings.CutSuffix(b, e)
-	return r
-}
-
-func SlugifyPath(filePath string) string {
-	fn := FilenameFromPath(filePath)
-	return slugs.SlugifyString(fn)
-}
-
-func HasSpace(s string) bool {
-	return strings.Contains(s, " ")
-}
-
 func IsServiceRunning(cfg *config.Instance) bool {
 	_, err := client.LocalClient(context.Background(), cfg, models.MethodVersion, "")
 	if err != nil {
-		log.Debug().Err(err).Msg("error checking if service running")
+		log.Debug().
+			Err(err).
+			Int("port", cfg.APIPort()).
+			Msg("service not detected on API port")
 		return false
 	}
+	log.Debug().
+		Int("port", cfg.APIPort()).
+		Msg("detected running service instance")
 	return true
+}
+
+// WaitForAPI waits for the service API to become available.
+// Returns true if API became available, false if timeout reached.
+func WaitForAPI(cfg *config.Instance, maxWaitTime, checkInterval time.Duration) bool {
+	deadline := time.Now().Add(maxWaitTime)
+
+	for time.Now().Before(deadline) {
+		if IsServiceRunning(cfg) {
+			return true
+		}
+		time.Sleep(checkInterval)
+	}
+
+	return false
 }
 
 func IsTruthy(s string) bool {
@@ -432,4 +383,14 @@ func MaybeJSON(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// PadNumber formats a number with leading zeros to the specified width.
+// Examples:
+//   - PadNumber(5, 2) → "05"
+//   - PadNumber(42, 4) → "0042"
+//   - PadNumber(123, 2) → "123"
+func PadNumber(num, width int) string {
+	format := fmt.Sprintf("%%0%dd", width)
+	return fmt.Sprintf(format, num)
 }

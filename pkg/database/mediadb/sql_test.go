@@ -159,23 +159,25 @@ func TestSqlSearchMediaPathExact_Success(t *testing.T) {
 	expectedResults := []database.SearchResult{
 		{
 			SystemID: "test-system",
+			Name:     "Test Game",
 			Path:     "/games/test.rom",
 		},
 	}
 
-	rows := sqlmock.NewRows([]string{"SystemID", "Path"}).
-		AddRow(expectedResults[0].SystemID, expectedResults[0].Path)
+	rows := sqlmock.NewRows([]string{"SystemID", "Name", "Path"}).
+		AddRow(expectedResults[0].SystemID, expectedResults[0].Name, expectedResults[0].Path)
 
 	// Match the actual SQL query structure
 	mock.ExpectPrepare(`select.*from Systems.*inner join.*MediaTitles.*inner join.*Media.*where.*LIMIT`).
 		ExpectQuery().
-		WithArgs("test-system", sqlmock.AnyArg(), path). // slug will be computed
+		WithArgs("test-system", path).
 		WillReturnRows(rows)
 
 	result, err := sqlSearchMediaPathExact(context.Background(), db, systems, path)
 	require.NoError(t, err)
 	assert.Len(t, result, 1)
 	assert.Equal(t, expectedResults[0].SystemID, result[0].SystemID)
+	assert.Equal(t, expectedResults[0].Name, result[0].Name)
 	assert.Equal(t, expectedResults[0].Path, result[0].Path)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -468,13 +470,16 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 	systems := []systemdefs.System{
 		{ID: "NES"},
 	}
-	parts := []string{"mario"}
+	variantGroups := [][]string{{"mario"}} // Single word with single variant
+	rawWords := []string{"mario"}
 	tags := []database.TagFilter{{Type: "genre", Value: "Action"}}
+	includeName := false
 
 	// Mock first query: get media items (with EXISTS clause - no HAVING COUNT arg needed)
+	// Now searches both Slug and SecondarySlug for each variant
 	mock.ExpectPrepare("SELECT.*Systems\\.SystemID.*MediaTitles\\.Name.*Media\\.Path.*Media\\.DBID.*").
 		ExpectQuery().
-		WithArgs("NES", "%mario%", "genre", "Action", 10).
+		WithArgs("NES", "%mario%", "%mario%", "genre", "Action", 10). // Slug LIKE, SecondarySlug LIKE
 		WillReturnRows(sqlmock.NewRows([]string{"SystemID", "Name", "Path", "DBID"}).
 			AddRow("NES", "Mario", "/games/mario.nes", 1))
 
@@ -485,7 +490,9 @@ func TestSqlSearchMediaWithFilters_WithTags(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"MediaDBID", "Tag", "Type"}).
 			AddRow(1, "Action", "genre"))
 
-	results, err := sqlSearchMediaWithFilters(context.Background(), db, systems, parts, tags, nil, nil, 10, false)
+	results, err := sqlSearchMediaWithFilters(
+		context.Background(), db, systems, variantGroups, rawWords, tags, nil, nil, 10, includeName,
+	)
 
 	require.NoError(t, err)
 	assert.Len(t, results, 1)

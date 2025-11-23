@@ -51,9 +51,9 @@ func NewService(args ServiceArgs) (*Service, error) {
 
 // Create new PID file using current process PID.
 func (s *Service) createPidFile() error {
-	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
+	pidPath := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
-	err := os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0o600)
+	err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", pid)), 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
@@ -71,11 +71,11 @@ func (s *Service) removePidFile() error {
 // Pid returns the process ID of the current running service daemon.
 func (s *Service) Pid() (int, error) {
 	pid := 0
-	path := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
+	pidPath := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(pidPath); err == nil {
 		//nolint:gosec // Safe: reads PID files for service management
-		pidFile, err := os.ReadFile(path)
+		pidFile, err := os.ReadFile(pidPath)
 		if err != nil {
 			return pid, fmt.Errorf("error reading pid file: %w", err)
 		}
@@ -252,9 +252,14 @@ func (s *Service) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	//nolint:gosec // Safe: executes copy of current binary for service restart
-	cmd := exec.CommandContext(ctx, tempPath, "-service", "exec", "&")
+	cmd := exec.CommandContext(ctx, tempPath, "-service", "exec")
 	env := os.Environ()
 	cmd.Env = env
+
+	// Detach from parent: create new session
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+	}
 
 	// point new binary to existing config file
 	configPath := filepath.Join(ConfigDir(s.pl), config.CfgFile)
@@ -267,6 +272,26 @@ func (s *Service) Start() error {
 	err = cmd.Start()
 	if err != nil {
 		return fmt.Errorf("error starting service: %w", err)
+	}
+
+	err = cmd.Process.Release()
+	if err != nil {
+		return fmt.Errorf("error releasing service process: %w", err)
+	}
+
+	// Give process a moment to write PID file
+	time.Sleep(500 * time.Millisecond)
+
+	pid, pidErr := s.Pid()
+	if pidErr != nil {
+		log.Error().Err(pidErr).Msg("PID file not found after service start - process may have failed")
+		return fmt.Errorf("service started but PID file not found: %w", pidErr)
+	}
+
+	log.Info().Msgf("service process started with PID %d", pid)
+
+	if !s.Running() {
+		return fmt.Errorf("service process %d started but is no longer running", pid)
 	}
 
 	return nil
@@ -319,6 +344,23 @@ func (s *Service) Restart() error {
 	}
 
 	return nil
+}
+
+// WaitForAPI waits for the service API to become available with health monitoring.
+// Returns nil if API became available, error if timeout or process crashed.
+func (s *Service) WaitForAPI(cfg *config.Instance, maxWait, checkInterval time.Duration) error {
+	if WaitForAPI(cfg, maxWait, checkInterval) {
+		log.Info().Msg("API is now available")
+		return nil
+	}
+
+	if !s.Running() {
+		log.Error().Msg("service process is no longer running")
+		return errors.New("service process crashed during startup")
+	}
+
+	log.Warn().Msg("service process is running but API is not responding")
+	return errors.New("API did not become available within timeout")
 }
 
 func (s *Service) ServiceHandler(cmd *string) error {

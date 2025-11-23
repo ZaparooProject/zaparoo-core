@@ -73,3 +73,11 @@ func ReadersAdded(ns chan<- models.Notification, payload models.ReaderResponse) 
 func ReadersRemoved(ns chan<- models.Notification, payload models.ReaderResponse) {
 	sendNotification(ns, models.NotificationReadersDisconnected, payload)
 }
+
+func PlaytimeLimitReached(ns chan<- models.Notification, payload models.PlaytimeLimitReachedParams) {
+	sendNotification(ns, models.NotificationPlaytimeLimitReached, payload)
+}
+
+func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.PlaytimeLimitWarningParams) {
+	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
+}

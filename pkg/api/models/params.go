@@ -86,6 +86,15 @@ type UpdateSettingsParams struct {
 	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems"`
 }
 
+type UpdatePlaytimeLimitsParams struct {
+	Enabled      *bool     `json:"enabled"`
+	Daily        *string   `json:"daily"`
+	Session      *string   `json:"session"`
+	SessionReset *string   `json:"sessionReset"`
+	Warnings     *[]string `json:"warnings"`
+	Retention    *int      `json:"retention"`
+}
+
 type NewClientParams struct {
 	Name string `json:"name"`
 }

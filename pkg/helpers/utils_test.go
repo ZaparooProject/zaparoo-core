@@ -21,11 +21,14 @@ package helpers
 
 import (
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -810,7 +813,7 @@ func TestIsZip(t *testing.T) {
 	}
 }
 
-func TestHasSpace(t *testing.T) {
+func TestIsValidExtension(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -818,35 +821,63 @@ func TestHasSpace(t *testing.T) {
 		input    string
 		expected bool
 	}{
+		// Valid extensions
 		{
-			name:     "no_spaces",
-			input:    "hello",
+			name:     "simple_extension",
+			input:    ".zip",
+			expected: true,
+		},
+		{
+			name:     "extension_with_numbers",
+			input:    ".mp3",
+			expected: true,
+		},
+		{
+			name:     "uppercase_extension",
+			input:    ".ZIP",
+			expected: true,
+		},
+		{
+			name:     "mixed_case",
+			input:    ".TaR",
+			expected: true,
+		},
+		{
+			name:     "all_numbers",
+			input:    ".264",
+			expected: true,
+		},
+		{
+			name:     "long_extension",
+			input:    ".jpeg",
+			expected: true,
+		},
+
+		// Invalid extensions
+		{
+			name:     "extension_with_space",
+			input:    ".tar gz",
 			expected: false,
 		},
 		{
-			name:     "single_space_middle",
-			input:    "hello world",
-			expected: true,
+			name:     "extension_with_hyphen",
+			input:    ".tar-gz",
+			expected: false,
 		},
 		{
-			name:     "space_at_start",
-			input:    " hello",
-			expected: true,
+			name:     "extension_with_underscore",
+			input:    ".tar_gz",
+			expected: false,
 		},
 		{
-			name:     "space_at_end",
-			input:    "hello ",
-			expected: true,
+			name:     "extension_with_special_char",
+			input:    ".tar!gz",
+			expected: false,
 		},
 		{
-			name:     "multiple_spaces",
-			input:    "hello   world",
-			expected: true,
-		},
-		{
-			name:     "only_spaces",
-			input:    "   ",
-			expected: true,
+			name:     "just_dot",
+			input:    ".",
+			expected: false,
 		},
 		{
 			name:     "empty_string",
@@ -854,37 +885,32 @@ func TestHasSpace(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "single_character",
-			input:    "a",
+			name:     "no_leading_dot",
+			input:    "zip",
+			expected: true, // Still valid, just checks alphanumeric
+		},
+		{
+			name:     "space_at_start",
+			input:    ". zip",
 			expected: false,
 		},
 		{
-			name:     "special_chars_no_space",
-			input:    "hello-world_test",
+			name:     "space_at_end",
+			input:    ".zip ",
 			expected: false,
 		},
 		{
-			name:     "special_chars_with_space",
-			input:    "hello-world test",
-			expected: true,
-		},
-		{
-			name:     "tab_character",
-			input:    "hello\tworld",
-			expected: false, // Only checks for space character, not tab
-		},
-		{
-			name:     "newline_character",
-			input:    "hello\nworld",
-			expected: false, // Only checks for space character, not newline
+			name:     "multiple_dots",
+			input:    ".tar.gz", // path.Ext returns ".gz", which is valid
+			expected: false,     // But this has a dot in the middle
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := HasSpace(tt.input)
-			assert.Equal(t, tt.expected, result, "HasSpace result mismatch")
+			result := IsValidExtension(tt.input)
+			assert.Equal(t, tt.expected, result, "IsValidExtension result mismatch")
 		})
 	}
 }
@@ -953,7 +979,7 @@ func TestRandSeq(t *testing.T) {
 	})
 }
 
-func TestSlugifyPath(t *testing.T) {
+func TestFilenameFromPath_WithSlugify(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1009,7 +1035,7 @@ func TestSlugifyPath(t *testing.T) {
 		{
 			name:     "extension_with_space",
 			input:    "/games/test. ext",
-			expected: "testext", // Space is removed by SlugifyString
+			expected: "testext", // Space is removed by Slugify
 		},
 		{
 			name:     "hidden_file",
@@ -1026,8 +1052,9 @@ func TestSlugifyPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyPath(tt.input)
-			assert.Equal(t, tt.expected, result, "SlugifyPath result mismatch")
+			filename := FilenameFromPath(tt.input)
+			result := slugs.Slugify(slugs.MediaTypeGame, filename)
+			assert.Equal(t, tt.expected, result, "Slugified filename mismatch")
 		})
 	}
 }
@@ -1390,6 +1417,80 @@ func TestCopyFile(t *testing.T) {
 	}
 }
 
+func TestCopyFileWithPermissions(t *testing.T) {
+	t.Parallel()
+
+	// Skip on Windows - Unix file permissions don't work the same way
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix file permission test on Windows")
+	}
+
+	tempDir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		sourcePath string
+		destPath   string
+		perm       os.FileMode
+		wantErr    bool
+	}{
+		{
+			name:       "set_executable_permissions",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/executable.txt",
+			perm:       0o755,
+			wantErr:    false,
+		},
+		{
+			name:       "set_readonly_permissions",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/readonly.txt",
+			perm:       0o444,
+			wantErr:    false,
+		},
+		{
+			name:       "default_permissions_when_not_specified",
+			sourcePath: "testdata/test.txt",
+			destPath:   tempDir + "/default.txt",
+			perm:       0, // No permission specified
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var err error
+			if tt.perm == 0 {
+				// Test default permissions
+				err = CopyFile(tt.sourcePath, tt.destPath)
+			} else {
+				// Test with specified permissions
+				err = CopyFile(tt.sourcePath, tt.destPath, tt.perm)
+			}
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+
+				// Verify file exists
+				info, err := os.Stat(tt.destPath)
+				require.NoError(t, err)
+
+				// Check permissions match expected
+				if tt.perm != 0 {
+					assert.Equal(t, tt.perm, info.Mode().Perm(), "permissions should match")
+				} else {
+					// Default should be 0644
+					assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "default permissions should be 0644")
+				}
+			}
+		})
+	}
+}
+
 func TestGetAllLocalIPs(t *testing.T) {
 	t.Parallel()
 
@@ -1446,13 +1547,41 @@ func TestCreateVirtualPath(t *testing.T) {
 			pathName: "Some Hot/Cold",
 			expected: "kodi-show://456/Some%20Hot%2FCold",
 		},
+		{
+			name:     "alphanumeric_id",
+			scheme:   "scummvm",
+			id:       "monkey1",
+			pathName: "Monkey Island",
+			expected: "scummvm://monkey1/Monkey%20Island",
+		},
+		{
+			name:     "id_with_special_chars",
+			scheme:   "launchbox",
+			id:       "game-id_123",
+			pathName: "Game Title",
+			expected: "launchbox://game-id_123/Game%20Title",
+		},
+		{
+			name:     "id_with_space",
+			scheme:   "steam",
+			id:       "space id",
+			pathName: "Game Name",
+			expected: "steam://space%20id/Game%20Name",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := CreateVirtualPath(tt.scheme, tt.id, tt.pathName)
+			result := virtualpath.CreateVirtualPath(tt.scheme, tt.id, tt.pathName)
 			assert.Equal(t, tt.expected, result)
+
+			// Verify round-trip: create path, parse it back
+			parsed, err := virtualpath.ParseVirtualPathStr(result)
+			require.NoError(t, err, "Should parse created path without error")
+			assert.Equal(t, tt.scheme, parsed.Scheme, "Scheme should match")
+			assert.Equal(t, tt.id, parsed.ID, "ID should match after round-trip")
+			assert.Equal(t, tt.pathName, parsed.Name, "Name should match after round-trip")
 		})
 	}
 }

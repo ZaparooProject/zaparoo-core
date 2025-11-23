@@ -81,13 +81,13 @@ func TestHandleMedia_TotalMediaCount(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 
-			// Set indexing status
-			statusInstance.indexing = tt.indexing
+			// Set indexing status - use setRunning() to avoid data race
+			statusInstance.setRunning(tt.indexing)
 
 			if tt.optimizationStatus == "running" && !tt.indexing {
 				// Database exists but is optimizing

@@ -24,14 +24,18 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
+	"context"
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -51,41 +55,101 @@ func main() {
 }
 
 func run() error {
+	// Parse flags early for install/uninstall operations
+	install := flag.String(
+		"install",
+		"",
+		"install component: application, desktop, service, hardware",
+	)
+	uninstall := flag.String(
+		"uninstall",
+		"",
+		"uninstall component: application, desktop, service, hardware",
+	)
+
 	pl := &linux.Platform{}
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool(
-		"install",
-		false,
-		"configure system for Zaparoo",
-	)
-	doUninstall := flag.Bool(
-		"uninstall",
-		false,
-		"revert Zaparoo system configuration",
-	)
 	daemonMode := flag.Bool(
 		"daemon",
 		false,
 		"run service in foreground with no UI",
 	)
+	start := flag.Bool(
+		"start",
+		false,
+		"start service and open web UI in browser",
+	)
 
 	flags.Pre(pl)
 
-	if *doInstall {
-		err := installer.CLIInstall()
-		if err != nil {
-			return errors.New("installation failed")
-		}
-		return nil
-	} else if *doUninstall {
-		err := installer.CLIUninstall()
-		if err != nil {
-			return errors.New("uninstallation failed")
+	// Handle install operations
+	if *install != "" {
+		switch *install {
+		case "application":
+			if err := installer.InstallApplication(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("application installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Application installation complete")
+		case "desktop":
+			if err := installer.InstallDesktop(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("desktop installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Desktop installation complete")
+		case "service":
+			if err := installer.InstallService(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("service installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Service installation complete")
+		case "hardware":
+			if err := installer.InstallHardware(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("hardware installation failed: %w", err)
+			}
+			_, _ = fmt.Println("Hardware installation complete")
+		default:
+			return fmt.Errorf("unknown component: %s (valid: application, desktop, service, hardware)", *install)
 		}
 		return nil
 	}
 
+	// Handle uninstall operations
+	if *uninstall != "" {
+		switch *uninstall {
+		case "application":
+			if err := installer.UninstallApplication(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("application uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Application uninstallation complete")
+		case "desktop":
+			if err := installer.UninstallDesktop(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("desktop uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Desktop uninstallation complete")
+		case "service":
+			if err := installer.UninstallService(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("service uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Service uninstallation complete")
+		case "hardware":
+			if err := installer.UninstallHardware(); err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+				return fmt.Errorf("hardware uninstallation failed: %w", err)
+			}
+			_, _ = fmt.Println("Hardware uninstallation complete")
+		default:
+			return fmt.Errorf("unknown component: %s (valid: application, desktop, service, hardware)", *uninstall)
+		}
+		return nil
+	}
+
+	// Normal root check for regular operations
 	if os.Geteuid() == 0 {
 		return errors.New("zaparoo cannot be run as root")
 	}
@@ -101,6 +165,11 @@ func run() error {
 		logWriters,
 	)
 
+	// Handle start mode (for desktop entry)
+	if *start {
+		return startAndOpenBrowser(cfg)
+	}
+
 	defer func() {
 		if err := recover(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Panic: %s\n", err)
@@ -110,8 +179,11 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
+	var stopSvc func() error
 	if !helpers.IsServiceRunning(cfg) {
-		stopSvc, err := service.Start(pl, cfg)
+		log.Info().Msg("starting new service instance")
+		var err error
+		stopSvc, err = service.Start(pl, cfg)
 		if err != nil {
 			log.Error().Msgf("error starting service: %s", err)
 			return fmt.Errorf("error starting service: %w", err)
@@ -123,6 +195,10 @@ func run() error {
 				log.Error().Msgf("error stopping service: %s", err)
 			}
 		}()
+	} else {
+		log.Info().
+			Int("port", cfg.APIPort()).
+			Msg("connecting to existing service instance")
 	}
 
 	sigs := make(chan os.Signal, 1)
@@ -132,9 +208,11 @@ func run() error {
 	exit := make(chan bool, 1)
 	defer close(exit)
 
-	if *daemonMode {
+	// Handle application modes
+	switch {
+	case *daemonMode:
 		log.Info().Msg("started in daemon mode")
-	} else {
+	default:
 		// default to showing the TUI
 		app, err := tui.BuildMain(
 			cfg, pl,
@@ -161,5 +239,62 @@ func run() error {
 	case <-exit:
 	}
 
+	return nil
+}
+
+func startAndOpenBrowser(cfg *config.Instance) error {
+	// Get actual API port from config
+	port := cfg.APIPort()
+	webURL := fmt.Sprintf("http://localhost:%d/app/", port)
+
+	// Check if API is already responding
+	if helpers.IsServiceRunning(cfg) {
+		// Service already running - just open browser
+		_, _ = fmt.Fprintln(os.Stderr, "Service is already running")
+		return openBrowser(webURL)
+	}
+
+	// All status messages go to stderr
+	_, _ = fmt.Fprintln(os.Stderr, "Service not running, attempting to start...")
+
+	// Check if systemd service is installed
+	ctx := context.Background()
+	checkCmd := exec.CommandContext(ctx, "systemctl", "--user", "status", "zaparoo")
+	if err := checkCmd.Run(); err != nil {
+		// Service not installed, install it
+		_, _ = fmt.Fprintln(os.Stderr, "Service not installed, installing...")
+		if err := installer.InstallService(); err != nil {
+			return fmt.Errorf("failed to install service: %w", err)
+		}
+		_, _ = fmt.Fprintln(os.Stderr, "Service installed successfully")
+	}
+
+	// Start the service
+	_, _ = fmt.Fprintln(os.Stderr, "Starting service...")
+	startCmd := exec.CommandContext(ctx, "systemctl", "--user", "start", "zaparoo")
+	if err := startCmd.Run(); err != nil {
+		return fmt.Errorf("failed to start service: %w", err)
+	}
+
+	// Wait for API to respond (with retries)
+	_, _ = fmt.Fprintln(os.Stderr, "Waiting for service to be ready...")
+	for range 30 {
+		if helpers.IsServiceRunning(cfg) {
+			_, _ = fmt.Fprintln(os.Stderr, "Service is ready")
+			return openBrowser(webURL)
+		}
+		time.Sleep(time.Second)
+	}
+
+	return errors.New("service failed to start within 30 seconds")
+}
+
+func openBrowser(url string) error {
+	_, _ = fmt.Fprintf(os.Stderr, "Opening %s in browser...\n", url)
+
+	cmd := exec.CommandContext(context.Background(), "xdg-open", url)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to open browser: %w", err)
+	}
 	return nil
 }

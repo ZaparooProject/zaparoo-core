@@ -26,6 +26,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -61,8 +62,9 @@ func (m *MockPlatform) StartPre(cfg *config.Instance) error {
 func (m *MockPlatform) StartPost(cfg *config.Instance,
 	launcherManager platforms.LauncherContextManager,
 	getActiveMedia func() *models.ActiveMedia, setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) error {
-	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia)
+	args := m.Called(cfg, launcherManager, getActiveMedia, setActiveMedia, db)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock platform start post failed: %w", err)
 	}
@@ -114,12 +116,6 @@ func (m *MockPlatform) RootDirs(cfg *config.Instance) []string {
 	return []string{}
 }
 
-// NormalizePath converts a path to a normalized form for the platform
-func (m *MockPlatform) NormalizePath(cfg *config.Instance, path string) string {
-	args := m.Called(cfg, path)
-	return args.String(0)
-}
-
 // StopActiveLauncher kills/exits the currently running launcher process
 func (m *MockPlatform) StopActiveLauncher(intent platforms.StopIntent) error {
 	args := m.Called(intent)
@@ -138,15 +134,6 @@ func (m *MockPlatform) ReturnToMenu() error {
 	return nil
 }
 
-// PlayAudio plays an audio file at the given path
-func (m *MockPlatform) PlayAudio(path string) error {
-	args := m.Called(path)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock platform play audio failed: %w", err)
-	}
-	return nil
-}
-
 // LaunchSystem launches a system by ID
 func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error {
 	args := m.Called(cfg, systemID)
@@ -158,8 +145,10 @@ func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error
 }
 
 // LaunchMedia launches some media by path and sets the active media if it was successful
-func (m *MockPlatform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
-	args := m.Called(cfg, path, launcher)
+func (m *MockPlatform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
+	args := m.Called(cfg, path, launcher, db)
 	m.launchedMedia = append(m.launchedMedia, path)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)

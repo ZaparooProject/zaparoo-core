@@ -50,7 +50,7 @@ COPY build_c_lib.sh /usr/local/bin/build_c_lib.sh
 RUN chmod +x /usr/local/bin/build_c_lib.sh
 
 # Define target architectures and their corresponding host triplets
-ENV TARGETS="x86_64-linux-musl aarch64-linux-musl arm-linux-musleabihf"
+ENV TARGETS="x86_64-linux-gnu aarch64-linux-gnu arm-linux-gnueabihf"
 ENV HOSTS="x86_64-linux aarch64-linux arm-linux"
 
 WORKDIR /src
@@ -90,7 +90,7 @@ RUN /usr/local/bin/build_c_lib.sh libnfc "/opt/libnfc" "--with-drivers=acr122_us
 # Final builder stage with all cross-compiled libraries
 FROM base AS builder
 
-# Copy all pre-built dependencies
+# Copy all pre-built dependencies (libnfc, libusb, libusb-compat)
 COPY --from=libnfc-builder /opt /opt
 
 # Install task runner

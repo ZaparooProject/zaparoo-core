@@ -29,6 +29,7 @@ const (
 	TypeAmiibo         = "Amiibo"
 	TypeLegoDimensions = "LegoDimensions"
 	TypeFeliCa         = "FeliCa"
+	TypeBarcode        = "Barcode"
 	TypeUnknown        = "Unknown"
 	SourcePlaylist     = "Playlist"
 )

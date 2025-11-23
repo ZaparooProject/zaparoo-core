@@ -55,7 +55,7 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	}
 
 	// Create mock state
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Mock database to return "completed" status (no interruption)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusCompleted, nil)
@@ -94,7 +94,7 @@ func TestCheckAndResumeIndexing_WithRunningStatus(t *testing.T) {
 	defer cleanup()
 
 	// Create mock state
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Set up interrupted indexing state in real database
 	// Use a minimal system list to make the test fast
@@ -169,7 +169,7 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	defer cleanup()
 
 	// Create mock state
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Set up interrupted indexing state in real database with "pending" status
 	// Use a minimal system list to make the test fast
@@ -235,7 +235,7 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 	}
 
 	// Create mock state
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Mock database to return error when checking indexing status
 	mockMediaDB.On("GetIndexingStatus").Return("", assert.AnError)
@@ -272,7 +272,7 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	}
 
 	// Create mock state
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Mock database to return "failed" status (should not resume)
 	mockMediaDB.On("GetIndexingStatus").Return(mediadb.IndexingStatusFailed, nil)
@@ -298,7 +298,7 @@ func TestStartPublishers_NoPublishers(t *testing.T) {
 	require.NoError(t, err)
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
 	publishers, cancel := startPublishers(st, cfg, notifChan)
@@ -332,7 +332,7 @@ topic = "zaparoo/events"
 	require.NoError(t, err)
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
 	publishers, cancel := startPublishers(st, cfg, notifChan)
@@ -365,7 +365,7 @@ topic = "zaparoo/events"
 	require.NoError(t, err)
 
 	mockPlatform := mocks.NewMockPlatform()
-	st, _ := state.NewState(mockPlatform)
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
 	notifChan := make(chan models.Notification)
 
 	publishers, cancel := startPublishers(st, cfg, notifChan)

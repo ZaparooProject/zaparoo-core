@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	DriverID  = "external_drive"
+	DriverID  = "externaldrive"
 	TokenType = "externaldrive"
 	// Maximum file size for zaparoo.txt (1MB) to prevent memory exhaustion
 	maxFileSize = 1 * 1024 * 1024
@@ -76,7 +76,7 @@ func NewReader(cfg *config.Instance) *Reader {
 
 func (*Reader) Metadata() readers.DriverMetadata {
 	return readers.DriverMetadata{
-		ID:                "external_drive",
+		ID:                "externaldrive",
 		DefaultEnabled:    false, // Opt-in only
 		DefaultAutoDetect: true,  // Automatically detects mounted devices
 		Description:       "External drive reader (USB sticks, SD cards, external HDDs)",
@@ -84,7 +84,7 @@ func (*Reader) Metadata() readers.DriverMetadata {
 }
 
 func (*Reader) IDs() []string {
-	return []string{DriverID}
+	return []string{"externaldrive", "external_drive"}
 }
 
 func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {

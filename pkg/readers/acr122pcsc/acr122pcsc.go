@@ -132,7 +132,7 @@ func (*ACR122PCSC) Metadata() readers.DriverMetadata {
 }
 
 func (*ACR122PCSC) IDs() []string {
-	return []string{"acr122_pcsc"}
+	return []string{"acr122pcsc", "acr122_pcsc"}
 }
 
 func (r *ACR122PCSC) Open(device config.ReadersConnect, iq chan<- readers.Scan) error {
@@ -388,7 +388,7 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 
 	acrs := make([]string, 0)
 	for _, r := range rs {
-		if strings.HasPrefix(r, "ACS ACR122") && !helpers.Contains(connected, "acr122_pcsc:"+r) {
+		if strings.HasPrefix(r, "ACS ACR122") && !helpers.Contains(connected, "acr122pcsc:"+r) {
 			acrs = append(acrs, r)
 		}
 	}
@@ -398,7 +398,7 @@ func (r *ACR122PCSC) Detect(connected []string) string {
 	}
 
 	log.Trace().Msgf("acr122 reader found: %s", acrs[0])
-	return "acr122_pcsc:" + acrs[0]
+	return "acr122pcsc:" + acrs[0]
 }
 
 func (r *ACR122PCSC) Device() string {

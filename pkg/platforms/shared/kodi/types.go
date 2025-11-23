@@ -19,16 +19,8 @@
 
 package kodi
 
-import "encoding/json"
-
-// URL scheme constants for Kodi media
-const (
-	SchemeKodiMovie   = "kodi-movie"
-	SchemeKodiEpisode = "kodi-episode"
-	SchemeKodiSong    = "kodi-song"
-	SchemeKodiAlbum   = "kodi-album"
-	SchemeKodiArtist  = "kodi-artist"
-	SchemeKodiShow    = "kodi-show"
+import (
+	"encoding/json"
 )
 
 // Player represents an active Kodi player
@@ -64,7 +56,8 @@ type Episode struct {
 type Song struct {
 	Label    string `json:"label"`
 	File     string `json:"file,omitempty"`
-	Artist   string `json:"artist"`
+	Artist   string `json:"displayartist"` // Use displayartist (string) instead of artist (array)
+	Album    string `json:"album"`
 	ID       int    `json:"songid"`
 	AlbumID  int    `json:"albumid"`
 	Duration int    `json:"duration"`
@@ -73,7 +66,7 @@ type Song struct {
 // Album represents an album in Kodi's library
 type Album struct {
 	Label  string `json:"label"`
-	Artist string `json:"artist"`
+	Artist string `json:"displayartist"` // Use displayartist (string) instead of artist (array)
 	ID     int    `json:"albumid"`
 	Year   int    `json:"year"`
 }
@@ -91,6 +84,7 @@ type APIMethod string
 const (
 	APIMethodPlayerOpen              APIMethod = "Player.Open"
 	APIMethodPlayerGetActivePlayers  APIMethod = "Player.GetActivePlayers"
+	APIMethodPlayerGetItem           APIMethod = "Player.GetItem"
 	APIMethodPlayerStop              APIMethod = "Player.Stop"
 	APIMethodVideoLibraryGetMovies   APIMethod = "VideoLibrary.GetMovies"
 	APIMethodVideoLibraryGetTVShows  APIMethod = "VideoLibrary.GetTVShows"
@@ -104,6 +98,9 @@ const (
 	// Playlist Management (for collections)
 	APIMethodPlaylistClear APIMethod = "Playlist.Clear"
 	APIMethodPlaylistAdd   APIMethod = "Playlist.Add"
+
+	// Application Control
+	APIMethodApplicationQuit APIMethod = "Application.Quit"
 )
 
 // APIPayload represents a Kodi JSON-RPC request
@@ -136,6 +133,8 @@ type Item struct {
 	TVShowID   int    `json:"tvshowid,omitempty"`
 	EpisodeID  int    `json:"episodeid,omitempty"`
 	SongID     int    `json:"songid,omitempty"`
+	AlbumID    int    `json:"albumid,omitempty"`
+	ArtistID   int    `json:"artistid,omitempty"`
 	PlaylistID int    `json:"playlistid,omitempty"`
 }
 
@@ -167,7 +166,8 @@ type VideoLibraryGetTVShowsResponse struct {
 
 // VideoLibraryGetEpisodesParams represents parameters for VideoLibrary.GetEpisodes API method
 type VideoLibraryGetEpisodesParams struct {
-	TVShowID int `json:"tvshowid"`
+	Properties []string `json:"properties,omitempty"`
+	TVShowID   int      `json:"tvshowid"`
 }
 
 // VideoLibraryGetEpisodesResponse represents the response from VideoLibrary.GetEpisodes
@@ -188,6 +188,26 @@ type AudioLibraryGetAlbumsResponse struct {
 // AudioLibraryGetArtistsResponse represents the response from AudioLibrary.GetArtists
 type AudioLibraryGetArtistsResponse struct {
 	Artists []Artist `json:"artists"`
+}
+
+// VideoLibraryGetMoviesParams represents parameters for VideoLibrary.GetMovies API method
+type VideoLibraryGetMoviesParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// VideoLibraryGetTVShowsParams represents parameters for VideoLibrary.GetTVShows API method
+type VideoLibraryGetTVShowsParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// AudioLibraryGetAlbumsParams represents parameters for AudioLibrary.GetAlbums API method
+type AudioLibraryGetAlbumsParams struct {
+	Properties []string `json:"properties,omitempty"`
+}
+
+// AudioLibraryGetArtistsParams represents parameters for AudioLibrary.GetArtists API method
+type AudioLibraryGetArtistsParams struct {
+	Properties []string `json:"properties,omitempty"`
 }
 
 // PlaylistClearParams represents parameters for Playlist.Clear API method
@@ -226,5 +246,31 @@ type FilterRule struct {
 
 // AudioLibraryGetSongsParams represents parameters for AudioLibrary.GetSongs API method
 type AudioLibraryGetSongsParams struct {
-	Filter *FilterRule `json:"filter,omitempty"`
+	Filter     *FilterRule `json:"filter,omitempty"`
+	Properties []string    `json:"properties,omitempty"`
+}
+
+// PlayerGetItemParams represents parameters for Player.GetItem API method
+type PlayerGetItemParams struct {
+	Properties []string `json:"properties"`
+	PlayerID   int      `json:"playerid"`
+}
+
+// PlayerItem represents the currently playing item
+type PlayerItem struct {
+	Label     string   `json:"label"`
+	Type      string   `json:"type"`
+	File      string   `json:"file,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Album     string   `json:"album,omitempty"`
+	ShowTitle string   `json:"showtitle,omitempty"`
+	Artist    []string `json:"artist,omitempty"`
+	Season    int      `json:"season,omitempty"`
+	Episode   int      `json:"episode,omitempty"`
+	Year      int      `json:"year,omitempty"`
+}
+
+// PlayerGetItemResponse represents the response from Player.GetItem
+type PlayerGetItemResponse struct {
+	Item PlayerItem `json:"item"`
 }

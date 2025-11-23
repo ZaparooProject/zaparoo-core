@@ -139,7 +139,7 @@ func TestCmdTitle(t *testing.T) {
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			} else if tt.expectedSystem != "" && tt.expectedSlug != "" {
 				// shouldError but validation passes - set up mocks to return no results
 				mockMediaDB.On("GetCachedSlugResolution",
@@ -317,7 +317,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 		mock.Anything, expectedSystem, expectedSlug, expectedTags,
 		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 		Return(nil).Maybe()
-	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	result, err := cmdTitle(mockPlatform, env)
 
@@ -481,7 +481,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			}
 
 			result, err := cmdTitle(mockPlatform, env)
@@ -629,7 +629,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
 				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 				Return(nil).Maybe()
-			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 			result, err := cmdTitle(mockPlatform, env)
 
@@ -741,8 +741,28 @@ func TestMightBeTitle(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "has extension - might be slug (file check runs first)",
+			name:     "has valid file extension - is a path not title",
 			input:    "snes/game.smc",
+			expected: false,
+		},
+		{
+			name:     "path with zip extension",
+			input:    "MAME/games/mslug.zip",
+			expected: false,
+		},
+		{
+			name:     "complex path with valid extension - gbc",
+			input:    "GameboyColor/@Game Boy Color SMDB 2022-05-12.zip/1 GBC US - A-L/Alone in the Dark (USA).gbc",
+			expected: false,
+		},
+		{
+			name:     "invalid extension with space - treated as title",
+			input:    "System/file.other thing",
+			expected: true,
+		},
+		{
+			name:     "invalid extension with dash - treated as title",
+			input:    "System/file.test-file",
 			expected: true,
 		},
 		{
@@ -758,6 +778,11 @@ func TestMightBeTitle(t *testing.T) {
 		{
 			name:     "asterisk in middle of title - not slug (Q*bert)",
 			input:    "atari2600/Q*bert",
+			expected: false,
+		},
+		{
+			name:     "windows backslash path",
+			input:    "SNES/roms\\mario.smc",
 			expected: false,
 		},
 		{
@@ -825,7 +850,7 @@ func TestSlugGeneration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := slugs.SlugifyString(tt.input)
+			result := slugs.Slugify(slugs.MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1383,7 +1408,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			Return(database.Media{Path: "/cached/path.smc"}, nil)
 
 		// Platform launch should be called with cached path
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		// SearchMediaBySlug should NOT be called when cache hits
 		result, err := cmdTitle(mockPlatform, env)
@@ -1448,7 +1473,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			int64(123), mock.AnythingOfType("string")). // strategy string
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		result, err := cmdTitle(mockPlatform, env)
 
@@ -1504,7 +1529,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		_, err := cmdTitle(mockPlatform, env1)
 		require.NoError(t, err)
@@ -1537,7 +1562,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		_, err = cmdTitle(mockPlatform, env2)
 		require.NoError(t, err)
@@ -1627,7 +1652,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			Return(nil).Maybe()
 
 		// Platform launch fails
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(assert.AnError)
 
 		_, err := cmdTitle(mockPlatform, env)
@@ -1801,7 +1826,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 			mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		result, err := cmdTitle(mockPlatform, env)
 

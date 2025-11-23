@@ -3,10 +3,8 @@
 package mistex
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
@@ -30,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -37,15 +37,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// arcadeCardLaunchCache stores the last arcade game launched via card to prevent duplicate tracker notifications.
+type arcadeCardLaunchCache struct {
+	timestamp time.Time
+	setname   string
+	mu        sync.RWMutex
+}
+
 type Platform struct {
-	tr             *tracker.Tracker
-	stopTr         func() error
-	activeMedia    func() *models.ActiveMedia
-	setActiveMedia func(*models.ActiveMedia)
-	trackedProcess *os.Process
-	kbd            linuxinput.Keyboard
-	gpd            linuxinput.Gamepad
-	processMu      sync.RWMutex
+	tr               *tracker.Tracker
+	stopTr           func() error
+	activeMedia      func() *models.ActiveMedia
+	setActiveMedia   func(*models.ActiveMedia)
+	trackedProcess   *os.Process
+	kbd              linuxinput.Keyboard
+	gpd              linuxinput.Gamepad
+	arcadeCardLaunch arcadeCardLaunchCache
+	processMu        sync.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -60,6 +68,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		libnfc.NewLegacyI2CReader(cfg),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		rs232barcode.NewReader(cfg),
 		tty2oled.NewReader(cfg, p),
 		mqtt.NewReader(cfg),
 		externaldrive.NewReader(cfg),
@@ -106,6 +115,7 @@ func (p *Platform) StartPost(
 	_ platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
@@ -115,6 +125,7 @@ func (p *Platform) StartPost(
 		p,
 		activeMedia,
 		setActiveMedia,
+		db,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to start tracker: %w", err)
@@ -204,6 +215,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    misterconfig.DataDir,
 		ConfigDir:  misterconfig.DataDir,
 		TempDir:    misterconfig.TempDir,
+		LogDir:     misterconfig.TempDir,
 		ZipsAsDirs: true,
 	}
 }
@@ -266,24 +278,6 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (p *Platform) PlayAudio(path string) error {
-	if !strings.HasSuffix(strings.ToLower(path), ".wav") {
-		return fmt.Errorf("unsupported audio format: %s", path)
-	}
-
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(helpers.DataDir(p), path)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	err := exec.CommandContext(ctx, "aplay", path).Start()
-	if err != nil {
-		return fmt.Errorf("failed to start audio playback: %w", err)
-	}
-	return nil
-}
-
 func (p *Platform) ActiveSystem() string {
 	return p.tr.ActiveSystem
 }
@@ -301,6 +295,14 @@ func (p *Platform) ActiveGamePath() string {
 }
 
 func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
+	// Handle menu specially - launch menu core directly
+	if strings.EqualFold(id, "menu") {
+		if err := LaunchMenu(); err != nil {
+			return fmt.Errorf("failed to launch menu: %w", err)
+		}
+		return nil
+	}
+
 	system, err := cores.LookupCore(id)
 	if err != nil {
 		return fmt.Errorf("failed to lookup system %s: %w", id, err)
@@ -313,7 +315,9 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 	return nil
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	if launcher == nil {
@@ -325,7 +329,14 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err := helpers.DoLaunch(&helpers.LaunchParams{
+		Config:         cfg,
+		Platform:       p,
+		SetActiveMedia: p.setActiveMedia,
+		Launcher:       launcher,
+		Path:           path,
+		DB:             db,
+	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -333,13 +344,20 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	return nil
 }
 
-func (p *Platform) KeyboardPress(name string) error {
-	code, ok := linuxinput.ToKeyboardCode(name)
-	if !ok {
-		return fmt.Errorf("unknown keyboard key: %s", name)
-	}
-	err := p.kbd.Press(code)
+func (p *Platform) KeyboardPress(arg string) error {
+	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
 	if err != nil {
+		return fmt.Errorf("failed to parse key combo: %w", err)
+	}
+
+	if isCombo {
+		if err := p.kbd.Combo(codes...); err != nil {
+			return fmt.Errorf("failed to press keyboard combo: %w", err)
+		}
+		return nil
+	}
+
+	if err := p.kbd.Press(codes[0]); err != nil {
 		return fmt.Errorf("failed to press keyboard key: %w", err)
 	}
 	return nil
@@ -396,4 +414,49 @@ func (*Platform) ShowPicker(
 	_ widgetmodels.PickerArgs,
 ) error {
 	return platforms.ErrNotSupported
+}
+
+// SetArcadeCardLaunch caches the arcade setname when launching via card.
+func (p *Platform) SetArcadeCardLaunch(setname string) {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+	p.arcadeCardLaunch.setname = setname
+	p.arcadeCardLaunch.timestamp = time.Now()
+	log.Debug().
+		Str("setname", setname).
+		Msg("cached arcade card launch")
+}
+
+// CheckAndClearArcadeCardLaunch checks if the setname was recently launched via card.
+// Returns true if there's a match within the last 15 seconds, false otherwise.
+// Clears the cache after checking to prevent stale suppressions.
+func (p *Platform) CheckAndClearArcadeCardLaunch(setname string) bool {
+	p.arcadeCardLaunch.mu.Lock()
+	defer p.arcadeCardLaunch.mu.Unlock()
+
+	// Check if cache is empty
+	if p.arcadeCardLaunch.setname == "" {
+		return false
+	}
+
+	// Check if setnames match
+	if p.arcadeCardLaunch.setname != setname {
+		return false
+	}
+
+	// Check if within time window (15 seconds)
+	elapsed := time.Since(p.arcadeCardLaunch.timestamp)
+	if elapsed > 15*time.Second {
+		// Cache is stale, clear it
+		p.arcadeCardLaunch.setname = ""
+		return false
+	}
+
+	// Match found - clear cache and return true
+	log.Debug().
+		Str("setname", setname).
+		Dur("elapsed", elapsed).
+		Msg("suppressing duplicate arcade notification")
+	p.arcadeCardLaunch.setname = ""
+	return true
 }

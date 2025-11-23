@@ -230,8 +230,11 @@ func (*Reader) Metadata() readers.DriverMetadata {
 func (*Reader) IDs() []string {
 	return []string{
 		"pn532",
+		"pn532uart",
 		"pn532_uart",
+		"pn532i2c",
 		"pn532_i2c",
+		"pn532spi",
 		"pn532_spi",
 	}
 }
@@ -412,6 +415,14 @@ func (r *Reader) Close() error {
 
 	// Wait for session goroutine to complete
 	r.wg.Wait()
+
+	// Close the underlying device to release hardware resources
+	if r.device != nil {
+		err := r.device.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close PN532 device: %w", err)
+		}
+	}
 
 	return nil
 }

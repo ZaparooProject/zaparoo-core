@@ -15,7 +15,7 @@ const (
 	LegacyMappingsPath = SDRootDir + "/nfc.csv"
 	TokenReadFile      = "/tmp/TOKENREAD" //nolint:gosec // Zaparoo token, not credentials
 	DataDir            = SDRootDir + "/zaparoo"
-	ArcadeDbURL        = "https://api.github.com/repositories/521644036/contents/ArcadeDatabase_CSV"
+	ArcadeDbURL        = "https://api.github.com/repos/MiSTer-devel/ArcadeDatabase_MiSTer/contents"
 	ArcadeDbFile       = "ArcadeDatabase.csv"
 	ScriptsDir         = SDRootDir + "/Scripts"
 	CmdInterface       = "/dev/MiSTer_cmd"
@@ -78,10 +78,17 @@ var GamesFolders = []string{
 	"/media/fat",
 }
 
+var CustomFolders = []string{
+	"/media/fat/_Homebrew", // Taki homebrew games
+}
+
 // FIXME: splitting this out of the platform so it can be called without
 // passing platform to the launch/test launcher functions. better solution
 // would be to update the platform interface to give launchers methods
 // access to the platform
+
 func RootDirs(cfg *config.Instance) []string {
-	return append(cfg.IndexRoots(), GamesFolders...)
+	folders := cfg.IndexRoots()
+	folders = append(folders, CustomFolders...)
+	return append(folders, GamesFolders...)
 }

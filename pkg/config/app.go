@@ -32,9 +32,11 @@ const (
 	CfgFile              = "config.toml"
 	AuthFile             = "auth.toml"
 	UserDir              = "user"
+	LogsDir              = "logs"
 	APIRequestTimeout    = 30 * time.Second
 	SuccessSoundFilename = "success.wav"
 	FailSoundFilename    = "fail.wav"
+	LimitSoundFilename   = "limit.wav"
 	AssetsDir            = "assets"
 	MappingsDir          = "mappings"
 	LaunchersDir         = "launchers"

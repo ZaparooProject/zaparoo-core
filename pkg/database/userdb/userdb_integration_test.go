@@ -166,3 +166,104 @@ func TestMappingCRUD_Integration(t *testing.T) {
 	require.NoError(t, err, "Should be able to get all mappings after deletion")
 	assert.Empty(t, finalMappings, "Should have 0 mappings after deletion")
 }
+
+func TestUserDB_CleanupHistory_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Add test history entries with different timestamps
+	now := time.Now()
+	oldEntry := database.HistoryEntry{
+		Time:       now.AddDate(0, 0, -60), // 60 days old
+		Type:       "nfc",
+		TokenID:    "old-token",
+		TokenValue: "old-value",
+		TokenData:  "old-data",
+		Success:    true,
+	}
+	recentEntry := database.HistoryEntry{
+		Time:       now.AddDate(0, 0, -10), // 10 days old
+		Type:       "nfc",
+		TokenID:    "recent-token",
+		TokenValue: "recent-value",
+		TokenData:  "recent-data",
+		Success:    true,
+	}
+	veryRecentEntry := database.HistoryEntry{
+		Time:       now,
+		Type:       "nfc",
+		TokenID:    "very-recent-token",
+		TokenValue: "very-recent-value",
+		TokenData:  "very-recent-data",
+		Success:    true,
+	}
+
+	// Add all entries
+	err := userDB.AddHistory(&oldEntry)
+	require.NoError(t, err)
+	err = userDB.AddHistory(&recentEntry)
+	require.NoError(t, err)
+	err = userDB.AddHistory(&veryRecentEntry)
+	require.NoError(t, err)
+
+	// Verify all 3 entries exist
+	allHistory, err := userDB.GetHistory(0)
+	require.NoError(t, err)
+	assert.Len(t, allHistory, 3, "Should have 3 history entries before cleanup")
+
+	// Run cleanup with 30-day retention
+	rowsDeleted, err := userDB.CleanupHistory(30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rowsDeleted, "Should delete 1 old entry (60 days old)")
+
+	// Verify only 2 entries remain
+	remainingHistory, err := userDB.GetHistory(0)
+	require.NoError(t, err)
+	assert.Len(t, remainingHistory, 2, "Should have 2 history entries after cleanup")
+
+	// Verify the old entry was deleted (remaining entries should be recent and very recent)
+	for _, entry := range remainingHistory {
+		assert.NotEqual(t, "old-token", entry.TokenID, "Old entry should have been deleted")
+	}
+
+	// Run cleanup again - should delete nothing
+	rowsDeleted, err = userDB.CleanupHistory(30)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), rowsDeleted, "Should delete 0 entries on second run")
+
+	// Verify still 2 entries
+	finalHistory, err := userDB.GetHistory(0)
+	require.NoError(t, err)
+	assert.Len(t, finalHistory, 2, "Should still have 2 history entries")
+}
+
+func TestUserDB_CleanupHistory_ZeroRetention_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Add old test entry
+	oldEntry := database.HistoryEntry{
+		Time:       time.Now().AddDate(0, 0, -90),
+		Type:       "nfc",
+		TokenID:    "test-token",
+		TokenValue: "test-value",
+		TokenData:  "test-data",
+		Success:    true,
+	}
+	err := userDB.AddHistory(&oldEntry)
+	require.NoError(t, err)
+
+	// Run cleanup with 0 retention (unlimited) - should delete old entries
+	rowsDeleted, err := userDB.CleanupHistory(0)
+	require.NoError(t, err)
+
+	// With 0 days retention, it should delete everything older than "now"
+	// Since our entry is from the past, it should be deleted
+	assert.Positive(t, rowsDeleted, "Should delete entry with 0 retention")
+}

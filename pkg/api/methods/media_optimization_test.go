@@ -104,7 +104,7 @@ func TestHandleMedia_OptimizationStatus(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status calls
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, tt.optimizationStatusErr)
@@ -168,17 +168,19 @@ func TestHandleMedia_IndexingAndOptimizationPriority(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
 	mockUserDB := &helpers.MockUserDBI{}
 	mockPlatform := mocks.NewMockPlatform()
-	testState, _ := state.NewState(mockPlatform)
+	testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	// Both indexing and optimization are "running"
 	mockMediaDB.On("GetOptimizationStatus").Return("running", nil)
 
-	// Set indexing as active
-	statusInstance.indexing = true
-	statusInstance.totalSteps = 10
-	statusInstance.currentStep = 5
-	statusInstance.currentDesc = "Indexing files"
-	statusInstance.totalFiles = 1000
+	// Set indexing as active - use set() to avoid data race
+	statusInstance.set(indexingStatusVals{
+		indexing:    true,
+		totalSteps:  10,
+		currentStep: 5,
+		currentDesc: "Indexing files",
+		totalFiles:  1000,
+	})
 
 	db := &database.Database{
 		MediaDB: mockMediaDB,
@@ -246,13 +248,12 @@ func TestHandleMedia_OptimizationStatusIntegration(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
 			mockUserDB := &helpers.MockUserDBI{}
 			mockPlatform := mocks.NewMockPlatform()
-			testState, _ := state.NewState(mockPlatform)
+			testState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			// Mock optimization status
 			mockMediaDB.On("GetOptimizationStatus").Return(tt.optimizationStatus, nil)
 
-			// Mock normal operation
-			statusInstance.indexing = false
+			ClearIndexingStatus()
 			mockMediaDB.On("GetLastGenerated").Return(time.Now(), nil)
 			mockMediaDB.On("GetTotalMediaCount").Return(100, nil)
 

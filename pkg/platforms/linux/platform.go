@@ -34,6 +34,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
@@ -44,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/mqtt"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/opticaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/pn532"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/rs232barcode"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/simpleserial"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/tty2oled"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -69,6 +71,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 		tty2oled.NewReader(cfg, p),
 		file.NewReader(cfg),
 		simpleserial.NewReader(cfg),
+		rs232barcode.NewReader(cfg),
 		pn532.NewReader(cfg),
 		libnfc.NewACR122Reader(cfg),
 		libnfc.NewLegacyUARTReader(cfg),
@@ -97,6 +100,7 @@ func (p *Platform) StartPost(
 	launcherManager platforms.LauncherContextManager,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	_ *database.Database,
 ) error {
 	p.launcherManager = launcherManager
 	p.activeMedia = activeMedia
@@ -121,6 +125,7 @@ func (*Platform) Settings() platforms.Settings {
 		DataDir:    filepath.Join(xdg.DataHome, config.AppName),
 		ConfigDir:  filepath.Join(xdg.ConfigHome, config.AppName),
 		TempDir:    filepath.Join(os.TempDir(), config.AppName),
+		LogDir:     filepath.Join(xdg.DataHome, config.AppName, config.LogsDir),
 		ZipsAsDirs: false,
 	}
 }
@@ -167,15 +172,13 @@ func (*Platform) ReturnToMenu() error {
 	return nil
 }
 
-func (*Platform) PlayAudio(_ string) error {
-	return nil
-}
-
 func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 	return errors.New("launching systems is not supported")
 }
 
-func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *platforms.Launcher) error {
+func (p *Platform) LaunchMedia(
+	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+) error {
 	log.Info().Msgf("launch media: %s", path)
 
 	var err error
@@ -190,7 +193,14 @@ func (p *Platform) LaunchMedia(cfg *config.Instance, path string, launcher *plat
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(cfg, p, p.setActiveMedia, launcher, path)
+	err = helpers.DoLaunch(&helpers.LaunchParams{
+		Config:         cfg,
+		Platform:       p,
+		SetActiveMedia: p.setActiveMedia,
+		Launcher:       launcher,
+		Path:           path,
+		DB:             db,
+	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -224,6 +234,22 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
+		NewSteamLauncher(),
+		{
+			ID:        "WebBrowser",
+			Schemes:   []string{"http", "https"},
+			Lifecycle: platforms.LifecycleFireAndForget,
+			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+				cmd := exec.CommandContext(context.Background(), "xdg-open", path)
+				err := cmd.Start()
+				if err != nil {
+					return nil, fmt.Errorf("failed to open URL in browser: %w", err)
+				}
+				return nil, nil //nolint:nilnil // Browser launches don't return a process handle
+			},
+		},
+		NewLutrisLauncher(),
+		NewHeroicLauncher(),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -122,7 +123,14 @@ func (s *Startup) Save() error {
 		contents += "\n"
 	}
 
-	err := os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
+	// Ensure parent directory exists before writing
+	dir := filepath.Dir(config.StartupFile)
+	err := os.MkdirAll(dir, 0o750)
+	if err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	err = os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
 	if err != nil {
 		return fmt.Errorf("failed to write startup file %s: %w", config.StartupFile, err)
 	}

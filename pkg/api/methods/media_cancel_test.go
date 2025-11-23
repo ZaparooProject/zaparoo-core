@@ -88,7 +88,7 @@ func TestHandleMediaGenerateCancel(t *testing.T) {
 			}
 
 			cfg := &config.Instance{}
-			appState, _ := state.NewState(mockPlatform)
+			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 			env := requests.RequestEnv{
 				Platform: mockPlatform,
@@ -159,7 +159,7 @@ func TestMediaGenerateCancel_ConcurrentAccess(t *testing.T) {
 	}
 
 	cfg := &config.Instance{}
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Platform: mockPlatform,
@@ -255,7 +255,7 @@ func TestMediaGenerateCancel_StatusManagement(t *testing.T) {
 	}
 
 	cfg := &config.Instance{}
-	appState, _ := state.NewState(mockPlatform)
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
 
 	env := requests.RequestEnv{
 		Platform: mockPlatform,
@@ -327,14 +327,15 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	defer cleanup()
 
 	cfg := &config.Instance{}
-	appState, notifications := state.NewState(mockPlatform)
+	appState, notifications := state.NewState(mockPlatform, "test-boot-uuid")
 
 	generateEnv := requests.RequestEnv{
 		Platform: mockPlatform,
 		Config:   cfg,
 		State:    appState,
 		Database: db,
-		Params:   []byte(`{"systems": ["NES"]}`), // Single system for faster test
+		// Remove system filter to ensure indexing takes long enough to be reliably cancelled
+		Params: []byte(`{}`),
 	}
 
 	cancelEnv := requests.RequestEnv{
@@ -353,11 +354,27 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result) // HandleGenerateMedia returns nil on success
 
-	// Wait briefly for indexing to start or complete
-	time.Sleep(50 * time.Millisecond)
+	// Poll to see if we can catch the process running
+	timeout := time.After(1 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 
-	// Check if indexing is still running or has completed
-	isRunning := statusInstance.isRunning()
+	caughtRunning := false
+Loop:
+	for {
+		select {
+		case <-timeout:
+			// Timed out waiting for it to start
+			break Loop
+		case <-ticker.C:
+			if statusInstance.isRunning() {
+				caughtRunning = true
+				break Loop
+			}
+		}
+	}
+
+	isRunning := caughtRunning
 
 	if isRunning {
 		// Indexing is still running, test cancellation
@@ -376,21 +393,9 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 		assert.Equal(t, "Media indexing cancelled successfully", message)
 
 		// Wait for cancellation to complete
-		timeout := time.After(2 * time.Second)
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-
-		var cancellationCompleted bool
-		for !cancellationCompleted {
-			select {
-			case <-timeout:
-				t.Fatal("Cancellation did not complete within timeout")
-			case <-ticker.C:
-				if !statusInstance.isRunning() {
-					cancellationCompleted = true
-				}
-			}
-		}
+		require.Eventually(t, func() bool {
+			return !statusInstance.isRunning()
+		}, 2*time.Second, 10*time.Millisecond, "cancellation did not complete within timeout")
 
 		assert.False(t, statusInstance.isRunning(), "Status should be cleared after cancellation")
 	} else {
@@ -398,6 +403,12 @@ func TestMediaIndexingCancellation_Integration(t *testing.T) {
 		t.Log("Indexing completed quickly, testing post-completion cancellation")
 		assert.False(t, statusInstance.isRunning(), "Status should be cleared after completion")
 	}
+
+	// Wait for the indexing goroutine to fully complete (including optimization)
+	// before cleanup runs to avoid "attempt to write a readonly database" errors
+	require.Eventually(t, func() bool {
+		return !statusInstance.isRunning()
+	}, 5*time.Second, 50*time.Millisecond, "indexing and optimization did not complete")
 
 	// Drain any remaining notifications to prevent goroutine leak
 	go func() {

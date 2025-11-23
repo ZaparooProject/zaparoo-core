@@ -203,13 +203,13 @@ func TestNoSlugCollisions(t *testing.T) {
 	for sysID, sys := range Systems {
 		keys := []string{
 			strings.ToLower(sys.ID),
-			slugs.SlugifyString(sys.ID),
+			slugs.Slugify(slugs.MediaTypeGame, sys.ID),
 		}
 
 		for _, alias := range sys.Aliases {
 			keys = append(keys,
 				strings.ToLower(alias),
-				slugs.SlugifyString(alias),
+				slugs.Slugify(slugs.MediaTypeGame, alias),
 			)
 		}
 
@@ -300,6 +300,77 @@ func TestLookupSystemAliases(t *testing.T) {
 			assert.Equal(t, tt.wantID, sys.ID)
 		})
 	}
+}
+
+// TestTVEpisodeBackwardCompatibility verifies that the old "TV" system ID
+// still resolves correctly to TVEpisode for backward compatibility
+func TestTVEpisodeBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		wantID string
+	}{
+		{"TV alias (old ID)", "TV", "TVEpisode"},
+		{"TV lowercase", "tv", "TVEpisode"},
+		{"TVEpisode canonical", "TVEpisode", "TVEpisode"},
+		{"TVEpisode lowercase", "tvepisode", "TVEpisode"},
+		{"television slug", "television", "TVEpisode"},
+		{"tvchannel slug", "tvchannel", "TVEpisode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sys, err := LookupSystem(tt.input)
+			require.NoError(t, err, "LookupSystem(%q) should not error", tt.input)
+			require.NotNil(t, sys, "LookupSystem(%q) should return a system", tt.input)
+			assert.Equal(t, tt.wantID, sys.ID, "LookupSystem(%q) should resolve to %s", tt.input, tt.wantID)
+		})
+	}
+
+	// Verify that TV and TVEpisode resolve to the exact same system
+	tvSys, err := LookupSystem("TV")
+	require.NoError(t, err)
+	tvEpisodeSys, err := LookupSystem("TVEpisode")
+	require.NoError(t, err)
+	assert.Equal(t, tvEpisodeSys.ID, tvSys.ID, "TV and TVEpisode should resolve to the same system")
+	assert.Contains(t, tvSys.Aliases, "TV", "TVEpisode system should have 'TV' as an alias")
+}
+
+func TestMusicTrackBackwardCompatibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		wantID string
+	}{
+		{"Music alias (old ID)", "Music", "MusicTrack"},
+		{"Music lowercase", "music", "MusicTrack"},
+		{"MusicTrack canonical", "MusicTrack", "MusicTrack"},
+		{"MusicTrack lowercase", "musictrack", "MusicTrack"},
+		{"musicfile slug", "musicfile", "MusicTrack"},
+		{"song slug", "song", "MusicTrack"},
+		{"songs slug", "songs", "MusicTrack"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sys, err := LookupSystem(tt.input)
+			require.NoError(t, err, "LookupSystem(%q) should not error", tt.input)
+			require.NotNil(t, sys, "LookupSystem(%q) should return a system", tt.input)
+			assert.Equal(t, tt.wantID, sys.ID, "LookupSystem(%q) should resolve to %s", tt.input, tt.wantID)
+		})
+	}
+
+	// Verify that Music and MusicTrack resolve to the exact same system
+	musicSys, err := LookupSystem("Music")
+	require.NoError(t, err)
+	musicTrackSys, err := LookupSystem("MusicTrack")
+	require.NoError(t, err)
+	assert.Equal(t, musicTrackSys.ID, musicSys.ID, "Music and MusicTrack should resolve to the same system")
+	assert.Contains(t, musicSys.Aliases, "Music", "MusicTrack system should have 'Music' as an alias")
 }
 
 // TestLookupSystemNaturalLanguage verifies natural language lookups using manufacturer prefixes
@@ -455,14 +526,14 @@ func TestNoRedundantSlugs(t *testing.T) {
 		autoDerived := make(map[string]bool)
 
 		// Add slugified ID
-		slugifiedID := slugs.SlugifyString(sys.ID)
+		slugifiedID := slugs.Slugify(slugs.MediaTypeGame, sys.ID)
 		if slugifiedID != "" {
 			autoDerived[slugifiedID] = true
 		}
 
 		// Add slugified aliases
 		for _, alias := range sys.Aliases {
-			slugifiedAlias := slugs.SlugifyString(alias)
+			slugifiedAlias := slugs.Slugify(slugs.MediaTypeGame, alias)
 			if slugifiedAlias != "" {
 				autoDerived[slugifiedAlias] = true
 			}
@@ -593,5 +664,134 @@ func BenchmarkLookupSystemSlug(b *testing.B) {
 func BenchmarkLookupSystemAlias(b *testing.B) {
 	for range b.N {
 		_, _ = LookupSystem("MegaDrive")
+	}
+}
+
+// TestAllSystemsHaveMediaType verifies that all systems have a valid MediaType
+func TestAllSystemsHaveMediaType(t *testing.T) {
+	t.Parallel()
+
+	for systemID, system := range Systems {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			// GetMediaType should always return a valid MediaType (never empty)
+			mediaType := system.GetMediaType()
+			assert.NotEmpty(t, mediaType, "System %s should have a MediaType (via GetMediaType)", systemID)
+
+			// MediaType should be one of the defined constants
+			validTypes := map[MediaType]bool{
+				MediaTypeGame:   true,
+				MediaTypeMovie:  true,
+				MediaTypeTVShow: true,
+				MediaTypeMusic:  true,
+				MediaTypeImage:  true,
+				MediaTypeAudio:  true,
+				MediaTypeVideo:  true,
+			}
+			assert.True(t, validTypes[mediaType],
+				"System %s has invalid MediaType %q, must be one of: Game, Movie, TVShow, Music, Image, Audio, Video",
+				systemID, mediaType)
+		})
+	}
+}
+
+// TestMediaTypeSystems verifies that media-specific systems have correct MediaType
+func TestMediaTypeSystems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		systemID string
+		wantType MediaType
+	}{
+		{SystemVideo, MediaTypeVideo},
+		{SystemAudio, MediaTypeAudio},
+		{SystemMovie, MediaTypeMovie},
+		{SystemTVEpisode, MediaTypeTVShow},
+		{SystemTVShow, MediaTypeTVShow},
+		{SystemMusicTrack, MediaTypeMusic},
+		{SystemMusicArtist, MediaTypeMusic},
+		{SystemMusicAlbum, MediaTypeMusic},
+		{SystemImage, MediaTypeImage},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.systemID, func(t *testing.T) {
+			t.Parallel()
+
+			system, err := GetSystem(tt.systemID)
+			require.NoError(t, err, "System %s should exist", tt.systemID)
+
+			// Check explicit MediaType field
+			assert.Equal(t, tt.wantType, system.MediaType,
+				"System %s should have MediaType %s", tt.systemID, tt.wantType)
+
+			// Check GetMediaType method
+			assert.Equal(t, tt.wantType, system.GetMediaType(),
+				"System %s GetMediaType() should return %s", tt.systemID, tt.wantType)
+		})
+	}
+}
+
+// TestGameSystemsDefaultToGame verifies that game/console systems default to MediaTypeGame
+func TestGameSystemsDefaultToGame(t *testing.T) {
+	t.Parallel()
+
+	// Test a selection of well-known game systems
+	gameSystems := []string{
+		SystemNES,
+		SystemSNES,
+		SystemGenesis,
+		SystemPSX,
+		SystemPS2,
+		SystemNintendo64,
+		SystemGameboy,
+		SystemGBA,
+		SystemGameCube,
+		SystemDreamcast,
+		SystemAtari2600,
+		SystemAmiga,
+		SystemC64,
+		SystemDOS,
+		SystemArcade,
+	}
+
+	for _, systemID := range gameSystems {
+		t.Run(systemID, func(t *testing.T) {
+			t.Parallel()
+
+			system, err := GetSystem(systemID)
+			require.NoError(t, err, "System %s should exist", systemID)
+
+			// GetMediaType should return Game (either explicit or default)
+			assert.Equal(t, MediaTypeGame, system.GetMediaType(),
+				"Game system %s should have MediaType Game", systemID)
+		})
+	}
+}
+
+// TestMediaTypeStringValues verifies that MediaType constants have expected string values
+func TestMediaTypeStringValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mediaType MediaType
+		wantStr   string
+	}{
+		{MediaTypeGame, "Game"},
+		{MediaTypeMovie, "Movie"},
+		{MediaTypeTVShow, "TVShow"},
+		{MediaTypeMusic, "Music"},
+		{MediaTypeImage, "Image"},
+		{MediaTypeAudio, "Audio"},
+		{MediaTypeVideo, "Video"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.wantStr, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantStr, string(tt.mediaType),
+				"MediaType constant should have correct string value")
+		})
 	}
 }

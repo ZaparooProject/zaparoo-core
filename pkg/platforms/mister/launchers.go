@@ -16,12 +16,14 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/cores"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker/activegame"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
 
@@ -131,6 +133,32 @@ func launch(pl platforms.Platform, coreID string) func(*config.Instance, string)
 			return nil, fmt.Errorf("failed to set active game: %w", err)
 		}
 		return nil, nil
+	}
+}
+
+// arcadePlatform is a small interface for platforms that support arcade setname caching.
+type arcadePlatform interface {
+	SetArcadeCardLaunch(setname string)
+}
+
+// launchArcade provides a specialized launch function for the Arcade system.
+// It handles MRA file parsing and setname caching before delegating to the generic launch logic.
+func launchArcade(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
+	genericLauncher := launch(pl, coreID)
+
+	return func(cfg *config.Instance, path string) (*os.Process, error) {
+		if strings.HasSuffix(strings.ToLower(path), ".mra") {
+			if arcadePl, ok := pl.(arcadePlatform); ok {
+				mra, err := mgls.ReadMRA(path)
+				if err != nil {
+					log.Warn().Err(err).Str("path", path).Msg("failed to parse MRA for setname caching")
+				} else if mra.SetName != "" {
+					arcadePl.SetArcadeCardLaunch(mra.SetName)
+				}
+			}
+		}
+
+		return genericLauncher(cfg, path)
 	}
 }
 
@@ -403,7 +431,7 @@ func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, erro
 		restoreFunc := createConsoleRestoreFunc(pl, cm)
 
 		// Start process and manage lifecycle
-		return runTrackedProcess(launcherCtx, pl, cmd, restoreFunc, "fvp")
+		return runTrackedProcess(pl, cmd, restoreFunc, "fvp")
 	}
 }
 
@@ -439,8 +467,10 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Extract game target ID from virtual path: scummvm://targetid/Game Name
-		targetID := strings.TrimPrefix(path, "scummvm://")
-		targetID = strings.SplitN(targetID, "/", 2)[0]
+		targetID, err := virtualpath.ExtractSchemeID(path, shared.SchemeScummVM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract ScummVM target ID from path: %w", err)
+		}
 
 		if targetID == "" {
 			return nil, errors.New("no ScummVM target ID specified in path")
@@ -493,7 +523,7 @@ func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, er
 		}
 
 		// Start process and manage lifecycle (wraps with nice/setsid)
-		return runTrackedProcess(launcherCtx, pl, cmd, restoreWithMIDI, "scummvm")
+		return runTrackedProcess(pl, cmd, restoreWithMIDI, "scummvm")
 	}
 }
 
@@ -502,7 +532,7 @@ func createScummVMLauncher(pl *Platform) platforms.Launcher {
 	return platforms.Launcher{
 		ID:                 "ScummVM",
 		SystemID:           systemdefs.SystemScummVM,
-		Schemes:            []string{"scummvm"},
+		Schemes:            []string{shared.SchemeScummVM},
 		SkipFilesystemScan: true,
 		Lifecycle:          platforms.LifecycleTracked,
 		Scanner:            scanScummVMGames,
@@ -846,6 +876,20 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			Folders:    []string{"NeoGeo-CD", "NEOGEO"},
 			Extensions: []string{".cue", ".chd"},
 			Launch:     launch(pl, systemdefs.SystemNeoGeoCD),
+		},
+		{
+			ID:         systemdefs.SystemNeoGeoPocket,
+			SystemID:   systemdefs.SystemNeoGeoPocket,
+			Folders:    []string{"NGP"},
+			Extensions: []string{".ngp"},
+			Launch:     launch(pl, systemdefs.SystemNeoGeoPocket),
+		},
+		{
+			ID:         systemdefs.SystemNeoGeoPocketColor,
+			SystemID:   systemdefs.SystemNeoGeoPocketColor,
+			Folders:    []string{"NGPC"},
+			Extensions: []string{".ngc"},
+			Launch:     launch(pl, systemdefs.SystemNeoGeoPocketColor),
 		},
 		{
 			ID:         systemdefs.SystemNES,
@@ -1453,7 +1497,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			SystemID:   systemdefs.SystemArcade,
 			Folders:    []string{"_Arcade"},
 			Extensions: []string{".mra"},
-			Launch:     launch(pl, systemdefs.SystemArcade),
+			Launch:     launchArcade(pl, systemdefs.SystemArcade),
 		},
 		{
 			ID:         systemdefs.SystemArduboy,

@@ -71,6 +71,13 @@ const (
 	StopForConsoleReset
 )
 
+// Running instance identifiers for launchers that communicate with persistent applications.
+// Used in Launcher.UsesRunningInstance to indicate which app instance the launcher targets.
+const (
+	// InstanceKodi identifies launchers that send commands to a running Kodi instance
+	InstanceKodi = "kodi"
+)
+
 const (
 	PlatformIDBatocera  = "batocera"
 	PlatformIDBazzite   = "bazzite"
@@ -141,9 +148,6 @@ type ScanResult struct {
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
-	// Test function returns true if file looks supported by this launcher.
-	// It's checked after all standard extension and folder checks.
-	Test func(*config.Instance, string) bool
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
 	Launch func(*config.Instance, string) (*os.Process, error)
@@ -156,6 +160,16 @@ type Launcher struct {
 	// Optional function to perform custom media scanning. Takes the list of
 	// results from the standard scan, if any, and returns the final list.
 	Scanner func(context.Context, *config.Instance, string, []ScanResult) ([]ScanResult, error)
+	// Test function returns true if file looks supported by this launcher.
+	// It's checked after all standard extension and folder checks.
+	Test func(*config.Instance, string) bool
+	// UsesRunningInstance identifies which running application instance this launcher
+	// communicates with (e.g., "kodi", "plex"). Empty string means the launcher starts
+	// its own process. When non-empty, platforms should not kill the running app if both
+	// current and new launchers share the same instance identifier. Example: All Kodi
+	// launchers use "kodi" to indicate they send JSON-RPC commands to the same running
+	// Kodi instance rather than launching separate processes.
+	UsesRunningInstance string
 	// Unique ID of the launcher, visible to user.
 	ID string
 	// System associated with this launcher.
@@ -164,10 +178,12 @@ type Launcher struct {
 	// TODO: Support absolute paths?
 	// TODO: rename RootDirs
 	Folders []string
-	// Extensions to match for files during a standard scan.
-	Extensions []string
 	// Accepted schemes for URI-style launches.
 	Schemes []string
+	// Extensions to match for files during a standard scan.
+	Extensions []string
+	// Lifecycle determines how the launcher process is managed.
+	Lifecycle LauncherLifecycle
 	// If true, all resolved paths must be in the allow list before they
 	// can be launched.
 	AllowListOnly bool
@@ -176,8 +192,6 @@ type Launcher struct {
 	// Use for launchers that rely entirely on custom scanners (e.g., Batocera
 	// gamelist.xml, Kodi API queries) and don't need filesystem scanning.
 	SkipFilesystemScan bool
-	// Lifecycle determines how the launcher process is managed.
-	Lifecycle LauncherLifecycle
 }
 
 // Settings defines all simple settings/configuration values available for a
@@ -191,9 +205,12 @@ type Settings struct {
 	// WARNING: This value should be accessed using the ConfigDir function in
 	// the utils package.
 	ConfigDir string
-	// TempDir returns a temporary directory where the logs are stored and any
-	// files used for inter-process communication. Expect it to be deleted.
+	// TempDir returns a temporary directory for files used for inter-process
+	// communication such as PID files and temporary binaries. Expect it to be
+	// deleted.
 	TempDir string
+	// LogDir returns the directory where persistent log files are stored.
+	LogDir string
 	// ZipsAsDir returns true if this platform treats .zip files as if they
 	// were directories for the purpose of launching media.
 	ZipsAsDirs bool
@@ -214,6 +231,7 @@ type Platform interface {
 		LauncherContextManager,
 		func() *models.ActiveMedia,
 		func(*models.ActiveMedia),
+		*database.Database,
 	) error
 	// Stop runs any necessary cleanup tasks before the rest of the service
 	// starts shutting down.
@@ -243,17 +261,13 @@ type Platform interface {
 	// SetTrackedProcess stores a process handle for lifecycle management.
 	// Used by DoLaunch to track processes that can be killed later.
 	SetTrackedProcess(*os.Process)
-	// PlayAudio plays an audio file at the given path. A relative path will be
-	// resolved using the data directory assets folder as the base. This
-	// function does not block until the audio finishes.
-	PlayAudio(string) error
 	// LaunchSystem launches a system by ID. This generally means, if a
 	// platform even has the capability, attempt to launch the default or most
 	// appropriate launcher for a given system, without any media loaded.
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches some media by path and sets the active media if it
 	// was successful. Pass nil for launcher to auto-detect, or a specific Launcher.
-	LaunchMedia(*config.Instance, string, *Launcher) error
+	LaunchMedia(*config.Instance, string, *Launcher, *database.Database) error
 	// KeyboardPress presses and then releases a single keyboard button on a
 	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error

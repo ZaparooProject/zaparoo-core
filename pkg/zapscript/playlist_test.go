@@ -24,8 +24,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,4 +120,154 @@ TitleB=Song 1`,
 			}
 		})
 	}
+}
+
+// TestCmdPlaylistOpen_NoArgs tests playlist.open command behavior with no arguments
+func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		activePlaylist   *playlists.Playlist
+		expectedError    string
+		expectPickerCall bool
+	}{
+		{
+			name: "no args with active playlist shows picker",
+			activePlaylist: &playlists.Playlist{
+				ID:   "test-playlist",
+				Name: "Test Playlist",
+				Items: []playlists.PlaylistItem{
+					{Name: "Item 1", ZapScript: "**test1"},
+					{Name: "Item 2", ZapScript: "**test2"},
+					{Name: "Item 3", ZapScript: "**test3"},
+				},
+				Index:   1, // Currently at second item
+				Playing: true,
+			},
+			expectPickerCall: true,
+		},
+		{
+			name:           "no args with no active playlist returns error",
+			activePlaylist: nil,
+			expectedError:  "no active playlist to open",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mockPlatform := mocks.NewMockPlatform()
+			cfg := &config.Instance{}
+
+			// Mock ShowPicker if we expect it to be called
+			if tt.expectPickerCall {
+				mockPlatform.On("ShowPicker", cfg, mock.MatchedBy(func(args models.PickerArgs) bool {
+					// Verify picker shows the active playlist
+					return args.Title == tt.activePlaylist.Name &&
+						len(args.Items) == len(tt.activePlaylist.Items) &&
+						args.Selected == tt.activePlaylist.Index
+				})).Return(nil)
+			}
+
+			// Create playlist queue channel
+			playlistQueue := make(chan *playlists.Playlist, 1)
+
+			env := platforms.CmdEnv{
+				Cmd: parser.Command{
+					Name: "playlist.open",
+					Args: []string{}, // No arguments!
+				},
+				Cfg: cfg,
+				Playlist: playlists.PlaylistController{
+					Active: tt.activePlaylist,
+					Queue:  playlistQueue,
+				},
+			}
+
+			result, err := cmdPlaylistOpen(mockPlatform, env)
+
+			if tt.expectedError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedError)
+			} else {
+				require.NoError(t, err)
+				assert.True(t, result.PlaylistChanged)
+				assert.Equal(t, tt.activePlaylist, result.Playlist)
+
+				// Verify playlist was sent to queue
+				select {
+				case queuedPlaylist := <-playlistQueue:
+					assert.Equal(t, tt.activePlaylist, queuedPlaylist)
+				default:
+					t.Fatal("expected playlist to be queued")
+				}
+
+				mockPlatform.AssertExpectations(t)
+			}
+		})
+	}
+}
+
+// TestCmdPlaylistOpen_PreservesPosition tests that position is preserved when reopening active playlist
+func TestCmdPlaylistOpen_PreservesPosition(t *testing.T) {
+	t.Parallel()
+
+	// Create a test playlist file
+	plsContent := `[playlist]
+File1=**test1
+Title1=Item 1
+File2=**test2
+Title2=Item 2
+File3=**test3
+Title3=Item 3`
+
+	plsFile := filepath.Join(t.TempDir(), "test.pls")
+	err := os.WriteFile(plsFile, []byte(plsContent), 0o600)
+	require.NoError(t, err)
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+
+	// Active playlist at index 2 (third item)
+	activePlaylist := &playlists.Playlist{
+		ID:   plsFile, // ID is the file path
+		Name: "test.pls",
+		Items: []playlists.PlaylistItem{
+			{Name: "Item 1", ZapScript: "**test1"},
+			{Name: "Item 2", ZapScript: "**test2"},
+			{Name: "Item 3", ZapScript: "**test3"},
+		},
+		Index:   2, // At third item
+		Playing: true,
+	}
+
+	// Mock ShowPicker - verify it's called with preserved index
+	mockPlatform.On("ShowPicker", cfg, mock.MatchedBy(func(args models.PickerArgs) bool {
+		// Should preserve the Index from active playlist
+		return args.Selected == 2 && len(args.Items) == 3
+	})).Return(nil)
+
+	playlistQueue := make(chan *playlists.Playlist, 1)
+
+	env := platforms.CmdEnv{
+		Cmd: parser.Command{
+			Name: "playlist.open",
+			Args: []string{plsFile}, // Argument matches active playlist
+		},
+		Cfg: cfg,
+		Playlist: playlists.PlaylistController{
+			Active: activePlaylist,
+			Queue:  playlistQueue,
+		},
+	}
+
+	result, err := cmdPlaylistOpen(mockPlatform, env)
+
+	require.NoError(t, err)
+	assert.True(t, result.PlaylistChanged)
+	assert.Equal(t, 2, result.Playlist.Index, "should preserve current position")
+
+	mockPlatform.AssertExpectations(t)
 }

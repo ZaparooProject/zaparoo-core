@@ -15,7 +15,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
@@ -30,6 +32,12 @@ import (
 
 const ArcadeSystem = "Arcade"
 
+// platformWithArcadeCache is an optional interface for platforms that support arcade card launch caching.
+type platformWithArcadeCache interface {
+	platforms.Platform
+	CheckAndClearArcadeCardLaunch(setname string) bool
+}
+
 type NameMapping struct {
 	CoreName   string
 	System     string
@@ -42,6 +50,7 @@ type Tracker struct {
 	setActiveMedia   func(*models.ActiveMedia)
 	cfg              *config.Instance
 	activeMedia      func() *models.ActiveMedia
+	db               *database.Database
 	ActiveSystemName string
 	ActiveSystem     string
 	ActiveGameID     string
@@ -96,6 +105,7 @@ func NewTracker(
 	cfg *config.Instance,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) (*Tracker, error) {
 	log.Info().Msg("starting tracker")
 
@@ -106,6 +116,7 @@ func NewTracker(
 	return &Tracker{
 		pl:               pl,
 		cfg:              cfg,
+		db:               db,
 		ActiveCore:       "",
 		ActiveSystem:     "",
 		ActiveSystemName: "",
@@ -224,13 +235,24 @@ func (tr *Tracker) LoadCore() {
 		tr.ActiveSystem = ArcadeSystem
 		tr.ActiveSystemName = ArcadeSystem
 
-		tr.setActiveMedia(&models.ActiveMedia{
-			SystemID:   tr.ActiveSystem,
-			SystemName: tr.ActiveSystemName,
-			Name:       tr.ActiveGameName,
-			Path:       coreName,
-			Started:    time.Now(),
-		})
+		// Check if this arcade game was recently launched via card scan
+		// If so, suppress duplicate notification
+		if arcadePl, ok := tr.pl.(platformWithArcadeCache); ok {
+			if arcadePl.CheckAndClearArcadeCardLaunch(result.CoreName) {
+				log.Debug().
+					Str("setname", result.CoreName).
+					Msg("skipping duplicate arcade notification (launched via card)")
+				return
+			}
+		}
+
+		tr.setActiveMedia(models.NewActiveMedia(
+			tr.ActiveSystem,
+			tr.ActiveSystemName,
+			coreName,
+			tr.ActiveGameName,
+			"", // LauncherID unknown when tracking MiSTer core changes
+		))
 	}
 }
 
@@ -268,7 +290,6 @@ func (tr *Tracker) loadGame() {
 
 	path := ResolvePath(activeGame)
 	filename := filepath.Base(path)
-	name := helpers.FilenameFromPath(filename)
 
 	if filepath.Ext(strings.ToLower(filename)) == ".mgl" {
 		mgl, mglErr := mgls.ReadMgl(path)
@@ -305,6 +326,20 @@ func (tr *Tracker) loadGame() {
 		return
 	}
 
+	// Try to get clean display name from database first, fallback to filename parsing
+	pathInfo := helpers.GetPathInfo(path)
+	name := tags.ParseTitleFromFilename(pathInfo.Name, false)
+	if tr.db != nil && tr.db.MediaDB != nil {
+		systems := []systemdefs.System{{ID: system.ID}}
+		results, searchErr := tr.db.MediaDB.SearchMediaPathExact(systems, path)
+		if searchErr == nil && len(results) > 0 && results[0].Name != "" {
+			name = results[0].Name
+			log.Debug().Str("path", path).Msg("tracker using indexed display name")
+		} else {
+			log.Debug().Str("path", path).Msg("tracker media not indexed, using filename")
+		}
+	}
+
 	id := fmt.Sprintf("%s/%s", system.ID, filename)
 
 	if id != tr.ActiveGameID {
@@ -315,13 +350,13 @@ func (tr *Tracker) loadGame() {
 		tr.ActiveSystem = system.ID
 		tr.ActiveSystemName = meta.Name
 
-		tr.setActiveMedia(&models.ActiveMedia{
-			SystemID:   system.ID,
-			SystemName: meta.Name,
-			Name:       name,
-			Path:       path,
-			Started:    time.Now(),
-		})
+		tr.setActiveMedia(models.NewActiveMedia(
+			system.ID,
+			meta.Name,
+			path,
+			name,
+			"", // LauncherID unknown when tracking MiSTer core changes
+		))
 	}
 }
 
@@ -542,8 +577,9 @@ func StartTracker(
 	pl platforms.Platform,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
 ) (*Tracker, func() error, error) {
-	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia)
+	tr, err := NewTracker(pl, cfg, activeMedia, setActiveMedia, db)
 	if err != nil {
 		log.Error().Msgf("error creating tracker: %s", err)
 		return nil, nil, err

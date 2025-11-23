@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/google/uuid"
 )
 
@@ -95,12 +97,14 @@ func (c *Client) LaunchFile(path string) error {
 
 // LaunchMovie launches a movie by ID from Kodi's library
 func (c *Client) LaunchMovie(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiMovie+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	movieID, err := strconv.Atoi(pathID)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiMovie)
 	if err != nil {
-		return fmt.Errorf("failed to parse movie ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract movie ID from path: %w", err)
+	}
+
+	movieID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse movie ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -116,16 +120,14 @@ func (c *Client) LaunchMovie(path string) error {
 
 // LaunchTVEpisode launches a TV episode by ID from Kodi's library
 func (c *Client) LaunchTVEpisode(path string) error {
-	if !strings.HasPrefix(path, SchemeKodiEpisode+"://") {
-		return fmt.Errorf("invalid path: %s", path)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiEpisode)
+	if err != nil {
+		return fmt.Errorf("failed to extract episode ID from path: %w", err)
 	}
 
-	id := strings.TrimPrefix(path, SchemeKodiEpisode+"://")
-	id = strings.SplitN(id, "/", 2)[0]
-
-	intID, err := strconv.Atoi(id)
+	intID, err := strconv.Atoi(idStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse episode ID %q: %w", id, err)
+		return fmt.Errorf("failed to parse episode ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -158,6 +160,12 @@ func (c *Client) Stop() error {
 	return nil
 }
 
+// Quit gracefully exits Kodi application
+func (c *Client) Quit(ctx context.Context) error {
+	_, err := c.APIRequest(ctx, APIMethodApplicationQuit, nil)
+	return err
+}
+
 // GetActivePlayers retrieves all active players in Kodi
 func (c *Client) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	result, err := c.APIRequest(ctx, APIMethodPlayerGetActivePlayers, nil)
@@ -174,9 +182,43 @@ func (c *Client) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	return players, nil
 }
 
+// GetPlayerItem retrieves the currently playing item for a specific player
+func (c *Client) GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, error) {
+	params := PlayerGetItemParams{
+		PlayerID: playerID,
+		Properties: []string{
+			"title",
+			"file",
+			"artist",
+			"album",
+			"showtitle",
+			"season",
+			"episode",
+			"year",
+		},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodPlayerGetItem, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var response PlayerGetItemResponse
+	err = json.Unmarshal(result, &response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GetPlayerItem response: %w", err)
+	}
+
+	return &response.Item, nil
+}
+
 // GetMovies retrieves all movies from Kodi's library
 func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
-	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, nil)
+	params := VideoLibraryGetMoviesParams{
+		Properties: []string{"title", "file"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetMovies, params)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +234,11 @@ func (c *Client) GetMovies(ctx context.Context) ([]Movie, error) {
 
 // GetTVShows retrieves all TV shows from Kodi's library
 func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
-	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, nil)
+	params := VideoLibraryGetTVShowsParams{
+		Properties: []string{"title"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetTVShows, params)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +255,8 @@ func (c *Client) GetTVShows(ctx context.Context) ([]TVShow, error) {
 // GetEpisodes retrieves all episodes for a specific TV show from Kodi's library
 func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, error) {
 	params := VideoLibraryGetEpisodesParams{
-		TVShowID: tvShowID,
+		TVShowID:   tvShowID,
+		Properties: []string{"title", "file", "tvshowid", "season", "episode"},
 	}
 
 	result, err := c.APIRequest(ctx, APIMethodVideoLibraryGetEpisodes, params)
@@ -228,7 +275,11 @@ func (c *Client) GetEpisodes(ctx context.Context, tvShowID int) ([]Episode, erro
 
 // GetSongs retrieves all songs from Kodi's library
 func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
-	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, nil)
+	params := AudioLibraryGetSongsParams{
+		Properties: []string{"title", "displayartist", "album", "albumid", "duration", "file"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetSongs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +295,11 @@ func (c *Client) GetSongs(ctx context.Context) ([]Song, error) {
 
 // GetAlbums retrieves all albums from Kodi's library
 func (c *Client) GetAlbums(ctx context.Context) ([]Album, error) {
-	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetAlbums, nil)
+	params := AudioLibraryGetAlbumsParams{
+		Properties: []string{"title", "displayartist", "year"},
+	}
+
+	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetAlbums, params)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +315,7 @@ func (c *Client) GetAlbums(ctx context.Context) ([]Album, error) {
 
 // GetArtists retrieves all artists from Kodi's library
 func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
+	// No properties needed - we only use the default "label" field
 	result, err := c.APIRequest(ctx, APIMethodAudioLibraryGetArtists, nil)
 	if err != nil {
 		return nil, err
@@ -276,12 +332,14 @@ func (c *Client) GetArtists(ctx context.Context) ([]Artist, error) {
 
 // LaunchSong launches a song by ID from Kodi's library
 func (c *Client) LaunchSong(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiSong+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	songID, err := strconv.Atoi(pathID)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiSong)
 	if err != nil {
-		return fmt.Errorf("failed to parse song ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract song ID from path: %w", err)
+	}
+
+	songID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse song ID %q: %w", idStr, err)
 	}
 
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
@@ -295,131 +353,47 @@ func (c *Client) LaunchSong(path string) error {
 	return err
 }
 
-// LaunchAlbum launches an album by ID using playlist generation
+// LaunchAlbum launches an album by ID from Kodi's library
 func (c *Client) LaunchAlbum(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiAlbum+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	albumID, err := strconv.Atoi(pathID)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiAlbum)
 	if err != nil {
-		return fmt.Errorf("failed to parse album ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract album ID from path: %w", err)
 	}
 
-	// Step 1: Clear music playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
-		PlaylistID: 0,
-	})
+	albumID, err := strconv.Atoi(idStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse album ID %q: %w", idStr, err)
 	}
 
-	// Step 2: Get songs with album filter
-	filter := &FilterRule{
-		Field:    "albumid",
-		Operator: "is",
-		Value:    albumID,
-	}
-	params := AudioLibraryGetSongsParams{Filter: filter}
-
-	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
-	if err != nil {
-		return err
-	}
-
-	var response AudioLibraryGetSongsResponse
-	err = json.Unmarshal(result, &response)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
-	}
-
-	allSongs := response.Songs
-
-	// Convert to playlist items - no filtering needed since API filtered
-	albumSongs := make([]PlaylistItemSongID, 0, len(allSongs))
-	for _, song := range allSongs {
-		albumSongs = append(albumSongs, PlaylistItemSongID{SongID: song.ID})
-	}
-
-	// Step 3: Add to playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
-		PlaylistID: 0,
-		Item:       albumSongs,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 4: Start playback
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
-			PlaylistID: 0,
+			AlbumID: albumID,
+		},
+		Options: ItemOptions{
+			Resume: true,
 		},
 	})
 	return err
 }
 
-// LaunchArtist launches an artist by ID using playlist generation
+// LaunchArtist launches an artist by ID from Kodi's library
 func (c *Client) LaunchArtist(path string) error {
-	pathID := strings.TrimPrefix(path, SchemeKodiArtist+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	artistID, err := strconv.Atoi(pathID)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiArtist)
 	if err != nil {
-		return fmt.Errorf("failed to parse artist ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract artist ID from path: %w", err)
 	}
 
-	// Step 1: Clear music playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistClear, PlaylistClearParams{
-		PlaylistID: 0,
-	})
+	artistID, err := strconv.Atoi(idStr)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse artist ID %q: %w", idStr, err)
 	}
 
-	// Step 2: Get songs for specific artist using API filtering
-	filter := &FilterRule{
-		Field:    "artistid",
-		Operator: "is",
-		Value:    artistID,
-	}
-	params := AudioLibraryGetSongsParams{Filter: filter}
-
-	result, err := c.APIRequest(context.Background(), APIMethodAudioLibraryGetSongs, params)
-	if err != nil {
-		return err
-	}
-
-	var response AudioLibraryGetSongsResponse
-	err = json.Unmarshal(result, &response)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal GetSongs response: %w", err)
-	}
-
-	allSongs := response.Songs
-
-	// Convert to playlist items - no filtering needed since API filtered
-	artistSongs := make([]PlaylistItemSongID, 0, len(allSongs))
-	for _, song := range allSongs {
-		artistSongs = append(artistSongs, PlaylistItemSongID{SongID: song.ID})
-	}
-
-	if len(artistSongs) == 0 {
-		return fmt.Errorf("no songs found for artist ID %d", artistID)
-	}
-
-	// Step 3: Add songs to playlist
-	_, err = c.APIRequest(context.Background(), APIMethodPlaylistAdd, PlaylistAddParams{
-		PlaylistID: 0,
-		Item:       artistSongs,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Step 4: Start playback
 	_, err = c.APIRequest(context.Background(), APIMethodPlayerOpen, PlayerOpenParams{
 		Item: Item{
-			PlaylistID: 0,
+			ArtistID: artistID,
+		},
+		Options: ItemOptions{
+			Resume: true,
 		},
 	})
 	return err
@@ -428,12 +402,14 @@ func (c *Client) LaunchArtist(path string) error {
 // LaunchTVShow launches a TV show by ID using playlist generation
 func (c *Client) LaunchTVShow(path string) error {
 	// Parse show ID
-	pathID := strings.TrimPrefix(path, SchemeKodiShow+"://")
-	pathID = strings.SplitN(pathID, "/", 2)[0]
-
-	showID, err := strconv.Atoi(pathID)
+	idStr, err := virtualpath.ExtractSchemeID(path, shared.SchemeKodiShow)
 	if err != nil {
-		return fmt.Errorf("failed to parse show ID %q: %w", pathID, err)
+		return fmt.Errorf("failed to extract show ID from path: %w", err)
+	}
+
+	showID, err := strconv.Atoi(idStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse show ID %q: %w", idStr, err)
 	}
 
 	// Step 1: Clear video playlist (playlistid=1)

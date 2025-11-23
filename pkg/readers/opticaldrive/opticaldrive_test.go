@@ -62,8 +62,9 @@ func TestIDs(t *testing.T) {
 	reader := &FileReader{}
 	ids := reader.IDs()
 
-	require.Len(t, ids, 1)
-	assert.Equal(t, "optical_drive", ids[0])
+	require.Len(t, ids, 2)
+	assert.Equal(t, "opticaldrive", ids[0])
+	assert.Equal(t, "optical_drive", ids[1])
 }
 
 func TestDetect(t *testing.T) {

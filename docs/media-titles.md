@@ -61,7 +61,7 @@ When launching by title, Zaparoo:
 
 Slug normalization is a **14-stage pipeline** that converts titles into a canonical form. Both indexing and resolution use identical normalization.
 
-**Implementation:** `pkg/database/slugs/slugify.go` → `SlugifyString()`
+**Implementation:** `pkg/database/slugs/slugify.go` → `Slugify(mediaType MediaType, input string)`
 
 ### The 14 Stages (Summary)
 

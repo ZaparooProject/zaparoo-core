@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,7 +33,7 @@ func TestNewKodiLocalLauncher(t *testing.T) {
 
 	launcher := NewKodiLocalLauncher()
 
-	assert.Equal(t, "KodiLocal", launcher.ID)
+	assert.Equal(t, "KodiLocalVideo", launcher.ID)
 	assert.Equal(t, systemdefs.SystemVideo, launcher.SystemID)
 	assert.Equal(t, []string{"videos", "tvshows"}, launcher.Folders)
 
@@ -54,7 +55,7 @@ func TestNewKodiMovieLauncher(t *testing.T) {
 
 	assert.Equal(t, "KodiMovie", launcher.ID)
 	assert.Equal(t, systemdefs.SystemMovie, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiMovie}, launcher.Schemes)
+	assert.Equal(t, []string{shared.SchemeKodiMovie}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
 }
@@ -65,9 +66,9 @@ func TestNewKodiTVLauncher(t *testing.T) {
 
 	launcher := NewKodiTVLauncher()
 
-	assert.Equal(t, "KodiTV", launcher.ID)
-	assert.Equal(t, systemdefs.SystemTV, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiEpisode}, launcher.Schemes)
+	assert.Equal(t, "KodiTVEpisode", launcher.ID)
+	assert.Equal(t, systemdefs.SystemTVEpisode, launcher.SystemID)
+	assert.Equal(t, []string{shared.SchemeKodiEpisode}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
 }
@@ -79,8 +80,8 @@ func TestNewKodiSongLauncher(t *testing.T) {
 	launcher := NewKodiSongLauncher()
 
 	assert.Equal(t, "KodiSong", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiSong}, launcher.Schemes)
+	assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
+	assert.Equal(t, []string{shared.SchemeKodiSong}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	// Scanner will be tested when scanners are implemented
 	// assert.NotNil(t, launcher.Scanner, "Scanner function should be set")
@@ -92,8 +93,8 @@ func TestNewKodiMusicLauncher(t *testing.T) {
 
 	launcher := NewKodiMusicLauncher()
 
-	assert.Equal(t, "KodiMusic", launcher.ID)
-	assert.Equal(t, systemdefs.SystemMusic, launcher.SystemID)
+	assert.Equal(t, "KodiLocalAudio", launcher.ID)
+	assert.Equal(t, systemdefs.SystemMusicTrack, launcher.SystemID)
 	assert.Contains(t, launcher.Folders, "music")
 	assert.Contains(t, launcher.Extensions, ".mp3")
 	assert.Contains(t, launcher.Extensions, ".flac")
@@ -111,7 +112,7 @@ func TestNewKodiAlbumLauncher(t *testing.T) {
 
 	assert.Equal(t, "KodiAlbum", launcher.ID)
 	assert.Equal(t, systemdefs.SystemMusicAlbum, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiAlbum}, launcher.Schemes)
+	assert.Equal(t, []string{shared.SchemeKodiAlbum}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
 }
@@ -124,7 +125,7 @@ func TestNewKodiArtistLauncher(t *testing.T) {
 
 	assert.Equal(t, "KodiArtist", launcher.ID)
 	assert.Equal(t, systemdefs.SystemMusicArtist, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiArtist}, launcher.Schemes)
+	assert.Equal(t, []string{shared.SchemeKodiArtist}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
 }
@@ -137,7 +138,7 @@ func TestNewKodiTVShowLauncher(t *testing.T) {
 
 	assert.Equal(t, "KodiTVShow", launcher.ID)
 	assert.Equal(t, systemdefs.SystemTVShow, launcher.SystemID)
-	assert.Equal(t, []string{SchemeKodiShow}, launcher.Schemes)
+	assert.Equal(t, []string{shared.SchemeKodiShow}, launcher.Schemes)
 	assert.NotNil(t, launcher.Launch, "Launch function should be set")
 	assert.NotNil(t, launcher.Scanner, "Scanner function should be set for collection")
 }

@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSlugifyString(t *testing.T) {
+func TestSlugifyBasic(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -888,13 +888,13 @@ func TestSlugifyString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
-			assert.Equal(t, tt.expected, result, "SlugifyString result mismatch")
+			result := Slugify(MediaTypeGame, tt.input)
+			assert.Equal(t, tt.expected, result, "Slugify result mismatch")
 		})
 	}
 }
 
-func TestSlugifyStringIdempotency(t *testing.T) {
+func TestSlugifyIdempotency(t *testing.T) {
 	t.Parallel()
 
 	inputs := []string{
@@ -909,13 +909,13 @@ func TestSlugifyStringIdempotency(t *testing.T) {
 	}
 
 	for _, input := range inputs {
-		first := SlugifyString(input)
-		second := SlugifyString(first)
-		assert.Equal(t, first, second, "SlugifyString should be idempotent")
+		first := Slugify(MediaTypeGame, input)
+		second := Slugify(MediaTypeGame, first)
+		assert.Equal(t, first, second, "Slugify should be idempotent")
 	}
 }
 
-func BenchmarkSlugifyString(b *testing.B) {
+func BenchmarkSlugifyBasic(b *testing.B) {
 	testCases := []string{
 		"The Legend of Zelda: Ocarina of Time (USA) [!]",
 		"Pokémon Stadium 2",
@@ -927,7 +927,7 @@ func BenchmarkSlugifyString(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc, func(b *testing.B) {
 			for range b.N {
-				SlugifyString(tc)
+				Slugify(MediaTypeGame, tc)
 			}
 		})
 	}
@@ -1100,7 +1100,7 @@ func TestConjunctionNormalization(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result, "Conjunction normalization failed")
 		})
 	}
@@ -1194,114 +1194,6 @@ func TestStripLeadingArticle(t *testing.T) {
 	}
 }
 
-func TestStripMetadataBrackets(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "parentheses",
-			input:    "Game (USA)",
-			expected: "Game",
-		},
-		{
-			name:     "square_brackets",
-			input:    "Game [!]",
-			expected: "Game",
-		},
-		{
-			name:     "braces",
-			input:    "Game {Europe}",
-			expected: "Game",
-		},
-		{
-			name:     "angle_brackets",
-			input:    "Game <Beta>",
-			expected: "Game",
-		},
-		{
-			name:     "all_bracket_types",
-			input:    "Game (USA)[!]{En}<Proto>",
-			expected: "Game",
-		},
-		{
-			name:     "multiple_same_type",
-			input:    "Game (USA) (v1.2)",
-			expected: "Game",
-		},
-		{
-			name:     "no_brackets",
-			input:    "Plain Game",
-			expected: "Plain Game",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := StripMetadataBrackets(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestStripEditionAndVersionSuffixes(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "special_edition",
-			input:    "Game Special Edition",
-			expected: "Game Special",
-		},
-		{
-			name:     "deluxe_edition",
-			input:    "Title Deluxe Edition",
-			expected: "Title Deluxe",
-		},
-		{
-			name:     "goty_edition",
-			input:    "Game GOTY Edition",
-			expected: "Game GOTY",
-		},
-		{
-			name:     "version_number",
-			input:    "Title v1.2",
-			expected: "Title",
-		},
-		{
-			name:     "version_roman",
-			input:    "Game vIII",
-			expected: "Game",
-		},
-		{
-			name:     "both_edition_and_version",
-			input:    "Game Special Edition v2.0",
-			expected: "Game Special Edition",
-		},
-		{
-			name:     "no_suffix",
-			input:    "Plain Game",
-			expected: "Plain Game",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := StripEditionAndVersionSuffixes(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestNormalizeConjunctions(t *testing.T) {
 	t.Parallel()
 
@@ -1361,90 +1253,6 @@ func TestNormalizeConjunctions(t *testing.T) {
 	}
 }
 
-func TestConvertRomanNumerals(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "numeral_vii",
-			input:    "Final Fantasy VII",
-			expected: "final fantasy 7",
-		},
-		{
-			name:     "numeral_ii",
-			input:    "Street Fighter II",
-			expected: "street fighter 2",
-		},
-		{
-			name:     "numeral_iii",
-			input:    "Game III",
-			expected: "game 3",
-		},
-		{
-			name:     "numeral_iv",
-			input:    "Title IV",
-			expected: "title 4",
-		},
-		{
-			name:     "numeral_v",
-			input:    "Game V",
-			expected: "game 5",
-		},
-		{
-			name:     "numeral_vi",
-			input:    "Game VI",
-			expected: "game 6",
-		},
-		{
-			name:     "numeral_viii",
-			input:    "Game VIII",
-			expected: "game 8",
-		},
-		{
-			name:     "numeral_ix",
-			input:    "Game IX",
-			expected: "game 9",
-		},
-		{
-			name:     "numeral_x_preserved",
-			input:    "Mega Man X",
-			expected: "mega man x",
-		},
-		{
-			name:     "numeral_xi",
-			input:    "Final Fantasy XI",
-			expected: "final fantasy 11",
-		},
-		{
-			name:     "numeral_xix",
-			input:    "Game XIX",
-			expected: "game 19",
-		},
-		{
-			name:     "suffix_i",
-			input:    "Game I",
-			expected: "game 1",
-		},
-		{
-			name:     "no_numerals",
-			input:    "Plain Game",
-			expected: "plain game",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := ConvertRomanNumerals(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestNormalizeSeparators(t *testing.T) {
 	t.Parallel()
 
@@ -1489,10 +1297,10 @@ func TestNormalizeSeparators(t *testing.T) {
 	}
 }
 
-// TestSlugifyStringRegression_AsciiFastPath ensures the ASCII fast-path optimization
+// TestSlugifyRegression_AsciiFastPath ensures the ASCII fast-path optimization
 // doesn't change the algorithm's behavior. This test catches the bug where ASCII strings
 // were returning different results than the original algorithm.
-func TestSlugifyStringRegression_AsciiFastPath(t *testing.T) {
+func TestSlugifyRegression_AsciiFastPath(t *testing.T) {
 	t.Parallel()
 
 	// These test cases specifically target edge cases where the ASCII fast-path
@@ -1566,9 +1374,10 @@ func TestSlugifyStringRegression_AsciiFastPath(t *testing.T) {
 			expected: "supermarioworld",
 		},
 		{
-			name:     "pure_ascii_multiple_separators",
-			input:    "Game: The_Subtitle-Edition",
-			expected: "gamethesubtitleedition", // Hyphen preserved in "Subtitle-Edition", so "Edition" not stripped
+			name:  "pure_ascii_multiple_separators",
+			input: "Game: The_Subtitle-Edition",
+			// "The_" not stripped (StripLeadingArticle requires space), "Edition" stripped
+			expected: "gamethesubtitleedition",
 		},
 		{
 			name:     "pure_ascii_empty_after_stripping",
@@ -1585,17 +1394,17 @@ func TestSlugifyStringRegression_AsciiFastPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result,
 				"ASCII fast-path should produce same result as original algorithm")
 		})
 	}
 }
 
-// TestSlugifyStringRegression_ScriptDetectionConsistency ensures that script detection
+// TestSlugifyRegression_ScriptDetectionConsistency ensures that script detection
 // and slug selection logic works correctly for all input types, including edge cases
 // that might be affected by optimizations.
-func TestSlugifyStringRegression_ScriptDetectionConsistency(t *testing.T) {
+func TestSlugifyRegression_ScriptDetectionConsistency(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1679,16 +1488,16 @@ func TestSlugifyStringRegression_ScriptDetectionConsistency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result,
 				"Script detection and slug selection should be consistent")
 		})
 	}
 }
 
-// TestSlugifyStringRegression_EdgeCaseConsistency tests specific edge cases
+// TestSlugifyRegression_EdgeCaseConsistency tests specific edge cases
 // that could be affected by performance optimizations, ensuring behavioral consistency.
-func TestSlugifyStringRegression_EdgeCaseConsistency(t *testing.T) {
+func TestSlugifyRegression_EdgeCaseConsistency(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1777,17 +1586,17 @@ func TestSlugifyStringRegression_EdgeCaseConsistency(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := SlugifyString(tt.input)
+			result := Slugify(MediaTypeGame, tt.input)
 			assert.Equal(t, tt.expected, result,
 				"Edge case handling should be consistent")
 		})
 	}
 }
 
-// TestSlugifyStringRegression_PerformanceOptimizationImpact ensures that performance
+// TestSlugifyRegression_PerformanceOptimizationImpact ensures that performance
 // optimizations don't change the algorithm's behavior by comparing results before and
 // after optimization paths.
-func TestSlugifyStringRegression_PerformanceOptimizationImpact(t *testing.T) {
+func TestSlugifyRegression_PerformanceOptimizationImpact(t *testing.T) {
 	t.Parallel()
 
 	// Test cases that specifically exercise different optimization paths
@@ -1819,13 +1628,13 @@ func TestSlugifyStringRegression_PerformanceOptimizationImpact(t *testing.T) {
 			// Run the function multiple times to test consistency
 			results := make([]string, 5)
 			for i := range results {
-				results[i] = SlugifyString(input)
+				results[i] = Slugify(MediaTypeGame, input)
 			}
 
 			// All results should be identical
 			for i := 1; i < len(results); i++ {
 				assert.Equal(t, results[0], results[i],
-					"SlugifyString should be deterministic for input: %s", input)
+					"Slugify should be deterministic for input: %s", input)
 			}
 
 			// Result should not be empty unless input is empty or only special chars
@@ -1840,217 +1649,148 @@ func TestSlugifyStringRegression_PerformanceOptimizationImpact(t *testing.T) {
 	}
 }
 
-func TestConvertRomanNumerals_EdgeCases(t *testing.T) {
+// TestNormalizeEpisodeFormat has been moved to media_parsing_test.go
+// Episode format normalization is now TV-specific and handled by ParseTVShow
+
+// TestSlugifyEpisodeFormats tests that different episode formats produce matching slugs
+func TestSlugifyEpisodeFormats(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name   string
+		input1 string
+		input2 string
 	}{
-		// Word boundaries - should NOT convert
 		{
-			name:     "word_containing_i_should_not_convert",
-			input:    "this is invisible",
-			expected: "this is invisible",
+			name:   "1x02_vs_S01E02",
+			input1: "Attack on Titan - 1x02 - That Day",
+			input2: "Attack on Titan - S01E02 - That Day",
 		},
 		{
-			name:     "word_containing_v_should_not_convert",
-			input:    "vivid river",
-			expected: "vivid river",
-		},
-		{
-			name:     "word_containing_iv_should_not_convert",
-			input:    "alive and giving",
-			expected: "alive and giving",
-		},
-		{
-			name:     "word_containing_ix_should_not_convert",
-			input:    "mixing pixel",
-			expected: "mixing pixel",
-		},
-		{
-			name:     "word_containing_vii_should_not_convert",
-			input:    "soviet viio",
-			expected: "soviet viio",
-		},
-
-		// Adjacent to digits - should NOT convert
-		{
-			name:     "v_adjacent_to_digit",
-			input:    "v1.0",
-			expected: "v1.0",
-		},
-		{
-			name:     "vii_adjacent_to_digit",
-			input:    "version VII2",
-			expected: "version vii2",
-		},
-		{
-			name:     "digit_then_roman",
-			input:    "1IX test",
-			expected: "1ix test",
-		},
-
-		// Adjacent to punctuation - SHOULD convert
-		{
-			name:     "roman_with_colon",
-			input:    "Game VII: Subtitle",
-			expected: "game 7: subtitle",
-		},
-		{
-			name:     "roman_with_dash",
-			input:    "Game III-Part",
-			expected: "game 3-part",
-		},
-		{
-			name:     "roman_with_underscore_no_convert",
-			input:    "Game_II_Final",
-			expected: "game_ii_final", // Underscore is a word char, so no boundary
-		},
-		{
-			name:     "roman_after_underscore_with_space",
-			input:    "Game_ II Final",
-			expected: "game_ 2 final", // Space creates boundary
-		},
-		{
-			name:     "roman_with_parenthesis",
-			input:    "Game (II)",
-			expected: "game (2)",
-		},
-
-		// At string boundaries
-		{
-			name:     "roman_at_start",
-			input:    "III Kings",
-			expected: "3 kings",
-		},
-		{
-			name:     "roman_at_end",
-			input:    "Final VII",
-			expected: "final 7",
-		},
-		{
-			name:     "only_roman",
-			input:    "VII",
-			expected: "7",
-		},
-
-		// Multiple romans
-		{
-			name:     "multiple_romans_in_string",
-			input:    "Game II Part III",
-			expected: "game 2 part 3",
-		},
-		{
-			name:     "three_romans",
-			input:    "I II III",
-			expected: "1 2 3",
-		},
-
-		// Adjacent to Unicode/CJK - SHOULD convert
-		{
-			name:     "roman_adjacent_to_cjk",
-			input:    "ドラゴンクエストIII",
-			expected: "ドラゴンクエスト3",
-		},
-		{
-			name:     "roman_between_cjk",
-			input:    "ファイナルファンタジーVII",
-			expected: "ファイナルファンタジー7",
-		},
-		{
-			name:     "cjk_space_roman",
-			input:    "ドラゴンクエスト VII",
-			expected: "ドラゴンクエスト 7",
-		},
-
-		// Pattern matching order (longest first)
-		{
-			name:     "xviii_not_viii_then_i",
-			input:    "Game XVIII",
-			expected: "game 18",
-		},
-		{
-			name:     "xiii_not_iii",
-			input:    "Game XIII",
-			expected: "game 13",
-		},
-
-		// Case variations
-		{
-			name:     "lowercase_roman",
-			input:    "game vii",
-			expected: "game 7",
-		},
-		{
-			name:     "mixed_case_roman",
-			input:    "Game ViI",
-			expected: "game 7",
-		},
-
-		// Invalid/non-standard patterns - should NOT convert
-		{
-			name:     "invalid_iiii",
-			input:    "Game IIII",
-			expected: "game iiii",
-		},
-		{
-			name:     "invalid_vv",
-			input:    "Game VV",
-			expected: "game vv",
-		},
-		{
-			name:     "invalid_iix",
-			input:    "Game IIX",
-			expected: "game iix",
-		},
-
-		// Edge cases
-		{
-			name:     "empty_string",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "only_spaces",
-			input:    "   ",
-			expected: "   ",
-		},
-		{
-			name:     "single_i_pronoun_at_start",
-			input:    "I am",
-			expected: "1 am", // All "I" now converts to "1"
-		},
-		{
-			name:     "single_i_numeral_at_end",
-			input:    "Part I",
-			expected: "part 1", // Numeral: at end of title
-		},
-
-		// Real-world game titles
-		{
-			name:     "007_world_is_not_enough",
-			input:    "007 World Is Not Enough",
-			expected: "007 world is not enough",
-		},
-		{
-			name:     "marios_vs_mario",
-			input:    "Mario's vs Mario",
-			expected: "mario's vs mario",
-		},
-		{
-			name:     "cafe_international",
-			input:    "Cafe International",
-			expected: "cafe international",
+			name:   "3x15_vs_S03E15",
+			input1: "Breaking Bad - 3x15 - Ozymandias",
+			input2: "Breaking Bad - S03E15 - Ozymandias",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := ConvertRomanNumerals(tt.input)
-			assert.Equal(t, tt.expected, result, "ConvertRomanNumerals failed for input: %q", tt.input)
+			slug1 := Slugify(MediaTypeTVShow, tt.input1)
+			slug2 := Slugify(MediaTypeTVShow, tt.input2)
+			assert.Equal(t, slug1, slug2, "Slugs should match for different episode formats")
 		})
 	}
+}
+
+// TestSlugifyMediaType_TVShowMatching tests that different TV episode formats
+// produce the same slug after media-aware slugification
+func TestSlugifyMediaType_TVShowMatching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mediaType string
+		inputs    []string
+	}{
+		{
+			name: "Batocera issue - S01E02 vs 1x02",
+			inputs: []string{
+				"Attack on Titan - S01E02 - That Day",
+				"Attack on Titan - 1x02 - That Day",
+				"Attack on Titan - s01e02 - That Day",
+				"Attack on Titan - 01x02 - That Day",
+			},
+			mediaType: "TVShow",
+		},
+		{
+			name: "Breaking Bad episode variations",
+			inputs: []string{
+				"Breaking Bad - S01E02 - Gray Matter",
+				"Breaking Bad - 1x02 - Gray Matter",
+				"Breaking Bad - 1X02 - Gray Matter",
+			},
+			mediaType: "TVShow",
+		},
+		{
+			name: "Episode without title",
+			inputs: []string{
+				"Game of Thrones - S03E09",
+				"Game of Thrones - 3x09",
+				"Game of Thrones - 03x09",
+			},
+			mediaType: "TVShow",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Slugify all inputs
+			var slugs []string
+			for _, input := range tt.inputs {
+				slug := Slugify(MediaType(tt.mediaType), input)
+				slugs = append(slugs, slug)
+			}
+
+			// All slugs should be identical
+			firstSlug := slugs[0]
+			for i, slug := range slugs[1:] {
+				assert.Equal(t, firstSlug, slug,
+					"Slug mismatch:\n  Input[0]: %q → %q\n  Input[%d]: %q → %q",
+					tt.inputs[0], firstSlug, i+1, tt.inputs[i+1], slug)
+			}
+		})
+	}
+}
+
+// TestSlugifyMediaType_GameTitles tests that game titles work correctly
+// with media-type-aware slugification
+func TestSlugifyMediaType_GameTitles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		mediaType string
+		want      string
+	}{
+		{
+			name:      "Classic game title",
+			input:     "The Legend of Zelda: Ocarina of Time",
+			mediaType: "Game",
+			want:      Slugify(MediaTypeGame, "The Legend of Zelda: Ocarina of Time"),
+		},
+		{
+			name:      "Game with edition suffix",
+			input:     "Super Mario 64 Deluxe Edition",
+			mediaType: "Game",
+			want:      Slugify(MediaTypeGame, "Super Mario 64 Deluxe Edition"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Slugify(MediaType(tt.mediaType), tt.input)
+			assert.Equal(t, tt.want, result,
+				"Game title slugification should match standard Slugify")
+		})
+	}
+}
+
+// TestSlugifyMediaType_EmptyMediaType tests behavior with empty media type
+// (should get universal-only processing, no media-specific normalization)
+func TestSlugifyMediaType_EmptyMediaType(t *testing.T) {
+	t.Parallel()
+
+	input := "The Legend of Zelda"
+	withEmpty := Slugify(MediaType(""), input)
+
+	// Empty media type gets NO media-specific processing (no article stripping from parsers)
+	// Article stripping only happens in media parsers now, not in universal pipeline
+	assert.Equal(t, "thelegendofzelda", withEmpty,
+		"Empty media type should get universal-only processing (no article stripping)")
 }

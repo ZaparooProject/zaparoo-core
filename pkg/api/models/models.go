@@ -26,14 +26,21 @@ import (
 )
 
 const (
-	NotificationReadersConnected    = "readers.added"
-	NotificationReadersDisconnected = "readers.removed"
-	NotificationRunning             = "running"
-	NotificationTokensAdded         = "tokens.added"
-	NotificationTokensRemoved       = "tokens.removed"
-	NotificationStopped             = "media.stopped"
-	NotificationStarted             = "media.started"
-	NotificationMediaIndexing       = "media.indexing" // TODO: rename to generating
+	NotificationReadersConnected     = "readers.added"
+	NotificationReadersDisconnected  = "readers.removed"
+	NotificationRunning              = "running"
+	NotificationTokensAdded          = "tokens.added"
+	NotificationTokensRemoved        = "tokens.removed"
+	NotificationStopped              = "media.stopped"
+	NotificationStarted              = "media.started"
+	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
+	NotificationPlaytimeLimitReached = "playtime.limit.reached"
+	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+)
+
+const (
+	PlaytimeLimitReasonSession = "session"
+	PlaytimeLimitReasonDaily   = "daily"
 )
 
 const (
@@ -54,6 +61,9 @@ const (
 	MethodSettingsUpdate       = "settings.update"
 	MethodSettingsReload       = "settings.reload"
 	MethodSettingsLogsDownload = "settings.logs.download"
+	MethodPlaytimeLimits       = "settings.playtime.limits"
+	MethodPlaytimeLimitsUpdate = "settings.playtime.limits.update"
+	MethodPlaytime             = "playtime"
 	MethodClients              = "clients"
 	MethodClientsNew           = "clients.new"
 	MethodClientsDelete        = "clients.delete"

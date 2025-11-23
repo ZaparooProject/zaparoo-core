@@ -41,10 +41,10 @@ func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, e
 //nolint:gocritic // unused parameter required by interface
 func cmdStop(pl platforms.Platform, _ platforms.CmdEnv) (platforms.CmdResult, error) {
 	log.Info().Msg("stopping media")
-	if err := pl.StopActiveLauncher(platforms.StopForMenu); err != nil {
+	if err := pl.ReturnToMenu(); err != nil {
 		return platforms.CmdResult{
 			MediaChanged: true,
-		}, fmt.Errorf("failed to stop active launcher: %w", err)
+		}, fmt.Errorf("failed to return to menu: %w", err)
 	}
 	return platforms.CmdResult{
 		MediaChanged: true,

@@ -22,6 +22,7 @@ package kodi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -69,6 +70,14 @@ func (m *MockKodiClient) Stop() error {
 	return nil
 }
 
+func (m *MockKodiClient) Quit(ctx context.Context) error {
+	args := m.Called(ctx)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock Quit error: %w", err)
+	}
+	return nil
+}
+
 func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]Player, error) {
 	args := m.Called(ctx)
 	if players, ok := args.Get(0).([]Player); ok {
@@ -81,6 +90,21 @@ func (m *MockKodiClient) GetActivePlayers(ctx context.Context) ([]Player, error)
 		return nil, fmt.Errorf("mock GetActivePlayers error: %w", err)
 	}
 	return nil, nil
+}
+
+func (m *MockKodiClient) GetPlayerItem(ctx context.Context, playerID int) (*PlayerItem, error) {
+	args := m.Called(ctx, playerID)
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock GetPlayerItem error: %w", err)
+	}
+	if args.Get(0) == nil {
+		return nil, errors.New("mock GetPlayerItem: no item configured")
+	}
+	item, ok := args.Get(0).(*PlayerItem)
+	if !ok {
+		return nil, errors.New("mock GetPlayerItem: type assertion failed")
+	}
+	return item, nil
 }
 
 func (m *MockKodiClient) GetMovies(ctx context.Context) ([]Movie, error) {
@@ -290,8 +314,14 @@ func TestScanSongs(t *testing.T) {
 
 	// Mock songs data
 	expectedSongs := []Song{
-		{ID: 123, Label: "Bohemian Rhapsody", Artist: "Queen", AlbumID: 456, Duration: 355},
-		{ID: 124, Label: "Stairway to Heaven", Artist: "Led Zeppelin", AlbumID: 457, Duration: 482},
+		{
+			ID: 123, Label: "Bohemian Rhapsody", Artist: "Queen",
+			Album: "A Night at the Opera", AlbumID: 456, Duration: 355,
+		},
+		{
+			ID: 124, Label: "Stairway to Heaven", Artist: "Led Zeppelin",
+			Album: "Led Zeppelin IV", AlbumID: 457, Duration: 482,
+		},
 	}
 
 	// Set up mock expectation
@@ -305,11 +335,15 @@ func TestScanSongs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 
-	assert.Equal(t, "Queen - Bohemian Rhapsody", results[0].Name)
-	assert.Equal(t, "kodi-song://123/Queen%20-%20Bohemian%20Rhapsody", results[0].Path)
+	assert.Equal(t, "Queen - A Night at the Opera - Bohemian Rhapsody", results[0].Name)
+	assert.Equal(t,
+		"kodi-song://123/Queen%20-%20A%20Night%20at%20the%20Opera%20-%20Bohemian%20Rhapsody",
+		results[0].Path)
 
-	assert.Equal(t, "Led Zeppelin - Stairway to Heaven", results[1].Name)
-	assert.Equal(t, "kodi-song://124/Led%20Zeppelin%20-%20Stairway%20to%20Heaven", results[1].Path)
+	assert.Equal(t, "Led Zeppelin - Led Zeppelin IV - Stairway to Heaven", results[1].Name)
+	assert.Equal(t,
+		"kodi-song://124/Led%20Zeppelin%20-%20Led%20Zeppelin%20IV%20-%20Stairway%20to%20Heaven",
+		results[1].Path)
 
 	// Verify mock was called
 	mockClient.AssertExpectations(t)

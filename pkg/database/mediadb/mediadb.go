@@ -156,33 +156,41 @@ func OpenMediaDB(ctx context.Context, pl platforms.Platform) (*MediaDB, error) {
 func (db *MediaDB) Open() error {
 	exists := true
 	dbPath := db.GetDBPath()
+	log.Debug().Str("path", dbPath).Msg("checking if media database file exists")
+
 	_, err := os.Stat(dbPath)
 	if err != nil {
 		exists = false
+		log.Debug().Msg("media database file does not exist, creating directory")
 		mkdirErr := os.MkdirAll(filepath.Dir(dbPath), 0o750)
 		if mkdirErr != nil {
-			return fmt.Errorf("failed to create database directory: %w", mkdirErr)
+			return fmt.Errorf("failed to create media database directory: %w", mkdirErr)
 		}
 	}
+
+	log.Debug().Msg("opening media database connection")
 	sqlInstance, err := sql.Open("sqlite3", dbPath+getSqliteConnParams())
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
+		return fmt.Errorf("failed to open media database: %w", err)
 	}
 	db.sql = sqlInstance
 
 	if !exists {
+		log.Debug().Msg("media database is new, allocating schema")
 		err = db.Allocate()
 		if err != nil {
 			return err
 		}
 	}
 
+	log.Debug().Msg("running media database PRAGMA optimize")
 	// Run PRAGMA optimize after database is opened and potentially allocated
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA optimize;")
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to run PRAGMA optimize")
 	}
 
+	log.Debug().Msg("running media database WAL checkpoint")
 	// Run WAL checkpoint on startup to clean up any orphaned WAL from crashes
 	_, err = db.sql.ExecContext(db.ctx, "PRAGMA wal_checkpoint(TRUNCATE);")
 	if err != nil {
@@ -803,30 +811,53 @@ func (db *MediaDB) SearchMediaWithFilters(
 		return make([]database.SearchResultWithCursor, 0), ErrNullSQL
 	}
 
-	// Slugify query words to match stored slugs
+	// Collect unique MediaTypes from the systems being searched
+	uniqueMediaTypes := make(map[slugs.MediaType]struct{})
+	for _, system := range filters.Systems {
+		uniqueMediaTypes[system.GetMediaType()] = struct{}{}
+	}
+
+	// Generate slug variants for each query word based on the MediaTypes we're actually searching
 	qWords := strings.Fields(filters.Query)
-	slugifiedWords := make([]string, 0, len(qWords))
-	hasNonLatinWords := false
+	variantGroups := make([][]string, 0, len(qWords))
+	includeName := false
+
 	for _, word := range qWords {
-		slug := slugs.SlugifyString(word)
-		if slug != "" {
-			slugifiedWords = append(slugifiedWords, slug)
-		} else if word != "" {
-			hasNonLatinWords = true
+		seenVariants := make(map[string]struct{})
+		variants := make([]string, 0, len(uniqueMediaTypes))
+
+		// Generate a slug variant for each MediaType present in the search
+		for mediaType := range uniqueMediaTypes {
+			slugVariant := slugs.Slugify(mediaType, word)
+			if slugVariant != "" {
+				if _, exists := seenVariants[slugVariant]; !exists {
+					variants = append(variants, slugVariant)
+					seenVariants[slugVariant] = struct{}{}
+				}
+			}
+		}
+
+		// If no variants were generated (non-Latin word), we'll need Name fallback
+		if len(variants) == 0 && word != "" {
+			includeName = true
+		}
+
+		// Cap variants per word to avoid SQLite param limit issues (999 params total)
+		// With max 10 words * 8 media types = 80 params for variants, plus systems/tags/etc, we're safe
+		const maxVariantsPerWord = 8
+		if len(variants) > maxVariantsPerWord {
+			variants = variants[:maxVariantsPerWord]
+		}
+
+		if len(variants) > 0 {
+			variantGroups = append(variantGroups, variants)
 		}
 	}
 
-	// Try slug-based search first
+	// Search with variant groups
 	results, err := sqlSearchMediaWithFilters(
-		ctx, db.sql, filters.Systems, slugifiedWords, filters.Tags,
-		filters.Letter, filters.Cursor, filters.Limit, false)
-
-	// Fallback to raw name search if we have non-Latin words that slugified to empty
-	if err == nil && len(results) == 0 && hasNonLatinWords {
-		return sqlSearchMediaWithFilters(
-			ctx, db.sql, filters.Systems, qWords, filters.Tags, filters.Letter, filters.Cursor,
-			filters.Limit, true)
-	}
+		ctx, db.sql, filters.Systems, variantGroups, qWords, filters.Tags,
+		filters.Letter, filters.Cursor, filters.Limit, includeName)
 
 	return results, err
 }
@@ -983,17 +1014,40 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 	if db.sql == nil {
 		return nullResults, ErrNullSQL
 	}
-	// Search terms are slugified to match the database's Slug field.
-	// This provides fuzzy matching: spaces/punctuation are ignored,
-	// making searches more forgiving (e.g., "mega man" finds "Megaman")
-	var parts []string
+
+	// Collect unique MediaTypes from the systems being searched
+	uniqueMediaTypes := make(map[slugs.MediaType]struct{})
+	for _, system := range systems {
+		uniqueMediaTypes[system.GetMediaType()] = struct{}{}
+	}
+
+	// Generate slug variants for each glob part based on MediaTypes present
+	var variantGroups [][]string
 	for _, part := range strings.Split(query, "*") {
-		if part != "" {
-			// Slugify search parts to match how titles are stored
-			parts = append(parts, slugs.SlugifyString(part))
+		if part == "" {
+			continue
+		}
+
+		seenVariants := make(map[string]struct{})
+		variants := make([]string, 0, len(uniqueMediaTypes))
+
+		// Generate a slug variant for each MediaType present
+		for mediaType := range uniqueMediaTypes {
+			slugVariant := slugs.Slugify(mediaType, part)
+			if slugVariant != "" {
+				if _, exists := seenVariants[slugVariant]; !exists {
+					variants = append(variants, slugVariant)
+					seenVariants[slugVariant] = struct{}{}
+				}
+			}
+		}
+
+		if len(variants) > 0 {
+			variantGroups = append(variantGroups, variants)
 		}
 	}
-	if len(parts) == 0 {
+
+	if len(variantGroups) == 0 {
 		// return random instead
 		rnd, err := db.RandomGame(systems)
 		if err != nil {
@@ -1004,7 +1058,7 @@ func (db *MediaDB) SearchMediaPathGlob(systems []systemdefs.System, query string
 
 	// TODO: since we approximated a glob, we should actually check
 	//       result paths against base glob to confirm
-	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, parts)
+	return sqlSearchMediaPathParts(db.ctx, db.sql, systems, variantGroups)
 }
 
 // SystemIndexed returns true if a specific system is indexed in the media database.

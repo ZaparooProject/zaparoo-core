@@ -63,11 +63,13 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	systemID := env.Cmd.Args[0]
 
+	// For menu, use ReturnToMenu() instead of LaunchSystem
+	// This ensures proper handling across all platforms (stops active launcher and returns to main menu)
 	if strings.EqualFold(systemID, "menu") {
-		if err := pl.StopActiveLauncher(platforms.StopForPreemption); err != nil {
+		if err := pl.ReturnToMenu(); err != nil {
 			return platforms.CmdResult{
 				MediaChanged: true,
-			}, fmt.Errorf("failed to stop active launcher: %w", err)
+			}, fmt.Errorf("failed to return to menu: %w", err)
 		}
 		return platforms.CmdResult{
 			MediaChanged: true,
@@ -281,12 +283,12 @@ func getAltLauncher(
 
 		return func(args string) error {
 			// Pass the specific launcher - DoLaunch handles lifecycle
-			return pl.LaunchMedia(env.Cfg, args, &launcher)
+			return pl.LaunchMedia(env.Cfg, args, &launcher, env.Database)
 		}, nil
 	}
 	// Normal path - pass nil for auto-detection
 	return func(args string) error {
-		return pl.LaunchMedia(env.Cfg, args, nil)
+		return pl.LaunchMedia(env.Cfg, args, nil, env.Database)
 	}, nil
 }
 
@@ -336,6 +338,22 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			return platforms.CmdResult{}, fmt.Errorf("failed to install remote file: %w", err)
 		}
 		path = installPath
+	}
+
+	// Apply system defaults from system advanced arg if no explicit launcher specified
+	if env.Cmd.AdvArgs["launcher"] == "" && env.Cmd.AdvArgs["system"] != "" {
+		systemID := env.Cmd.AdvArgs["system"]
+		system, lookupErr := systemdefs.LookupSystem(systemID)
+		if lookupErr != nil {
+			log.Warn().Err(lookupErr).Str("system", systemID).
+				Msg("system arg provided but lookup failed - falling back to auto-detection")
+		} else {
+			if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+				log.Debug().Str("system", system.ID).Str("launcher", systemDefaults.Launcher).
+					Msg("applying system default launcher from system arg")
+				env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+			}
+		}
 	}
 
 	launch, err := getAltLauncher(pl, env)

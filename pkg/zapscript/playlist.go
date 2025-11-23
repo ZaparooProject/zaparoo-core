@@ -346,20 +346,35 @@ func cmdPlaylistLoad(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
-	pls, err := loadPlaylist(pl, env)
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
+	var pls *playlists.Playlist
 
-	if env.Playlist.Active != nil && env.Playlist.Active.ID == pls.ID {
-		log.Debug().Msg("opening active playlist")
-		pls.Index = env.Playlist.Active.Index
-		// Validate index bounds
-		if pls.Index >= len(pls.Items) {
-			pls.Index = len(pls.Items) - 1
+	// If no args provided, use the currently active playlist
+	if len(env.Cmd.Args) == 0 {
+		if env.Playlist.Active == nil {
+			return platforms.CmdResult{}, errors.New("no active playlist to open")
 		}
-		if pls.Index < 0 {
-			pls.Index = 0
+		log.Debug().Msg("opening active playlist (no args)")
+		// Use active playlist as-is (preserves current Index and state)
+		pls = env.Playlist.Active
+	} else {
+		// Load playlist from argument
+		var err error
+		pls, err = loadPlaylist(pl, env)
+		if err != nil {
+			return platforms.CmdResult{}, err
+		}
+
+		// If loaded playlist matches active, preserve current position
+		if env.Playlist.Active != nil && env.Playlist.Active.ID == pls.ID {
+			log.Debug().Msg("opening active playlist")
+			pls.Index = env.Playlist.Active.Index
+			// Validate index bounds
+			if pls.Index >= len(pls.Items) {
+				pls.Index = len(pls.Items) - 1
+			}
+			if pls.Index < 0 {
+				pls.Index = 0
+			}
 		}
 	}
 

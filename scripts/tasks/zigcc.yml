@@ -20,14 +20,13 @@ tasks:
           BUILD_ARCH: amd64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
-          CC: "zig cc -target x86_64-linux-musl"
-          CXX: "zig c++ -target x86_64-linux-musl"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          CC: "zig cc -target x86_64-linux-gnu"
+          CXX: "zig c++ -target x86_64-linux-gnu"
+          NO_STATIC: true
+          EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-musl/include
-            -I/opt/deps/x86_64-linux-musl/include"
-            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-musl/lib
-            -L/opt/deps/x86_64-linux-musl/lib -lnfc -lusb -lusb-1.0"
+            -e CGO_CFLAGS="-I/opt/libnfc/x86_64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/x86_64-linux-gnu/lib -L/opt/deps/x86_64-linux-gnu/lib /opt/libnfc/x86_64-linux-gnu/lib/libnfc.a /opt/deps/x86_64-linux-gnu/lib/libusb.a /opt/deps/x86_64-linux-gnu/lib/libusb-1.0.a -ldl"
 
   build-linux-arm64:
     internal: true
@@ -40,14 +39,13 @@ tasks:
           BUILD_ARCH: arm64
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
-          CC: "zig cc -target aarch64-linux-musl"
-          CXX: "zig c++ -target aarch64-linux-musl"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          CC: "zig cc -target aarch64-linux-gnu"
+          CXX: "zig c++ -target aarch64-linux-gnu"
+          NO_STATIC: true
+          EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-musl/include
-            -I/opt/deps/aarch64-linux-musl/include"
-            -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-musl/lib
-            -L/opt/deps/aarch64-linux-musl/lib -lnfc -lusb -lusb-1.0"
+            -e CGO_CFLAGS="-I/opt/libnfc/aarch64-linux-gnu/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/aarch64-linux-gnu/lib -L/opt/deps/aarch64-linux-gnu/lib /opt/libnfc/aarch64-linux-gnu/lib/libnfc.a /opt/deps/aarch64-linux-gnu/lib/libusb.a /opt/deps/aarch64-linux-gnu/lib/libusb-1.0.a -ldl"
 
   build-linux-arm:
     internal: true
@@ -60,14 +58,13 @@ tasks:
           BUILD_ARCH: arm
           IMAGE_NAME: zaparoo/zigcc
           APP_BIN: '{{default "zaparoo" .APP_BIN}}'
-          CC: "zig cc -target arm-linux-musleabihf"
-          CXX: "zig c++ -target arm-linux-musleabihf"
-          EXTRA_LDFLAGS: "-linkmode external -extldflags '-static'"
+          CC: "zig cc -target arm-linux-gnueabihf"
+          CXX: "zig c++ -target arm-linux-gnueabihf"
+          NO_STATIC: true
+          EXTRA_LDFLAGS: "-linkmode external"
           EXTRA_DOCKER_ARGS: >-
-            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-musleabihf/include
-            -I/opt/deps/arm-linux-musleabihf/include"
-            -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-musleabihf/lib
-            -L/opt/deps/arm-linux-musleabihf/lib -lnfc -lusb -lusb-1.0"
+            -e CGO_CFLAGS="-I/opt/libnfc/arm-linux-gnueabihf/include"
+            -e CGO_LDFLAGS="-L/opt/libnfc/arm-linux-gnueabihf/lib -L/opt/deps/arm-linux-gnueabihf/lib /opt/libnfc/arm-linux-gnueabihf/lib/libnfc.a /opt/deps/arm-linux-gnueabihf/lib/libusb.a /opt/deps/arm-linux-gnueabihf/lib/libusb-1.0.a -ldl"
 
   build-windows-amd64:
     internal: true
