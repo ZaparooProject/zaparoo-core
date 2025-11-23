@@ -65,12 +65,26 @@ func isDBusAvailable() bool {
 
 	done := make(chan bool, 1)
 	go func() {
-		conn, err := dbus.SystemBus()
+		// Use SystemBusPrivate to create a new connection that we can safely close
+		// without affecting the shared connection used by Start()
+		conn, err := dbus.SystemBusPrivate()
 		if err != nil {
 			done <- false
 			return
 		}
 		defer func() { _ = conn.Close() }()
+
+		// Auth must be called after SystemBusPrivate
+		if err := conn.Auth(nil); err != nil {
+			done <- false
+			return
+		}
+
+		// Hello must be called after Auth to complete the connection setup
+		if err := conn.Hello(); err != nil {
+			done <- false
+			return
+		}
 
 		// Verify UDisks2 service is actually available
 		obj := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus")
