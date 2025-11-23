@@ -12,8 +12,6 @@ This page documents the protocol used to communicate with the API and how to int
 
 The API uses a standard [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) connection to exchange [JSON](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) payloads using the [JSON-RPC 2.0](https://www.jsonrpc.org/specification) protocol.
 
-All remote cleartext WebSocket connections must encrypt every payload using the [secure layer](#secure-layer) detailed below, or else the payload will be rejected. Local unencrypted connections are allowed, depending on the platform and privilege context of the running service.
-
 Communication follows a loose client-server relationship. Clients, by default, are not expected to implement the API beyond what that particular client needs to function.
 
 ### Connection
