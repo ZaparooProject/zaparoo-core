@@ -19,7 +19,7 @@ permissions:
   contents: write
 
 env:
-  ZIGCC_VERSION: "1.0.1"
+  ZIGCC_VERSION: "1.1.0"
   BUILD_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
@@ -170,62 +170,64 @@ jobs:
           name: unsigned-zip-${{matrix.arch}}
           path: _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${{env.VERSION}}.zip
           retention-days: 1
-      - name: Copy installer to consistent name for signing
-        if: matrix.platform == 'windows'
-        run: |
-          cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
-             "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
+      # TODO: Re-enable when signing is configured
+      # - name: Copy installer to consistent name for signing
+      #   if: matrix.platform == 'windows'
+      #   run: |
+      #     cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
+      #        "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned installer artifact
         if: matrix.platform == 'windows'
         id: upload-unsigned-installer
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-installer-${{matrix.arch}}
-          path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
+          path: _build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe
           retention-days: 1
-      - name: Sign ZIP file
-        if: matrix.platform == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
-          signing-policy-slug: 'release-signing'
-          artifact-configuration-slug: 'windows-zip'
-          github-artifact-id: '${{ steps.upload-unsigned-zip.outputs.artifact-id }}'
-          wait-for-completion: true
-          output-artifact-directory: '_build/signed/zip_${{matrix.arch}}'
-      - name: Sign installer EXE
-        if: matrix.platform == 'windows'
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-          organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
-          project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
-          signing-policy-slug: 'release-signing'
-          artifact-configuration-slug: 'windows-installer'
-          github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
-          wait-for-completion: true
-          output-artifact-directory: '_build/signed/installer_${{matrix.arch}}'
-      - name: Rename signed installer back to versioned name
-        if: matrix.platform == 'windows'
-        run: |
-          mv "_build/signed/installer_${{matrix.arch}}/zaparoo-setup.exe" \
-             "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
-      - name: Add signed ZIP to release
+      # TODO: Re-enable signing once SignPath is configured
+      # - name: Sign ZIP file
+      #   if: matrix.platform == 'windows'
+      #   uses: signpath/github-action-submit-signing-request@v2
+      #   with:
+      #     api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+      #     organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+      #     project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
+      #     signing-policy-slug: 'release-signing'
+      #     artifact-configuration-slug: 'windows-zip'
+      #     github-artifact-id: '${{ steps.upload-unsigned-zip.outputs.artifact-id }}'
+      #     wait-for-completion: true
+      #     output-artifact-directory: '_build/signed/zip_${{matrix.arch}}'
+      # - name: Sign installer EXE
+      #   if: matrix.platform == 'windows'
+      #   uses: signpath/github-action-submit-signing-request@v2
+      #   with:
+      #     api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+      #     organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
+      #     project-slug: '${{ secrets.SIGNPATH_PROJECT_SLUG }}'
+      #     signing-policy-slug: 'release-signing'
+      #     artifact-configuration-slug: 'windows-installer'
+      #     github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
+      #     wait-for-completion: true
+      #     output-artifact-directory: '_build/signed/installer_${{matrix.arch}}'
+      # - name: Rename signed installer back to versioned name
+      #   if: matrix.platform == 'windows'
+      #   run: |
+      #     mv "_build/signed/installer_${{matrix.arch}}/zaparoo-setup.exe" \
+      #        "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
+      - name: Add unsigned ZIP to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
         if: matrix.platform == 'windows'
         run: |
-          gh release upload "$tag" "_build/signed/zip_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
-      - name: Add signed Windows installer to release
+          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
+      - name: Add unsigned Windows installer to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
         if: matrix.platform == 'windows'
         run: |
-          gh release upload "$tag" "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
+          gh release upload "$tag" "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
       - name: Add release (non-Windows)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
