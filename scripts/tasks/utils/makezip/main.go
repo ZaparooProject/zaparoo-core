@@ -39,7 +39,7 @@ var platformDocs = map[string]string{
 	"bazzite":   "bazzite.mdx",
 	"chimeraos": "chimeraos.mdx",
 	"libreelec": "libreelec.md",
-	"linux":     "linux.mdx",
+	"linux":     "linux.md",
 	"mac":       "mac.mdx",
 	"mister":    "mister.md",
 	"mistex":    "mistex.md",
