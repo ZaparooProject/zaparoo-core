@@ -1,0 +1,79 @@
+name: Nightly Build
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-nightly:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.generate_tag.outputs.tag }}
+      should_build: ${{ steps.check_changes.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to check for changes
+
+      - name: Check for changes since last nightly
+        id: check_changes
+        run: |
+          # Get the latest nightly tag
+          LATEST_NIGHTLY=$(git tag -l "v*-nightly.*" | sort -V | tail -n 1)
+
+          if [ -z "$LATEST_NIGHTLY" ]; then
+            echo "No previous nightly found, proceeding with build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check if there are commits since the last nightly
+          COMMITS_SINCE=$(git rev-list "${LATEST_NIGHTLY}..HEAD" --count)
+
+          if [ "$COMMITS_SINCE" -gt 0 ]; then
+            echo "Found $COMMITS_SINCE commits since last nightly, proceeding with build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No commits since last nightly, skipping build"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate nightly tag name
+        if: steps.check_changes.outputs.should_build == 'true'
+        id: generate_tag
+        run: |
+          # Get version from install.sh DEFAULT_VERSION
+          BASE_VERSION=$(grep '^DEFAULT_VERSION=' scripts/install.sh | cut -d'"' -f2)
+          # Include time to avoid collisions if workflow runs multiple times per day
+          NIGHTLY_TAG="v${BASE_VERSION}-nightly.$(date +%Y%m%d.%H%M)"
+
+          echo "Generated nightly tag: ${NIGHTLY_TAG}"
+          echo "tag=${NIGHTLY_TAG}" >> "$GITHUB_OUTPUT"
+
+  build-nightly:
+    needs: prepare-nightly
+    if: needs.prepare-nightly.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.prepare-nightly.outputs.tag }}
+      is_nightly: true
+    secrets: inherit
+
+  cleanup-old-nightlies:
+    needs: build-nightly
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete old nightly releases
+        uses: dev-drprasad/delete-older-releases@v0.3.0
+        with:
+          keep_latest: 5
+          delete_tags: true
+          delete_tag_pattern: nightly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
