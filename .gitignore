@@ -52,3 +52,5 @@ worktrees/
 
 /scripts/mister/utils/src/
 /scripts/mister/utils/build/
+
+/scripts/batocera/template/userdata/roms/ports/Zaparoo.sh

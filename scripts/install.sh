@@ -201,11 +201,16 @@ install_linux_generic() {
 
     # Check for special distro handling
     case "${distro}" in
+        batocera)
+            # Batocera has its own installation method
+            install_batocera
+            return 0
+            ;;
         steamos|chimeraos)
             warn "Immutable filesystem detected (${distro})"
             warn "Installation will be user-local only"
             ;;
-        batocera|recalbox|retropie)
+        recalbox|retropie)
             warn "Embedded system detected (${distro})"
             warn "Some features may require manual configuration"
             ;;
@@ -318,6 +323,45 @@ install_hardware() {
     else
         info "Skipping hardware support installation"
     fi
+}
+
+# ============================================================================
+# Batocera Installation
+# ============================================================================
+
+install_batocera() {
+    info "Installing Zaparoo Core for Batocera..."
+
+    # Build package filename
+    local package_name download_url
+    package_name="zaparoo-core-${VERSION}-1-any.pkg.tar.zst"
+    download_url="${BASE_URL}/download/v${VERSION}/${package_name}"
+
+    info "Downloading Batocera package ${VERSION}..."
+
+    # Create temp directory
+    TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
+    TMP_PACKAGE="${TMP_DIR}/${package_name}"
+
+    # Download package
+    if ! curl -fsSL "${download_url}" -o "${TMP_PACKAGE}"; then
+        abort "Failed to download from ${download_url}"
+    fi
+
+    success "Downloaded ${package_name}"
+
+    # Check if pacman is available
+    if ! command -v pacman >/dev/null 2>&1; then
+        abort "pacman is required for Batocera installation but not found"
+    fi
+
+    # Install package
+    info "Installing package with pacman..."
+    if ! pacman -U --noconfirm "${TMP_PACKAGE}"; then
+        abort "Failed to install package with pacman"
+    fi
+
+    success "Batocera package installed successfully"
 }
 
 # ============================================================================

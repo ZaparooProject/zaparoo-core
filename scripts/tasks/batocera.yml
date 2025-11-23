@@ -31,6 +31,8 @@ tasks:
     cmds:
       - rm -rf {{.BUILD_DIR}}
       - mkdir -p {{.BUILD_DIR}}
+      - mkdir -p {{.TEMPLATE_DIR}}/userdata/roms/ports
+      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.TEMPLATE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - task: package-arch
         vars:
           BUILD_ARCH: amd64
@@ -60,17 +62,20 @@ tasks:
     vars:
       BUILD_DIR: '{{.BUILD_DIR | default "_build/packages/batocera"}}'
       TEMPLATE_DIR: '{{.TEMPLATE_DIR | default "scripts/batocera/template"}}'
-      PACKAGE_NAME: zaparoo-batocera-{{.VERSION}}-{{.PKG_ARCH}}
+      PACKAGE_NAME: zaparoo-core-{{.VERSION}}-1-{{.PKG_ARCH}}
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating package for {{.PKG_ARCH}}..."
       - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
       - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
       - cp _build/batocera_{{.BUILD_ARCH}}/zaparoo {{.PACKAGE_DIR}}/userdata/system/
+      - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
       - sed -i "s/__VERSION__/{{.VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - sed -i "s/__ARCH__/{{.PKG_ARCH}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/services/zaparoo_service
+      - chmod +x {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - task: create-package
         vars:
           PACKAGE_DIR: "{{.PACKAGE_DIR}}"
@@ -82,30 +87,50 @@ tasks:
     dir: "{{.PACKAGE_DIR}}"
     cmds:
       - echo "Creating package manually..."
-      - tar -cf - .PKGINFO .BATOEXEC userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
+      # Copy BATOEXEC files to userdata/system/pacman/batoexec/ for pacman hooks
+      - mkdir -p userdata/system/pacman/batoexec
+      - |
+        i=0
+        for f in .BATOEXEC*; do
+          if [ -f "$f" ]; then
+            cp "$f" "userdata/system/pacman/batoexec/zaparoo-core_$i"
+            echo "Copied $f -> userdata/system/pacman/batoexec/zaparoo-core_$i"
+            i=$((i+1))
+          fi
+        done
+      - tar -cf - .PKGINFO .BATOEXEC* userdata | zstd -c --rsyncable - -o "../{{.PACKAGE_NAME}}.pkg.tar.zst"
       - chmod go+r "../{{.PACKAGE_NAME}}.pkg.tar.zst"
 
   package-any:
     desc: Build universal Batocera pacman package for all architectures
     deps: [build-amd64, build-arm64, build-arm]
     vars:
-      TEMPLATE_DIR: scripts/batocera/template-any
+      TEMPLATE_DIR: scripts/batocera/template
       BUILD_DIR: _build/packages/batocera
-      PACKAGE_NAME: zaparoo-batocera-{{.APP_VERSION}}-any
+      PACKAGE_NAME: zaparoo-core-{{.APP_VERSION}}-1-any
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating universal 'any' architecture package..."
+      - rm -f {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst
+      - rm -rf {{.PACKAGE_DIR}}
       - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
+      - mkdir -p {{.TEMPLATE_DIR}}/userdata/roms/ports
+      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.TEMPLATE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - cp cmd/batocera/scripts/zaparoo_wrapper.sh {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
       - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
       - cp _build/batocera_arm64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
       - cp _build/batocera_arm/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
       - sed -i "s/__VERSION__/{{.APP_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__ARCH__/any/g" {{.PACKAGE_DIR}}/.PKGINFO
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/services/zaparoo_service
+      - chmod +x {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - task: create-package
         vars:
           PACKAGE_DIR: "{{.PACKAGE_DIR}}"
@@ -114,7 +139,9 @@ tasks:
       - echo "Universal package created at {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst"
 
   deploy:
+    desc: Build universal package and deploy to Batocera system
     cmds:
-      - task: build-{{.CLI_ARGS}}
-      - scp _build/batocera_{{.CLI_ARGS}}/zaparoo root@${BATOCERA_IP}:/userdata/system/zaparoo
-      - ssh root@${BATOCERA_IP} /userdata/system/zaparoo -service restart
+      - task: package-any
+      - scp _build/packages/batocera/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst root@${BATOCERA_IP}:/tmp/
+      - ssh root@${BATOCERA_IP} "pacman -R --noconfirm zaparoo-core || true"
+      - ssh root@${BATOCERA_IP} "pacman -U --noconfirm /tmp/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst"
