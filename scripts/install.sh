@@ -135,8 +135,8 @@ check_requirements() {
         abort "curl is required but not installed. Please install curl and try again."
     fi
 
-    if ! command -v unzip >/dev/null 2>&1; then
-        abort "unzip is required but not installed. Please install unzip and try again."
+    if ! command -v tar >/dev/null 2>&1; then
+        abort "tar is required but not installed. Please install tar and try again."
     fi
 
     success "All requirements met"
@@ -147,7 +147,7 @@ check_requirements() {
 # ============================================================================
 
 download_and_extract() {
-    local os_type arch zip_name download_url
+    local os_type arch archive_name download_url
 
     os_type="$1"
     arch="$(detect_arch)"
@@ -155,14 +155,14 @@ download_and_extract() {
     info "Detected system: ${os_type}/${arch}"
 
     # Build filename with version and download URL
-    zip_name="zaparoo-${os_type}_${arch}-${VERSION}.zip"
-    download_url="${BASE_URL}/download/v${VERSION}/${zip_name}"
+    archive_name="zaparoo-${os_type}_${arch}-${VERSION}.tar.gz"
+    download_url="${BASE_URL}/download/v${VERSION}/${archive_name}"
 
     info "Downloading Zaparoo Core ${VERSION}..."
     info "URL: ${download_url}"
 
     if [ "$DRY_RUN" = true ]; then
-        info "[DRY-RUN] Would download: ${zip_name}"
+        info "[DRY-RUN] Would download: ${archive_name}"
         info "[DRY-RUN] Would extract to temporary directory"
         ZAPAROO_BIN="/tmp/zaparoo-dry-run"  # Dummy path for dry-run
         return 0
@@ -170,21 +170,21 @@ download_and_extract() {
 
     # Create temp directory
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
-    TMP_ZIP="${TMP_DIR}/zaparoo.zip"
+    TMP_ARCHIVE="${TMP_DIR}/zaparoo.tar.gz"
     TMP_EXTRACT="${TMP_DIR}/extract"
 
-    # Download zip
-    if ! curl -fsSL "${download_url}" -o "${TMP_ZIP}"; then
+    # Download archive
+    if ! curl -fsSL "${download_url}" -o "${TMP_ARCHIVE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
-    success "Downloaded ${zip_name}"
+    success "Downloaded ${archive_name}"
 
     info "Extracting archive..."
     mkdir -p "${TMP_EXTRACT}"
 
-    if ! unzip -q "${TMP_ZIP}" -d "${TMP_EXTRACT}"; then
-        abort "Failed to extract zip"
+    if ! tar -xzf "${TMP_ARCHIVE}" -C "${TMP_EXTRACT}"; then
+        abort "Failed to extract archive"
     fi
 
     # Find the zaparoo binary

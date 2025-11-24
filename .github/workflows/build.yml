@@ -234,7 +234,16 @@ jobs:
           tag: ${{ env.BUILD_TAG }}
         if: matrix.platform != 'windows'
         run: |
-          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
+          # Determine archive extension based on platform
+          case "${{matrix.platform}}" in
+            mac|mister|mistex)
+              EXT="zip"
+              ;;
+            *)
+              EXT="tar.gz"
+              ;;
+          esac
+          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.${EXT}"
       - name: Add Batocera package
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

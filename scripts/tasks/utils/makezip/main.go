@@ -20,7 +20,9 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -113,14 +115,14 @@ func downloadDoc(platformID, toDir string) error {
 
 func main() {
 	if len(os.Args) < 5 {
-		_, _ = fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <zip_name>")
+		_, _ = fmt.Println("Usage: go run makezip.go <platform> <build_dir> <app_bin> <archive_name>")
 		os.Exit(1)
 	}
 
 	platform := os.Args[1]
 	buildDir := os.Args[2]
 	appBin := os.Args[3]
-	zipName := os.Args[4]
+	archiveName := os.Args[4]
 
 	if strings.HasPrefix(platform, "test") {
 		os.Exit(0)
@@ -151,8 +153,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	zipPath := filepath.Join(buildDir, zipName)
-	_ = os.Remove(zipPath)
+	archivePath := filepath.Join(buildDir, archiveName)
+	_ = os.Remove(archivePath)
 
 	readmePath := filepath.Join(buildDir, "README.txt")
 	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
@@ -162,8 +164,16 @@ func main() {
 		}
 	}
 
-	if err := createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir); err != nil {
-		_, _ = fmt.Printf("Error creating zip: %v\n", err)
+	// Determine format based on file extension
+	var err error
+	if strings.HasSuffix(archiveName, ".tar.gz") {
+		err = createTarGzFile(archivePath, appPath, licensePath, readmePath, platform, buildDir)
+	} else {
+		err = createZipFile(archivePath, appPath, licensePath, readmePath, platform, buildDir)
+	}
+
+	if err != nil {
+		_, _ = fmt.Printf("Error creating archive: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -293,6 +303,126 @@ func copyFile(src, dst string) error {
 	}
 	if err := os.WriteFile(dst, input, 0o600); err != nil {
 		return fmt.Errorf("failed to write file %s: %w", dst, err)
+	}
+	return nil
+}
+
+func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, buildDir string) error {
+	//nolint:gosec // Safe: creates tar.gz files in build script with controlled paths
+	tarGzFile, err := os.Create(tarGzPath)
+	if err != nil {
+		return fmt.Errorf("error creating tar.gz file: %w", err)
+	}
+	defer func(tarGzFile *os.File) {
+		_ = tarGzFile.Close()
+	}(tarGzFile)
+
+	gzipWriter := gzip.NewWriter(tarGzFile)
+	defer func(gzipWriter *gzip.Writer) {
+		_ = gzipWriter.Close()
+	}(gzipWriter)
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer func(tarWriter *tar.Writer) {
+		_ = tarWriter.Close()
+	}(tarWriter)
+
+	filesToAdd := []struct {
+		path    string
+		arcname string
+	}{
+		{appPath, filepath.Base(appPath)},
+		{licensePath, filepath.Base(licensePath)},
+		{readmePath, filepath.Base(readmePath)},
+	}
+
+	for _, file := range filesToAdd {
+		err := addFileToTar(tarWriter, file.path, file.arcname)
+		if err != nil {
+			return fmt.Errorf("error adding file to tar: %w", err)
+		}
+	}
+
+	if items, ok := extraItems[platform]; ok {
+		for _, item := range items {
+			if info, err := os.Stat(item); err == nil {
+				if info.IsDir() {
+					err = addDirToTar(tarWriter, item, buildDir)
+				} else {
+					destPath := filepath.Join(buildDir, filepath.Base(item))
+					if copyErr := copyFile(item, destPath); copyErr != nil {
+						return fmt.Errorf("error copying extra file: %w", copyErr)
+					}
+					err = addFileToTar(tarWriter, destPath, filepath.Base(item))
+				}
+				if err != nil {
+					return fmt.Errorf("error adding extra item to tar: %w", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
+	//nolint:gosec // Safe: opens files in build script with controlled paths
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file %s: %w", filePath, err)
+	}
+	defer func(file *os.File) {
+		_ = file.Close()
+	}(file)
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("operation failed: %w", err)
+	}
+
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return fmt.Errorf("operation failed: %w", err)
+	}
+	header.Name = arcname
+
+	if err := tarWriter.WriteHeader(header); err != nil {
+		return fmt.Errorf("failed to write tar header: %w", err)
+	}
+
+	_, err = io.Copy(tarWriter, file)
+	if err != nil {
+		return fmt.Errorf("failed to copy file content to tar: %w", err)
+	}
+	return nil
+}
+
+func addDirToTar(tarWriter *tar.Writer, dirPath, buildDir string) error {
+	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			relPath, err := filepath.Rel(dirPath, path)
+			if err != nil {
+				return fmt.Errorf("failed to get relative path: %w", err)
+			}
+
+			destPath := filepath.Join(buildDir, filepath.Base(dirPath), relPath)
+			if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+				return fmt.Errorf("failed to create directory: %w", err)
+			}
+
+			if err := copyFile(path, destPath); err != nil {
+				return err
+			}
+
+			return addFileToTar(tarWriter, destPath, filepath.Join(filepath.Base(dirPath), relPath))
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
 	}
 	return nil
 }
