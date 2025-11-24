@@ -262,6 +262,7 @@ jobs:
         with:
           sparse-checkout: |
             scripts/
+            cmd/batocera/scripts/
             Taskfile.dist.yml
           sparse-checkout-cone-mode: false
       - name: Write release version
@@ -294,7 +295,7 @@ jobs:
           name: batocera-binary-arm
           path: _build/batocera_arm/
       - name: Build universal Batocera package
-        run: APP_VERSION=${VERSION} task batocera:package-any
+        run: APP_VERSION=${VERSION} task batocera:package-any-from-artifacts
       - name: Upload Batocera any-arch package to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

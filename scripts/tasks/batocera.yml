@@ -139,6 +139,46 @@ tasks:
           BUILD_DIR: "{{.BUILD_DIR}}"
       - echo "Universal package created at {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst"
 
+  package-any-from-artifacts:
+    desc: Build universal Batocera package from pre-built binaries (for CI)
+    preconditions:
+      - test -f _build/batocera_amd64/zaparoo
+      - test -f _build/batocera_arm64/zaparoo
+      - test -f _build/batocera_arm/zaparoo
+    vars:
+      TEMPLATE_DIR: scripts/batocera/template
+      BUILD_DIR: _build/packages/batocera
+      PACKAGE_NAME: zaparoo-core-{{.APP_VERSION}}-1-any
+      PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
+    cmds:
+      - echo "Creating universal 'any' architecture package from artifacts..."
+      - rm -f {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst
+      - rm -rf {{.PACKAGE_DIR}}
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
+      - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/roms/ports
+      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
+      - cp cmd/batocera/scripts/zaparoo_wrapper.sh {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
+      - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
+      - cp _build/batocera_arm64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
+      - cp _build/batocera_arm/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
+      - sed -i "s/__VERSION__/{{.APP_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__ARCH__/any/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
+      - chmod +x {{.PACKAGE_DIR}}/userdata/system/services/zaparoo_service
+      - chmod +x {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
+      - task: create-package
+        vars:
+          PACKAGE_DIR: "{{.PACKAGE_DIR}}"
+          PACKAGE_NAME: "{{.PACKAGE_NAME}}"
+          BUILD_DIR: "{{.BUILD_DIR}}"
+      - echo "Universal package created at {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst"
+
   deploy:
     desc: Build universal package and deploy to Batocera system
     cmds:
