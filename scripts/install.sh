@@ -96,6 +96,13 @@ detect_linux_distro() {
     # shellcheck source=/dev/null
     . /etc/os-release
 
+    # Check NAME field for distributions that use generic IDs
+    # Batocera uses ID=buildroot, so we need to check NAME
+    if echo "${NAME:-}" | grep -qi "batocera"; then
+        echo "batocera"
+        return
+    fi
+
     # Return the ID (e.g., "ubuntu", "fedora", "steamos", "chimeraos")
     echo "${ID:-generic}"
 }
@@ -274,14 +281,22 @@ prompt_yes_no() {
         return
     fi
 
+    # When run via "curl | bash", stdin is the pipe, not the terminal.
+    # We need to read from /dev/tty for input. The prompt goes to stderr
+    # so it's not captured by command substitution.
     local yn
     if [ "${default}" = "y" ]; then
-        printf "%s [Y/n] " "${prompt}"
+        printf "%s [Y/n] " "${prompt}" >&2
     else
-        printf "%s [y/N] " "${prompt}"
+        printf "%s [y/N] " "${prompt}" >&2
     fi
 
-    read -r yn
+    # Read from /dev/tty if available (handles curl|bash case), otherwise stdin
+    if [ -e /dev/tty ]; then
+        read -r yn </dev/tty
+    else
+        read -r yn
+    fi
     yn="${yn:-${default}}"
 
     case "${yn}" in
@@ -514,12 +529,46 @@ main() {
     # Parse arguments
     while [ $# -gt 0 ]; do
         case "$1" in
+            -y|--yes)
+                NONINTERACTIVE=1
+                shift
+                ;;
             --dry-run)
                 DRY_RUN=true
                 shift
                 ;;
+            -V|--version)
+                echo "Zaparoo Core Installer v${VERSION}"
+                exit 0
+                ;;
+            -h|--help)
+                cat <<EOF
+Zaparoo Core Installer v${VERSION}
+
+Usage:
+    install.sh [options]
+    curl -fsSL https://get.zaparoo.org | bash
+    curl -fsSL https://get.zaparoo.org | bash -s -- [options]
+
+Options:
+    -y, --yes       Accept defaults, don't prompt
+    --dry-run       Show what would be installed without making changes
+    -h, --help      Show this help message
+    -V, --version   Show version
+
+Environment:
+    ZAPAROO_VERSION   Install a specific version (default: ${DEFAULT_VERSION})
+
+Examples:
+    curl -fsSL https://get.zaparoo.org | bash
+    curl -fsSL https://get.zaparoo.org | bash -s -- -y
+    curl -fsSL https://get.zaparoo.org | bash -s -- --dry-run
+    ZAPAROO_VERSION=2.6.0 curl -fsSL https://get.zaparoo.org | bash
+EOF
+                exit 0
+                ;;
             *)
-                abort "Unknown option: $1"
+                abort "Unknown option: $1 (use -h for help)"
                 ;;
         esac
     done
