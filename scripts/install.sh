@@ -181,7 +181,7 @@ download_and_extract() {
     TMP_EXTRACT="${TMP_DIR}/extract"
 
     # Download archive
-    if ! curl -fsSL "${download_url}" -o "${TMP_ARCHIVE}"; then
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_ARCHIVE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
@@ -465,7 +465,7 @@ install_batocera() {
     TMP_PACKAGE="${TMP_DIR}/${package_name}"
 
     # Download package
-    if ! curl -fsSL "${download_url}" -o "${TMP_PACKAGE}"; then
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_PACKAGE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
