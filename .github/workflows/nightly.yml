@@ -45,11 +45,13 @@ jobs:
         if: steps.check_changes.outputs.should_build == 'true'
         id: generate_tag
         run: |
-          # Get version from install.sh DEFAULT_VERSION
-          BASE_VERSION=$(grep '^DEFAULT_VERSION=' scripts/install.sh | cut -d'"' -f2)
+          # Get version from latest release tag (not install.sh)
+          LATEST_RELEASE=$(git describe --tags --abbrev=0 --match='v[0-9]*' --exclude='*nightly*' --exclude='*beta*' 2>/dev/null || echo "v2.7.0")
+          BASE_VERSION="${LATEST_RELEASE#v}"  # Strip 'v' prefix
           # Include time to avoid collisions if workflow runs multiple times per day
           NIGHTLY_TAG="v${BASE_VERSION}-nightly.$(date +%Y%m%d.%H%M)"
 
+          echo "Latest release: ${LATEST_RELEASE}"
           echo "Generated nightly tag: ${NIGHTLY_TAG}"
           echo "tag=${NIGHTLY_TAG}" >> "$GITHUB_OUTPUT"
 
