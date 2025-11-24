@@ -16,6 +16,9 @@ DEFAULT_VERSION="2.7.0"  # Update this with each release
 VERSION="${ZAPAROO_VERSION:-${DEFAULT_VERSION}}"
 BASE_URL="https://github.com/${GITHUB_REPO}/releases"
 
+# Dry-run mode (set by --dry-run flag)
+DRY_RUN=false
+
 # ============================================================================
 # Color and Output Functions
 # ============================================================================
@@ -74,7 +77,7 @@ detect_os() {
             echo "macos"
             ;;
         CYGWIN*|MINGW*|MSYS*)
-            echo "windows-wsl"
+            echo "windows"
             ;;
         *)
             echo "unknown"
@@ -144,7 +147,7 @@ check_requirements() {
 # ============================================================================
 
 download_and_extract() {
-    local os_type arch tarball_name download_url
+    local os_type arch archive_name download_url
 
     os_type="$1"
     arch="$(detect_arch)"
@@ -152,28 +155,36 @@ download_and_extract() {
     info "Detected system: ${os_type}/${arch}"
 
     # Build filename with version and download URL
-    tarball_name="zaparoo_${VERSION}_${os_type}_${arch}.tar.gz"
-    download_url="${BASE_URL}/download/v${VERSION}/${tarball_name}"
+    archive_name="zaparoo-${os_type}_${arch}-${VERSION}.tar.gz"
+    download_url="${BASE_URL}/download/v${VERSION}/${archive_name}"
 
     info "Downloading Zaparoo Core ${VERSION}..."
+    info "URL: ${download_url}"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would download: ${archive_name}"
+        info "[DRY-RUN] Would extract to temporary directory"
+        ZAPAROO_BIN="/tmp/zaparoo-dry-run"  # Dummy path for dry-run
+        return 0
+    fi
 
     # Create temp directory
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
-    TMP_TARBALL="${TMP_DIR}/zaparoo.tar.gz"
+    TMP_ARCHIVE="${TMP_DIR}/zaparoo.tar.gz"
     TMP_EXTRACT="${TMP_DIR}/extract"
 
-    # Download tarball
-    if ! curl -fsSL "${download_url}" -o "${TMP_TARBALL}"; then
+    # Download archive
+    if ! curl -fsSL "${download_url}" -o "${TMP_ARCHIVE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
-    success "Downloaded ${tarball_name}"
+    success "Downloaded ${archive_name}"
 
     info "Extracting archive..."
     mkdir -p "${TMP_EXTRACT}"
 
-    if ! tar -xzf "${TMP_TARBALL}" -C "${TMP_EXTRACT}"; then
-        abort "Failed to extract tarball"
+    if ! tar -xzf "${TMP_ARCHIVE}" -C "${TMP_EXTRACT}"; then
+        abort "Failed to extract archive"
     fi
 
     # Find the zaparoo binary
@@ -231,6 +242,14 @@ install_linux_generic() {
 install_application() {
     info "Installing application (binary, menu entry, icons)..."
 
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would install binary to: ~/.local/bin/zaparoo"
+        info "[DRY-RUN] Would install menu entry to: ~/.local/share/applications/"
+        info "[DRY-RUN] Would install icons to: ~/.local/share/icons/"
+        success "[DRY-RUN] Application installation simulated"
+        return 0
+    fi
+
     if ! "${ZAPAROO_BIN}" -install application; then
         abort "Failed to install application files"
     fi
@@ -241,6 +260,13 @@ install_application() {
 prompt_yes_no() {
     local prompt="$1"
     local default="${2:-n}"
+
+    # Dry-run mode - always answer yes to show what would be installed
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Auto-answering prompt: yes"
+        echo "y"
+        return
+    fi
 
     # Non-interactive mode
     if [ -n "${NONINTERACTIVE:-}" ]; then
@@ -275,6 +301,14 @@ install_service() {
     if [ "${response}" = "y" ]; then
         info "Installing systemd user service..."
 
+        if [ "$DRY_RUN" = true ]; then
+            info "[DRY-RUN] Would install service to: ~/.config/systemd/user/zaparoo.service"
+            info "[DRY-RUN] Would enable with: systemctl --user enable zaparoo"
+            info "[DRY-RUN] Would start with: systemctl --user start zaparoo"
+            success "[DRY-RUN] Systemd service installation simulated"
+            return 0
+        fi
+
         if ! "${ZAPAROO_BIN}" -install service; then
             warn "Failed to install systemd service"
             return 1
@@ -295,6 +329,12 @@ install_desktop() {
     if [ "${response}" = "y" ]; then
         info "Installing desktop shortcut..."
 
+        if [ "$DRY_RUN" = true ]; then
+            info "[DRY-RUN] Would install desktop file to: ~/.local/share/applications/zaparoo.desktop"
+            success "[DRY-RUN] Desktop shortcut installation simulated"
+            return 0
+        fi
+
         if ! "${ZAPAROO_BIN}" -install desktop; then
             warn "Failed to install desktop shortcut"
             return 1
@@ -312,6 +352,14 @@ install_hardware() {
 
     if [ "${response}" = "y" ]; then
         info "Installing hardware support (requires root)..."
+
+        if [ "$DRY_RUN" = true ]; then
+            info "[DRY-RUN] Would install udev rules to: /etc/udev/rules.d/99-zaparoo.rules"
+            info "[DRY-RUN] Would reload udev with: udevadm control --reload-rules"
+            info "[DRY-RUN] Would require: sudo privileges"
+            success "[DRY-RUN] Hardware support installation simulated"
+            return 0
+        fi
 
         if ! sudo "${ZAPAROO_BIN}" -install hardware; then
             warn "Failed to install hardware support"
@@ -332,12 +380,70 @@ install_hardware() {
 install_batocera() {
     info "Installing Zaparoo Core for Batocera..."
 
+    # Check for existing installations and clean up manual installs if needed
+    local has_pacman_install=false
+    local has_manual_install=false
+
+    # Detect pacman installation
+    if pacman -Q zaparoo-core >/dev/null 2>&1 || \
+       ls /userdata/system/pacman/batoexec/zaparoo-core_* >/dev/null 2>&1; then
+        has_pacman_install=true
+        info "Existing pacman installation detected"
+    fi
+
+    # Detect manual installation (only if no pacman install)
+    if [ "$has_pacman_install" = false ] && [ -f /userdata/system/zaparoo ]; then
+        has_manual_install=true
+        info "Manual installation detected - cleanup required"
+    fi
+
+    # Clean up manual installation if detected
+    if [ "$has_manual_install" = true ]; then
+        info "Cleaning up manual installation files..."
+
+        if [ "$DRY_RUN" = true ]; then
+            info "[DRY-RUN] Would stop and disable service: zaparoo_service"
+            info "[DRY-RUN] Would remove: /userdata/system/zaparoo"
+            info "[DRY-RUN] Would remove: /userdata/system/zaparoo_write_game.sh"
+            info "[DRY-RUN] Would remove: /userdata/system/services/zaparoo_service"
+            info "[DRY-RUN] Would remove: /userdata/roms/ports/Zaparoo.sh"
+            info "[DRY-RUN] Would remove: /userdata/system/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh"
+        else
+            # Stop and disable service if running
+            batocera-services stop zaparoo_service 2>/dev/null || true
+            batocera-services disable zaparoo_service 2>/dev/null || true
+
+            # Remove manual installation files
+            rm -f /userdata/system/zaparoo
+            rm -f /userdata/system/zaparoo_write_game.sh
+            rm -f /userdata/system/services/zaparoo_service
+            rm -f /userdata/roms/ports/Zaparoo.sh
+
+            # Remove manual-only configuration files
+            rm -f /userdata/system/configs/emulationstation/scripts/game-selected/zaparoo_game_select.sh
+
+            success "Manual installation cleaned up"
+        fi
+    fi
+
     # Build package filename
     local package_name download_url
     package_name="zaparoo-core-${VERSION}-1-any.pkg.tar.zst"
     download_url="${BASE_URL}/download/v${VERSION}/${package_name}"
 
     info "Downloading Batocera package ${VERSION}..."
+    info "URL: ${download_url}"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would download: ${package_name}"
+        info "[DRY-RUN] Would install with: pacman -U --noconfirm ${package_name}"
+        info "[DRY-RUN] Package would install to:"
+        info "[DRY-RUN]   - /userdata/system/zaparoo (wrapper + arch-specific binaries)"
+        info "[DRY-RUN]   - /userdata/system/services/zaparoo_service"
+        info "[DRY-RUN]   - /userdata/roms/ports/Zaparoo.sh"
+        success "[DRY-RUN] Batocera package installation simulated successfully"
+        return 0
+    fi
 
     # Create temp directory
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
@@ -355,9 +461,9 @@ install_batocera() {
         abort "pacman is required for Batocera installation but not found"
     fi
 
-    # Install package
+    # Install package (suppress output to avoid confusing warnings from upstream bug)
     info "Installing package with pacman..."
-    if ! pacman -U --noconfirm "${TMP_PACKAGE}"; then
+    if ! pacman -U --noconfirm "${TMP_PACKAGE}" >/dev/null 2>&1; then
         abort "Failed to install package with pacman"
     fi
 
@@ -379,14 +485,11 @@ install_macos() {
 }
 
 # ============================================================================
-# Windows WSL Installation
+# Windows Installation
 # ============================================================================
 
-install_windows_wsl() {
-    # WSL can use the Linux installer
-    warn "Detected Windows WSL environment"
-    info "Installing Linux version for WSL..."
-    install_linux_generic
+install_windows() {
+    abort "Windows installation requires the .exe installer. Please download it from https://zaparoo.org/download"
 }
 
 # ============================================================================
@@ -408,9 +511,25 @@ trap cleanup EXIT INT TERM
 main() {
     local os_type
 
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            *)
+                abort "Unknown option: $1"
+                ;;
+        esac
+    done
+
     # Print banner
     printf "\n"
     info "Zaparoo Core Installer"
+    if [ "$DRY_RUN" = true ]; then
+        warn "DRY-RUN MODE - No changes will be made"
+    fi
     printf "\n"
 
     # Detect OS
@@ -437,8 +556,8 @@ main() {
         macos)
             install_macos
             ;;
-        windows-wsl)
-            install_windows_wsl
+        windows)
+            install_windows
             ;;
         *)
             abort "Unsupported operating system: ${os_type}. Please visit https://zaparoo.org/download for manual installation."
@@ -447,17 +566,22 @@ main() {
 
     # Print success message
     printf "\n"
-    success "Zaparoo Core installed successfully!"
-    printf "\n"
-    info "Quick start:"
-    printf "  %szaparoo%s          - Start Zaparoo Core\n" "${BOLD}" "${RESET}"
-    printf "  %szaparoo -help%s    - Show help\n" "${BOLD}" "${RESET}"
+    if [ "$DRY_RUN" = true ]; then
+        success "Dry-run completed successfully!"
+        info "No changes were made to your system"
+    else
+        success "Zaparoo Core installed successfully!"
+        printf "\n"
+        info "Quick start:"
+        printf "  %szaparoo%s          - Start Zaparoo Core\n" "${BOLD}" "${RESET}"
+        printf "  %szaparoo -help%s    - Show help\n" "${BOLD}" "${RESET}"
+    fi
     printf "\n"
     info "For more information, visit: https://zaparoo.org"
     printf "\n"
 }
 
 # Run main function
-main
+main "$@"
 
 # Powered by Octocode MCP ⭐🐙 link:(https://github.com/bgauryy/octocode-mcp)

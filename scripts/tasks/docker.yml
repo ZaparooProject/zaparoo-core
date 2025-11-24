@@ -19,6 +19,18 @@ tasks:
     vars:
       BUILD_DIR: "_build/{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}"
       APP_BIN: '{{default "zaparoo" .APP_BIN}}'
+      # Determine archive extension based on platform
+      # Only Windows, macOS, MiSTer, and MiSTeX use .zip; everything else uses .tar.gz
+      ARCHIVE_EXT:
+        sh: |
+          case "{{.PLATFORM}}" in
+            windows|mac|mister|mistex)
+              echo "zip"
+              ;;
+            *)
+              echo "tar.gz"
+              ;;
+          esac
     cmds:
       - task: run
         vars:
@@ -40,7 +52,7 @@ tasks:
       - >-
         go run scripts/tasks/utils/makezip/main.go
         {{.PLATFORM}} {{.BUILD_DIR}} {{.APP_BIN}}
-        "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.zip"
+        "zaparoo-{{.PLATFORM}}_{{default ARCH .BUILD_ARCH}}-${APP_VERSION}.{{.ARCHIVE_EXT}}"
 
   run:
     internal: true

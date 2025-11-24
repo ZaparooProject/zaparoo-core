@@ -9,7 +9,9 @@ on:
         required: false
         type: string
 
-permissions: write-all
+permissions:
+  contents: write  # Needed for committing and pushing repo updates
+
 jobs:
   mister-repo:
     runs-on: ubuntu-latest

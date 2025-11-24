@@ -31,8 +31,6 @@ tasks:
     cmds:
       - rm -rf {{.BUILD_DIR}}
       - mkdir -p {{.BUILD_DIR}}
-      - mkdir -p {{.TEMPLATE_DIR}}/userdata/roms/ports
-      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.TEMPLATE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - task: package-arch
         vars:
           BUILD_ARCH: amd64
@@ -66,8 +64,11 @@ tasks:
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating package for {{.PKG_ARCH}}..."
+      - rm -rf {{.PACKAGE_DIR}}
       - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
       - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/roms/ports
+      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - cp _build/batocera_{{.BUILD_ARCH}}/zaparoo {{.PACKAGE_DIR}}/userdata/system/
       - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
       - sed -i "s/__VERSION__/{{.VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
@@ -114,9 +115,9 @@ tasks:
       - rm -f {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst
       - rm -rf {{.PACKAGE_DIR}}
       - mkdir -p {{.PACKAGE_DIR}}/userdata/system/services
-      - mkdir -p {{.TEMPLATE_DIR}}/userdata/roms/ports
-      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.TEMPLATE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - cp -r {{.TEMPLATE_DIR}}/. {{.PACKAGE_DIR}}/
+      - mkdir -p {{.PACKAGE_DIR}}/userdata/roms/ports
+      - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - cp cmd/batocera/scripts/zaparoo_wrapper.sh {{.PACKAGE_DIR}}/userdata/system/zaparoo
       - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
       - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
