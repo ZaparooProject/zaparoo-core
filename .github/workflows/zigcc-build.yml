@@ -32,12 +32,12 @@ jobs:
           else
             VERSION=$(cat scripts/zigcc/VERSION)
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building zigcc version: $VERSION"
       
       - name: Set lowercase repository owner
         run: |
-          echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
+          echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_ENV"
         env:
           OWNER: ${{ github.repository_owner }}
       
@@ -52,10 +52,10 @@ jobs:
         id: check
         run: |
           if docker manifest inspect ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.version.outputs.version }} > /dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version ${{ steps.version.outputs.version }} already exists in registry"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Version ${{ steps.version.outputs.version }} will be built"
           fi
       

@@ -84,9 +84,11 @@ jobs:
       - name: Configure Go paths for Windows
         if: matrix.os == 'windows-latest'
         run: |
-          echo "GOCACHE=D:\go-cache" >> $GITHUB_ENV
-          echo "GOMODCACHE=D:\go-mod-cache" >> $GITHUB_ENV
-          echo "GOTMPDIR=D:\go-tmp" >> $GITHUB_ENV
+          {
+            echo "GOCACHE=D:\go-cache"
+            echo "GOMODCACHE=D:\go-mod-cache"
+            echo "GOTMPDIR=D:\go-tmp"
+          } >> "$GITHUB_ENV"
 
       - name: Cache scoop packages (Windows)
         if: matrix.os == 'windows-latest'
@@ -97,6 +99,7 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
           if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
             irm get.scoop.sh | iex
@@ -156,9 +159,11 @@ jobs:
       - name: Configure Go paths for Windows
         if: matrix.os == 'windows-latest'
         run: |
-          echo "GOCACHE=D:\go-cache" >> $GITHUB_ENV
-          echo "GOMODCACHE=D:\go-mod-cache" >> $GITHUB_ENV
-          echo "GOTMPDIR=D:\go-tmp" >> $GITHUB_ENV
+          {
+            echo "GOCACHE=D:\go-cache"
+            echo "GOMODCACHE=D:\go-mod-cache"
+            echo "GOTMPDIR=D:\go-tmp"
+          } >> "$GITHUB_ENV"
 
       - name: Cache scoop packages (Windows)
         if: matrix.os == 'windows-latest'
@@ -169,6 +174,7 @@ jobs:
 
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
           if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
             irm get.scoop.sh | iex

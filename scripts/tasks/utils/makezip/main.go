@@ -386,7 +386,8 @@ func addFileToTar(tarWriter *tar.Writer, filePath, arcname string) error {
 	}
 	header.Name = arcname
 
-	if err := tarWriter.WriteHeader(header); err != nil {
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
 		return fmt.Errorf("failed to write tar header: %w", err)
 	}
 
