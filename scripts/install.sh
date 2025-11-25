@@ -86,6 +86,12 @@ detect_os() {
 }
 
 detect_linux_distro() {
+    # Check for MiSTer FPGA (before os-release check)
+    if [ -f /MiSTer.version ]; then
+        echo "mister"
+        return
+    fi
+
     # Detect Linux distribution from /etc/os-release
     if [ ! -f /etc/os-release ]; then
         echo "generic"
@@ -219,6 +225,11 @@ install_linux_generic() {
 
     # Check for special distro handling
     case "${distro}" in
+        mister)
+            # MiSTer FPGA has its own installation method
+            install_mister
+            return 0
+            ;;
         batocera)
             # Batocera has its own installation method
             install_batocera
@@ -385,6 +396,89 @@ install_hardware() {
         info "You may need to replug your reader or reboot for changes to take effect"
     else
         info "Skipping hardware support installation"
+    fi
+}
+
+# ============================================================================
+# MiSTer FPGA Installation
+# ============================================================================
+
+install_mister() {
+    info "Installing Zaparoo Core for MiSTer FPGA..."
+
+    local archive_name download_url
+    archive_name="zaparoo-mister_arm-${VERSION}.zip"
+    download_url="${BASE_URL}/download/v${VERSION}/${archive_name}"
+
+    info "Downloading Zaparoo Core ${VERSION}..."
+    info "URL: ${download_url}"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would download: ${archive_name}"
+        info "[DRY-RUN] Would extract zaparoo.sh to: /media/fat/Scripts/zaparoo.sh"
+        install_mister_startup_dryrun
+        success "[DRY-RUN] MiSTer installation simulated"
+        return 0
+    fi
+
+    # Create temp directory
+    TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
+    TMP_ARCHIVE="${TMP_DIR}/${archive_name}"
+
+    # Download archive
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_ARCHIVE}"; then
+        abort "Failed to download from ${download_url}"
+    fi
+
+    success "Downloaded ${archive_name}"
+
+    # Check for unzip
+    if ! command -v unzip >/dev/null 2>&1; then
+        abort "unzip is required for MiSTer installation but not found"
+    fi
+
+    # Extract zaparoo.sh
+    info "Extracting to /media/fat/Scripts/..."
+    if ! unzip -o "${TMP_ARCHIVE}" zaparoo.sh -d /media/fat/Scripts/; then
+        abort "Failed to extract zaparoo.sh"
+    fi
+
+    chmod +x /media/fat/Scripts/zaparoo.sh
+    success "Installed to /media/fat/Scripts/zaparoo.sh"
+
+    # Prompt for startup
+    install_mister_startup
+
+    success "MiSTer installation complete!"
+    info "Run from the Scripts menu or via SSH: /media/fat/Scripts/zaparoo.sh"
+}
+
+install_mister_startup() {
+    local response
+    response="$(prompt_yes_no "Add to MiSTer startup (auto-start on boot)?" "y")"
+
+    if [ "${response}" = "y" ]; then
+        info "Adding to MiSTer startup..."
+        if ! /media/fat/Scripts/zaparoo.sh -add-startup; then
+            warn "Failed to add to startup"
+            return 1
+        fi
+        success "Added to MiSTer startup"
+    else
+        info "Skipping startup configuration"
+        info "You can add it later with: /media/fat/Scripts/zaparoo.sh -add-startup"
+    fi
+}
+
+install_mister_startup_dryrun() {
+    local response
+    response="$(prompt_yes_no "Add to MiSTer startup (auto-start on boot)?" "y")"
+
+    if [ "${response}" = "y" ]; then
+        info "[DRY-RUN] Would run: /media/fat/Scripts/zaparoo.sh -add-startup"
+        success "[DRY-RUN] Would add to MiSTer startup"
+    else
+        info "[DRY-RUN] Skipping startup configuration"
     fi
 }
 
