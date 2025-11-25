@@ -86,45 +86,64 @@ func stripFrontmatter(content string) string {
 func expandRelativeLinks(content, _ string) string {
 	baseDocsURL := "https://zaparoo.org/docs/"
 
-	// Pattern for markdown links: [text](path)
-	linkPattern := regexp.MustCompile(`\]\((\.\./|\./)?([^)]+\.mdx?)(#[^)]+)?\)`)
+	// Pattern for markdown links: [text](path.md) or [text](path.mdx)
+	// Captures the full relative path including any ../ prefixes
+	linkPattern := regexp.MustCompile(`\]\(([^)]+\.mdx?)(#[^)]+)?\)`)
 
 	return linkPattern.ReplaceAllStringFunc(content, func(match string) string {
-		// Extract the path from the match
 		submatches := linkPattern.FindStringSubmatch(match)
-		if len(submatches) < 3 {
+		if len(submatches) < 2 {
 			return match
 		}
 
-		relPrefix := submatches[1] // ../ or ./
-		path := submatches[2]      // the path without extension
+		fullPath := submatches[1]
 		anchor := ""
-		if len(submatches) > 3 {
-			anchor = submatches[3] // #anchor if present
+		if len(submatches) > 2 {
+			anchor = submatches[2]
 		}
 
 		// Skip external links and absolute paths
-		if strings.HasPrefix(path, "http") || strings.HasPrefix(path, "/") {
+		if strings.HasPrefix(fullPath, "http") || strings.HasPrefix(fullPath, "/") {
 			return match
 		}
+
+		// Count and strip leading ../ sequences
+		upLevels := 0
+		path := fullPath
+		for strings.HasPrefix(path, "../") {
+			upLevels++
+			path = strings.TrimPrefix(path, "../")
+		}
+		// Also handle ./ prefix (same directory)
+		path = strings.TrimPrefix(path, "./")
 
 		// Remove .md or .mdx extension
 		path = strings.TrimSuffix(path, ".mdx")
 		path = strings.TrimSuffix(path, ".md")
 
-		// Build the absolute URL based on relative path
+		// Remove trailing /index since zaparoo.org doesn't need it in URLs
+		path = strings.TrimSuffix(path, "/index")
+		path = strings.TrimSuffix(path, "index")
+
+		// Build the absolute URL based on how many levels up we go
+		// Source docs are at docs/platforms/{platform}/, so:
+		// - 0 levels (./): stays in platforms/ directory
+		// - 1 level (../): goes to platforms/ parent (but we treat as docs/)
+		// - 2+ levels (../../): goes to docs/
 		var absURL string
-		if relPrefix == ".." || relPrefix == "../" {
-			// Going up from platforms directory
-			absURL = baseDocsURL + path + "/"
+		if upLevels == 0 {
+			// Same directory or subdirectory - relative to platforms
+			absURL = baseDocsURL + "platforms/" + path
 		} else {
-			// Same directory or subdirectory - relative to current platform
-			absURL = baseDocsURL + "platforms/" + path + "/"
+			// Going up from platforms directory - resolve to docs base
+			absURL = baseDocsURL + path
 		}
 
-		// Clean up any accidental double slashes in the path portion
+		// Ensure URL ends with / and clean up any double slashes
+		if !strings.HasSuffix(absURL, "/") {
+			absURL += "/"
+		}
 		absURL = strings.ReplaceAll(absURL, "docs//", "docs/")
-		absURL = strings.ReplaceAll(absURL, "platforms//", "platforms/")
 
 		return "](" + absURL + anchor + ")"
 	})
