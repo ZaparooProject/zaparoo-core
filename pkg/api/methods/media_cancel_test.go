@@ -410,6 +410,10 @@ Loop:
 		return !statusInstance.isRunning()
 	}, 5*time.Second, 50*time.Millisecond, "indexing and optimization did not complete")
 
+	// Wait for ALL background operations (especially optimization goroutine) to complete
+	// This prevents race condition where temp directory cleanup fails with "directory not empty"
+	db.MediaDB.WaitForBackgroundOperations()
+
 	// Drain any remaining notifications to prevent goroutine leak
 	go func() {
 		for n := range notifications {

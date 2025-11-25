@@ -361,6 +361,11 @@ func (db *MediaDB) Close() error {
 	if db.sql == nil {
 		return nil
 	}
+
+	// Wait for all background operations (optimization, etc.) to complete
+	// before closing the database connection
+	db.WaitForBackgroundOperations()
+
 	err := db.sql.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close database: %w", err)

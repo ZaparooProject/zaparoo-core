@@ -196,6 +196,18 @@ func GetSystemPaths(
 ) []PathResult {
 	var matches []PathResult
 
+	// Validate root folders ONCE before iterating systems
+	// This prevents logging the same error 200+ times (once per system)
+	validRootFolders := make([]string, 0, len(rootFolders))
+	for _, folder := range rootFolders {
+		gf, err := FindPath(folder)
+		if err != nil {
+			log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
+			continue
+		}
+		validRootFolders = append(validRootFolders, gf)
+	}
+
 	for _, system := range systems {
 		// GlobalLauncherCache is assumed to be read-only after initialization
 		launchers := helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
@@ -214,13 +226,7 @@ func GetSystemPaths(
 		}
 
 		// check for <root>/<folder>
-		for _, folder := range rootFolders {
-			gf, err := FindPath(folder)
-			if err != nil {
-				log.Debug().Err(err).Str("path", folder).Msg("skipping root folder - not found or inaccessible")
-				continue
-			}
-
+		for _, gf := range validRootFolders {
 			for _, folder := range folders {
 				systemFolder := filepath.Join(gf, folder)
 				path, err := FindPath(systemFolder)
