@@ -1,6 +1,5 @@
 pkgname = zaparoo-core
-pkgver = __VERSION__
-pkgrel = 1
+pkgver = __VERSION__-1
 pkgdesc = Zaparoo Core - Launch media using physical objects like NFC cards
 arch = __ARCH__
 group = sys

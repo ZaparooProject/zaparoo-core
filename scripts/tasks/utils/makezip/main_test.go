@@ -110,9 +110,9 @@ func TestExpandRelativeLinks(t *testing.T) {
 		},
 		{
 			name:       "link without prefix",
-			content:    "[Index](index.md)",
+			content:    "[Install](install.md)",
 			platformID: "linux",
-			expected:   "[Index](https://zaparoo.org/docs/platforms/index/)",
+			expected:   "[Install](https://zaparoo.org/docs/platforms/install/)",
 		},
 		{
 			name:       "link with anchor",
@@ -156,6 +156,30 @@ func TestExpandRelativeLinks(t *testing.T) {
 			content:    "[Nested](../guides/advanced.md)",
 			platformID: "linux",
 			expected:   "[Nested](https://zaparoo.org/docs/guides/advanced/)",
+		},
+		{
+			name:       "double parent directory ../../",
+			content:    "[Readers](../../readers/index.md)",
+			platformID: "linux",
+			expected:   "[Readers](https://zaparoo.org/docs/readers/)",
+		},
+		{
+			name:       "triple parent directory",
+			content:    "[Root](../../../something.md)",
+			platformID: "linux",
+			expected:   "[Root](https://zaparoo.org/docs/something/)",
+		},
+		{
+			name:       "index.md stripped from path",
+			content:    "[Index](../readers/index.md)",
+			platformID: "linux",
+			expected:   "[Index](https://zaparoo.org/docs/readers/)",
+		},
+		{
+			name:       "standalone index file",
+			content:    "[Home](index.md)",
+			platformID: "linux",
+			expected:   "[Home](https://zaparoo.org/docs/platforms/)",
 		},
 	}
 
