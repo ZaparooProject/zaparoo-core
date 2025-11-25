@@ -322,7 +322,7 @@ prompt_yes_no() {
 
 install_service() {
     local response
-    response="$(prompt_yes_no "Install systemd service (auto-start on login)?" "n")"
+    response="$(prompt_yes_no "Install systemd service (auto-start on login)?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing systemd user service..."
@@ -350,7 +350,7 @@ install_service() {
 
 install_desktop() {
     local response
-    response="$(prompt_yes_no "Install desktop shortcut?" "n")"
+    response="$(prompt_yes_no "Install desktop shortcut?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing desktop shortcut..."
@@ -374,7 +374,7 @@ install_desktop() {
 
 install_hardware() {
     local response
-    response="$(prompt_yes_no "Install hardware support (udev rules, requires sudo)?" "n")"
+    response="$(prompt_yes_no "Install hardware support (udev rules, requires sudo)?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing hardware support (requires root)..."
