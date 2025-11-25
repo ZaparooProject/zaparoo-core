@@ -86,6 +86,12 @@ detect_os() {
 }
 
 detect_linux_distro() {
+    # Check for MiSTer FPGA (before os-release check)
+    if [ -f /MiSTer.version ]; then
+        echo "mister"
+        return
+    fi
+
     # Detect Linux distribution from /etc/os-release
     if [ ! -f /etc/os-release ]; then
         echo "generic"
@@ -95,6 +101,13 @@ detect_linux_distro() {
     # Source the os-release file to get distro info
     # shellcheck source=/dev/null
     . /etc/os-release
+
+    # Check NAME field for distributions that use generic IDs
+    # Batocera uses ID=buildroot, so we need to check NAME
+    if echo "${NAME:-}" | grep -qi "batocera"; then
+        echo "batocera"
+        return
+    fi
 
     # Return the ID (e.g., "ubuntu", "fedora", "steamos", "chimeraos")
     echo "${ID:-generic}"
@@ -174,7 +187,7 @@ download_and_extract() {
     TMP_EXTRACT="${TMP_DIR}/extract"
 
     # Download archive
-    if ! curl -fsSL "${download_url}" -o "${TMP_ARCHIVE}"; then
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_ARCHIVE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
@@ -212,6 +225,11 @@ install_linux_generic() {
 
     # Check for special distro handling
     case "${distro}" in
+        mister)
+            # MiSTer FPGA has its own installation method
+            install_mister
+            return 0
+            ;;
         batocera)
             # Batocera has its own installation method
             install_batocera
@@ -274,14 +292,22 @@ prompt_yes_no() {
         return
     fi
 
+    # When run via "curl | bash", stdin is the pipe, not the terminal.
+    # We need to read from /dev/tty for input. The prompt goes to stderr
+    # so it's not captured by command substitution.
     local yn
     if [ "${default}" = "y" ]; then
-        printf "%s [Y/n] " "${prompt}"
+        printf "%s [Y/n] " "${prompt}" >&2
     else
-        printf "%s [y/N] " "${prompt}"
+        printf "%s [y/N] " "${prompt}" >&2
     fi
 
-    read -r yn
+    # Read from /dev/tty if available (handles curl|bash case), otherwise stdin
+    if [ -e /dev/tty ]; then
+        read -r yn </dev/tty
+    else
+        read -r yn
+    fi
     yn="${yn:-${default}}"
 
     case "${yn}" in
@@ -296,7 +322,7 @@ prompt_yes_no() {
 
 install_service() {
     local response
-    response="$(prompt_yes_no "Install systemd service (auto-start on login)?" "n")"
+    response="$(prompt_yes_no "Install systemd service (auto-start on login)?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing systemd user service..."
@@ -324,7 +350,7 @@ install_service() {
 
 install_desktop() {
     local response
-    response="$(prompt_yes_no "Install desktop shortcut?" "n")"
+    response="$(prompt_yes_no "Install desktop shortcut?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing desktop shortcut..."
@@ -348,7 +374,7 @@ install_desktop() {
 
 install_hardware() {
     local response
-    response="$(prompt_yes_no "Install hardware support (udev rules, requires sudo)?" "n")"
+    response="$(prompt_yes_no "Install hardware support (udev rules, requires sudo)?" "y")"
 
     if [ "${response}" = "y" ]; then
         info "Installing hardware support (requires root)..."
@@ -370,6 +396,89 @@ install_hardware() {
         info "You may need to replug your reader or reboot for changes to take effect"
     else
         info "Skipping hardware support installation"
+    fi
+}
+
+# ============================================================================
+# MiSTer FPGA Installation
+# ============================================================================
+
+install_mister() {
+    info "Installing Zaparoo Core for MiSTer FPGA..."
+
+    local archive_name download_url
+    archive_name="zaparoo-mister_arm-${VERSION}.zip"
+    download_url="${BASE_URL}/download/v${VERSION}/${archive_name}"
+
+    info "Downloading Zaparoo Core ${VERSION}..."
+    info "URL: ${download_url}"
+
+    if [ "$DRY_RUN" = true ]; then
+        info "[DRY-RUN] Would download: ${archive_name}"
+        info "[DRY-RUN] Would extract zaparoo.sh to: /media/fat/Scripts/zaparoo.sh"
+        install_mister_startup_dryrun
+        success "[DRY-RUN] MiSTer installation simulated"
+        return 0
+    fi
+
+    # Create temp directory
+    TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'zaparoo-install')"
+    TMP_ARCHIVE="${TMP_DIR}/${archive_name}"
+
+    # Download archive
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_ARCHIVE}"; then
+        abort "Failed to download from ${download_url}"
+    fi
+
+    success "Downloaded ${archive_name}"
+
+    # Check for unzip
+    if ! command -v unzip >/dev/null 2>&1; then
+        abort "unzip is required for MiSTer installation but not found"
+    fi
+
+    # Extract zaparoo.sh
+    info "Extracting to /media/fat/Scripts/..."
+    if ! unzip -o "${TMP_ARCHIVE}" zaparoo.sh -d /media/fat/Scripts/; then
+        abort "Failed to extract zaparoo.sh"
+    fi
+
+    chmod +x /media/fat/Scripts/zaparoo.sh
+    success "Installed to /media/fat/Scripts/zaparoo.sh"
+
+    # Prompt for startup
+    install_mister_startup
+
+    success "MiSTer installation complete!"
+    info "Run from the Scripts menu or via SSH: /media/fat/Scripts/zaparoo.sh"
+}
+
+install_mister_startup() {
+    local response
+    response="$(prompt_yes_no "Add to MiSTer startup (auto-start on boot)?" "y")"
+
+    if [ "${response}" = "y" ]; then
+        info "Adding to MiSTer startup..."
+        if ! /media/fat/Scripts/zaparoo.sh -add-startup; then
+            warn "Failed to add to startup"
+            return 1
+        fi
+        success "Added to MiSTer startup"
+    else
+        info "Skipping startup configuration"
+        info "You can add it later with: /media/fat/Scripts/zaparoo.sh -add-startup"
+    fi
+}
+
+install_mister_startup_dryrun() {
+    local response
+    response="$(prompt_yes_no "Add to MiSTer startup (auto-start on boot)?" "y")"
+
+    if [ "${response}" = "y" ]; then
+        info "[DRY-RUN] Would run: /media/fat/Scripts/zaparoo.sh -add-startup"
+        success "[DRY-RUN] Would add to MiSTer startup"
+    else
+        info "[DRY-RUN] Skipping startup configuration"
     fi
 }
 
@@ -450,7 +559,7 @@ install_batocera() {
     TMP_PACKAGE="${TMP_DIR}/${package_name}"
 
     # Download package
-    if ! curl -fsSL "${download_url}" -o "${TMP_PACKAGE}"; then
+    if ! curl --fail --progress-bar --location "${download_url}" -o "${TMP_PACKAGE}"; then
         abort "Failed to download from ${download_url}"
     fi
 
@@ -514,12 +623,46 @@ main() {
     # Parse arguments
     while [ $# -gt 0 ]; do
         case "$1" in
+            -y|--yes)
+                NONINTERACTIVE=1
+                shift
+                ;;
             --dry-run)
                 DRY_RUN=true
                 shift
                 ;;
+            -V|--version)
+                echo "Zaparoo Core Installer v${VERSION}"
+                exit 0
+                ;;
+            -h|--help)
+                cat <<EOF
+Zaparoo Core Installer v${VERSION}
+
+Usage:
+    install.sh [options]
+    curl -fsSL https://get.zaparoo.org | bash
+    curl -fsSL https://get.zaparoo.org | bash -s -- [options]
+
+Options:
+    -y, --yes       Accept defaults, don't prompt
+    --dry-run       Show what would be installed without making changes
+    -h, --help      Show this help message
+    -V, --version   Show version
+
+Environment:
+    ZAPAROO_VERSION   Install a specific version (default: ${DEFAULT_VERSION})
+
+Examples:
+    curl -fsSL https://get.zaparoo.org | bash
+    curl -fsSL https://get.zaparoo.org | bash -s -- -y
+    curl -fsSL https://get.zaparoo.org | bash -s -- --dry-run
+    ZAPAROO_VERSION=2.6.0 curl -fsSL https://get.zaparoo.org | bash
+EOF
+                exit 0
+                ;;
             *)
-                abort "Unknown option: $1"
+                abort "Unknown option: $1 (use -h for help)"
                 ;;
         esac
     done

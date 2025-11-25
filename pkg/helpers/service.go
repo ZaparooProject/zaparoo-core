@@ -363,6 +363,75 @@ func (s *Service) WaitForAPI(cfg *config.Instance, maxWait, checkInterval time.D
 	return errors.New("API did not become available within timeout")
 }
 
+// SpawnDaemon spawns a daemon subprocess for service isolation (e.g., TUI mode).
+// It waits for the service API to become available and returns a cleanup function.
+// The cleanup function sends SIGTERM and waits for graceful shutdown with timeout.
+// Returns a no-op cleanup function if service was already running.
+func SpawnDaemon(cfg *config.Instance) (cleanup func(), err error) {
+	if IsServiceRunning(cfg) {
+		log.Info().
+			Int("port", cfg.APIPort()).
+			Msg("connecting to existing service instance")
+		return func() {}, nil // no-op cleanup when using existing service
+	}
+
+	log.Info().Msg("spawning daemon subprocess")
+
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	//nolint:gosec // exe is from os.Executable()
+	cmd := exec.CommandContext(context.Background(), exe, "-daemon")
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid: true,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start daemon: %w", err)
+	}
+
+	// Wait for service to be ready
+	ready := false
+	for range 30 {
+		if IsServiceRunning(cfg) {
+			ready = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if !ready {
+		_ = cmd.Process.Kill()
+		return nil, errors.New("daemon failed to start within 3 seconds")
+	}
+
+	log.Info().Msg("daemon subprocess started")
+
+	// Return cleanup function
+	return func() {
+		if cmd.Process == nil {
+			return
+		}
+
+		log.Info().Msg("stopping daemon subprocess")
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			log.Warn().Msg("daemon shutdown timed out, killing")
+			_ = cmd.Process.Kill()
+		}
+	}, nil
+}
+
 func (s *Service) ServiceHandler(cmd *string) error {
 	switch *cmd {
 	case "exec":

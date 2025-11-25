@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -37,17 +38,32 @@ import (
 const baseURL = "https://github.com/ZaparooProject/zaparoo.org/raw/refs/heads/main/docs/platforms/"
 
 var platformDocs = map[string]string{
-	"batocera":  "batocera.md",
+	"batocera":  "batocera/index.md",
 	"bazzite":   "bazzite.mdx",
 	"chimeraos": "chimeraos.mdx",
 	"libreelec": "libreelec.md",
-	"linux":     "linux.md",
+	"linux":     "linux/index.md",
 	"mac":       "mac.mdx",
-	"mister":    "mister.md",
+	"mister":    "mister/index.md",
 	"mistex":    "mistex.md",
 	"recalbox":  "recalbox.mdx",
 	"steamos":   "steamos.md",
 	"windows":   "windows/index.md",
+}
+
+// platformURLs maps platform IDs to their online documentation URLs
+var platformURLs = map[string]string{
+	"batocera":  "https://zaparoo.org/docs/platforms/batocera/",
+	"bazzite":   "https://zaparoo.org/docs/platforms/bazzite/",
+	"chimeraos": "https://zaparoo.org/docs/platforms/chimeraos/",
+	"libreelec": "https://zaparoo.org/docs/platforms/libreelec/",
+	"linux":     "https://zaparoo.org/docs/platforms/linux/",
+	"mac":       "https://zaparoo.org/docs/platforms/mac/",
+	"mister":    "https://zaparoo.org/docs/platforms/mister/",
+	"mistex":    "https://zaparoo.org/docs/platforms/mistex/",
+	"recalbox":  "https://zaparoo.org/docs/platforms/recalbox/",
+	"steamos":   "https://zaparoo.org/docs/platforms/steamos/",
+	"windows":   "https://zaparoo.org/docs/platforms/windows/",
 }
 
 var extraItems = map[string][]string{
@@ -64,6 +80,65 @@ func stripFrontmatter(content string) string {
 		}
 	}
 	return content
+}
+
+// expandRelativeLinks converts relative markdown links to absolute zaparoo.org URLs
+func expandRelativeLinks(content, _ string) string {
+	baseDocsURL := "https://zaparoo.org/docs/"
+
+	// Pattern for markdown links: [text](path)
+	linkPattern := regexp.MustCompile(`\]\((\.\./|\./)?([^)]+\.mdx?)(#[^)]+)?\)`)
+
+	return linkPattern.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract the path from the match
+		submatches := linkPattern.FindStringSubmatch(match)
+		if len(submatches) < 3 {
+			return match
+		}
+
+		relPrefix := submatches[1] // ../ or ./
+		path := submatches[2]      // the path without extension
+		anchor := ""
+		if len(submatches) > 3 {
+			anchor = submatches[3] // #anchor if present
+		}
+
+		// Skip external links and absolute paths
+		if strings.HasPrefix(path, "http") || strings.HasPrefix(path, "/") {
+			return match
+		}
+
+		// Remove .md or .mdx extension
+		path = strings.TrimSuffix(path, ".mdx")
+		path = strings.TrimSuffix(path, ".md")
+
+		// Build the absolute URL based on relative path
+		var absURL string
+		if relPrefix == ".." || relPrefix == "../" {
+			// Going up from platforms directory
+			absURL = baseDocsURL + path + "/"
+		} else {
+			// Same directory or subdirectory - relative to current platform
+			absURL = baseDocsURL + "platforms/" + path + "/"
+		}
+
+		// Clean up any accidental double slashes in the path portion
+		absURL = strings.ReplaceAll(absURL, "docs//", "docs/")
+		absURL = strings.ReplaceAll(absURL, "platforms//", "platforms/")
+
+		return "](" + absURL + anchor + ")"
+	})
+}
+
+// addDocFooter appends a footer with link to full documentation
+func addDocFooter(content, platformID string) string {
+	docURL, ok := platformURLs[platformID]
+	if !ok {
+		docURL = "https://zaparoo.org/docs/"
+	}
+
+	footer := fmt.Sprintf("\n\n---\n\nFull documentation: %s\n", docURL)
+	return content + footer
 }
 
 func downloadDoc(platformID, toDir string) error {
@@ -89,6 +164,10 @@ func downloadDoc(platformID, toDir string) error {
 	if resp == nil {
 		return errors.New("received nil response")
 	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			_, _ = fmt.Printf("error closing response body: %v\n", closeErr)
@@ -101,12 +180,20 @@ func downloadDoc(platformID, toDir string) error {
 	}
 
 	processedContent := string(content)
+
+	// Strip frontmatter from MDX files
 	if strings.HasSuffix(strings.ToLower(fileName), ".mdx") {
 		processedContent = stripFrontmatter(processedContent)
 	}
 
+	// Expand relative links to absolute URLs
+	processedContent = expandRelativeLinks(processedContent, platformID)
+
+	// Add footer with link to full documentation
+	processedContent = addDocFooter(strings.TrimSpace(processedContent), platformID)
+
 	readmePath := filepath.Join(toDir, "README.txt")
-	readmeContent := []byte(strings.TrimSpace(processedContent) + "\n")
+	readmeContent := []byte(processedContent + "\n")
 	if err := os.WriteFile(readmePath, readmeContent, 0o600); err != nil {
 		return fmt.Errorf("failed to write README.txt: %w", err)
 	}
@@ -190,7 +277,9 @@ func createZipFile(zipPath, appPath, licensePath, readmePath, platform, buildDir
 
 	zipWriter := zip.NewWriter(zipFile)
 	defer func(zipWriter *zip.Writer) {
-		_ = zipWriter.Close()
+		if err := zipWriter.Close(); err != nil {
+			_, _ = fmt.Printf("warning: failed to close zip writer: %v\n", err)
+		}
 	}(zipWriter)
 
 	filesToAdd := []struct {
@@ -319,12 +408,16 @@ func createTarGzFile(tarGzPath, appPath, licensePath, readmePath, platform, buil
 
 	gzipWriter := gzip.NewWriter(tarGzFile)
 	defer func(gzipWriter *gzip.Writer) {
-		_ = gzipWriter.Close()
+		if err := gzipWriter.Close(); err != nil {
+			_, _ = fmt.Printf("warning: failed to close gzip writer: %v\n", err)
+		}
 	}(gzipWriter)
 
 	tarWriter := tar.NewWriter(gzipWriter)
 	defer func(tarWriter *tar.Writer) {
-		_ = tarWriter.Close()
+		if err := tarWriter.Close(); err != nil {
+			_, _ = fmt.Printf("warning: failed to close tar writer: %v\n", err)
+		}
 	}(tarWriter)
 
 	filesToAdd := []struct {

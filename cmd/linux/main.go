@@ -179,28 +179,6 @@ func run() error {
 
 	flags.Post(cfg, pl)
 
-	var stopSvc func() error
-	if !helpers.IsServiceRunning(cfg) {
-		log.Info().Msg("starting new service instance")
-		var err error
-		stopSvc, err = service.Start(pl, cfg)
-		if err != nil {
-			log.Error().Msgf("error starting service: %s", err)
-			return fmt.Errorf("error starting service: %w", err)
-		}
-
-		defer func() {
-			err := stopSvc()
-			if err != nil {
-				log.Error().Msgf("error stopping service: %s", err)
-			}
-		}()
-	} else {
-		log.Info().
-			Int("port", cfg.APIPort()).
-			Msg("connecting to existing service instance")
-	}
-
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -211,9 +189,35 @@ func run() error {
 	// Handle application modes
 	switch {
 	case *daemonMode:
+		// Daemon mode: run service in-process
+		if helpers.IsServiceRunning(cfg) {
+			log.Info().
+				Int("port", cfg.APIPort()).
+				Msg("service already running, exiting")
+			return nil
+		}
+
+		log.Info().Msg("starting service in daemon mode")
+		stopSvc, err := service.Start(pl, cfg)
+		if err != nil {
+			log.Error().Msgf("error starting service: %s", err)
+			return fmt.Errorf("error starting service: %w", err)
+		}
+		defer func() {
+			if err := stopSvc(); err != nil {
+				log.Error().Msgf("error stopping service: %s", err)
+			}
+		}()
 		log.Info().Msg("started in daemon mode")
+
 	default:
-		// default to showing the TUI
+		// TUI mode: spawn daemon subprocess for service isolation
+		stopDaemon, err := helpers.SpawnDaemon(cfg)
+		if err != nil {
+			return fmt.Errorf("error spawning daemon: %w", err)
+		}
+		defer stopDaemon()
+
 		app, err := tui.BuildMain(
 			cfg, pl,
 			func() bool { return helpers.IsServiceRunning(cfg) },
@@ -225,8 +229,7 @@ func run() error {
 			return fmt.Errorf("error building UI: %w", err)
 		}
 
-		err = app.Run()
-		if err != nil {
+		if err = app.Run(); err != nil {
 			log.Error().Err(err).Msg("error running UI")
 			return fmt.Errorf("error running UI: %w", err)
 		}
