@@ -1,0 +1,6 @@
+github-policies:
+  runners:
+    allowed_groups:
+      - 'GitHub Actions'
+  build:
+    disallow_reruns: true
