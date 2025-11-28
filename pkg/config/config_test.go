@@ -651,24 +651,27 @@ func TestGetMQTTPublishers(t *testing.T) {
 func TestAPIPort(t *testing.T) {
 	t.Parallel()
 
+	port7497 := 7497
+	port8080 := 8080
+
 	tests := []struct {
+		apiPort  *int
 		name     string
-		apiPort  int
 		expected int
 	}{
 		{
-			name:     "default port",
-			apiPort:  7497,
+			name:     "explicit port",
+			apiPort:  &port7497,
 			expected: 7497,
 		},
 		{
 			name:     "custom port",
-			apiPort:  8080,
+			apiPort:  &port8080,
 			expected: 8080,
 		},
 		{
-			name:     "zero port returns default",
-			apiPort:  0,
+			name:     "nil port returns default",
+			apiPort:  nil,
 			expected: 7497,
 		},
 	}
@@ -689,6 +692,76 @@ func TestAPIPort(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestSetAPIPort(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets port from nil", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Service: Service{
+					APIPort: nil, // Start with nil
+				},
+			},
+		}
+
+		assert.Nil(t, cfg.vals.Service.APIPort, "APIPort should start as nil")
+		assert.Equal(t, DefaultAPIPort, cfg.APIPort(), "Getter should return default")
+
+		cfg.SetAPIPort(8080)
+
+		require.NotNil(t, cfg.vals.Service.APIPort, "APIPort should be set after SetAPIPort")
+		assert.Equal(t, 8080, *cfg.vals.Service.APIPort, "APIPort value should be 8080")
+		assert.Equal(t, 8080, cfg.APIPort(), "Getter should return new value")
+	})
+
+	t.Run("overwrites existing port", func(t *testing.T) {
+		t.Parallel()
+
+		initialPort := 9000
+		cfg := &Instance{
+			vals: Values{
+				Service: Service{
+					APIPort: &initialPort,
+				},
+			},
+		}
+
+		cfg.SetAPIPort(7777)
+
+		assert.Equal(t, 7777, *cfg.vals.Service.APIPort, "APIPort should be overwritten")
+		assert.Equal(t, 7777, cfg.APIPort(), "Getter should return new value")
+	})
+}
+
+func TestAPIPort_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	// Create config with defaults (APIPort is nil)
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Verify default is returned via getter
+	assert.Equal(t, DefaultAPIPort, cfg.APIPort(), "Should return default port initially")
+
+	// Set a custom port
+	cfg.SetAPIPort(9999)
+	assert.Equal(t, 9999, cfg.APIPort(), "Should return custom port after setting")
+
+	// Save and reload
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	// Verify custom port persists
+	assert.Equal(t, 9999, cfg.APIPort(), "Custom port should persist after save/load")
 }
 
 func TestAllowedOrigins(t *testing.T) {
@@ -798,6 +871,8 @@ func TestLoad_PreservesDefaultsForMissingFields(t *testing.T) {
 	cfgPath := filepath.Join(tempDir, CfgFile)
 
 	// Define custom defaults that differ from zero values
+	// Note: Service.APIPort and Groovy fields use pointer types with nil defaults
+	// returned by getters, so they're not included in BaseDefaults
 	defaults := Values{
 		ConfigSchema: SchemaVersion,
 		Audio: Audio{
@@ -808,9 +883,6 @@ func TestLoad_PreservesDefaultsForMissingFields(t *testing.T) {
 			Scan: ReadersScan{
 				Mode: ScanModeTap, // This should persist after Load()
 			},
-		},
-		Service: Service{
-			APIPort: 7497, // This should persist after Load()
 		},
 	}
 
@@ -835,7 +907,8 @@ func TestLoad_PreservesDefaultsForMissingFields(t *testing.T) {
 	assert.True(t, cfg.vals.Audio.ScanFeedback, "Audio.ScanFeedback should retain default true")
 	assert.True(t, cfg.vals.Readers.AutoDetect, "Readers.AutoDetect should retain default true")
 	assert.Equal(t, ScanModeTap, cfg.vals.Readers.Scan.Mode, "Readers.Scan.Mode should retain default")
-	assert.Equal(t, 7497, cfg.vals.Service.APIPort, "Service.APIPort should retain default")
+	// Note: Service.APIPort is now a pointer type - nil value means use DefaultAPIPort via getter
+	assert.Nil(t, cfg.vals.Service.APIPort, "Service.APIPort should be nil (getter returns default)")
 }
 
 func TestLoad_OverridesDefaults(t *testing.T) {
@@ -845,6 +918,7 @@ func TestLoad_OverridesDefaults(t *testing.T) {
 	cfgPath := filepath.Join(tempDir, CfgFile)
 
 	// Defaults with specific values
+	// Note: Service.APIPort uses pointer type with nil default returned by getter
 	defaults := Values{
 		ConfigSchema: SchemaVersion,
 		Audio: Audio{
@@ -855,9 +929,6 @@ func TestLoad_OverridesDefaults(t *testing.T) {
 			Scan: ReadersScan{
 				Mode: ScanModeTap,
 			},
-		},
-		Service: Service{
-			APIPort: 7497,
 		},
 	}
 
@@ -895,7 +966,8 @@ api_port = 8080
 	assert.False(t, cfg.vals.Audio.ScanFeedback, "Audio.ScanFeedback should be overridden to false")
 	assert.False(t, cfg.vals.Readers.AutoDetect, "Readers.AutoDetect should be overridden to false")
 	assert.Equal(t, ScanModeHold, cfg.vals.Readers.Scan.Mode, "Readers.Scan.Mode should be overridden")
-	assert.Equal(t, 8080, cfg.vals.Service.APIPort, "Service.APIPort should be overridden")
+	require.NotNil(t, cfg.vals.Service.APIPort, "Service.APIPort should be set from file")
+	assert.Equal(t, 8080, *cfg.vals.Service.APIPort, "Service.APIPort should be overridden to 8080")
 }
 
 func TestLoad_ReloadCycle(t *testing.T) {
@@ -928,4 +1000,72 @@ func TestLoad_ReloadCycle(t *testing.T) {
 
 	// Verify other defaults are still intact
 	assert.True(t, cfg.Readers().AutoDetect, "AutoDetect should retain default true after reload")
+}
+
+func TestGroovyDefaults_ReturnDefaultsWhenNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Groovy: Groovy{}, // All fields nil
+		},
+	}
+
+	// Verify getters return defaults when fields are nil
+	assert.False(t, cfg.GmcProxyEnabled(), "GmcProxyEnabled should return false when nil")
+	assert.Equal(t, DefaultGmcProxyPort, cfg.GmcProxyPort(), "GmcProxyPort should return default when nil")
+	assert.Equal(t, DefaultGmcProxyBeaconInterval, cfg.GmcProxyBeaconInterval(),
+		"GmcProxyBeaconInterval should return default when nil")
+}
+
+func TestGroovyDefaults_ReturnExplicitValues(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	port := 12345
+	interval := "5s"
+
+	cfg := &Instance{
+		vals: Values{
+			Groovy: Groovy{
+				GmcProxyEnabled:        &enabled,
+				GmcProxyPort:           &port,
+				GmcProxyBeaconInterval: &interval,
+			},
+		},
+	}
+
+	// Verify getters return explicit values
+	assert.True(t, cfg.GmcProxyEnabled(), "GmcProxyEnabled should return true when set")
+	assert.Equal(t, 12345, cfg.GmcProxyPort(), "GmcProxyPort should return explicit value")
+	assert.Equal(t, "5s", cfg.GmcProxyBeaconInterval(), "GmcProxyBeaconInterval should return explicit value")
+}
+
+func TestSave_OmitsNilPointerFields(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	// Create config with default values (nil pointers)
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Save the config
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Read the saved file
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test file path is controlled
+	require.NoError(t, err)
+
+	content := string(data)
+
+	// Verify that pointer fields with nil values are not written
+	assert.NotContains(t, content, "api_port", "api_port should not be in config when nil")
+	assert.NotContains(t, content, "[groovy]", "groovy section should not be in config when all fields nil")
+	assert.NotContains(t, content, "gmc_proxy_enabled", "gmc_proxy_enabled should not be in config when nil")
+	assert.NotContains(t, content, "gmc_proxy_port", "gmc_proxy_port should not be in config when nil")
+	assert.NotContains(t, content, "gmc_proxy_beacon_interval",
+		"gmc_proxy_beacon_interval should not be in config when nil")
 }

@@ -93,14 +93,6 @@ var BaseDefaults = Values{
 			Mode: ScanModeTap,
 		},
 	},
-	Service: Service{
-		APIPort: DefaultAPIPort,
-	},
-	Groovy: Groovy{
-		GmcProxyEnabled:        false,
-		GmcProxyPort:           32106,
-		GmcProxyBeaconInterval: "2s",
-	},
 }
 
 type Instance struct {
