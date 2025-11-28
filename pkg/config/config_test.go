@@ -20,11 +20,15 @@
 package config
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckAllow(t *testing.T) {
@@ -785,4 +789,143 @@ func TestScanHistory(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestLoad_PreservesDefaultsForMissingFields(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfgPath := filepath.Join(tempDir, CfgFile)
+
+	// Define custom defaults that differ from zero values
+	defaults := Values{
+		ConfigSchema: SchemaVersion,
+		Audio: Audio{
+			ScanFeedback: true, // This should persist after Load()
+		},
+		Readers: Readers{
+			AutoDetect: true, // This should persist after Load()
+			Scan: ReadersScan{
+				Mode: ScanModeTap, // This should persist after Load()
+			},
+		},
+		Service: Service{
+			APIPort: 7497, // This should persist after Load()
+		},
+	}
+
+	// Create a minimal TOML file that only has ConfigSchema
+	// (simulating a file that was saved without all default fields)
+	minimalConfig := fmt.Sprintf("config_schema = %d\n", SchemaVersion)
+	err := os.WriteFile(cfgPath, []byte(minimalConfig), 0o600)
+	require.NoError(t, err)
+
+	// Create config instance with our defaults
+	cfg := &Instance{
+		cfgPath:  cfgPath,
+		vals:     defaults,
+		defaults: defaults,
+	}
+
+	// Load the config file
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	// Verify that default values are preserved for fields not in the file
+	assert.True(t, cfg.vals.Audio.ScanFeedback, "Audio.ScanFeedback should retain default true")
+	assert.True(t, cfg.vals.Readers.AutoDetect, "Readers.AutoDetect should retain default true")
+	assert.Equal(t, ScanModeTap, cfg.vals.Readers.Scan.Mode, "Readers.Scan.Mode should retain default")
+	assert.Equal(t, 7497, cfg.vals.Service.APIPort, "Service.APIPort should retain default")
+}
+
+func TestLoad_OverridesDefaults(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cfgPath := filepath.Join(tempDir, CfgFile)
+
+	// Defaults with specific values
+	defaults := Values{
+		ConfigSchema: SchemaVersion,
+		Audio: Audio{
+			ScanFeedback: true,
+		},
+		Readers: Readers{
+			AutoDetect: true,
+			Scan: ReadersScan{
+				Mode: ScanModeTap,
+			},
+		},
+		Service: Service{
+			APIPort: 7497,
+		},
+	}
+
+	// Config file that explicitly overrides some defaults
+	configContent := fmt.Sprintf(`config_schema = %d
+debug_logging = true
+
+[audio]
+scan_feedback = false
+
+[readers]
+auto_detect = false
+
+[readers.scan]
+mode = "hold"
+
+[service]
+api_port = 8080
+`, SchemaVersion)
+
+	err := os.WriteFile(cfgPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	cfg := &Instance{
+		cfgPath:  cfgPath,
+		vals:     defaults,
+		defaults: defaults,
+	}
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	// Verify that file values override defaults
+	assert.True(t, cfg.vals.DebugLogging, "DebugLogging should be overridden to true")
+	assert.False(t, cfg.vals.Audio.ScanFeedback, "Audio.ScanFeedback should be overridden to false")
+	assert.False(t, cfg.vals.Readers.AutoDetect, "Readers.AutoDetect should be overridden to false")
+	assert.Equal(t, ScanModeHold, cfg.vals.Readers.Scan.Mode, "Readers.Scan.Mode should be overridden")
+	assert.Equal(t, 8080, cfg.vals.Service.APIPort, "Service.APIPort should be overridden")
+}
+
+func TestLoad_ReloadCycle(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	// Create config using NewConfig (the normal initialization path)
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Verify initial defaults are set
+	assert.True(t, cfg.AudioFeedback(), "Initial AudioFeedback should be true")
+	assert.True(t, cfg.Readers().AutoDetect, "Initial AutoDetect should be true")
+	assert.Equal(t, ScanModeTap, cfg.ReadersScan().Mode, "Initial scan mode should be tap")
+
+	// Modify a setting and save
+	cfg.SetAudioFeedback(false)
+	cfg.SetScanMode(ScanModeHold)
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Reload config
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	// Verify the explicitly saved values persist
+	assert.False(t, cfg.AudioFeedback(), "AudioFeedback should be false after reload")
+	assert.Equal(t, ScanModeHold, cfg.ReadersScan().Mode, "Scan mode should be hold after reload")
+
+	// Verify other defaults are still intact
+	assert.True(t, cfg.Readers().AutoDetect, "AutoDetect should retain default true after reload")
 }
