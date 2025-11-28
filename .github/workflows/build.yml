@@ -3,6 +3,17 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v2.7.0)'
+        required: true
+        type: string
+      signing_policy:
+        description: 'SignPath signing policy'
+        required: false
+        type: string
+        default: 'release-signing'
   workflow_call:
     inputs:
       tag:
@@ -173,7 +184,7 @@ jobs:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
+          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-zip'
           github-artifact-id: '${{ steps.upload-unsigned-zip.outputs.artifact-id }}'
           wait-for-completion: true
@@ -185,7 +196,7 @@ jobs:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
+          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-installer'
           github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
           wait-for-completion: true
