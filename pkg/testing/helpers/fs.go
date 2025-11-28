@@ -410,7 +410,7 @@ func NewTestConfigWithPort(_ *FSHelper, configDir string, port int) (*config.Ins
 	// Create defaults with custom port
 	defaults := config.BaseDefaults
 	if port != 0 {
-		defaults.Service.APIPort = port
+		defaults.Service.APIPort = &port
 	}
 
 	// Create config instance using the real filesystem

@@ -45,7 +45,7 @@ func TestNewTestConfig(t *testing.T) {
 	// Verify the config was created properly
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
-	assert.Equal(t, config.BaseDefaults.Service.APIPort, cfg.APIPort())
+	assert.Equal(t, config.DefaultAPIPort, cfg.APIPort())
 
 	// Verify the config file exists on the real filesystem
 	configPath := filepath.Join(configDir, config.CfgFile)
