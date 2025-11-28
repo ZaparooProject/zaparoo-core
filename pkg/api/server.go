@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -319,7 +320,25 @@ func handleResponse(resp models.ResponseObject) error {
 }
 
 func fsCustom404(root http.FileSystem) http.Handler {
-	appFS := http.FileServer(root)
+	mimeTypeMap := map[string]string{
+		".js":   "application/javascript",
+		".css":  "text/css",
+		".html": "text/html",
+	}
+
+	// Middleware to set Content-Type based on file extension
+	contentTypeMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ext := filepath.Ext(r.URL.Path)
+			if mime, ok := mimeTypeMap[ext]; ok {
+				w.Header().Set("Content-Type", mime)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	appFS := contentTypeMiddleware(http.FileServer(root))
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f, err := root.Open(r.URL.Path)
 		if err != nil {
@@ -330,6 +349,8 @@ func fsCustom404(root http.FileSystem) http.Handler {
 					http.Error(w, indexErr.Error(), http.StatusInternalServerError)
 					return
 				}
+				defer index.Close()
+				w.Header().Set("Content-Type", "text/html")
 				http.ServeContent(w, r, "index.html", time.Now(), index)
 				return
 			}
@@ -337,10 +358,20 @@ func fsCustom404(root http.FileSystem) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		err = f.Close()
+		defer f.Close()
+
+		// Check if it's a directory
+		stat, err := f.Stat()
 		if err != nil {
-			log.Error().Err(err).Msg("error closing file")
+			log.Error().Err(err).Str("path", r.URL.Path).Msg("error stating file")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		if stat.IsDir() {
+			http.Redirect(w, r, r.URL.Path+"/", http.StatusFound)
+			return
+		}
+
 		appFS.ServeHTTP(w, r)
 	})
 }
