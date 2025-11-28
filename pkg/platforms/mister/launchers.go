@@ -919,7 +919,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 			ID:         systemdefs.SystemNintendo64,
 			SystemID:   systemdefs.SystemNintendo64,
 			Folders:    []string{"N64"},
-			Extensions: []string{".n64", ".z64"},
+			Extensions: []string{".n64", ".z64", ".v64"},
 			Launch:     launch(pl, systemdefs.SystemNintendo64),
 		},
 		{

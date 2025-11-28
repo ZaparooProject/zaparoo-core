@@ -79,18 +79,18 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 			remainingStr := status.SessionRemaining.String()
 			resp.SessionRemaining = &remainingStr
 		}
-
-		// Daily remaining time
-		if status.DailyRemaining > 0 {
-			remainingStr := status.DailyRemaining.String()
-			resp.DailyRemaining = &remainingStr
-		}
 	}
 
-	// Daily usage (only during active state when we have accurate data)
-	if status.SessionActive && status.DailyUsageToday > 0 {
+	// nil = not calculated (limits disabled or clock unreliable)
+	if status.DailyUsageToday != nil {
 		usageStr := status.DailyUsageToday.String()
 		resp.DailyUsageToday = &usageStr
+	}
+
+	// nil = not calculated (limits disabled or clock unreliable)
+	if status.DailyRemaining != nil {
+		remainingStr := status.DailyRemaining.String()
+		resp.DailyRemaining = &remainingStr
 	}
 
 	return resp, nil

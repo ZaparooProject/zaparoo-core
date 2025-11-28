@@ -47,6 +47,25 @@ func TestPathToMGLDef(t *testing.T) {
 			path:     "PLATFORMER_GAME.NES",
 			wantMgl:  Systems["NES"].Slots[0].Mgl,
 		},
+		// Regression test: N64 .v64 extension support
+		{
+			name:     "N64 .v64 extension (byte-swapped ROM format)",
+			systemID: "Nintendo64",
+			path:     "mario64.v64",
+			wantMgl:  Systems["Nintendo64"].Slots[0].Mgl,
+		},
+		{
+			name:     "N64 .n64 extension (standard)",
+			systemID: "Nintendo64",
+			path:     "zelda.n64",
+			wantMgl:  Systems["Nintendo64"].Slots[0].Mgl,
+		},
+		{
+			name:     "N64 .z64 extension (big-endian)",
+			systemID: "Nintendo64",
+			path:     "goldeneye.z64",
+			wantMgl:  Systems["Nintendo64"].Slots[0].Mgl,
+		},
 		{
 			name:     "Nil MGL allowed (Arcade .mra)",
 			systemID: "Arcade",

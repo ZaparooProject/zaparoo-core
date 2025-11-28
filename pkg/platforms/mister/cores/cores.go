@@ -625,7 +625,7 @@ var Systems = map[string]Core{
 		RBF: "_Console/N64",
 		Slots: []Slot{
 			{
-				Exts: []string{".n64", ".z64"},
+				Exts: []string{".n64", ".z64", ".v64"},
 				Mgl: &MGLParams{
 					Delay:  1,
 					Method: "f",
