@@ -36,61 +36,58 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 		status = env.LimitsManager.GetStatus()
 	}
 
-	if status == nil {
-		// No limits manager - return reset state
-		return models.PlaytimeStatusResponse{
-			State:         "reset",
-			SessionActive: false,
-			LimitsEnabled: env.Config.PlaytimeLimitsEnabled(),
-		}, nil
-	}
-
-	// Build response
+	// Build base response
 	resp := models.PlaytimeStatusResponse{
-		State:         status.State,
-		SessionActive: status.SessionActive,
+		State:         "reset",
+		SessionActive: false,
 		LimitsEnabled: env.Config.PlaytimeLimitsEnabled(),
 	}
 
-	// Cooldown remaining (only during cooldown)
+	if status == nil {
+		// No limits manager - return base response
+		return resp, nil
+	}
+
+	// Update with actual status
+	resp.State = status.State
+	resp.SessionActive = status.SessionActive
+
+	// Daily usage and remaining are available in all states (if calculable)
+	if status.DailyUsageToday > 0 {
+		usageStr := status.DailyUsageToday.String()
+		resp.DailyUsageToday = &usageStr
+	}
+	if status.DailyRemaining > 0 {
+		remainingStr := status.DailyRemaining.String()
+		resp.DailyRemaining = &remainingStr
+	}
+
+	// Cooldown remaining (only during cooldown state)
 	if status.CooldownRemaining > 0 {
 		remainingStr := status.CooldownRemaining.String()
 		resp.CooldownRemaining = &remainingStr
 	}
 
-	// Session info (available during active and cooldown states)
+	// Session info (only during active and cooldown states)
 	if status.State != "reset" {
-		// Session started timestamp (only if not zero - cooldown has no current game)
+		// Session started timestamp (only during active - cooldown has no current game)
 		if !status.SessionStarted.IsZero() {
 			startedStr := status.SessionStarted.Format("2006-01-02T15:04:05Z07:00")
 			resp.SessionStarted = &startedStr
 		}
 
-		// Session duration (total time in session)
+		// Session duration and cumulative time
 		durationStr := status.SessionDuration.String()
 		resp.SessionDuration = &durationStr
 
-		// Session cumulative time
 		cumulativeStr := status.SessionCumulativeTime.String()
 		resp.SessionCumulativeTime = &cumulativeStr
 
-		// Session remaining time
+		// Session remaining (only if session limit is configured)
 		if status.SessionRemaining > 0 {
 			remainingStr := status.SessionRemaining.String()
 			resp.SessionRemaining = &remainingStr
 		}
-
-		// Daily remaining time
-		if status.DailyRemaining > 0 {
-			remainingStr := status.DailyRemaining.String()
-			resp.DailyRemaining = &remainingStr
-		}
-	}
-
-	// Daily usage (only during active state when we have accurate data)
-	if status.SessionActive && status.DailyUsageToday > 0 {
-		usageStr := status.DailyUsageToday.String()
-		resp.DailyUsageToday = &usageStr
 	}
 
 	return resp, nil

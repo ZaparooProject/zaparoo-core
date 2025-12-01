@@ -695,9 +695,28 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// State: Reset (no session exists)
 	if currentState == StateReset {
+		// Still calculate daily usage/remaining even when no session is active
+		var dailyUsage, dailyRemaining time.Duration
+		dailyLimit := tm.cfg.DailyLimit()
+
+		if dailyLimit > 0 && helpers.IsClockReliable(now) {
+			year, month, day := now.Date()
+			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+			usage, err := tm.calculateDailyUsage(todayStart, 0)
+			if err == nil {
+				dailyUsage = usage
+				dailyRemaining = dailyLimit - usage
+				if dailyRemaining < 0 {
+					dailyRemaining = 0
+				}
+			}
+		}
+
 		return &StatusInfo{
-			State:         StateReset.String(),
-			SessionActive: false,
+			State:           StateReset.String(),
+			SessionActive:   false,
+			DailyUsageToday: dailyUsage,
+			DailyRemaining:  dailyRemaining,
 		}
 	}
 
@@ -714,7 +733,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 
 		// Calculate remaining times based on cumulative time
-		var sessionRemaining, dailyRemaining time.Duration
+		var sessionRemaining, dailyRemaining, dailyUsage time.Duration
 		sessionLimit := tm.cfg.SessionLimit()
 		dailyLimit := tm.cfg.DailyLimit()
 
@@ -725,12 +744,13 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			}
 		}
 
-		// For daily remaining, we need to calculate today's total usage
-		if dailyLimit > 0 {
+		// Calculate today's total usage for daily remaining and display
+		if dailyLimit > 0 && helpers.IsClockReliable(now) {
 			year, month, day := now.Date()
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 			usage, err := tm.calculateDailyUsage(todayStart, 0)
 			if err == nil {
+				dailyUsage = usage
 				dailyRemaining = dailyLimit - usage
 				if dailyRemaining < 0 {
 					dailyRemaining = 0
@@ -748,7 +768,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionCumulativeTime: cumulativeTime,
 			SessionRemaining:      sessionRemaining,
 			CooldownRemaining:     cooldownRemaining,
-			DailyUsageToday:       0, // Skip during cooldown
+			DailyUsageToday:       dailyUsage,
 			DailyRemaining:        dailyRemaining,
 		}
 	}

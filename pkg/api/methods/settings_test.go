@@ -1,0 +1,175 @@
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
+package methods
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
+	"github.com/jonboulle/clockwork"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+)
+
+// TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia tests that re-enabling
+// playtime limits while a game is already running correctly triggers a session start.
+// This is a regression test for the bug where disabling then re-enabling limits
+// while a game was running would leave the session in "reset" state with 0m values.
+func TestHandlePlaytimeLimitsUpdate_ReEnableWithActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	// Create a config using NewConfig with a temp directory so Save() works
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetPlaytimeLimitsEnabled(false) // Start with limits disabled
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Use a reliable time (2025) so clock checks pass
+	baseTime := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+	fakeClock := clockwork.NewFakeClockAt(baseTime)
+
+	// Simulate a game already running
+	appState.SetActiveMedia(&models.ActiveMedia{
+		SystemID:   "NES",
+		SystemName: "Nintendo Entertainment System",
+		Name:       "Super Mario Bros",
+		Path:       "/roms/nes/smb.nes",
+		Started:    baseTime,
+	})
+
+	// Set up mock database - needed for checkLimits goroutine
+	mockUserDB := helpers.NewMockUserDBI()
+	mockUserDB.On("GetMediaHistory", mock.Anything, mock.Anything).Return([]database.MediaHistoryEntry{}, nil).Maybe()
+
+	db := &database.Database{
+		UserDB: mockUserDB,
+	}
+
+	// Create a LimitsManager with the mock database
+	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock)
+	defer limitsManager.Stop() // Clean up goroutines
+
+	// Prepare the request to enable limits
+	enabled := true
+	params := models.UpdatePlaytimeLimitsParams{
+		Enabled: &enabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LimitsManager: limitsManager,
+		Params:        paramsJSON,
+	}
+
+	// Call the handler
+	result, err := HandlePlaytimeLimitsUpdate(env)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify that the limits are now enabled
+	assert.True(t, cfg.PlaytimeLimitsEnabled(), "config should have limits enabled")
+	assert.True(t, limitsManager.IsEnabled(), "limits manager should be enabled")
+
+	// Verify that the session was started (state should be "active" not "reset")
+	// This is the key assertion - the bug was that state remained "reset"
+	status := limitsManager.GetStatus()
+	assert.Equal(t, "active", status.State, "session should be active after re-enabling with running game")
+	assert.True(t, status.SessionActive, "session should be marked as active")
+}
+
+// TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia tests that re-enabling
+// playtime limits when no game is running leaves the session in "reset" state.
+func TestHandlePlaytimeLimitsUpdate_ReEnableWithNoActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test-platform").Maybe()
+
+	// Create a config using NewConfig with a temp directory so Save() works
+	tmpDir := t.TempDir()
+	cfg, err := config.NewConfig(tmpDir, config.Values{})
+	require.NoError(t, err)
+	cfg.SetPlaytimeLimitsEnabled(false) // Start with limits disabled
+
+	appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// No active media - simulate no game running
+
+	// Set up mock database
+	mockUserDB := helpers.NewMockUserDBI()
+	db := &database.Database{
+		UserDB: mockUserDB,
+	}
+
+	// Create a LimitsManager
+	baseTime := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
+	fakeClock := clockwork.NewFakeClockAt(baseTime)
+	limitsManager := playtime.NewLimitsManager(db, mockPlatform, cfg, fakeClock)
+	defer limitsManager.Stop() // Clean up goroutines
+
+	// Prepare the request to enable limits
+	enabled := true
+	params := models.UpdatePlaytimeLimitsParams{
+		Enabled: &enabled,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	env := requests.RequestEnv{
+		Platform:      mockPlatform,
+		Config:        cfg,
+		State:         appState,
+		LimitsManager: limitsManager,
+		Params:        paramsJSON,
+	}
+
+	// Call the handler
+	result, err := HandlePlaytimeLimitsUpdate(env)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify that the limits are now enabled
+	assert.True(t, cfg.PlaytimeLimitsEnabled(), "config should have limits enabled")
+	assert.True(t, limitsManager.IsEnabled(), "limits manager should be enabled")
+
+	// Verify that the session remains in reset state (no active game)
+	status := limitsManager.GetStatus()
+	assert.Equal(t, "reset", status.State, "session should be reset when no game is running")
+	assert.False(t, status.SessionActive, "session should not be marked as active")
+}
