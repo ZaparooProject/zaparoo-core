@@ -93,6 +93,11 @@ tasks:
     cmds:
       - nilaway ./...
 
+  deadlock:
+    desc: Run tests with go-deadlock to detect lock ordering violations
+    cmds:
+      - go test -tags=deadlock -race -count=1 ./...
+
   get-logs:
     desc: Download and decode logs from Zaparoo API
     vars:

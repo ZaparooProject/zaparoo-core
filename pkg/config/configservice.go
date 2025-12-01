@@ -51,6 +51,11 @@ type MQTTPublisher struct {
 func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.apiPortLocked()
+}
+
+// apiPortLocked returns the API port. Caller must hold mu (read or write).
+func (c *Instance) apiPortLocked() int {
 	if c.vals.Service.APIPort == 0 {
 		return DefaultAPIPort
 	}
@@ -79,7 +84,7 @@ func (c *Instance) APIListen() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.vals.Service.APIListen == "" {
-		return ":" + strconv.Itoa(c.APIPort())
+		return ":" + strconv.Itoa(c.apiPortLocked())
 	}
 	return c.vals.Service.APIListen
 }

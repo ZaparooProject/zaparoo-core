@@ -25,10 +25,10 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +102,7 @@ func TestRunTrackedProcess_QuickExit(t *testing.T) {
 	cmd := exec.CommandContext(ctx, "true")
 
 	var restoreCalled bool
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 	restoreFunc := func() {
 		mu.Lock()
 		restoreCalled = true
@@ -145,7 +145,7 @@ func TestRunTrackedProcess_CancelledContext(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "sleep", "10")
 
 	var restoreCalled bool
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 	restoreFunc := func() {
 		mu.Lock()
 		restoreCalled = true

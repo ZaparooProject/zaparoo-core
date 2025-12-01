@@ -37,7 +37,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -46,6 +45,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
@@ -98,8 +98,8 @@ type LimitsManager struct {
 	sessionResetTimeout   time.Duration
 	sessionCumulativeTime time.Duration
 	subscriptionID        int
-	mu                    sync.Mutex
-	enabledMu             sync.Mutex
+	mu                    syncutil.Mutex
+	enabledMu             syncutil.Mutex
 	sessionStartReliable  bool
 	enabled               bool
 }

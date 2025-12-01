@@ -22,11 +22,11 @@ package state
 import (
 	"context"
 	"strings"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -34,6 +34,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// State holds the runtime state of the Zaparoo service.
+//
+// LOCKING RULES: The mu mutex protects all mutable fields. To prevent deadlocks:
+//   - Never send to channels while holding the lock (notifications, callbacks)
+//   - Never call external methods (reader.OnMediaChange, hooks) while holding the lock
+//   - Pattern: lock → modify state → copy needed data → unlock → send notifications
+//
+// See SetActiveCard, SetActiveMedia, SetReader, RemoveReader for examples.
 type State struct {
 	platform         platforms.Platform
 	ctx              context.Context
@@ -49,13 +57,15 @@ type State struct {
 	bootUUID         string
 	lastScanned      tokens.Token
 	activeToken      tokens.Token
-	mu               sync.RWMutex
+	mu               syncutil.RWMutex
 	stopService      bool
 	runZapScript     bool
 }
 
 func NewState(platform platforms.Platform, bootUUID string) (state *State, notificationCh <-chan models.Notification) {
-	ns := make(chan models.Notification, 100)
+	// Buffer size of 500 provides headroom for high-volume events (e.g., MediaIndexing)
+	// without dropping critical user-facing notifications (tokens, readers, media state)
+	ns := make(chan models.Notification, 500)
 	ctx, ctxCancelFunc := context.WithCancel(context.Background())
 	return &State{
 		runZapScript:    true,
@@ -79,20 +89,28 @@ func (s *State) SetActiveCard(card tokens.Token) { //nolint:gocritic // single-u
 	}
 
 	s.activeToken = card
+
+	// Prepare notification payload inside lock, send outside
+	var payload *models.TokenResponse
 	if !s.activeToken.ScanTime.IsZero() {
 		s.lastScanned = card
-		notifications.TokensAdded(s.Notifications, models.TokenResponse{
+		payload = &models.TokenResponse{
 			Type:     card.Type,
 			UID:      card.UID,
 			Text:     card.Text,
 			Data:     card.Data,
 			ScanTime: card.ScanTime,
-		})
-	} else {
-		notifications.TokensRemoved(s.Notifications)
+		}
 	}
 
 	s.mu.Unlock()
+
+	// Send notification outside lock to prevent deadlock
+	if payload != nil {
+		notifications.TokensAdded(s.Notifications, *payload)
+	} else {
+		notifications.TokensRemoved(s.Notifications)
+	}
 }
 
 func (s *State) GetActiveCard() tokens.Token {
@@ -157,16 +175,23 @@ func (s *State) SetReader(device string, reader readers.Reader) {
 	if len(ps) > 1 {
 		path = ps[1]
 	}
-	notifications.ReadersAdded(s.Notifications, models.ReaderResponse{
+
+	// Prepare payload inside lock
+	payload := models.ReaderResponse{
 		Connected: true,
 		Driver:    driver,
 		Path:      path,
-	})
+	}
+
 	s.mu.Unlock()
+
+	// Send notification outside lock to prevent deadlock
+	notifications.ReadersAdded(s.Notifications, payload)
 }
 
 func (s *State) RemoveReader(device string) {
 	s.mu.Lock()
+
 	r, ok := s.readers[device]
 	if ok && r != nil {
 		err := r.Close()
@@ -181,12 +206,18 @@ func (s *State) RemoveReader(device string) {
 		path = ps[1]
 	}
 	delete(s.readers, device)
-	notifications.ReadersRemoved(s.Notifications, models.ReaderResponse{
+
+	// Prepare payload inside lock
+	payload := models.ReaderResponse{
 		Connected: false,
 		Driver:    driver,
 		Path:      path,
-	})
+	}
+
 	s.mu.Unlock()
+
+	// Send notification outside lock to prevent deadlock
+	notifications.ReadersRemoved(s.Notifications, payload)
 }
 
 func (s *State) ListReaders() []string {
@@ -244,22 +275,37 @@ func (s *State) ActiveMedia() *models.ActiveMedia {
 }
 
 func (s *State) SetActiveMedia(media *models.ActiveMedia) {
-	oldMedia := s.ActiveMedia()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+
+	// Read oldMedia inside lock to prevent race condition where another
+	// goroutine modifies activeMedia between our read and lock acquisition
+	oldMedia := s.activeMedia
+
 	if oldMedia == nil && media == nil {
+		s.mu.Unlock()
 		return
 	}
+
+	// Capture hook reference inside lock
+	hook := s.onMediaStartHook
+
 	if media == nil {
 		// media has stopped
 		s.activeMedia = media
+		s.mu.Unlock()
+
+		// Send notifications outside lock to prevent deadlock
 		notifications.MediaStopped(s.Notifications)
 		s.notifyDisplayReaders(media)
 		return
 	}
+
 	if oldMedia == nil {
 		// media has started
 		s.activeMedia = media
+		s.mu.Unlock()
+
+		// Send notifications outside lock to prevent deadlock
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
 			SystemName: media.SystemName,
@@ -269,14 +315,18 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.notifyDisplayReaders(media)
 
 		// Execute OnMediaStart hook if set
-		if s.onMediaStartHook != nil {
-			go s.onMediaStartHook(media)
+		if hook != nil {
+			go hook(media)
 		}
 		return
 	}
+
 	if !oldMedia.Equal(media) {
 		// media has changed
 		s.activeMedia = media
+		s.mu.Unlock()
+
+		// Send notifications outside lock to prevent deadlock
 		notifications.MediaStopped(s.Notifications)
 		notifications.MediaStarted(s.Notifications, models.MediaStartedParams{
 			SystemID:   media.SystemID,
@@ -287,33 +337,71 @@ func (s *State) SetActiveMedia(media *models.ActiveMedia) {
 		s.notifyDisplayReaders(media)
 
 		// Execute OnMediaStart hook if set (new media started)
-		if s.onMediaStartHook != nil {
-			go s.onMediaStartHook(media)
+		if hook != nil {
+			go hook(media)
 		}
 		return
 	}
+
+	// No changes
+	s.mu.Unlock()
 }
 
-// notifyDisplayReaders calls OnMediaChange for all readers with display capability
+// notifyDisplayReaders calls OnMediaChange for all readers with display capability.
+// This method acquires a read lock to copy the readers list, then releases the lock
+// before making external calls to prevent deadlocks.
+//
+// Note: Because we release the lock before calling OnMediaChange, a reader could be
+// closed by RemoveReader concurrently. We use defer/recover to handle any panics
+// from calling methods on closed readers.
 func (s *State) notifyDisplayReaders(media *models.ActiveMedia) {
+	// Copy readers list inside lock to avoid holding lock during external calls
+	s.mu.RLock()
+	readersToNotify := make([]readers.Reader, 0, len(s.readers))
 	for _, reader := range s.readers {
-		if reader == nil {
-			continue
+		if reader != nil {
+			readersToNotify = append(readersToNotify, reader)
 		}
+	}
+	s.mu.RUnlock()
 
-		capabilities := reader.Capabilities()
-		hasDisplayCapability := false
-		for _, cap := range capabilities {
-			if cap == readers.CapabilityDisplay {
-				hasDisplayCapability = true
-				break
-			}
+	// Call OnMediaChange outside lock to prevent deadlock
+	for _, reader := range readersToNotify {
+		s.safeNotifyReader(reader, media)
+	}
+}
+
+// safeNotifyReader calls OnMediaChange on a reader with panic recovery.
+// This handles the case where a reader is closed concurrently by RemoveReader.
+//
+// TODO: The proper fix is to make all Reader.OnMediaChange implementations
+// close-safe (return ErrReaderClosed instead of panicking). Then we can remove
+// the panic recovery entirely. The Connected() check narrows the race window
+// but doesn't eliminate it.
+func (*State) safeNotifyReader(reader readers.Reader, media *models.ActiveMedia) {
+	// Skip readers that are already disconnected (fast path)
+	if !reader.Connected() {
+		return
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warn().Interface("panic", r).Msg("panic in reader OnMediaChange (reader may have been closed)")
 		}
+	}()
 
-		if hasDisplayCapability {
-			if err := reader.OnMediaChange(media); err != nil {
-				log.Warn().Err(err).Msg("failed to notify display reader of media change")
-			}
+	capabilities := reader.Capabilities()
+	hasDisplayCapability := false
+	for _, cap := range capabilities {
+		if cap == readers.CapabilityDisplay {
+			hasDisplayCapability = true
+			break
+		}
+	}
+
+	if hasDisplayCapability {
+		if err := reader.OnMediaChange(media); err != nil {
+			log.Warn().Err(err).Msg("failed to notify display reader of media change")
 		}
 	}
 }

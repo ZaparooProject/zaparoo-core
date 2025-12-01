@@ -32,10 +32,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -312,7 +312,7 @@ type LaunchBoxPipeServer struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	writer         *bufio.Writer
-	connMu         sync.Mutex
+	connMu         syncutil.Mutex
 }
 
 // NewLaunchBoxPipeServer creates a new named pipe server

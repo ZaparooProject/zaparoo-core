@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,7 +19,7 @@ const (
 
 var (
 	midiProcess   *os.Process
-	midiProcessMu sync.Mutex
+	midiProcessMu syncutil.Mutex
 )
 
 // shouldStartMIDIMeister checks if MIDIMeister is available and should be started

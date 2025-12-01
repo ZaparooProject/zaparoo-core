@@ -28,12 +28,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -88,7 +88,7 @@ type PN532UARTReader struct {
 	device    config.ReadersConnect
 	name      string
 	polling   bool
-	mu        sync.RWMutex // protects polling
+	mu        syncutil.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *PN532UARTReader {
@@ -344,7 +344,7 @@ func (r *PN532UARTReader) Close() error {
 
 // keep track of serial devices that had failed opens
 var (
-	serialCacheMu   = &sync.RWMutex{}
+	serialCacheMu   = &syncutil.RWMutex{}
 	serialBlockList []string
 )
 
