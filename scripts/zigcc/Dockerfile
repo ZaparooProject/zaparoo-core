@@ -1,6 +1,6 @@
 FROM debian:trixie AS base
 
-# Install base dependencies in single layer (Debian)
+# Install base dependencies
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -100,10 +100,9 @@ RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/loc
 # Create non-root build user for security
 ARG UID=1000
 ARG GID=1000
-# Use Debian-compatible commands to create group and user
+# Create non-root build user with adjusted GID
 RUN set -eux; \
-    GID=$((GID + 1000)); \
-    groupadd -g "$GID" build; \
+    groupadd -g "$GID" build || groupadd -g "$((GID + 1000))" build; \
     useradd -m -u "$UID" -g build -s /bin/bash build
 
 # Switch to non-root user
