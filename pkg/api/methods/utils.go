@@ -33,3 +33,10 @@ func HandleVersion(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 		Platform: env.Platform.ID(),
 	}, nil
 }
+
+func HandleHealthCheck(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+	log.Info().Msg("received health check request")
+	return models.HealthCheckResponse{
+		Status: "ok",
+	}, nil
+}

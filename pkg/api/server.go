@@ -222,7 +222,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodReadersWrite:       methods.HandleReaderWrite,
 		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// utils
-		models.MethodVersion: methods.HandleVersion,
+		models.MethodVersion:     methods.HandleVersion,
+		models.MethodHealthCheck: methods.HandleHealthCheck,
 	}
 
 	for name, fn := range defaultMethods {
@@ -787,6 +788,10 @@ func Start(
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{
