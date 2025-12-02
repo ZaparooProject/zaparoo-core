@@ -1,25 +1,26 @@
-FROM alpine:3.21 AS base
+FROM debian:trixie AS base
 
-# Install base dependencies in single layer
-RUN apk add --no-cache \
-    ca-certificates \
-    curl \
-    git \
-    build-base \
-    autoconf \
-    automake \
-    libtool \
-    pkgconfig \
-    linux-headers \
-    bash \
-    eudev-dev \
-    mingw-w64-gcc \
-    xz && \
-    # Clean up to reduce image size
-    rm -rf /var/cache/apk/*
+# Install base dependencies in single layer (Debian)
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        build-essential \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        linux-libc-dev \
+        bash \
+        libudev-dev \
+        mingw-w64 \
+        xz-utils; \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Go
-COPY --from=golang:1.24-alpine /usr/local/go/ /usr/local/go/
+COPY --from=golang:1.24 /usr/local/go/ /usr/local/go/
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install Zig
@@ -99,8 +100,11 @@ RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/loc
 # Create non-root build user for security
 ARG UID=1000
 ARG GID=1000
-RUN addgroup -g $GID build && \
-    adduser -D -u $UID -G build build
+# Use Debian-compatible commands to create group and user
+RUN set -eux; \
+    GID=$((GID + 1000)); \
+    groupadd -g "$GID" build; \
+    useradd -m -u "$UID" -g build -s /bin/bash build
 
 # Switch to non-root user
 USER build
