@@ -79,7 +79,7 @@ const (
 	MethodReadersWrite         = "readers.write"
 	MethodReadersWriteCancel   = "readers.write.cancel"
 	MethodVersion              = "version"
-	MethodHealthCheck          = "healthcheck"
+	MethodHealthCheck          = "health.check"
 )
 
 type Notification struct {
