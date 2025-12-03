@@ -654,3 +654,55 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		expectedStatus string
+	}{
+		{
+			name:           "returns ok status",
+			expectedStatus: "ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Create mock environment
+			mockPlatform := mocks.NewMockPlatform()
+			mockUserDB := &helpers.MockUserDBI{}
+			mockMediaDB := helpers.NewMockMediaDBI()
+
+			db := &database.Database{
+				UserDB:  mockUserDB,
+				MediaDB: mockMediaDB,
+			}
+
+			cfg := &config.Instance{}
+			appState, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+			env := requests.RequestEnv{
+				Platform: mockPlatform,
+				Config:   cfg,
+				State:    appState,
+				Database: db,
+				Params:   []byte(`{}`),
+			}
+
+			// Call the handler
+			result, err := HandleHealthCheck(env)
+
+			// Verify response
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			response, ok := result.(models.HealthCheckResponse)
+			require.True(t, ok, "Response should be HealthCheckResponse type")
+			assert.Equal(t, tt.expectedStatus, response.Status)
+		})
+	}
+}
