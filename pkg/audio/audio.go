@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -227,6 +228,9 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer) error {
 	malgoCtx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return fmt.Errorf("failed to initialize malgo context: %w", err)
+	}
+	if malgoCtx == nil {
+		return errors.New("malgo context is nil after initialization")
 	}
 	defer func() {
 		_ = malgoCtx.Uninit()
