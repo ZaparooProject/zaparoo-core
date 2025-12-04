@@ -58,11 +58,9 @@ const (
 
 // getSqliteConnParams constructs the SQLite connection string
 func getSqliteConnParams() string {
-	// Write-optimized WAL connection: defer checkpoints, keep dirty pages in RAM, larger cache
-	// synchronous=NORMAL is safe with WAL and provides good performance
 	return "?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000" +
-		"&_cache_size=-65536&_temp_store=MEMORY&_mmap_size=67108864" +
-		"&_page_size=8192&_foreign_keys=ON&_wal_autocheckpoint=0&_cache_spill=OFF"
+		"&_cache_size=-8192&_temp_store=FILE&_mmap_size=0" +
+		"&_page_size=8192&_foreign_keys=ON"
 }
 
 type MediaDB struct {
@@ -351,6 +349,9 @@ func (db *MediaDB) MigrateUp() error {
 }
 
 func (db *MediaDB) Vacuum() error {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -794,6 +795,9 @@ func (*MediaDB) CreateIndexes() error {
 }
 
 func (db *MediaDB) Analyze() error {
+	db.sqlMu.RLock()
+	defer db.sqlMu.RUnlock()
+
 	if db.sql == nil {
 		return ErrNullSQL
 	}
@@ -1642,6 +1646,17 @@ func (db *MediaDB) RunBackgroundOptimization(statusCallback func(optimizing bool
 	}
 	db.backgroundOps.Add(1)
 	defer func() {
+		// Recover from any panics to prevent crashing the entire service
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("panic recovered in background optimization")
+			if statusCallback != nil {
+				statusCallback(false)
+			}
+			// Try to mark optimization as failed so it can be retried
+			if db.sql != nil {
+				_ = db.SetOptimizationStatus(IndexingStatusFailed)
+			}
+		}
 		db.isOptimizing.Store(false)
 		db.backgroundOps.Done()
 	}()
