@@ -223,7 +223,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodReadersWrite:       methods.HandleReaderWrite,
 		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// utils
-		models.MethodVersion: methods.HandleVersion,
+		models.MethodVersion:     methods.HandleVersion,
+		models.MethodHealthCheck: methods.HandleHealthCheck,
 	}
 
 	for name, fn := range defaultMethods {
@@ -818,6 +819,14 @@ func Start(
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
+
+	// the health endpoint is behind every standard middleware we added
+	// the response is a simple string on purpose, we want just to be able
+	// to see if the server is up and answering
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{

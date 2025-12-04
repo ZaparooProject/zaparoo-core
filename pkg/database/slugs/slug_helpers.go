@@ -145,32 +145,32 @@ func StripMetadataBrackets(s string) string {
 	for _, r := range s {
 		switch r {
 		case '(':
-			depth[0]++ //nolint:gosec // G602 - array size is 4, index 0 is safe
+			depth[0]++
 		case ')':
-			if depth[0] > 0 { //nolint:gosec // G602 - array size is 4, index 0 is safe
+			if depth[0] > 0 {
 				depth[0]--
 			}
 		case '[':
-			depth[1]++ //nolint:gosec // G602 - array size is 4, index 1 is safe
+			depth[1]++
 		case ']':
-			if depth[1] > 0 { //nolint:gosec // G602 - array size is 4, index 1 is safe
+			if depth[1] > 0 {
 				depth[1]--
 			}
 		case '{':
-			depth[2]++ //nolint:gosec // G602 - array size is 4, index 2 is safe
+			depth[2]++
 		case '}':
-			if depth[2] > 0 { //nolint:gosec // G602 - array size is 4, index 2 is safe
+			if depth[2] > 0 {
 				depth[2]--
 			}
 		case '<':
-			depth[3]++ //nolint:gosec // G602 - array size is 4, index 3 is safe
+			depth[3]++
 		case '>':
-			if depth[3] > 0 { //nolint:gosec // G602 - array size is 4, index 3 is safe
+			if depth[3] > 0 {
 				depth[3]--
 			}
 		default:
 			// Only write runes when we're not inside any brackets
-			//nolint:gosec // G602 - array size is 4, all indices are safe
+
 			if depth[0] == 0 && depth[1] == 0 && depth[2] == 0 && depth[3] == 0 {
 				_, _ = result.WriteRune(r)
 			}
