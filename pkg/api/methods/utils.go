@@ -34,7 +34,7 @@ func HandleVersion(env requests.RequestEnv) (any, error) { //nolint:gocritic // 
 	}, nil
 }
 
-func HandleHealthCheck(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
+func HandleHealthCheck(_ requests.RequestEnv) (any, error) { //nolint:gocritic // hugeParam yes is huge
 	log.Info().Msg("received health check request")
 	return models.HealthCheckResponse{
 		Status: "ok",
