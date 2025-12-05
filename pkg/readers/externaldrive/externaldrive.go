@@ -33,6 +33,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -63,7 +64,7 @@ type Reader struct {
 	activeTokens map[string]*tokens.Token
 	device       config.ReadersConnect
 	wg           sync.WaitGroup
-	mu           sync.RWMutex
+	mu           syncutil.RWMutex
 }
 
 // NewReader creates a new external drive reader instance.

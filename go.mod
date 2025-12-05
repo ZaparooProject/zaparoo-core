@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.24.9
+go 1.24.11
 
 require (
 	fyne.io/systray v1.11.0
@@ -39,6 +39,7 @@ require (
 	github.com/pressly/goose/v3 v3.24.3
 	github.com/rivo/tview v0.0.0-20250625164341-a4a78f1e05cb
 	github.com/rs/zerolog v1.34.0
+	github.com/sasha-s/go-deadlock v0.3.6
 	github.com/spf13/afero v1.14.0
 	github.com/stretchr/testify v1.11.1
 	go.bug.st/serial v1.6.4
@@ -78,6 +79,7 @@ require (
 	github.com/mewkiz/flac v1.0.12 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
+	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

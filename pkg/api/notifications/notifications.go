@@ -26,21 +26,47 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// criticalNotifications are user-facing events that should never be silently dropped.
+// These are logged at ERROR level if the channel is full.
+var criticalNotifications = map[string]bool{
+	models.NotificationTokensAdded:         true,
+	models.NotificationTokensRemoved:       true,
+	models.NotificationReadersConnected:    true,
+	models.NotificationReadersDisconnected: true,
+	models.NotificationStarted:             true,
+	models.NotificationStopped:             true,
+}
+
 func sendNotification(ns chan<- models.Notification, method string, payload any) {
-	log.Debug().Msgf("sending notification: %s, %v", method, payload)
+	var notification models.Notification
+
 	if payload != nil {
 		params, err := json.Marshal(payload)
 		if err != nil {
 			log.Error().Err(err).Msgf("error marshalling notification params: %s", method)
 			return
 		}
-		ns <- models.Notification{
+		notification = models.Notification{
 			Method: method,
 			Params: params,
 		}
 	} else {
-		ns <- models.Notification{
+		notification = models.Notification{
 			Method: method,
+		}
+	}
+
+	// Use non-blocking send to prevent back-pressure from freezing callers.
+	// If the buffer is full, the notification is dropped and logged.
+	select {
+	case ns <- notification:
+		log.Debug().Msgf("notification sent: %s", method)
+	default:
+		// Log at ERROR level for critical user-facing notifications
+		if criticalNotifications[method] {
+			log.Error().Msgf("notification channel full, dropping CRITICAL: %s", method)
+		} else {
+			log.Warn().Msgf("notification channel full, dropping: %s", method)
 		}
 	}
 }

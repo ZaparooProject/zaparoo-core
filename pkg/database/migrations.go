@@ -23,13 +23,13 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/pressly/goose/v3"
 	"github.com/rs/zerolog/log"
 )
 
-var migrationMutex sync.Mutex
+var migrationMutex syncutil.Mutex
 
 // gooseZerologAdapter implements goose.Logger interface to redirect
 // goose output to zerolog instead of stdout

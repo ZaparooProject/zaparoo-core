@@ -21,7 +21,8 @@ package state
 
 import (
 	"context"
-	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // LauncherManager manages the lifecycle of launcher contexts across the application.
@@ -31,7 +32,7 @@ import (
 type LauncherManager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	mu     sync.RWMutex
+	mu     syncutil.RWMutex
 }
 
 func NewLauncherManager() *LauncherManager {

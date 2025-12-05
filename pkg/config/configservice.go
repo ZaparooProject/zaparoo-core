@@ -27,6 +27,7 @@ import (
 const DefaultAPIPort = 7497
 
 type Service struct {
+	APIPort        *int     `toml:"api_port,omitempty"`
 	DeviceID       string   `toml:"device_id"`
 	APIListen      string   `toml:"api_listen,omitempty"`
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
@@ -34,7 +35,6 @@ type Service struct {
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
-	APIPort        int        `toml:"api_port"`
 }
 
 type Publishers struct {
@@ -51,10 +51,21 @@ type MQTTPublisher struct {
 func (c *Instance) APIPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.vals.Service.APIPort == 0 {
+	return c.apiPortLocked()
+}
+
+// apiPortLocked returns the API port. Caller must hold mu (read or write).
+func (c *Instance) apiPortLocked() int {
+	if c.vals.Service.APIPort == nil {
 		return DefaultAPIPort
 	}
-	return c.vals.Service.APIPort
+	return *c.vals.Service.APIPort
+}
+
+func (c *Instance) SetAPIPort(port int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.APIPort = &port
 }
 
 func (c *Instance) AllowedOrigins() []string {
@@ -79,7 +90,7 @@ func (c *Instance) APIListen() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.vals.Service.APIListen == "" {
-		return ":" + strconv.Itoa(c.APIPort())
+		return ":" + strconv.Itoa(c.apiPortLocked())
 	}
 	return c.vals.Service.APIListen
 }

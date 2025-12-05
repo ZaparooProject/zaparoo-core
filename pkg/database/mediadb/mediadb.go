@@ -39,6 +39,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/slugs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/jonboulle/clockwork"
 	_ "github.com/mattn/go-sqlite3"
@@ -88,7 +89,7 @@ type MediaDB struct {
 	vacuumRetryDelay      time.Duration
 	analyzeRetryDelay     time.Duration
 	batchSize             int
-	sqlMu                 sync.RWMutex
+	sqlMu                 syncutil.RWMutex
 	isOptimizing          atomic.Bool
 	inTransaction         bool
 }

@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -18,7 +18,7 @@ import (
 type MiSTerConsoleManager struct {
 	platform *Platform
 	active   bool
-	mu       sync.RWMutex
+	mu       syncutil.RWMutex
 }
 
 func newConsoleManager(p *Platform) *MiSTerConsoleManager {

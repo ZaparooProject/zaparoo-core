@@ -21,8 +21,9 @@ package testutils
 
 import (
 	"errors"
-	"sync"
 	"time"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // MockSerialPort is a mock implementation of serial port for testing.
@@ -35,7 +36,7 @@ type MockSerialPort struct {
 	ReadData   []byte
 	ReadIndex  int
 	Closed     bool
-	mu         sync.RWMutex // protects Closed, CloseError
+	mu         syncutil.RWMutex // protects Closed, CloseError
 }
 
 // NewMockSerialPort creates a new mock serial port for testing.

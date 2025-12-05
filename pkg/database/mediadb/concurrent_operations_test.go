@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestConcurrentOptimizationPrevention(t *testing.T) {
 
 	const numGoroutines = 5
 	completedCount := 0
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 	var wg sync.WaitGroup
 
 	// Start multiple optimization attempts concurrently
@@ -212,7 +213,7 @@ func TestConcurrentStatusUpdates(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var updateErrors []error
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Concurrently update optimization status
 	for range numGoroutines {
@@ -282,7 +283,7 @@ func TestAtomicOptimizationFlag(t *testing.T) {
 	const numGoroutines = 100
 	var wg sync.WaitGroup
 	var actualOptimizations int32
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Mock a single successful optimization
 	mock.ExpectExec("INSERT OR REPLACE INTO DBConfig").
@@ -410,7 +411,7 @@ func TestConcurrentIndexingAndOptimizationStatusChecks(t *testing.T) {
 	}
 
 	var readErrors []error
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Many concurrent readers checking optimization status
 	for range numReaders {
@@ -490,7 +491,7 @@ func TestRaceConditionBetweenStatusAndOptimization(t *testing.T) {
 	}
 
 	var statusErrors []error
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	var wg sync.WaitGroup
 

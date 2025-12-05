@@ -231,6 +231,10 @@ type VersionResponse struct {
 	Platform string `json:"platform"`
 }
 
+type HealthCheckResponse struct {
+	Status string `json:"status"`
+}
+
 type MediaResponse struct {
 	Database IndexingStatusResponse `json:"database"`
 	Active   []ActiveMedia          `json:"active"`

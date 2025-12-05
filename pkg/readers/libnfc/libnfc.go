@@ -10,12 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/libnfc/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/shared/ndef"
@@ -141,17 +141,16 @@ type Reader struct {
 	write         chan WriteRequest
 	activeWrite   *WriteRequest
 	conn          config.ReadersConnect
-	activeWriteMu sync.RWMutex
+	activeWriteMu syncutil.RWMutex
 	polling       bool
 	mode          readerMode // Reader mode for different device types
 }
 
 func NewReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg:           cfg,
-		write:         make(chan WriteRequest),
-		activeWriteMu: sync.RWMutex{},
-		mode:          modeAll,
+		cfg:   cfg,
+		write: make(chan WriteRequest),
+		mode:  modeAll,
 	}
 }
 
@@ -160,10 +159,9 @@ func NewReader(cfg *config.Instance) *Reader {
 // library handles UART/I2C devices and we want to prevent conflicts.
 func NewACR122Reader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg:           cfg,
-		write:         make(chan WriteRequest),
-		activeWriteMu: sync.RWMutex{},
-		mode:          modeACR122Only,
+		cfg:   cfg,
+		write: make(chan WriteRequest),
+		mode:  modeACR122Only,
 	}
 }
 
@@ -172,10 +170,9 @@ func NewACR122Reader(cfg *config.Instance) *Reader {
 // new go-pn532 driver. Auto-detect is disabled by default.
 func NewLegacyUARTReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg:           cfg,
-		write:         make(chan WriteRequest),
-		activeWriteMu: sync.RWMutex{},
-		mode:          modeLegacyUART,
+		cfg:   cfg,
+		write: make(chan WriteRequest),
+		mode:  modeLegacyUART,
 	}
 }
 
@@ -184,10 +181,9 @@ func NewLegacyUARTReader(cfg *config.Instance) *Reader {
 // new go-pn532 driver. Auto-detect is disabled by default.
 func NewLegacyI2CReader(cfg *config.Instance) *Reader {
 	return &Reader{
-		cfg:           cfg,
-		write:         make(chan WriteRequest),
-		activeWriteMu: sync.RWMutex{},
-		mode:          modeLegacyI2C,
+		cfg:   cfg,
+		write: make(chan WriteRequest),
+		mode:  modeLegacyI2C,
 	}
 }
 
@@ -477,7 +473,7 @@ func (*Reader) OnMediaChange(*models.ActiveMedia) error {
 
 // keep track of serial devices that had failed opens
 var (
-	serialCacheMu   = &sync.RWMutex{}
+	serialCacheMu   = &syncutil.RWMutex{}
 	serialBlockList []string
 )
 
@@ -564,7 +560,7 @@ func detectSerialReaders(connected []string) string {
 
 // keep track of I2C devices that had failed opens
 var (
-	i2cCacheMu   = &sync.RWMutex{}
+	i2cCacheMu   = &syncutil.RWMutex{}
 	i2cBlockList []string
 )
 

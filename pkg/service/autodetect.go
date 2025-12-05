@@ -22,10 +22,10 @@ package service
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -37,7 +37,7 @@ type AutoDetector struct {
 	connected            map[string]bool
 	failed               map[string]bool
 	lastDetectionSummary string
-	mu                   sync.RWMutex
+	mu                   syncutil.RWMutex
 }
 
 func NewAutoDetector(_ *config.Instance) *AutoDetector {
