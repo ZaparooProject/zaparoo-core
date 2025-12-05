@@ -242,9 +242,9 @@ func TestHandlePostRequest_OversizedBody(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler(rr, req)
 
-	// Body limit triggers a read error, resulting in HTTP 500
-	require.Equal(t, http.StatusInternalServerError, rr.Code, "oversized body should return HTTP 500")
-	require.Contains(t, rr.Body.String(), "Failed to read request body", "should indicate body read failure")
+	// Body limit triggers HTTP 413 Request Entity Too Large
+	require.Equal(t, http.StatusRequestEntityTooLarge, rr.Code, "oversized body should return HTTP 413")
+	require.Contains(t, rr.Body.String(), "Request body too large", "should indicate body size limit exceeded")
 }
 
 // TestHandlePostRequest_EmptyBody tests that an empty request body is handled correctly.

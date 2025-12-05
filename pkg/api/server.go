@@ -676,7 +676,12 @@ func handlePostRequest(
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to read request body")
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -704,7 +709,7 @@ func handlePostRequest(
 			respBody, err = json.Marshal(errorResp)
 			if err != nil {
 				log.Error().Err(err).Msg("error marshalling error response")
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		} else {
@@ -716,7 +721,7 @@ func handlePostRequest(
 			respBody, err = json.Marshal(resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error marshalling response")
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		}
