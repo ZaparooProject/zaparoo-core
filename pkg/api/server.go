@@ -664,15 +664,24 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(w, "Content-Type is not application/json", http.StatusUnsupportedMediaType)
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if mediaType != "application/json" {
+			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
+
+		const maxPostBodySize = 1 << 20 // 1MB
+		r.Body = http.MaxBytesReader(w, r.Body, maxPostBodySize)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to read request body")
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
@@ -700,7 +709,7 @@ func handlePostRequest(
 			respBody, err = json.Marshal(errorResp)
 			if err != nil {
 				log.Error().Err(err).Msg("error marshalling error response")
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		} else {
@@ -712,16 +721,16 @@ func handlePostRequest(
 			respBody, err = json.Marshal(resp)
 			if err != nil {
 				log.Error().Err(err).Msg("error marshalling response")
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		_, err = w.Write(respBody)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to write error response")
+			log.Error().Err(err).Msg("failed to write response")
 		}
 	}
 }
