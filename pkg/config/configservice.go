@@ -56,7 +56,7 @@ func (c *Instance) APIPort() int {
 
 // apiPortLocked returns the API port. Caller must hold mu (read or write).
 func (c *Instance) apiPortLocked() int {
-	if c.vals.Service.APIPort == 0 {
+	if c.vals.Service.APIPort == nil {
 		return DefaultAPIPort
 	}
 	return *c.vals.Service.APIPort

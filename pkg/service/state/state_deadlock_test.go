@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -403,4 +404,163 @@ func TestNotifyDisplayReaders_PanicRecovery(t *testing.T) {
 			Path:     "/test/path",
 		})
 	}, "notifyDisplayReaders should recover from panics in reader.OnMediaChange")
+}
+
+// mockClosableReader is a simple mock reader that tracks Close() calls.
+type mockClosableReader struct {
+	closeErr    error
+	closeCalled atomic.Bool
+}
+
+func (*mockClosableReader) Metadata() readers.DriverMetadata {
+	return readers.DriverMetadata{ID: "closable"}
+}
+
+func (*mockClosableReader) IDs() []string                                             { return []string{"closable"} }
+func (*mockClosableReader) Open(_ config.ReadersConnect, _ chan<- readers.Scan) error { return nil }
+func (m *mockClosableReader) Close() error {
+	m.closeCalled.Store(true)
+	return m.closeErr
+}
+func (*mockClosableReader) Detect(_ []string) string           { return "" }
+func (*mockClosableReader) Device() string                     { return "closable:test" }
+func (m *mockClosableReader) Connected() bool                  { return !m.closeCalled.Load() }
+func (*mockClosableReader) Info() string                       { return "mock closable reader" }
+func (*mockClosableReader) Capabilities() []readers.Capability { return nil }
+
+//nolint:nilnil // mock implementation
+func (*mockClosableReader) Write(_ string) (*tokens.Token, error)     { return nil, nil }
+func (*mockClosableReader) CancelWrite()                              {}
+func (*mockClosableReader) OnMediaChange(_ *models.ActiveMedia) error { return nil }
+
+// TestRemoveReader_ClosesAndNotifies verifies RemoveReader closes the reader
+// and sends a notification.
+func TestRemoveReader_ClosesAndNotifies(t *testing.T) {
+	t.Parallel()
+
+	state, notifications := NewState(nil, "test-boot-uuid")
+
+	done := make(chan struct{})
+	defer close(done)
+
+	// Collect notifications
+	var received []models.Notification
+	var mu syncutil.Mutex
+	go func() {
+		for {
+			select {
+			case n := <-notifications:
+				mu.Lock()
+				received = append(received, n)
+				mu.Unlock()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// Add a reader
+	mockReader := &mockClosableReader{}
+	state.SetReader("pn532:/dev/ttyUSB0", mockReader)
+
+	// Remove it
+	state.RemoveReader("pn532:/dev/ttyUSB0")
+
+	// Give notification time to be received
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify reader was closed
+	assert.True(t, mockReader.closeCalled.Load(), "reader should have been closed")
+
+	// Verify reader is no longer in state
+	_, exists := state.GetReader("pn532:/dev/ttyUSB0")
+	assert.False(t, exists, "reader should have been removed from state")
+
+	// Verify notifications were sent (added + removed)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Len(t, received, 2, "should have received 2 notifications (add + remove)")
+
+	// Last notification should be the removal
+	lastNotification := received[len(received)-1]
+	assert.Equal(t, models.NotificationReadersDisconnected, lastNotification.Method)
+	assert.Contains(t, string(lastNotification.Params), "pn532")
+	assert.Contains(t, string(lastNotification.Params), "/dev/ttyUSB0")
+}
+
+// TestRemoveReader_NonExistent verifies RemoveReader handles non-existent readers gracefully.
+func TestRemoveReader_NonExistent(t *testing.T) {
+	t.Parallel()
+
+	state, notifications := NewState(nil, "test-boot-uuid")
+
+	done := make(chan struct{})
+	defer close(done)
+
+	// Drain notifications
+	go func() {
+		for {
+			select {
+			case <-notifications:
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// Remove a reader that doesn't exist - should not panic
+	assert.NotPanics(t, func() {
+		state.RemoveReader("nonexistent:device")
+	}, "RemoveReader should handle non-existent readers")
+}
+
+// TestRemoveReader_NoDeadlockWithSlowConsumer verifies RemoveReader doesn't deadlock
+// when the notification channel has backpressure.
+func TestRemoveReader_NoDeadlockWithSlowConsumer(t *testing.T) {
+	t.Parallel()
+
+	state, notifications := NewState(nil, "test-boot-uuid")
+
+	done := make(chan struct{})
+	defer close(done)
+
+	// Slow consumer
+	go func() {
+		for {
+			select {
+			case <-notifications:
+				time.Sleep(10 * time.Millisecond)
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// Add and remove readers rapidly
+	var wg sync.WaitGroup
+	for i := range 5 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			device := "test:" + string(rune('A'+id))
+			for range 10 {
+				state.SetReader(device, &mockClosableReader{})
+				state.RemoveReader(device)
+			}
+		}(i)
+	}
+
+	// Wait with timeout
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock detected: RemoveReader blocked with slow notification consumer")
+	}
 }

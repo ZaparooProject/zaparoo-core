@@ -100,6 +100,7 @@ type Instance struct {
 	cfgPath  string
 	authPath string
 	vals     Values
+	defaults Values
 	mu       syncutil.RWMutex
 }
 
@@ -127,10 +128,11 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	}
 
 	cfg := Instance{
-		mu:      syncutil.RWMutex{},
-		appPath: os.Getenv(AppEnv),
-		cfgPath: cfgPath,
-		vals:    defaults,
+		mu:       syncutil.RWMutex{},
+		appPath:  os.Getenv(AppEnv),
+		cfgPath:  cfgPath,
+		vals:     defaults,
+		defaults: defaults,
 	}
 
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
