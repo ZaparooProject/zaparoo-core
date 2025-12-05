@@ -374,3 +374,59 @@ topic = "zaparoo/events"
 	// Should return empty slice when publisher fails to start
 	assert.Empty(t, publishers, "should not include publishers that fail to start")
 }
+
+// TestCheckAndResumeIndexing_WaitGroupRace is a regression test for a race condition
+// where WaitGroup.Add() was called after WaitGroup.Wait() had already returned.
+// The bug occurred when optimization was started as a separate goroutine with its own
+// Add(1) inside, creating a window where the indexing goroutine's Done() could cause
+// Wait() to return before optimization's Add(1) ran.
+//
+// This test runs multiple iterations to increase the likelihood of triggering the race
+// condition if the bug is reintroduced. Run with: go test -race -run TestCheckAndResumeIndexing_WaitGroupRace
+func TestCheckAndResumeIndexing_WaitGroupRace(t *testing.T) {
+	// Note: Not using t.Parallel() due to global statusInstance usage in GenerateMediaDB
+	// Run multiple iterations to stress-test the race condition
+	const iterations = 10
+
+	for range iterations {
+		t.Run("iteration", func(t *testing.T) {
+			methods.ClearIndexingStatus()
+
+			// Create test dependencies
+			fs := testhelpers.NewMemoryFS()
+			cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+			require.NoError(t, err)
+
+			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform.On("ID").Return("test-platform")
+			mockPlatform.On("Settings").Return(platforms.Settings{})
+			mockPlatform.On("Launchers", mock.Anything).Return([]platforms.Launcher{})
+			mockPlatform.On("RootDirs", mock.Anything).Return([]string{"/test/roms"})
+
+			// Use real database
+			db, cleanup := testhelpers.NewTestDatabase(t)
+
+			// Create mock state
+			st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+			// Set up interrupted indexing state
+			err = db.MediaDB.SetIndexingStatus(mediadb.IndexingStatusRunning)
+			require.NoError(t, err)
+			err = db.MediaDB.SetLastIndexedSystem("")
+			require.NoError(t, err)
+			err = db.MediaDB.SetIndexingSystems([]string{"NES"})
+			require.NoError(t, err)
+
+			// Call the function - this starts async indexing + optimization
+			checkAndResumeIndexing(mockPlatform, cfg, db, st)
+
+			// The critical test: WaitForBackgroundOperations should NOT panic
+			// If the race condition exists, this could panic with:
+			// "sync: WaitGroup is reused before previous Wait has returned"
+			db.MediaDB.WaitForBackgroundOperations()
+
+			// Clean up after waiting for all operations
+			cleanup()
+		})
+	}
+}
