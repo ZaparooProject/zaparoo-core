@@ -502,6 +502,21 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 	return result
 }
 
+// privateNetworkAccessMiddleware adds the Access-Control-Allow-Private-Network
+// header for preflight requests. This allows HTTPS websites (like zaparoo.app)
+// to connect to Zaparoo Core running on local network IPs.
+// See: https://wicg.github.io/private-network-access/
+func privateNetworkAccessMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a preflight request asking for private network access
+		if r.Method == http.MethodOptions &&
+			r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // broadcastNotifications consumes and broadcasts all incoming API
 // notifications to all connected clients.
 func broadcastNotifications(
@@ -790,6 +805,7 @@ func Start(
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
+	r.Use(privateNetworkAccessMiddleware)
 
 	// Rate limiting only for API routes, not static assets
 	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
