@@ -6,20 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version to build (e.g. v2.7.0 or test-build)'
+        description: 'Tag/version to build (e.g. v2.7.0). Leave empty for commit-based version.'
         required: false
         type: string
-        default: 'dev'
+        default: ''
       test_build:
-        description: 'Test build only (no release created)'
+        description: 'Test build only (no release created, uses test-signing)'
         required: false
         type: boolean
         default: false
-      signing_policy:
-        description: 'SignPath signing policy'
-        required: false
-        type: string
-        default: 'release-signing'
   workflow_call:
     inputs:
       tag:
@@ -127,6 +122,10 @@ jobs:
       - name: Write release version
         run: |
           VERSION="${BUILD_TAG#v}"
+          # For test builds without a real version tag, use commit hash
+          if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+            VERSION="$(git rev-parse --short HEAD)-dev"
+          fi
           echo "Version: $VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Set up Go
@@ -191,36 +190,36 @@ jobs:
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
       - name: Sign exe file
-        if: matrix.platform == 'windows' && !inputs.test_build
+        if: matrix.platform == 'windows'
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
+          signing-policy-slug: '${{ inputs.test_build && ''test-signing'' || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-zip'
           github-artifact-id: '${{ steps.upload-unsigned-exe.outputs.artifact-id }}'
           wait-for-completion: true
           output-artifact-directory: '_build/signed/exe_${{matrix.arch}}'
       - name: Sign installer EXE
-        if: matrix.platform == 'windows' && !inputs.test_build
+        if: matrix.platform == 'windows'
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
+          signing-policy-slug: '${{ inputs.test_build && ''test-signing'' || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-installer'
           github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
           wait-for-completion: true
           output-artifact-directory: '_build/signed/installer_${{matrix.arch}}'
       - name: Rename signed installer back to versioned name
-        if: matrix.platform == 'windows' && !inputs.test_build
+        if: matrix.platform == 'windows'
         run: |
           mv "_build/signed/installer_${{matrix.arch}}/zaparoo-setup.exe" \
              "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
       - name: Repackage distribution ZIP with signed exe
-        if: matrix.platform == 'windows' && !inputs.test_build
+        if: matrix.platform == 'windows'
         run: |
           # Replace unsigned exe with signed exe in build directory
           cp "_build/signed/exe_${{matrix.arch}}/Zaparoo.exe" "_build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe"
@@ -300,6 +299,10 @@ jobs:
       - name: Write release version
         run: |
           VERSION="${BUILD_TAG#v}"
+          # For test builds without a real version tag, use commit hash
+          if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+            VERSION="$(git rev-parse --short HEAD)-dev"
+          fi
           echo "Version: $VERSION"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Install dependencies
