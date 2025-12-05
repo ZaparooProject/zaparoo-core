@@ -148,21 +148,25 @@ func TestWALCheckpointing(t *testing.T) {
 	require.Equal(t, 4, count) // 1 initial + 3 additional
 }
 
-// TestConnectionParameters verifies the write-optimized connection parameters
+// TestConnectionParameters verifies the memory-safe connection parameters
 func TestConnectionParameters(t *testing.T) {
 	connParams := getSqliteConnParams()
 
-	// Verify key write-optimized parameters are present
+	// Verify key memory-safe parameters are present
+	// These settings are optimized for all platforms including low-RAM devices (e.g. MiSTer 256MB)
 	require.Contains(t, connParams, "_journal_mode=WAL")
 	require.Contains(t, connParams, "_synchronous=NORMAL")
-	require.Contains(t, connParams, "_wal_autocheckpoint=0")
-	require.Contains(t, connParams, "_cache_spill=OFF")
-	require.Contains(t, connParams, "_cache_size=-65536") // 64MB cache
-	require.Contains(t, connParams, "_temp_store=MEMORY")
-	require.Contains(t, connParams, "_mmap_size=67108864") // 64MB mmap
+	require.Contains(t, connParams, "_cache_size=-8192") // 8MB cache (safe on 256MB systems)
+	require.Contains(t, connParams, "_temp_store=FILE")  // temp tables on disk for safe VACUUM
+	require.Contains(t, connParams, "_mmap_size=0")      // disabled to avoid memory pressure
 	require.Contains(t, connParams, "_page_size=8192")
 	require.Contains(t, connParams, "_foreign_keys=ON")
 	require.Contains(t, connParams, "_busy_timeout=5000")
+
+	// Verify aggressive memory settings are NOT present (removed for memory safety)
+	require.NotContains(t, connParams, "_wal_autocheckpoint=0")
+	require.NotContains(t, connParams, "_cache_spill=OFF")
+	require.NotContains(t, connParams, "_temp_store=MEMORY")
 }
 
 // TestTransactionPerformanceWithWAL verifies that transactions perform well
