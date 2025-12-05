@@ -664,10 +664,14 @@ func handlePostRequest(
 	limitsManager *playtime.LimitsManager,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(w, "Content-Type is not application/json", http.StatusUnsupportedMediaType)
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if mediaType != "application/json" {
+			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
+
+		const maxPostBodySize = 1 << 20 // 1MB
+		r.Body = http.MaxBytesReader(w, r.Body, maxPostBodySize)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -718,10 +722,10 @@ func handlePostRequest(
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		_, err = w.Write(respBody)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to write error response")
+			log.Error().Err(err).Msg("failed to write response")
 		}
 	}
 }
