@@ -31,6 +31,11 @@ on:
         required: false
         type: boolean
         default: false
+      test_build:
+        description: 'Test build only (no release created)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
