@@ -46,13 +46,14 @@ func TestFsCustom404(t *testing.T) {
 	handler := fsCustom404(http.FS(mockFS))
 
 	tests := []struct {
-		name                string
-		path                string
-		expectedContentType string
-		expectedBody        string
-		expectedStatus      int
-		checkNosniff        bool
-		checkNoCache        bool
+		name                 string
+		path                 string
+		expectedContentType  string
+		expectedBody         string
+		expectedContentTypes []string
+		expectedStatus       int
+		checkNosniff         bool
+		checkNoCache         bool
 	}{
 		{
 			name:                "serves index.html at root",
@@ -64,12 +65,13 @@ func TestFsCustom404(t *testing.T) {
 			checkNoCache:        true,
 		},
 		{
-			name:                "serves JavaScript with correct MIME",
-			path:                "/assets/app.js",
-			expectedStatus:      http.StatusOK,
-			expectedContentType: "text/javascript; charset=utf-8",
-			expectedBody:        "console.log",
-			checkNosniff:        true,
+			name:           "serves JavaScript with correct MIME",
+			path:           "/assets/app.js",
+			expectedStatus: http.StatusOK,
+			// MIME type varies by OS: Linux/macOS use text/javascript, Windows uses application/javascript
+			expectedContentTypes: []string{"text/javascript; charset=utf-8", "application/javascript"},
+			expectedBody:         "console.log",
+			checkNosniff:         true,
 		},
 		{
 			name:                "serves CSS with correct MIME",
@@ -140,7 +142,14 @@ func TestFsCustom404(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.expectedStatus, rec.Code)
-			assert.Equal(t, tt.expectedContentType, rec.Header().Get("Content-Type"))
+
+			actualContentType := rec.Header().Get("Content-Type")
+			if len(tt.expectedContentTypes) > 0 {
+				assert.Contains(t, tt.expectedContentTypes, actualContentType,
+					"Content-Type %q not in expected types %v", actualContentType, tt.expectedContentTypes)
+			} else {
+				assert.Equal(t, tt.expectedContentType, actualContentType)
+			}
 
 			if tt.expectedBody != "" {
 				assert.Contains(t, rec.Body.String(), tt.expectedBody)
