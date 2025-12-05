@@ -223,7 +223,9 @@ func GenerateMediaDB(
 		Indexing: true,
 	})
 
+	db.MediaDB.TrackBackgroundOperation()
 	go func() {
+		defer db.MediaDB.BackgroundOperationDone()
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch status.Step {
