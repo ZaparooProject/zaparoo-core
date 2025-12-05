@@ -694,11 +694,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(p, systemdefs.SystemAmiga),
 		Scanner: func(
-			_ context.Context,
+			ctx context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
+			select {
+			case <-ctx.Done():
+				return results, ctx.Err()
+			default:
+			}
+
 			log.Info().Msg("starting amigavision scan")
 
 			var fullPaths []string
@@ -709,7 +715,15 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
+			log.Debug().Int("paths", len(sfs)).Msg("amigavision scan paths found")
+
 			for _, sf := range sfs {
+				select {
+				case <-ctx.Done():
+					return results, ctx.Err()
+				default:
+				}
+
 				for _, txt := range []string{aGamesPath, aDemosPath} {
 					tp, err := mediascanner.FindPath(filepath.Join(sf.Path, txt))
 					if err == nil {
@@ -741,6 +755,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				})
 			}
 
+			log.Debug().Int("results", len(results)).Msg("amigavision scan completed")
+
 			return results, nil
 		},
 	}
@@ -761,11 +777,17 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 		Launch: launch(p, systemdefs.SystemNeoGeo),
 		Scanner: func(
-			_ context.Context,
+			ctx context.Context,
 			cfg *config.Instance,
 			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
+			select {
+			case <-ctx.Done():
+				return results, ctx.Err()
+			default:
+			}
+
 			log.Info().Msg("starting neogeo scan")
 			romsetsFilename := "romsets.xml"
 			names := make(map[string]string)
@@ -776,7 +798,15 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			}
 
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
+			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
+
 			for _, sf := range sfs {
+				select {
+				case <-ctx.Done():
+					return results, ctx.Err()
+				default:
+				}
+
 				rsf, err := mediascanner.FindPath(filepath.Join(sf.Path, romsetsFilename))
 				if err == nil {
 					romsets, readErr := readRomsets(rsf)
@@ -798,9 +828,10 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 				}
 
 				files, err := dir.Readdirnames(-1)
+				_ = dir.Close()
+
 				if err != nil {
 					log.Warn().Err(err).Msg("unable to read neogeo directory")
-					_ = dir.Close()
 					continue
 				}
 
@@ -819,6 +850,8 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					}
 				}
 			}
+
+			log.Debug().Int("results", len(results)).Msg("neogeo scan completed")
 
 			return results, nil
 		},

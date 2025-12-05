@@ -345,6 +345,7 @@ func GetFiles(
 
 		// handle symlinked directories
 		if file.Type()&os.ModeSymlink != 0 {
+			log.Trace().Str("path", path).Msg("processing symlink")
 			absSym, absErr := filepath.Abs(path)
 			if absErr != nil {
 				return fmt.Errorf("failed to get absolute path for %s: %w", path, absErr)
@@ -354,6 +355,7 @@ func GetFiles(
 			if realPathErr != nil {
 				return fmt.Errorf("failed to evaluate symlink %s: %w", absSym, realPathErr)
 			}
+			log.Trace().Str("symlink", path).Str("target", realPath).Msg("resolved symlink")
 
 			file, statErr := os.Stat(realPath)
 			if statErr != nil {
@@ -389,6 +391,7 @@ func GetFiles(
 
 		if helpers.IsZip(path) && platform.Settings().ZipsAsDirs {
 			// zip files
+			log.Trace().Str("path", path).Msg("opening zip file for indexing")
 			zipFiles, zipErr := helpers.ListZip(path)
 			if zipErr != nil {
 				// skip invalid zip files
@@ -438,10 +441,16 @@ func GetFiles(
 		return nil, errors.New("root is not a directory")
 	}
 
+	log.Debug().Str("system", systemID).Str("path", realPath).Msg("starting directory walk")
 	err = filepath.WalkDir(realPath, scanner)
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
+	log.Debug().
+		Str("system", systemID).
+		Str("path", realPath).
+		Int("files", len(allResults)).
+		Msg("completed directory walk")
 
 	results, err := stack.get()
 	if err != nil {
@@ -831,6 +840,14 @@ func NewNamesIndex(
 		status.SystemID = systemID
 		status.Step++
 		update(status)
+
+		pathCount := len(systemPaths[k])
+		log.Info().
+			Str("system", systemID).
+			Int("step", status.Step).
+			Int("total", status.Total).
+			Int("paths", pathCount).
+			Msg("indexing system")
 
 		// scan using standard folder and extensions
 		for _, systemPath := range systemPaths[k] {
