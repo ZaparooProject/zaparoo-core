@@ -43,6 +43,13 @@ env:
   BUILD_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # Ensure zigcc Docker image is available (builds if needed, skips if exists)
+  ensure-zigcc:
+    uses: ./.github/workflows/zigcc-build.yml
+    permissions:
+      contents: read
+      packages: write
+
   create-release:
     if: ${{ !inputs.test_build }}
     runs-on: ubuntu-latest
@@ -73,8 +80,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [create-release]
-    if: ${{ !cancelled() }}
+    needs: [create-release, ensure-zigcc]
+    if: ${{ !cancelled() && needs.ensure-zigcc.result == 'success' }}
     permissions:
       contents: write  # Needed for uploading release assets
       packages: read   # Needed for pulling Docker images from ghcr.io
@@ -154,16 +161,12 @@ jobs:
           echo "OWNER_LC=${OWNER,,}" >> "$GITHUB_ENV"
         env:
           OWNER: ${{ github.repository_owner }}
-      - name: Read ZIGCC version
-        id: zigcc
-        run: |
-          ZIGCC_VERSION=$(cat scripts/zigcc/VERSION)
-          echo "version=$ZIGCC_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Using zigcc version: $ZIGCC_VERSION"
       - name: Pull zigcc image
         run: |
-          docker pull ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.zigcc.outputs.version }}
-          docker tag ghcr.io/${{ env.OWNER_LC }}/zigcc:${{ steps.zigcc.outputs.version }} zaparoo/zigcc
+          ZIGCC_VERSION="${{ needs.ensure-zigcc.outputs.version }}"
+          echo "Using zigcc version: $ZIGCC_VERSION"
+          docker pull ghcr.io/${{ env.OWNER_LC }}/zigcc:${ZIGCC_VERSION}
+          docker tag ghcr.io/${{ env.OWNER_LC }}/zigcc:${ZIGCC_VERSION} zaparoo/zigcc
       - name: Build
         env:
           GOFLAGS: "-buildvcs=false"
