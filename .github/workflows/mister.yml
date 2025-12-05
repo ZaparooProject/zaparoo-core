@@ -30,6 +30,8 @@ jobs:
       - name: Get release info
         id: zaparooreleaseinfo
         uses: cardinalby/git-get-release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           # Use provided tag, or current release tag (for release event), or latest
           tag: ${{ github.event.inputs.tag || github.event.release.tag_name || '' }}
