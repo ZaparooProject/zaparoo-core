@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
@@ -47,7 +47,7 @@ import (
 type arcadeCardLaunchCache struct {
 	timestamp time.Time
 	setname   string
-	mu        sync.RWMutex
+	mu        syncutil.RWMutex
 }
 
 type Platform struct {
@@ -71,13 +71,13 @@ type Platform struct {
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
-	processMu           sync.RWMutex
-	platformMu          sync.Mutex
+	processMu           syncutil.RWMutex
+	platformMu          syncutil.Mutex
 }
 
 func NewPlatform() *Platform {
 	p := &Platform{
-		platformMu: sync.Mutex{},
+		platformMu: syncutil.Mutex{},
 	}
 	p.consoleManager = newConsoleManager(p)
 	return p

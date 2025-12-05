@@ -53,6 +53,7 @@ linters:
     - copyloopvar
     - intrange
     - nakedret
+    - forbidigo
     # Note: For Go 1.21+ min/max modernization, run:
     # go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -fix -test ./...
   settings:
@@ -184,6 +185,14 @@ linters:
     wrapcheck:
       extra-ignore-sigs:
         - .Err(
+    forbidigo:
+      forbid:
+        - pattern: 'sync\.Mutex'
+          msg: "use syncutil.Mutex instead of sync.Mutex for deadlock detection support"
+        - pattern: 'sync\.RWMutex'
+          msg: "use syncutil.RWMutex instead of sync.RWMutex for deadlock detection support"
+      exclude-godoc-examples: true
+      analyze-types: true
     goheader:
       template: |-
         Zaparoo Core

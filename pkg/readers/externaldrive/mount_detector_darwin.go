@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/fsnotify/fsnotify"
 	"github.com/rs/zerolog/log"
 )
@@ -50,7 +51,7 @@ type darwinMountDetector struct {
 	stopChan    chan struct{}
 	mountedDevs map[string]MountEvent
 	wg          sync.WaitGroup
-	mu          sync.RWMutex
+	mu          syncutil.RWMutex
 	stopOnce    sync.Once
 }
 

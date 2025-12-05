@@ -22,7 +22,8 @@ package helpers
 import (
 	"fmt"
 	"regexp"
-	"sync"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 )
 
 // RegexCache provides thread-safe caching of compiled regular expressions
@@ -46,7 +47,7 @@ import (
 //   - Better code organization (patterns visible at top of file)
 type RegexCache struct {
 	cache map[string]*regexp.Regexp
-	mu    sync.RWMutex
+	mu    syncutil.RWMutex
 }
 
 // GlobalRegexCache is the singleton instance used throughout the application

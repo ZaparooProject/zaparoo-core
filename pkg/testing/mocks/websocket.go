@@ -22,9 +22,9 @@ package mocks
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/olahol/melody"
 	"github.com/stretchr/testify/mock"
 )
@@ -36,7 +36,7 @@ type MockMelodySession struct {
 	CloseReason    string
 	SentMessages   [][]byte
 	BinaryMessages [][]byte
-	mu             sync.RWMutex
+	mu             syncutil.RWMutex
 	Closed         bool
 }
 
@@ -249,7 +249,7 @@ type MockMelody struct {
 	ErrorHandler      func(*melody.Session, error)
 	mock.Mock
 	Sessions []*MockMelodySession
-	mu       sync.RWMutex
+	mu       syncutil.RWMutex
 }
 
 // NewMockMelody creates a new mock melody instance

@@ -23,9 +23,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 )
@@ -34,7 +34,7 @@ import (
 type MockKodiServer struct {
 	*httptest.Server
 	players []kodi.Player
-	mu      sync.Mutex
+	mu      syncutil.Mutex
 }
 
 // NewMockKodiServer creates a new mock Kodi server for testing

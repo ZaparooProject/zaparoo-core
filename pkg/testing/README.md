@@ -24,19 +24,22 @@ This directory provides comprehensive testing utilities for Zaparoo Core, enabli
 - `helpers.NewMockUserDBI()` - In-memory user database mock
 - `helpers.NewMockMediaDBI()` - In-memory media database mock
 
-#### Database Fixtures & Helpers  
-- `fixtures.GetTestTokens()` - Pre-defined test token data
-- `fixtures.GetTestMedia()` - Pre-defined media entries
-- `fixtures.GetTestPlaylists()` - Pre-defined playlist data
+#### Database Fixtures & Helpers
+- `fixtures.SampleTokens()` - Pre-defined test token data
+- `fixtures.SampleMedia()` - Pre-defined media entries
+- `fixtures.SamplePlaylists()` - Pre-defined playlist data
 - `helpers.HistoryEntryMatcher()` - Flexible matching for history entries
 
 ### Filesystem Testing
 
 #### In-Memory Filesystem
 - `helpers.NewMemoryFS()` - In-memory filesystem using afero
-- `fs.WriteFile(path, content)` - Create test files
-- `fs.MkdirAll(path)` - Create test directories
+- `fs.WriteFile(path, content, perm)` - Create test files
 - `fs.ReadFile(path)` - Read test files
+- `fs.FileExists(path)` - Check if file exists
+- `fs.CreateConfigFile(path, map)` - Create JSON config from map
+- `fs.CreateMediaDirectory(basePath)` - Create sample media directory structure
+- `fs.CreateDirectoryStructure(structure)` - Create complex directory trees from map
 
 #### Configuration Helpers
 - `helpers.NewTestConfig(fs, configDir)` - Test configuration with random port
@@ -221,10 +224,20 @@ func TestDatabaseOperations(t *testing.T) {
 ## Test Data & Fixtures
 
 The `fixtures/` directory provides pre-built test data:
-- **Token fixtures** - Various NFC/RFID test tokens
-- **Media fixtures** - Game entries, ROMs, metadata
-- **Playlist fixtures** - M3U files, game collections
-- **Database fixtures** - Pre-populated database states
+
+#### Token Fixtures
+- `fixtures.SampleTokens()` - Slice of common test tokens
+- `fixtures.NewNFCToken()`, `NewMifareToken()`, `NewAmiiboToken()` - Individual token types
+- `fixtures.NewTokenCollection()` - Collection with lookup methods
+
+#### Media Fixtures
+- `fixtures.SampleMedia()` - Slice of common test media
+- `fixtures.NewRetroGame()`, `NewModernGame()`, `NewArcadeGame()` - Individual media types
+- `fixtures.NewMediaCollection()` - Collection with lookup methods
+
+#### Other Fixtures
+- `fixtures.SamplePlaylists()` - Pre-defined playlist data
+- `fixtures.HistoryEntries` - Pre-populated history entries
 
 ## Integration with TDD Guard
 

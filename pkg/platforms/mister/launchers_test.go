@@ -29,6 +29,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	misterconfig "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/stretchr/testify/assert"
@@ -430,5 +431,31 @@ func TestBuildScummVMCommand_DifferentTargets(t *testing.T) {
 			assert.Contains(t, cmd.Args, tt.targetID)
 			assert.Equal(t, scummvmBaseDir, cmd.Dir)
 		})
+	}
+}
+
+// Regression test: N64 launcher should support .v64 extension (byte-swapped ROM format)
+func TestN64LauncherExtensions(t *testing.T) {
+	t.Parallel()
+
+	pl := NewPlatform()
+	launchers := CreateLaunchers(pl)
+
+	// Find the N64 launcher by SystemID
+	var n64Launcher *platforms.Launcher
+	for i := range launchers {
+		if launchers[i].SystemID == "Nintendo64" && len(launchers[i].Extensions) > 0 {
+			n64Launcher = &launchers[i]
+			break
+		}
+	}
+
+	require.NotNil(t, n64Launcher, "N64 launcher should exist")
+
+	// Verify all three N64 ROM formats are supported
+	expectedExts := []string{".n64", ".z64", ".v64"}
+	for _, ext := range expectedExts {
+		assert.Contains(t, n64Launcher.Extensions, ext,
+			"N64 launcher should support %s extension", ext)
 	}
 }

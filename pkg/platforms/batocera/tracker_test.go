@@ -7,12 +7,12 @@
 package batocera
 
 import (
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
@@ -76,7 +76,7 @@ func TestBackgroundTracker_DetectsExternalGameLaunch(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	setActiveMedia := func(media *models.ActiveMedia) {
 		mediaMu.Lock()
@@ -147,7 +147,7 @@ func TestBackgroundTracker_DetectsExternalGameClose(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	setActiveMedia := func(media *models.ActiveMedia) {
 		mediaMu.Lock()
@@ -208,7 +208,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotReachable(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	setActiveMedia := func(media *models.ActiveMedia) {
 		mediaMu.Lock()
@@ -286,7 +286,7 @@ func TestBackgroundTracker_ClearsKodiWhenNotActive(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	setActiveMedia := func(media *models.ActiveMedia) {
 		mediaMu.Lock()
@@ -357,7 +357,7 @@ func TestBackgroundTracker_DetectsGameChange(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	setActiveMedia := func(media *models.ActiveMedia) {
 		mediaMu.Lock()
@@ -680,7 +680,7 @@ func TestBackgroundTracker_PollingInterval(t *testing.T) {
 		clock: fakeClock,
 	}
 
-	var mediaMu sync.RWMutex
+	var mediaMu syncutil.RWMutex
 	var capturedMedia *models.ActiveMedia
 	var callCount int
 	setActiveMedia := func(media *models.ActiveMedia) {

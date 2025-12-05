@@ -211,6 +211,14 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 		// Apply immediately to running LimitsManager
 		if env.LimitsManager != nil {
 			env.LimitsManager.SetEnabled(*params.Enabled)
+
+			// If re-enabling limits while a game is already running,
+			// manually trigger session start since no media.started
+			// notification will be sent for the already-running game.
+			if *params.Enabled && env.State != nil && env.State.ActiveMedia() != nil {
+				log.Debug().Msg("playtime: game already running, triggering session start")
+				env.LimitsManager.OnMediaStarted()
+			}
 		}
 	}
 

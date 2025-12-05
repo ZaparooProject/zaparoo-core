@@ -24,10 +24,10 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 )
 
@@ -38,7 +38,7 @@ type MockESAPIServer struct {
 	listener    net.Listener
 	runningGame *esapi.RunningGameResponse
 	isRunning   bool
-	mu          sync.Mutex
+	mu          syncutil.Mutex
 }
 
 // NewMockESAPIServer creates a mock EmulationStation API server on localhost:1234.

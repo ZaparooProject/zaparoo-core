@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -19,6 +18,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
@@ -57,8 +57,8 @@ type Platform struct {
 	lastKnownGame     *models.ActiveMedia
 	kbd               linuxinput.Keyboard
 	gpd               linuxinput.Gamepad
-	processMu         sync.RWMutex
-	trackerMu         sync.RWMutex
+	processMu         syncutil.RWMutex
+	trackerMu         syncutil.RWMutex
 	kodiActive        bool
 	maxStartupRetries int // For testing: reduces retry count to speed up ES API unavailability tests
 }

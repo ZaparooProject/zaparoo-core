@@ -26,14 +26,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/gen2brain/malgo"
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/flac"
@@ -49,7 +50,7 @@ var (
 	// playbackGen tracks the generation of the current playback
 	playbackGen uint64
 	// playbackMu protects access to currentCancel and playbackGen
-	playbackMu sync.Mutex
+	playbackMu syncutil.Mutex
 )
 
 // PlayWAV plays a WAV audio stream from an io.ReadCloser asynchronously.
@@ -228,6 +229,9 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize malgo context: %w", err)
 	}
+	if malgoCtx == nil {
+		return errors.New("malgo context is nil after initialization")
+	}
 	defer func() {
 		_ = malgoCtx.Uninit()
 		malgoCtx.Free()
@@ -246,7 +250,7 @@ func playWAVWithMalgo(ctx context.Context, streamer beep.Streamer) error {
 
 	// Buffer to store samples for conversion
 	var (
-		mu       sync.Mutex
+		mu       syncutil.Mutex
 		finished bool
 		samples  [][2]float64
 	)

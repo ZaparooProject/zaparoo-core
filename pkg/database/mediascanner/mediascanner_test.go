@@ -24,13 +24,13 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -40,7 +40,7 @@ import (
 )
 
 // testLauncherCacheMutex protects GlobalLauncherCache modifications in tests
-var testLauncherCacheMutex sync.Mutex
+var testLauncherCacheMutex syncutil.Mutex
 
 // TestMultipleScannersForSameSystemID tests that multiple launchers with the same SystemID
 // both have their scanners executed. This reproduces the bug where only one scanner

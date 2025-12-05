@@ -27,6 +27,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -292,7 +293,7 @@ func TestStateNotificationSystem(t *testing.T) {
 
 			// Collect notifications for this specific test
 			var notifications []any
-			var notificationMutex sync.Mutex
+			var notificationMutex syncutil.Mutex
 			stopNotifications := make(chan struct{})
 			defer close(stopNotifications)
 

@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  packages: read
+  actions: read
 
 jobs:
   prepare-nightly:
