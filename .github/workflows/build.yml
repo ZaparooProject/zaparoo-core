@@ -3,6 +3,23 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag/version to build (e.g. v2.7.0 or test-build)'
+        required: false
+        type: string
+        default: 'dev'
+      test_build:
+        description: 'Test build only (no release created)'
+        required: false
+        type: boolean
+        default: false
+      signing_policy:
+        description: 'SignPath signing policy'
+        required: false
+        type: string
+        default: 'release-signing'
   workflow_call:
     inputs:
       tag:
@@ -11,6 +28,11 @@ on:
         type: string
       is_nightly:
         description: 'Is this a nightly build?'
+        required: false
+        type: boolean
+        default: false
+      test_build:
+        description: 'Test build only (no release created)'
         required: false
         type: boolean
         default: false
@@ -27,6 +49,7 @@ env:
 
 jobs:
   create-release:
+    if: ${{ !inputs.test_build }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -56,6 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [create-release]
+    if: ${{ !cancelled() }}
     permissions:
       contents: write  # Needed for uploading release assets
       packages: read   # Needed for pulling Docker images from ghcr.io
@@ -145,13 +169,13 @@ jobs:
         env:
           GOFLAGS: "-buildvcs=false"
         run: APP_VERSION=${VERSION} task ${{matrix.platform}}:build-${{matrix.arch}}
-      - name: Upload unsigned ZIP artifact
+      - name: Upload unsigned exe artifact for signing
         if: matrix.platform == 'windows'
-        id: upload-unsigned-zip
+        id: upload-unsigned-exe
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-zip-${{matrix.arch}}
-          path: _build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${{env.VERSION}}.zip
+          name: unsigned-exe-${{matrix.arch}}
+          path: _build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe
           retention-days: 30
       - name: Copy installer to consistent name for signing
         if: matrix.platform == 'windows'
@@ -166,54 +190,63 @@ jobs:
           name: unsigned-installer-${{matrix.arch}}
           path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
-      - name: Sign ZIP file
-        if: matrix.platform == 'windows'
+      - name: Sign exe file
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
+          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-zip'
-          github-artifact-id: '${{ steps.upload-unsigned-zip.outputs.artifact-id }}'
+          github-artifact-id: '${{ steps.upload-unsigned-exe.outputs.artifact-id }}'
           wait-for-completion: true
-          output-artifact-directory: '_build/signed/zip_${{matrix.arch}}'
+          output-artifact-directory: '_build/signed/exe_${{matrix.arch}}'
       - name: Sign installer EXE
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
           organization-id: '${{ secrets.SIGNPATH_ORGANIZATION_ID }}'
           project-slug: 'zaparoo-core'
-          signing-policy-slug: 'release-signing'
+          signing-policy-slug: '${{ inputs.signing_policy || ''release-signing'' }}'
           artifact-configuration-slug: 'windows-installer'
           github-artifact-id: '${{ steps.upload-unsigned-installer.outputs.artifact-id }}'
           wait-for-completion: true
           output-artifact-directory: '_build/signed/installer_${{matrix.arch}}'
       - name: Rename signed installer back to versioned name
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         run: |
           mv "_build/signed/installer_${{matrix.arch}}/zaparoo-setup.exe" \
              "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
+      - name: Repackage distribution ZIP with signed exe
+        if: matrix.platform == 'windows' && !inputs.test_build
+        run: |
+          # Replace unsigned exe with signed exe in build directory
+          cp "_build/signed/exe_${{matrix.arch}}/Zaparoo.exe" "_build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe"
+          # Recreate the distribution ZIP
+          APP_VERSION=${VERSION} go run scripts/tasks/utils/makezip/main.go \
+            ${{matrix.platform}} "_build/${{matrix.platform}}_${{matrix.arch}}" Zaparoo.exe \
+            "zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
       - name: Add signed ZIP to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         run: |
-          gh release upload "$tag" "_build/signed/zip_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
+          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
       - name: Add signed Windows installer to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform == 'windows'
+        if: matrix.platform == 'windows' && !inputs.test_build
         run: |
           gh release upload "$tag" "_build/signed/installer_${{matrix.arch}}/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
       - name: Add release (non-Windows)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform != 'windows'
+        if: matrix.platform != 'windows' && !inputs.test_build
         run: |
           # Determine archive extension based on platform
           case "${{matrix.platform}}" in
@@ -229,7 +262,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
-        if: matrix.platform == 'batocera'
+        if: matrix.platform == 'batocera' && !inputs.test_build
         run: |
           # Map build arch to package arch
           case "${{matrix.arch}}" in
@@ -253,6 +286,7 @@ jobs:
     timeout-minutes: 15
     name: Build universal Batocera package (any arch)
     needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     permissions:
       contents: write
     steps:
@@ -295,6 +329,7 @@ jobs:
       - name: Build universal Batocera package
         run: APP_VERSION=${VERSION} task batocera:package-any-from-artifacts
       - name: Upload Batocera any-arch package to release
+        if: ${{ !inputs.test_build }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
