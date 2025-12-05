@@ -405,7 +405,6 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 
 func (r *Reader) Close() error {
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
 
 	if r.cancel != nil {
 		r.cancel()
@@ -414,12 +413,19 @@ func (r *Reader) Close() error {
 	if r.session != nil {
 		err := r.session.Close()
 		if err != nil {
+			r.mutex.Unlock()
 			return fmt.Errorf("failed to close PN532 session: %w", err)
 		}
 	}
 
-	// Wait for session goroutine to complete
+	r.mutex.Unlock()
+
+	// Wait for session goroutine to complete outside of lock to avoid deadlock.
+	// The goroutines may need to acquire the mutex before they can exit.
 	r.wg.Wait()
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
 	// Close the underlying device to release hardware resources
 	if r.device != nil {
