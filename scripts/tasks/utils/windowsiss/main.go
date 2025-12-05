@@ -49,7 +49,9 @@ func main() {
 	}
 
 	outputVersion := *version
-	if strings.Contains(*version, "-") {
+	// Inno Setup VersionInfoVersion requires a valid numeric version (e.g., 1.2.3)
+	// Fall back to 0.0.0 for non-semver versions like "dev" or pre-release versions
+	if strings.Contains(*version, "-") || !isValidSemver(*version) {
 		*version = "0.0.0"
 	}
 
@@ -110,4 +112,13 @@ func generateSetupFile(
 	}
 
 	return nil
+}
+
+// isValidSemver checks if a version string starts with a digit (basic semver check).
+// Returns false for versions like "dev", "latest", etc.
+func isValidSemver(version string) bool {
+	if version == "" {
+		return false
+	}
+	return version[0] >= '0' && version[0] <= '9'
 }
