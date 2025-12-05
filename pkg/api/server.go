@@ -50,10 +50,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	chi "github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/google/uuid"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 )
@@ -98,7 +97,7 @@ func makeJSONRPCError(code int, message string) models.ErrorObject {
 }
 
 // logSafeRequest logs a request but avoids logging sensitive or large content
-func logSafeRequest(req models.RequestObject) {
+func logSafeRequest(req *models.RequestObject) {
 	if req.Method == models.MethodSettingsLogsDownload {
 		log.Debug().Str("method", req.Method).Interface("id", req.ID).Msg("received logs download request")
 	} else {
@@ -247,7 +246,7 @@ func handleRequest(
 	env requests.RequestEnv,
 	req models.RequestObject,
 ) (any, *models.ErrorObject) {
-	logSafeRequest(req)
+	logSafeRequest(&req)
 
 	fn, ok := methodMap.GetMethod(req.Method)
 	if !ok {
@@ -255,12 +254,6 @@ func handleRequest(
 		return nil, &JSONRPCErrorMethodNotFound
 	}
 
-	if req.ID == nil {
-		log.Error().Str("method", req.Method).Msg("missing ID for request")
-		return nil, &JSONRPCErrorInvalidRequest
-	}
-
-	env.ID = *req.ID
 	env.Params = req.Params
 
 	resp, err := fn(env)
@@ -274,7 +267,7 @@ func handleRequest(
 }
 
 // sendWSResponse marshals a method result and sends it to the client.
-func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
+func sendWSResponse(session *melody.Session, id models.RPCID, result any) error {
 	logSafeResponse(result)
 
 	resp := models.ResponseObject{
@@ -295,7 +288,7 @@ func sendWSResponse(session *melody.Session, id uuid.UUID, result any) error {
 }
 
 // sendWSError sends a JSON-RPC error object response to the client.
-func sendWSError(session *melody.Session, id uuid.UUID, errObj models.ErrorObject) error {
+func sendWSError(session *melody.Session, id models.RPCID, errObj models.ErrorObject) error {
 	log.Debug().Int("code", errObj.Code).Str("message", errObj.Message).Msg("sending error")
 
 	resp := models.ResponseErrorObject{
@@ -540,14 +533,27 @@ func broadcastNotifications(
 	}
 }
 
+// requestResult holds the result of processing a JSON-RPC request.
+type requestResult struct {
+	Result      any
+	Error       *models.ErrorObject
+	ID          models.RPCID
+	ShouldReply bool
+}
+
+// processRequestObject parses and handles incoming JSON-RPC messages.
+// Per JSON-RPC 2.0 spec:
+// - Notifications (missing ID): server MUST NOT reply
+// - Incoming responses: server MUST NOT reply
+// - Requests: server MUST reply
 func processRequestObject(
 	methodMap *MethodMap,
 	env requests.RequestEnv, //nolint:gocritic // single-use parameter in API handler
 	msg []byte,
-) (uuid.UUID, any, *models.ErrorObject) {
+) requestResult {
 	if !json.Valid(msg) {
 		log.Error().Msg("request payload is not valid JSON")
-		return uuid.Nil, nil, &JSONRPCErrorParseError
+		return requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorParseError, ShouldReply: true}
 	}
 
 	// try parse a request first, which has a method field
@@ -555,43 +561,40 @@ func processRequestObject(
 	err := json.Unmarshal(msg, &req)
 
 	if err == nil && req.JSONRPC != "2.0" {
-		id := uuid.Nil
-		if req.ID != nil {
-			id = *req.ID
-		}
 		log.Error().Str("version", req.JSONRPC).Msg("unsupported JSON-RPC version")
-		return id, nil, &JSONRPCErrorInvalidRequest
+		return requestResult{ID: req.ID, Error: &JSONRPCErrorInvalidRequest, ShouldReply: true}
 	}
 
 	if err == nil && req.Method != "" {
-		if req.ID == nil {
-			// request is notification, we don't do anything with these yet
+		if req.ID.IsAbsent() {
+			// Missing ID = notification per JSON-RPC 2.0 spec
+			// Server MUST NOT reply to notifications
 			log.Info().Interface("req", req).Msg("received notification, ignoring")
-			return uuid.Nil, nil, nil
+			return requestResult{ShouldReply: false}
 		}
 
-		// request is a request
+		// ID is present (could be null or valid value) - this is a request that needs a response
 		resp, rpcError := handleRequest(methodMap, env, req)
 		if rpcError != nil {
-			return *req.ID, nil, rpcError
+			return requestResult{ID: req.ID, Error: rpcError, ShouldReply: true}
 		}
-		return *req.ID, resp, nil
+		return requestResult{ID: req.ID, Result: resp, ShouldReply: true}
 	}
 
 	// otherwise try parse a response, which has an id field
 	var resp models.ResponseObject
 	err = json.Unmarshal(msg, &resp)
-	if err == nil && resp.ID != uuid.Nil {
+	if err == nil && !resp.ID.IsAbsent() {
+		// This is an incoming response - handle it but don't reply
 		err := handleResponse(resp)
 		if err != nil {
 			log.Error().Err(err).Msg("error handling response")
-			return resp.ID, nil, &JSONRPCErrorInternalError
 		}
-		return resp.ID, nil, nil
+		return requestResult{ShouldReply: false}
 	}
 
 	// can't identify the message
-	return uuid.Nil, nil, &JSONRPCErrorInvalidRequest
+	return requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorInvalidRequest, ShouldReply: true}
 }
 
 // handleWSMessage parses all incoming WS requests, identifies what type of
@@ -610,7 +613,7 @@ func handleWSMessage(
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error().Interface("panic", r).Msg("panic in websocket handler")
-				err := sendWSError(session, uuid.Nil, JSONRPCErrorInternalError)
+				err := sendWSError(session, models.NullRPCID, JSONRPCErrorInternalError)
 				if err != nil {
 					log.Error().Err(err).Msg("error sending panic error response")
 				}
@@ -639,14 +642,18 @@ func handleWSMessage(
 			ClientID:      session.Request.RemoteAddr,
 		}
 
-		id, resp, rpcError := processRequestObject(methodMap, env, msg)
-		if rpcError != nil {
-			err := sendWSError(session, id, *rpcError)
+		result := processRequestObject(methodMap, env, msg)
+		if !result.ShouldReply {
+			// Notifications and incoming responses don't get replies
+			return
+		}
+		if result.Error != nil {
+			err := sendWSError(session, result.ID, *result.Error)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending error response")
 			}
 		} else {
-			err := sendWSResponse(session, id, resp)
+			err := sendWSResponse(session, result.ID, result.Result)
 			if err != nil {
 				log.Error().Err(err).Msg("error sending response")
 			}
@@ -698,13 +705,19 @@ func handlePostRequest(
 			ClientID:      r.RemoteAddr,
 		}
 
+		result := processRequestObject(methodMap, env, body)
+		if !result.ShouldReply {
+			// Notifications and incoming responses don't get replies
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		var respBody []byte
-		id, resp, rpcError := processRequestObject(methodMap, env, body)
-		if rpcError != nil {
+		if result.Error != nil {
 			errorResp := models.ResponseErrorObject{
 				JSONRPC: "2.0",
-				ID:      id,
-				Error:   rpcError,
+				ID:      result.ID,
+				Error:   result.Error,
 			}
 			respBody, err = json.Marshal(errorResp)
 			if err != nil {
@@ -715,8 +728,8 @@ func handlePostRequest(
 		} else {
 			resp := models.ResponseObject{
 				JSONRPC: "2.0",
-				ID:      id,
-				Result:  resp,
+				ID:      result.ID,
+				Result:  result.Result,
 			}
 			respBody, err = json.Marshal(resp)
 			if err != nil {

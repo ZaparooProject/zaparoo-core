@@ -28,7 +28,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/google/uuid"
 )
 
 type RequestEnv struct {
@@ -40,6 +39,5 @@ type RequestEnv struct {
 	TokenQueue    chan<- tokens.Token
 	ClientID      string
 	Params        json.RawMessage
-	ID            uuid.UUID
 	IsLocal       bool
 }
