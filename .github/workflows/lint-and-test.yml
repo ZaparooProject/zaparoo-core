@@ -15,10 +15,33 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  # Detect what files changed to skip tests on doc-only changes
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'pkg/**'
+              - 'cmd/**'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/**'
+              - '.golangci.yml'
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 10
     strategy:
       fail-fast: false # Continue testing on other OS even if one fails
@@ -34,7 +57,41 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          {
+            echo "GOCACHE=D:\go-cache"
+            echo "GOMODCACHE=D:\go-mod-cache"
+            echo "GOTMPDIR=D:\go-tmp"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Go cache (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Restore Go cache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            D:\go-mod-cache
+            D:\go-cache
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Cache APT packages (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -49,9 +106,16 @@ jobs:
           version: latest
           args: --timeout=5m
 
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
   quick-test:
-    name: Quick Test (Unit + Vuln Check)
-    needs: lint # Only run tests if lint passes
+    name: Quick Test (Unit)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 10
     strategy:
       fail-fast: false # Continue testing on other OS even if one fails
@@ -67,7 +131,41 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          {
+            echo "GOCACHE=D:\go-cache"
+            echo "GOMODCACHE=D:\go-mod-cache"
+            echo "GOTMPDIR=D:\go-tmp"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Go cache (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Restore Go cache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            D:\go-mod-cache
+            D:\go-cache
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Cache APT packages (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -80,15 +178,6 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew install libusb pkg-config
-
-      - name: Configure Go paths for Windows
-        if: matrix.os == 'windows-latest'
-        run: |
-          {
-            echo "GOCACHE=D:\go-cache"
-            echo "GOMODCACHE=D:\go-mod-cache"
-            echo "GOTMPDIR=D:\go-tmp"
-          } >> "$GITHUB_ENV"
 
       - name: Cache scoop packages (Windows)
         if: matrix.os == 'windows-latest'
@@ -106,12 +195,6 @@ jobs:
           }
           scoop install pkg-config
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Run govulncheck
-        run: govulncheck ./...
-
       - name: Run unit tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
@@ -124,8 +207,9 @@ jobs:
         run: go test -v -short -race ./...
 
   full-test:
-    name: Full Test (Unit + Integration + Vuln Check)
-    needs: lint # Only run tests if lint passes
+    name: Full Test (Unit + Integration)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name != 'pull_request'
     timeout-minutes: 20
     # Only run on Linux for PRs, all platforms for main/tags
     strategy:
@@ -142,7 +226,41 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+
+      - name: Configure Go paths for Windows
+        if: matrix.os == 'windows-latest'
+        run: |
+          {
+            echo "GOCACHE=D:\go-cache"
+            echo "GOMODCACHE=D:\go-mod-cache"
+            echo "GOTMPDIR=D:\go-tmp"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Go cache (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Restore Go cache (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            D:\go-mod-cache
+            D:\go-cache
+          key: no-match-${{ runner.os }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Cache APT packages (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -155,15 +273,6 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew install libusb pkg-config
-
-      - name: Configure Go paths for Windows
-        if: matrix.os == 'windows-latest'
-        run: |
-          {
-            echo "GOCACHE=D:\go-cache"
-            echo "GOMODCACHE=D:\go-mod-cache"
-            echo "GOTMPDIR=D:\go-tmp"
-          } >> "$GITHUB_ENV"
 
       - name: Cache scoop packages (Windows)
         if: matrix.os == 'windows-latest'
@@ -180,12 +289,6 @@ jobs:
             irm get.scoop.sh | iex
           }
           scoop install pkg-config
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Run govulncheck
-        run: govulncheck ./...
 
       - name: Run full tests (Windows)
         if: matrix.os == 'windows-latest'
@@ -207,3 +310,21 @@ jobs:
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: true
+
+      - name: Save Go cache (Unix)
+        if: github.ref == 'refs/heads/main' && matrix.os != 'windows-latest'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}
+
+      - name: Save Go cache (Windows)
+        if: github.ref == 'refs/heads/main' && matrix.os == 'windows-latest'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            D:\go-mod-cache
+            D:\go-cache
+          key: ${{ runner.os }}-go-${{ hashFiles('go.mod') }}-${{ github.run_id }}

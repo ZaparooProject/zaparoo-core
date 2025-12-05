@@ -27,10 +27,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -222,7 +224,8 @@ func NewMethodMap() *MethodMap {
 		models.MethodReadersWrite:       methods.HandleReaderWrite,
 		models.MethodReadersWriteCancel: methods.HandleReaderWriteCancel,
 		// utils
-		models.MethodVersion: methods.HandleVersion,
+		models.MethodVersion:     methods.HandleVersion,
+		models.MethodHealthCheck: methods.HandleHealthCheck,
 	}
 
 	for name, fn := range defaultMethods {
@@ -318,31 +321,75 @@ func handleResponse(resp models.ResponseObject) error {
 	return nil
 }
 
+// mimeFallbacks covers types not in Go's built-in mime package.
+var mimeFallbacks = map[string]string{
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+}
+
+// fsCustom404 creates a file server handler with SPA fallback support.
+// Unknown paths fall back to index.html for client-side routing.
 func fsCustom404(root http.FileSystem) http.Handler {
-	appFS := http.FileServer(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f, err := root.Open(r.URL.Path)
+		upath := r.URL.Path
+
+		f, err := root.Open(upath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				index, indexErr := root.Open("index.html")
-				if indexErr != nil {
-					log.Error().Err(indexErr).Msg("error opening index.html")
-					http.Error(w, indexErr.Error(), http.StatusInternalServerError)
-					return
-				}
-				http.ServeContent(w, r, "index.html", time.Now(), index)
+				serveIndex(w, r, root)
 				return
 			}
-			log.Error().Err(err).Str("path", r.URL.Path).Msg("error opening file")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Error().Err(err).Str("path", upath).Msg("error opening file")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		err = f.Close()
+		defer func() { _ = f.Close() }()
+
+		stat, err := f.Stat()
 		if err != nil {
-			log.Error().Err(err).Msg("error closing file")
+			log.Error().Err(err).Str("path", upath).Msg("error stating file")
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
-		appFS.ServeHTTP(w, r)
+
+		if stat.IsDir() {
+			serveIndex(w, r, root)
+			return
+		}
+
+		ext := filepath.Ext(upath)
+		if ct := mime.TypeByExtension(ext); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		} else if ct, ok := mimeFallbacks[ext]; ok {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		http.ServeContent(w, r, stat.Name(), stat.ModTime(), f)
 	})
+}
+
+// serveIndex serves the SPA index.html for client-side routing.
+func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
+	index, err := root.Open("index.html")
+	if err != nil {
+		log.Error().Err(err).Msg("error opening index.html")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = index.Close() }()
+
+	stat, err := index.Stat()
+	if err != nil {
+		log.Error().Err(err).Msg("error stating index.html")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
 }
 
 // handleApp serves the embedded Zaparoo App web build to the client.
@@ -724,10 +771,9 @@ func Start(
 
 	ipFilter := apimiddleware.NewIPFilter(cfg.AllowedIPs())
 
+	// Global middleware for all routes
 	r.Use(apimiddleware.HTTPIPFilterMiddleware(ipFilter))
-	r.Use(apimiddleware.HTTPRateLimitMiddleware(rateLimiter))
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.NoCache)
 	r.Use(middleware.Timeout(config.APIRequestTimeout))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: dynamicAllowedOrigins,
@@ -735,6 +781,9 @@ func Start(
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
+
+	// Rate limiting only for API routes, not static assets
+	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
 
 	if strings.HasSuffix(config.AppVersion, "-dev") {
 		r.Mount("/debug", middleware.Profiler())
@@ -751,42 +800,58 @@ func Start(
 	}
 	go broadcastNotifications(st, session, notifications)
 
-	r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: latest")
-		}
-	})
-	r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+	// API routes
+	r.Group(func(r chi.Router) {
+		r.Use(apiRateLimitMiddleware)
+		r.Use(middleware.NoCache)
 
-	r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v0")
-		}
-	})
-	r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+		r.Get("/api", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: latest")
+			}
+		})
+		r.Post("/api", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
-	r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
-		err := session.HandleRequest(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("handling websocket request: v0.1")
-		}
+		r.Get("/api/v0", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: v0")
+			}
+		})
+		r.Post("/api/v0", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+
+		r.Get("/api/v0.1", func(w http.ResponseWriter, r *http.Request) {
+			err := session.HandleRequest(w, r)
+			if err != nil {
+				log.Error().Err(err).Msg("handling websocket request: v0.1")
+			}
+		})
+		r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
+
+		// REST action endpoints
+		r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
+		r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
+		r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
 	})
-	r.Post("/api/v0.1", handlePostRequest(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager))
 
 	session.HandleMessage(apimiddleware.WebSocketRateLimitHandler(
 		rateLimiter,
 		handleWSMessage(methodMap, platform, cfg, st, inTokenQueue, db, limitsManager),
 	))
 
-	r.Get("/l/*", methods.HandleRunRest(cfg, st, inTokenQueue)) // DEPRECATED
-	r.Get("/r/*", methods.HandleRunRest(cfg, st, inTokenQueue))
-	r.Get("/run/*", methods.HandleRunRest(cfg, st, inTokenQueue))
-
+	// Static app assets
 	r.Get("/app/*", handleApp)
 	r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
+
+	// the health endpoint is behind every standard middleware we added
+	// the response is a simple string on purpose, we want just to be able
+	// to see if the server is up and answering
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{

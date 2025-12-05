@@ -4,6 +4,11 @@ run:
   go: "1.24"
 
 linters:
+  exclusions:
+    rules:
+      - linters:
+          - revive
+        text: "avoid meaningless package names"
   enable:
     - staticcheck
     - errcheck
