@@ -788,3 +788,46 @@ func TestWriteWithContext_DifferentTagTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestOpen_NilSessionFactory verifies that Open returns an error and cleans up
+// the device when the session factory returns nil.
+func TestOpen_NilSessionFactory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanQueue := testutils.CreateTestScanChannel(t)
+
+	mockDevice := &mockPN532Device{}
+
+	// Transport factory returns mock transport
+	reader.transportFactory = func(_ detection.DeviceInfo) (pn532.Transport, error) {
+		return &mockTransport{}, nil
+	}
+
+	// Device factory returns mock device
+	reader.deviceFactory = func(_ pn532.Transport) (PN532Device, error) {
+		return mockDevice, nil
+	}
+
+	// Session factory returns nil to simulate failure
+	reader.sessionFactory = func(_ PN532Device, _ *polling.Config) PollingSession {
+		return nil
+	}
+
+	device := config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	// Open should fail with specific error
+	err := reader.Open(device, scanQueue)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session factory returned nil")
+
+	// Verify device was cleaned up
+	assert.True(t, mockDevice.closeCalled, "device should be closed when session factory returns nil")
+}
