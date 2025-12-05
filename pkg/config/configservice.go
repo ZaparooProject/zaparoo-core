@@ -27,6 +27,7 @@ import (
 const DefaultAPIPort = 7497
 
 type Service struct {
+	APIPort        *int     `toml:"api_port,omitempty"`
 	DeviceID       string   `toml:"device_id"`
 	APIListen      string   `toml:"api_listen,omitempty"`
 	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
@@ -34,7 +35,6 @@ type Service struct {
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
 	Publishers     Publishers `toml:"publishers,omitempty"`
-	APIPort        int        `toml:"api_port"`
 }
 
 type Publishers struct {
@@ -59,7 +59,13 @@ func (c *Instance) apiPortLocked() int {
 	if c.vals.Service.APIPort == 0 {
 		return DefaultAPIPort
 	}
-	return c.vals.Service.APIPort
+	return *c.vals.Service.APIPort
+}
+
+func (c *Instance) SetAPIPort(port int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.APIPort = &port
 }
 
 func (c *Instance) AllowedOrigins() []string {

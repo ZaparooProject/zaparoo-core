@@ -669,13 +669,13 @@ func (tm *LimitsManager) playWarningSound() {
 // StatusInfo contains current playtime session and limit status.
 type StatusInfo struct {
 	SessionStarted        time.Time
+	DailyUsageToday       *time.Duration
+	DailyRemaining        *time.Duration
 	State                 string
 	SessionDuration       time.Duration
 	SessionCumulativeTime time.Duration
 	SessionRemaining      time.Duration
 	CooldownRemaining     time.Duration
-	DailyUsageToday       time.Duration
-	DailyRemaining        time.Duration
 	SessionActive         bool
 }
 
@@ -695,10 +695,30 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// State: Reset (no session exists)
 	if currentState == StateReset {
-		return &StatusInfo{
+		status := &StatusInfo{
 			State:         StateReset.String(),
 			SessionActive: false,
 		}
+
+		// Calculate daily usage/remaining even during reset - this data is valid
+		// regardless of session state (the user has used time today and has
+		// time remaining in their daily allowance)
+		dailyLimit := tm.cfg.DailyLimit()
+		if dailyLimit > 0 && helpers.IsClockReliable(now) {
+			year, month, day := now.Date()
+			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+			usage, err := tm.calculateDailyUsage(todayStart, 0)
+			if err == nil {
+				status.DailyUsageToday = &usage
+				dailyRemaining := dailyLimit - usage
+				if dailyRemaining < 0 {
+					dailyRemaining = 0
+				}
+				status.DailyRemaining = &dailyRemaining
+			}
+		}
+
+		return status
 	}
 
 	// State: Cooldown (session exists but no game running)
@@ -714,7 +734,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 
 		// Calculate remaining times based on cumulative time
-		var sessionRemaining, dailyRemaining time.Duration
+		var sessionRemaining time.Duration
 		sessionLimit := tm.cfg.SessionLimit()
 		dailyLimit := tm.cfg.DailyLimit()
 
@@ -725,22 +745,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			}
 		}
 
-		// For daily remaining, we need to calculate today's total usage
-		if dailyLimit > 0 {
-			year, month, day := now.Date()
-			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
-			usage, err := tm.calculateDailyUsage(todayStart, 0)
-			if err == nil {
-				dailyRemaining = dailyLimit - usage
-				if dailyRemaining < 0 {
-					dailyRemaining = 0
-				}
-			}
-		}
-
-		// Note: sessionStart is zero during cooldown (no current game)
-		// Don't include SessionStarted in response - it's not meaningful
-		return &StatusInfo{
+		// Build status with session info
+		status := &StatusInfo{
 			State:                 StateCooldown.String(),
 			SessionActive:         false,
 			SessionStarted:        time.Time{}, // Zero time - will be omitted from API response
@@ -748,9 +754,24 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			SessionCumulativeTime: cumulativeTime,
 			SessionRemaining:      sessionRemaining,
 			CooldownRemaining:     cooldownRemaining,
-			DailyUsageToday:       0, // Skip during cooldown
-			DailyRemaining:        dailyRemaining,
 		}
+
+		// For daily usage/remaining, we need to calculate today's total usage
+		if dailyLimit > 0 && helpers.IsClockReliable(now) {
+			year, month, day := now.Date()
+			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+			usage, err := tm.calculateDailyUsage(todayStart, 0)
+			if err == nil {
+				status.DailyUsageToday = &usage
+				dailyRemaining := dailyLimit - usage
+				if dailyRemaining < 0 {
+					dailyRemaining = 0
+				}
+				status.DailyRemaining = &dailyRemaining
+			}
+		}
+
+		return status
 	}
 
 	// State: Active (game is running)
@@ -767,8 +788,8 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 	}
 
-	// Calculate session and daily remaining times
-	var sessionRemaining, dailyRemaining time.Duration
+	// Calculate session remaining time
+	var sessionRemaining time.Duration
 	sessionLimit := tm.cfg.SessionLimit()
 	dailyLimit := tm.cfg.DailyLimit()
 
@@ -779,11 +800,15 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 	}
 
+	// Calculate daily usage/remaining (only if limits enabled and clock reliable)
+	var dailyUsageToday, dailyRemaining *time.Duration
 	if dailyLimit > 0 && ctx.ClockReliable {
-		dailyRemaining = dailyLimit - ctx.DailyUsageToday
-		if dailyRemaining < 0 {
-			dailyRemaining = 0
+		dailyUsageToday = &ctx.DailyUsageToday
+		remaining := dailyLimit - ctx.DailyUsageToday
+		if remaining < 0 {
+			remaining = 0
 		}
+		dailyRemaining = &remaining
 	}
 
 	// Re-acquire lock to verify session didn't stop while we were unlocked
@@ -806,7 +831,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		SessionCumulativeTime: cumulativeTime,
 		SessionRemaining:      sessionRemaining,
 		CooldownRemaining:     0, // Not in cooldown
-		DailyUsageToday:       ctx.DailyUsageToday,
+		DailyUsageToday:       dailyUsageToday,
 		DailyRemaining:        dailyRemaining,
 	}
 }

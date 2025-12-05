@@ -46,7 +46,7 @@ const (
 )
 
 type Values struct {
-	Audio        Audio     `toml:"audio,omitempty"`
+	Audio        Audio     `toml:"audio"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	Media        Media     `toml:"media,omitempty"`
 	Playtime     Playtime  `toml:"playtime,omitempty"`
@@ -64,7 +64,7 @@ type Audio struct {
 	SuccessSound *string `toml:"success_sound,omitempty"`
 	FailSound    *string `toml:"fail_sound,omitempty"`
 	LimitSound   *string `toml:"limit_sound,omitempty"`
-	ScanFeedback bool    `toml:"scan_feedback,omitempty"`
+	ScanFeedback bool    `toml:"scan_feedback"`
 }
 
 type ZapScript struct {
@@ -92,14 +92,6 @@ var BaseDefaults = Values{
 		Scan: ReadersScan{
 			Mode: ScanModeTap,
 		},
-	},
-	Service: Service{
-		APIPort: DefaultAPIPort,
-	},
-	Groovy: Groovy{
-		GmcProxyEnabled:        false,
-		GmcProxyPort:           32106,
-		GmcProxyBeaconInterval: "2s",
 	},
 }
 
@@ -182,7 +174,9 @@ func (c *Instance) Load() error {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var newVals Values
+	// Start with defaults, then unmarshal file values on top.
+	// This ensures fields not present in the file retain their default values.
+	newVals := c.defaults
 	err = toml.Unmarshal(data, &newVals)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)

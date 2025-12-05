@@ -129,8 +129,9 @@ func IniToToml(iniPath string) (config.Values, error) {
 	// api - port
 	port, err := strconv.Atoi(iniVals.API.Port)
 	if err == nil {
-		if port != vals.Service.APIPort {
-			vals.Service.APIPort = port
+		// Only set if different from default
+		if port != config.DefaultAPIPort {
+			vals.Service.APIPort = &port
 		}
 	}
 
