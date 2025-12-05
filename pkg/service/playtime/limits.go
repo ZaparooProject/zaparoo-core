@@ -695,28 +695,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 
 	// State: Reset (no session exists)
 	if currentState == StateReset {
-		// Still calculate daily usage/remaining even when no session is active
-		var dailyUsage, dailyRemaining time.Duration
-		dailyLimit := tm.cfg.DailyLimit()
-
-		if dailyLimit > 0 && helpers.IsClockReliable(now) {
-			year, month, day := now.Date()
-			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
-			usage, err := tm.calculateDailyUsage(todayStart, 0)
-			if err == nil {
-				dailyUsage = usage
-				dailyRemaining = dailyLimit - usage
-				if dailyRemaining < 0 {
-					dailyRemaining = 0
-				}
-			}
-		}
-
-		return &StatusInfo{
-			State:           StateReset.String(),
-			SessionActive:   false,
-			DailyUsageToday: dailyUsage,
-			DailyRemaining:  dailyRemaining,
 		status := &StatusInfo{
 			State:         StateReset.String(),
 			SessionActive: false,
@@ -756,7 +734,7 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 		}
 
 		// Calculate remaining times based on cumulative time
-		var sessionRemaining, dailyRemaining, dailyUsage time.Duration
+		var sessionRemaining time.Duration
 		sessionLimit := tm.cfg.SessionLimit()
 		dailyLimit := tm.cfg.DailyLimit()
 
@@ -767,7 +745,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			}
 		}
 
-		// Calculate today's total usage for daily remaining and display
 		// Build status with session info
 		status := &StatusInfo{
 			State:                 StateCooldown.String(),
@@ -785,8 +762,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			todayStart := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 			usage, err := tm.calculateDailyUsage(todayStart, 0)
 			if err == nil {
-				dailyUsage = usage
-				dailyRemaining = dailyLimit - usage
 				status.DailyUsageToday = &usage
 				dailyRemaining := dailyLimit - usage
 				if dailyRemaining < 0 {
@@ -796,19 +771,6 @@ func (tm *LimitsManager) GetStatus() *StatusInfo {
 			}
 		}
 
-		// Note: sessionStart is zero during cooldown (no current game)
-		// Don't include SessionStarted in response - it's not meaningful
-		return &StatusInfo{
-			State:                 StateCooldown.String(),
-			SessionActive:         false,
-			SessionStarted:        time.Time{}, // Zero time - will be omitted from API response
-			SessionDuration:       cumulativeTime,
-			SessionCumulativeTime: cumulativeTime,
-			SessionRemaining:      sessionRemaining,
-			CooldownRemaining:     cooldownRemaining,
-			DailyUsageToday:       dailyUsage,
-			DailyRemaining:        dailyRemaining,
-		}
 		return status
 	}
 

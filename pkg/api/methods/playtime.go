@@ -52,16 +52,6 @@ func HandlePlaytime(env requests.RequestEnv) (any, error) {
 	resp.State = status.State
 	resp.SessionActive = status.SessionActive
 
-	// Daily usage and remaining are available in all states (if calculable)
-	if status.DailyUsageToday > 0 {
-		usageStr := status.DailyUsageToday.String()
-		resp.DailyUsageToday = &usageStr
-	}
-	if status.DailyRemaining > 0 {
-		remainingStr := status.DailyRemaining.String()
-		resp.DailyRemaining = &remainingStr
-	}
-
 	// Cooldown remaining (only during cooldown state)
 	if status.CooldownRemaining > 0 {
 		remainingStr := status.CooldownRemaining.String()
