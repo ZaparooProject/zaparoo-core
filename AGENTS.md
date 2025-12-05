@@ -4,9 +4,9 @@ A README for AI coding agents working on Zaparoo Core.
 
 ## Project Overview
 
-Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 10 reader types, includes cross-platform audio feedback via beep, and features a custom ZapScript language for automation.
+Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (NFC tags, barcodes, RFID) with digital media across 12 gaming platforms. Built in Go, it provides a unified API for launching games on MiSTer, Batocera, Bazzite, ChimeraOS, LibreELEC, Linux, macOS, RetroPie, Recalbox, SteamOS, Windows, and MiSTeX through token scanning. The system uses WebSocket/JSON-RPC for real-time communication, SQLite for dual-database storage, supports 11 reader types, includes cross-platform audio feedback, and features a custom ZapScript language for automation.
 
-**Tech Stack**: Go 1.24.11+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, beep/v2 (audio), testify/mock, sqlmock, afero
+**Tech Stack**: Go 1.24.11+, SQLite (dual-DB: UserDB + MediaDB), WebSocket/HTTP with JSON-RPC 2.0, malgo+beep/v2 (audio), testify/mock, sqlmock, afero
 
 **Testing Standards**: Comprehensive test coverage required for all new code - we have extensive testing infrastructure with mocks, fixtures, and examples in `pkg/testing/`
 
@@ -36,8 +36,6 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 ### Code Quality
 
 - **Use Go 1.24.11+** with Go modules enabled
-- **Write tests for all new features and bug fixes** (see TESTING.md) - high test coverage is required
-- **Use table-driven tests** with subtests for multiple scenarios
 - **Handle all errors explicitly** - use golangci-lint's error handling checks
 - **Use explicit returns** in functions longer than 5 lines (avoid naked returns)
 - **Keep functions small** and focused on single responsibility
@@ -51,11 +49,33 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 
 ### Testing
 
+**The goal is useful tests, not coverage metrics.** High coverage means nothing if tests don't catch bugs.
+
+#### What to Test
+- **Business logic and algorithms** - the core value of your code
+- **Edge cases and error paths** - where bugs hide
+- **Integration points** - database queries, API responses
+- **State transitions** - multi-step workflows
+- **Regression scenarios** - any bug that was fixed
+
+#### What NOT to Test
+- ❌ **Library functions** - don't test that `strings.Split` works
+- ❌ **Simple getters/setters** - trivial code with no logic
+- ❌ **Third-party code** - don't verify its internals
+- ❌ **Implementation details** - test behavior, not how it's done
+- ❌ **Obvious code** - `if err != nil { return err }` doesn't need a test
+
+#### How to Test
 - **Mock at interface boundaries** - all hardware interactions must be mocked
 - **Use existing mocks/fixtures** from `pkg/testing/` instead of creating new ones
 - **Write sqlmock tests** for all direct SQL operations
 - **Use `t.Parallel()`** in tests when safe to run concurrently
 - **Run file-scoped tests** for faster feedback (see Commands section below)
+
+#### Test Quality Checklist
+- Would this test catch a real bug?
+- Does it test behavior the user/caller cares about?
+- Is this testing MY code or a library's code?
 
 ### File Paths & Filesystem
 
@@ -171,7 +191,7 @@ zaparoo-core/
 │   │   ├── userdb/      # User mappings, history, playlists
 │   │   └── mediadb/     # Indexed media content
 │   ├── platforms/       # 12 platform implementations
-│   ├── readers/         # 8 reader type drivers
+│   ├── readers/         # 11 reader type drivers
 │   ├── service/         # Core business logic
 │   │   ├── tokens/      # Token processing
 │   │   └── playlists/   # Playlist management
@@ -187,15 +207,16 @@ zaparoo-core/
 
 ## Audio System
 
-Zaparoo uses **beep** (github.com/gopxl/beep/v2) for cross-platform audio playback of feedback sounds. Beep is a high-level audio library that wraps oto/v3 for hardware output.
+Zaparoo uses **malgo** (gen2brain/malgo) for cross-platform hardware audio output and **beep** (gopxl/beep/v2) for audio decoding.
 
 ### Overview
 
 - **Location**: `pkg/audio/audio.go`
 - **Supported platforms**: All 12 platforms (Linux, Windows, macOS, MiSTer, MiSTeX, Batocera, etc.)
-- **Audio format**: WAV files (beep handles various formats and sample rates automatically)
-- **Playback**: Fire-and-forget asynchronous playback with automatic cleanup
-- **Initialization**: Speaker initialized once at application startup with 44100 Hz sample rate
+- **Audio formats**: WAV, MP3, FLAC, Vorbis (beep handles decoding)
+- **Sample rate**: Resampled to 48000 Hz for HDMI audio compatibility (MiSTer, etc.)
+- **Playback**: Fire-and-forget asynchronous - audio devices are created and released per-playback
+- **Cancellation**: New sounds automatically cancel any currently playing sound
 
 ## Good Examples to Follow
 
@@ -210,17 +231,11 @@ Zaparoo uses **beep** (github.com/gopxl/beep/v2) for cross-platform audio playba
 - **Platform**: `pkg/platforms/linux/platform.go` - Platform implementation pattern
 - **Service**: `pkg/service/tokens/tokens.go` - Service layer pattern
 
-**Reference for testing:**
+## Testing Quick Reference
 
-- `pkg/testing/README.md` - Quick reference guide to all testing utilities
-- `TESTING.md` - Comprehensive testing guide with best practices
-- All example tests in `pkg/testing/examples/` - Real-world test patterns
+**Full guide**: [TESTING.md](TESTING.md) | **Quick reference**: `pkg/testing/README.md`
 
-## Testing Instructions
-
-**Read [TESTING.md](TESTING.md) first** - it contains comprehensive testing documentation.
-
-### Quick testing patterns:
+### Mock Setup Pattern
 
 ```go
 import (
@@ -229,56 +244,27 @@ import (
     "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/fixtures"
 )
 
-// All major interfaces have mocks ready
 mockPlatform := mocks.NewMockPlatform()
 mockReader := mocks.NewMockReader()
 mockUserDB := helpers.NewMockUserDBI()
 mockMediaDB := helpers.NewMockMediaDBI()
 ```
 
-### Testing rules:
-
-1. **Write tests for all new features and bug fixes** - comprehensive test coverage is required
-2. **Use existing mocks and fixtures** from `pkg/testing/`
-3. **No hardware dependencies** - all hardware interactions are mocked
-4. **Tests must be fast** - aim for <5 seconds for full suite
-5. **Use table-driven tests** for multiple scenarios
-6. **Always use `t.Parallel()`** unless tests have shared state
-7. **Verify mock expectations** with `AssertExpectations(t)`
-
-### Running tests:
+### Running Tests
 
 ```bash
-# Run tests via task command
 task test                           # All tests with race detection
-task test -- -v                     # Verbose output
 task test -- -run TestName          # Specific test
 task test -- ./pkg/service/...      # Specific package
+go test -race ./pkg/service/tokens/ # Package with race detection
 ```
 
-## Test File Organization
+### Test Organization
 
-Follow Go community best practices: **big files aren't necessarily bad**. The Go standard library has test files with 6,000+ lines, and Kubernetes has test files with 26,000+ lines. Organize tests by **what makes sense for the code**, not arbitrary file size limits.
-
-### When to Create Separate Test Files
-
-1. **Testing a distinct feature** - `batch_inserter_test.go`, `slug_cache_test.go`
-2. **Integration vs unit tests** - Use `_integration_test.go` suffix or combine in same file for smaller suites
-3. **Distinct error scenarios** - `concurrent_operations_test.go`, `transaction_concurrency_test.go`
-4. **Regression tests** - Document specific bugs: `column_mismatch_regression_test.go`
-
-### File Size Guidelines
-
-- **Small (<200 lines)**: Consider merging with related tests
-- **Medium (200-1,000 lines)**: Ideal range
-- **Large (1,000-2,500 lines)**: Perfectly acceptable if cohesive
-- **Very large (2,500+ lines)**: OK if it makes sense (see Go stdlib)
-
-### Key Principle
-
-**Focus on cohesion over file size** - Keep related tests together. Split only when there's a clear feature/concern separation. The goal is **easy to find, easy to understand** tests - not perfect file sizes.
-
-**See TESTING.md** for detailed examples, naming conventions, and package organization patterns.
+- **Use table-driven tests** for multiple scenarios
+- **Use `t.Parallel()`** unless tests share state
+- **Verify mock expectations** with `AssertExpectations(t)`
+- **Focus on cohesion over file size** - big test files are fine if cohesive
 
 ## Code Style & Standards
 
@@ -440,9 +426,9 @@ Each platform has its own entry point in `cmd/{platform}/` with platform-specifi
 
 ### Reader Auto-Detection
 
-10 supported reader types auto-detect by default:
+11 supported reader types auto-detect by default:
 
-- acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, pn532uart, simpleserial, tty2oled
+- acr122pcsc, externaldrive, file, libnfc, mqtt, opticaldrive, pn532, pn532uart, rs232barcode, simpleserial, tty2oled
 
 ## Additional Resources
 
