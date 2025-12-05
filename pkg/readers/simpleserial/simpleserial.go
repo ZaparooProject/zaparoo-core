@@ -46,7 +46,7 @@ type SimpleSerialReader struct {
 	device      config.ReadersConnect
 	path        string
 	polling     bool
-	mu          syncutil.RWMutex // protects polling
+	mu          syncutil.RWMutex // protects polling and port
 }
 
 func NewReader(cfg *config.Instance) *SimpleSerialReader {
@@ -144,10 +144,10 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 		return fmt.Errorf("failed to set read timeout on serial port: %w", err)
 	}
 
-	r.port = port
 	r.device = device
 	r.path = path
 	r.mu.Lock()
+	r.port = port
 	r.polling = true
 	r.mu.Unlock()
 
@@ -157,12 +157,13 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 		for {
 			r.mu.RLock()
 			polling := r.polling
+			port := r.port
 			r.mu.RUnlock()
-			if !polling {
+			if !polling || port == nil {
 				break
 			}
 			buf := make([]byte, 1024)
-			n, err := r.port.Read(buf)
+			n, err := port.Read(buf)
 			if err != nil {
 				log.Error().Err(err).Msg("failed to read from serial port")
 
@@ -230,9 +231,11 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 func (r *SimpleSerialReader) Close() error {
 	r.mu.Lock()
 	r.polling = false
+	port := r.port
+	r.port = nil
 	r.mu.Unlock()
-	if r.port != nil {
-		err := r.port.Close()
+	if port != nil {
+		err := port.Close()
 		if err != nil {
 			return fmt.Errorf("failed to close serial port: %w", err)
 		}
@@ -249,6 +252,8 @@ func (r *SimpleSerialReader) Device() string {
 }
 
 func (r *SimpleSerialReader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling && r.port != nil
 }
 

@@ -92,7 +92,8 @@ func TestAPIListen_CustomPort(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Instance{}
-	cfg.vals.Service.APIPort = 8080
+	port := 8080
+	cfg.vals.Service.APIPort = &port
 	assert.Equal(t, ":8080", cfg.APIListen())
 }
 
