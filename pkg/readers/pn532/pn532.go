@@ -38,6 +38,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -205,8 +206,8 @@ type Reader struct {
 	deviceInfo       config.ReadersConnect
 	name             string
 	wg               sync.WaitGroup
-	mutex            sync.RWMutex
-	writeMutex       sync.Mutex
+	mutex            syncutil.RWMutex
+	writeMutex       syncutil.Mutex
 }
 
 func NewReader(cfg *config.Instance) *Reader {
@@ -308,6 +309,10 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 	// Create session with callbacks
 	r.session = r.sessionFactory(r.device, sessionConfig)
+	if r.session == nil {
+		_ = r.device.Close()
+		return errors.New("failed to create polling session: session factory returned nil")
+	}
 
 	// Set up callbacks
 	r.session.SetOnCardDetected(func(detectedTag *pn532.DetectedTag) error {

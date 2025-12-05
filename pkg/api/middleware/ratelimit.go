@@ -24,9 +24,9 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/olahol/melody"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
@@ -40,7 +40,7 @@ const (
 // IPRateLimiter manages rate limiters per IP address for both HTTP and WebSocket
 type IPRateLimiter struct {
 	limiters map[string]*rateLimiterEntry
-	mu       sync.RWMutex
+	mu       syncutil.RWMutex
 }
 
 type rateLimiterEntry struct {

@@ -1010,8 +1010,8 @@ None.
 | sessionCumulativeTime | string  | No       | Cumulative time from previous games in session. Present during `"active"` and `"cooldown"` states.    |
 | sessionRemaining      | string  | No       | Time remaining before session limit reached. Only present if session limit is configured.             |
 | cooldownRemaining     | string  | No       | Time until session auto-resets. Only present during `"cooldown"` state.                               |
-| dailyUsageToday       | string  | No       | Total playtime accumulated today. Only present during `"active"` state when data is available.        |
-| dailyRemaining        | string  | No       | Time remaining before daily limit reached. Only present if daily limit is configured.                 |
+| dailyUsageToday       | string  | No       | Total playtime accumulated today. Available in all states when data is available.                     |
+| dailyRemaining        | string  | No       | Time remaining before daily limit reached. Available in all states if daily limit is configured.      |
 
 **Note:** All duration fields use Go's duration format (e.g., `"1h30m45s"`, `"45m"`, `"2h"`).
 
@@ -1036,7 +1036,9 @@ None.
   "result": {
     "state": "reset",
     "sessionActive": false,
-    "limitsEnabled": true
+    "limitsEnabled": true,
+    "dailyUsageToday": "1h30m0s",
+    "dailyRemaining": "2h30m0s"
   }
 }
 ```
@@ -1073,7 +1075,10 @@ None.
     "limitsEnabled": true,
     "sessionDuration": "45m30s",
     "sessionCumulativeTime": "45m30s",
-    "cooldownRemaining": "12m30s"
+    "sessionRemaining": "14m30s",
+    "cooldownRemaining": "12m30s",
+    "dailyUsageToday": "2h15m30s",
+    "dailyRemaining": "1h44m30s"
   }
 }
 ```

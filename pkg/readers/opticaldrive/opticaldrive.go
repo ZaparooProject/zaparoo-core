@@ -27,12 +27,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -85,7 +85,7 @@ type FileReader struct {
 	device        config.ReadersConnect
 	path          string
 	polling       bool
-	mu            sync.RWMutex // protects polling
+	mu            syncutil.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *FileReader {

@@ -28,9 +28,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
@@ -46,7 +46,7 @@ const (
 )
 
 type Values struct {
-	Audio        Audio     `toml:"audio,omitempty"`
+	Audio        Audio     `toml:"audio"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	Media        Media     `toml:"media,omitempty"`
 	Playtime     Playtime  `toml:"playtime,omitempty"`
@@ -64,7 +64,7 @@ type Audio struct {
 	SuccessSound *string `toml:"success_sound,omitempty"`
 	FailSound    *string `toml:"fail_sound,omitempty"`
 	LimitSound   *string `toml:"limit_sound,omitempty"`
-	ScanFeedback bool    `toml:"scan_feedback,omitempty"`
+	ScanFeedback bool    `toml:"scan_feedback"`
 }
 
 type ZapScript struct {
@@ -93,14 +93,6 @@ var BaseDefaults = Values{
 			Mode: ScanModeTap,
 		},
 	},
-	Service: Service{
-		APIPort: DefaultAPIPort,
-	},
-	Groovy: Groovy{
-		GmcProxyEnabled:        false,
-		GmcProxyPort:           32106,
-		GmcProxyBeaconInterval: "2s",
-	},
 }
 
 type Instance struct {
@@ -108,7 +100,8 @@ type Instance struct {
 	cfgPath  string
 	authPath string
 	vals     Values
-	mu       sync.RWMutex
+	defaults Values
+	mu       syncutil.RWMutex
 }
 
 var authCfg atomic.Value
@@ -135,10 +128,11 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	}
 
 	cfg := Instance{
-		mu:      sync.RWMutex{},
-		appPath: os.Getenv(AppEnv),
-		cfgPath: cfgPath,
-		vals:    defaults,
+		mu:       syncutil.RWMutex{},
+		appPath:  os.Getenv(AppEnv),
+		cfgPath:  cfgPath,
+		vals:     defaults,
+		defaults: defaults,
 	}
 
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
@@ -182,7 +176,9 @@ func (c *Instance) Load() error {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	var newVals Values
+	// Start with defaults, then unmarshal file values on top.
+	// This ensures fields not present in the file retain their default values.
+	newVals := c.defaults
 	err = toml.Unmarshal(data, &newVals)
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)

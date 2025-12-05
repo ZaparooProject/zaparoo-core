@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
 	"github.com/rs/zerolog/log"
@@ -44,7 +45,7 @@ type windowsMountDetector struct {
 	events      chan MountEvent
 	unmounts    chan string
 	stopChan    chan struct{}
-	mu          sync.RWMutex
+	mu          syncutil.RWMutex
 	wg          sync.WaitGroup
 	stopOnce    sync.Once
 }

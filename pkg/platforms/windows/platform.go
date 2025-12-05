@@ -29,7 +29,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -64,8 +64,8 @@ type Platform struct {
 	setActiveMedia    func(*models.ActiveMedia)
 	trackedProcess    *os.Process
 	launchBoxPipe     *LaunchBoxPipeServer
-	processMu         sync.RWMutex
-	launchBoxPipeLock sync.Mutex
+	processMu         syncutil.RWMutex
+	launchBoxPipeLock syncutil.Mutex
 }
 
 func (*Platform) ID() string {

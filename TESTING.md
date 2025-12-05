@@ -52,9 +52,12 @@ pkg/testing/
 │   ├── fs.go          # Filesystem testing helpers
 │   └── api.go         # API testing helpers
 ├── fixtures/           # Test data
-│   ├── tokens.go      # Sample token data
-│   ├── media.go       # Sample media data
-│   └── database.go    # Database fixtures
+│   ├── tokens.go      # Sample tokens: SampleTokens(), NewNFCToken(), NewTokenCollection()
+│   ├── media.go       # Sample media: SampleMedia(), NewRetroGame(), NewMediaCollection()
+│   ├── playlists.go   # Sample playlists: SamplePlaylists()
+│   ├── kodi.go        # Kodi test fixtures
+│   └── database.go    # Database fixtures and history entries
+├── sqlmock/            # SQL mock utilities (testsqlmock.NewSQLMock())
 └── examples/           # Example tests and patterns
     ├── mock_usage_example_test.go
     ├── database_example_test.go
@@ -250,14 +253,23 @@ func TestReaderOperations(t *testing.T) {
     // Create reader mock
     reader := mocks.NewMockReader()
     reader.SetupBasicMock()
-    
-    // Simulate token detection
+
+    // Create a scan channel and simulate token detection
+    scanChan := make(chan readers.Scan, 1)
     token := fixtures.SampleTokens()[0]
-    reader.SimulateTokenScan(token)
-    
-    // Verify Write operations
-    writes := reader.GetWriteHistory()
-    assert.Len(t, writes, 1)
+    reader.SimulateTokenScan(scanChan, token, "mock://test")
+
+    // Receive the scan
+    scan := <-scanChan
+    require.NoError(t, scan.Error)
+    assert.Equal(t, token.UID, scan.Token.UID)
+
+    // For write testing, set up expectations
+    reader.On("Write", "test-data").Return(token, nil)
+    result, err := reader.Write("test-data")
+    require.NoError(t, err)
+    assert.Equal(t, token.UID, result.UID)
+    reader.AssertExpectations(t)
 }
 ```
 
@@ -313,21 +325,25 @@ func TestUserOperations(t *testing.T) {
 ### SQLMock for Raw SQL
 
 ```go
+import (
+    testsqlmock "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/sqlmock"
+)
+
 func TestRawSQL(t *testing.T) {
     // Create sqlmock
-    db, mock, err := helpers.NewSQLMock()
+    db, mock, err := testsqlmock.NewSQLMock()
     require.NoError(t, err)
     defer db.Close()
-    
+
     // Set expectations
     mock.ExpectQuery("SELECT \\* FROM users WHERE id = \\?").
         WithArgs(1).
         WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).
             AddRow(1, "Test User"))
-    
+
     // Test your function
     user, err := GetUserByID(db, 1)
-    
+
     // Verify
     require.NoError(t, err)
     assert.Equal(t, "Test User", user.Name)
@@ -341,21 +357,24 @@ func TestRawSQL(t *testing.T) {
 
 ```go
 func TestFileOperations(t *testing.T) {
-    // Setup in-memory filesystem
-    fs := helpers.SetupMemoryFilesystem()
-    
-    // Create test directories and files
-    helpers.CreateTestConfigFile(fs, "test.yaml", `
-setting: value
-another: setting
-`)
-    
-    // Test your function
-    config, err := LoadConfig(fs, "test.yaml")
-    
-    // Verify
+    // Create in-memory filesystem
+    fs := helpers.NewMemoryFS()
+
+    // Write files directly
+    err := fs.WriteFile("/config/test.json", []byte(`{"setting": "value"}`), 0o644)
     require.NoError(t, err)
-    assert.Equal(t, "value", config.Setting)
+
+    // Or create a config file with a map
+    err = fs.CreateConfigFile("/config/app.json", map[string]any{
+        "setting": "value",
+        "another": "setting",
+    })
+    require.NoError(t, err)
+
+    // Read and verify
+    content, err := fs.ReadFile("/config/test.json")
+    require.NoError(t, err)
+    assert.Contains(t, string(content), "value")
 }
 ```
 
@@ -363,15 +382,26 @@ another: setting
 
 ```go
 func TestMediaScanning(t *testing.T) {
-    // Setup complex directory structure
-    fs := helpers.SetupComplexMediaDirectories()
-    
-    // Test media scanning
-    media, err := ScanMediaDirectories(fs, "/media")
-    
-    // Verify
+    // Create in-memory filesystem with media directories
+    fs := helpers.NewMemoryFS()
+
+    // Create sample media directory structure
+    err := fs.CreateMediaDirectory("/media/roms")
     require.NoError(t, err)
-    assert.Greater(t, len(media), 0)
+
+    // Or create custom structure
+    err = fs.CreateDirectoryStructure(map[string]any{
+        "media": map[string]any{
+            "games": map[string]any{
+                "nes":  map[string]any{"mario.nes": "game-data"},
+                "snes": map[string]any{"zelda.sfc": "game-data"},
+            },
+        },
+    })
+    require.NoError(t, err)
+
+    // Test your function
+    assert.True(t, fs.FileExists("/media/games/nes/mario.nes"))
 }
 ```
 

@@ -19,26 +19,40 @@
 
 package config
 
+const (
+	DefaultGmcProxyPort           = 32106
+	DefaultGmcProxyBeaconInterval = "2s"
+)
+
 type Groovy struct {
-	GmcProxyBeaconInterval string `toml:"gmc_proxy_beacon_interval"`
-	GmcProxyPort           int    `toml:"gmc_proxy_port"`
-	GmcProxyEnabled        bool   `toml:"gmc_proxy_enabled"`
+	GmcProxyBeaconInterval *string `toml:"gmc_proxy_beacon_interval,omitempty"`
+	GmcProxyPort           *int    `toml:"gmc_proxy_port,omitempty"`
+	GmcProxyEnabled        *bool   `toml:"gmc_proxy_enabled,omitempty"`
 }
 
 func (c *Instance) GmcProxyEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Groovy.GmcProxyEnabled
+	if c.vals.Groovy.GmcProxyEnabled == nil {
+		return false
+	}
+	return *c.vals.Groovy.GmcProxyEnabled
 }
 
 func (c *Instance) GmcProxyPort() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Groovy.GmcProxyPort
+	if c.vals.Groovy.GmcProxyPort == nil {
+		return DefaultGmcProxyPort
+	}
+	return *c.vals.Groovy.GmcProxyPort
 }
 
 func (c *Instance) GmcProxyBeaconInterval() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.vals.Groovy.GmcProxyBeaconInterval
+	if c.vals.Groovy.GmcProxyBeaconInterval == nil {
+		return DefaultGmcProxyBeaconInterval
+	}
+	return *c.vals.Groovy.GmcProxyBeaconInterval
 }

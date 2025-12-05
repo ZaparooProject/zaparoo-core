@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -15,6 +14,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
@@ -41,7 +41,7 @@ import (
 type arcadeCardLaunchCache struct {
 	timestamp time.Time
 	setname   string
-	mu        sync.RWMutex
+	mu        syncutil.RWMutex
 }
 
 type Platform struct {
@@ -53,7 +53,7 @@ type Platform struct {
 	kbd              linuxinput.Keyboard
 	gpd              linuxinput.Gamepad
 	arcadeCardLaunch arcadeCardLaunchCache
-	processMu        sync.RWMutex
+	processMu        syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

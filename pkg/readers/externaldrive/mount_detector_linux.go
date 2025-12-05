@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/godbus/dbus/v5"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
@@ -54,7 +55,7 @@ type linuxMountDetector struct {
 	mountedDevs  map[string]MountEvent
 	pathMappings map[dbus.ObjectPath]string // objectPath -> deviceID mapping for reliable unmount detection
 	wg           sync.WaitGroup
-	mu           sync.RWMutex
+	mu           syncutil.RWMutex
 	stopOnce     sync.Once
 }
 
@@ -435,7 +436,7 @@ type linuxMountDetectorFallback struct {
 	stopChan    chan struct{}
 	mountedDevs map[string]MountEvent
 	wg          sync.WaitGroup
-	mu          sync.RWMutex
+	mu          syncutil.RWMutex
 	stopOnce    sync.Once
 }
 

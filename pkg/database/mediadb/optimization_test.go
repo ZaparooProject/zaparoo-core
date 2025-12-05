@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -368,7 +369,7 @@ func TestConcurrentOptimization(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	var firstStarted, secondSkipped bool
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	var wg sync.WaitGroup
 
@@ -481,7 +482,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		// Track callback invocations
 		var callbackCalls []bool
-		var mu sync.Mutex
+		var mu syncutil.Mutex
 
 		callback := func(optimizing bool) {
 			mu.Lock()
@@ -541,7 +542,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		// Track callback invocations
 		var callbackCalls []bool
-		var mu sync.Mutex
+		var mu syncutil.Mutex
 
 		callback := func(optimizing bool) {
 			mu.Lock()
@@ -635,7 +636,7 @@ func TestOptimizationNotificationCallbacks(t *testing.T) {
 
 		// Track callback invocations
 		var callbackCalls []bool
-		var mu sync.Mutex
+		var mu syncutil.Mutex
 
 		callback := func(optimizing bool) {
 			mu.Lock()
