@@ -20,9 +20,9 @@
 package publishers
 
 import (
-	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -33,7 +33,7 @@ type mockMQTTClient struct {
 	publishedMsgs  []publishedMessage
 	disconnectCall int
 	connected      bool
-	mu             sync.Mutex
+	mu             syncutil.Mutex
 }
 
 type publishedMessage struct {
@@ -47,7 +47,6 @@ func newMockMQTTClient() *mockMQTTClient {
 	return &mockMQTTClient{
 		connected:     false,
 		publishedMsgs: make([]publishedMessage, 0),
-		mu:            sync.Mutex{},
 	}
 }
 

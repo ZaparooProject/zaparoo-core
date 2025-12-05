@@ -55,11 +55,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
@@ -72,7 +72,7 @@ type WebSocketTestServer struct {
 	Melody   *melody.Melody
 	t        *testing.T
 	Messages []WebSocketMessage
-	mu       sync.RWMutex
+	mu       syncutil.RWMutex
 }
 
 // WebSocketMessage captures a message sent or received during testing
@@ -321,7 +321,7 @@ type MockWebSocketConnection struct {
 	ReadError        error
 	SentMessages     [][]byte
 	ReceivedMessages [][]byte
-	mu               sync.RWMutex
+	mu               syncutil.RWMutex
 	Closed           bool
 }
 

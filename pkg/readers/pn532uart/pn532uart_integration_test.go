@@ -20,11 +20,11 @@
 package pn532uart
 
 import (
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/stretchr/testify/assert"
@@ -34,7 +34,7 @@ import (
 // mockSerialPort is a mock implementation of SerialPort for testing.
 type mockSerialPort struct {
 	closed bool
-	mu     sync.RWMutex // protects closed
+	mu     syncutil.RWMutex // protects closed
 }
 
 func (m *mockSerialPort) Close() error {

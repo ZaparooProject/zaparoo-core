@@ -25,9 +25,9 @@ package broker
 
 import (
 	"context"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,7 +37,7 @@ type Broker struct {
 	ctx         context.Context
 	source      <-chan models.Notification
 	subscribers map[int]chan models.Notification
-	mu          sync.RWMutex
+	mu          syncutil.RWMutex
 	nextID      int
 }
 

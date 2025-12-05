@@ -20,9 +20,8 @@
 package helpers
 
 import (
-	"sync"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 )
 
@@ -31,7 +30,7 @@ import (
 type LauncherCache struct {
 	bySystemID   map[string][]platforms.Launcher
 	allLaunchers []platforms.Launcher
-	mu           sync.RWMutex
+	mu           syncutil.RWMutex
 }
 
 // GlobalLauncherCache is the singleton instance used throughout the application.

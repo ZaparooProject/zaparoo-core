@@ -29,12 +29,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -63,7 +63,7 @@ type Reader struct {
 	operationWorkerCancel context.CancelFunc
 	deviceConfig          config.ReadersConnect
 	path                  string
-	mu                    sync.RWMutex
+	mu                    syncutil.RWMutex
 	connected             bool
 	operationInProgress   bool
 	originalReadTimeout   time.Duration // Store original timeout for restoration

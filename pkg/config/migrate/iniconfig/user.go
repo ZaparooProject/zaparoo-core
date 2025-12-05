@@ -27,9 +27,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	ini "gopkg.in/ini.v1"
@@ -75,7 +75,7 @@ type UserConfig struct {
 	API       APIConfig       `ini:"api"`
 	Launchers LaunchersConfig `ini:"launchers"`
 	TapTo     TapToConfig     `ini:"tapto"`
-	mu        sync.RWMutex
+	mu        syncutil.RWMutex
 }
 
 func (c *UserConfig) GetConnectionString() string {

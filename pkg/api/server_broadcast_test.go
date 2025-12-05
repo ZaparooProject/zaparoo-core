@@ -20,11 +20,11 @@
 package api
 
 import (
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -48,7 +48,7 @@ func TestBroadcastNotifications_AsyncBroadcastDoesNotBlockConsumer(t *testing.T)
 
 	// Track how many notifications were consumed from the channel
 	var consumedCount int
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Start broadcast goroutine with instrumentation
 	go func() {
@@ -108,7 +108,7 @@ func TestBroadcastNotifications_BufferSizeHandlesBurst(t *testing.T) {
 
 	// Track consumption
 	var consumedCount int
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Start consumer similar to broadcastNotifications
 	go func() {
@@ -235,7 +235,7 @@ func TestBroadcastNotifications_ConcurrentBroadcastsComplete(t *testing.T) {
 
 	// Track completed broadcasts
 	var broadcastCount int
-	var mu sync.Mutex
+	var mu syncutil.Mutex
 
 	// Start consumer with instrumented async broadcasts
 	go func() {

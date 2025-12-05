@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api"
@@ -41,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb/boltmigration"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/groovyproxy"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
@@ -385,7 +385,7 @@ type mediaHistoryTracker struct {
 	st                        *state.State
 	db                        *database.Database
 	currentHistoryDBID        int64
-	mu                        sync.RWMutex
+	mu                        syncutil.RWMutex
 }
 
 // listen processes media start/stop notifications and records them in the database.

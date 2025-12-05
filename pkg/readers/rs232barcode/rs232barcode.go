@@ -25,12 +25,12 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/testutils"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -47,7 +47,7 @@ type Reader struct {
 	device      config.ReadersConnect
 	path        string
 	polling     bool
-	mu          sync.RWMutex // protects polling
+	mu          syncutil.RWMutex // protects polling
 }
 
 func NewReader(cfg *config.Instance) *Reader {

@@ -28,9 +28,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/google/uuid"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
@@ -100,8 +100,8 @@ type Instance struct {
 	cfgPath  string
 	authPath string
 	vals     Values
-	defaults Values // Store original defaults for use in Load()
-	mu       sync.RWMutex
+	defaults Values
+	mu       syncutil.RWMutex
 }
 
 var authCfg atomic.Value
@@ -128,7 +128,7 @@ func NewConfig(configDir string, defaults Values) (*Instance, error) {
 	}
 
 	cfg := Instance{
-		mu:       sync.RWMutex{},
+		mu:       syncutil.RWMutex{},
 		appPath:  os.Getenv(AppEnv),
 		cfgPath:  cfgPath,
 		vals:     defaults,
