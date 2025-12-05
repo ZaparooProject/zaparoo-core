@@ -309,6 +309,10 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 	// Create session with callbacks
 	r.session = r.sessionFactory(r.device, sessionConfig)
+	if r.session == nil {
+		_ = r.device.Close()
+		return errors.New("failed to create polling session: session factory returned nil")
+	}
 
 	// Set up callbacks
 	r.session.SetOnCardDetected(func(detectedTag *pn532.DetectedTag) error {
