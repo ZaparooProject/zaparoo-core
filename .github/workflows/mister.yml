@@ -15,6 +15,7 @@ permissions:
 jobs:
   mister-repo:
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
     steps:
       - name: Generate GitHub App token
         uses: actions/create-github-app-token@v1
