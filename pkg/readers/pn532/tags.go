@@ -23,31 +23,29 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
 
-	pn533 "github.com/ZaparooProject/go-pn532"
+	pn532 "github.com/ZaparooProject/go-pn532"
 	"github.com/ZaparooProject/go-pn532/tagops"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
-	"github.com/hsanjuan/go-ndef"
 	"github.com/rs/zerolog/log"
 )
 
-func (*Reader) convertTagType(tagType pn533.TagType) string {
+func (*Reader) convertTagType(tagType pn532.TagType) string {
 	switch tagType {
-	case pn533.TagTypeNTAG:
+	case pn532.TagTypeNTAG:
 		return tokens.TypeNTAG
-	case pn533.TagTypeMIFARE:
+	case pn532.TagTypeMIFARE:
 		return tokens.TypeMifare
-	case pn533.TagTypeFeliCa:
+	case pn532.TagTypeFeliCa:
 		return tokens.TypeFeliCa
-	case pn533.TagTypeUnknown, pn533.TagTypeAny:
+	case pn532.TagTypeUnknown, pn532.TagTypeAny:
 		return tokens.TypeUnknown
 	default:
 		return tokens.TypeUnknown
 	}
 }
 
-func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data []byte) {
+func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (uid string, data []byte) {
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting readNDEFData")
 
 	// Use realDevice for tag operations (mocks won't reach here in tests)
@@ -64,6 +62,7 @@ func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data 
 
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.DetectTag")
 	if err := tagOps.DetectTag(ctx); err != nil {
+		logTraceableError(err, "detect tag for NDEF")
 		log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("failed to detect tag for NDEF reading")
 		return "", detectedTag.TargetData
 	}
@@ -74,6 +73,7 @@ func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data 
 	ndefMessage, err := tagOps.ReadNDEF(ctx)
 	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
+		logTraceableError(err, "read NDEF")
 		log.Debug().Err(err).Msg("failed to read NDEF data")
 		return "", detectedTag.TargetData
 	}
@@ -83,7 +83,7 @@ func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data 
 	}
 
 	// Process NDEF records and convert to token text
-	tokenText := r.convertNDEFToTokenText(ndefMessage)
+	tokenText := convertNDEFToTokenText(ndefMessage)
 
 	// Return the token text and original target data
 	return tokenText, detectedTag.TargetData
@@ -91,76 +91,67 @@ func (r *Reader) readNDEFData(detectedTag *pn533.DetectedTag) (uid string, data 
 
 // convertNDEFToTokenText converts NDEF message to token text:
 // - Text and URI records pass through directly
-// - All other types (WiFi, VCard, etc.) convert to JSON
-func (*Reader) convertNDEFToTokenText(ndefMessage *ndef.Message) string {
+// - WiFi and VCard records convert to JSON
+// - Other types convert to generic JSON with payload
+func convertNDEFToTokenText(ndefMessage *pn532.NDEFMessage) string {
 	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
 		return ""
 	}
 
 	// Process first record (primary content)
 	record := ndefMessage.Records[0]
-	tnf := record.TNF()
-	typeField := record.Type()
 
 	// Handle text records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 1 && typeField[0] == 'T' {
-		payload, err := record.Payload()
-		if err != nil {
-			return ""
-		}
-		payloadBytes := payload.Marshal()
-		if len(payloadBytes) > 3 {
-			// Skip language code to get actual text
-			langLen := int(payloadBytes[0] & 0x3F)
-			if len(payloadBytes) > langLen+1 {
-				return string(payloadBytes[langLen+1:])
-			}
-		}
-		return ""
+	if record.Text != "" {
+		return record.Text
 	}
 
 	// Handle URI records - pass through directly
-	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 1 && typeField[0] == 'U' {
-		payload, err := record.Payload()
-		if err != nil {
-			return ""
-		}
-		return string(payload.Marshal())
+	if record.URI != "" {
+		return record.URI
 	}
 
 	// Handle WiFi credentials - convert to JSON
-	if typeField == "application/vnd.wfa.wsc" {
-		return convertWiFiToJSON(record)
+	if record.WiFi != nil {
+		return convertWiFiToJSON(record.WiFi)
 	}
 
 	// Handle VCard records - convert to JSON
-	if typeField == "text/vcard" || typeField == "text/x-vcard" {
-		return convertVCardToJSON(record)
+	if record.VCard != nil {
+		return convertVCardToJSON(record.VCard)
 	}
 
 	// Handle Smart Poster records - convert to JSON
-	if tnf == ndef.NFCForumWellKnownType && len(typeField) == 2 && typeField == "Sp" {
-		return convertSmartPosterToJSON(record)
+	if record.Type == pn532.NDEFTypeSmartPoster {
+		return convertSmartPosterToJSON(record.Payload)
 	}
 
-	// For any other complex types, convert to generic JSON
-	return convertGenericRecordToJSON(record)
+	// For any other types with payload, convert to generic JSON
+	if len(record.Payload) > 0 {
+		return convertGenericRecordToJSON(string(record.Type), record.Payload)
+	}
+
+	return ""
 }
 
-func convertWiFiToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
+func convertWiFiToJSON(wifi *pn532.WiFiCredential) string {
 	wifiData := map[string]any{
 		"type": "wifi",
-		"raw":  hex.EncodeToString(payload.Marshal()),
+		"ssid": wifi.SSID,
 	}
 
-	// Try to parse WiFi credentials if possible
-	// This is a simplified approach - full parsing would require WSC binary format parsing
-	wifiData["note"] = "WiFi credentials (binary format)"
+	if wifi.NetworkKey != "" {
+		wifiData["networkKey"] = wifi.NetworkKey
+	}
+	if wifi.AuthType != 0 {
+		wifiData["authType"] = wifi.AuthType
+	}
+	if wifi.EncryptionType != 0 {
+		wifiData["encryptionType"] = wifi.EncryptionType
+	}
+	if wifi.MACAddress != "" {
+		wifiData["macAddress"] = wifi.MACAddress
+	}
 
 	jsonBytes, err := json.Marshal(wifiData)
 	if err != nil {
@@ -170,33 +161,29 @@ func convertWiFiToJSON(record *ndef.Record) string {
 	return string(jsonBytes)
 }
 
-func convertVCardToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
-	vcardText := string(payload.Marshal())
-
+func convertVCardToJSON(vcard *pn532.VCardContact) string {
 	vcardData := map[string]any{
-		"type":  "vcard",
-		"vcard": vcardText,
+		"type": "vcard",
 	}
 
-	// Try to extract basic contact info
-	lines := strings.Split(vcardText, "\n")
-	contact := make(map[string]string)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "FN:"):
-			contact["name"] = strings.TrimPrefix(line, "FN:")
-		case strings.HasPrefix(line, "TEL:"):
-			contact["phone"] = strings.TrimPrefix(line, "TEL:")
-		case strings.HasPrefix(line, "EMAIL:"):
-			contact["email"] = strings.TrimPrefix(line, "EMAIL:")
-		}
+	contact := make(map[string]any)
+	if vcard.FormattedName != "" {
+		contact["name"] = vcard.FormattedName
+	}
+	if len(vcard.PhoneNumbers) > 0 {
+		contact["phones"] = vcard.PhoneNumbers
+	}
+	if len(vcard.EmailAddresses) > 0 {
+		contact["emails"] = vcard.EmailAddresses
+	}
+	if vcard.Organization != "" {
+		contact["organization"] = vcard.Organization
+	}
+	if vcard.Title != "" {
+		contact["title"] = vcard.Title
+	}
+	if vcard.URL != "" {
+		contact["url"] = vcard.URL
 	}
 
 	if len(contact) > 0 {
@@ -211,15 +198,10 @@ func convertVCardToJSON(record *ndef.Record) string {
 	return string(jsonBytes)
 }
 
-func convertSmartPosterToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
+func convertSmartPosterToJSON(payload []byte) string {
 	posterData := map[string]any{
 		"type": "smartposter",
-		"raw":  hex.EncodeToString(payload.Marshal()),
+		"raw":  hex.EncodeToString(payload),
 	}
 
 	jsonBytes, err := json.Marshal(posterData)
@@ -230,17 +212,11 @@ func convertSmartPosterToJSON(record *ndef.Record) string {
 	return string(jsonBytes)
 }
 
-func convertGenericRecordToJSON(record *ndef.Record) string {
-	payload, err := record.Payload()
-	if err != nil {
-		return ""
-	}
-
+func convertGenericRecordToJSON(recordType string, payload []byte) string {
 	genericData := map[string]any{
 		"type":      "unknown",
-		"tnf":       record.TNF(),
-		"typeField": record.Type(),
-		"payload":   hex.EncodeToString(payload.Marshal()),
+		"typeField": recordType,
+		"payload":   hex.EncodeToString(payload),
 	}
 
 	jsonBytes, err := json.Marshal(genericData)

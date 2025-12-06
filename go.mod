@@ -7,7 +7,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/TimDeve/valve-vdf-binary v0.0.1
-	github.com/ZaparooProject/go-pn532 v0.8.3
+	github.com/ZaparooProject/go-pn532 v0.9.0
 	github.com/adrg/xdg v0.5.3
 	github.com/andygrunwald/vdf v1.1.0
 	github.com/bendahl/uinput v1.7.0
