@@ -87,14 +87,11 @@ func LocalClient(
 		Path:   APIPath,
 	}
 
-	id, err := uuid.NewUUID()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate uuid: %w", err)
-	}
+	id := models.NewStringID(uuid.New().String())
 
 	req := models.RequestObject{
 		JSONRPC: "2.0",
-		ID:      &id,
+		ID:      id,
 		Method:  method,
 	}
 
@@ -151,7 +148,7 @@ func LocalClient(
 				continue
 			}
 
-			if m.ID != id {
+			if !m.ID.Equal(id) {
 				continue
 			}
 
@@ -268,7 +265,7 @@ func WaitNotification(
 				continue
 			}
 
-			if m.ID != nil {
+			if !m.ID.IsAbsent() {
 				continue
 			}
 

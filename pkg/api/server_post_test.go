@@ -182,6 +182,7 @@ func TestHandlePostRequest_ContentTypeWithCharset(t *testing.T) {
 }
 
 // TestHandlePostRequest_Notification tests that a notification (request without ID) is handled correctly.
+// Per JSON-RPC 2.0 spec: "The Server MUST NOT reply to a Notification"
 func TestHandlePostRequest_Notification(t *testing.T) {
 	t.Parallel()
 
@@ -195,15 +196,9 @@ func TestHandlePostRequest_Notification(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler(rr, req)
 
-	require.Equal(t, http.StatusOK, rr.Code, "notification should return HTTP 200")
-
-	// Notifications may return an empty response or null result
-	body := rr.Body.Bytes()
-	if len(body) > 0 {
-		var resp models.ResponseObject
-		err := json.Unmarshal(body, &resp)
-		require.NoError(t, err)
-	}
+	// Server MUST NOT reply to notifications - expect 204 No Content
+	require.Equal(t, http.StatusNoContent, rr.Code, "notification should return HTTP 204 No Content")
+	require.Empty(t, rr.Body.Bytes(), "notification should have empty response body")
 }
 
 // TestHandlePostRequest_MethodError tests that a method returning an error produces correct JSON-RPC error.
@@ -288,4 +283,161 @@ func TestHandlePostRequest_InvalidJSONRPCVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Error)
 	require.Equal(t, -32600, resp.Error.Code, "should be invalid request error code")
+}
+
+// TestHandlePostRequest_StringID tests that string IDs are echoed back correctly.
+func TestHandlePostRequest_StringID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	reqBody := `{"jsonrpc":"2.0","id":"my-custom-string-id","method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.Equal(t, "my-custom-string-id", resp["id"], "string ID should be echoed back as string")
+}
+
+// TestHandlePostRequest_NumberID tests that number IDs are echoed back correctly.
+func TestHandlePostRequest_NumberID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	reqBody := `{"jsonrpc":"2.0","id":12345,"method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.InDelta(t, float64(12345), resp["id"], 0.001, "number ID should be echoed back as number")
+}
+
+// TestHandlePostRequest_MissingID tests that missing ID is treated as notification (no response).
+// Per JSON-RPC 2.0 spec: "The Server MUST NOT reply to a Notification"
+func TestHandlePostRequest_MissingID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	// Request without ID field = notification
+	reqBody := `{"jsonrpc":"2.0","method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	// Server MUST NOT reply to notifications - expect 204 No Content
+	require.Equal(t, http.StatusNoContent, rr.Code)
+	require.Empty(t, rr.Body.Bytes(), "notification should not have response body")
+}
+
+// TestHandlePostRequest_NullID tests that explicit null ID is treated as request (must respond with null ID).
+func TestHandlePostRequest_NullID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	// Request with explicit null ID
+	reqBody := `{"jsonrpc":"2.0","id":null,"method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// Explicit null ID should be echoed back as null
+	require.Nil(t, resp["id"], "explicit null ID should be echoed back as null")
+	// But it should have a result (unlike notification which wouldn't process)
+	require.NotNil(t, resp["result"], "request with null ID should have a result")
+}
+
+// TestHandlePostRequest_UUIDStringID tests backward compatibility with UUID string IDs.
+func TestHandlePostRequest_UUIDStringID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	testUUID := uuid.New().String()
+	reqBody := `{"jsonrpc":"2.0","id":"` + testUUID + `","method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.Equal(t, testUUID, resp["id"], "UUID string ID should be echoed back unchanged")
+}
+
+// TestHandlePostRequest_InvalidObjectID tests that object IDs are rejected.
+func TestHandlePostRequest_InvalidObjectID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	// Object ID is invalid per JSON-RPC spec
+	reqBody := `{"jsonrpc":"2.0","id":{"nested":"object"},"method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Should return an error response for invalid ID type
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// The request should fail to parse due to invalid ID
+	require.NotNil(t, resp["error"], "object ID should cause an error")
+}
+
+// TestHandlePostRequest_InvalidArrayID tests that array IDs are rejected.
+func TestHandlePostRequest_InvalidArrayID(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := createTestPostHandler(t)
+
+	// Array ID is invalid per JSON-RPC spec
+	reqBody := `{"jsonrpc":"2.0","id":[1,2,3],"method":"test.echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/api", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	handler(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// Should return an error response for invalid ID type
+	var resp map[string]any
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	// The request should fail to parse due to invalid ID
+	require.NotNil(t, resp["error"], "array ID should cause an error")
 }

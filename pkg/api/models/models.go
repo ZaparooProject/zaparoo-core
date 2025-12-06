@@ -21,8 +21,6 @@ package models
 
 import (
 	"encoding/json"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -89,7 +87,7 @@ type Notification struct {
 
 type RequestObject struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *uuid.UUID      `json:"id,omitempty"`
+	ID      RPCID           `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
@@ -103,7 +101,7 @@ type ResponseObject struct {
 	Result  any          `json:"result"`
 	Error   *ErrorObject `json:"error,omitempty"`
 	JSONRPC string       `json:"jsonrpc"`
-	ID      uuid.UUID    `json:"id"`
+	ID      RPCID        `json:"id"`
 }
 
 // ResponseErrorObject exists for sending errors, so we can omit result from
@@ -112,5 +110,5 @@ type ResponseObject struct {
 type ResponseErrorObject struct {
 	Error   *ErrorObject `json:"error"`
 	JSONRPC string       `json:"jsonrpc"`
-	ID      uuid.UUID    `json:"id"`
+	ID      RPCID        `json:"id"`
 }
