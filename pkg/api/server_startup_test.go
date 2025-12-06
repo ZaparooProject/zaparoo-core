@@ -411,7 +411,16 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 
 	localIPs := []string{"192.168.1.100", "10.0.0.50"}
 	port := 7497
-	customOrigins := []string{"example.com"}
+	// Test various custom origin formats
+	customOrigins := []string{
+		"example.com",                // hostname only
+		"http://batocera.local:7497", // full URL with port
+		"https://myhost.local:8080",  // full URL with different port
+		"http://noport.local",        // full URL without port
+		"capacitor://localhost",      // mobile app scheme
+		"  http://whitespace.local ", // with whitespace (should be trimmed)
+		"http://trailing.local/",     // with trailing slash (should be trimmed)
+	}
 
 	// Test that buildDynamicAllowedOrigins correctly builds allowed origins list
 	result := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
@@ -419,13 +428,80 @@ func TestBuildDynamicAllowedOrigins(t *testing.T) {
 	// Should include base origins
 	require.Contains(t, result, "capacitor://localhost")
 
-	// Should include all local IPs
+	// Should include all local IPs with port
 	require.Contains(t, result, "http://192.168.1.100:7497")
 	require.Contains(t, result, "https://192.168.1.100:7497")
 	require.Contains(t, result, "http://10.0.0.50:7497")
 	require.Contains(t, result, "https://10.0.0.50:7497")
 
-	// Should include custom origins
+	// Hostname-only custom origins should get all variants (with and without port)
+	// This supports both direct access and reverse proxy scenarios
 	require.Contains(t, result, "http://example.com")
 	require.Contains(t, result, "https://example.com")
+	require.Contains(t, result, "http://example.com:7497")
+	require.Contains(t, result, "https://example.com:7497")
+
+	// Full URL with port should be used as-is
+	require.Contains(t, result, "http://batocera.local:7497")
+	require.Contains(t, result, "https://myhost.local:8080")
+
+	// Full URL without port should include both as-is AND with port appended
+	require.Contains(t, result, "http://noport.local")
+	require.Contains(t, result, "http://noport.local:7497")
+
+	// Other schemes (capacitor://, ionic://) should be used as-is
+	require.Contains(t, result, "capacitor://localhost")
+
+	// Whitespace should be trimmed
+	require.Contains(t, result, "http://whitespace.local")
+	require.NotContains(t, result, "  http://whitespace.local ")
+
+	// Trailing slashes should be trimmed
+	require.Contains(t, result, "http://trailing.local")
+	require.NotContains(t, result, "http://trailing.local/")
+}
+
+// TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant is a regression
+// test for GitHub issue #371 where users couldn't connect from .local DNS hostnames
+// like batocera.local because the browser sends origin with port but users configure
+// URLs without port.
+func TestBuildDynamicAllowedOrigins_HTTPURLWithoutPortAddsPortVariant(t *testing.T) {
+	t.Parallel()
+
+	// Simulate the exact scenario from issue #371:
+	// User configured: allowed_origins = ['http://batocera.local', 'http://ko.rhino-dragon.ts.net']
+	// Browser sent origin: http://batocera.local:7497
+	// Expected: Connection should be allowed
+
+	baseOrigins := []string{"http://localhost"}
+	localIPs := []string{"192.168.1.100"}
+	port := 7497
+
+	// User's config from issue #371
+	customOrigins := []string{
+		"http://batocera.local",
+		"http://ko.rhino-dragon.ts.net",
+	}
+
+	result := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
+
+	// The browser sends origin WITH port, so we need to match it
+	// Before the fix: only "http://http://batocera.local" was added (double prefix bug)
+	// After the fix: both with and without port variants should be present
+	require.Contains(t, result, "http://batocera.local:7497",
+		"Issue #371: browser sends origin with port, must be in allowed list")
+	require.Contains(t, result, "http://ko.rhino-dragon.ts.net:7497",
+		"Issue #371: Tailscale hostname must also work with port")
+
+	// Also include the user's original config values (for reverse proxy scenarios)
+	require.Contains(t, result, "http://batocera.local",
+		"Original config value should also be preserved")
+	require.Contains(t, result, "http://ko.rhino-dragon.ts.net",
+		"Original config value should also be preserved")
+
+	// Verify the old bug is fixed - should NOT have double http:// prefix
+	require.NotContains(t, result, "http://http://batocera.local",
+		"Bug fix: should not have double http:// prefix")
+	require.NotContains(t, result, "https://http://batocera.local",
+		"Bug fix: should not have https:// prepended to http:// URL")
 }
