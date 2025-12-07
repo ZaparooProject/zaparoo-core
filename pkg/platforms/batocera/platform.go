@@ -92,7 +92,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return enabled
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (p *Platform) StartPre(cfg *config.Instance) error {
 	// Initialize clock if not set (for production use)
 	if p.clock == nil {
 		p.clock = clockwork.NewRealClock()
@@ -104,11 +104,14 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 	}
 	p.kbd = kbd
 
-	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create gamepad input device: %w", err)
+	// Virtual gamepad is disabled by default on Batocera
+	if cfg.VirtualGamepadEnabled(false) {
+		gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
+		if err != nil {
+			return fmt.Errorf("failed to create gamepad input device: %w", err)
+		}
+		p.gpd = gpd
 	}
-	p.gpd = gpd
 
 	return nil
 }
@@ -216,9 +219,11 @@ func (p *Platform) Stop() error {
 		log.Warn().Err(err).Msg("error closing keyboard")
 	}
 
-	err = p.gpd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing gamepad")
+	if p.gpd.Device != nil {
+		err = p.gpd.Close()
+		if err != nil {
+			log.Warn().Err(err).Msg("error closing gamepad")
+		}
 	}
 
 	return nil
@@ -555,6 +560,9 @@ func (p *Platform) KeyboardPress(arg string) error {
 }
 
 func (p *Platform) GamepadPress(name string) error {
+	if p.gpd.Device == nil {
+		return errors.New("virtual gamepad is disabled")
+	}
 	code, ok := linuxinput.ToGamepadCode(name)
 	if !ok {
 		return fmt.Errorf("unknown button: %s", name)
