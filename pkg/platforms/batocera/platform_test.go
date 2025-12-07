@@ -14,10 +14,12 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -984,4 +986,69 @@ func TestStopActiveLauncher_ESAPIUnavailable(t *testing.T) {
 
 	// Media should be cleared (because kill succeeded gracefully)
 	assert.Equal(t, 1, mediaClearedCount, "Should clear active media after graceful kill")
+}
+
+// TestLaunchMedia_SendsEscapeKeyToExitScreensaver verifies that LaunchMedia sends
+// an ESC key press before launching to exit any active screensaver (GitHub issue #398)
+func TestLaunchMedia_SendsEscapeKeyToExitScreensaver(t *testing.T) {
+	// Note: Not using t.Parallel() because we need to ensure no MockESAPIServer is running
+
+	fs := helpers.NewMemoryFS()
+	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
+	require.NoError(t, err)
+
+	// Create mock keyboard to track key presses
+	mockKbd := mocks.NewMockKeyboard()
+
+	// Set up platform with mock keyboard
+	platform := &Platform{
+		cfg:   cfg,
+		clock: clockwork.NewRealClock(),
+		kbd: linuxinput.Keyboard{
+			Device: mockKbd,
+			Delay:  1 * time.Millisecond, // Short delay for tests
+		},
+	}
+
+	var capturedMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		capturedMedia = media
+	}
+
+	activeMedia := func() *models.ActiveMedia {
+		return capturedMedia
+	}
+
+	platform.activeMedia = activeMedia
+	platform.setActiveMedia = setActiveMedia
+
+	// Create a test database
+	db, cleanup := helpers.NewTestDatabase(t)
+	defer cleanup()
+
+	// Create a mock launcher
+	launchCalled := false
+	launcher := &platforms.Launcher{
+		ID:       "TestLauncher",
+		SystemID: systemdefs.SystemNES,
+		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+			launchCalled = true
+			return &os.Process{Pid: 12345}, nil
+		},
+	}
+
+	// Call LaunchMedia
+	err = platform.LaunchMedia(cfg, "/test/game.nes", launcher, db)
+	require.NoError(t, err, "LaunchMedia should succeed")
+
+	// Verify launch was called
+	assert.True(t, launchCalled, "Launch function should have been called")
+
+	// Verify ESC key (code 1) was pressed before launch
+	// The Press() method calls KeyDown then KeyUp
+	require.NotEmpty(t, mockKbd.KeyDownCalls, "KeyDown should have been called")
+	assert.Equal(t, 1, mockKbd.KeyDownCalls[0], "First KeyDown should be ESC (key code 1)")
+
+	require.NotEmpty(t, mockKbd.KeyUpCalls, "KeyUp should have been called")
+	assert.Equal(t, 1, mockKbd.KeyUpCalls[0], "First KeyUp should be ESC (key code 1)")
 }

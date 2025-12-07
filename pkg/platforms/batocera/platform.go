@@ -519,6 +519,18 @@ func (p *Platform) LaunchMedia(
 		}
 	}
 
+	// Send ESC to cancel any active screensaver before launching.
+	// This works around an ES bug where launching via API during screensaver
+	// can corrupt the screensaver state (see GitHub issue #398).
+	// TODO: Remove this workaround once the upstream EmulationStation fix is applied.
+	if p.kbd.Device != nil {
+		if escErr := p.kbd.Press(1); escErr != nil { // KEY_ESC = 1
+			log.Warn().Err(escErr).Msg("failed to send ESC key to cancel screensaver")
+			// Continue anyway - the launch might still work
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
 	err = helpers.DoLaunch(&helpers.LaunchParams{
 		Config:         cfg,
