@@ -139,39 +139,38 @@ func StripMetadataBrackets(s string) string {
 	var result strings.Builder
 	result.Grow(len(s))
 
-	// Track nesting depth for each bracket type: 0=(), 1=[], 2={}, 3=<>
-	depth := [4]int{}
+	// Track nesting depth for each bracket type
+	var parenDepth, bracketDepth, braceDepth, angleDepth int
 
 	for _, r := range s {
 		switch r {
 		case '(':
-			depth[0]++
+			parenDepth++
 		case ')':
-			if depth[0] > 0 {
-				depth[0]--
+			if parenDepth > 0 {
+				parenDepth--
 			}
 		case '[':
-			depth[1]++
+			bracketDepth++
 		case ']':
-			if depth[1] > 0 {
-				depth[1]--
+			if bracketDepth > 0 {
+				bracketDepth--
 			}
 		case '{':
-			depth[2]++
+			braceDepth++
 		case '}':
-			if depth[2] > 0 {
-				depth[2]--
+			if braceDepth > 0 {
+				braceDepth--
 			}
 		case '<':
-			depth[3]++
+			angleDepth++
 		case '>':
-			if depth[3] > 0 {
-				depth[3]--
+			if angleDepth > 0 {
+				angleDepth--
 			}
 		default:
 			// Only write runes when we're not inside any brackets
-
-			if depth[0] == 0 && depth[1] == 0 && depth[2] == 0 && depth[3] == 0 {
+			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 {
 				_, _ = result.WriteRune(r)
 			}
 		}
