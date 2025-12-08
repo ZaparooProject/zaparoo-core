@@ -45,6 +45,7 @@ func IsProcessRunning(proc *os.Process) bool {
 
 	// Open process handle with PROCESS_QUERY_LIMITED_INFORMATION access
 	// This is the minimum access required to query process information
+	//nolint:gosec // G115 false positive - Windows PIDs are 32-bit, and negative check above ensures safe conversion
 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(proc.Pid))
 	if err != nil {
 		// If we can't open the process, it's not running (or we don't have permissions)

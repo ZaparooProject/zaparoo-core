@@ -17,9 +17,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -48,19 +48,18 @@ const (
 )
 
 type Platform struct {
-	clock             clockwork.Clock
-	cfg               *config.Instance
-	activeMedia       func() *models.ActiveMedia
-	setActiveMedia    func(*models.ActiveMedia)
-	trackedProcess    *os.Process
-	stopTracker       func() error
-	lastKnownGame     *models.ActiveMedia
-	kbd               linuxinput.Keyboard
-	gpd               linuxinput.Gamepad
+	clock          clockwork.Clock
+	cfg            *config.Instance
+	activeMedia    func() *models.ActiveMedia
+	setActiveMedia func(*models.ActiveMedia)
+	trackedProcess *os.Process
+	stopTracker    func() error
+	lastKnownGame  *models.ActiveMedia
+	shared.LinuxInput
+	maxStartupRetries int
 	processMu         syncutil.RWMutex
 	trackerMu         syncutil.RWMutex
 	kodiActive        bool
-	maxStartupRetries int // For testing: reduces retry count to speed up ES API unavailability tests
 }
 
 func (*Platform) ID() string {
@@ -92,23 +91,17 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return enabled
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
-	// Initialize clock if not set (for production use)
+func (p *Platform) StartPre(cfg *config.Instance) error {
 	if p.clock == nil {
 		p.clock = clockwork.NewRealClock()
 	}
 
-	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create keyboard input device: %w", err)
+	// Virtual gamepad is disabled by default on Batocera
+	// TODO: see if we can enable a safe list of launchers where the virtual
+	//       gamepad does not interfere with the real devices
+	if err := p.InitDevices(cfg, false); err != nil {
+		return fmt.Errorf("failed to initialize input devices: %w", err)
 	}
-	p.kbd = kbd
-
-	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create gamepad input device: %w", err)
-	}
-	p.gpd = gpd
 
 	return nil
 }
@@ -211,15 +204,7 @@ func (p *Platform) Stop() error {
 		}
 	}
 
-	err := p.kbd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing keyboard")
-	}
-
-	err = p.gpd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing gamepad")
-	}
+	p.CloseDevices()
 
 	return nil
 }
@@ -532,37 +517,6 @@ func (p *Platform) LaunchMedia(
 	p.kodiActive = isKodiLauncher(launcher.ID)
 	p.trackerMu.Unlock()
 
-	return nil
-}
-
-func (p *Platform) KeyboardPress(arg string) error {
-	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
-	if err != nil {
-		return fmt.Errorf("failed to parse key combo: %w", err)
-	}
-
-	if isCombo {
-		if err := p.kbd.Combo(codes...); err != nil {
-			return fmt.Errorf("failed to press keyboard combo: %w", err)
-		}
-		return nil
-	}
-
-	if err := p.kbd.Press(codes[0]); err != nil {
-		return fmt.Errorf("failed to press keyboard key: %w", err)
-	}
-	return nil
-}
-
-func (p *Platform) GamepadPress(name string) error {
-	code, ok := linuxinput.ToGamepadCode(name)
-	if !ok {
-		return fmt.Errorf("unknown button: %s", name)
-	}
-	err := p.gpd.Press(code)
-	if err != nil {
-		return fmt.Errorf("failed to press gamepad button %s: %w", name, err)
-	}
 	return nil
 }
 

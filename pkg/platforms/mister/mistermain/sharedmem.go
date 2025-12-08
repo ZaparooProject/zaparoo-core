@@ -86,6 +86,7 @@ func GetActiveIni() (int, error) { // used for reference later
 		return 0, err
 	}
 
+	//nolint:gosec // G602 false positive - slice literal has exactly 4 elements
 	if vs[0] == 0x34 && vs[1] == 0x99 && vs[2] == 0xBA {
 		return int(vs[3] + 1), nil
 	}

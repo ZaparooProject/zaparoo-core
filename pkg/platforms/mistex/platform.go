@@ -13,7 +13,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister"
@@ -23,6 +22,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -45,15 +45,14 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
-	tr               *tracker.Tracker
-	stopTr           func() error
-	activeMedia      func() *models.ActiveMedia
-	setActiveMedia   func(*models.ActiveMedia)
-	trackedProcess   *os.Process
-	kbd              linuxinput.Keyboard
-	gpd              linuxinput.Gamepad
-	arcadeCardLaunch arcadeCardLaunchCache
-	processMu        syncutil.RWMutex
+	shared.LinuxInput // Embedded for keyboard/gamepad support
+	tr                *tracker.Tracker
+	stopTr            func() error
+	activeMedia       func() *models.ActiveMedia
+	setActiveMedia    func(*models.ActiveMedia)
+	trackedProcess    *os.Process
+	arcadeCardLaunch  arcadeCardLaunchCache
+	processMu         syncutil.RWMutex
 }
 
 func (*Platform) ID() string {
@@ -84,7 +83,7 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 	return enabled
 }
 
-func (p *Platform) StartPre(_ *config.Instance) error {
+func (p *Platform) StartPre(cfg *config.Instance) error {
 	err := os.MkdirAll(misterconfig.TempDir, 0o750)
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
@@ -95,17 +94,9 @@ func (p *Platform) StartPre(_ *config.Instance) error {
 		return fmt.Errorf("failed to create data directory: %w", err)
 	}
 
-	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create keyboard: %w", err)
+	if err := p.InitDevices(cfg, true); err != nil {
+		return fmt.Errorf("failed to initialize input devices: %w", err)
 	}
-	p.kbd = kbd
-
-	gpd, err := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create gamepad: %w", err)
-	}
-	p.gpd = gpd
 
 	return nil
 }
@@ -170,15 +161,7 @@ func (p *Platform) Stop() error {
 		return p.stopTr()
 	}
 
-	err := p.kbd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing keyboard")
-	}
-
-	err = p.gpd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing gamepad")
-	}
+	p.CloseDevices()
 
 	return nil
 }
@@ -341,37 +324,6 @@ func (p *Platform) LaunchMedia(
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
 
-	return nil
-}
-
-func (p *Platform) KeyboardPress(arg string) error {
-	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
-	if err != nil {
-		return fmt.Errorf("failed to parse key combo: %w", err)
-	}
-
-	if isCombo {
-		if err := p.kbd.Combo(codes...); err != nil {
-			return fmt.Errorf("failed to press keyboard combo: %w", err)
-		}
-		return nil
-	}
-
-	if err := p.kbd.Press(codes[0]); err != nil {
-		return fmt.Errorf("failed to press keyboard key: %w", err)
-	}
-	return nil
-}
-
-func (p *Platform) GamepadPress(name string) error {
-	code, ok := linuxinput.ToGamepadCode(name)
-	if !ok {
-		return fmt.Errorf("unknown button: %s", name)
-	}
-	err := p.gpd.Press(code)
-	if err != nil {
-		return fmt.Errorf("failed to press gamepad button: %w", err)
-	}
 	return nil
 }
 

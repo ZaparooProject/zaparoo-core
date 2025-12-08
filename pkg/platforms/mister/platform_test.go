@@ -314,3 +314,36 @@ func TestArcadeCardLaunchCache(t *testing.T) {
 		// (run with go test -race to verify)
 	})
 }
+
+// TestGamepadPress_DisabledReturnsError tests that GamepadPress returns an error
+// when the virtual gamepad is disabled (gpd.Device is nil).
+func TestGamepadPress_DisabledReturnsError(t *testing.T) {
+	t.Parallel()
+
+	// Create platform with zero-value gamepad (Device will be nil)
+	platform := NewPlatform()
+
+	// Attempt to press a button
+	err := platform.GamepadPress("a")
+
+	// Should return error indicating gamepad is disabled
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "virtual gamepad is disabled")
+}
+
+// TestGamepadPress_ValidButtonsWhenDisabled tests various button names return the same disabled error
+func TestGamepadPress_ValidButtonsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	platform := NewPlatform()
+
+	buttons := []string{"a", "b", "x", "y", "start", "select", "up", "down", "left", "right"}
+	for _, button := range buttons {
+		t.Run(button, func(t *testing.T) {
+			t.Parallel()
+			err := platform.GamepadPress(button)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "virtual gamepad is disabled")
+		})
+	}
+}

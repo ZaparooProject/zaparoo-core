@@ -47,6 +47,7 @@ const (
 
 type Values struct {
 	Audio        Audio     `toml:"audio"`
+	Input        Input     `toml:"input,omitempty"`
 	Launchers    Launchers `toml:"launchers,omitempty"`
 	Media        Media     `toml:"media,omitempty"`
 	Playtime     Playtime  `toml:"playtime,omitempty"`
@@ -70,6 +71,10 @@ type Audio struct {
 type ZapScript struct {
 	AllowExecute   []string `toml:"allow_execute,omitempty,multiline"`
 	allowExecuteRe []*regexp.Regexp
+}
+
+type Input struct {
+	GamepadEnabled *bool `toml:"gamepad_enabled,omitempty"`
 }
 
 type Auth struct {
@@ -505,4 +510,22 @@ func SetAuthCfgForTesting(auth Auth) {
 // ClearAuthCfgForTesting clears the global auth config for testing purposes
 func ClearAuthCfgForTesting() {
 	authCfg.Store(Auth{})
+}
+
+// VirtualGamepadEnabled returns whether virtual gamepad emulation is enabled.
+// The defaultEnabled parameter allows platforms to specify their own default.
+func (c *Instance) VirtualGamepadEnabled(defaultEnabled bool) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Input.GamepadEnabled == nil {
+		return defaultEnabled
+	}
+	return *c.vals.Input.GamepadEnabled
+}
+
+// SetVirtualGamepadEnabled sets whether virtual gamepad emulation is enabled.
+func (c *Instance) SetVirtualGamepadEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Input.GamepadEnabled = &enabled
 }
