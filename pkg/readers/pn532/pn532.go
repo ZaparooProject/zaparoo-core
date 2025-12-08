@@ -49,6 +49,7 @@ const (
 	ndefReadTimeout       = 2 * time.Second
 	writeTimeout          = 30 * time.Second
 	deviceTimeout         = 5 * time.Second
+	writeRetryCount       = 3
 )
 
 // PN532Device abstracts the pn532.Device for testing.
@@ -586,7 +587,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	var writeErr error
 
 	err := r.session.WriteToNextTagWithRetry(
-		ctx, writeCtx, writeTimeout, 3,
+		ctx, writeCtx, writeTimeout, writeRetryCount,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			// Create NDEF message with text record
 			ndefMessage := &pn532.NDEFMessage{
