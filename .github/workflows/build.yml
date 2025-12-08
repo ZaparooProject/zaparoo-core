@@ -123,7 +123,7 @@ jobs:
           APP_TAG="${{ steps.zaparooapprel.outputs.release }}"
           APP_VERSION="${APP_TAG#v}"
           APP_FILENAME="zaparoo_app-web-core-${APP_VERSION}.tar.gz"
-          wget --fail "https://github.com/ZaparooProject/zaparoo-app/releases/download/${APP_TAG}/${APP_FILENAME}" -O "pkg/assets/_app/${APP_FILENAME}"
+          curl -fsSL -o "pkg/assets/_app/${APP_FILENAME}" "https://github.com/ZaparooProject/zaparoo-app/releases/download/${APP_TAG}/${APP_FILENAME}"
           mkdir pkg/assets/_app/dist
           tar xf "pkg/assets/_app/${APP_FILENAME}" -C pkg/assets/_app/dist/
       - name: Write release version
