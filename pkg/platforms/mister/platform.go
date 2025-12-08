@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +19,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/linuxinput"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/arcadedb"
@@ -29,6 +27,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mgls"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/mistermain"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mister/tracker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -52,6 +51,7 @@ type arcadeCardLaunchCache struct {
 }
 
 type Platform struct {
+	shared.LinuxInput
 	dbLoadTime          time.Time
 	lastUIHidden        time.Time
 	launcherManager     platforms.LauncherContextManager
@@ -67,8 +67,6 @@ type Platform struct {
 	activeMedia         func() *models.ActiveMedia
 	textMap             map[string]string
 	consoleManager      *MiSTerConsoleManager
-	gpd                 linuxinput.Gamepad
-	kbd                 linuxinput.Keyboard
 	lastLauncher        platforms.Launcher
 	arcadeCardLaunch    arcadeCardLaunchCache
 	stopIntent          platforms.StopIntent
@@ -153,22 +151,9 @@ func (p *Platform) StartPre(cfg *config.Instance) error {
 		}
 	}
 
-	kbd, err := linuxinput.NewKeyboard(linuxinput.DefaultTimeout)
-	if err != nil {
-		return fmt.Errorf("failed to create keyboard: %w", err)
+	if err := p.InitDevices(cfg, true); err != nil {
+		return fmt.Errorf("failed to initialize input devices: %w", err)
 	}
-	p.kbd = kbd
-
-	// Virtual gamepad is enabled by default on MiSTer
-	if cfg.VirtualGamepadEnabled(true) {
-		gpd, gpdErr := linuxinput.NewGamepad(linuxinput.DefaultTimeout)
-		if gpdErr != nil {
-			return fmt.Errorf("failed to create gamepad: %w", gpdErr)
-		}
-		p.gpd = gpd
-	}
-
-	log.Debug().Msg("input devices initialized successfully")
 
 	uids, texts, err := LoadCsvMappings()
 	if err != nil {
@@ -263,17 +248,7 @@ func (p *Platform) Stop() error {
 		}
 	}
 
-	err := p.kbd.Close()
-	if err != nil {
-		log.Warn().Err(err).Msg("error closing keyboard")
-	}
-
-	if p.gpd.Device != nil {
-		err = p.gpd.Close()
-		if err != nil {
-			log.Warn().Err(err).Msg("error closing gamepad")
-		}
-	}
+	p.CloseDevices()
 
 	if p.stopMappingsWatcher != nil {
 		err := p.stopMappingsWatcher()
@@ -580,40 +555,6 @@ func (p *Platform) LaunchMedia(
 	}
 
 	p.setLastLauncher(launcher)
-	return nil
-}
-
-func (p *Platform) KeyboardPress(arg string) error {
-	codes, isCombo, err := linuxinput.ParseKeyCombo(arg)
-	if err != nil {
-		return fmt.Errorf("failed to parse key combo: %w", err)
-	}
-
-	if isCombo {
-		if err := p.kbd.Combo(codes...); err != nil {
-			return fmt.Errorf("failed to press keyboard combo: %w", err)
-		}
-		return nil
-	}
-
-	if err := p.kbd.Press(codes[0]); err != nil {
-		return fmt.Errorf("failed to press keyboard key: %w", err)
-	}
-	return nil
-}
-
-func (p *Platform) GamepadPress(name string) error {
-	if p.gpd.Device == nil {
-		return errors.New("virtual gamepad is disabled")
-	}
-	code, ok := linuxinput.ToGamepadCode(name)
-	if !ok {
-		return fmt.Errorf("unknown button: %s", name)
-	}
-	err := p.gpd.Press(code)
-	if err != nil {
-		return fmt.Errorf("failed to press gamepad button: %w", err)
-	}
 	return nil
 }
 
