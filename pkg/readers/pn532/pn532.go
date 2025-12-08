@@ -586,7 +586,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	var writeErr error
 
 	err := r.session.WriteToNextTagWithRetry(
-		ctx, writeCtx, writeTimeout, 3,
+		ctx, writeCtx, writeTimeout, 5,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			// Create NDEF message with text record
 			ndefMessage := &pn532.NDEFMessage{
