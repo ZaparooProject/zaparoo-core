@@ -70,6 +70,12 @@ type PollingSession interface {
 		timeout time.Duration,
 		writeFunc func(context.Context, pn532.Tag) error,
 	) error
+	WriteToNextTagWithRetry(
+		ctx, writeCtx context.Context,
+		timeout time.Duration,
+		maxRetries int,
+		writeFunc func(context.Context, pn532.Tag) error,
+	) error
 }
 
 // TransportFactory creates a transport from device info.
@@ -153,6 +159,18 @@ func (s *realSession) WriteToNextTag(
 	writeFunc func(context.Context, pn532.Tag) error,
 ) error {
 	if err := s.session.WriteToNextTag(ctx, writeCtx, timeout, writeFunc); err != nil {
+		return fmt.Errorf("failed to write to tag: %w", err)
+	}
+	return nil
+}
+
+func (s *realSession) WriteToNextTagWithRetry(
+	ctx, writeCtx context.Context,
+	timeout time.Duration,
+	maxRetries int,
+	writeFunc func(context.Context, pn532.Tag) error,
+) error {
+	if err := s.session.WriteToNextTagWithRetry(ctx, writeCtx, timeout, maxRetries, writeFunc); err != nil {
 		return fmt.Errorf("failed to write to tag: %w", err)
 	}
 	return nil
@@ -567,8 +585,8 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	var resultToken *tokens.Token
 	var writeErr error
 
-	err := r.session.WriteToNextTag(
-		ctx, writeCtx, writeTimeout,
+	err := r.session.WriteToNextTagWithRetry(
+		ctx, writeCtx, writeTimeout, 3,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			// Create NDEF message with text record
 			ndefMessage := &pn532.NDEFMessage{
@@ -578,8 +596,8 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				}},
 			}
 
-			// Write NDEF message to tag using the provided write context
-			if err := tag.WriteNDEFWithContext(writeCtx, ndefMessage); err != nil {
+			// Write NDEF message to tag (includes automatic verification)
+			if err := tag.WriteNDEF(writeCtx, ndefMessage); err != nil {
 				logTraceableError(err, "write NDEF")
 				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
 				return writeErr
@@ -600,6 +618,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 			return nil
 		})
 	if err != nil {
+		logTraceableError(err, "write to next tag")
 		if writeErr != nil {
 			return nil, writeErr
 		}

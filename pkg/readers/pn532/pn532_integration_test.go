@@ -107,39 +107,29 @@ func (m *mockTag) Type() pn532.TagType {
 	return m.tagType
 }
 
-func (*mockTag) ReadBlock(_ uint8) ([]byte, error) {
+func (*mockTag) ReadBlock(_ context.Context, _ uint8) ([]byte, error) {
 	return nil, nil
 }
 
-func (*mockTag) WriteBlock(_ uint8, _ []byte) error {
+func (*mockTag) WriteBlock(_ context.Context, _ uint8, _ []byte) error {
 	return nil
 }
 
-func (*mockTag) ReadNDEF() (*pn532.NDEFMessage, error) {
+func (*mockTag) ReadNDEF(_ context.Context) (*pn532.NDEFMessage, error) {
 	return nil, assert.AnError
 }
 
-func (m *mockTag) WriteNDEF(message *pn532.NDEFMessage) error {
+func (m *mockTag) WriteNDEF(_ context.Context, message *pn532.NDEFMessage) error {
 	m.writeNDEFCalled = true
 	m.lastNDEFMessage = message
 	return m.writeNDEFErr
 }
 
-func (m *mockTag) WriteNDEFWithContext(_ context.Context, message *pn532.NDEFMessage) error {
-	m.writeNDEFCalled = true
-	m.lastNDEFMessage = message
-	return m.writeNDEFErr
-}
-
-func (*mockTag) ReadText() (string, error) {
+func (*mockTag) ReadText(_ context.Context) (string, error) {
 	return "", nil
 }
 
-func (*mockTag) WriteText(_ string) error {
-	return nil
-}
-
-func (*mockTag) WriteTextWithContext(_ context.Context, _ string) error {
+func (*mockTag) WriteText(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -196,6 +186,20 @@ func (m *mockPollingSession) WriteToNextTag(
 	_ context.Context,
 	writeCtx context.Context,
 	_ time.Duration,
+	writeFunc func(context.Context, pn532.Tag) error,
+) error {
+	// If a mock tag is provided, invoke the callback
+	if m.mockTag != nil {
+		return writeFunc(writeCtx, m.mockTag)
+	}
+	return nil
+}
+
+func (m *mockPollingSession) WriteToNextTagWithRetry(
+	_ context.Context,
+	writeCtx context.Context,
+	_ time.Duration,
+	_ int,
 	writeFunc func(context.Context, pn532.Tag) error,
 ) error {
 	// If a mock tag is provided, invoke the callback
