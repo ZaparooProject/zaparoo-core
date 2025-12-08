@@ -21,6 +21,7 @@ package pn532
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -143,14 +144,15 @@ func (*mockTag) Summary() string {
 
 // mockPollingSession is a mock implementation of PollingSession for testing.
 type mockPollingSession struct {
-	startFunc          func(ctx context.Context) error
-	closeFunc          func() error
-	onCardDetected     func(*pn532.DetectedTag) error
-	onCardRemoved      func()
-	onCardChanged      func(*pn532.DetectedTag) error
-	mockTag            pn532.Tag
-	closeCalled        bool
-	setCallbacksCalled bool
+	mockTag                    pn532.Tag
+	writeToNextTagWithRetryErr error // Error to return before invoking callback
+	startFunc                  func(ctx context.Context) error
+	closeFunc                  func() error
+	onCardDetected             func(*pn532.DetectedTag) error
+	onCardRemoved              func()
+	onCardChanged              func(*pn532.DetectedTag) error
+	closeCalled                bool
+	setCallbacksCalled         bool
 }
 
 func (m *mockPollingSession) Start(ctx context.Context) error {
@@ -202,6 +204,10 @@ func (m *mockPollingSession) WriteToNextTagWithRetry(
 	_ int,
 	writeFunc func(context.Context, pn532.Tag) error,
 ) error {
+	// Return session-level error if configured (before invoking callback)
+	if m.writeToNextTagWithRetryErr != nil {
+		return m.writeToNextTagWithRetryErr
+	}
 	// If a mock tag is provided, invoke the callback
 	if m.mockTag != nil {
 		return writeFunc(writeCtx, m.mockTag)
@@ -834,4 +840,80 @@ func TestOpen_NilSessionFactory(t *testing.T) {
 
 	// Verify device was cleaned up
 	assert.True(t, mockDevice.closeCalled, "device should be closed when session factory returns nil")
+}
+
+// TestWriteWithContext_SessionError tests that session-level errors from WriteToNextTagWithRetry
+// are properly handled and logged.
+func TestWriteWithContext_SessionError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+
+	// Create mock session that returns a session-level error
+	sessionErr := errors.New("tag detection failed: no ACK received")
+	mockSession := &mockPollingSession{
+		writeToNextTagWithRetryErr: sessionErr,
+	}
+
+	// Set up reader with mock session
+	reader.session = mockSession
+	reader.deviceInfo = config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	// Perform write operation
+	ctx := context.Background()
+	token, err := reader.WriteWithContext(ctx, "test-text")
+
+	// Verify error is returned
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "failed to write to tag")
+}
+
+// TestWriteWithContext_WriteNDEFError tests that errors from WriteNDEF are properly handled.
+func TestWriteWithContext_WriteNDEFError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+
+	// Create mock tag that returns error on WriteNDEF
+	writeErr := errors.New("write verification failed")
+	mockTestTag := &mockTag{
+		uid:          "test-uid",
+		tagType:      pn532.TagTypeNTAG,
+		writeNDEFErr: writeErr,
+	}
+
+	mockSession := &mockPollingSession{
+		mockTag: mockTestTag,
+	}
+
+	// Set up reader with mock session
+	reader.session = mockSession
+	reader.deviceInfo = config.ReadersConnect{
+		Driver: "pn532",
+		Path:   "/dev/test",
+	}
+
+	// Perform write operation
+	ctx := context.Background()
+	token, err := reader.WriteWithContext(ctx, "test-text")
+
+	// Verify error is returned
+	require.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "failed to write NDEF to tag")
+
+	// Verify WriteNDEF was called
+	assert.True(t, mockTestTag.writeNDEFCalled)
 }
