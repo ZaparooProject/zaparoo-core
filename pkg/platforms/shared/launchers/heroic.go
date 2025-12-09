@@ -20,7 +20,7 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package linux
+package launchers
 
 import (
 	"context"
@@ -38,7 +38,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// heroicGameInfo represents a game entry in Heroic's library JSON files
+// heroicGameInfo represents a game entry in Heroic's library JSON files.
 type heroicGameInfo struct {
 	AppName     string `json:"app_name"` //nolint:tagliatelle // External JSON format from Heroic
 	Title       string `json:"title"`
@@ -46,7 +46,7 @@ type heroicGameInfo struct {
 	IsInstalled bool   `json:"is_installed"` //nolint:tagliatelle // External JSON format from Heroic
 }
 
-// ScanHeroicGames scans Heroic Games Launcher library files for installed games
+// ScanHeroicGames scans Heroic Games Launcher library files for installed games.
 func ScanHeroicGames(storeCacheDir string) ([]platforms.ScanResult, error) {
 	results := make([]platforms.ScanResult, 0)
 
@@ -82,7 +82,7 @@ func ScanHeroicGames(storeCacheDir string) ([]platforms.ScanResult, error) {
 	return results, nil
 }
 
-// scanHeroicLibraryFile parses a single Heroic library JSON file and returns scan results
+// scanHeroicLibraryFile parses a single Heroic library JSON file and returns scan results.
 func scanHeroicLibraryFile(filePath, jsonKey string) ([]platforms.ScanResult, error) {
 	results := make([]platforms.ScanResult, 0)
 
@@ -134,8 +134,8 @@ func scanHeroicLibraryFile(filePath, jsonKey string) ([]platforms.ScanResult, er
 	return results, nil
 }
 
-// NewHeroicLauncher creates a launcher for Heroic Games Launcher
-func NewHeroicLauncher() platforms.Launcher {
+// NewHeroicLauncher creates a configurable Heroic Games Launcher.
+func NewHeroicLauncher(opts HeroicOptions) platforms.Launcher {
 	return platforms.Launcher{
 		ID:       "Heroic",
 		SystemID: systemdefs.SystemPC,
@@ -154,13 +154,12 @@ func NewHeroicLauncher() platforms.Launcher {
 				return results, nil
 			}
 
-			// Try to scan Heroic library at ~/.config/heroic/store_cache/
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return results, fmt.Errorf("failed to get user home directory: %w", err)
+			// Find Heroic store cache (native or Flatpak)
+			storeCacheDir, found := FindHeroicStoreCache(opts.CheckFlatpak)
+			if !found {
+				log.Debug().Msg("Heroic store_cache directory not found")
+				return results, nil
 			}
-
-			storeCacheDir := filepath.Join(home, ".config", "heroic", "store_cache")
 
 			// Scan Heroic libraries for installed games
 			heroicResults, err := ScanHeroicGames(storeCacheDir)

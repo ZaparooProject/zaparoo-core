@@ -20,7 +20,7 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package linux
+package launchers
 
 import (
 	"context"
@@ -40,48 +40,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func findSteamDir(cfg *config.Instance) string {
-	const fallbackPath = "/usr/games/steam"
-
-	// Check for user-configured Steam install directory first
-	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
-			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
-			return def.InstallDir
-		}
-		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
-	}
-
-	// Try common Steam installation paths
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to get user home directory")
-		return fallbackPath
-	}
-
-	paths := []string{
-		filepath.Join(home, ".steam", "steam"),
-		filepath.Join(home, ".local", "share", "Steam"),
-		filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam"), // Flatpak
-		filepath.Join(home, "snap", "steam", "common", ".steam", "steam"),                // Snap
-		"/home/deck/.steam/steam",                                                        // Steam Deck default
-		"/usr/games/steam",
-		"/opt/steam",
-	}
-
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			log.Debug().Msgf("found Steam installation: %s", path)
-			return path
-		}
-	}
-
-	log.Debug().Msgf("Steam detection failed, using fallback: %s", fallbackPath)
-	return fallbackPath
-}
-
-// NewSteamLauncher creates a launcher for Steam games
-func NewSteamLauncher() platforms.Launcher {
+// NewSteamLauncher creates a configurable Steam launcher.
+func NewSteamLauncher(opts SteamOptions) platforms.Launcher {
 	return platforms.Launcher{
 		ID:       "Steam",
 		SystemID: systemdefs.SystemPC,
@@ -92,7 +52,7 @@ func NewSteamLauncher() platforms.Launcher {
 			_ string,
 			results []platforms.ScanResult,
 		) ([]platforms.ScanResult, error) {
-			steamRoot := findSteamDir(cfg)
+			steamRoot := findSteamDir(cfg, opts)
 			steamAppsRoot := filepath.Join(steamRoot, "steamapps")
 
 			// Scan official Steam apps
@@ -128,16 +88,75 @@ func NewSteamLauncher() platforms.Launcher {
 				return nil, fmt.Errorf("invalid Steam game ID: %s", id)
 			}
 
-			// Use xdg-open to launch steam:// URLs, which works for both native and Flatpak Steam
-			err = exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
-				context.Background(),
-				"xdg-open",
-				"steam://rungameid/"+id,
-			).Start()
-			if err != nil {
-				return nil, fmt.Errorf("failed to start steam: %w", err)
+			steamURL := "steam://rungameid/" + id
+
+			var cmd *exec.Cmd
+			if opts.UseXdgOpen {
+				// Desktop-friendly: works with native + Flatpak Steam
+				cmd = exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
+					context.Background(), "xdg-open", steamURL)
+			} else {
+				// Console-friendly: direct steam command for Game Mode
+				cmd = exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only above
+					context.Background(), "steam", steamURL)
+			}
+
+			if err := cmd.Start(); err != nil {
+				return nil, fmt.Errorf("failed to launch Steam: %w", err)
 			}
 			return nil, nil
 		},
 	}
+}
+
+func findSteamDir(cfg *config.Instance, opts SteamOptions) string {
+	// Check for user-configured Steam install directory first
+	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
+		if _, err := os.Stat(def.InstallDir); err == nil {
+			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
+			return def.InstallDir
+		}
+		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
+	}
+
+	// Try common Steam installation paths
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to get user home directory")
+		return opts.FallbackPath
+	}
+
+	// Build paths list
+	paths := []string{
+		filepath.Join(home, ".steam", "steam"),
+		filepath.Join(home, ".local", "share", "Steam"),
+	}
+
+	// Add extra paths from options
+	paths = append(paths, opts.ExtraPaths...)
+
+	// Add Flatpak path if enabled
+	if opts.CheckFlatpak {
+		paths = append(paths, filepath.Join(
+			FlatpakAppPath(FlatpakSteamID),
+			".steam", "steam",
+		))
+	}
+
+	// Add Snap and common system paths
+	paths = append(paths,
+		filepath.Join(home, "snap", "steam", "common", ".steam", "steam"),
+		"/usr/games/steam",
+		"/opt/steam",
+	)
+
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			log.Debug().Msgf("found Steam installation: %s", path)
+			return path
+		}
+	}
+
+	log.Debug().Msgf("Steam detection failed, using fallback: %s", opts.FallbackPath)
+	return opts.FallbackPath
 }
