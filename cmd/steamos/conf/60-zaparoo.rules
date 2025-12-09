@@ -1,4 +1,0 @@
-# Allow user (deck) access to NFC readers
-
-# CH340 serial devices (PN532 V2, ESP32, DIY Reader, etc.)
-SUBSYSTEMS=="usb", ATTRS{idProduct}=="7523", ATTRS{idVendor}=="1a86", MODE="0660", GROUP="deck"

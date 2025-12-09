@@ -3,7 +3,7 @@
 /*
 Zaparoo Core
 Copyright (C) 2023 Gareth Jones
-Copyright (C) 2023, 2024 Callan Barrett
+Copyright (C) 2023-2025 Callan Barrett
 
 This file is part of Zaparoo Core.
 
@@ -24,27 +24,19 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package main
 
 import (
-	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
-	"github.com/adrg/xdg"
-	"github.com/rs/zerolog/log"
 )
-
-// TODO: fix permissions on files in ~/zaparoo so root doesn't lock them
 
 func main() {
 	if err := run(); err != nil {
@@ -54,48 +46,56 @@ func main() {
 }
 
 func run() error {
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	install := flag.String(
+		"install",
+		"",
+		"install component: application, desktop, service, hardware",
+	)
+	uninstall := flag.String(
+		"uninstall",
+		"",
+		"uninstall component: application, desktop, service, hardware",
+	)
 
-	pl := &steamos.Platform{}
+	pl := steamos.NewPlatform()
 	flags := cli.SetupFlags()
 
-	doInstall := flag.Bool("install", false, "install zaparoo service")
-	doUninstall := flag.Bool("uninstall", false, "uninstall zaparoo service")
+	daemonMode := flag.Bool(
+		"daemon",
+		false,
+		"run service in foreground with no UI",
+	)
+	start := flag.Bool(
+		"start",
+		false,
+		"start service and open web UI in browser",
+	)
 
 	flags.Pre(pl)
 
-	uid := os.Getuid()
-	if *doInstall {
-		if uid != 0 {
-			return errors.New("install must be run as root")
-		}
-		err := install()
-		if err != nil {
-			return fmt.Errorf("error installing service: %w", err)
+	if *install != "" {
+		if err := cli.HandleInstall(*install); err != nil {
+			return fmt.Errorf("install failed: %w", err)
 		}
 		return nil
-	} else if *doUninstall {
-		if uid != 0 {
-			return errors.New("uninstall must be run as root")
-		}
-		err := uninstall()
-		if err != nil {
-			return fmt.Errorf("error uninstalling service: %w", err)
+	}
+	if *uninstall != "" {
+		if err := cli.HandleUninstall(*uninstall); err != nil {
+			return fmt.Errorf("uninstall failed: %w", err)
 		}
 		return nil
 	}
 
-	if uid == 0 {
-		return errors.New("service must not be run as root")
+	if os.Geteuid() == 0 {
+		return errors.New("zaparoo cannot be run as root")
 	}
 
-	err := os.MkdirAll(filepath.Join(xdg.DataHome, config.AppName), 0o750)
-	if err != nil {
-		return fmt.Errorf("error creating data directory: %w", err)
+	var logWriters []io.Writer
+	if *daemonMode {
+		logWriters = []io.Writer{os.Stderr}
 	}
 
+	// SteamOS-specific: Migrate config from legacy tapto.ini if present
 	defaults := config.BaseDefaults
 	iniPath := filepath.Join(helpers.ExeDir(), "tapto.ini")
 	if migrate.Required(iniPath, filepath.Join(helpers.ConfigDir(pl), config.CfgFile)) {
@@ -106,26 +106,19 @@ func run() error {
 		defaults = migrated
 	}
 
-	cfg := cli.Setup(
-		pl,
-		defaults,
-		[]io.Writer{os.Stderr},
-	)
+	cfg := cli.Setup(pl, defaults, logWriters)
+
+	if *start {
+		if err := cli.StartAndOpenBrowser(cfg); err != nil {
+			return fmt.Errorf("start failed: %w", err)
+		}
+		return nil
+	}
 
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
-		return fmt.Errorf("error starting service: %w", err)
+	if err := cli.RunApp(pl, cfg, *daemonMode); err != nil {
+		return fmt.Errorf("run failed: %w", err)
 	}
-
-	<-sigs
-	err = stop()
-	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
-		return fmt.Errorf("error stopping service: %w", err)
-	}
-
 	return nil
 }
