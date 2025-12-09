@@ -180,11 +180,10 @@ func RunApp(pl platforms.Platform, cfg *config.Instance, daemonMode bool) (retur
 	}()
 
 	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigs)
 
 	exit := make(chan bool, 1)
-	defer close(exit)
 
 	switch {
 	case daemonMode:

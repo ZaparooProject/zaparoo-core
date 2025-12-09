@@ -30,9 +30,16 @@ import (
 	"strings"
 )
 
+// MaxURLLength is the maximum allowed URL length for browser opening.
+// This prevents resource exhaustion from malicious tokens with extremely long URLs.
+const MaxURLLength = 8192
+
 // ValidateBrowserURL checks if the URL has a valid scheme for browser opening.
 // Only http:// and https:// URLs are accepted for security.
 func ValidateBrowserURL(url string) error {
+	if len(url) > MaxURLLength {
+		return fmt.Errorf("URL too long: %d bytes (max %d)", len(url), MaxURLLength)
+	}
 	lower := strings.ToLower(url)
 	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
 		return errors.New("invalid URL scheme: must be http:// or https://")

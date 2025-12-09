@@ -37,13 +37,23 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+)
+
+// Timeout constants for process termination.
+const (
+	// SIGTERMTimeout is how long to wait for graceful SIGTERM shutdown.
+	SIGTERMTimeout = 3 * time.Second
+	// SIGKILLTimeout is how long to wait after SIGKILL before proceeding.
+	SIGKILLTimeout = 500 * time.Millisecond
 )
 
 // Base provides common functionality for all Linux-family platforms.
 // Platforms embed this struct and override methods as needed.
 type Base struct {
 	launcherManager platforms.LauncherContextManager
+	clock           clockwork.Clock
 	activeMedia     func() *models.ActiveMedia
 	setActiveMedia  func(*models.ActiveMedia)
 	trackedProcess  *os.Process
@@ -53,7 +63,15 @@ type Base struct {
 
 // NewBase creates a new Base with the given platform ID.
 func NewBase(platformID string) *Base {
-	return &Base{platformID: platformID}
+	return &Base{
+		platformID: platformID,
+		clock:      clockwork.NewRealClock(),
+	}
+}
+
+// SetClock sets the clock for testing. Must be called before using the Base.
+func (b *Base) SetClock(clock clockwork.Clock) {
+	b.clock = clock
 }
 
 // ID returns the platform identifier.
@@ -114,31 +132,43 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 
 	// Kill tracked process if exists
 	if b.trackedProcess != nil {
+		proc := b.trackedProcess // Capture locally to avoid race
+		done := make(chan struct{})
+		go func() {
+			_, _ = proc.Wait()
+			close(done)
+		}()
+
 		// Try SIGTERM first for graceful shutdown
-		if err := b.trackedProcess.Signal(syscall.SIGTERM); err != nil {
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
 			log.Debug().Err(err).Msg("SIGTERM failed, trying SIGKILL")
-			if killErr := b.trackedProcess.Kill(); killErr != nil {
+			if killErr := proc.Kill(); killErr != nil {
 				log.Warn().Err(killErr).Msg("failed to kill tracked process")
 			}
 		} else {
-			// Wait up to 3 seconds for graceful exit
-			done := make(chan struct{})
-			proc := b.trackedProcess // Capture locally to avoid race
-			go func() {
-				_, _ = proc.Wait()
-				close(done)
-			}()
-
+			// Wait for graceful exit or timeout
 			select {
 			case <-done:
 				log.Debug().Msg("tracked process exited gracefully")
-			case <-time.After(3 * time.Second):
+				b.trackedProcess = nil
+				b.setActiveMedia(nil)
+				return nil
+			case <-b.clock.After(SIGTERMTimeout):
 				log.Debug().Msg("SIGTERM timeout, sending SIGKILL")
-				if err := b.trackedProcess.Kill(); err != nil {
+				if err := proc.Kill(); err != nil {
 					log.Warn().Err(err).Msg("failed to kill tracked process after timeout")
 				}
 			}
 		}
+
+		// Wait briefly for SIGKILL to take effect before moving on
+		select {
+		case <-done:
+			log.Debug().Msg("tracked process exited after SIGKILL")
+		case <-b.clock.After(SIGKILLTimeout):
+			log.Debug().Msg("process cleanup timeout, proceeding anyway")
+		}
+
 		b.trackedProcess = nil
 	}
 

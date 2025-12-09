@@ -26,6 +26,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -186,8 +188,6 @@ func TestStopActiveLauncher(t *testing.T) {
 		t.Parallel()
 
 		// Start a process that ignores SIGTERM
-		// Use a Go subprocess that explicitly ignores SIGTERM
-		// Note: This test is inherently timing-sensitive
 		cmd := exec.CommandContext(context.Background(), "bash", "-c", "trap '' TERM; while true; do sleep 1; done")
 		require.NoError(t, cmd.Start())
 
@@ -195,23 +195,39 @@ func TestStopActiveLauncher(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		activeMedia := &models.ActiveMedia{Name: "test"}
+		fakeClock := clockwork.NewFakeClock()
 		base := NewBase("test")
+		base.SetClock(fakeClock)
 		base.trackedProcess = cmd.Process
 		base.setActiveMedia = func(m *models.ActiveMedia) {
 			activeMedia = m
 		}
 
-		start := time.Now()
-		err := base.StopActiveLauncher(platforms.StopForPreemption)
-		elapsed := time.Since(start)
+		// Run StopActiveLauncher in a goroutine since it will block on the fake clock
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		var err error
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err = base.StopActiveLauncher(platforms.StopForPreemption)
+		}()
+
+		// Wait for the goroutine to block on the SIGTERM timeout
+		require.NoError(t, fakeClock.BlockUntilContext(ctx, 1))
+		// Advance past SIGTERM timeout to trigger SIGKILL
+		fakeClock.Advance(SIGTERMTimeout)
+
+		// Wait for the goroutine to block on the SIGKILL cleanup timeout
+		require.NoError(t, fakeClock.BlockUntilContext(ctx, 1))
+		// Advance past SIGKILL cleanup timeout
+		fakeClock.Advance(SIGKILLTimeout)
+
+		wg.Wait()
 
 		require.NoError(t, err)
 		assert.Nil(t, base.trackedProcess)
 		assert.Nil(t, activeMedia)
-		// Should take about 3 seconds (timeout before SIGKILL)
-		// Allow some variance for CI environments
-		assert.GreaterOrEqual(t, elapsed, 2500*time.Millisecond)
-		assert.Less(t, elapsed, 6*time.Second)
 	})
 
 	t.Run("already_dead_process", func(t *testing.T) {

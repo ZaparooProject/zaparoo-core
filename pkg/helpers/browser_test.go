@@ -22,6 +22,7 @@
 package helpers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -114,6 +115,17 @@ func TestValidateBrowserURL(t *testing.T) {
 			url:     "http/example.com",
 			wantErr: true,
 			errMsg:  "invalid URL scheme",
+		},
+		{
+			name:    "invalid_url_too_long",
+			url:     "https://example.com/" + strings.Repeat("a", MaxURLLength),
+			wantErr: true,
+			errMsg:  "URL too long",
+		},
+		{
+			name:    "valid_url_at_max_length",
+			url:     "https://example.com/" + strings.Repeat("a", MaxURLLength-20),
+			wantErr: false,
 		},
 	}
 

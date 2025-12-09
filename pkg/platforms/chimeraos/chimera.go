@@ -33,13 +33,11 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	chimeraContentPath = ".local/share/chimera/content"
-	schemeChimeraGOG   = "chimera-gog"
-)
+const chimeraContentPath = ".local/share/chimera/content"
 
 // Common executable names to look for in Chimera game directories.
 var chimeraExecutableNames = []string{
@@ -50,11 +48,12 @@ var chimeraExecutableNames = []string{
 }
 
 // NewChimeraGOGLauncher creates a launcher for GOG games installed via Chimera.
+// Uses the universal gog:// scheme with GOG product IDs.
 func NewChimeraGOGLauncher() platforms.Launcher {
 	return platforms.Launcher{
 		ID:       "ChimeraGOG",
 		SystemID: systemdefs.SystemPC,
-		Schemes:  []string{schemeChimeraGOG},
+		Schemes:  []string{shared.SchemeGOG},
 		Scanner: func(
 			_ context.Context,
 			_ *config.Instance,
@@ -93,7 +92,7 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 				if startScript != "" {
 					results = append(results, platforms.ScanResult{
 						Name:  gameID, // TODO: Parse game name from info file if available
-						Path:  virtualpath.CreateVirtualPath(schemeChimeraGOG, gameID, gameID),
+						Path:  virtualpath.CreateVirtualPath(shared.SchemeGOG, gameID, gameID),
 						NoExt: true,
 					})
 				}
@@ -103,16 +102,17 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 			return results, nil
 		},
 		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-			// Extract game ID from chimera-gog://game_id
-			gameID, err := virtualpath.ExtractSchemeID(path, schemeChimeraGOG)
+			// Extract game ID from gog://game_id
+			gameID, err := virtualpath.ExtractSchemeID(path, shared.SchemeGOG)
 			if err != nil {
-				return nil, fmt.Errorf("failed to extract Chimera GOG game ID: %w", err)
+				return nil, fmt.Errorf("failed to extract GOG game ID: %w", err)
 			}
 
 			// Sanitize gameID to prevent path traversal
+			originalGameID := gameID
 			gameID = filepath.Base(gameID)
-			if gameID == "." || gameID == ".." || gameID == string(filepath.Separator) {
-				return nil, fmt.Errorf("invalid Chimera GOG game ID: %s", gameID)
+			if gameID == "." || gameID == ".." || gameID == string(filepath.Separator) || gameID != originalGameID {
+				return nil, fmt.Errorf("invalid GOG game ID: %s", originalGameID)
 			}
 
 			home, err := os.UserHomeDir()
@@ -124,13 +124,13 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 			startScript := findChimeraExecutable(gamePath)
 
 			if startScript == "" {
-				return nil, fmt.Errorf("no executable found for Chimera GOG game: %s", gameID)
+				return nil, fmt.Errorf("no executable found for GOG game: %s", gameID)
 			}
 
 			//nolint:gosec // Path constructed from known base directory
 			cmd := exec.CommandContext(context.Background(), startScript)
 			if err := cmd.Start(); err != nil {
-				return nil, fmt.Errorf("failed to launch Chimera GOG game: %w", err)
+				return nil, fmt.Errorf("failed to launch GOG game: %w", err)
 			}
 			return nil, nil
 		},
