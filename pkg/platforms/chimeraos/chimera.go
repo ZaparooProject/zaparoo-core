@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -108,11 +109,11 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 				return nil, fmt.Errorf("failed to extract GOG game ID: %w", err)
 			}
 
-			// Sanitize gameID to prevent path traversal
-			originalGameID := gameID
-			gameID = filepath.Base(gameID)
-			if gameID == "." || gameID == ".." || gameID == string(filepath.Separator) || gameID != originalGameID {
-				return nil, fmt.Errorf("invalid GOG game ID: %s", originalGameID)
+			// Sanitize gameID to prevent path traversal - reject any input
+			// containing path separators or traversal sequences
+			if gameID != filepath.Base(gameID) || gameID == "." || gameID == ".." ||
+				strings.Contains(gameID, string(filepath.Separator)) {
+				return nil, fmt.Errorf("invalid GOG game ID: %s", gameID)
 			}
 
 			home, err := os.UserHomeDir()

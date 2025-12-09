@@ -78,7 +78,7 @@ func TestFlatpakAppPath(t *testing.T) {
 	})
 }
 
-func TestIsFlatpakInstalled(t *testing.T) {
+func TestHasFlatpakAppData(t *testing.T) {
 	// Cannot run in parallel due to HOME env modification
 	t.Run("returns_true_when_directory_exists", func(t *testing.T) {
 		home := withTempHome(t)
@@ -87,18 +87,18 @@ func TestIsFlatpakInstalled(t *testing.T) {
 		appPath := filepath.Join(home, ".var", "app", FlatpakSteamID)
 		require.NoError(t, os.MkdirAll(appPath, 0o750))
 
-		installed := IsFlatpakInstalled(FlatpakSteamID)
+		hasData := HasFlatpakAppData(FlatpakSteamID)
 
-		assert.True(t, installed)
+		assert.True(t, hasData)
 	})
 
 	t.Run("returns_false_when_directory_missing", func(t *testing.T) {
 		_ = withTempHome(t)
 
 		// Don't create any directories
-		installed := IsFlatpakInstalled(FlatpakSteamID)
+		hasData := HasFlatpakAppData(FlatpakSteamID)
 
-		assert.False(t, installed)
+		assert.False(t, hasData)
 	})
 
 	t.Run("returns_false_when_file_instead_of_directory", func(t *testing.T) {
@@ -112,12 +112,12 @@ func TestIsFlatpakInstalled(t *testing.T) {
 		filePath := filepath.Join(varAppPath, FlatpakSteamID)
 		require.NoError(t, os.WriteFile(filePath, []byte("not a directory"), 0o600))
 
-		// IsFlatpakInstalled uses Stat, which succeeds for files too
+		// HasFlatpakAppData uses Stat, which succeeds for files too
 		// So this actually returns true (file exists)
-		installed := IsFlatpakInstalled(FlatpakSteamID)
+		hasData := HasFlatpakAppData(FlatpakSteamID)
 
 		// The function only checks existence, not if it's a directory
-		assert.True(t, installed)
+		assert.True(t, hasData)
 	})
 }
 

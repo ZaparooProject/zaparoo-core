@@ -28,6 +28,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mockInstaller is a test double that tracks which methods were called
+// without performing any actual installation operations.
+type mockInstaller struct {
+	installApplicationCalled   bool
+	installDesktopCalled       bool
+	installServiceCalled       bool
+	installHardwareCalled      bool
+	uninstallApplicationCalled bool
+	uninstallDesktopCalled     bool
+	uninstallServiceCalled     bool
+	uninstallHardwareCalled    bool
+}
+
+func (m *mockInstaller) InstallApplication() error {
+	m.installApplicationCalled = true
+	return nil
+}
+
+func (m *mockInstaller) InstallDesktop() error {
+	m.installDesktopCalled = true
+	return nil
+}
+
+func (m *mockInstaller) InstallService() error {
+	m.installServiceCalled = true
+	return nil
+}
+
+func (m *mockInstaller) InstallHardware() error {
+	m.installHardwareCalled = true
+	return nil
+}
+
+func (m *mockInstaller) UninstallApplication() error {
+	m.uninstallApplicationCalled = true
+	return nil
+}
+
+func (m *mockInstaller) UninstallDesktop() error {
+	m.uninstallDesktopCalled = true
+	return nil
+}
+
+func (m *mockInstaller) UninstallService() error {
+	m.uninstallServiceCalled = true
+	return nil
+}
+
+func (m *mockInstaller) UninstallHardware() error {
+	m.uninstallHardwareCalled = true
+	return nil
+}
+
 func TestHandleInstall_UnknownComponent(t *testing.T) {
 	t.Parallel()
 
@@ -133,55 +186,65 @@ func TestHandleUninstall_UnknownComponent(t *testing.T) {
 }
 
 func TestHandleInstall_ValidComponents(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies package-level defaultInstaller
+	mock := &mockInstaller{}
+	originalInstaller := defaultInstaller
+	defaultInstaller = mock
+	t.Cleanup(func() {
+		defaultInstaller = originalInstaller
+	})
 
-	// These are the valid component names that should be accepted
-	// The actual installation may fail due to environment constraints,
-	// but the switch case should route correctly
-	validComponents := []string{
-		"application",
-		"desktop",
-		"service",
-		"hardware",
+	tests := []struct {
+		checkFunc func() bool
+		component string
+	}{
+		{component: "application", checkFunc: func() bool { return mock.installApplicationCalled }},
+		{component: "desktop", checkFunc: func() bool { return mock.installDesktopCalled }},
+		{component: "service", checkFunc: func() bool { return mock.installServiceCalled }},
+		{component: "hardware", checkFunc: func() bool { return mock.installHardwareCalled }},
 	}
 
-	for _, component := range validComponents {
-		t.Run(component, func(t *testing.T) {
-			t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.component, func(t *testing.T) {
+			// Reset mock state for each test
+			*mock = mockInstaller{}
 
-			err := HandleInstall(component)
-			// If there's an error, it should NOT be about unknown component
-			if err != nil {
-				assert.NotContains(t, err.Error(), "unknown component",
-					"Valid component %q should not be reported as unknown", component)
-			}
+			err := HandleInstall(tt.component)
+			require.NoError(t, err)
+			assert.True(t, tt.checkFunc(),
+				"Expected %s installer to be called", tt.component)
 		})
 	}
 }
 
 func TestHandleUninstall_ValidComponents(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies package-level defaultInstaller
+	mock := &mockInstaller{}
+	originalInstaller := defaultInstaller
+	defaultInstaller = mock
+	t.Cleanup(func() {
+		defaultInstaller = originalInstaller
+	})
 
-	// These are the valid component names that should be accepted
-	// The actual uninstallation may fail due to environment constraints,
-	// but the switch case should route correctly
-	validComponents := []string{
-		"application",
-		"desktop",
-		"service",
-		"hardware",
+	tests := []struct {
+		checkFunc func() bool
+		component string
+	}{
+		{component: "application", checkFunc: func() bool { return mock.uninstallApplicationCalled }},
+		{component: "desktop", checkFunc: func() bool { return mock.uninstallDesktopCalled }},
+		{component: "service", checkFunc: func() bool { return mock.uninstallServiceCalled }},
+		{component: "hardware", checkFunc: func() bool { return mock.uninstallHardwareCalled }},
 	}
 
-	for _, component := range validComponents {
-		t.Run(component, func(t *testing.T) {
-			t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.component, func(t *testing.T) {
+			// Reset mock state for each test
+			*mock = mockInstaller{}
 
-			err := HandleUninstall(component)
-			// If there's an error, it should NOT be about unknown component
-			if err != nil {
-				assert.NotContains(t, err.Error(), "unknown component",
-					"Valid component %q should not be reported as unknown", component)
-			}
+			err := HandleUninstall(tt.component)
+			require.NoError(t, err)
+			assert.True(t, tt.checkFunc(),
+				"Expected %s uninstaller to be called", tt.component)
 		})
 	}
 }

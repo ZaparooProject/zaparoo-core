@@ -42,29 +42,89 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Installer defines the interface for install/uninstall operations.
+// This allows mocking in tests to avoid side effects.
+type Installer interface {
+	InstallApplication() error
+	InstallDesktop() error
+	InstallService() error
+	InstallHardware() error
+	UninstallApplication() error
+	UninstallDesktop() error
+	UninstallService() error
+	UninstallHardware() error
+}
+
+// DefaultInstaller implements Installer using the real installer package.
+type DefaultInstaller struct{}
+
+func (DefaultInstaller) InstallApplication() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.InstallApplication()
+}
+
+func (DefaultInstaller) InstallDesktop() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.InstallDesktop()
+}
+
+func (DefaultInstaller) InstallService() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.InstallService()
+}
+
+func (DefaultInstaller) InstallHardware() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.InstallHardware()
+}
+
+func (DefaultInstaller) UninstallApplication() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.UninstallApplication()
+}
+
+func (DefaultInstaller) UninstallDesktop() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.UninstallDesktop()
+}
+
+func (DefaultInstaller) UninstallService() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.UninstallService()
+}
+
+func (DefaultInstaller) UninstallHardware() error {
+	//nolint:wrapcheck // Thin wrapper, error context added by caller
+	return installer.UninstallHardware()
+}
+
+// defaultInstaller is the package-level installer used by HandleInstall/HandleUninstall.
+// It can be replaced in tests to avoid side effects.
+var defaultInstaller Installer = DefaultInstaller{}
+
 // HandleInstall handles the -install flag for all Linux platforms.
 func HandleInstall(component string) error {
 	switch component {
 	case "application":
-		if err := installer.InstallApplication(); err != nil {
+		if err := defaultInstaller.InstallApplication(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("application installation failed: %w", err)
 		}
 		_, _ = fmt.Println("Application installation complete")
 	case "desktop":
-		if err := installer.InstallDesktop(); err != nil {
+		if err := defaultInstaller.InstallDesktop(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("desktop installation failed: %w", err)
 		}
 		_, _ = fmt.Println("Desktop installation complete")
 	case "service":
-		if err := installer.InstallService(); err != nil {
+		if err := defaultInstaller.InstallService(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("service installation failed: %w", err)
 		}
 		_, _ = fmt.Println("Service installation complete")
 	case "hardware":
-		if err := installer.InstallHardware(); err != nil {
+		if err := defaultInstaller.InstallHardware(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("hardware installation failed: %w", err)
 		}
@@ -79,25 +139,25 @@ func HandleInstall(component string) error {
 func HandleUninstall(component string) error {
 	switch component {
 	case "application":
-		if err := installer.UninstallApplication(); err != nil {
+		if err := defaultInstaller.UninstallApplication(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("application uninstallation failed: %w", err)
 		}
 		_, _ = fmt.Println("Application uninstallation complete")
 	case "desktop":
-		if err := installer.UninstallDesktop(); err != nil {
+		if err := defaultInstaller.UninstallDesktop(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("desktop uninstallation failed: %w", err)
 		}
 		_, _ = fmt.Println("Desktop uninstallation complete")
 	case "service":
-		if err := installer.UninstallService(); err != nil {
+		if err := defaultInstaller.UninstallService(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("service uninstallation failed: %w", err)
 		}
 		_, _ = fmt.Println("Service uninstallation complete")
 	case "hardware":
-		if err := installer.UninstallHardware(); err != nil {
+		if err := defaultInstaller.UninstallHardware(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			return fmt.Errorf("hardware uninstallation failed: %w", err)
 		}

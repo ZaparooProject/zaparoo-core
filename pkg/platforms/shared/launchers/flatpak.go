@@ -47,9 +47,9 @@ func FlatpakAppPath(appID string) string {
 	return filepath.Join(FlatpakBasePath(), appID)
 }
 
-// IsFlatpakInstalled checks if a Flatpak app is installed by checking for its data directory.
+// HasFlatpakAppData checks if a Flatpak app has a data directory.
 // Note: This directory is created when the app is first run, not when installed.
-func IsFlatpakInstalled(appID string) bool {
+func HasFlatpakAppData(appID string) bool {
 	path := FlatpakAppPath(appID)
 	if _, err := os.Stat(path); err != nil {
 		log.Debug().
