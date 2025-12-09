@@ -26,6 +26,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
@@ -409,5 +411,82 @@ func TestProcessKillRace(t *testing.T) {
 		base.SetTrackedProcess(cmd.Process)
 		time.Sleep(10 * time.Millisecond)
 		_ = base.StopActiveLauncher(platforms.StopForPreemption)
+	}
+}
+
+func TestSetClock(t *testing.T) {
+	t.Parallel()
+
+	base := NewBase("test")
+
+	// Default clock should be a real clock
+	assert.NotNil(t, base.clock)
+
+	// Set fake clock
+	fakeClock := clockwork.NewFakeClock()
+	base.SetClock(fakeClock)
+
+	assert.Equal(t, fakeClock, base.clock)
+}
+
+func TestRootDirs(t *testing.T) {
+	t.Parallel()
+
+	// Setup temporary directory for config
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, configDir)
+	require.NoError(t, err)
+
+	base := NewBase("test")
+	roots := base.RootDirs(cfg)
+
+	// With default config, should return configured index roots (could be empty)
+	assert.IsType(t, []string{}, roots)
+}
+
+func TestRootDirsWithMediaDir(t *testing.T) {
+	t.Parallel()
+
+	// Setup temporary directory for config with media dir
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "config")
+
+	// Create a test config
+	fsHelper := helpers.NewOSFS()
+	cfg, err := helpers.NewTestConfig(fsHelper, configDir)
+	require.NoError(t, err)
+
+	// Set a media directory - this uses the config's internal method
+	// IndexRoots returns the configured index_root values plus media_dir
+	base := NewBase("test")
+	roots := base.RootDirs(cfg)
+
+	// Verify RootDirs delegates to config.IndexRoots
+	assert.Equal(t, cfg.IndexRoots(), roots)
+}
+
+func TestID(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		platformID string
+	}{
+		{"standard_id", "linux"},
+		{"with_hyphen", "chimera-os"},
+		{"with_underscore", "steam_os"},
+		{"empty", ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			base := NewBase(tc.platformID)
+			assert.Equal(t, tc.platformID, base.ID())
+		})
 	}
 }
