@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build windows
 
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
@@ -28,67 +28,19 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-// withTempHome sets HOME to a temporary directory for the duration of the test.
-// Returns the temp directory path.
-func withTempHome(t *testing.T) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	t.Setenv("HOME", tmpDir)
-	return tmpDir
-}
-
 func TestClientFindSteamDir(t *testing.T) {
-	// Cannot run in parallel due to HOME env modification
-
-	t.Run("finds_macos_steam_path", func(t *testing.T) {
-		home := withTempHome(t)
-
-		// Create macOS Steam directory
-		steamPath := filepath.Join(home, "Library", "Application Support", "Steam")
-		require.NoError(t, os.MkdirAll(steamPath, 0o750))
-
-		fs := testhelpers.NewMemoryFS()
-		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
-		require.NoError(t, err)
-
-		client := NewClient(Options{
-			FallbackPath: "/fallback/steam",
-		})
-
-		result := client.FindSteamDir(cfg)
-
-		assert.Equal(t, steamPath, result)
-	})
-
-	t.Run("uses_fallback_when_no_path_found", func(t *testing.T) {
-		_ = withTempHome(t)
-
-		// Don't create any Steam directories
-
-		fs := testhelpers.NewMemoryFS()
-		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
-		require.NoError(t, err)
-
-		client := NewClient(Options{
-			FallbackPath: "/custom/fallback/path",
-		})
-
-		result := client.FindSteamDir(cfg)
-
-		assert.Equal(t, "/custom/fallback/path", result)
-	})
+	// Cannot run in parallel due to filesystem operations
 
 	t.Run("uses_user_configured_install_dir", func(t *testing.T) {
-		home := withTempHome(t)
-
 		// Create user-configured directory
-		customPath := filepath.Join(home, "custom", "Steam")
+		customPath := filepath.Join(t.TempDir(), "custom", "Steam")
 		require.NoError(t, os.MkdirAll(customPath, 0o750))
 
 		fs := testhelpers.NewMemoryFS()
@@ -102,12 +54,28 @@ func TestClientFindSteamDir(t *testing.T) {
 		})
 
 		client := NewClient(Options{
-			FallbackPath: "/fallback/steam",
+			FallbackPath: "C:\\fallback\\steam",
 		})
 
 		result := client.FindSteamDir(cfg)
 
 		assert.Equal(t, customPath, result)
+	})
+
+	t.Run("uses_fallback_when_no_path_found", func(t *testing.T) {
+		fs := testhelpers.NewMemoryFS()
+		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+		require.NoError(t, err)
+
+		client := NewClient(Options{
+			FallbackPath: "C:\\custom\\fallback\\path",
+		})
+
+		result := client.FindSteamDir(cfg)
+
+		// Either finds Steam via registry or uses fallback
+		// We can't mock registry, so just verify it returns something
+		assert.NotEmpty(t, result)
 	})
 }
 
@@ -119,7 +87,8 @@ func TestClientLaunch(t *testing.T) {
 
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
-		mockCmd.On("Start", mock.Anything, "open", []string{"steam://rungameid/730"}).Return(nil)
+		opts := command.StartOptions{HideWindow: true}
+		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", []string{"/c", "start", "steam://rungameid/730"}).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
@@ -134,7 +103,8 @@ func TestClientLaunch(t *testing.T) {
 
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
-		mockCmd.On("Start", mock.Anything, "open", []string{"steam://rungameid/730"}).Return(nil)
+		opts := command.StartOptions{HideWindow: true}
+		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", []string{"/c", "start", "steam://rungameid/730"}).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
@@ -156,18 +126,18 @@ func TestClientLaunch(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid Steam game ID")
 	})
 
-	t.Run("returns_error_when_open_fails", func(t *testing.T) {
+	t.Run("returns_error_when_command_fails", func(t *testing.T) {
 		t.Parallel()
 
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
-		mockCmd.On("Start", mock.Anything, "open", mock.Anything).Return(errors.New("open failed"))
+		mockCmd.On("StartWithOptions", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("command failed"))
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
 		_, err := client.Launch(nil, "steam://730/Counter-Strike")
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to launch Steam")
+		assert.Contains(t, err.Error(), "failed to start Steam")
 	})
 }

@@ -17,7 +17,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package helpers
+package command
 
 import (
 	"context"
@@ -27,10 +27,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRealCommandExecutor_Run(t *testing.T) {
+func TestRealExecutor_Run(t *testing.T) {
 	t.Parallel()
 
-	executor := &RealCommandExecutor{}
+	executor := &RealExecutor{}
 
 	t.Run("executes_successful_command", func(t *testing.T) {
 		t.Parallel()
@@ -57,15 +57,14 @@ func TestRealCommandExecutor_Run(t *testing.T) {
 	})
 }
 
-func TestRealCommandExecutor_Start(t *testing.T) {
+func TestRealExecutor_Start(t *testing.T) {
 	t.Parallel()
 
-	executor := &RealCommandExecutor{}
+	executor := &RealExecutor{}
 
 	t.Run("starts_command_without_waiting", func(t *testing.T) {
 		t.Parallel()
 
-		// Use 'sleep 0' which should start immediately and return
 		err := executor.Start(context.Background(), "true")
 
 		assert.NoError(t, err)
@@ -80,9 +79,42 @@ func TestRealCommandExecutor_Start(t *testing.T) {
 	})
 }
 
-func TestCommandExecutor_Interface(t *testing.T) {
+func TestRealExecutor_StartWithOptions(t *testing.T) {
 	t.Parallel()
 
-	// Verify that RealCommandExecutor implements CommandExecutor
-	var _ CommandExecutor = (*RealCommandExecutor)(nil)
+	executor := &RealExecutor{}
+
+	t.Run("starts_command_with_options", func(t *testing.T) {
+		t.Parallel()
+
+		opts := StartOptions{HideWindow: true}
+		err := executor.StartWithOptions(context.Background(), opts, "true")
+
+		assert.NoError(t, err)
+	})
+
+	t.Run("starts_command_without_hide_window", func(t *testing.T) {
+		t.Parallel()
+
+		opts := StartOptions{HideWindow: false}
+		err := executor.StartWithOptions(context.Background(), opts, "true")
+
+		assert.NoError(t, err)
+	})
+
+	t.Run("returns_error_for_nonexistent_command", func(t *testing.T) {
+		t.Parallel()
+
+		opts := StartOptions{}
+		err := executor.StartWithOptions(context.Background(), opts, "nonexistent_command_that_should_not_exist_12345")
+
+		require.Error(t, err)
+	})
+}
+
+func TestExecutor_Interface(t *testing.T) {
+	t.Parallel()
+
+	// Verify that RealExecutor implements Executor
+	var _ Executor = (*RealExecutor)(nil)
 }

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -191,6 +192,32 @@ func TestClientFindSteamDir(t *testing.T) {
 		result := client.FindSteamDir(cfg)
 
 		assert.Equal(t, "/custom/fallback/path", result)
+	})
+
+	t.Run("uses_user_configured_install_dir", func(t *testing.T) {
+		home := withTempHome(t)
+
+		// Create user-configured directory
+		customPath := filepath.Join(home, "custom", "Steam")
+		require.NoError(t, os.MkdirAll(customPath, 0o750))
+
+		fs := testhelpers.NewMemoryFS()
+		configDir := t.TempDir()
+		cfg, err := testhelpers.NewTestConfig(fs, configDir)
+		require.NoError(t, err)
+
+		// Configure custom install dir
+		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
+			{Launcher: "Steam", InstallDir: customPath},
+		})
+
+		client := NewClient(Options{
+			FallbackPath: "/fallback/steam",
+		})
+
+		result := client.FindSteamDir(cfg)
+
+		assert.Equal(t, customPath, result)
 	})
 
 	t.Run("finds_snap_steam_path", func(t *testing.T) {

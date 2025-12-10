@@ -83,6 +83,13 @@ func (c *Instance) LookupLauncherDefaults(launcherID string) (LaunchersDefault, 
 	return LaunchersDefault{}, false
 }
 
+// SetLauncherDefaultsForTesting sets launcher defaults for testing purposes.
+func (c *Instance) SetLauncherDefaultsForTesting(defaults []LaunchersDefault) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Launchers.Default = defaults
+}
+
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

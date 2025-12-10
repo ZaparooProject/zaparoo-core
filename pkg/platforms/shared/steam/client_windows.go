@@ -25,10 +25,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows/registry"
 )
@@ -76,8 +75,6 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 }
 
 // Launch launches a Steam game on Windows using the start command.
-// NOTE: Uses exec.Command directly (not c.cmd) because Windows requires
-// the HideWindow syscall attribute, which CommandExecutor doesn't support.
 func (c *Client) Launch(_ *config.Instance, path string) (*os.Process, error) {
 	id, err := ExtractAndValidateID(path)
 	if err != nil {
@@ -87,14 +84,9 @@ func (c *Client) Launch(_ *config.Instance, path string) (*os.Process, error) {
 	steamURL := BuildSteamURL(id)
 
 	// On Windows, we use "cmd /c start <url>" to open Steam URLs
-	// Must use direct exec.Command to set HideWindow attribute
-	cmd := exec.CommandContext( //nolint:gosec // Steam ID validated as numeric-only by ExtractAndValidateID
-		context.Background(),
-		"cmd", "/c", "start", steamURL,
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
-	if err := cmd.Start(); err != nil {
+	// HideWindow prevents a console window from flashing on screen
+	opts := command.StartOptions{HideWindow: true}
+	if err := c.cmd.StartWithOptions(context.Background(), opts, "cmd", "/c", "start", steamURL); err != nil {
 		return nil, fmt.Errorf("failed to start Steam: %w", err)
 	}
 	return nil, nil //nolint:nilnil // Steam launches are fire-and-forget

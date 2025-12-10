@@ -40,5 +40,8 @@ func NewMockCommandExecutor() *mocks.MockCommandExecutor {
 	// Match any command with any arguments - all succeed by default
 	cmd.On("Run", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
 	cmd.On("Start", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
+	cmd.On(
+		"StartWithOptions", mock.Anything, mock.Anything, mock.AnythingOfType("string"), mock.Anything,
+	).Return(nil).Maybe()
 	return cmd
 }

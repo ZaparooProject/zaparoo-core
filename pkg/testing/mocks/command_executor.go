@@ -22,10 +22,11 @@ package mocks
 import (
 	"context"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/stretchr/testify/mock"
 )
 
-// MockCommandExecutor is a testify mock for helpers.CommandExecutor.
+// MockCommandExecutor is a testify mock for command.Executor.
 // It allows testing code that executes system commands without actually running them.
 type MockCommandExecutor struct {
 	mock.Mock
@@ -53,6 +54,25 @@ func (m *MockCommandExecutor) Run(ctx context.Context, name string, args ...stri
 //	mockCmd.On("Start", mock.Anything, "steam", mock.Anything).Return(nil)
 func (m *MockCommandExecutor) Start(ctx context.Context, name string, args ...string) error {
 	called := m.Called(ctx, name, args)
+	//nolint:wrapcheck // Mock returns are already wrapped by caller
+	return called.Error(0)
+}
+
+// StartWithOptions mocks starting a command with platform-specific options.
+// Use On() to set expectations and Return() to control the mock behavior.
+//
+// Example:
+//
+//	mockCmd := &MockCommandExecutor{}
+//	opts := command.StartOptions{HideWindow: true}
+//	mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", mock.Anything).Return(nil)
+func (m *MockCommandExecutor) StartWithOptions(
+	ctx context.Context,
+	opts command.StartOptions,
+	name string,
+	args ...string,
+) error {
+	called := m.Called(ctx, opts, name, args)
 	//nolint:wrapcheck // Mock returns are already wrapped by caller
 	return called.Error(0)
 }

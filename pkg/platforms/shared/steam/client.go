@@ -24,14 +24,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 )
 
 // Client implements SteamClient for Steam game launching and scanning.
 type Client struct {
-	cmd  helpers.CommandExecutor
+	cmd  command.Executor
 	opts Options
 }
 
@@ -39,13 +39,13 @@ type Client struct {
 func NewClient(opts Options) *Client {
 	return &Client{
 		opts: opts,
-		cmd:  &helpers.RealCommandExecutor{},
+		cmd:  &command.RealExecutor{},
 	}
 }
 
 // NewClientWithExecutor creates a new Steam client with a custom command executor.
 // This is useful for testing.
-func NewClientWithExecutor(opts Options, cmd helpers.CommandExecutor) *Client {
+func NewClientWithExecutor(opts Options, cmd command.Executor) *Client {
 	return &Client{
 		opts: opts,
 		cmd:  cmd,
