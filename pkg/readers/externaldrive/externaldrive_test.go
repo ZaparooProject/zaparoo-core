@@ -20,6 +20,7 @@
 package externaldrive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,6 +32,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const (
+	// testEventTimeout is the maximum time to wait for an expected event
+	testEventTimeout = 2 * time.Second
+	// testNoEventTimeout is the time to wait to verify no event occurs
+	testNoEventTimeout = 200 * time.Millisecond
+)
+
+// testContext returns a context with the specified timeout for test synchronization.
+// Using context instead of raw time.After provides better semantics and cancellation support.
+func testContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), timeout)
+}
 
 // mockMountDetector implements MountDetector for testing
 type mockMountDetector struct {
@@ -334,12 +348,14 @@ func TestProcessEvents_MountEvent(t *testing.T) {
 	}
 
 	// Should receive scan with token
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
 	select {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token, "Should receive token from mount event")
 		assert.Equal(t, TokenType, scan.Token.Type)
 		assert.Contains(t, scan.Token.Text, tokenContents)
-	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")
 	}
 
@@ -378,10 +394,12 @@ func TestProcessEvents_UnmountEvent(t *testing.T) {
 	mockDetector.unmountsChan <- "test-device-456"
 
 	// Should receive nil token scan (removal)
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
 	select {
 	case scan := <-scanChan:
 		assert.Nil(t, scan.Token, "Should receive nil token on unmount")
-	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("Timeout waiting for unmount scan")
 	}
 
@@ -421,10 +439,12 @@ func TestProcessEvents_StopChannel(t *testing.T) {
 		close(done)
 	}()
 
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
 	select {
 	case <-done:
 		// Success - processEvents exited cleanly
-	case <-time.After(1 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("processEvents did not exit when stopChan was closed")
 	}
 }
@@ -465,12 +485,14 @@ func TestHandleMountEvent_WithValidToken(t *testing.T) {
 	reader.wg.Wait()
 
 	// Check that scan was emitted
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
 	select {
 	case scan := <-scanChan:
 		assert.NotNil(t, scan.Token)
 		assert.Equal(t, TokenType, scan.Token.Type)
 		assert.Contains(t, scan.Token.Text, "**launch.system:nes")
-	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("Timeout waiting for scan event")
 	}
 
@@ -512,11 +534,13 @@ func TestHandleMountEvent_MissingFile(t *testing.T) {
 	reader.wg.Wait()
 
 	// Should not emit any scan (no file found)
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
 	select {
 	case <-scanChan:
 		t.Fatal("Should not emit scan when file is missing")
-	case <-time.After(200 * time.Millisecond):
-		// Expected behavior
+	case <-ctx.Done():
+		// Expected behavior - no event within timeout
 	}
 
 	// Check that no token was added
@@ -559,11 +583,13 @@ func TestHandleMountEvent_EmptyFile(t *testing.T) {
 	reader.wg.Wait()
 
 	// Should not emit any scan (empty file)
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
 	select {
 	case <-scanChan:
 		t.Fatal("Should not emit scan when file is empty")
-	case <-time.After(200 * time.Millisecond):
-		// Expected behavior
+	case <-ctx.Done():
+		// Expected behavior - no event within timeout
 	}
 }
 
@@ -601,11 +627,13 @@ func TestHandleMountEvent_FileTooBig(t *testing.T) {
 	reader.wg.Wait()
 
 	// Should not emit any scan (file too large)
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
 	select {
 	case <-scanChan:
 		t.Fatal("Should not emit scan when file exceeds size limit")
-	case <-time.After(200 * time.Millisecond):
-		// Expected behavior
+	case <-ctx.Done():
+		// Expected behavior - no event within timeout
 	}
 }
 
@@ -652,10 +680,12 @@ func TestHandleMountEvent_SymlinkRejected(t *testing.T) {
 	reader.wg.Wait()
 
 	// Should not emit any scan (symlink rejected for security)
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
 	select {
 	case <-scanChan:
 		t.Fatal("Should not emit scan for symlink files")
-	case <-time.After(200 * time.Millisecond):
+	case <-ctx.Done():
 		// Expected behavior - symlinks are rejected
 	}
 }
@@ -682,10 +712,12 @@ func TestHandleUnmountEvent(t *testing.T) {
 	reader.handleUnmountEvent("test-device-unmount")
 
 	// Should emit nil token scan
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
 	select {
 	case scan := <-scanChan:
 		assert.Nil(t, scan.Token, "Should emit nil token on unmount")
-	case <-time.After(200 * time.Millisecond):
+	case <-ctx.Done():
 		t.Fatal("Timeout waiting for unmount scan")
 	}
 

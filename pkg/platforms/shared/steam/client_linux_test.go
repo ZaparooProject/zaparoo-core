@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	testhelpers "github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/stretchr/testify/assert"
@@ -251,7 +252,7 @@ func TestClientLaunch(t *testing.T) {
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
 		// Non-numeric Steam ID should fail before even trying to run command
-		_, err := client.Launch(nil, "steam://not-a-number/game")
+		_, err := client.Launch(nil, "steam://not-a-number/game", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid Steam game ID")
@@ -264,7 +265,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://")
+		_, err := client.Launch(nil, "steam://", nil)
 
 		require.Error(t, err)
 		mockCmd.AssertNotCalled(t, "Start", mock.Anything, mock.Anything, mock.Anything)
@@ -276,7 +277,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "not-a-steam-path")
+		_, err := client.Launch(nil, "not-a-steam-path", nil)
 
 		require.Error(t, err)
 		mockCmd.AssertNotCalled(t, "Start", mock.Anything, mock.Anything, mock.Anything)
@@ -288,7 +289,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://123/GameName")
+		_, err := client.Launch(nil, "steam://123/GameName", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
@@ -300,7 +301,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: false}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://456/AnotherGame")
+		_, err := client.Launch(nil, "steam://456/AnotherGame", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "steam", []string{"steam://rungameid/456"})
@@ -312,7 +313,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://rungameid/789")
+		_, err := client.Launch(nil, "steam://rungameid/789", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/789"})
@@ -325,7 +326,7 @@ func TestClientLaunch(t *testing.T) {
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
 		// Big Picture ID format for non-Steam games
-		_, err := client.Launch(nil, "steam://2305843009213693952/NonSteamGame")
+		_, err := client.Launch(nil, "steam://2305843009213693952/NonSteamGame", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/2305843009213693952"})
@@ -338,9 +339,93 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd.On("Start", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("command failed"))
 		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://123/Game")
+		_, err := client.Launch(nil, "steam://123/Game", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to launch Steam")
+	})
+
+	t.Run("launches_details_page_when_action_is_details", func(t *testing.T) {
+		t.Parallel()
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+
+		opts := &platforms.LaunchOptions{Action: "details"}
+		_, err := client.Launch(nil, "steam://123/GameName", opts)
+
+		require.NoError(t, err)
+		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://nav/games/details/123"})
+	})
+
+	t.Run("launches_details_page_case_insensitive", func(t *testing.T) {
+		t.Parallel()
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+
+		opts := &platforms.LaunchOptions{Action: "DETAILS"}
+		_, err := client.Launch(nil, "steam://456/Game", opts)
+
+		require.NoError(t, err)
+		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://nav/games/details/456"})
+	})
+
+	t.Run("launches_normal_url_when_action_is_run", func(t *testing.T) {
+		t.Parallel()
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+
+		opts := &platforms.LaunchOptions{Action: "run"}
+		_, err := client.Launch(nil, "steam://123/GameName", opts)
+
+		require.NoError(t, err)
+		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
+	})
+
+	t.Run("uses_config_action_when_opts_is_nil", func(t *testing.T) {
+		// Cannot use t.Parallel() due to config modification
+
+		fs := testhelpers.NewMemoryFS()
+		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+		require.NoError(t, err)
+
+		// Configure Steam launcher with action=details
+		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
+			{Launcher: "Steam", Action: "details"},
+		})
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+
+		_, err = client.Launch(cfg, "steam://123/Game", nil)
+
+		require.NoError(t, err)
+		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://nav/games/details/123"})
+	})
+
+	t.Run("opts_action_overrides_config_action", func(t *testing.T) {
+		// Cannot use t.Parallel() due to config modification
+
+		fs := testhelpers.NewMemoryFS()
+		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
+		require.NoError(t, err)
+
+		// Configure Steam launcher with action=details
+		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
+			{Launcher: "Steam", Action: "details"},
+		})
+
+		mockCmd := testhelpers.NewMockCommandExecutor()
+		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
+
+		// Override with action=run from opts
+		opts := &platforms.LaunchOptions{Action: "run"}
+		_, err = client.Launch(cfg, "steam://123/Game", opts)
+
+		require.NoError(t, err)
+		// Should use run URL because opts override config
+		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
 	})
 }

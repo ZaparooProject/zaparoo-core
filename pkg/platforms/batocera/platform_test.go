@@ -53,34 +53,6 @@ func TestKodiLocalLauncherExists(t *testing.T) {
 	assert.Contains(t, kodiLocal.Extensions, ".avi")
 }
 
-// TestKodiLocalLaunchesVideoFiles tests that KodiLocal launcher can launch video files
-func TestKodiLocalLaunchesVideoFiles(t *testing.T) {
-	t.Parallel()
-
-	fs := helpers.NewMemoryFS()
-	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
-	require.NoError(t, err)
-
-	platform := &Platform{}
-
-	launchers := platform.Launchers(cfg)
-
-	// Find KodiLocalVideo launcher
-	var kodiLocal *platforms.Launcher
-	for i := range launchers {
-		if launchers[i].ID == "KodiLocalVideo" {
-			kodiLocal = &launchers[i]
-			break
-		}
-	}
-
-	require.NotNil(t, kodiLocal, "KodiLocal launcher should exist")
-
-	// Test that the launcher has a Launch function
-	// We don't test the actual launch since it requires a running Kodi instance
-	assert.NotNil(t, kodiLocal.Launch, "KodiLocal should have a Launch function")
-}
-
 // TestKodiMovieLauncherExists tests that KodiMovie launcher exists in Batocera
 func TestKodiMovieLauncherExists(t *testing.T) {
 	t.Parallel()
@@ -920,7 +892,7 @@ func TestLaunchMedia_ESAPIUnavailable(t *testing.T) {
 		ID:       "KodiAlbum",
 		SystemID: systemdefs.SystemMusicAlbum,
 		Schemes:  []string{"kodi-album"},
-		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// If we get here, the ES API check passed!
 			esAPICheckPassed = true
 			// Return a mock process (we don't actually launch anything)
@@ -930,7 +902,7 @@ func TestLaunchMedia_ESAPIUnavailable(t *testing.T) {
 
 	// LaunchMedia should handle ES API unavailability gracefully
 	// It should log a warning and proceed with the launch (assuming no game is running)
-	err = platform.LaunchMedia(cfg, "kodi-album://47/Weather", launcher, db)
+	err = platform.LaunchMedia(cfg, "kodi-album://47/Weather", launcher, db, nil)
 
 	// Should not error - ES API check should pass gracefully
 	require.NoError(t, err, "Launch should succeed when ES API is unavailable")

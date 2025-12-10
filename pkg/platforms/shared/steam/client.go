@@ -87,3 +87,9 @@ func ExtractAndValidateID(path string) (string, error) {
 func BuildSteamURL(id string) string {
 	return "steam://rungameid/" + id
 }
+
+// BuildSteamDetailsURL builds a Steam details page URL from a game ID.
+// This opens the game's details page in the Steam client library.
+func BuildSteamDetailsURL(id string) string {
+	return "steam://nav/games/details/" + id
+}

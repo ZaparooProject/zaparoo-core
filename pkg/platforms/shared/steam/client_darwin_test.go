@@ -123,7 +123,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://730/Counter-Strike")
+		_, err := client.Launch(nil, "steam://730/Counter-Strike", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertExpectations(t)
@@ -138,7 +138,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://rungameid/730")
+		_, err := client.Launch(nil, "steam://rungameid/730", nil)
 
 		require.NoError(t, err)
 		mockCmd.AssertExpectations(t)
@@ -150,7 +150,7 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://not-a-number/game")
+		_, err := client.Launch(nil, "steam://not-a-number/game", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid Steam game ID")
@@ -165,7 +165,7 @@ func TestClientLaunch(t *testing.T) {
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
-		_, err := client.Launch(nil, "steam://730/Counter-Strike")
+		_, err := client.Launch(nil, "steam://730/Counter-Strike", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to launch Steam")

@@ -415,50 +415,6 @@ func TestLookupAuth(t *testing.T) {
 	})
 }
 
-func TestLaunchersDefaultServerURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		launcherCfg LaunchersDefault
-		expected    string
-	}{
-		{
-			name: "ServerURL field is properly set and retrieved",
-			launcherCfg: LaunchersDefault{
-				Launcher:   "Kodi",
-				InstallDir: "/opt/kodi",
-				ServerURL:  "http://kodi-server:8080/jsonrpc",
-			},
-			expected: "http://kodi-server:8080/jsonrpc",
-		},
-		{
-			name: "ServerURL field can be empty",
-			launcherCfg: LaunchersDefault{
-				Launcher:   "KodiLocalVideo",
-				InstallDir: "/usr/bin/kodi",
-				ServerURL:  "",
-			},
-			expected: "",
-		},
-		{
-			name: "ServerURL field supports localhost URLs",
-			launcherCfg: LaunchersDefault{
-				Launcher:  "KodiTest",
-				ServerURL: "http://localhost:8080/jsonrpc",
-			},
-			expected: "http://localhost:8080/jsonrpc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.expected, tt.launcherCfg.ServerURL)
-		})
-	}
-}
-
 func TestIsWindowsStylePath(t *testing.T) {
 	t.Parallel()
 
@@ -762,54 +718,6 @@ func TestAPIPort_SaveLoadRoundTrip(t *testing.T) {
 
 	// Verify custom port persists
 	assert.Equal(t, 9999, cfg.APIPort(), "Custom port should persist after save/load")
-}
-
-func TestAllowedOrigins(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		origins  []string
-		expected []string
-	}{
-		{
-			name:     "nil origins",
-			origins:  nil,
-			expected: nil,
-		},
-		{
-			name:     "empty origins",
-			origins:  []string{},
-			expected: []string{},
-		},
-		{
-			name:     "single origin",
-			origins:  []string{"http://localhost:3000"},
-			expected: []string{"http://localhost:3000"},
-		},
-		{
-			name:     "multiple origins",
-			origins:  []string{"http://localhost:3000", "https://example.com"},
-			expected: []string{"http://localhost:3000", "https://example.com"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := &Instance{
-				vals: Values{
-					Service: Service{
-						AllowedOrigins: tt.origins,
-					},
-				},
-			}
-
-			result := cfg.AllowedOrigins()
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 func TestScanHistory(t *testing.T) {

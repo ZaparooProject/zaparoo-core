@@ -56,7 +56,7 @@ func TestNewSteamLauncher(t *testing.T) {
 		launcher := NewSteamLauncher(Options{})
 
 		// Non-numeric Steam ID should fail
-		_, err := launcher.Launch(nil, "steam://not-a-number/game")
+		_, err := launcher.Launch(nil, "steam://not-a-number/game", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid Steam game ID")
@@ -67,7 +67,7 @@ func TestNewSteamLauncher(t *testing.T) {
 
 		launcher := NewSteamLauncher(Options{})
 
-		_, err := launcher.Launch(nil, "steam://")
+		_, err := launcher.Launch(nil, "steam://", nil)
 
 		assert.Error(t, err)
 	})
@@ -77,7 +77,7 @@ func TestNewSteamLauncher(t *testing.T) {
 
 		launcher := NewSteamLauncher(Options{})
 
-		_, err := launcher.Launch(nil, "not-a-steam-path")
+		_, err := launcher.Launch(nil, "not-a-steam-path", nil)
 
 		assert.Error(t, err)
 	})

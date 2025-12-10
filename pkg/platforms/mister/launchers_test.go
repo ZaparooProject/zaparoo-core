@@ -251,7 +251,7 @@ func TestLaunchVideo_EmptyPath(t *testing.T) {
 	launcherFunc := launchVideo(pl)
 
 	// Call with empty path - should fail validation before hitting hardware
-	process, err := launcherFunc(nil, "")
+	process, err := launcherFunc(nil, "", nil)
 
 	require.Error(t, err)
 	assert.Nil(t, process)
@@ -269,7 +269,7 @@ func TestLaunchScummVM_EmptyPath(t *testing.T) {
 	launcherFunc := launchScummVM(pl)
 
 	// Call with empty path - should fail validation before hitting hardware
-	process, err := launcherFunc(nil, "")
+	process, err := launcherFunc(nil, "", nil)
 
 	require.Error(t, err)
 	assert.Nil(t, process)
@@ -294,7 +294,7 @@ func TestLaunchScummVM_InvalidPath_NoTargetID(t *testing.T) {
 	}
 
 	for _, path := range testPaths {
-		process, err := launcherFunc(nil, path)
+		process, err := launcherFunc(nil, path, nil)
 		require.Error(t, err, "path %s should fail", path)
 		assert.Nil(t, process)
 		// Error message can be either from ExtractSchemeID (malformed path) or from empty ID check

@@ -187,7 +187,8 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 }
 
 func (p *Platform) LaunchMedia(
-	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+	cfg *config.Instance, path string, launcher *platforms.Launcher,
+	db *database.Database, opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
 
@@ -207,6 +208,7 @@ func (p *Platform) LaunchMedia(
 		Launcher:       launcher,
 		Path:           path,
 		DB:             db,
+		Options:        opts,
 	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
@@ -246,7 +248,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,
 			Schemes:  []string{shared.SchemeFlashpoint},
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				// Handle native Flashpoint URL format: flashpoint://run/123
 				// Normalize to standard virtual path format: flashpoint://123
 				if strings.HasPrefix(path, "flashpoint://run/") {
@@ -276,7 +278,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:        "WebBrowser",
 			Schemes:   []string{"http", "https"},
 			Lifecycle: platforms.LifecycleFireAndForget,
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				cmd := exec.CommandContext(context.Background(),
 					"cmd", "/c",
 					"start",
@@ -295,7 +297,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".exe"},
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleBlocking, // Block for executables to track completion
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				cmd := exec.CommandContext(context.Background(), path)
 				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 				if err := cmd.Start(); err != nil {
@@ -309,7 +311,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			Extensions:    []string{".bat", ".cmd", ".lnk", ".a3x", ".ahk"},
 			AllowListOnly: true,
 			Lifecycle:     platforms.LifecycleFireAndForget, // Fire-and-forget for scripts
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				ext := strings.ToLower(filepath.Ext(path))
 				var cmd *exec.Cmd
 				// Extensions not in default PATHEXT need START command for proper execution

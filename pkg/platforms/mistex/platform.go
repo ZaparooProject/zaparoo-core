@@ -300,6 +300,7 @@ func (p *Platform) LaunchSystem(cfg *config.Instance, id string) error {
 
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
 
@@ -319,6 +320,7 @@ func (p *Platform) LaunchMedia(
 		Launcher:       launcher,
 		Path:           path,
 		DB:             db,
+		Options:        opts,
 	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)

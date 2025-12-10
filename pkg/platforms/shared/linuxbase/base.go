@@ -204,6 +204,7 @@ func (b *Base) LaunchMedia(
 	path string,
 	launcher *platforms.Launcher,
 	db *database.Database,
+	opts *platforms.LaunchOptions,
 	p platforms.Platform,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
@@ -227,6 +228,7 @@ func (b *Base) LaunchMedia(
 		Launcher:       launcher,
 		Path:           path,
 		DB:             db,
+		Options:        opts,
 	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)

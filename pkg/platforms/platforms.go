@@ -145,12 +145,21 @@ type ScanResult struct {
 	NoExt bool
 }
 
+// LaunchOptions contains optional parameters that can be passed to launchers.
+type LaunchOptions struct {
+	// Action specifies the launch action. Common values:
+	// - "" or "run": Default behavior (launch/play the media)
+	// - "details": Show media details/info page instead of launching
+	Action string
+}
+
 // Launcher defines how a platform launcher can launch media and what media it
 // supports launching.
 type Launcher struct {
 	// Launch function, takes a direct as possible path/ID media file.
 	// Returns process handle for tracked processes, nil for fire-and-forget.
-	Launch func(*config.Instance, string) (*os.Process, error)
+	// The opts parameter is optional and may be nil.
+	Launch func(*config.Instance, string, *LaunchOptions) (*os.Process, error)
 	// Kill function provides custom termination logic for the launcher.
 	// If defined, this function is called instead of signal-based termination
 	// (SIGTERM/SIGKILL). Use this for launchers that require special exit methods
@@ -267,7 +276,8 @@ type Platform interface {
 	LaunchSystem(*config.Instance, string) error
 	// LaunchMedia launches some media by path and sets the active media if it
 	// was successful. Pass nil for launcher to auto-detect, or a specific Launcher.
-	LaunchMedia(*config.Instance, string, *Launcher, *database.Database) error
+	// The opts parameter is optional and may be nil.
+	LaunchMedia(*config.Instance, string, *Launcher, *database.Database, *LaunchOptions) error
 	// KeyboardPress presses and then releases a single keyboard button on a
 	// virtual keyboard, using a key name from the ZapScript format.
 	KeyboardPress(string) error

@@ -907,7 +907,7 @@ func TestDoLaunch_RunningInstanceLauncher(t *testing.T) {
 				SystemID:            "test-system",
 				UsesRunningInstance: tt.usesRunningInstance,
 				Lifecycle:           platforms.LifecycleTracked,
-				Launch: func(*config.Instance, string) (*os.Process, error) {
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 					// Return a mock process (use current process for testing)
 					return &os.Process{Pid: os.Getpid()}, nil
 				},
@@ -1004,7 +1004,7 @@ func TestDoLaunch_LifecycleModes(t *testing.T) {
 				SystemID:            "test-system",
 				UsesRunningInstance: tt.usesRunningInstance,
 				Lifecycle:           tt.lifecycle,
-				Launch: func(*config.Instance, string) (*os.Process, error) {
+				Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 					if tt.launchReturnsProc {
 						return &os.Process{Pid: os.Getpid()}, nil
 					}

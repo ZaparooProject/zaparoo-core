@@ -36,7 +36,8 @@ type SteamClient interface {
 	// Launch launches a Steam game by its virtual path.
 	// Path format: "steam://[id]/[name]" or "steam://rungameid/[id]"
 	// Returns nil for fire-and-forget launches (Steam handles the process).
-	Launch(cfg *config.Instance, path string) (*os.Process, error)
+	// The opts parameter is optional and may be nil.
+	Launch(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error)
 
 	// ScanApps scans Steam library for installed official apps.
 	// steamAppsDir should point to the steamapps directory (e.g., ~/.steam/steam/steamapps).

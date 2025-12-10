@@ -100,10 +100,10 @@ func TestMockPlatformUsage(t *testing.T) {
 
 	// Mock a successful media launch
 	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path,
-		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
+		(*platforms.Launcher)(nil), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
 
 	// Perform the launch (we'd need a config instance in a real test)
-	err := mockPlatform.LaunchMedia(nil, testMedia.Path, nil, nil)
+	err := mockPlatform.LaunchMedia(nil, testMedia.Path, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Verify the launch was tracked
@@ -186,7 +186,7 @@ func TestMockAndFixtureIntegration(t *testing.T) {
 
 	// Mock platform launching the media
 	mockPlatform.On("LaunchMedia", mock.AnythingOfType("*config.Instance"), testMedia.Path,
-		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
+		(*platforms.Launcher)(nil), (*database.Database)(nil), (*platforms.LaunchOptions)(nil)).Return(nil)
 
 	// Simulate a token-to-media workflow
 	assert.True(t, mockReader.Connected())
@@ -195,7 +195,7 @@ func TestMockAndFixtureIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testToken.Text, scannedToken.Text)
 
-	err = mockPlatform.LaunchMedia(nil, testMedia.Path, nil, nil)
+	err = mockPlatform.LaunchMedia(nil, testMedia.Path, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Verify tracking worked
