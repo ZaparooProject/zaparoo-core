@@ -187,7 +187,8 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 }
 
 func (p *Platform) LaunchMedia(
-	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database, opts *platforms.LaunchOptions,
+	cfg *config.Instance, path string, launcher *platforms.Launcher,
+	db *database.Database, opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
 

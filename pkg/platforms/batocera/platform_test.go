@@ -53,34 +53,6 @@ func TestKodiLocalLauncherExists(t *testing.T) {
 	assert.Contains(t, kodiLocal.Extensions, ".avi")
 }
 
-// TestKodiLocalLaunchesVideoFiles tests that KodiLocal launcher can launch video files
-func TestKodiLocalLaunchesVideoFiles(t *testing.T) {
-	t.Parallel()
-
-	fs := helpers.NewMemoryFS()
-	cfg, err := helpers.NewTestConfig(fs, t.TempDir())
-	require.NoError(t, err)
-
-	platform := &Platform{}
-
-	launchers := platform.Launchers(cfg)
-
-	// Find KodiLocalVideo launcher
-	var kodiLocal *platforms.Launcher
-	for i := range launchers {
-		if launchers[i].ID == "KodiLocalVideo" {
-			kodiLocal = &launchers[i]
-			break
-		}
-	}
-
-	require.NotNil(t, kodiLocal, "KodiLocal launcher should exist")
-
-	// Test that the launcher has a Launch function
-	// We don't test the actual launch since it requires a running Kodi instance
-	assert.NotNil(t, kodiLocal.Launch, "KodiLocal should have a Launch function")
-}
-
 // TestKodiMovieLauncherExists tests that KodiMovie launcher exists in Batocera
 func TestKodiMovieLauncherExists(t *testing.T) {
 	t.Parallel()

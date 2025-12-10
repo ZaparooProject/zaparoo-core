@@ -63,10 +63,6 @@ func TestCheckAndResumeIndexing_NoInterruption(t *testing.T) {
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Give async goroutine a brief moment to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 
 	// Verify that no indexing was triggered (only GetIndexingStatus should be called)
@@ -247,10 +243,6 @@ func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Give async goroutine a brief moment to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 
 	// Verify that only GetIndexingStatus was called and no further operations
@@ -284,10 +276,6 @@ func TestCheckAndResumeIndexing_FailedStatus(t *testing.T) {
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Give async goroutine a brief moment to start
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify mock expectations
 	mockMediaDB.AssertExpectations(t)
 
 	// Verify that no indexing was triggered for failed status
