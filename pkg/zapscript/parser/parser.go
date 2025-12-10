@@ -76,11 +76,6 @@ const (
 	TokExprEnd             = "\uE001"
 )
 
-const (
-	// Advanced arg key names
-	AdvArgKeyTags = "tags"
-)
-
 type Command struct {
 	AdvArgs map[string]string
 	Name    string

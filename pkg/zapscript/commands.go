@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
@@ -272,7 +273,7 @@ func RunCommand(
 		cmd.AdvArgs[k] = output
 	}
 
-	if when, ok := cmd.AdvArgs["when"]; ok && !helpers.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs[advargs.KeyWhen]; ok && !helpers.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,

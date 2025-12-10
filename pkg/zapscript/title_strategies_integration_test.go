@@ -41,6 +41,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newMockPlatformForCmdTitle creates a mock platform with Launchers configured for cmdTitle tests.
+func newMockPlatformForCmdTitle() *mocks.MockPlatform {
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	return mp
+}
+
 // setupTestMediaDBWithAllGames creates a real SQLite database populated with comprehensive test data
 // covering all matching strategies. All tests use this SAME database.
 //
@@ -1508,8 +1515,8 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock platform for launch
-			mockPlatform := mocks.NewMockPlatform()
+			// Create mock platform for launch with Launchers configured
+			mockPlatform := newMockPlatformForCmdTitle()
 			if !tt.expectedError {
 				mockPlatform.On(
 					"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
@@ -1706,7 +1713,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Test 1: Fuzzy match "Earthbond" (typo) should match "EarthBound"
 	// Jaro-Winkler similarity: 0.98 (well above 0.85 threshold)
 	t.Run("typo_earthbond_matches_earthbound", func(t *testing.T) {
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformForCmdTitle()
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 		).Return(nil)
@@ -1736,7 +1743,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 	// Test 2: British spelling "neighbours" should match American "neighbors"
 	// Jaro-Winkler similarity: 0.99
 	t.Run("british_spelling_neighbours_matches_neighbors", func(t *testing.T) {
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformForCmdTitle()
 		mockPlatform.On(
 			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 		).Return(nil)

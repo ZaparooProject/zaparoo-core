@@ -27,32 +27,34 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/rs/zerolog/log"
 )
 
-// parseTagsAdvArg parses comma-delimited tags from advanced args
-// Format: "type:value,-type2:value2,~type3:value3"
-// Operators: "-" = NOT, "~" = OR, none = AND (default)
-// Uses shared parser from pkg/database/filters
-func parseTagsAdvArg(tagsStr string) []database.TagFilter {
-	if tagsStr == "" {
-		return nil
+// getLauncherIDs extracts launcher IDs from the platform for validation context.
+func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
+	launchers := pl.Launchers(cfg)
+	ids := make([]string, len(launchers))
+	for i := range launchers {
+		ids[i] = launchers[i].ID
 	}
+	return ids
+}
 
-	parts := strings.Split(tagsStr, ",")
-	tagFilters, err := filters.ParseTagFilters(parts)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to parse tag filters")
-		return nil
+// parseAdvArgs parses and validates advanced arguments for a command.
+// Returns an error if parsing or validation fails.
+func parseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
+	ctx := advargs.NewParseContext(getLauncherIDs(pl, env.Cfg))
+	if err := advargs.Parse(env.Cmd.AdvArgs, dest, ctx); err != nil {
+		return fmt.Errorf("failed to parse advanced args: %w", err)
 	}
-
-	return tagFilters
+	return nil
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -98,13 +100,18 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	launch, err := getAltLauncher(pl, env)
+	// Parse and validate advanced args
+	var args advargs.LaunchRandomArgs
+	if err := parseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
+	}
+
+	launch, err := getAltLauncherTyped(pl, env, args.Launcher, args.Action)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 
-	// Parse tags from advanced args
-	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
 
@@ -260,32 +267,44 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}, nil
 }
 
+// getAltLauncher returns a launch function using advanced args from env.Cmd.AdvArgs.
+//
+// Deprecated: Use getAltLauncherTyped with parsed advargs instead.
 func getAltLauncher(
 	pl platforms.Platform,
 	env platforms.CmdEnv, //nolint:gocritic // single-use parameter in command handler
 ) (func(args string) error, error) {
-	// Build launch options from advanced args
+	return getAltLauncherTyped(pl, env, env.Cmd.AdvArgs[advargs.KeyLauncher], env.Cmd.AdvArgs[advargs.KeyAction])
+}
+
+// getAltLauncherTyped returns a launch function using typed launcher and action args.
+func getAltLauncherTyped(
+	pl platforms.Platform,
+	env platforms.CmdEnv, //nolint:gocritic // single-use parameter in command handler
+	launcherID string,
+	action string,
+) (func(args string) error, error) {
 	var opts *platforms.LaunchOptions
-	if action := env.Cmd.AdvArgs["action"]; action != "" {
+	if action != "" {
 		opts = &platforms.LaunchOptions{Action: action}
 	}
 
-	if env.Cmd.AdvArgs["launcher"] != "" {
+	if launcherID != "" {
 		var launcher platforms.Launcher
 
 		launchers := pl.Launchers(env.Cfg)
 		for i := range launchers {
-			if launchers[i].ID == env.Cmd.AdvArgs["launcher"] {
+			if launchers[i].ID == launcherID {
 				launcher = launchers[i]
 				break
 			}
 		}
 
 		if launcher.Launch == nil {
-			return nil, fmt.Errorf("alt launcher not found: %s", env.Cmd.AdvArgs["launcher"])
+			return nil, fmt.Errorf("alt launcher not found: %s", launcherID)
 		}
 
-		log.Info().Msgf("launching with alt launcher: %s", env.Cmd.AdvArgs["launcher"])
+		log.Info().Msgf("launching with alt launcher: %s", launcherID)
 
 		return func(args string) error {
 			// Pass the specific launcher - DoLaunch handles lifecycle
@@ -328,10 +347,10 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	systemArg := env.Cmd.AdvArgs["system"]
+	systemArg := env.Cmd.AdvArgs[advargs.KeySystem]
 	if dler, ok := isValidRemoteFileURL(path); ok && systemArg != "" {
-		name := env.Cmd.AdvArgs["name"]
-		preNotice := env.Cmd.AdvArgs["pre_notice"]
+		name := env.Cmd.AdvArgs[advargs.KeyName]
+		preNotice := env.Cmd.AdvArgs[advargs.KeyPreNotice]
 		installPath, err := installer.InstallRemoteFile(
 			env.Cfg, pl,
 			path,
@@ -347,8 +366,8 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	// Apply system defaults from system advanced arg if no explicit launcher specified
-	if env.Cmd.AdvArgs["launcher"] == "" && env.Cmd.AdvArgs["system"] != "" {
-		systemID := env.Cmd.AdvArgs["system"]
+	if env.Cmd.AdvArgs[advargs.KeyLauncher] == "" && env.Cmd.AdvArgs[advargs.KeySystem] != "" {
+		systemID := env.Cmd.AdvArgs[advargs.KeySystem]
 		system, lookupErr := systemdefs.LookupSystem(systemID)
 		if lookupErr != nil {
 			log.Warn().Err(lookupErr).Str("system", systemID).
@@ -357,7 +376,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 			if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
 				log.Debug().Str("system", system.ID).Str("launcher", systemDefaults.Launcher).
 					Msg("applying system default launcher from system arg")
-				env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+				env.Cmd.AdvArgs[advargs.KeyLauncher] = systemDefaults.Launcher
 			}
 		}
 	}
@@ -415,13 +434,13 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}
 
 	// Check system defaults for launcher if not already specified
-	if env.Cmd.AdvArgs["launcher"] == "" {
+	if env.Cmd.AdvArgs[advargs.KeyLauncher] == "" {
 		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
 			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
 			if env.Cmd.AdvArgs == nil {
 				env.Cmd.AdvArgs = make(map[string]string)
 			}
-			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
+			env.Cmd.AdvArgs[advargs.KeyLauncher] = systemDefaults.Launcher
 		}
 	}
 
@@ -512,13 +531,18 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	launch, err := getAltLauncher(pl, env)
+	// Parse and validate advanced args
+	var args advargs.LaunchSearchArgs
+	if err := parseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
+	}
+
+	launch, err := getAltLauncherTyped(pl, env, args.Launcher, args.Action)
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}
 
-	// Parse tags from advanced args
-	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	tagFilters := args.Tags
 
 	query = strings.ToLower(query)
 	query = strings.TrimSpace(query)
