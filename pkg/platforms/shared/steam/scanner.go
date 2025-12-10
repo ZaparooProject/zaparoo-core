@@ -157,29 +157,43 @@ func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
 func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 	var results []platforms.ScanResult
 
+	log.Debug().Str("steamDir", steamDir).Msg("scanning Steam shortcuts")
+
 	userdataDir := filepath.Join(steamDir, "userdata")
-	if _, err := os.Stat(userdataDir); os.IsNotExist(err) {
-		log.Debug().Msg("Steam userdata directory not found")
+	if _, err := os.Stat(userdataDir); err != nil {
+		if os.IsNotExist(err) {
+			log.Debug().Str("path", userdataDir).Msg("Steam userdata directory not found")
+		} else {
+			log.Warn().Err(err).Str("path", userdataDir).Msg("error accessing Steam userdata directory")
+		}
 		return results, nil
 	}
 
 	userDirs, err := os.ReadDir(userdataDir)
 	if err != nil {
-		log.Error().Err(err).Msg("error reading Steam userdata directory")
+		log.Error().Err(err).Str("path", userdataDir).Msg("error reading Steam userdata directory")
 		return results, nil
 	}
 
+	log.Debug().Int("count", len(userDirs)).Msg("found Steam user directories")
+
 	for _, userDir := range userDirs {
 		if !userDir.IsDir() {
+			log.Debug().Str("name", userDir.Name()).Msg("skipping non-directory entry in userdata")
 			continue
 		}
 
 		shortcutsPath := filepath.Join(userdataDir, userDir.Name(), "config", "shortcuts.vdf")
-		if _, err := os.Stat(shortcutsPath); os.IsNotExist(err) {
+		if _, err := os.Stat(shortcutsPath); err != nil {
+			if os.IsNotExist(err) {
+				log.Debug().Str("userId", userDir.Name()).Msg("no shortcuts.vdf for user")
+			} else {
+				log.Warn().Err(err).Str("path", shortcutsPath).Msg("error accessing shortcuts.vdf")
+			}
 			continue
 		}
 
-		log.Debug().Msgf("reading shortcuts from: %s", shortcutsPath)
+		log.Debug().Str("path", shortcutsPath).Msg("reading shortcuts")
 
 		//nolint:gosec // Safe: reads Steam config files for game library scanning
 		shortcutsData, err := os.ReadFile(shortcutsPath)
@@ -193,6 +207,11 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
 			continue
 		}
+
+		log.Debug().
+			Str("userId", userDir.Name()).
+			Int("count", len(shortcuts)).
+			Msg("parsed shortcuts for user")
 
 		for _, shortcut := range shortcuts {
 			if shortcut.AppName == "" {
@@ -211,6 +230,8 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			})
 		}
 	}
+
+	log.Debug().Int("total", len(results)).Msg("Steam shortcuts scan complete")
 
 	return results, nil
 }
