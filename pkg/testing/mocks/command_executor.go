@@ -43,3 +43,16 @@ func (m *MockCommandExecutor) Run(ctx context.Context, name string, args ...stri
 	//nolint:wrapcheck // Mock returns are already wrapped by caller
 	return called.Error(0)
 }
+
+// Start mocks starting a command without waiting for completion.
+// Use On() to set expectations and Return() to control the mock behavior.
+//
+// Example:
+//
+//	mockCmd := &MockCommandExecutor{}
+//	mockCmd.On("Start", mock.Anything, "steam", mock.Anything).Return(nil)
+func (m *MockCommandExecutor) Start(ctx context.Context, name string, args ...string) error {
+	called := m.Called(ctx, name, args)
+	//nolint:wrapcheck // Mock returns are already wrapped by caller
+	return called.Error(0)
+}

@@ -30,6 +30,10 @@ type CommandExecutor interface {
 	// Run executes a command and waits for it to complete.
 	// Returns an error if the command fails to start or exits with non-zero status.
 	Run(ctx context.Context, name string, args ...string) error
+
+	// Start starts a command without waiting for it to complete (fire-and-forget).
+	// Returns an error if the command fails to start.
+	Start(ctx context.Context, name string, args ...string) error
 }
 
 // RealCommandExecutor uses actual exec.Command to execute system commands.
@@ -41,4 +45,11 @@ type RealCommandExecutor struct{}
 //nolint:wrapcheck // Wrapping exec errors loses important context
 func (*RealCommandExecutor) Run(ctx context.Context, name string, args ...string) error {
 	return exec.CommandContext(ctx, name, args...).Run()
+}
+
+// Start starts a command without waiting for it to complete.
+//
+//nolint:wrapcheck // Wrapping exec errors loses important context
+func (*RealCommandExecutor) Start(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Start()
 }

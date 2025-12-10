@@ -22,23 +22,6 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
 package launchers
 
-// SteamOptions configures the Steam launcher behavior.
-type SteamOptions struct {
-	// FallbackPath is used if Steam directory detection fails.
-	// Examples: "/home/deck/.steam/steam", "/home/gamer/.steam/steam"
-	FallbackPath string
-
-	// ExtraPaths are additional paths to check for Steam installation.
-	ExtraPaths []string
-
-	// UseXdgOpen uses xdg-open for launching (desktop-friendly).
-	// When false, uses direct `steam` command (console/Game Mode friendly).
-	UseXdgOpen bool
-
-	// CheckFlatpak enables checking for Flatpak Steam installation.
-	CheckFlatpak bool
-}
-
 // LutrisOptions configures the Lutris launcher behavior.
 type LutrisOptions struct {
 	// CheckFlatpak enables checking for Flatpak Lutris installation.
