@@ -66,8 +66,8 @@ func NewSteamLauncher(opts Options) platforms.Launcher {
 
 			return results, nil
 		},
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
-			return client.Launch(cfg, path)
+		Launch: func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
+			return client.Launch(cfg, path, opts)
 		},
 	}
 }

@@ -161,6 +161,7 @@ func (*Platform) LaunchSystem(_ *config.Instance, _ string) error {
 
 func (p *Platform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+	opts *platforms.LaunchOptions,
 ) error {
 	log.Info().Msgf("launch media: %s", path)
 
@@ -180,6 +181,7 @@ func (p *Platform) LaunchMedia(
 		Launcher:       launcher,
 		Path:           path,
 		DB:             db,
+		Options:        opts,
 	})
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
@@ -210,7 +212,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			ID:            "Generic",
 			Extensions:    []string{".sh"},
 			AllowListOnly: true,
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				err := exec.CommandContext(context.Background(), path).Start()
 				if err != nil {
 					return nil, fmt.Errorf("failed to start command: %w", err)

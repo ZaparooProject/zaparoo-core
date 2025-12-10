@@ -264,6 +264,12 @@ func getAltLauncher(
 	pl platforms.Platform,
 	env platforms.CmdEnv, //nolint:gocritic // single-use parameter in command handler
 ) (func(args string) error, error) {
+	// Build launch options from advanced args
+	var opts *platforms.LaunchOptions
+	if action := env.Cmd.AdvArgs["action"]; action != "" {
+		opts = &platforms.LaunchOptions{Action: action}
+	}
+
 	if env.Cmd.AdvArgs["launcher"] != "" {
 		var launcher platforms.Launcher
 
@@ -283,12 +289,12 @@ func getAltLauncher(
 
 		return func(args string) error {
 			// Pass the specific launcher - DoLaunch handles lifecycle
-			return pl.LaunchMedia(env.Cfg, args, &launcher, env.Database)
+			return pl.LaunchMedia(env.Cfg, args, &launcher, env.Database, opts)
 		}, nil
 	}
 	// Normal path - pass nil for auto-detection
 	return func(args string) error {
-		return pl.LaunchMedia(env.Cfg, args, nil, env.Database)
+		return pl.LaunchMedia(env.Cfg, args, nil, env.Database, opts)
 	}, nil
 }
 

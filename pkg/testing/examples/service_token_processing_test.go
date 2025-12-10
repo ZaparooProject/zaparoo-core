@@ -78,12 +78,14 @@ func TestTokenProcessingMockIntegration(t *testing.T) {
 	assert.Equal(t, testDBMedia.DBID, foundMedia.DBID)
 
 	// Test 3: Platform operations
-	mockPlatform.On("LaunchMedia", cfg, testDBMedia.Path, (*platforms.Launcher)(nil), db).Return(nil)
+	mockPlatform.On(
+		"LaunchMedia", cfg, testDBMedia.Path, (*platforms.Launcher)(nil), db, (*platforms.LaunchOptions)(nil),
+	).Return(nil)
 	mockPlatform.On("ID").Return("test-platform")
 
 	// Verify platform works
 	assert.Equal(t, "test-platform", mockPlatform.ID())
-	err = mockPlatform.LaunchMedia(cfg, testDBMedia.Path, nil, db)
+	err = mockPlatform.LaunchMedia(cfg, testDBMedia.Path, nil, db, nil)
 	require.NoError(t, err)
 
 	// Verify launch tracking
@@ -154,10 +156,12 @@ func TestErrorHandlingWithMocks(t *testing.T) {
 				// Use minimal config to avoid disk I/O
 				cfg := &config.Instance{}
 
-				mockPlatform.On("LaunchMedia", cfg, "/invalid/path",
-					(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(errors.New("launch failed"))
+				mockPlatform.On(
+					"LaunchMedia", cfg, "/invalid/path", (*platforms.Launcher)(nil),
+					(*database.Database)(nil), (*platforms.LaunchOptions)(nil),
+				).Return(errors.New("launch failed"))
 
-				err := mockPlatform.LaunchMedia(cfg, "/invalid/path", nil, nil)
+				err := mockPlatform.LaunchMedia(cfg, "/invalid/path", nil, nil, nil)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "launch failed")
 				mockPlatform.AssertExpectations(t)

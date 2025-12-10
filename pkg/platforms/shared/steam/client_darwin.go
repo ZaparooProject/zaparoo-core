@@ -26,8 +26,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
 
@@ -65,13 +67,31 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 }
 
 // Launch launches a Steam game on macOS using the open command.
-func (c *Client) Launch(_ *config.Instance, path string) (*os.Process, error) {
+func (c *Client) Launch(
+	cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+) (*os.Process, error) {
 	id, err := ExtractAndValidateID(path)
 	if err != nil {
 		return nil, err
 	}
 
-	steamURL := BuildSteamURL(id)
+	// Determine action: check opts first, then config default
+	action := ""
+	if opts != nil && opts.Action != "" {
+		action = opts.Action
+	} else if cfg != nil {
+		if def, ok := cfg.LookupLauncherDefaults("Steam"); ok {
+			action = def.Action
+		}
+	}
+
+	// Build the appropriate Steam URL based on the action
+	var steamURL string
+	if strings.EqualFold(action, "details") {
+		steamURL = BuildSteamDetailsURL(id)
+	} else {
+		steamURL = BuildSteamURL(id)
+	}
 
 	// On macOS, we use "open" to open Steam URLs
 	if err := c.cmd.Start(context.Background(), "open", steamURL); err != nil {

@@ -38,7 +38,7 @@ func NewWebBrowserLauncher() platforms.Launcher {
 		ID:        "WebBrowser",
 		Schemes:   []string{"http", "https"},
 		Lifecycle: platforms.LifecycleFireAndForget,
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			cmd := exec.CommandContext(context.Background(), "xdg-open", path)
 			err := cmd.Start()
 			if err != nil {

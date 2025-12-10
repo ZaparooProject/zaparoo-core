@@ -95,8 +95,10 @@ func checkInZip(path string) string {
 	return path
 }
 
-func launch(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+func launch(
+	pl platforms.Platform, coreID string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		// Close console if needed - FPGA cores take over display
 		if err := pl.ConsoleManager().Close(); err != nil {
 			log.Warn().Err(err).Msg("failed to close console before FPGA launch")
@@ -143,10 +145,12 @@ type arcadePlatform interface {
 
 // launchArcade provides a specialized launch function for the Arcade system.
 // It handles MRA file parsing and setname caching before delegating to the generic launch logic.
-func launchArcade(pl platforms.Platform, coreID string) func(*config.Instance, string) (*os.Process, error) {
+func launchArcade(
+	pl platforms.Platform, coreID string,
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	genericLauncher := launch(pl, coreID)
 
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, opts *platforms.LaunchOptions) (*os.Process, error) {
 		if strings.HasSuffix(strings.ToLower(path), ".mra") {
 			if arcadePl, ok := pl.(arcadePlatform); ok {
 				mra, err := mgls.ReadMRA(path)
@@ -158,15 +162,15 @@ func launchArcade(pl platforms.Platform, coreID string) func(*config.Instance, s
 			}
 		}
 
-		return genericLauncher(cfg, path)
+		return genericLauncher(cfg, path, opts)
 	}
 }
 
 func launchSinden(
 	systemID string,
 	rbfName string,
-) func(*config.Instance, string) (*os.Process, error) {
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -207,7 +211,7 @@ func launchSinden(
 	}
 }
 
-func launchAggGnw(cfg *config.Instance, path string) (*os.Process, error) {
+func launchAggGnw(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 	s, err := cores.GetCore("GameNWatch")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get GameNWatch system: %w", err)
@@ -242,8 +246,8 @@ func launchAggGnw(cfg *config.Instance, path string) (*os.Process, error) {
 func launchAltCore(
 	systemID string,
 	rbfPath string,
-) func(*config.Instance, string) (*os.Process, error) {
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore(systemID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
@@ -269,9 +273,9 @@ func launchAltCore(
 }
 
 //nolint:unused // keeping as reference for future implementation
-func launchGroovyCore() func(*config.Instance, string) (*os.Process, error) {
+func launchGroovyCore() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
 	// Merge into mrext?
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		sn := cores.Core{
 			ID:  "Groovy",
 			RBF: "_Utility/Groovy",
@@ -303,8 +307,8 @@ func launchGroovyCore() func(*config.Instance, string) (*os.Process, error) {
 	}
 }
 
-func launchDOS() func(*config.Instance, string) (*os.Process, error) {
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+func launchDOS() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		if filepath.Ext(strings.ToLower(path)) == ".mgl" {
 			err := mgls.LaunchBasicFile(path)
 			if err != nil {
@@ -339,8 +343,8 @@ func launchDOS() func(*config.Instance, string) (*os.Process, error) {
 	}
 }
 
-func launchAtari2600() func(*config.Instance, string) (*os.Process, error) {
-	return func(cfg *config.Instance, path string) (*os.Process, error) {
+func launchAtari2600() func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		s, err := cores.GetCore("Atari2600")
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Atari2600 system: %w", err)
@@ -391,8 +395,8 @@ func buildFvpCommand(ctx context.Context, path string) *exec.Cmd {
 	return cmd
 }
 
-func launchVideo(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
-	return func(_ *config.Instance, path string) (*os.Process, error) {
+func launchVideo(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		// videoDivisor controls the framebuffer resolution divisor for video playback.
 		// Using fb_cmd0 (scaled mode):
 		//   - divisor 3: ~640x360 on 1920x1080, ~853x480 on 2560x1440
@@ -460,8 +464,8 @@ func buildScummVMCommand(ctx context.Context, scummvmBinary, targetID string) *e
 }
 
 // launchScummVM returns a launcher function for ScummVM games on MiSTer.
-func launchScummVM(pl *Platform) func(*config.Instance, string) (*os.Process, error) {
-	return func(_ *config.Instance, path string) (*os.Process, error) {
+func launchScummVM(pl *Platform) func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+	return func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 		if path == "" {
 			return nil, errors.New("no path specified")
 		}
@@ -1523,7 +1527,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:         "Generic",
 			Extensions: []string{".mgl", ".rbf", ".mra"},
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				err := mgls.LaunchBasicFile(path)
 				if err != nil {
 					return nil, fmt.Errorf("failed to launch generic file: %w", err)

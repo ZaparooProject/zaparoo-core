@@ -140,7 +140,7 @@ func NewLutrisLauncher(opts LutrisOptions) platforms.Launcher {
 
 			return results, nil
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// Extract game slug/id from lutris://game-slug format
 			slug, err := virtualpath.ExtractSchemeID(path, shared.SchemeLutris)
 			if err != nil {

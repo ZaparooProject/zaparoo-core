@@ -215,7 +215,7 @@ func TestChimeraGOGLauncherPathTraversalProtection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := launcher.Launch(nil, tc.path)
+			_, err := launcher.Launch(nil, tc.path, nil)
 			if tc.expectErr {
 				require.Error(t, err)
 				// The error should indicate an invalid game ID
@@ -258,7 +258,7 @@ func TestChimeraGOGLauncherValidGameID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := launcher.Launch(nil, tc.path)
+			_, err := launcher.Launch(nil, tc.path, nil)
 			// Should fail because game isn't installed, not because of validation
 			require.Error(t, err)
 			// Should NOT be an invalid game ID error

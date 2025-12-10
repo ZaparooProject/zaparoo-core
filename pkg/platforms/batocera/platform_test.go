@@ -920,7 +920,7 @@ func TestLaunchMedia_ESAPIUnavailable(t *testing.T) {
 		ID:       "KodiAlbum",
 		SystemID: systemdefs.SystemMusicAlbum,
 		Schemes:  []string{"kodi-album"},
-		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// If we get here, the ES API check passed!
 			esAPICheckPassed = true
 			// Return a mock process (we don't actually launch anything)
@@ -930,7 +930,7 @@ func TestLaunchMedia_ESAPIUnavailable(t *testing.T) {
 
 	// LaunchMedia should handle ES API unavailability gracefully
 	// It should log a warning and proceed with the launch (assuming no game is running)
-	err = platform.LaunchMedia(cfg, "kodi-album://47/Weather", launcher, db)
+	err = platform.LaunchMedia(cfg, "kodi-album://47/Weather", launcher, db, nil)
 
 	// Should not error - ES API check should pass gracefully
 	require.NoError(t, err, "Launch should succeed when ES API is unavailable")

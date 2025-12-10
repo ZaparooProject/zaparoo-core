@@ -158,3 +158,23 @@ func TestBuildSteamURL(t *testing.T) {
 		assert.Equal(t, "steam://rungameid/2305843009213693952", url)
 	})
 }
+
+func TestBuildSteamDetailsURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("builds_correct_details_url", func(t *testing.T) {
+		t.Parallel()
+
+		url := BuildSteamDetailsURL("123")
+
+		assert.Equal(t, "steam://nav/games/details/123", url)
+	})
+
+	t.Run("handles_large_id", func(t *testing.T) {
+		t.Parallel()
+
+		url := BuildSteamDetailsURL("2305843009213693952")
+
+		assert.Equal(t, "steam://nav/games/details/2305843009213693952", url)
+	})
+}

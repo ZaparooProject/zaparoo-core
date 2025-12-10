@@ -63,9 +63,10 @@ func (p *Platform) LaunchMedia(
 	path string,
 	launcher *platforms.Launcher,
 	db *database.Database,
+	opts *platforms.LaunchOptions,
 ) error {
 	//nolint:wrapcheck // Pass-through to base implementation
-	return p.Base.LaunchMedia(cfg, path, launcher, db, p)
+	return p.Base.LaunchMedia(cfg, path, launcher, db, opts, p)
 }
 
 // Launchers returns the available launchers for Bazzite.

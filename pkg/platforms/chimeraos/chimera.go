@@ -102,7 +102,7 @@ func NewChimeraGOGLauncher() platforms.Launcher {
 			log.Debug().Msgf("found %d Chimera GOG games", len(results))
 			return results, nil
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// Extract game ID from gog://game_id
 			gameID, err := virtualpath.ExtractSchemeID(path, shared.SchemeGOG)
 			if err != nil {

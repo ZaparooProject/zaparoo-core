@@ -139,7 +139,9 @@ func TestCmdTitle(t *testing.T) {
 					mock.Anything, tt.expectedSystem, tt.expectedSlug, []database.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				mockPlatform.On(
+					"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				).Return(nil)
 			} else if tt.expectedSystem != "" && tt.expectedSlug != "" {
 				// shouldError but validation passes - set up mocks to return no results
 				mockMediaDB.On("GetCachedSlugResolution",
@@ -317,7 +319,9 @@ func TestCmdTitleWithTags(t *testing.T) {
 		mock.Anything, expectedSystem, expectedSlug, expectedTags,
 		mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 		Return(nil).Maybe()
-	mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockPlatform.On(
+		"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+	).Return(nil)
 
 	result, err := cmdTitle(mockPlatform, env)
 
@@ -481,7 +485,9 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 					mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
 					mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 					Return(nil).Maybe()
-				mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				mockPlatform.On(
+					"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				).Return(nil)
 			}
 
 			result, err := cmdTitle(mockPlatform, env)
@@ -629,7 +635,9 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 				mock.Anything, tt.systemID, mock.AnythingOfType("string"), []database.TagFilter(nil),
 				mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 				Return(nil).Maybe()
-			mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			mockPlatform.On(
+				"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+			).Return(nil)
 
 			result, err := cmdTitle(mockPlatform, env)
 
@@ -1408,7 +1416,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			Return(database.Media{Path: "/cached/path.smc"}, nil)
 
 		// Platform launch should be called with cached path
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On(
+			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(nil)
 
 		// SearchMediaBySlug should NOT be called when cache hits
 		result, err := cmdTitle(mockPlatform, env)
@@ -1473,7 +1483,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			int64(123), mock.AnythingOfType("string")). // strategy string
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On(
+			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(nil)
 
 		result, err := cmdTitle(mockPlatform, env)
 
@@ -1529,7 +1541,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			mock.Anything, systemID, slug, tags1, int64(100), mock.AnythingOfType("string")).
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		mockPlatform.On(
+			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(nil).Once()
 
 		_, err := cmdTitle(mockPlatform, env1)
 		require.NoError(t, err)
@@ -1562,7 +1576,9 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 			mock.Anything, systemID, slug, tags2, int64(200), mock.AnythingOfType("string")).
 			Return(nil).Once()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		mockPlatform.On(
+			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(nil).Once()
 
 		_, err = cmdTitle(mockPlatform, env2)
 		require.NoError(t, err)
@@ -1652,7 +1668,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 			Return(nil).Maybe()
 
 		// Platform launch fails
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(assert.AnError)
 
 		_, err := cmdTitle(mockPlatform, env)
@@ -1826,7 +1842,9 @@ func TestCmdTitlePerformance(t *testing.T) {
 			mock.AnythingOfType("int64"), mock.AnythingOfType("string")).
 			Return(nil).Maybe()
 
-		mockPlatform.On("LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockPlatform.On(
+			"LaunchMedia", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(nil)
 
 		result, err := cmdTitle(mockPlatform, env)
 

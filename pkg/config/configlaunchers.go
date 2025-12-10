@@ -44,6 +44,10 @@ type LaunchersDefault struct {
 	Launcher   string `toml:"launcher"`
 	InstallDir string `toml:"install_dir,omitempty"`
 	ServerURL  string `toml:"server_url,omitempty"`
+	// Action specifies the default launch action. Common values:
+	// - "" or "run": Default behavior (launch/play the media)
+	// - "details": Show media details/info page instead of launching
+	Action string `toml:"action,omitempty"`
 }
 
 type LaunchersCustom struct {

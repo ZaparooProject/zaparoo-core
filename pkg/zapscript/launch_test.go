@@ -51,7 +51,7 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 	genesisLauncher := platforms.Launcher{
 		ID:       "genesis-retroarch",
 		SystemID: "genesis",
-		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			return &os.Process{}, nil
 		},
 	}
@@ -64,7 +64,8 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "genesis-retroarch"
 		}),
-		(*database.Database)(nil)).Return(nil)
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
@@ -101,7 +102,7 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 	explicitLauncher := platforms.Launcher{
 		ID:       "genesis-explicit",
 		SystemID: "genesis",
-		Launch: func(_ *config.Instance, _ string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, _ string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			return &os.Process{}, nil
 		},
 	}
@@ -114,7 +115,8 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 		mock.MatchedBy(func(l *platforms.Launcher) bool {
 			return l != nil && l.ID == "genesis-explicit"
 		}),
-		(*database.Database)(nil)).Return(nil)
+		(*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
@@ -145,7 +147,8 @@ func TestCmdLaunch_InvalidSystemArgFallsBackToAutoDetect(t *testing.T) {
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
 	mockPlatform.On("LaunchMedia", cfg, absPath,
-		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
+		(*platforms.Launcher)(nil), (*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
@@ -175,7 +178,8 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
 	mockPlatform.On("LaunchMedia", cfg, absPath,
-		(*platforms.Launcher)(nil), (*database.Database)(nil)).Return(nil)
+		(*platforms.Launcher)(nil), (*database.Database)(nil),
+		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{

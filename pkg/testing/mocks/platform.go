@@ -147,8 +147,9 @@ func (m *MockPlatform) LaunchSystem(cfg *config.Instance, systemID string) error
 // LaunchMedia launches some media by path and sets the active media if it was successful
 func (m *MockPlatform) LaunchMedia(
 	cfg *config.Instance, path string, launcher *platforms.Launcher, db *database.Database,
+	opts *platforms.LaunchOptions,
 ) error {
-	args := m.Called(cfg, path, launcher, db)
+	args := m.Called(cfg, path, launcher, db, opts)
 	m.launchedMedia = append(m.launchedMedia, path)
 	if err := args.Error(0); err != nil {
 		return fmt.Errorf("mock operation failed: %w", err)

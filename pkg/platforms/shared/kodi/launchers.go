@@ -41,7 +41,7 @@ func NewKodiLocalLauncher() platforms.Launcher {
 			".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".m2ts", ".mts",
 			".m3u", ".m3u8",
 		},
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchFile(path)
 		},
@@ -56,7 +56,7 @@ func NewKodiMovieLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiMovie},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchMovie(path)
 		},
@@ -80,7 +80,7 @@ func NewKodiTVLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiEpisode},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchTVEpisode(path)
 		},
@@ -106,7 +106,7 @@ func NewKodiMusicLauncher() platforms.Launcher {
 		Extensions: []string{
 			".mp3", ".flac", ".ogg", ".m4a", ".wav", ".wma", ".aac", ".opus",
 		},
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchFile(path)
 		},
@@ -121,7 +121,7 @@ func NewKodiAlbumLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiAlbum},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchAlbum(path)
 		},
@@ -145,7 +145,7 @@ func NewKodiArtistLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiArtist},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchArtist(path)
 		},
@@ -169,7 +169,7 @@ func NewKodiTVShowLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiShow},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchTVShow(path)
 		},
@@ -193,7 +193,7 @@ func NewKodiSongLauncher() platforms.Launcher {
 		Schemes:             []string{shared.SchemeKodiSong},
 		SkipFilesystemScan:  true,                   // Uses Kodi API via Scanner, no filesystem scanning needed
 		UsesRunningInstance: platforms.InstanceKodi, // Sends commands to running Kodi via JSON-RPC
-		Launch: func(cfg *config.Instance, path string) (*os.Process, error) {
+		Launch: func(cfg *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			client := NewClient(cfg)
 			return nil, client.LaunchSong(path)
 		},

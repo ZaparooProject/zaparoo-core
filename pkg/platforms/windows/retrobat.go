@@ -232,7 +232,7 @@ func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher
 			}
 			return false
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			if !isRetroBatRunning() {
 				return nil, errors.New("RetroBat is not running")
 			}

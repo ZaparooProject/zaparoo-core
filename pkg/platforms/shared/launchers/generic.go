@@ -39,7 +39,7 @@ func NewGenericLauncher() platforms.Launcher {
 		ID:            "Generic",
 		Extensions:    []string{".sh"},
 		AllowListOnly: true,
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			cmd := exec.CommandContext(context.Background(), path)
 			if err := cmd.Start(); err != nil {
 				return nil, fmt.Errorf("failed to start command: %w", err)

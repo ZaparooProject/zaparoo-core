@@ -171,7 +171,7 @@ func NewHeroicLauncher(opts HeroicOptions) platforms.Launcher {
 
 			return results, nil
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// Extract game app name from heroic://appName format
 			appName, err := virtualpath.ExtractSchemeID(path, shared.SchemeHeroic)
 			if err != nil {

@@ -735,7 +735,7 @@ func (p *Platform) NewLaunchBoxLauncher() platforms.Launcher {
 
 			return results, nil
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			id, err := virtualpath.ExtractSchemeID(path, shared.SchemeLaunchBox)
 			if err != nil {
 				return nil, fmt.Errorf("failed to extract LaunchBox game ID from path: %w", err)

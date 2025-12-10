@@ -160,7 +160,8 @@ func TestZapScriptExecution(t *testing.T) {
 						cfg,
 						fixtures.SearchResults.Collection[0].Path,
 						(*platforms.Launcher)(nil),
-						db).Return(nil)
+						db,
+						(*platforms.LaunchOptions)(nil)).Return(nil)
 				case "SENDKEY":
 					platform.On("KeyboardPress", tt.commands[1]).Return(nil)
 				case "SENDPAD":
@@ -180,7 +181,7 @@ func TestZapScriptExecution(t *testing.T) {
 					require.NoError(t, err)
 					require.Len(t, results, 1, "Should find media")
 
-					err = platform.LaunchMedia(cfg, results[0].Path, nil, db)
+					err = platform.LaunchMedia(cfg, results[0].Path, nil, db, nil)
 					require.NoError(t, err)
 
 					// Verify launch was tracked
@@ -295,7 +296,8 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 		cfg,
 		fixtures.SearchResults.Collection[0].Path,
 		(*platforms.Launcher)(nil),
-		db).Return(nil)
+		db,
+		(*platforms.LaunchOptions)(nil)).Return(nil)
 	platform.On("KeyboardPress", "RETURN").Return(nil)
 
 	// Execute complex workflow by directly calling mocked methods
@@ -306,7 +308,7 @@ func TestZapScriptComplexWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "Should find media")
 
-	err = platform.LaunchMedia(cfg, results[0].Path, nil, db)
+	err = platform.LaunchMedia(cfg, results[0].Path, nil, db, nil)
 	require.NoError(t, err)
 
 	// Step 2: Send keyboard input
