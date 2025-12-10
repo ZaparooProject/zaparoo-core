@@ -83,3 +83,10 @@ func DefaultWindowsOptions() Options {
 		FallbackPath: `C:\Program Files (x86)\Steam`,
 	}
 }
+
+// DefaultDarwinOptions returns sensible defaults for macOS.
+func DefaultDarwinOptions() Options {
+	return Options{
+		FallbackPath: "~/Library/Application Support/Steam",
+	}
+}

@@ -115,4 +115,34 @@ func TestNewSteamLauncherWithDefaultOptions(t *testing.T) {
 		assert.NotNil(t, launcher.Scanner)
 		assert.NotNil(t, launcher.Launch)
 	})
+
+	t.Run("works_with_darwin_defaults", func(t *testing.T) {
+		t.Parallel()
+
+		launcher := NewSteamLauncher(DefaultDarwinOptions())
+
+		assert.Equal(t, "Steam", launcher.ID)
+		assert.NotNil(t, launcher.Scanner)
+		assert.NotNil(t, launcher.Launch)
+	})
+
+	t.Run("works_with_bazzite_defaults", func(t *testing.T) {
+		t.Parallel()
+
+		launcher := NewSteamLauncher(DefaultBazziteOptions())
+
+		assert.Equal(t, "Steam", launcher.ID)
+		assert.NotNil(t, launcher.Scanner)
+		assert.NotNil(t, launcher.Launch)
+	})
+
+	t.Run("works_with_chimeraos_defaults", func(t *testing.T) {
+		t.Parallel()
+
+		launcher := NewSteamLauncher(DefaultChimeraOSOptions())
+
+		assert.Equal(t, "Steam", launcher.ID)
+		assert.NotNil(t, launcher.Scanner)
+		assert.NotNil(t, launcher.Launch)
+	})
 }

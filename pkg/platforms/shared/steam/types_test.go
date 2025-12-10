@@ -77,3 +77,14 @@ func TestDefaultWindowsOptions(t *testing.T) {
 	assert.False(t, opts.UseXdgOpen)
 	assert.False(t, opts.CheckFlatpak)
 }
+
+func TestDefaultDarwinOptions(t *testing.T) {
+	t.Parallel()
+
+	opts := DefaultDarwinOptions()
+
+	assert.Equal(t, "~/Library/Application Support/Steam", opts.FallbackPath)
+	// macOS ignores these fields, but they should be at default values
+	assert.False(t, opts.UseXdgOpen)
+	assert.False(t, opts.CheckFlatpak)
+}
