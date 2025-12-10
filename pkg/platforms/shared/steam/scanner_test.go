@@ -22,11 +22,18 @@ package steam
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// vdfEscapePath escapes backslashes in paths for VDF files.
+// VDF format requires backslashes to be escaped as double backslashes.
+func vdfEscapePath(path string) string {
+	return strings.ReplaceAll(path, `\`, `\\`)
+}
 
 func TestScanSteamApps(t *testing.T) {
 	t.Parallel()
@@ -84,7 +91,7 @@ func TestScanSteamApps(t *testing.T) {
 {
 	"0"
 	{
-		"path"		"` + tempDir + `"
+		"path"		"` + vdfEscapePath(tempDir) + `"
 		"label"		""
 		"contentid"		"123456"
 		"totalsize"		"0"
@@ -134,7 +141,7 @@ func TestScanSteamApps(t *testing.T) {
 {
 	"0"
 	{
-		"path"		"` + tempDir + `"
+		"path"		"` + vdfEscapePath(tempDir) + `"
 	}
 }`
 		err := os.WriteFile(filepath.Join(steamAppsDir, "libraryfolders.vdf"), []byte(vdfContent), 0o600)

@@ -88,7 +88,8 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
 		opts := command.StartOptions{HideWindow: true}
-		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", []string{"/c", "start", "steam://rungameid/730"}).Return(nil)
+		args := []string{"/c", "start", "steam://rungameid/730"}
+		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", args).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
@@ -104,7 +105,8 @@ func TestClientLaunch(t *testing.T) {
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
 		opts := command.StartOptions{HideWindow: true}
-		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", []string{"/c", "start", "steam://rungameid/730"}).Return(nil)
+		args := []string{"/c", "start", "steam://rungameid/730"}
+		mockCmd.On("StartWithOptions", mock.Anything, opts, "cmd", args).Return(nil)
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
@@ -131,7 +133,9 @@ func TestClientLaunch(t *testing.T) {
 
 		mockCmd := testhelpers.NewMockCommandExecutor()
 		mockCmd.ExpectedCalls = nil
-		mockCmd.On("StartWithOptions", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("command failed"))
+		mockCmd.On(
+			"StartWithOptions", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		).Return(errors.New("command failed"))
 
 		client := NewClientWithExecutor(Options{}, mockCmd)
 
