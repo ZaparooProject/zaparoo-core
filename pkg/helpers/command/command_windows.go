@@ -1,3 +1,5 @@
+//go:build windows
+
 // Zaparoo Core
 // Copyright (c) 2025 The Zaparoo Project Contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -17,28 +19,27 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
-package helpers
+package command
 
 import (
 	"context"
 	"os/exec"
+	"syscall"
 )
 
-// CommandExecutor provides an abstraction over exec.Command for testability.
-// This allows commands to be mocked in tests without executing real system commands.
-type CommandExecutor interface {
-	// Run executes a command and waits for it to complete.
-	// Returns an error if the command fails to start or exits with non-zero status.
-	Run(ctx context.Context, name string, args ...string) error
-}
-
-// RealCommandExecutor uses actual exec.Command to execute system commands.
-// This is the production implementation used in normal operation.
-type RealCommandExecutor struct{}
-
-// Run executes a system command using exec.CommandContext.
+// StartWithOptions starts a command with platform-specific options on Windows.
+// Supports HideWindow to prevent console window flash.
 //
 //nolint:wrapcheck // Wrapping exec errors loses important context
-func (*RealCommandExecutor) Run(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
+func (*RealExecutor) StartWithOptions(
+	ctx context.Context,
+	opts StartOptions,
+	name string,
+	args ...string,
+) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if opts.HideWindow {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
+	return cmd.Start()
 }

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/adrg/xdg"
 )
 
@@ -69,11 +70,11 @@ const (
 // InstallApplication installs application files (binary, application launcher entry, icon).
 // Does not install systemd service or desktop shortcut. Must NOT be run as root.
 func InstallApplication() error {
-	return doInstallApplication(&helpers.RealCommandExecutor{})
+	return doInstallApplication(&command.RealExecutor{})
 }
 
 // doInstallApplication is the internal testable implementation.
-func doInstallApplication(cmd helpers.CommandExecutor) error {
+func doInstallApplication(cmd command.Executor) error {
 	if os.Geteuid() == 0 {
 		return errors.New("application install must not be run as root")
 	}
@@ -162,11 +163,11 @@ func doInstallApplication(cmd helpers.CommandExecutor) error {
 // InstallService installs systemd user service.
 // Does not install application files. Must NOT be run as root.
 func InstallService() error {
-	return doInstallService(&helpers.RealCommandExecutor{})
+	return doInstallService(&command.RealExecutor{})
 }
 
 // doInstallService is the internal testable implementation.
-func doInstallService(cmd helpers.CommandExecutor) error {
+func doInstallService(cmd command.Executor) error {
 	if os.Geteuid() == 0 {
 		return errors.New("service install must not be run as root")
 	}
@@ -278,11 +279,11 @@ func InstallDesktop() error {
 // InstallHardware installs hardware support files (udev rules, modprobe blacklist).
 // Must be run as root.
 func InstallHardware() error {
-	return doInstallHardware(&helpers.RealCommandExecutor{})
+	return doInstallHardware(&command.RealExecutor{})
 }
 
 // doInstallHardware is the internal testable implementation.
-func doInstallHardware(cmd helpers.CommandExecutor) error {
+func doInstallHardware(cmd command.Executor) error {
 	if os.Geteuid() != 0 {
 		return errors.New("hardware install must be run as root")
 	}
@@ -323,11 +324,11 @@ func doInstallHardware(cmd helpers.CommandExecutor) error {
 // UninstallApplication removes application files (binary, application launcher entry, icon).
 // Does not remove systemd service or desktop shortcut. Must NOT be run as root.
 func UninstallApplication() error {
-	return doUninstallApplication(&helpers.RealCommandExecutor{})
+	return doUninstallApplication(&command.RealExecutor{})
 }
 
 // doUninstallApplication is the internal testable implementation.
-func doUninstallApplication(cmd helpers.CommandExecutor) error {
+func doUninstallApplication(cmd command.Executor) error {
 	if os.Geteuid() == 0 {
 		return errors.New("application uninstall must not be run as root")
 	}
@@ -383,11 +384,11 @@ func doUninstallApplication(cmd helpers.CommandExecutor) error {
 // UninstallService removes systemd user service.
 // Does not remove application files. Must NOT be run as root.
 func UninstallService() error {
-	return doUninstallService(&helpers.RealCommandExecutor{})
+	return doUninstallService(&command.RealExecutor{})
 }
 
 // doUninstallService is the internal testable implementation.
-func doUninstallService(cmd helpers.CommandExecutor) error {
+func doUninstallService(cmd command.Executor) error {
 	if os.Geteuid() == 0 {
 		return errors.New("service uninstall must not be run as root")
 	}
@@ -435,11 +436,11 @@ func UninstallDesktop() error {
 // UninstallHardware removes hardware support files.
 // Must be run as root.
 func UninstallHardware() error {
-	return doUninstallHardware(&helpers.RealCommandExecutor{})
+	return doUninstallHardware(&command.RealExecutor{})
 }
 
 // doUninstallHardware is the internal testable implementation.
-func doUninstallHardware(cmd helpers.CommandExecutor) error {
+func doUninstallHardware(cmd command.Executor) error {
 	if os.Geteuid() != 0 {
 		return errors.New("hardware uninstall must be run as root")
 	}

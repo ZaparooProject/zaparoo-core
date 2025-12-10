@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
 
@@ -73,11 +74,7 @@ func (p *Platform) LaunchMedia(
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := []platforms.Launcher{
 		// Steam - primary launcher, direct command for console experience
-		launchers.NewSteamLauncher(launchers.SteamOptions{
-			FallbackPath: "/home/gamer/.steam/steam",
-			UseXdgOpen:   false, // Direct steam command
-			CheckFlatpak: false,
-		}),
+		steam.NewSteamLauncher(steam.DefaultChimeraOSOptions()),
 
 		// ChimeraOS-specific GOG launcher (scans Chimera content)
 		NewChimeraGOGLauncher(),

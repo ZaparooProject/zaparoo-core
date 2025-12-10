@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
 
@@ -84,11 +85,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiTVShowLauncher(),
 
 		// Steam - support native, Flatpak, and Snap
-		launchers.NewSteamLauncher(launchers.SteamOptions{
-			FallbackPath: "/usr/games/steam",
-			UseXdgOpen:   true, // Desktop-friendly
-			CheckFlatpak: true,
-		}),
+		steam.NewSteamLauncher(steam.DefaultLinuxOptions()),
 
 		// Lutris - check both native and Flatpak
 		launchers.NewLutrisLauncher(launchers.LutrisOptions{

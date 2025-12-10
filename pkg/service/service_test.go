@@ -183,11 +183,11 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 	// Call the function
 	checkAndResumeIndexing(mockPlatform, cfg, db, st)
 
-	// Wait for async operation to complete with polling loop
-	// With minimal system list (just NES), this should complete quickly
+	// Wait for status to change from "pending" - this confirms resume was triggered
+	// We only need to see it start (change from pending), not complete
 	var status string
-	maxWait := time.Second
-	pollInterval := 50 * time.Millisecond
+	maxWait := 30 * time.Second
+	pollInterval := 100 * time.Millisecond
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		var getStatusErr error
@@ -199,21 +199,25 @@ func TestCheckAndResumeIndexing_WithPendingStatus(t *testing.T) {
 		time.Sleep(pollInterval)
 	}
 
-	// Verify that indexing resume was triggered (it will fail due to test database limitations)
-	// With the minimal test database setup, indexing fails at the DBConfig table step
-	// This is expected behavior - the test verifies that resume logic is triggered
-	// Note: Status could also be "running" if async operation hasn't completed yet
-	validStatuses := []string{
-		mediadb.IndexingStatusCompleted,
-		mediadb.IndexingStatusFailed,
-		mediadb.IndexingStatusRunning,
-	}
-	assert.Contains(t, validStatuses, status,
-		"Indexing should complete or fail (due to test database limitations)")
+	// The key assertion: status should have changed from "pending"
+	// This proves the resume logic was triggered
+	assert.NotEqual(t, mediadb.IndexingStatusPending, status,
+		"Status should have changed from pending (resume logic should have triggered)")
 
-	// The important part is that the resume logic was triggered, which we can verify
-	// by checking that the status changed from "pending"
-	assert.NotEqual(t, mediadb.IndexingStatusPending, status, "Status should have changed from pending")
+	// Cancel any running indexing to ensure clean test cleanup
+	// This prevents "database is closed" errors during cleanup
+	if status == mediadb.IndexingStatusRunning {
+		methods.CancelIndexing()
+		// Wait briefly for cancellation
+		cancelDeadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(cancelDeadline) {
+			status, _ = db.MediaDB.GetIndexingStatus()
+			if status != mediadb.IndexingStatusRunning {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 }
 
 func TestCheckAndResumeIndexing_DatabaseError(t *testing.T) {

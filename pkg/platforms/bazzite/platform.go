@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
 
@@ -73,11 +74,7 @@ func (p *Platform) LaunchMedia(
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := []platforms.Launcher{
 		// Steam - support both native (default) and Flatpak
-		launchers.NewSteamLauncher(launchers.SteamOptions{
-			FallbackPath: "/usr/games/steam",
-			UseXdgOpen:   true, // Works with native + Flatpak
-			CheckFlatpak: true,
-		}),
+		steam.NewSteamLauncher(steam.DefaultBazziteOptions()),
 
 		// Lutris - pre-installed native on Bazzite
 		launchers.NewLutrisLauncher(launchers.LutrisOptions{

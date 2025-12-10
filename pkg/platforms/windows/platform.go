@@ -42,6 +42,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -56,7 +57,6 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/adrg/xdg"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sys/windows/registry"
 )
 
 type Platform struct {
@@ -231,49 +231,6 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 	return "", false
 }
 
-func findSteamDir(cfg *config.Instance) string {
-	const fallbackPath = "C:\\Program Files (x86)\\Steam"
-
-	// Check for user-configured Steam install directory first
-	if def, ok := cfg.LookupLauncherDefaults("Steam"); ok && def.InstallDir != "" {
-		if _, err := os.Stat(def.InstallDir); err == nil {
-			log.Debug().Msgf("using user-configured Steam directory: %s", def.InstallDir)
-			return def.InstallDir
-		}
-		log.Warn().Msgf("user-configured Steam directory not found: %s", def.InstallDir)
-	}
-
-	// Try 64-bit systems first (most common)
-	paths := []string{
-		`SOFTWARE\Wow6432Node\Valve\Steam`,
-		`SOFTWARE\Valve\Steam`,
-	}
-
-	for _, path := range paths {
-		key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
-		if err != nil {
-			continue
-		}
-
-		installPath, _, err := key.GetStringValue("InstallPath")
-		if closeErr := key.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("error closing registry key")
-		}
-		if err != nil {
-			continue
-		}
-
-		// Validate the path exists
-		if _, statErr := os.Stat(installPath); statErr == nil {
-			log.Debug().Msgf("found Steam installation via registry: %s", installPath)
-			return installPath
-		}
-	}
-
-	log.Debug().Msgf("Steam registry detection failed, using fallback: %s", fallbackPath)
-	return fallbackPath
-}
-
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
 		kodi.NewKodiLocalLauncher(),
@@ -284,62 +241,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		kodi.NewKodiAlbumLauncher(),
 		kodi.NewKodiArtistLauncher(),
 		kodi.NewKodiTVShowLauncher(),
-		{
-			ID:       "Steam",
-			SystemID: systemdefs.SystemPC,
-			Schemes:  []string{shared.SchemeSteam},
-			Scanner: func(
-				_ context.Context,
-				cfg *config.Instance,
-				_ string,
-				results []platforms.ScanResult,
-			) ([]platforms.ScanResult, error) {
-				steamRoot := findSteamDir(cfg)
-				steamAppsRoot := filepath.Join(steamRoot, "steamapps")
-
-				// Scan official Steam apps
-				appResults, err := helpers.ScanSteamApps(steamAppsRoot)
-				if err != nil {
-					return nil, fmt.Errorf("failed to scan Steam apps: %w", err)
-				}
-				results = append(results, appResults...)
-
-				// Scan non-Steam games (shortcuts)
-				shortcutResults, err := helpers.ScanSteamShortcuts(steamRoot)
-				if err != nil {
-					log.Warn().Err(err).Msg("failed to scan Steam shortcuts, continuing without them")
-				} else {
-					results = append(results, shortcutResults...)
-				}
-
-				return results, nil
-			},
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
-				// Handle native Steam URL format: steam://rungameid/123
-				// Normalize to standard virtual path format: steam://123
-				if strings.HasPrefix(path, "steam://rungameid/") {
-					path = strings.Replace(path, "steam://rungameid/", "steam://", 1)
-				}
-
-				id, err := virtualpath.ExtractSchemeID(path, shared.SchemeSteam)
-				if err != nil {
-					return nil, fmt.Errorf("failed to extract Steam game ID from path: %w", err)
-				}
-
-				//nolint:gosec // Safe: launches Steam with game ID from internal database
-				cmd := exec.CommandContext(context.Background(),
-					"cmd", "/c",
-					"start",
-					"steam://rungameid/"+id,
-				)
-				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-				err = cmd.Start()
-				if err != nil {
-					return nil, fmt.Errorf("failed to start steam: %w", err)
-				}
-				return nil, nil //nolint:nilnil // Steam launches don't return a process handle
-			},
-		},
+		steam.NewSteamLauncher(steam.DefaultWindowsOptions()),
 		{
 			ID:       "Flashpoint",
 			SystemID: systemdefs.SystemPC,

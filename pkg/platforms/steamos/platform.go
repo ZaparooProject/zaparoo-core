@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 )
 
@@ -71,14 +72,7 @@ func (p *Platform) LaunchMedia(
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	ls := []platforms.Launcher{
 		// Steam with Steam Deck optimizations
-		launchers.NewSteamLauncher(launchers.SteamOptions{
-			FallbackPath: "/home/deck/.steam/steam",
-			ExtraPaths: []string{
-				"/home/deck/.local/share/Steam",
-			},
-			UseXdgOpen:   false, // Direct steam command for Game Mode
-			CheckFlatpak: false, // Steam Deck uses native Steam
-		}),
+		steam.NewSteamLauncher(steam.DefaultSteamOSOptions()),
 
 		// Generic for EmuDeck and custom scripts
 		launchers.NewGenericLauncher(),
