@@ -31,6 +31,7 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
@@ -40,11 +41,8 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-var (
-	ErrMissingParams = errors.New("missing params")
-	ErrInvalidParams = errors.New("invalid params")
-	ErrNotAllowed    = errors.New("not allowed")
-)
+// ErrNotAllowed is returned when a run request is not allowed.
+var ErrNotAllowed = errors.New("not allowed")
 
 type NoContent struct{}
 
@@ -52,7 +50,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	log.Info().Msg("received run request")
 
 	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
+		return nil, validation.ErrMissingParams
 	}
 
 	var t tokens.Token
@@ -60,6 +58,12 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	var params models.RunParams
 	err := json.Unmarshal(env.Params, &params)
 	if err == nil {
+		// Validate the params
+		if err := validation.DefaultValidator.Validate(&params); err != nil {
+			log.Error().Err(err).Msg("invalid params")
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+
 		log.Debug().Msgf("unmarshalled run params: %+v", params)
 
 		if params.Type != nil {
@@ -83,14 +87,14 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 			t.Data = strings.ReplaceAll(t.Data, " ", "")
 
 			if _, err := hex.DecodeString(t.Data); err != nil {
-				return nil, ErrInvalidParams
+				return nil, validation.ErrInvalidParams
 			}
 
 			hasArg = true
 		}
 
 		if !hasArg {
-			return nil, ErrInvalidParams
+			return nil, validation.ErrInvalidParams
 		}
 
 		if params.Unsafe {
@@ -102,11 +106,11 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 		var text string
 		err := json.Unmarshal(env.Params, &text)
 		if err != nil {
-			return nil, ErrInvalidParams
+			return nil, validation.ErrInvalidParams
 		}
 
 		if text == "" {
-			return nil, ErrMissingParams
+			return nil, validation.ErrMissingParams
 		}
 
 		t.Text = norm.NFC.String(text)

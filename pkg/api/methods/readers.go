@@ -20,11 +20,12 @@
 package methods
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/rs/zerolog/log"
 )
@@ -32,14 +33,10 @@ import (
 func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received reader write request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.ReaderWriteParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	rs := env.State.ListReaders()

@@ -17,28 +17,29 @@
 // You should have received a copy of the GNU General Public License
 // along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 
+//nolint:revive // custom validation tags (letter, duration, etc.) are unknown to revive
 package models
 
 import "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 
 type SearchParams struct {
-	Systems    *[]string `json:"systems"`
-	MaxResults *int      `json:"maxResults"`
+	Systems    *[]string `json:"systems" validate:"omitempty,dive,system"`
+	MaxResults *int      `json:"maxResults" validate:"omitempty,gt=0,max=1000"`
 	Cursor     *string   `json:"cursor,omitempty"`
-	Tags       *[]string `json:"tags,omitempty"`
-	Letter     *string   `json:"letter,omitempty"`
+	Tags       *[]string `json:"tags,omitempty" validate:"omitempty,dive,min=1"`
+	Letter     *string   `json:"letter,omitempty" validate:"omitempty,letter"`
 	Query      *string   `json:"query"`
 }
 
 type MediaIndexParams struct {
-	Systems *[]string `json:"systems"`
+	Systems *[]string `json:"systems" validate:"omitempty,dive,system"`
 }
 
 type RunParams struct {
 	Type   *string `json:"type"`
 	UID    *string `json:"uid"`
 	Text   *string `json:"text"`
-	Data   *string `json:"data"`
+	Data   *string `json:"data" validate:"omitempty,hexdata"`
 	Unsafe bool    `json:"unsafe"`
 }
 
@@ -50,30 +51,30 @@ type RunScriptParams struct {
 }
 
 type AddMappingParams struct {
-	Label    string `json:"label"`
-	Type     string `json:"type"`
-	Match    string `json:"match"`
-	Pattern  string `json:"pattern"`
+	Label    string `json:"label" validate:"max=255"`
+	Type     string `json:"type" validate:"required,oneof=id value data uid text"`
+	Match    string `json:"match" validate:"required,oneof=exact partial regex"`
+	Pattern  string `json:"pattern" validate:"required"`
 	Override string `json:"override"`
 	Enabled  bool   `json:"enabled"`
 }
 
 type DeleteMappingParams struct {
-	ID int `json:"id"`
+	ID int `json:"id" validate:"gt=0"`
 }
 
 type UpdateMappingParams struct {
-	Label    *string `json:"label"`
+	Label    *string `json:"label" validate:"omitempty,max=255"`
 	Enabled  *bool   `json:"enabled"`
-	Type     *string `json:"type"`
-	Match    *string `json:"match"`
-	Pattern  *string `json:"pattern"`
+	Type     *string `json:"type" validate:"omitempty,oneof=id value data uid text"`
+	Match    *string `json:"match" validate:"omitempty,oneof=exact partial regex"`
+	Pattern  *string `json:"pattern" validate:"omitempty,min=1"`
 	Override *string `json:"override"`
-	ID       int     `json:"id"`
+	ID       int     `json:"id" validate:"gt=0"`
 }
 
 type ReaderWriteParams struct {
-	Text string `json:"text"`
+	Text string `json:"text" validate:"required"`
 }
 
 type UpdateSettingsParams struct {
@@ -81,37 +82,37 @@ type UpdateSettingsParams struct {
 	DebugLogging            *bool     `json:"debugLogging"`
 	AudioScanFeedback       *bool     `json:"audioScanFeedback"`
 	ReadersAutoDetect       *bool     `json:"readersAutoDetect"`
-	ReadersScanMode         *string   `json:"readersScanMode"`
-	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay"`
-	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems"`
+	ReadersScanMode         *string   `json:"readersScanMode" validate:"omitempty,oneof=tap hold"`
+	ReadersScanExitDelay    *float32  `json:"readersScanExitDelay" validate:"omitempty,gte=0"`
+	ReadersScanIgnoreSystem *[]string `json:"readersScanIgnoreSystems" validate:"omitempty,dive,system"`
 }
 
 type UpdatePlaytimeLimitsParams struct {
 	Enabled      *bool     `json:"enabled"`
-	Daily        *string   `json:"daily"`
-	Session      *string   `json:"session"`
-	SessionReset *string   `json:"sessionReset"`
-	Warnings     *[]string `json:"warnings"`
-	Retention    *int      `json:"retention"`
+	Daily        *string   `json:"daily" validate:"omitempty,duration"`
+	Session      *string   `json:"session" validate:"omitempty,duration"`
+	SessionReset *string   `json:"sessionReset" validate:"omitempty,duration"`
+	Warnings     *[]string `json:"warnings" validate:"omitempty,dive,duration"`
+	Retention    *int      `json:"retention" validate:"omitempty,gte=0"`
 }
 
 type NewClientParams struct {
-	Name string `json:"name"`
+	Name string `json:"name" validate:"required,min=1,max=255"`
 }
 
 type DeleteClientParams struct {
-	ID string `json:"id"`
+	ID string `json:"id" validate:"required,min=1"`
 }
 
 type MediaStartedParams struct {
-	SystemID   string `json:"systemId"`
-	SystemName string `json:"systemName"`
-	MediaPath  string `json:"mediaPath"`
-	MediaName  string `json:"mediaName"`
+	SystemID   string `json:"systemId" validate:"required"`
+	SystemName string `json:"systemName" validate:"required"`
+	MediaPath  string `json:"mediaPath" validate:"required"`
+	MediaName  string `json:"mediaName" validate:"required"`
 }
 
 type UpdateActiveMediaParams struct {
-	SystemID  string `json:"systemId"`
-	MediaPath string `json:"mediaPath"`
-	MediaName string `json:"mediaName"`
+	SystemID  string `json:"systemId" validate:"required"`
+	MediaPath string `json:"mediaPath" validate:"required"`
+	MediaName string `json:"mediaName" validate:"required"`
 }

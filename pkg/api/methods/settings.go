@@ -20,13 +20,13 @@
 package methods
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/rs/zerolog/log"
@@ -81,23 +81,15 @@ func HandleSettingsReload(env requests.RequestEnv) (any, error) {
 func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received settings update request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.UpdateSettingsParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	if params.RunZapScript != nil {
 		log.Info().Bool("runZapScript", *params.RunZapScript).Msg("update")
-		if *params.RunZapScript {
-			env.State.SetRunZapScript(true)
-		} else {
-			env.State.SetRunZapScript(false)
-		}
+		env.State.SetRunZapScript(*params.RunZapScript)
 	}
 
 	if params.DebugLogging != nil {
@@ -117,13 +109,11 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.ReadersScanMode != nil {
 		log.Info().Str("readersScanMode", *params.ReadersScanMode).Msg("update")
-		switch *params.ReadersScanMode {
-		case "":
+		// empty string defaults to tap mode
+		if *params.ReadersScanMode == "" {
 			env.Config.SetScanMode(config.ScanModeTap)
-		case config.ScanModeTap, config.ScanModeHold:
+		} else {
 			env.Config.SetScanMode(*params.ReadersScanMode)
-		default:
-			return nil, ErrInvalidParams
 		}
 	}
 
@@ -137,7 +127,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 		env.Config.SetScanIgnoreSystem(*params.ReadersScanIgnoreSystem)
 	}
 
-	err = env.Config.Save()
+	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
@@ -193,14 +183,10 @@ func HandlePlaytimeLimits(env requests.RequestEnv) (any, error) {
 func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received playtime limits update request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.UpdatePlaytimeLimitsParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	// Update each parameter if provided
@@ -224,7 +210,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.Daily != nil {
 		log.Info().Str("daily", *params.Daily).Msg("playtime limits update")
-		err = env.Config.SetDailyLimit(*params.Daily)
+		err := env.Config.SetDailyLimit(*params.Daily)
 		if err != nil {
 			return nil, fmt.Errorf("invalid daily limit duration: %w", err)
 		}
@@ -232,7 +218,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.Session != nil {
 		log.Info().Str("session", *params.Session).Msg("playtime limits update")
-		err = env.Config.SetSessionLimit(*params.Session)
+		err := env.Config.SetSessionLimit(*params.Session)
 		if err != nil {
 			return nil, fmt.Errorf("invalid session limit duration: %w", err)
 		}
@@ -240,7 +226,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.SessionReset != nil {
 		log.Info().Str("session_reset", *params.SessionReset).Msg("playtime limits update")
-		err = env.Config.SetSessionResetTimeout(params.SessionReset)
+		err := env.Config.SetSessionResetTimeout(params.SessionReset)
 		if err != nil {
 			return nil, fmt.Errorf("invalid session reset duration: %w", err)
 		}
@@ -248,7 +234,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	if params.Warnings != nil {
 		log.Info().Strs("warnings", *params.Warnings).Msg("playtime limits update")
-		err = env.Config.SetWarningIntervals(*params.Warnings)
+		err := env.Config.SetWarningIntervals(*params.Warnings)
 		if err != nil {
 			return nil, fmt.Errorf("invalid warning intervals: %w", err)
 		}
@@ -260,7 +246,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 	}
 
 	// Save configuration to disk
-	err = env.Config.Save()
+	err := env.Config.Save()
 	if err != nil {
 		return nil, fmt.Errorf("failed to save config: %w", err)
 	}
