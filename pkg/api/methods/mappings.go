@@ -20,16 +20,15 @@
 package methods
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
@@ -82,40 +81,13 @@ func HandleMappings(env requests.RequestEnv) (any, error) { //nolint:gocritic //
 	return resp, nil
 }
 
-func validateAddMappingParams(amr *models.AddMappingParams) error {
-	if !helpers.Contains(userdb.AllowedMappingTypes, amr.Type) {
-		return errors.New("invalid type")
-	}
-
-	if !helpers.Contains(userdb.AllowedMatchTypes, amr.Match) {
-		return errors.New("invalid match")
-	}
-
-	if amr.Pattern == "" {
-		return errors.New("missing pattern")
-	}
-
-	if amr.Match == userdb.MatchTypeRegex {
-		_, err := regexp.Compile(amr.Pattern)
-		if err != nil {
-			return fmt.Errorf("failed to compile regex pattern: %w", err)
-		}
-	}
-
-	return nil
-}
-
 func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received add mapping request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.AddMappingParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	// convert old type names
@@ -126,10 +98,11 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		params.Type = userdb.MappingTypeValue
 	}
 
-	err = validateAddMappingParams(&params)
-	if err != nil {
-		log.Error().Err(err).Msg("invalid params")
-		return nil, ErrInvalidParams
+	// validate regex pattern compiles if match type is regex
+	if params.Match == userdb.MatchTypeRegex {
+		if err := validation.ValidateRegexPattern(params.Pattern); err != nil {
+			return nil, fmt.Errorf("invalid pattern: %w", err)
+		}
 	}
 
 	m := database.Mapping{
@@ -141,7 +114,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 		Override: params.Override,
 	}
 
-	err = env.Database.UserDB.AddMapping(&m)
+	err := env.Database.UserDB.AddMapping(&m)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add mapping: %w", err)
 	}
@@ -153,17 +126,13 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received delete mapping request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.DeleteMappingParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	err = env.Database.UserDB.DeleteMapping(int64(params.ID))
+	err := env.Database.UserDB.DeleteMapping(int64(params.ID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete mapping: %w", err)
 	}
@@ -171,34 +140,11 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 	return NoContent{}, nil
 }
 
-func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
-	if umr.Label == nil && umr.Enabled == nil && umr.Type == nil &&
-		umr.Match == nil && umr.Pattern == nil && umr.Override == nil {
-		return errors.New("missing fields")
+func validateUpdateMappingHasFields(params *models.UpdateMappingParams) error {
+	if params.Label == nil && params.Enabled == nil && params.Type == nil &&
+		params.Match == nil && params.Pattern == nil && params.Override == nil {
+		return errors.New("at least one field must be provided")
 	}
-
-	if umr.Type != nil && !helpers.Contains(userdb.AllowedMappingTypes, *umr.Type) {
-		return errors.New("invalid type")
-	}
-
-	if umr.Match != nil && !helpers.Contains(userdb.AllowedMatchTypes, *umr.Match) {
-		return errors.New("invalid match")
-	}
-
-	if umr.Pattern != nil && *umr.Pattern == "" {
-		return errors.New("missing pattern")
-	}
-
-	if umr.Match != nil && *umr.Match == userdb.MatchTypeRegex {
-		if umr.Pattern == nil {
-			return errors.New("pattern is required for regex match")
-		}
-		_, err := regexp.Compile(*umr.Pattern)
-		if err != nil {
-			return fmt.Errorf("failed to compile regex pattern: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -206,14 +152,15 @@ func validateUpdateMappingParams(umr *models.UpdateMappingParams) error {
 func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 	log.Info().Msg("received update mapping request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
+	var params models.UpdateMappingParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	var params models.UpdateMappingParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	// check at least one field is provided
+	if err := validateUpdateMappingHasFields(&params); err != nil {
+		return nil, err
 	}
 
 	// convert old type names
@@ -226,10 +173,14 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 		}
 	}
 
-	err = validateUpdateMappingParams(&params)
-	if err != nil {
-		log.Error().Err(err).Msg("invalid params")
-		return nil, ErrInvalidParams
+	// validate regex pattern compiles if match type is regex
+	if params.Match != nil && *params.Match == userdb.MatchTypeRegex {
+		if params.Pattern == nil {
+			return nil, errors.New("pattern is required for regex match")
+		}
+		if err := validation.ValidateRegexPattern(*params.Pattern); err != nil {
+			return nil, fmt.Errorf("invalid pattern: %w", err)
+		}
 	}
 
 	oldMapping, err := env.Database.UserDB.GetMapping(int64(params.ID))

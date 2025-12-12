@@ -21,10 +21,12 @@ package methods
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/userdb"
@@ -105,7 +107,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "invalid type",
+			errorMsg:  "type must be one of",
 		},
 		{
 			name: "invalid match type",
@@ -118,7 +120,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "invalid match",
+			errorMsg:  "match must be one of",
 		},
 		{
 			name: "empty pattern",
@@ -131,7 +133,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "missing pattern",
+			errorMsg:  "pattern is required",
 		},
 		{
 			name: "invalid regex pattern - unclosed bracket",
@@ -144,7 +146,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "invalid regex pattern - unclosed parenthesis",
@@ -157,7 +159,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "invalid regex pattern - invalid repetition",
@@ -170,7 +172,7 @@ func TestValidateAddMappingParams(t *testing.T) {
 				Enabled:  true,
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "valid empty override",
@@ -238,7 +240,12 @@ func TestValidateAddMappingParams(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateAddMappingParams(&tt.params)
+			// Validate struct tags
+			err := validation.DefaultValidator.Validate(&tt.params)
+			// Also validate regex pattern if match type is regex and struct validation passed
+			if err == nil && tt.params.Match == userdb.MatchTypeRegex {
+				err = validation.ValidateRegexPattern(tt.params.Pattern)
+			}
 
 			if tt.wantError {
 				require.Error(t, err, "Expected error for test case: %s", tt.name)
@@ -341,7 +348,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				ID: 1,
 			},
 			wantError: true,
-			errorMsg:  "missing fields",
+			errorMsg:  "at least one field must be provided",
 		},
 		{
 			name: "invalid type",
@@ -350,7 +357,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Type: strPtr("invalid_type"),
 			},
 			wantError: true,
-			errorMsg:  "invalid type",
+			errorMsg:  "type must be one of",
 		},
 		{
 			name: "invalid match type",
@@ -359,7 +366,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Match: strPtr("invalid_match"),
 			},
 			wantError: true,
-			errorMsg:  "invalid match",
+			errorMsg:  "match must be one of",
 		},
 		{
 			name: "empty pattern",
@@ -368,7 +375,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Pattern: strPtr(""),
 			},
 			wantError: true,
-			errorMsg:  "missing pattern",
+			errorMsg:  "pattern must be at least 1",
 		},
 		{
 			name: "invalid regex pattern with regex match",
@@ -378,7 +385,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Pattern: strPtr("[abc"),
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "invalid regex pattern - unclosed parenthesis",
@@ -388,7 +395,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Pattern: strPtr("(test"),
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "invalid regex pattern - invalid repetition",
@@ -398,7 +405,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Pattern: strPtr("*invalid"),
 			},
 			wantError: true,
-			errorMsg:  "failed to compile regex pattern",
+			errorMsg:  "invalid regex pattern",
 		},
 		{
 			name: "valid empty override update",
@@ -426,7 +433,7 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 				Pattern: strPtr("valid_pattern"),
 			},
 			wantError: true,
-			errorMsg:  "invalid type",
+			errorMsg:  "type must be one of",
 		},
 		{
 			name: "valid unicode pattern update",
@@ -501,7 +508,20 @@ func TestValidateUpdateMappingParams(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateUpdateMappingParams(&tt.params)
+			// Validate struct tags
+			err := validation.DefaultValidator.Validate(&tt.params)
+			// Check at least one field is provided
+			if err == nil {
+				err = validateUpdateMappingHasFields(&tt.params)
+			}
+			// Validate regex pattern if match type is regex
+			if err == nil && tt.params.Match != nil && *tt.params.Match == userdb.MatchTypeRegex {
+				if tt.params.Pattern == nil {
+					err = errors.New("pattern is required for regex match")
+				} else {
+					err = validation.ValidateRegexPattern(*tt.params.Pattern)
+				}
+			}
 
 			if tt.wantError {
 				require.Error(t, err, "Expected error for test case: %s", tt.name)
@@ -551,7 +571,7 @@ func TestHandleGenerateMedia_SystemFiltering(t *testing.T) {
 			name:          "invalid system ID",
 			params:        `{"systems": ["invalid_system"]}`,
 			wantError:     true,
-			errorContains: "invalid system ID invalid_system",
+			errorContains: "system \"invalid_system\" not found",
 		},
 	}
 

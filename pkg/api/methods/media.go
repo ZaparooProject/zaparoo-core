@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models/requests"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/notifications"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/validation"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -334,7 +335,13 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 		var params models.MediaIndexParams
 		err := json.Unmarshal(env.Params, &params)
 		if err != nil {
-			return nil, ErrInvalidParams
+			return nil, validation.ErrInvalidParams
+		}
+
+		// Validate params (systems are validated by struct tags)
+		if err := validation.DefaultValidator.Validate(&params); err != nil {
+			log.Error().Err(err).Msg("invalid params")
+			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
 		if params.Systems == nil || len(*params.Systems) == 0 {
@@ -408,14 +415,10 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received media search request")
 
-	if len(env.Params) == 0 {
-		return nil, ErrMissingParams
-	}
-
 	var params models.SearchParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	maxResults := defaultMaxResults
@@ -441,7 +444,6 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		query = *params.Query
 	}
 	tagParams := params.Tags
-	letter := params.Letter
 
 	// Validate and parse tags parameter - requires type:value format
 	// Supports operator prefixes: "+" (AND), "-" (NOT), "~" (OR)
@@ -454,14 +456,10 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		}
 	}
 
-	// Validate letter parameter
+	// Normalize letter parameter (validation already done by struct tag)
 	var validatedLetter *string
-	if letter != nil && *letter != "" {
-		letterValue := strings.ToUpper(strings.TrimSpace(*letter))
-		if letterValue != "0-9" && letterValue != "#" &&
-			(len(letterValue) != 1 || letterValue < "A" || letterValue > "Z") {
-			return nil, fmt.Errorf("invalid letter parameter: %q (must be A-Z, 0-9, or #)", *letter)
-		}
+	if params.Letter != nil && *params.Letter != "" {
+		letterValue := strings.ToUpper(strings.TrimSpace(*params.Letter))
 		validatedLetter = &letterValue
 	}
 
@@ -581,7 +579,13 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 	if len(env.Params) > 0 {
 		err := json.Unmarshal(env.Params, &params)
 		if err != nil {
-			return nil, ErrInvalidParams
+			return nil, validation.ErrInvalidParams
+		}
+
+		// Validate params (systems are validated by struct tags)
+		if err := validation.DefaultValidator.Validate(&params); err != nil {
+			log.Error().Err(err).Msg("invalid params")
+			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 	}
 
@@ -710,9 +714,9 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 	}
 
 	var params models.UpdateActiveMediaParams
-	err := json.Unmarshal(env.Params, &params)
-	if err != nil {
-		return nil, ErrInvalidParams
+	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
+		log.Error().Err(err).Msg("invalid params")
+		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
 	system, err := systemdefs.LookupSystem(params.SystemID)
