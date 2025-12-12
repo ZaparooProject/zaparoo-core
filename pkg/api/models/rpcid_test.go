@@ -145,6 +145,19 @@ func TestRPCID_Equal(t *testing.T) {
 	assert.False(t, id1.Equal(id4))
 }
 
+func TestRPCID_Equal_NilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var nilID *RPCID
+	emptyID := RPCID{}
+	validID := NewStringID("test")
+
+	// nil receiver comparing to empty should return true (both are "absent")
+	assert.True(t, nilID.Equal(emptyID))
+	// nil receiver comparing to valid ID should return false
+	assert.False(t, nilID.Equal(validID))
+}
+
 func TestRPCID_Key(t *testing.T) {
 	t.Parallel()
 
@@ -161,6 +174,22 @@ func TestRPCID_Key(t *testing.T) {
 
 	assert.True(t, m[stringID.Key()])
 	assert.True(t, m[numberID.Key()])
+}
+
+func TestRPCID_Key_NilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var nilID *RPCID
+	// nil receiver should return empty string
+	assert.Empty(t, nilID.Key())
+}
+
+func TestRPCID_String_NilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var nilID *RPCID
+	// nil receiver should return "null" for logging purposes
+	assert.Equal(t, "null", nilID.String())
 }
 
 func TestRPCID_IsNull(t *testing.T) {

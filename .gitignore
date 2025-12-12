@@ -6,6 +6,7 @@
 *.test
 *.out
 *.pprof
+coverage.html
 
 go.work
 
