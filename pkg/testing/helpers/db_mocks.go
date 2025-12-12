@@ -1021,6 +1021,14 @@ func (m *MockMediaDBI) WaitForBackgroundOperations() {
 	m.Called()
 }
 
+func (m *MockMediaDBI) TrackBackgroundOperation() {
+	m.Called()
+}
+
+func (m *MockMediaDBI) BackgroundOperationDone() {
+	m.Called()
+}
+
 func (m *MockMediaDBI) SetIndexingStatus(status string) error {
 	args := m.Called(status)
 	if err := args.Error(0); err != nil {

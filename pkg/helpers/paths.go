@@ -535,6 +535,7 @@ type LaunchParams struct {
 	SetActiveMedia func(*models.ActiveMedia)
 	Launcher       *platforms.Launcher
 	DB             *database.Database
+	Options        *platforms.LaunchOptions
 	Path           string
 }
 
@@ -558,7 +559,7 @@ func DoLaunch(params *LaunchParams) error {
 	switch params.Launcher.Lifecycle {
 	case platforms.LifecycleTracked:
 		// Launch and store process handle for future stopping
-		proc, err := params.Launcher.Launch(params.Config, params.Path)
+		proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}
@@ -571,7 +572,7 @@ func DoLaunch(params *LaunchParams) error {
 		// Launch in goroutine to avoid blocking the service
 		go func() {
 			log.Debug().Msgf("launching blocking process for: %s", params.Path)
-			proc, err := params.Launcher.Launch(params.Config, params.Path)
+			proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
 			if err != nil {
 				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
 				params.SetActiveMedia(nil)
@@ -597,7 +598,7 @@ func DoLaunch(params *LaunchParams) error {
 		}()
 	case platforms.LifecycleFireAndForget:
 		// Default behavior - just launch and forget (ignore process)
-		_, err := params.Launcher.Launch(params.Config, params.Path)
+		_, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
 		if err != nil {
 			return fmt.Errorf("failed to launch: %w", err)
 		}

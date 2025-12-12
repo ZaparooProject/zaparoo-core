@@ -236,6 +236,8 @@ func (r *Reader) Device() string {
 }
 
 func (r *Reader) Connected() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.polling && r.port != nil
 }
 

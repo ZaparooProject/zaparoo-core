@@ -71,7 +71,7 @@ func ParseCustomLaunchers(
 			Folders:    v.MediaDirs,
 			Extensions: formatExtensions(v.FileExts),
 			Lifecycle:  platforms.LifecycleBlocking,
-			Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 				hostname, err := os.Hostname()
 				if err != nil {
 					log.Debug().Err(err).Msgf("error getting hostname, continuing")

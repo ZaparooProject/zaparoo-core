@@ -25,7 +25,7 @@ import (
 )
 
 // NewMockCommandExecutor creates a MockCommandExecutor that succeeds by default.
-// All Run() calls will return nil (success) unless explicitly overridden with On().
+// All Run() and Start() calls will return nil (success) unless explicitly overridden with On().
 //
 // This provides sensible defaults for tests where command execution details don't matter.
 // Override specific commands in tests that need to verify exact behavior:
@@ -39,5 +39,9 @@ func NewMockCommandExecutor() *mocks.MockCommandExecutor {
 	cmd := &mocks.MockCommandExecutor{}
 	// Match any command with any arguments - all succeed by default
 	cmd.On("Run", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
+	cmd.On("Start", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
+	cmd.On(
+		"StartWithOptions", mock.Anything, mock.Anything, mock.AnythingOfType("string"), mock.Anything,
+	).Return(nil).Maybe()
 	return cmd
 }

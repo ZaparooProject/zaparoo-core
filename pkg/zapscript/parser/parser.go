@@ -30,6 +30,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 	"github.com/expr-lang/expr"
 )
@@ -76,13 +77,71 @@ const (
 	TokExprEnd             = "\uE001"
 )
 
-const (
-	// Advanced arg key names
-	AdvArgKeyTags = "tags"
-)
+// AdvArgs is a wrapper around raw advanced arguments that enforces type-safe access.
+// Direct map access is not allowed; use the advargs.Parse() function to get typed
+// structs, or the getter/setter methods for pre-parse operations.
+type AdvArgs struct {
+	raw map[string]string
+}
+
+func NewAdvArgs(m map[string]string) AdvArgs {
+	return AdvArgs{raw: m}
+}
+
+func (a AdvArgs) Get(key advargtypes.Key) string {
+	return a.raw[string(key)]
+}
+
+// With returns a new AdvArgs with the key set to value. Does not mutate the receiver.
+func (a AdvArgs) With(key advargtypes.Key, value string) AdvArgs {
+	if a.raw == nil {
+		a.raw = make(map[string]string)
+	}
+	a.raw[string(key)] = value
+	return a
+}
+
+func (a AdvArgs) GetWhen() (string, bool) {
+	v, ok := a.raw[string(advargtypes.KeyWhen)]
+	return v, ok
+}
+
+func (a AdvArgs) IsEmpty() bool {
+	return len(a.raw) == 0
+}
+
+func (a AdvArgs) Range(fn func(key advargtypes.Key, value string) bool) {
+	for k, v := range a.raw {
+		if !fn(advargtypes.Key(k), v) {
+			return
+		}
+	}
+}
+
+func (a AdvArgs) Raw() map[string]string {
+	return a.raw
+}
+
+func (a AdvArgs) MarshalJSON() ([]byte, error) {
+	if a.raw == nil {
+		return []byte("null"), nil
+	}
+	b, err := json.Marshal(a.raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal AdvArgs: %w", err)
+	}
+	return b, nil
+}
+
+func (a *AdvArgs) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &a.raw); err != nil {
+		return fmt.Errorf("failed to unmarshal AdvArgs: %w", err)
+	}
+	return nil
+}
 
 type Command struct {
-	AdvArgs map[string]string
+	AdvArgs AdvArgs
 	Name    string
 	Args    []string
 }
@@ -796,7 +855,7 @@ commandLoop:
 			}
 
 			if len(advArgs) > 0 {
-				cmd.AdvArgs = advArgs
+				cmd.AdvArgs = NewAdvArgs(advArgs)
 			}
 
 			break commandLoop
@@ -832,7 +891,7 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			Args: args,
 		}
 		if len(advArgs) > 0 {
-			cmd.AdvArgs = advArgs
+			cmd.AdvArgs = NewAdvArgs(advArgs)
 		}
 		script.Cmds = append(script.Cmds, cmd)
 		return nil
@@ -876,7 +935,7 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 
 			// Only set AdvArgs if there are any
 			if len(result.advArgs) > 0 {
-				cmd.AdvArgs = result.advArgs
+				cmd.AdvArgs = NewAdvArgs(result.advArgs)
 			}
 
 			script.Cmds = append(script.Cmds, cmd)

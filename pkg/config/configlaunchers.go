@@ -44,6 +44,10 @@ type LaunchersDefault struct {
 	Launcher   string `toml:"launcher"`
 	InstallDir string `toml:"install_dir,omitempty"`
 	ServerURL  string `toml:"server_url,omitempty"`
+	// Action specifies the default launch action. Common values:
+	// - "" or "run": Default behavior (launch/play the media)
+	// - "details": Show media details/info page instead of launching
+	Action string `toml:"action,omitempty"`
 }
 
 type LaunchersCustom struct {
@@ -81,6 +85,13 @@ func (c *Instance) LookupLauncherDefaults(launcherID string) (LaunchersDefault, 
 		}
 	}
 	return LaunchersDefault{}, false
+}
+
+// SetLauncherDefaultsForTesting sets launcher defaults for testing purposes.
+func (c *Instance) SetLauncherDefaultsForTesting(defaults []LaunchersDefault) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Launchers.Default = defaults
 }
 
 func (c *Instance) LoadCustomLaunchers(launchersDir string) error {

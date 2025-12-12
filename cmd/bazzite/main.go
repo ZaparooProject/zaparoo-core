@@ -29,23 +29,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/bazzite"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
-
-// default user bazzite/bazzite, sudo is enabled
-// SSH is disabled by default (sudo systemctl enable --now sshd)
-// home: /home/bazzite
-// pn532 works without any changes, tag scans
-// acr122u works after modeprobe blacklist
-// add steam as a default launcher
 
 func main() {
 	if err := run(); err != nil {
@@ -55,52 +43,68 @@ func main() {
 }
 
 func run() error {
-	sigs := make(chan os.Signal, 1)
-	defer close(sigs)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	install := flag.String(
+		"install",
+		"",
+		"install component: application, desktop, service, hardware",
+	)
+	uninstall := flag.String(
+		"uninstall",
+		"",
+		"uninstall component: application, desktop, service, hardware",
+	)
 
-	pl := &bazzite.Platform{}
+	pl := bazzite.NewPlatform()
 	flags := cli.SetupFlags()
 
-	asDaemon := flag.Bool("daemon", false, "run zaparoo in daemon mode")
+	daemonMode := flag.Bool(
+		"daemon",
+		false,
+		"run service in foreground with no UI",
+	)
+	start := flag.Bool(
+		"start",
+		false,
+		"start service and open web UI in browser",
+	)
 
 	flags.Pre(pl)
 
-	// TODO: bazzite runs on fedora silverblue and has a read-only root fs
-	//       which will conflict with this install
-
-	if os.Geteuid() == 0 {
-		return errors.New("zaparoo must not be run as root")
+	if *install != "" {
+		if err := cli.HandleInstall(*install); err != nil {
+			return fmt.Errorf("install failed: %w", err)
+		}
+		return nil
+	}
+	if *uninstall != "" {
+		if err := cli.HandleUninstall(*uninstall); err != nil {
+			return fmt.Errorf("uninstall failed: %w", err)
+		}
+		return nil
 	}
 
-	// only difference with daemon mode right now is no log pretty printing
-	// TODO: launch simple gui
-	// TODO: fork service if it's not running
-	logWriters := []io.Writer{zerolog.ConsoleWriter{Out: os.Stderr}}
-	if *asDaemon {
+	if os.Geteuid() == 0 {
+		return errors.New("zaparoo cannot be run as root")
+	}
+
+	var logWriters []io.Writer
+	if *daemonMode {
 		logWriters = []io.Writer{os.Stderr}
 	}
 
-	cfg := cli.Setup(
-		pl,
-		config.BaseDefaults,
-		logWriters,
-	)
+	cfg := cli.Setup(pl, config.BaseDefaults, logWriters)
+
+	if *start {
+		if err := cli.StartAndOpenBrowser(cfg); err != nil {
+			return fmt.Errorf("start failed: %w", err)
+		}
+		return nil
+	}
 
 	flags.Post(cfg, pl)
 
-	stop, err := service.Start(pl, cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("error starting service")
-		return fmt.Errorf("error starting service: %w", err)
+	if err := cli.RunApp(pl, cfg, *daemonMode); err != nil {
+		return fmt.Errorf("run failed: %w", err)
 	}
-
-	<-sigs
-	err = stop()
-	if err != nil {
-		log.Error().Err(err).Msg("error stopping service")
-		return fmt.Errorf("error stopping service: %w", err)
-	}
-
 	return nil
 }

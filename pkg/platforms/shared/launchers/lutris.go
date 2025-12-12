@@ -20,7 +20,7 @@ You should have received a copy of the GNU General Public License
 along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-package linux
+package launchers
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
@@ -39,7 +38,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ScanLutrisGames scans the Lutris pga.db SQLite database for installed games
+// ScanLutrisGames scans the Lutris pga.db SQLite database for installed games.
 func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	results := make([]platforms.ScanResult, 0)
 
@@ -104,8 +103,8 @@ func ScanLutrisGames(dbPath string) ([]platforms.ScanResult, error) {
 	return results, nil
 }
 
-// NewLutrisLauncher creates a launcher for Lutris games
-func NewLutrisLauncher() platforms.Launcher {
+// NewLutrisLauncher creates a configurable Lutris launcher.
+func NewLutrisLauncher(opts LutrisOptions) platforms.Launcher {
 	return platforms.Launcher{
 		ID:       "Lutris",
 		SystemID: systemdefs.SystemPC,
@@ -124,13 +123,12 @@ func NewLutrisLauncher() platforms.Launcher {
 				return results, nil
 			}
 
-			// Try to scan Lutris database at ~/.local/share/lutris/pga.db
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return results, fmt.Errorf("failed to get user home directory: %w", err)
+			// Find Lutris database (native or Flatpak)
+			lutrisDB, found := FindLutrisDB(opts.CheckFlatpak)
+			if !found {
+				log.Debug().Msg("Lutris database not found")
+				return results, nil
 			}
-
-			lutrisDB := filepath.Join(home, ".local", "share", "lutris", "pga.db")
 
 			// Scan Lutris database for installed games
 			lutrisResults, err := ScanLutrisGames(lutrisDB)
@@ -142,7 +140,7 @@ func NewLutrisLauncher() platforms.Launcher {
 
 			return results, nil
 		},
-		Launch: func(_ *config.Instance, path string) (*os.Process, error) {
+		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
 			// Extract game slug/id from lutris://game-slug format
 			slug, err := virtualpath.ExtractSchemeID(path, shared.SchemeLutris)
 			if err != nil {

@@ -1775,6 +1775,19 @@ func (db *MediaDB) WaitForBackgroundOperations() {
 	db.backgroundOps.Wait()
 }
 
+// TrackBackgroundOperation increments the background operations counter.
+// Call BackgroundOperationDone when the operation completes.
+// This allows external code (like the indexing goroutine) to be tracked.
+func (db *MediaDB) TrackBackgroundOperation() {
+	db.backgroundOps.Add(1)
+}
+
+// BackgroundOperationDone decrements the background operations counter.
+// This should be called when an operation started with TrackBackgroundOperation completes.
+func (db *MediaDB) BackgroundOperationDone() {
+	db.backgroundOps.Done()
+}
+
 // GetLaunchCommandForMedia generates a title-based launch command for the given media.
 func (db *MediaDB) GetLaunchCommandForMedia(ctx context.Context, systemID, path string) (string, error) {
 	db.sqlMu.RLock()

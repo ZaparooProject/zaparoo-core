@@ -49,6 +49,7 @@ const (
 	ndefReadTimeout       = 2 * time.Second
 	writeTimeout          = 30 * time.Second
 	deviceTimeout         = 5 * time.Second
+	writeRetryCount       = 3
 )
 
 // PN532Device abstracts the pn532.Device for testing.
@@ -68,6 +69,12 @@ type PollingSession interface {
 	WriteToNextTag(
 		ctx, writeCtx context.Context,
 		timeout time.Duration,
+		writeFunc func(context.Context, pn532.Tag) error,
+	) error
+	WriteToNextTagWithRetry(
+		ctx, writeCtx context.Context,
+		timeout time.Duration,
+		maxRetries int,
 		writeFunc func(context.Context, pn532.Tag) error,
 	) error
 }
@@ -136,15 +143,15 @@ func (s *realSession) Close() error {
 }
 
 func (s *realSession) SetOnCardDetected(callback func(*pn532.DetectedTag) error) {
-	s.session.OnCardDetected = callback
+	s.session.SetOnCardDetected(callback)
 }
 
 func (s *realSession) SetOnCardRemoved(callback func()) {
-	s.session.OnCardRemoved = callback
+	s.session.SetOnCardRemoved(callback)
 }
 
 func (s *realSession) SetOnCardChanged(callback func(*pn532.DetectedTag) error) {
-	s.session.OnCardChanged = callback
+	s.session.SetOnCardChanged(callback)
 }
 
 func (s *realSession) WriteToNextTag(
@@ -158,6 +165,18 @@ func (s *realSession) WriteToNextTag(
 	return nil
 }
 
+func (s *realSession) WriteToNextTagWithRetry(
+	ctx, writeCtx context.Context,
+	timeout time.Duration,
+	maxRetries int,
+	writeFunc func(context.Context, pn532.Tag) error,
+) error {
+	if err := s.session.WriteToNextTagWithRetry(ctx, writeCtx, timeout, maxRetries, writeFunc); err != nil {
+		return fmt.Errorf("failed to write to tag: %w", err)
+	}
+	return nil
+}
+
 // DefaultSessionFactory creates a real polling.Session.
 func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) PollingSession {
 	// Cast back to *pn532.Device for the real session
@@ -165,6 +184,18 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 		return &realSession{session: polling.NewSession(dev, sessionConfig)}
 	}
 	return nil
+}
+
+// logTraceableError logs detailed transport trace data if available in the error.
+// This helps with debugging hardware communication issues by showing TX/RX data.
+func logTraceableError(err error, operation string) {
+	if trace := pn532.GetTrace(err); trace != nil {
+		log.Debug().
+			Str("operation", operation).
+			Str("transport", trace.Transport).
+			Str("port", trace.Port).
+			Msg("transport trace:\n" + trace.FormatTrace())
+	}
 }
 
 func createVIDPIDBlocklist() []string {
@@ -290,6 +321,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Initialize device
 	err = r.device.Init()
 	if err != nil {
+		logTraceableError(err, "device init")
 		_ = r.device.Close()
 		return fmt.Errorf("failed to initialize PN532 device: %w", err)
 	}
@@ -297,6 +329,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 	// Set timeout to match cmd/reader behavior (prevents constant LED blinking)
 	err = r.device.SetTimeout(deviceTimeout)
 	if err != nil {
+		logTraceableError(err, "set timeout")
 		_ = r.device.Close()
 		return fmt.Errorf("failed to set device timeout: %w", err)
 	}
@@ -333,6 +366,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		defer r.wg.Done()
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
+				logTraceableError(err, "session polling")
 				log.Error().Err(err).Msg("PN532 session ended with error")
 
 				// Send reader error notification to prevent triggering on_remove/exit
@@ -405,7 +439,6 @@ func (r *Reader) processNewTag(detectedTag *pn532.DetectedTag, iq chan<- readers
 
 func (r *Reader) Close() error {
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
 
 	if r.cancel != nil {
 		r.cancel()
@@ -414,12 +447,19 @@ func (r *Reader) Close() error {
 	if r.session != nil {
 		err := r.session.Close()
 		if err != nil {
+			r.mutex.Unlock()
 			return fmt.Errorf("failed to close PN532 session: %w", err)
 		}
 	}
 
-	// Wait for session goroutine to complete
+	r.mutex.Unlock()
+
+	// Wait for session goroutine to complete outside of lock to avoid deadlock.
+	// The goroutines may need to acquire the mutex before they can exit.
 	r.wg.Wait()
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
 	// Close the underlying device to release hardware resources
 	if r.device != nil {
@@ -546,8 +586,8 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 	var resultToken *tokens.Token
 	var writeErr error
 
-	err := r.session.WriteToNextTag(
-		ctx, writeCtx, writeTimeout,
+	err := r.session.WriteToNextTagWithRetry(
+		ctx, writeCtx, writeTimeout, writeRetryCount,
 		func(writeCtx context.Context, tag pn532.Tag) error {
 			// Create NDEF message with text record
 			ndefMessage := &pn532.NDEFMessage{
@@ -557,8 +597,9 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 				}},
 			}
 
-			// Write NDEF message to tag using the provided write context
-			if err := tag.WriteNDEFWithContext(writeCtx, ndefMessage); err != nil {
+			// Write NDEF message to tag (includes automatic verification)
+			if err := tag.WriteNDEF(writeCtx, ndefMessage); err != nil {
+				logTraceableError(err, "write NDEF")
 				writeErr = fmt.Errorf("failed to write NDEF to tag: %w", err)
 				return writeErr
 			}
@@ -578,6 +619,7 @@ func (r *Reader) WriteWithContext(ctx context.Context, text string) (*tokens.Tok
 			return nil
 		})
 	if err != nil {
+		logTraceableError(err, "write to next tag")
 		if writeErr != nil {
 			return nil, writeErr
 		}

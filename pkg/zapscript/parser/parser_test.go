@@ -23,6 +23,7 @@ import (
 	"errors"
 	"testing"
 
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/go-cmp/cmp"
 )
@@ -226,7 +227,7 @@ func TestParse(t *testing.T) {
 			input: `**example?debug=true`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "example", AdvArgs: map[string]string{"debug": "true"}},
+					{Name: "example", AdvArgs: parser.NewAdvArgs(map[string]string{"debug": "true"})},
 				},
 			},
 		},
@@ -235,7 +236,10 @@ func TestParse(t *testing.T) {
 			input: `**download:file1.txt?verify=sha256`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "download", Args: []string{"file1.txt"}, AdvArgs: map[string]string{"verify": "sha256"}},
+					{
+						Name: "download", Args: []string{"file1.txt"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"verify": "sha256"}),
+					},
 				},
 			},
 		},
@@ -244,11 +248,11 @@ func TestParse(t *testing.T) {
 			input: `**launch:game.exe?platform=win&fullscreen=yes&lang=en`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{
+					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"platform":   "win",
 						"fullscreen": "yes",
 						"lang":       "en",
-					}},
+					})},
 				},
 			},
 		},
@@ -257,7 +261,10 @@ func TestParse(t *testing.T) {
 			input: `**start:demo.bin?mode=fast||`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "start", Args: []string{"demo.bin"}, AdvArgs: map[string]string{"mode": "fast"}},
+					{
+						Name: "start", Args: []string{"demo.bin"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"mode": "fast"}),
+					},
 				},
 			},
 		},
@@ -266,7 +273,7 @@ func TestParse(t *testing.T) {
 			input: `**run:foo?trace=`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "run", Args: []string{"foo"}, AdvArgs: map[string]string{"trace": ""}},
+					{Name: "run", Args: []string{"foo"}, AdvArgs: parser.NewAdvArgs(map[string]string{"trace": ""})},
 				},
 			},
 		},
@@ -275,7 +282,7 @@ func TestParse(t *testing.T) {
 			input: `**build:release`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "build", Args: []string{"release"}, AdvArgs: nil},
+					{Name: "build", Args: []string{"release"}, AdvArgs: parser.AdvArgs{}},
 				},
 			},
 		},
@@ -293,7 +300,10 @@ func TestParse(t *testing.T) {
 			input: `**go:main?cmd=build^&run`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "go", Args: []string{"main"}, AdvArgs: map[string]string{"cmd": "build&run"}},
+					{
+						Name: "go", Args: []string{"main"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"cmd": "build&run"}),
+					},
 				},
 			},
 		},
@@ -302,7 +312,7 @@ func TestParse(t *testing.T) {
 			input: `**env?debug=1&trace=0`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "env", AdvArgs: map[string]string{"debug": "1", "trace": "0"}},
+					{Name: "env", AdvArgs: parser.NewAdvArgs(map[string]string{"debug": "1", "trace": "0"})},
 				},
 			},
 		},
@@ -311,7 +321,7 @@ func TestParse(t *testing.T) {
 			input: `**conf:dev?debug`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "conf", Args: []string{"dev"}, AdvArgs: map[string]string{"debug": ""}},
+					{Name: "conf", Args: []string{"dev"}, AdvArgs: parser.NewAdvArgs(map[string]string{"debug": ""})},
 				},
 			},
 		},
@@ -320,7 +330,7 @@ func TestParse(t *testing.T) {
 			input: `**bad:input?=oops`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "bad", Args: []string{"input"}, AdvArgs: nil},
+					{Name: "bad", Args: []string{"input"}, AdvArgs: parser.AdvArgs{}},
 				},
 			},
 		},
@@ -329,10 +339,10 @@ func TestParse(t *testing.T) {
 			input: `**env:prod?path=/bin:/usr/bin&cfg=foo=bar`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "env", Args: []string{"prod"}, AdvArgs: map[string]string{
+					{Name: "env", Args: []string{"prod"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"path": "/bin:/usr/bin",
 						"cfg":  "foo=bar",
-					}},
+					})},
 				},
 			},
 		},
@@ -341,9 +351,9 @@ func TestParse(t *testing.T) {
 			input: `**launch?devmode=on&`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", AdvArgs: map[string]string{
+					{Name: "launch", AdvArgs: parser.NewAdvArgs(map[string]string{
 						"devmode": "on",
-					}},
+					})},
 				},
 			},
 		},
@@ -352,9 +362,9 @@ func TestParse(t *testing.T) {
 			input: `**boot?&init=1`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "boot", AdvArgs: map[string]string{
+					{Name: "boot", AdvArgs: parser.NewAdvArgs(map[string]string{
 						"init": "1",
-					}},
+					})},
 				},
 			},
 		},
@@ -363,9 +373,9 @@ func TestParse(t *testing.T) {
 			input: `**cfg:file.cfg?env=dev^=beta`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", Args: []string{"file.cfg"}, AdvArgs: map[string]string{
+					{Name: "cfg", Args: []string{"file.cfg"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"env": "dev=beta",
-					}},
+					})},
 				},
 			},
 		},
@@ -374,9 +384,9 @@ func TestParse(t *testing.T) {
 			input: `**test:yes?data=foo^&bar^&baz`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "test", Args: []string{"yes"}, AdvArgs: map[string]string{
+					{Name: "test", Args: []string{"yes"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"data": "foo&bar&baz",
-					}},
+					})},
 				},
 			},
 		},
@@ -385,9 +395,9 @@ func TestParse(t *testing.T) {
 			input: `**safe:ok?path=c:^\windows^\system32`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "safe", Args: []string{"ok"}, AdvArgs: map[string]string{
+					{Name: "safe", Args: []string{"ok"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"path": `c:\windows\system32`,
-					}},
+					})},
 				},
 			},
 		},
@@ -432,7 +442,7 @@ func TestParse(t *testing.T) {
 			input: `**snap?mode=auto||**zap`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "snap", AdvArgs: map[string]string{"mode": "auto"}},
+					{Name: "snap", AdvArgs: parser.NewAdvArgs(map[string]string{"mode": "auto"})},
 					{Name: "zap"},
 				},
 			},
@@ -442,10 +452,10 @@ func TestParse(t *testing.T) {
 			input: `**alpha:one,two?x=1&y=2||**beta?z=9 `,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "alpha", Args: []string{"one", "two"}, AdvArgs: map[string]string{
+					{Name: "alpha", Args: []string{"one", "two"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"x": "1", "y": "2",
-					}},
-					{Name: "beta", AdvArgs: map[string]string{"z": "9"}},
+					})},
+					{Name: "beta", AdvArgs: parser.NewAdvArgs(map[string]string{"z": "9"})},
 				},
 			},
 		},
@@ -481,7 +491,7 @@ func TestParse(t *testing.T) {
 			input: `**cfg?path=C:\bin\`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", AdvArgs: map[string]string{"path": `C:\bin\`}},
+					{Name: "cfg", AdvArgs: parser.NewAdvArgs(map[string]string{"path": `C:\bin\`})},
 				},
 			},
 		},
@@ -490,7 +500,7 @@ func TestParse(t *testing.T) {
 			input: `**log?file=trace\`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "log", AdvArgs: map[string]string{"file": `trace\`}},
+					{Name: "log", AdvArgs: parser.NewAdvArgs(map[string]string{"file": `trace\`})},
 				},
 			},
 		},
@@ -535,10 +545,13 @@ func TestParse(t *testing.T) {
 			input: `https://google.com/stuff?some=args&q=something`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{`https://google.com/stuff`}, AdvArgs: map[string]string{
-						"some": `args`,
-						"q":    `something`,
-					}},
+					{
+						Name: "launch", Args: []string{`https://google.com/stuff`},
+						AdvArgs: parser.NewAdvArgs(map[string]string{
+							"some": `args`,
+							"q":    `something`,
+						}),
+					},
 				},
 			},
 		},
@@ -606,7 +619,10 @@ func TestParse(t *testing.T) {
 			input: `**cmd:"hello, world"?env=prod`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cmd", Args: []string{"hello, world"}, AdvArgs: map[string]string{"env": "prod"}},
+					{
+						Name: "cmd", Args: []string{"hello, world"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"env": "prod"}),
+					},
 				},
 			},
 		},
@@ -615,7 +631,7 @@ func TestParse(t *testing.T) {
 			input: `**cfg?env="prod build"`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", AdvArgs: map[string]string{"env": "prod build"}},
+					{Name: "cfg", AdvArgs: parser.NewAdvArgs(map[string]string{"env": "prod build"})},
 				},
 			},
 		},
@@ -624,7 +640,7 @@ func TestParse(t *testing.T) {
 			input: `**cfg?note="he said "hello""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", AdvArgs: map[string]string{"note": `he said hello""`}},
+					{Name: "cfg", AdvArgs: parser.NewAdvArgs(map[string]string{"note": `he said hello""`})},
 				},
 			},
 		},
@@ -644,7 +660,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "launch", Args: []string{`DOS/Games/test,123.iso`},
-						AdvArgs: map[string]string{"lang": "en"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"lang": "en"}),
 					},
 				},
 			},
@@ -672,7 +688,10 @@ func TestParse(t *testing.T) {
 			input: `**cfg:map:{key=value}?debug=true`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "cfg", Args: []string{"map:{key=value}"}, AdvArgs: map[string]string{"debug": "true"}},
+					{
+						Name: "cfg", Args: []string{"map:{key=value}"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"debug": "true"}),
+					},
 				},
 			},
 		},
@@ -702,7 +721,7 @@ func TestParse(t *testing.T) {
 					{
 						Name:    "render",
 						Args:    []string{"level-" + parser.TokExpStart + "difficulty" + parser.TokExprEnd},
-						AdvArgs: map[string]string{"fx": "true"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"fx": "true"}),
 					},
 				},
 			},
@@ -712,9 +731,9 @@ func TestParse(t *testing.T) {
 			input: `**info?text="he said ^"foo=bar^""`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "info", AdvArgs: map[string]string{
+					{Name: "info", AdvArgs: parser.NewAdvArgs(map[string]string{
 						"text": `he said "foo=bar"`,
-					}},
+					})},
 				},
 			},
 		},
@@ -746,10 +765,10 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "config",
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"key1": "val1",
 							"key2": "val2",
-						},
+						}),
 					},
 				},
 			},
@@ -762,7 +781,7 @@ func TestParse(t *testing.T) {
 					{
 						Name:    "do",
 						Args:    []string{"foo", "bar"},
-						AdvArgs: map[string]string{"flag": "on", "mode": "test"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"flag": "on", "mode": "test"}),
 					},
 				},
 			},
@@ -805,11 +824,11 @@ func TestParse(t *testing.T) {
 					{
 						Name:    "a",
 						Args:    []string{"1", "2"},
-						AdvArgs: map[string]string{"x": "1", "y": "2"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"x": "1", "y": "2"}),
 					},
 					{
 						Name:    "b",
-						AdvArgs: map[string]string{"f": "ok"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"f": "ok"}),
 					},
 					{
 						Name: "c",
@@ -918,7 +937,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "api", Args: []string{`{"endpoint":"/users","method":"GET"}`},
-						AdvArgs: map[string]string{"timeout": "30"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"timeout": "30"}),
 					},
 				},
 			},
@@ -928,7 +947,12 @@ func TestParse(t *testing.T) {
 			input: `**configure?data={"debug": true, "level": "info"}`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "configure", AdvArgs: map[string]string{"data": `{"debug":true,"level":"info"}`}},
+					{
+						Name: "configure",
+						AdvArgs: parser.NewAdvArgs(map[string]string{
+							"data": `{"debug":true,"level":"info"}`,
+						}),
+					},
 				},
 			},
 		},
@@ -1000,9 +1024,9 @@ func TestParse(t *testing.T) {
 					{
 						Name: "stuff",
 						Args: []string{`C:\some\path\completed?\usa, games/file.exe`},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"doot": "doot",
-						},
+						}),
 					},
 				},
 			},
@@ -1015,9 +1039,9 @@ func TestParse(t *testing.T) {
 					{
 						Name: "stuff",
 						Args: []string{`'C:\some\path\completed?\usa`, `games/file.exe'`},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"doot": "doot",
-						},
+						}),
 					},
 				},
 			},
@@ -1160,7 +1184,7 @@ func TestParse(t *testing.T) {
 							"{enter}",
 							"W", "o", "r", "l", "d",
 						},
-						AdvArgs: map[string]string{"delay": "100"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"delay": "100"}),
 					},
 				},
 			},
@@ -1192,10 +1216,10 @@ func TestParse(t *testing.T) {
 						Args: []string{
 							"A", "B", "{start}", "X", "Y",
 						},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"repeat":   "2",
 							"interval": "500",
-						},
+						}),
 					},
 				},
 			},
@@ -1263,7 +1287,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "http.get", Args: []string{`https://api.example.com/hello?stuff=thing`},
-						AdvArgs: map[string]string{"other": "stuff"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"other": "stuff"}),
 					},
 					{Name: "launch.random", Args: []string{`Genesis`}},
 				},
@@ -1384,7 +1408,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "launch", Args: []string{`Genesis/1 US - Q-Z/Some Game (USA, Europe).md`},
-						AdvArgs: map[string]string{"launcher": "LLAPIMegaDrive"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"launcher": "LLAPIMegaDrive"}),
 					},
 				},
 			},
@@ -1615,7 +1639,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "mister.script", Args: []string{`update_all.sh`},
-						AdvArgs: map[string]string{"hidden": "yes"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"hidden": "yes"}),
 					},
 				},
 			},
@@ -1654,7 +1678,7 @@ func TestParse(t *testing.T) {
 				Cmds: []parser.Command{
 					{
 						Name: "playlist.load", Args: []string{`/media/fat/playlist.pls`},
-						AdvArgs: map[string]string{"mode": "shuffle"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"mode": "shuffle"}),
 					},
 				},
 			},
@@ -1831,10 +1855,10 @@ func TestParse(t *testing.T) {
 			input: `**launch:game.exe?platform=[[system]]&debug=[[debug_mode]]`,
 			want: parser.Script{
 				Cmds: []parser.Command{
-					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: map[string]string{
+					{Name: "launch", Args: []string{"game.exe"}, AdvArgs: parser.NewAdvArgs(map[string]string{
 						"platform": parser.TokExpStart + "system" + parser.TokExprEnd,
 						"debug":    parser.TokExpStart + "debug_mode" + parser.TokExprEnd,
-					}},
+					})},
 				},
 			},
 		},
@@ -1903,9 +1927,9 @@ func TestParse(t *testing.T) {
 						Name: "url",
 						Args: []string{"https://api.example.com/" + parser.TokExpStart + "endpoint" +
 							parser.TokExprEnd},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"key": parser.TokExpStart + "api_key" + parser.TokExprEnd,
-						},
+						}),
 					},
 				},
 			},
@@ -1962,10 +1986,10 @@ func TestParse(t *testing.T) {
 					{
 						Name: "run",
 						Args: []string{parser.TokExpStart + "app_path" + parser.TokExprEnd, "arg2"},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"env":   parser.TokExpStart + "environment" + parser.TokExprEnd,
 							"debug": parser.TokExpStart + "debug" + parser.TokExprEnd,
-						},
+						}),
 					},
 					{Name: "cleanup", Args: []string{parser.TokExpStart + "temp_dir" + parser.TokExprEnd}},
 				},
@@ -2122,7 +2146,7 @@ func TestParse(t *testing.T) {
 				t.Errorf("ParseScript() error = %v, wantErr = %v", err, tt.wantErr)
 				return
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(parser.AdvArgs{})); diff != "" {
 				t.Errorf("ParseScript() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -2280,7 +2304,7 @@ func TestParseExpressions(t *testing.T) {
 				t.Errorf("ParseExpressions() error = %v, wantErr = %v", err, tt.wantErr)
 				return
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(parser.AdvArgs{})); diff != "" {
 				t.Errorf("ParseExpressions() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -2379,9 +2403,308 @@ func TestPostProcess(t *testing.T) {
 				return
 			}
 
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(parser.AdvArgs{})); diff != "" {
 				t.Errorf("EvalExpressions() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
+}
+
+// TestAdvArgs_WithMustAssignReturn verifies that AdvArgs.With() return value must be assigned
+// when the underlying map is nil. This test documents a subtle value receiver behavior:
+// - When raw map exists: changes persist (map is reference type, shared between copies)
+// - When raw map is nil: changes are lost (make() creates map in copy only)
+func TestAdvArgs_WithMustAssignReturn(t *testing.T) {
+	t.Parallel()
+
+	const testKey advargtypes.Key = "test_key"
+
+	t.Run("With without assign on nil map loses changes", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		// BUG PATTERN: Calling With without assigning return value on nil map
+		advArgs.With(testKey, "new_value")
+
+		got := advArgs.Get(testKey)
+		if got != "" {
+			t.Errorf("Expected empty string (change lost with nil map), got %q", got)
+		}
+	})
+
+	t.Run("With without assign on existing map preserves changes", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"original": "value",
+		})
+
+		advArgs.With(testKey, "new_value")
+
+		got := advArgs.Get(testKey)
+		if got != "new_value" {
+			t.Errorf("Expected %q (map is shared), got %q", "new_value", got)
+		}
+	})
+
+	t.Run("With assign always preserves changes", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+		advArgs = advArgs.With(testKey, "new_value")
+
+		got := advArgs.Get(testKey)
+		if got != "new_value" {
+			t.Errorf("Expected %q, got %q", "new_value", got)
+		}
+	})
+}
+
+func TestAdvArgs_GetWhen(t *testing.T) {
+	t.Parallel()
+
+	t.Run("when key exists", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"when": "true",
+		})
+
+		val, ok := advArgs.GetWhen()
+		if !ok {
+			t.Error("Expected GetWhen to return ok=true when key exists")
+		}
+		if val != "true" {
+			t.Errorf("Expected %q, got %q", "true", val)
+		}
+	})
+
+	t.Run("when key missing", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"other": "value",
+		})
+
+		val, ok := advArgs.GetWhen()
+		if ok {
+			t.Error("Expected GetWhen to return ok=false when key missing")
+		}
+		if val != "" {
+			t.Errorf("Expected empty string, got %q", val)
+		}
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		val, ok := advArgs.GetWhen()
+		if ok {
+			t.Error("Expected GetWhen to return ok=false for nil map")
+		}
+		if val != "" {
+			t.Errorf("Expected empty string, got %q", val)
+		}
+	})
+}
+
+func TestAdvArgs_IsEmpty(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil map is empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+		if !advArgs.IsEmpty() {
+			t.Error("Expected nil map to be empty")
+		}
+	})
+
+	t.Run("empty map is empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{})
+		if !advArgs.IsEmpty() {
+			t.Error("Expected empty map to be empty")
+		}
+	})
+
+	t.Run("non-empty map is not empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{"key": "value"})
+		if advArgs.IsEmpty() {
+			t.Error("Expected non-empty map to not be empty")
+		}
+	})
+}
+
+func TestAdvArgs_Range(t *testing.T) {
+	t.Parallel()
+
+	t.Run("iterates all entries", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"a": "1",
+			"b": "2",
+			"c": "3",
+		})
+
+		collected := make(map[string]string)
+		advArgs.Range(func(k advargtypes.Key, v string) bool {
+			collected[string(k)] = v
+			return true
+		})
+
+		if len(collected) != 3 {
+			t.Errorf("Expected 3 entries, got %d", len(collected))
+		}
+		if collected["a"] != "1" || collected["b"] != "2" || collected["c"] != "3" {
+			t.Errorf("Unexpected collected values: %v", collected)
+		}
+	})
+
+	t.Run("stops on false return", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"a": "1",
+			"b": "2",
+			"c": "3",
+		})
+
+		count := 0
+		advArgs.Range(func(_ advargtypes.Key, _ string) bool {
+			count++
+			return false // Stop after first iteration
+		})
+
+		if count != 1 {
+			t.Errorf("Expected 1 iteration, got %d", count)
+		}
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		count := 0
+		advArgs.Range(func(_ advargtypes.Key, _ string) bool {
+			count++
+			return true
+		})
+
+		if count != 0 {
+			t.Errorf("Expected 0 iterations for nil map, got %d", count)
+		}
+	})
+}
+
+func TestAdvArgs_Raw(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns underlying map", func(t *testing.T) {
+		t.Parallel()
+
+		m := map[string]string{"key": "value"}
+		advArgs := parser.NewAdvArgs(m)
+
+		raw := advArgs.Raw()
+		if raw["key"] != "value" {
+			t.Error("Expected raw map to contain key=value")
+		}
+	})
+
+	t.Run("nil map returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+		if advArgs.Raw() != nil {
+			t.Error("Expected Raw() to return nil for nil map")
+		}
+	})
+}
+
+func TestAdvArgs_MarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("marshals non-nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"key": "value",
+		})
+
+		data, err := advArgs.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON failed: %v", err)
+		}
+
+		expected := `{"key":"value"}`
+		if string(data) != expected {
+			t.Errorf("Expected %s, got %s", expected, string(data))
+		}
+	})
+
+	t.Run("marshals nil map as null", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		data, err := advArgs.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON failed: %v", err)
+		}
+
+		if string(data) != "null" {
+			t.Errorf("Expected null, got %s", string(data))
+		}
+	})
+}
+
+func TestAdvArgs_UnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmarshals valid JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`{"key":"value"}`))
+		if err != nil {
+			t.Fatalf("UnmarshalJSON failed: %v", err)
+		}
+
+		if advArgs.Get("key") != "value" {
+			t.Error("Expected key=value after unmarshal")
+		}
+	})
+
+	t.Run("unmarshals null as nil map", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`null`))
+		if err != nil {
+			t.Fatalf("UnmarshalJSON failed: %v", err)
+		}
+
+		if !advArgs.IsEmpty() {
+			t.Error("Expected empty AdvArgs after unmarshalling null")
+		}
+	})
+
+	t.Run("invalid JSON returns error", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`{invalid}`))
+		if err == nil {
+			t.Error("Expected error for invalid JSON")
+		}
+	})
 }

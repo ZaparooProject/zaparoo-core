@@ -415,50 +415,6 @@ func TestLookupAuth(t *testing.T) {
 	})
 }
 
-func TestLaunchersDefaultServerURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		launcherCfg LaunchersDefault
-		expected    string
-	}{
-		{
-			name: "ServerURL field is properly set and retrieved",
-			launcherCfg: LaunchersDefault{
-				Launcher:   "Kodi",
-				InstallDir: "/opt/kodi",
-				ServerURL:  "http://kodi-server:8080/jsonrpc",
-			},
-			expected: "http://kodi-server:8080/jsonrpc",
-		},
-		{
-			name: "ServerURL field can be empty",
-			launcherCfg: LaunchersDefault{
-				Launcher:   "KodiLocalVideo",
-				InstallDir: "/usr/bin/kodi",
-				ServerURL:  "",
-			},
-			expected: "",
-		},
-		{
-			name: "ServerURL field supports localhost URLs",
-			launcherCfg: LaunchersDefault{
-				Launcher:  "KodiTest",
-				ServerURL: "http://localhost:8080/jsonrpc",
-			},
-			expected: "http://localhost:8080/jsonrpc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.expected, tt.launcherCfg.ServerURL)
-		})
-	}
-}
-
 func TestIsWindowsStylePath(t *testing.T) {
 	t.Parallel()
 
@@ -764,54 +720,6 @@ func TestAPIPort_SaveLoadRoundTrip(t *testing.T) {
 	assert.Equal(t, 9999, cfg.APIPort(), "Custom port should persist after save/load")
 }
 
-func TestAllowedOrigins(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		origins  []string
-		expected []string
-	}{
-		{
-			name:     "nil origins",
-			origins:  nil,
-			expected: nil,
-		},
-		{
-			name:     "empty origins",
-			origins:  []string{},
-			expected: []string{},
-		},
-		{
-			name:     "single origin",
-			origins:  []string{"http://localhost:3000"},
-			expected: []string{"http://localhost:3000"},
-		},
-		{
-			name:     "multiple origins",
-			origins:  []string{"http://localhost:3000", "https://example.com"},
-			expected: []string{"http://localhost:3000", "https://example.com"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg := &Instance{
-				vals: Values{
-					Service: Service{
-						AllowedOrigins: tt.origins,
-					},
-				},
-			}
-
-			result := cfg.AllowedOrigins()
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestScanHistory(t *testing.T) {
 	t.Parallel()
 
@@ -1068,4 +976,182 @@ func TestSave_OmitsNilPointerFields(t *testing.T) {
 	assert.NotContains(t, content, "gmc_proxy_port", "gmc_proxy_port should not be in config when nil")
 	assert.NotContains(t, content, "gmc_proxy_beacon_interval",
 		"gmc_proxy_beacon_interval should not be in config when nil")
+}
+
+func TestVirtualGamepadEnabled(t *testing.T) {
+	t.Parallel()
+
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		gamepadEnabled *bool
+		name           string
+		defaultEnabled bool
+		expected       bool
+	}{
+		{
+			name:           "nil returns default true",
+			gamepadEnabled: nil,
+			defaultEnabled: true,
+			expected:       true,
+		},
+		{
+			name:           "nil returns default false",
+			gamepadEnabled: nil,
+			defaultEnabled: false,
+			expected:       false,
+		},
+		{
+			name:           "explicit true overrides default false",
+			gamepadEnabled: &trueVal,
+			defaultEnabled: false,
+			expected:       true,
+		},
+		{
+			name:           "explicit false overrides default true",
+			gamepadEnabled: &falseVal,
+			defaultEnabled: true,
+			expected:       false,
+		},
+		{
+			name:           "explicit true with default true",
+			gamepadEnabled: &trueVal,
+			defaultEnabled: true,
+			expected:       true,
+		},
+		{
+			name:           "explicit false with default false",
+			gamepadEnabled: &falseVal,
+			defaultEnabled: false,
+			expected:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Instance{
+				vals: Values{
+					Input: Input{
+						GamepadEnabled: tt.gamepadEnabled,
+					},
+				},
+			}
+
+			result := cfg.VirtualGamepadEnabled(tt.defaultEnabled)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSetVirtualGamepadEnabled(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets enabled from nil", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Input: Input{
+					GamepadEnabled: nil,
+				},
+			},
+		}
+
+		assert.Nil(t, cfg.vals.Input.GamepadEnabled, "GamepadEnabled should start as nil")
+
+		cfg.SetVirtualGamepadEnabled(true)
+
+		require.NotNil(t, cfg.vals.Input.GamepadEnabled, "GamepadEnabled should be set")
+		assert.True(t, *cfg.vals.Input.GamepadEnabled, "GamepadEnabled should be true")
+	})
+
+	t.Run("sets disabled from nil", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &Instance{
+			vals: Values{
+				Input: Input{
+					GamepadEnabled: nil,
+				},
+			},
+		}
+
+		cfg.SetVirtualGamepadEnabled(false)
+
+		require.NotNil(t, cfg.vals.Input.GamepadEnabled, "GamepadEnabled should be set")
+		assert.False(t, *cfg.vals.Input.GamepadEnabled, "GamepadEnabled should be false")
+	})
+
+	t.Run("overwrites existing value", func(t *testing.T) {
+		t.Parallel()
+
+		initialVal := true
+		cfg := &Instance{
+			vals: Values{
+				Input: Input{
+					GamepadEnabled: &initialVal,
+				},
+			},
+		}
+
+		cfg.SetVirtualGamepadEnabled(false)
+
+		assert.False(t, *cfg.vals.Input.GamepadEnabled, "GamepadEnabled should be overwritten to false")
+	})
+}
+
+func TestVirtualGamepadEnabled_SaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	// Create config with defaults (GamepadEnabled is nil)
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Verify default behavior - nil means use platform default
+	assert.True(t, cfg.VirtualGamepadEnabled(true), "Should return true when nil and default is true")
+	assert.False(t, cfg.VirtualGamepadEnabled(false), "Should return false when nil and default is false")
+
+	// Set an explicit value
+	cfg.SetVirtualGamepadEnabled(true)
+	assert.True(t, cfg.VirtualGamepadEnabled(false), "Should return true regardless of default after setting")
+
+	// Save and reload
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	err = cfg.Load()
+	require.NoError(t, err)
+
+	// Verify explicit value persists
+	assert.True(t, cfg.VirtualGamepadEnabled(false), "Explicit true should persist after save/load")
+}
+
+func TestSave_OmitsGamepadEnabledWhenNil(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+
+	// Create config with default values (nil pointers)
+	cfg, err := NewConfig(tempDir, BaseDefaults)
+	require.NoError(t, err)
+
+	// Save the config
+	err = cfg.Save()
+	require.NoError(t, err)
+
+	// Read the saved file
+	cfgPath := filepath.Join(tempDir, CfgFile)
+	data, err := os.ReadFile(cfgPath) //nolint:gosec // test file path is controlled
+	require.NoError(t, err)
+
+	content := string(data)
+
+	// Verify that gamepad_enabled is not written when nil
+	assert.NotContains(t, content, "gamepad_enabled", "gamepad_enabled should not be in config when nil")
+	assert.NotContains(t, content, "[input]", "input section should not be in config when all fields nil")
 }

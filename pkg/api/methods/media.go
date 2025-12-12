@@ -223,7 +223,9 @@ func GenerateMediaDB(
 		Indexing: true,
 	})
 
+	db.MediaDB.TrackBackgroundOperation()
 	go func() {
+		defer db.MediaDB.BackgroundOperationDone()
 		total, err := mediascanner.NewNamesIndex(indexCtx, pl, cfg, systems, db, func(status mediascanner.IndexStatus) {
 			var desc string
 			switch status.Step {
@@ -297,14 +299,22 @@ func GenerateMediaDB(
 		})
 
 		// Start background optimization with notification callback
-		go db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
-			notifications.MediaIndexing(ns, models.IndexingStatusResponse{
-				Exists:     true,
-				Indexing:   false,
-				Optimizing: optimizing,
-				TotalFiles: &total,
+		// Track the optimization operation BEFORE starting the goroutine to prevent a race
+		// where Close() → Wait() could return between this goroutine's Done() and
+		// RunBackgroundOptimization's internal Add(). The wrapper ensures Done() is called
+		// even if RunBackgroundOptimization skips (e.g., already optimizing).
+		db.MediaDB.TrackBackgroundOperation()
+		go func() {
+			defer db.MediaDB.BackgroundOperationDone()
+			db.MediaDB.RunBackgroundOptimization(func(optimizing bool) {
+				notifications.MediaIndexing(ns, models.IndexingStatusResponse{
+					Exists:     true,
+					Indexing:   false,
+					Optimizing: optimizing,
+					TotalFiles: &total,
+				})
 			})
-		})
+		}()
 
 		statusInstance.clear()
 		log.Info().Msgf("finished generating media db in %v", time.Since(startTime))

@@ -407,7 +407,8 @@ func TestStateIntegrationWithServices(t *testing.T) {
 			mock.AnythingOfType("*config.Instance"),
 			mock.AnythingOfType("string"),
 			(*platforms.Launcher)(nil),
-			mock.AnythingOfType("*database.Database")).Return(nil)
+			mock.AnythingOfType("*database.Database"),
+			(*platforms.LaunchOptions)(nil)).Return(nil)
 
 		// Simulate token processing that updates state
 		sampleTokens := fixtures.SampleTokens()
@@ -436,7 +437,7 @@ func TestStateIntegrationWithServices(t *testing.T) {
 
 		// Use the first search result path for launch
 		mediaPath := searchResults[0].Path
-		err = platform.LaunchMedia(cfg, mediaPath, nil, db)
+		err = platform.LaunchMedia(cfg, mediaPath, nil, db, nil)
 		require.NoError(t, err)
 
 		// 5. Record history

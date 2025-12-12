@@ -484,15 +484,54 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 		)
 	}
 
-	// Add custom origins
+	// Add custom origins. Custom origins can be:
+	// - Full URLs with port: http://example.com:7497 (used as-is)
+	// - Full URLs without port: http://example.com (adds version with API port too)
+	// - Other schemes: capacitor://localhost, ionic://localhost (used as-is)
+	// - Hostnames only: example.com (adds http/https with and without port)
 	for _, origin := range customOrigins {
-		result = append(result,
-			fmt.Sprintf("http://%s", origin),
-			fmt.Sprintf("https://%s", origin),
-		)
+		origin = strings.TrimSpace(origin)
+		origin = strings.TrimSuffix(origin, "/")
+
+		if strings.Contains(origin, "://") {
+			// URL with scheme provided - always include as-is
+			result = append(result, origin)
+
+			// For http/https URLs without explicit port, also add version with API port
+			if strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://") {
+				// Check if origin already has a port by looking for :port after the host
+				u, err := url.Parse(origin)
+				if err == nil && u.Port() == "" {
+					result = append(result, fmt.Sprintf("%s:%d", origin, port))
+				}
+			}
+		} else {
+			// Hostname only - add both protocols, with and without port
+			result = append(result,
+				fmt.Sprintf("http://%s", origin),
+				fmt.Sprintf("https://%s", origin),
+				fmt.Sprintf("http://%s:%d", origin, port),
+				fmt.Sprintf("https://%s:%d", origin, port),
+			)
+		}
 	}
 
 	return result
+}
+
+// privateNetworkAccessMiddleware adds the Access-Control-Allow-Private-Network
+// header for preflight requests. This allows HTTPS websites (like zaparoo.app)
+// to connect to Zaparoo Core running on local network IPs.
+// See: https://wicg.github.io/private-network-access/
+func privateNetworkAccessMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a preflight request asking for private network access
+		if r.Method == http.MethodOptions &&
+			r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // broadcastNotifications consumes and broadcasts all incoming API
@@ -803,6 +842,7 @@ func Start(
 		AllowedHeaders: []string{"Accept", "Content-Type"},
 		ExposedHeaders: []string{},
 	}))
+	r.Use(privateNetworkAccessMiddleware)
 
 	// Rate limiting only for API routes, not static assets
 	apiRateLimitMiddleware := apimiddleware.HTTPRateLimitMiddleware(rateLimiter)
