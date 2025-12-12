@@ -23,6 +23,7 @@ import (
 	"errors"
 	"testing"
 
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/go-cmp/cmp"
 )
@@ -2407,4 +2408,65 @@ func TestPostProcess(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdvArgs_SetMustAssignReturn verifies that AdvArgs.Set() return value must be assigned
+// when the underlying map is nil. This test documents a subtle value receiver behavior:
+// - When raw map exists: changes persist (map is reference type, shared between copies)
+// - When raw map is nil: changes are lost (make() creates map in copy only)
+//
+// The bug in commands.go:296 only manifests with nil maps, but the pattern is still wrong
+// because it's inconsistent and fragile.
+func TestAdvArgs_SetMustAssignReturn(t *testing.T) {
+	t.Parallel()
+
+	// Use a test key - Key is a string type alias so we can create one
+	const testKey advargtypes.Key = "test_key"
+
+	t.Run("Set without assign on nil map loses changes", func(t *testing.T) {
+		t.Parallel()
+
+		// Create with nil map - this is the bug case
+		advArgs := parser.NewAdvArgs(nil)
+
+		// BUG PATTERN: Calling Set without assigning return value on nil map
+		// The make() in Set creates a new map in the copy, not the original
+		advArgs.Set(testKey, "new_value")
+
+		// The change is lost because make() only affected the copy
+		got := advArgs.Get(testKey)
+		if got != "" {
+			t.Errorf("Expected empty string (change lost with nil map), got %q", got)
+		}
+	})
+
+	t.Run("Set without assign on existing map preserves changes", func(t *testing.T) {
+		t.Parallel()
+
+		// Create with existing map - changes persist because map is reference type
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"original": "value",
+		})
+
+		// This works because the map is shared between original and copy
+		advArgs.Set(testKey, "new_value")
+
+		got := advArgs.Get(testKey)
+		if got != "new_value" {
+			t.Errorf("Expected %q (map is shared), got %q", "new_value", got)
+		}
+	})
+
+	t.Run("Set with assign always preserves changes", func(t *testing.T) {
+		t.Parallel()
+
+		// CORRECT PATTERN: Always assign the return value
+		advArgs := parser.NewAdvArgs(nil)
+		advArgs = advArgs.Set(testKey, "new_value")
+
+		got := advArgs.Get(testKey)
+		if got != "new_value" {
+			t.Errorf("Expected %q, got %q", "new_value", got)
+		}
+	})
 }

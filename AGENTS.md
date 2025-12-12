@@ -32,6 +32,7 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 - ❌ Run full test suite unless needed (prefer file-scoped: `go test ./pkg/specific/`)
 - ❌ Skip writing tests for new features or bug fixes
 - ❌ Make large, unfocused diffs - keep changes small and targeted
+- ❌ Write comments that restate what the code does - comments should explain *why*, not *what*
 
 ### Code Quality
 

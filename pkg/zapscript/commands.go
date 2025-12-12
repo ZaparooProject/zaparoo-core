@@ -293,7 +293,7 @@ func RunCommand(
 			advArgEvalErr = fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
 			return false
 		}
-		cmd.AdvArgs.Set(k, output)
+		cmd.AdvArgs = cmd.AdvArgs.Set(k, output)
 		return true
 	})
 	if advArgEvalErr != nil {

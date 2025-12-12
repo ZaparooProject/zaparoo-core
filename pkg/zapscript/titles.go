@@ -70,18 +70,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
-	// Check system defaults for launcher if not already specified in advanced args
-	if args.Launcher == "" {
-		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
-			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
-			args.Launcher = systemDefaults.Launcher
-		}
-	}
-
-	launch, err := getAltLauncher(pl, env, args.Launcher, "")
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
+	args.Launcher = applySystemDefaultLauncher(&env, system.ID)
+	launch := getLaunchClosure(pl, &env)
 
 	// Collect all launchers for this system to enable file type prioritization
 	// during result selection. If user specified an alt launcher explicitly,
