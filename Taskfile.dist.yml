@@ -73,6 +73,15 @@ tasks:
     cmds:
       - go test -race {{.TEST_ARGS}}
 
+  fuzz:
+    desc: Run fuzz tests (default 30s per test, use FUZZ_TIME to override)
+    vars:
+      FUZZ_TIME: '{{default "30s" .FUZZ_TIME}}'
+    cmds:
+      - go test -run "^$" -fuzz=FuzzParseScript -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
+      - go test -run "^$" -fuzz=FuzzParseExpressions -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
+      - go test -run "^$" -fuzz=FuzzEvalExpressions -fuzztime={{.FUZZ_TIME}} ./pkg/zapscript/parser/...
+
   lint:
     desc: Run golangci-lint
     cmds:

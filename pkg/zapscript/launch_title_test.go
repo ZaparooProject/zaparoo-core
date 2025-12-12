@@ -116,7 +116,7 @@ func TestCmdTitle(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -298,7 +298,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 	cmd := parser.Command{
 		Name:    "launch.title",
 		Args:    []string{input},
-		AdvArgs: map[string]string{"tags": "region:usa,type:game"},
+		AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa,type:game"}),
 	}
 
 	env := platforms.CmdEnv{
@@ -434,7 +434,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -575,7 +575,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -711,7 +711,7 @@ func TestCmdTitleEdgeCases(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    tt.args,
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -1403,7 +1403,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1457,7 +1457,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1523,7 +1523,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd1 := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "region:usa"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa"}),
 		}
 
 		env1 := platforms.CmdEnv{
@@ -1559,7 +1559,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd2 := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "region:jp"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:jp"}),
 		}
 
 		env2 := platforms.CmdEnv{
@@ -1610,7 +1610,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1647,7 +1647,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1693,7 +1693,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "invalid_format"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "invalid_format"}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1723,7 +1723,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/NonexistentGame12345"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1782,7 +1782,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/mario"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{

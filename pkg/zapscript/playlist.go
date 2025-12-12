@@ -36,6 +36,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
@@ -249,9 +250,8 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, ErrRequiredArgs
 	}
 
-	// Parse and validate advanced args
-	var args advargs.PlaylistArgs
-	if err := parseAdvArgs(pl, &env, &args); err != nil {
+	var args advargtypes.PlaylistArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
 		return nil, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 

@@ -37,6 +37,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
@@ -47,6 +48,26 @@ var (
 	ErrRequiredArgs = errors.New("arguments are required")
 	ErrRemoteSource = errors.New("cannot run from remote source")
 )
+
+// getLauncherIDs extracts launcher IDs from the platform for validation context.
+func getLauncherIDs(pl platforms.Platform, cfg *config.Instance) []string {
+	launchers := pl.Launchers(cfg)
+	ids := make([]string, len(launchers))
+	for i := range launchers {
+		ids[i] = launchers[i].ID
+	}
+	return ids
+}
+
+// ParseAdvArgs parses and validates advanced arguments for a command.
+// Returns an error if parsing or validation fails.
+func ParseAdvArgs[T any](pl platforms.Platform, env *platforms.CmdEnv, dest *T) error {
+	ctx := advargs.NewParseContext(getLauncherIDs(pl, env.Cfg))
+	if err := advargs.Parse(env.Cmd.AdvArgs.Raw(), dest, ctx); err != nil {
+		return fmt.Errorf("failed to parse advanced args: %w", err)
+	}
+	return nil
+}
 
 var cmdMap = map[string]func(
 	platforms.Platform,
@@ -264,16 +285,22 @@ func RunCommand(
 		cmd.Args[i] = output
 	}
 
-	for k, arg := range cmd.AdvArgs {
+	var advArgEvalErr error
+	cmd.AdvArgs.Range(func(k advargtypes.Key, arg string) bool {
 		reader := parser.NewParser(arg)
 		output, evalErr := reader.EvalExpressions(exprEnv)
 		if evalErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
+			advArgEvalErr = fmt.Errorf("error evaluating advanced arg expression: %w", evalErr)
+			return false
 		}
-		cmd.AdvArgs[k] = output
+		cmd.AdvArgs.Set(k, output)
+		return true
+	})
+	if advArgEvalErr != nil {
+		return platforms.CmdResult{}, advArgEvalErr
 	}
 
-	if when, ok := cmd.AdvArgs[advargs.KeyWhen]; ok && !helpers.IsTruthy(when) {
+	if when, ok := cmd.AdvArgs.GetWhen(); ok && !helpers.IsTruthy(when) {
 		log.Debug().Msgf("skipping command, does not meet when criteria: %s", cmd)
 		return platforms.CmdResult{
 			Unsafe:      unsafe,

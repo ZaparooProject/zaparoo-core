@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +61,7 @@ func TestParse_GlobalArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args GlobalArgs
+			var args advargtypes.GlobalArgs
 			err := Parse(tt.raw, &args, nil)
 
 			if tt.wantErr {
@@ -96,8 +97,8 @@ func TestGlobalArgs_ShouldRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			args := GlobalArgs{When: tt.when}
-			assert.Equal(t, tt.want, args.ShouldRun())
+			args := advargtypes.GlobalArgs{When: tt.when}
+			assert.Equal(t, tt.want, ShouldRun(args))
 		})
 	}
 }
@@ -109,7 +110,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 
 	tests := []struct {
 		raw        map[string]string
-		check      func(t *testing.T, args *LaunchRandomArgs)
+		check      func(t *testing.T, args *advargtypes.LaunchRandomArgs)
 		name       string
 		errContain string
 		wantErr    bool
@@ -118,7 +119,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "empty args",
 			raw:     map[string]string{},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchRandomArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
 				assert.Empty(t, args.Launcher)
 				assert.Empty(t, args.Action)
 				assert.Nil(t, args.Tags)
@@ -128,7 +129,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid launcher",
 			raw:     map[string]string{"launcher": "steam"},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchRandomArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
 				assert.Equal(t, "steam", args.Launcher)
 			},
 		},
@@ -142,7 +143,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid action run",
 			raw:     map[string]string{"action": "run"},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchRandomArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
 				assert.Equal(t, "run", args.Action)
 			},
 		},
@@ -150,7 +151,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid action details",
 			raw:     map[string]string{"action": "details"},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchRandomArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
 				assert.Equal(t, "details", args.Action)
 			},
 		},
@@ -164,7 +165,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 			name:    "valid tags",
 			raw:     map[string]string{"tags": "region:usa,type:game"},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchRandomArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchRandomArgs) {
 				require.Len(t, args.Tags, 2)
 				assert.Equal(t, "region", args.Tags[0].Type)
 				assert.Equal(t, "usa", args.Tags[0].Value)
@@ -182,7 +183,7 @@ func TestParse_LaunchRandomArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args LaunchRandomArgs
+			var args advargtypes.LaunchRandomArgs
 			err := Parse(tt.raw, &args, ctx)
 
 			if tt.wantErr {
@@ -208,7 +209,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 
 	tests := []struct {
 		raw        map[string]string
-		check      func(t *testing.T, args *LaunchArgs)
+		check      func(t *testing.T, args *advargtypes.LaunchArgs)
 		name       string
 		errContain string
 		wantErr    bool
@@ -220,7 +221,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 				"name": "test", "pre_notice": "notice",
 			},
 			wantErr: false,
-			check: func(t *testing.T, args *LaunchArgs) {
+			check: func(t *testing.T, args *advargtypes.LaunchArgs) {
 				assert.Equal(t, "steam", args.Launcher)
 				assert.Equal(t, "snes", args.System)
 				assert.Equal(t, "run", args.Action)
@@ -240,7 +241,7 @@ func TestParse_LaunchArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args LaunchArgs
+			var args advargtypes.LaunchArgs
 			err := Parse(tt.raw, &args, ctx)
 
 			if tt.wantErr {
@@ -293,7 +294,7 @@ func TestParse_PlaylistArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var args PlaylistArgs
+			var args advargtypes.PlaylistArgs
 			err := Parse(tt.raw, &args, nil)
 
 			if tt.wantErr {
@@ -379,7 +380,7 @@ func TestParse_TagFiltersDecoding(t *testing.T) {
 				raw["tags"] = tt.tagsStr
 			}
 
-			var args LaunchRandomArgs
+			var args advargtypes.LaunchRandomArgs
 			err := Parse(raw, &args, nil)
 
 			if tt.wantErr {
@@ -405,7 +406,7 @@ func TestParser_NewParser(t *testing.T) {
 	require.NotNil(t, p.validate)
 
 	// Verify can parse successfully
-	var args GlobalArgs
+	var args advargtypes.GlobalArgs
 	err := p.Parse(map[string]string{"when": "true"}, &args, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "true", args.When)

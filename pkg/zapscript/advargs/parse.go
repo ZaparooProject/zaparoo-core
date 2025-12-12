@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 )
@@ -156,7 +157,7 @@ func stringToTagFiltersHook() mapstructure.DecodeHookFunc {
 }
 
 // ShouldRun returns true if the command should execute based on the When condition.
-func (g GlobalArgs) ShouldRun() bool {
+func ShouldRun(g advargtypes.GlobalArgs) bool {
 	if g.When == "" {
 		return true
 	}

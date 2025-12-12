@@ -30,6 +30,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
 	"github.com/expr-lang/expr"
 )
@@ -76,8 +77,64 @@ const (
 	TokExprEnd             = "\uE001"
 )
 
+// AdvArgs is a wrapper around raw advanced arguments that enforces type-safe access.
+// Direct map access is not allowed; use the advargs.Parse() function to get typed
+// structs, or the getter/setter methods for pre-parse operations.
+type AdvArgs struct {
+	raw map[string]string
+}
+
+// NewAdvArgs creates an AdvArgs wrapper from a raw map.
+func NewAdvArgs(m map[string]string) AdvArgs {
+	return AdvArgs{raw: m}
+}
+
+// Get returns the value for a key. This should only be used for pre-parse
+// operations where typed parsing isn't possible yet (e.g., system defaults).
+func (a AdvArgs) Get(key advargtypes.Key) string {
+	return a.raw[string(key)]
+}
+
+// Set sets a value for a key and returns the modified AdvArgs.
+// Used for pre-parse mutations like applying system default launchers before parsing.
+func (a AdvArgs) Set(key advargtypes.Key, value string) AdvArgs {
+	if a.raw == nil {
+		a.raw = make(map[string]string)
+	}
+	a.raw[string(key)] = value
+	return a
+}
+
+// GetWhen returns the "when" condition value.
+// Used by RunCommand before dispatching to check conditional execution.
+func (a AdvArgs) GetWhen() (string, bool) {
+	v, ok := a.raw[string(advargtypes.KeyWhen)]
+	return v, ok
+}
+
+// IsEmpty returns true if no advanced args are present.
+func (a AdvArgs) IsEmpty() bool {
+	return len(a.raw) == 0
+}
+
+// Range iterates over all key-value pairs. Used for expression evaluation
+// in RunCommand. The callback receives each key and value.
+func (a AdvArgs) Range(fn func(key advargtypes.Key, value string) bool) {
+	for k, v := range a.raw {
+		if !fn(advargtypes.Key(k), v) {
+			return
+		}
+	}
+}
+
+// Raw returns the underlying map for use by advargs.Parse().
+// This is intentionally not a convenient API to discourage direct map access.
+func (a AdvArgs) Raw() map[string]string {
+	return a.raw
+}
+
 type Command struct {
-	AdvArgs map[string]string
+	AdvArgs AdvArgs
 	Name    string
 	Args    []string
 }
@@ -791,7 +848,7 @@ commandLoop:
 			}
 
 			if len(advArgs) > 0 {
-				cmd.AdvArgs = advArgs
+				cmd.AdvArgs = NewAdvArgs(advArgs)
 			}
 
 			break commandLoop
@@ -827,7 +884,7 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 			Args: args,
 		}
 		if len(advArgs) > 0 {
-			cmd.AdvArgs = advArgs
+			cmd.AdvArgs = NewAdvArgs(advArgs)
 		}
 		script.Cmds = append(script.Cmds, cmd)
 		return nil
@@ -871,7 +928,7 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 
 			// Only set AdvArgs if there are any
 			if len(result.advArgs) > 0 {
-				cmd.AdvArgs = result.advArgs
+				cmd.AdvArgs = NewAdvArgs(result.advArgs)
 			}
 
 			script.Cmds = append(script.Cmds, cmd)

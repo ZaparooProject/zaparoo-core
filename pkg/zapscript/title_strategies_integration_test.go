@@ -489,7 +489,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		advArgs               map[string]string
+		advArgs               parser.AdvArgs
 		cfg                   *config.Instance
 		name                  string
 		input                 string
@@ -579,7 +579,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/genesis/Cyber Warrior (Demo).md",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Explicit demo tag overrides default exclusion and selects demo variant",
-			advArgs:          map[string]string{"tags": "unfinished:demo"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "unfinished:demo"}),
 		},
 		{
 			name:             "variant_exclusion_explicit_beta_inclusion",
@@ -587,7 +587,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/genesis/Cyber Warrior (Beta).md",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Explicit beta tag overrides default exclusion and selects beta variant",
-			advArgs:          map[string]string{"tags": "unfinished:beta"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "unfinished:beta"}),
 		},
 		{
 			name:             "variant_exclusion_explicit_proto_inclusion",
@@ -595,7 +595,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/genesis/Cyber Warrior (Proto).md",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Explicit proto tag overrides default exclusion and selects proto variant",
-			advArgs:          map[string]string{"tags": "unfinished:proto"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "unfinished:proto"}),
 		},
 		{
 			name:             "exact_match_word_normalization",
@@ -650,7 +650,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedStrategy: titles.StrategyExactMatch,
 			description: "Explicit tag (unfinished:demo) overrides default variant exclusion and " +
 				"finds demo game",
-			advArgs: map[string]string{"tags": "unfinished:demo"},
+			advArgs: parser.NewAdvArgs(map[string]string{"tags": "unfinished:demo"}),
 		},
 		{
 			name:             "exact_match_very_short_title_1_char",
@@ -1102,7 +1102,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Negative tag filter (-region:us) excludes USA version, selects Europe",
-			advArgs:          map[string]string{"tags": "-region:us"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "-region:us"}),
 		},
 		{
 			name:             "tag_filter_explicit_preference",
@@ -1110,7 +1110,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "AdvArgs tags can specify explicit region preference (Europe instead of default USA)",
-			advArgs:          map[string]string{"tags": "region:eu"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "region:eu"}),
 		},
 		{
 			name:             "tag_filter_multiple_negative",
@@ -1118,7 +1118,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Multiple negative tags (-region:us, -region:jp) exclude both and select Europe",
-			advArgs:          map[string]string{"tags": "-region:us,-region:jp"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "-region:us,-region:jp"}),
 		},
 		{
 			name:             "tag_filter_advargs_overrides_filename",
@@ -1126,7 +1126,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Time Paradox RPG (USA).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Explicit tag in advArgs (region:us) overrides different tag found in filename (europe)",
-			advArgs:          map[string]string{"tags": "region:us"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "region:us"}),
 		},
 		{
 			name:             "tag_filter_empty_string_ignored",
@@ -1134,7 +1134,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (USA).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Empty tags advArg should be ignored and use default behavior (USA preference)",
-			advArgs:          map[string]string{"tags": ""},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": ""}),
 		},
 		{
 			name:             "tag_filter_mixed_positive_negative_operators",
@@ -1142,7 +1142,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/snes/Plumber Quest Adventures (Europe).sfc",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Mixed operators: positive (region:eu) and negative (-unfinished:demo) should both apply",
-			advArgs:          map[string]string{"tags": "region:eu,-unfinished:demo"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "region:eu,-unfinished:demo"}),
 		},
 		{
 			name:             "tag_filter_lang_override_config",
@@ -1151,7 +1151,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedStrategy: titles.StrategyExactMatch,
 			description: "Explicit lang tag in advArgs (lang:fr) overrides default config " +
 				"language preference (en)",
-			advArgs: map[string]string{"tags": "lang:fr"},
+			advArgs: parser.NewAdvArgs(map[string]string{"tags": "lang:fr"}),
 		},
 		{
 			name:             "tag_filter_explicit_override_config_preference",
@@ -1159,7 +1159,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedPath:     "/roms/genesis/Space Shooter (JPN).md",
 			expectedStrategy: titles.StrategyExactMatch,
 			description:      "Explicit tag (region:jp) in advArgs overrides config region preference (eu)",
-			advArgs:          map[string]string{"tags": "region:jp"},
+			advArgs:          parser.NewAdvArgs(map[string]string{"tags": "region:jp"}),
 			cfg:              makeConfigWithPreferences(t, []string{string(tags.TagRegionEU)}, nil),
 		},
 
@@ -1364,7 +1364,7 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			expectedError: true,
 			description: "Query with (-region:us) fails despite 'Galaxia (USA)' existing - " +
 				"cache keys include tags",
-			advArgs: map[string]string{"tags": "-region:us"},
+			advArgs: parser.NewAdvArgs(map[string]string{"tags": "-region:us"}),
 		},
 		{
 			name:             "single_variant_proto_now_selected",
@@ -1530,14 +1530,9 @@ func TestCmdTitle_AllStrategiesIntegration(t *testing.T) {
 			}
 
 			cmd := parser.Command{
-				Name: "launch.title",
-				Args: []string{tt.input},
-				AdvArgs: func() map[string]string {
-					if tt.advArgs != nil {
-						return tt.advArgs
-					}
-					return map[string]string{}
-				}(),
+				Name:    "launch.title",
+				Args:    []string{tt.input},
+				AdvArgs: tt.advArgs,
 			}
 
 			env := platforms.CmdEnv{
@@ -1721,7 +1716,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"SNES/Earthbond"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.AdvArgs{},
 		}
 
 		env := platforms.CmdEnv{
@@ -1751,7 +1746,7 @@ func TestFuzzyMatching_NullSecondarySlug_RegressionTest(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"SNES/Zombies ate my neighbours"}, // British spelling
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.AdvArgs{},
 		}
 
 		env := platforms.CmdEnv{

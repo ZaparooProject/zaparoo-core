@@ -31,7 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -65,24 +65,20 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 	}
 
-	// Check system defaults for launcher if not already specified in advanced args
-	if env.Cmd.AdvArgs[advargs.KeyLauncher] == "" {
-		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
-			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
-			if env.Cmd.AdvArgs == nil {
-				env.Cmd.AdvArgs = make(map[string]string)
-			}
-			env.Cmd.AdvArgs[advargs.KeyLauncher] = systemDefaults.Launcher
-		}
-	}
-
-	// Parse and validate advanced args (after applying system defaults)
-	var args advargs.LaunchTitleArgs
-	if parseErr := parseAdvArgs(pl, &env, &args); parseErr != nil {
+	var args advargtypes.LaunchTitleArgs
+	if parseErr := ParseAdvArgs(pl, &env, &args); parseErr != nil {
 		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
-	launch, err := getAltLauncherTyped(pl, env, args.Launcher, "")
+	// Check system defaults for launcher if not already specified in advanced args
+	if args.Launcher == "" {
+		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
+			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
+			args.Launcher = systemDefaults.Launcher
+		}
+	}
+
+	launch, err := getAltLauncher(pl, env, args.Launcher, "")
 	if err != nil {
 		return platforms.CmdResult{}, err
 	}

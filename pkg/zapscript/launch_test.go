@@ -71,9 +71,9 @@ func TestCmdLaunch_SystemArgAppliesDefaults(t *testing.T) {
 		Cmd: parser.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: map[string]string{
+			AdvArgs: parser.NewAdvArgs(map[string]string{
 				"system": "genesis",
-			},
+			}),
 		},
 		Cfg: cfg,
 	}
@@ -122,10 +122,10 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 		Cmd: parser.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: map[string]string{
+			AdvArgs: parser.NewAdvArgs(map[string]string{
 				"system":   "genesis",
 				"launcher": "genesis-explicit", // Explicit launcher should win
-			},
+			}),
 		},
 		Cfg: cfg,
 	}
@@ -137,35 +137,34 @@ func TestCmdLaunch_LauncherArgOverridesSystemArg(t *testing.T) {
 	mockPlatform.AssertExpectations(t)
 }
 
-// TestCmdLaunch_InvalidSystemArgFallsBackToAutoDetect verifies invalid system doesn't crash
-func TestCmdLaunch_InvalidSystemArgFallsBackToAutoDetect(t *testing.T) {
+// TestCmdLaunch_InvalidSystemArgReturnsError verifies invalid system returns validation error
+func TestCmdLaunch_InvalidSystemArgReturnsError(t *testing.T) {
 	t.Parallel()
 
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
+	// Mock Launchers for advargs validation context
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
-	mockPlatform.On("LaunchMedia", cfg, absPath,
-		(*platforms.Launcher)(nil), (*database.Database)(nil),
-		(*platforms.LaunchOptions)(nil)).Return(nil)
 
 	env := platforms.CmdEnv{
 		Cmd: parser.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: map[string]string{
-				"system": "invalidname", // Invalid system should log warning and fall back
-			},
+			AdvArgs: parser.NewAdvArgs(map[string]string{
+				"system": "invalidname", // Invalid system should return validation error
+			}),
 		},
 		Cfg: cfg,
 	}
 
-	result, err := cmdLaunch(mockPlatform, env)
+	_, err := cmdLaunch(mockPlatform, env)
 
-	require.NoError(t, err, "cmdLaunch should not crash with invalid system")
-	assert.True(t, result.MediaChanged, "MediaChanged should be true")
-	mockPlatform.AssertExpectations(t)
+	require.Error(t, err, "cmdLaunch should return error for invalid system")
+	assert.Contains(t, err.Error(), "invalidname", "error should mention invalid system name")
 }
 
 // TestCmdLaunch_SystemArgWithNoDefaults verifies system with no configured defaults works
@@ -175,6 +174,9 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 	mockPlatform := mocks.NewMockPlatform()
 	cfg := &config.Instance{}
 
+	// Mock Launchers for advargs validation context
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{})
+
 	// Use a platform-specific absolute path
 	absPath := filepath.Join(t.TempDir(), "game.bin")
 	mockPlatform.On("LaunchMedia", cfg, absPath,
@@ -185,9 +187,9 @@ func TestCmdLaunch_SystemArgWithNoDefaults(t *testing.T) {
 		Cmd: parser.Command{
 			Name: "launch",
 			Args: []string{absPath},
-			AdvArgs: map[string]string{
+			AdvArgs: parser.NewAdvArgs(map[string]string{
 				"system": "genesis",
-			},
+			}),
 		},
 		Cfg: cfg,
 	}
