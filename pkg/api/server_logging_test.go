@@ -97,7 +97,7 @@ func TestLogSafeResponse(t *testing.T) {
 }
 
 func TestLogSafeRequest(t *testing.T) {
-	testID := uuid.New()
+	testID := models.NewStringID(uuid.New().String())
 
 	tests := []struct {
 		name              string
@@ -109,7 +109,7 @@ func TestLogSafeRequest(t *testing.T) {
 			name: "logs download request should log method only",
 			request: models.RequestObject{
 				Method:  models.MethodSettingsLogsDownload,
-				ID:      &testID,
+				ID:      testID,
 				JSONRPC: "2.0",
 			},
 			expectMethodOnly:  true,
@@ -119,7 +119,7 @@ func TestLogSafeRequest(t *testing.T) {
 			name: "other requests should log full request",
 			request: models.RequestObject{
 				Method:  models.MethodSettings,
-				ID:      &testID,
+				ID:      testID,
 				JSONRPC: "2.0",
 			},
 			expectMethodOnly:  false,
@@ -135,7 +135,7 @@ func TestLogSafeRequest(t *testing.T) {
 			log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
 
 			// Test the function
-			logSafeRequest(tt.request)
+			logSafeRequest(&tt.request)
 
 			// Restore original logger
 			log.Logger = originalLogger
