@@ -21,6 +21,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -338,6 +339,12 @@ func readerManager(
 					if ok && r != nil && !r.Connected() {
 						log.Debug().Msgf("pruning disconnected reader: %s", device)
 						st.RemoveReader(device)
+						if autoDetector != nil {
+							if parts := strings.SplitN(device, ":", 2); len(parts) == 2 {
+								autoDetector.ClearDevice(parts[1])
+							}
+							autoDetector.ClearFailedConnection(device)
+						}
 					}
 				}
 
