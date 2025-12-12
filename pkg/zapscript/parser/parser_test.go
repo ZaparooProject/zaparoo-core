@@ -2460,3 +2460,251 @@ func TestAdvArgs_WithMustAssignReturn(t *testing.T) {
 		}
 	})
 }
+
+func TestAdvArgs_GetWhen(t *testing.T) {
+	t.Parallel()
+
+	t.Run("when key exists", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"when": "true",
+		})
+
+		val, ok := advArgs.GetWhen()
+		if !ok {
+			t.Error("Expected GetWhen to return ok=true when key exists")
+		}
+		if val != "true" {
+			t.Errorf("Expected %q, got %q", "true", val)
+		}
+	})
+
+	t.Run("when key missing", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"other": "value",
+		})
+
+		val, ok := advArgs.GetWhen()
+		if ok {
+			t.Error("Expected GetWhen to return ok=false when key missing")
+		}
+		if val != "" {
+			t.Errorf("Expected empty string, got %q", val)
+		}
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		val, ok := advArgs.GetWhen()
+		if ok {
+			t.Error("Expected GetWhen to return ok=false for nil map")
+		}
+		if val != "" {
+			t.Errorf("Expected empty string, got %q", val)
+		}
+	})
+}
+
+func TestAdvArgs_IsEmpty(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil map is empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+		if !advArgs.IsEmpty() {
+			t.Error("Expected nil map to be empty")
+		}
+	})
+
+	t.Run("empty map is empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{})
+		if !advArgs.IsEmpty() {
+			t.Error("Expected empty map to be empty")
+		}
+	})
+
+	t.Run("non-empty map is not empty", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{"key": "value"})
+		if advArgs.IsEmpty() {
+			t.Error("Expected non-empty map to not be empty")
+		}
+	})
+}
+
+func TestAdvArgs_Range(t *testing.T) {
+	t.Parallel()
+
+	t.Run("iterates all entries", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"a": "1",
+			"b": "2",
+			"c": "3",
+		})
+
+		collected := make(map[string]string)
+		advArgs.Range(func(k advargtypes.Key, v string) bool {
+			collected[string(k)] = v
+			return true
+		})
+
+		if len(collected) != 3 {
+			t.Errorf("Expected 3 entries, got %d", len(collected))
+		}
+		if collected["a"] != "1" || collected["b"] != "2" || collected["c"] != "3" {
+			t.Errorf("Unexpected collected values: %v", collected)
+		}
+	})
+
+	t.Run("stops on false return", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"a": "1",
+			"b": "2",
+			"c": "3",
+		})
+
+		count := 0
+		advArgs.Range(func(_ advargtypes.Key, _ string) bool {
+			count++
+			return false // Stop after first iteration
+		})
+
+		if count != 1 {
+			t.Errorf("Expected 1 iteration, got %d", count)
+		}
+	})
+
+	t.Run("nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		count := 0
+		advArgs.Range(func(_ advargtypes.Key, _ string) bool {
+			count++
+			return true
+		})
+
+		if count != 0 {
+			t.Errorf("Expected 0 iterations for nil map, got %d", count)
+		}
+	})
+}
+
+func TestAdvArgs_Raw(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns underlying map", func(t *testing.T) {
+		t.Parallel()
+
+		m := map[string]string{"key": "value"}
+		advArgs := parser.NewAdvArgs(m)
+
+		raw := advArgs.Raw()
+		if raw["key"] != "value" {
+			t.Error("Expected raw map to contain key=value")
+		}
+	})
+
+	t.Run("nil map returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+		if advArgs.Raw() != nil {
+			t.Error("Expected Raw() to return nil for nil map")
+		}
+	})
+}
+
+func TestAdvArgs_MarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("marshals non-nil map", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(map[string]string{
+			"key": "value",
+		})
+
+		data, err := advArgs.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON failed: %v", err)
+		}
+
+		expected := `{"key":"value"}`
+		if string(data) != expected {
+			t.Errorf("Expected %s, got %s", expected, string(data))
+		}
+	})
+
+	t.Run("marshals nil map as null", func(t *testing.T) {
+		t.Parallel()
+
+		advArgs := parser.NewAdvArgs(nil)
+
+		data, err := advArgs.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON failed: %v", err)
+		}
+
+		if string(data) != "null" {
+			t.Errorf("Expected null, got %s", string(data))
+		}
+	})
+}
+
+func TestAdvArgs_UnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmarshals valid JSON", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`{"key":"value"}`))
+		if err != nil {
+			t.Fatalf("UnmarshalJSON failed: %v", err)
+		}
+
+		if advArgs.Get("key") != "value" {
+			t.Error("Expected key=value after unmarshal")
+		}
+	})
+
+	t.Run("unmarshals null as nil map", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`null`))
+		if err != nil {
+			t.Fatalf("UnmarshalJSON failed: %v", err)
+		}
+
+		if !advArgs.IsEmpty() {
+			t.Error("Expected empty AdvArgs after unmarshalling null")
+		}
+	})
+
+	t.Run("invalid JSON returns error", func(t *testing.T) {
+		t.Parallel()
+
+		var advArgs parser.AdvArgs
+		err := advArgs.UnmarshalJSON([]byte(`{invalid}`))
+		if err == nil {
+			t.Error("Expected error for invalid JSON")
+		}
+	})
+}

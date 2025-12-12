@@ -420,3 +420,107 @@ func TestParseContext(t *testing.T) {
 
 	assert.Equal(t, launchers, ctx.LauncherIDs)
 }
+
+func TestParse_LauncherValidation_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	// Launcher IDs are case-insensitive
+	ctx := NewParseContext([]string{"Steam", "RetroArch"})
+
+	tests := []struct {
+		name     string
+		launcher string
+		wantErr  bool
+	}{
+		{name: "exact case match", launcher: "Steam", wantErr: false},
+		{name: "lowercase match", launcher: "steam", wantErr: false},
+		{name: "uppercase match", launcher: "STEAM", wantErr: false},
+		{name: "mixed case match", launcher: "sTeAm", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var args advargtypes.LaunchRandomArgs
+			err := Parse(map[string]string{"launcher": tt.launcher}, &args, ctx)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.launcher, args.Launcher)
+			}
+		})
+	}
+}
+
+func TestParse_LauncherValidation_NilContext(t *testing.T) {
+	t.Parallel()
+
+	// When no context is provided, launcher validation passes through
+	// (will fail at runtime if invalid, but allows parsing to succeed)
+	var args advargtypes.LaunchRandomArgs
+	err := Parse(map[string]string{"launcher": "any_launcher"}, &args, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "any_launcher", args.Launcher)
+}
+
+func TestParse_UnknownArgument(t *testing.T) {
+	t.Parallel()
+
+	// Unknown arguments should fail with ErrorUnused
+	var args advargtypes.GlobalArgs
+	err := Parse(map[string]string{"unknown_key": "value"}, &args, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode")
+}
+
+func TestParse_MisterScriptArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        map[string]string
+		wantHidden string
+		wantErr    bool
+	}{
+		{
+			name:       "empty hidden",
+			raw:        map[string]string{},
+			wantHidden: "",
+			wantErr:    false,
+		},
+		{
+			name:       "hidden true",
+			raw:        map[string]string{"hidden": "true"},
+			wantHidden: "true",
+			wantErr:    false,
+		},
+		{
+			name:       "hidden yes",
+			raw:        map[string]string{"hidden": "yes"},
+			wantHidden: "yes",
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var args advargtypes.MisterScriptArgs
+			err := Parse(tt.raw, &args, nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantHidden, args.Hidden)
+		})
+	}
+}
