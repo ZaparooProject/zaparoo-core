@@ -61,24 +61,22 @@ func (ad *AutoDetector) DetectReaders(
 	connectedReaders := st.ListReaders()
 	ad.updateConnected(connectedReaders)
 
-	// Build detection summary for intelligent logging
 	var detectedDevices []string
 	var detectionErrors []string
 
 	for _, reader := range supportedReaders {
 		metadata := reader.Metadata()
 
-		// Check if auto-detect is enabled for this driver
 		if !cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
 			continue
 		}
 
-		// Get failed connections specific to this reader type
 		readerFailedConnections := ad.getFailedConnectionsForReader(reader.IDs())
 
-		// Combine connected (all readers) and failed (this reader type only)
-		connectedReaders = append(connectedReaders, readerFailedConnections...)
-		detect := reader.Detect(connectedReaders)
+		excludeList := make([]string, 0, len(connectedReaders)+len(readerFailedConnections))
+		excludeList = append(excludeList, connectedReaders...)
+		excludeList = append(excludeList, readerFailedConnections...)
+		detect := reader.Detect(excludeList)
 		if detect == "" {
 			continue
 		}
@@ -110,12 +108,10 @@ func (ad *AutoDetector) DetectReaders(
 				Err(err).
 				Msg("failed to connect detected reader")
 
-			// Mark this connection string as failed
 			ad.setFailed(detect)
 		}
 	}
 
-	// Intelligent logging: only log when detection state changes or on periodic heartbeat
 	ad.logDetectionResults(detectedDevices, connectedReaders, detectionErrors)
 
 	return nil
@@ -139,17 +135,15 @@ func (ad *AutoDetector) logDetectionResults(detectedDevices, _, _ []string) {
 				Strs("new_devices_detected", detectedDevices).
 				Msg("auto-detect found new devices available for connection")
 		} else if heartbeatTime {
-			// Only show heartbeat if auto-detect is actually running
 			if len(ad.failed) > 0 {
-				log.Debug().
+				log.Trace().
 					Int("total_failed_attempts", len(ad.failed)).
 					Msg("auto-detect active: no new devices found")
 			} else {
-				log.Debug().Msg("auto-detect active: no devices detected")
+				log.Trace().Msg("auto-detect active: no devices detected")
 			}
 		}
 
-		// Update tracking state
 		ad.lastDetectionSummary = summary
 		ad.lastLogTime = time.Now()
 	}

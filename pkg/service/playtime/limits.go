@@ -19,15 +19,7 @@
 
 package playtime
 
-// KNOWN EDGE CASES / TODO:
-//
-// 1. System Sleep/Hibernate:
-//    If a game is running when the system sleeps (laptop lid close, hibernate),
-//    using wall-clock time (Now - StartTime) will count sleep hours as playtime.
-//    Fix: Detect OS sleep/wake events and pause timers, OR ensure monotonic clock
-//    excludes suspension time (most OS wall clocks include it).
-//
-// 2. Time Zone Manipulation:
+// TODO: Time Zone Manipulation (time crimes)
 //    A user could change the system clock backward (e.g., set time to yesterday)
 //    to bypass daily limits or extend session time.
 //    Fix: If online, verify time against NTP server. If offline, detect large

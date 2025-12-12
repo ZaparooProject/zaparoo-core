@@ -21,6 +21,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -294,6 +295,7 @@ func readerManager(
 	// manage reader connections
 	go func() {
 		log.Info().Msgf("reader manager started, auto-detect=%v", cfg.AutoDetect())
+		sleepMonitor := helpers.NewSleepWakeMonitor(5 * time.Second)
 		readerConnectAttempts := 0
 		lastReaderCount := 0
 		for {
@@ -302,6 +304,20 @@ func readerManager(
 				log.Info().Msg("reader manager shutting down via context cancellation")
 				return
 			case <-readerTicker.C:
+				// Check for wake from sleep and reconnect all readers if detected
+				if sleepMonitor.Check() {
+					log.Info().Msg("detected wake from sleep, reconnecting all readers")
+					for _, device := range st.ListReaders() {
+						if r, ok := st.GetReader(device); ok && r != nil {
+							if closeErr := r.Close(); closeErr != nil {
+								log.Debug().Err(closeErr).Str("device", device).Msg("error closing reader after sleep")
+							}
+						}
+						st.RemoveReader(device)
+					}
+					lastReaderCount = 0
+				}
+
 				readerConnectAttempts++
 				rs := st.ListReaders()
 
@@ -323,12 +339,21 @@ func readerManager(
 					if ok && r != nil && !r.Connected() {
 						log.Debug().Msgf("pruning disconnected reader: %s", device)
 						st.RemoveReader(device)
+						if autoDetector != nil {
+							if parts := strings.SplitN(device, ":", 2); len(parts) == 2 {
+								autoDetector.ClearDevice(parts[1])
+							}
+							autoDetector.ClearFailedConnection(device)
+						}
 					}
 				}
 
 				if connectErr := connectReaders(pl, cfg, st, scanQueue, autoDetector); connectErr != nil {
 					log.Error().Msgf("error connecting rs: %s", connectErr)
 				}
+				// Reset monitor after potentially blocking operations to avoid
+				// counting USB enumeration/connection time as sleep
+				sleepMonitor.Reset()
 			}
 		}
 	}()
