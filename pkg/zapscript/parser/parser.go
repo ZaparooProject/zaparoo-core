@@ -84,20 +84,16 @@ type AdvArgs struct {
 	raw map[string]string
 }
 
-// NewAdvArgs creates an AdvArgs wrapper from a raw map.
 func NewAdvArgs(m map[string]string) AdvArgs {
 	return AdvArgs{raw: m}
 }
 
-// Get returns the value for a key. This should only be used for pre-parse
-// operations where typed parsing isn't possible yet (e.g., system defaults).
 func (a AdvArgs) Get(key advargtypes.Key) string {
 	return a.raw[string(key)]
 }
 
-// Set sets a value for a key and returns the modified AdvArgs.
-// Used for pre-parse mutations like applying system default launchers before parsing.
-func (a AdvArgs) Set(key advargtypes.Key, value string) AdvArgs {
+// With returns a new AdvArgs with the key set to value. Does not mutate the receiver.
+func (a AdvArgs) With(key advargtypes.Key, value string) AdvArgs {
 	if a.raw == nil {
 		a.raw = make(map[string]string)
 	}
@@ -105,20 +101,15 @@ func (a AdvArgs) Set(key advargtypes.Key, value string) AdvArgs {
 	return a
 }
 
-// GetWhen returns the "when" condition value.
-// Used by RunCommand before dispatching to check conditional execution.
 func (a AdvArgs) GetWhen() (string, bool) {
 	v, ok := a.raw[string(advargtypes.KeyWhen)]
 	return v, ok
 }
 
-// IsEmpty returns true if no advanced args are present.
 func (a AdvArgs) IsEmpty() bool {
 	return len(a.raw) == 0
 }
 
-// Range iterates over all key-value pairs. Used for expression evaluation
-// in RunCommand. The callback receives each key and value.
 func (a AdvArgs) Range(fn func(key advargtypes.Key, value string) bool) {
 	for k, v := range a.raw {
 		if !fn(advargtypes.Key(k), v) {
@@ -127,10 +118,26 @@ func (a AdvArgs) Range(fn func(key advargtypes.Key, value string) bool) {
 	}
 }
 
-// Raw returns the underlying map for use by advargs.Parse().
-// This is intentionally not a convenient API to discourage direct map access.
 func (a AdvArgs) Raw() map[string]string {
 	return a.raw
+}
+
+func (a AdvArgs) MarshalJSON() ([]byte, error) {
+	if a.raw == nil {
+		return []byte("null"), nil
+	}
+	b, err := json.Marshal(a.raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal AdvArgs: %w", err)
+	}
+	return b, nil
+}
+
+func (a *AdvArgs) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &a.raw); err != nil {
+		return fmt.Errorf("failed to unmarshal AdvArgs: %w", err)
+	}
+	return nil
 }
 
 type Command struct {

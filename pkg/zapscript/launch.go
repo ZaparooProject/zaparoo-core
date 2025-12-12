@@ -43,7 +43,7 @@ func applySystemDefaultLauncher(env *platforms.CmdEnv, systemID string) string {
 	}
 	if defaults, ok := env.Cfg.LookupSystemDefaults(systemID); ok && defaults.Launcher != "" {
 		log.Info().Msgf("using system default launcher for %s: %s", systemID, defaults.Launcher)
-		env.Cmd.AdvArgs = env.Cmd.AdvArgs.Set(advargtypes.KeyLauncher, defaults.Launcher)
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(advargtypes.KeyLauncher, defaults.Launcher)
 		return defaults.Launcher
 	}
 	return ""
