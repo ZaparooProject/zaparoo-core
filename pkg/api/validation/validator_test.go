@@ -469,3 +469,68 @@ func TestErrorFormatting(t *testing.T) {
 	require.ErrorAs(t, err, &valErr)
 	assert.Len(t, valErr.Fields, 2)
 }
+
+func TestErrorFormattingAllCases(t *testing.T) {
+	t.Parallel()
+
+	v := NewValidator()
+
+	tests := []struct {
+		name       string
+		structDef  any
+		wantSubstr string
+	}{
+		{
+			name: "lt validation",
+			structDef: &struct {
+				Value int `validate:"lt=10"`
+			}{Value: 15},
+			wantSubstr: "must be less than 10",
+		},
+		{
+			name: "lte validation",
+			structDef: &struct {
+				Value int `validate:"lte=10"`
+			}{Value: 15},
+			wantSubstr: "must be less than or equal to 10",
+		},
+		{
+			name: "gte validation",
+			structDef: &struct {
+				Value int `validate:"gte=10"`
+			}{Value: 5},
+			wantSubstr: "must be greater than or equal to 10",
+		},
+		{
+			name: "max validation",
+			structDef: &struct {
+				Value string `validate:"max=5"`
+			}{Value: "toolong"},
+			wantSubstr: "must be at most 5",
+		},
+		{
+			name: "unknown tag falls back to default",
+			structDef: &struct {
+				Value string `validate:"alphanum"`
+			}{Value: "test!@#"},
+			wantSubstr: "failed alphanum validation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := v.Validate(tt.structDef)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantSubstr)
+		})
+	}
+}
+
+func TestErrorEmptyFields(t *testing.T) {
+	t.Parallel()
+
+	// Test Error.Error() with empty fields
+	err := &Error{Fields: []FieldError{}}
+	assert.Equal(t, "validation failed", err.Error())
+}
