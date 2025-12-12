@@ -147,7 +147,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 					{
 						Name:    "launch.title",
 						Args:    []string{"snes/Super Mario World"},
-						AdvArgs: map[string]string{"launcher": "custom"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"launcher": "custom"}),
 					},
 				},
 			},
@@ -160,10 +160,10 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 					{
 						Name: "launch.title",
 						Args: []string{"snes/Game"},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"launcher": "custom",
 							"tags":     "region:us",
-						},
+						}),
 					},
 				},
 			},
@@ -176,7 +176,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 					{
 						Name:    "launch.title",
 						Args:    []string{"snes/Game (USA) (year:1994)"},
-						AdvArgs: map[string]string{"launcher": "custom"},
+						AdvArgs: parser.NewAdvArgs(map[string]string{"launcher": "custom"}),
 					},
 				},
 			},
@@ -392,10 +392,10 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 					{
 						Name: "launch.title",
 						Args: []string{"Sega Genesis/Sonic & Knuckles (USA) (Rev A) (year:1994)"},
-						AdvArgs: map[string]string{
+						AdvArgs: parser.NewAdvArgs(map[string]string{
 							"launcher": "custom",
 							"tags":     "region:us",
-						},
+						}),
 					},
 				},
 			},
@@ -432,7 +432,7 @@ func TestParseMediaTitleSyntax(t *testing.T) {
 				t.Errorf("ParseScript() error = %v, wantErr = %v", err, tt.wantErr)
 				return
 			}
-			if diff := cmp.Diff(tt.want, got); diff != "" {
+			if diff := cmp.Diff(tt.want, got, cmp.AllowUnexported(parser.AdvArgs{})); diff != "" {
 				t.Errorf("ParseScript() mismatch (-want +got):\n%s", diff)
 			}
 		})

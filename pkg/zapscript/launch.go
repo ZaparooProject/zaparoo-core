@@ -28,31 +28,25 @@ import (
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/filters"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/installer"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
-// parseTagsAdvArg parses comma-delimited tags from advanced args
-// Format: "type:value,-type2:value2,~type3:value3"
-// Operators: "-" = NOT, "~" = OR, none = AND (default)
-// Uses shared parser from pkg/database/filters
-func parseTagsAdvArg(tagsStr string) []database.TagFilter {
-	if tagsStr == "" {
-		return nil
+func applySystemDefaultLauncher(env *platforms.CmdEnv, systemID string) string {
+	current := env.Cmd.AdvArgs.Get(advargtypes.KeyLauncher)
+	if current != "" {
+		return current
 	}
-
-	parts := strings.Split(tagsStr, ",")
-	tagFilters, err := filters.ParseTagFilters(parts)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to parse tag filters")
-		return nil
+	if defaults, ok := env.Cfg.LookupSystemDefaults(systemID); ok && defaults.Launcher != "" {
+		log.Info().Msgf("using system default launcher for %s: %s", systemID, defaults.Launcher)
+		env.Cmd.AdvArgs = env.Cmd.AdvArgs.With(advargtypes.KeyLauncher, defaults.Launcher)
+		return defaults.Launcher
 	}
-
-	return tagFilters
+	return ""
 }
 
 //nolint:gocritic // single-use parameter in command handler
@@ -65,6 +59,7 @@ func cmdSystem(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	// For menu, use ReturnToMenu() instead of LaunchSystem
 	// This ensures proper handling across all platforms (stops active launcher and returns to main menu)
+	// TODO: move "menu" to a const somewhere else
 	if strings.EqualFold(systemID, "menu") {
 		if err := pl.ReturnToMenu(); err != nil {
 			return platforms.CmdResult{
@@ -98,13 +93,13 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	launch, err := getAltLauncher(pl, env)
-	if err != nil {
-		return platforms.CmdResult{}, err
+	var args advargtypes.LaunchRandomArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
-	// Parse tags from advanced args
-	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	launch := getLaunchClosure(pl, &env)
+	tagFilters := args.Tags
 
 	gamesdb := env.Database.MediaDB
 
@@ -160,7 +155,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// TODO: use parser for launch command
 	ps := strings.SplitN(query, "/", 2)
 	if len(ps) == 2 {
-		systemID, query := ps[0], ps[1]
+		systemID, searchQuery := ps[0], ps[1]
 
 		var systems []systemdefs.System
 		if strings.EqualFold(systemID, "all") {
@@ -176,7 +171,7 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 
 		// Handle the special case of /* pattern - use RandomGameWithQuery
-		if query == "*" {
+		if searchQuery == "*" {
 			systemIDs := make([]string, len(systems))
 			for i, sys := range systems {
 				systemIDs[i] = sys.ID
@@ -206,12 +201,13 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}
 		mediaQuery := database.MediaQuery{
 			Systems:  systemIDs,
-			PathGlob: query,
+			PathGlob: searchQuery,
 			Tags:     tagFilters,
 		}
 		game, randomErr := gamesdb.RandomGameWithQuery(&mediaQuery)
 		if randomErr != nil {
-			return platforms.CmdResult{}, fmt.Errorf("failed to get random game matching '%s': %w", query, randomErr)
+			return platforms.CmdResult{},
+				fmt.Errorf("failed to get random game matching '%s': %w", searchQuery, randomErr)
 		}
 
 		if launchErr := launch(game.Path); launchErr != nil {
@@ -260,42 +256,43 @@ func cmdRandom(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	}, nil
 }
 
-func getAltLauncher(
+func findLauncher(pl platforms.Platform, cfg *platforms.CmdEnv, launcherID string) *platforms.Launcher {
+	if launcherID == "" {
+		return nil
+	}
+	launchers := pl.Launchers(cfg.Cfg)
+	for i := range launchers {
+		if strings.EqualFold(launchers[i].ID, launcherID) {
+			return &launchers[i]
+		}
+	}
+	return nil
+}
+
+func getLaunchClosure(
 	pl platforms.Platform,
-	env platforms.CmdEnv, //nolint:gocritic // single-use parameter in command handler
-) (func(args string) error, error) {
-	// Build launch options from advanced args
-	var opts *platforms.LaunchOptions
-	if action := env.Cmd.AdvArgs["action"]; action != "" {
-		opts = &platforms.LaunchOptions{Action: action}
-	}
+	env *platforms.CmdEnv,
+) func(path string) error {
+	return func(path string) error {
+		launcherID := env.Cmd.AdvArgs.Get(advargtypes.KeyLauncher)
+		action := env.Cmd.AdvArgs.Get(advargtypes.KeyAction)
 
-	if env.Cmd.AdvArgs["launcher"] != "" {
-		var launcher platforms.Launcher
+		var opts *platforms.LaunchOptions
+		if action != "" {
+			opts = &platforms.LaunchOptions{Action: action}
+		}
 
-		launchers := pl.Launchers(env.Cfg)
-		for i := range launchers {
-			if launchers[i].ID == env.Cmd.AdvArgs["launcher"] {
-				launcher = launchers[i]
-				break
+		if launcherID != "" {
+			launcher := findLauncher(pl, env, launcherID)
+			if launcher == nil {
+				return fmt.Errorf("launcher not found: %s", launcherID)
 			}
+			log.Info().Msgf("launching with launcher: %s", launcherID)
+			return pl.LaunchMedia(env.Cfg, path, launcher, env.Database, opts)
 		}
 
-		if launcher.Launch == nil {
-			return nil, fmt.Errorf("alt launcher not found: %s", env.Cmd.AdvArgs["launcher"])
-		}
-
-		log.Info().Msgf("launching with alt launcher: %s", env.Cmd.AdvArgs["launcher"])
-
-		return func(args string) error {
-			// Pass the specific launcher - DoLaunch handles lifecycle
-			return pl.LaunchMedia(env.Cfg, args, &launcher, env.Database, opts)
-		}, nil
+		return pl.LaunchMedia(env.Cfg, path, nil, env.Database, opts)
 	}
-	// Normal path - pass nil for auto-detection
-	return func(args string) error {
-		return pl.LaunchMedia(env.Cfg, args, nil, env.Database, opts)
-	}, nil
 }
 
 func isValidRemoteFileURL(s string) (func(installer.DownloaderArgs) error, bool) {
@@ -328,16 +325,18 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	systemArg := env.Cmd.AdvArgs["system"]
-	if dler, ok := isValidRemoteFileURL(path); ok && systemArg != "" {
-		name := env.Cmd.AdvArgs["name"]
-		preNotice := env.Cmd.AdvArgs["pre_notice"]
+	var args advargtypes.LaunchArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, err
+	}
+
+	if dler, ok := isValidRemoteFileURL(path); ok && args.System != "" {
 		installPath, err := installer.InstallRemoteFile(
 			env.Cfg, pl,
 			path,
-			systemArg,
-			preNotice,
-			name,
+			args.System,
+			args.PreNotice,
+			args.Name,
 			dler,
 		)
 		if err != nil {
@@ -346,26 +345,17 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		path = installPath
 	}
 
-	// Apply system defaults from system advanced arg if no explicit launcher specified
-	if env.Cmd.AdvArgs["launcher"] == "" && env.Cmd.AdvArgs["system"] != "" {
-		systemID := env.Cmd.AdvArgs["system"]
-		system, lookupErr := systemdefs.LookupSystem(systemID)
+	if args.System != "" {
+		system, lookupErr := systemdefs.LookupSystem(args.System)
 		if lookupErr != nil {
-			log.Warn().Err(lookupErr).Str("system", systemID).
+			log.Warn().Err(lookupErr).Str("system", args.System).
 				Msg("system arg provided but lookup failed - falling back to auto-detection")
 		} else {
-			if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
-				log.Debug().Str("system", system.ID).Str("launcher", systemDefaults.Launcher).
-					Msg("applying system default launcher from system arg")
-				env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
-			}
+			applySystemDefaultLauncher(&env, system.ID)
 		}
 	}
 
-	launch, err := getAltLauncher(pl, env)
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
+	launch := getLaunchClosure(pl, &env)
 
 	// if it's an absolute path, just try launch it
 	if filepath.IsAbs(path) {
@@ -401,6 +391,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return cmdTitle(pl, env)
 	}
 
+	// TODO: create central function for parsing the <system>/<path> format
 	// attempt to parse the <system>/<path> format
 	ps := strings.SplitN(path, "/", 2)
 	if len(ps) < 2 {
@@ -414,16 +405,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("failed to lookup system '%s': %w", systemID, err)
 	}
 
-	// Check system defaults for launcher if not already specified
-	if env.Cmd.AdvArgs["launcher"] == "" {
-		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
-			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
-			if env.Cmd.AdvArgs == nil {
-				env.Cmd.AdvArgs = make(map[string]string)
-			}
-			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
-		}
-	}
+	applySystemDefaultLauncher(&env, system.ID)
 
 	log.Info().Msgf("launching system: %s, path: %s", systemID, lookupPath)
 
@@ -472,8 +454,6 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 	// search if the path contains no / or file extensions
 	if !strings.Contains(lookupPath, "/") && filepath.Ext(lookupPath) == "" {
 		if strings.Contains(lookupPath, "*") {
-			// treat as a search
-			// TODO: passthrough advanced args
 			return cmdSearch(pl, env)
 		}
 		log.Info().Msgf("searching in %s: %s", system.ID, lookupPath)
@@ -512,13 +492,13 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, ErrRequiredArgs
 	}
 
-	launch, err := getAltLauncher(pl, env)
-	if err != nil {
-		return platforms.CmdResult{}, err
+	var args advargtypes.LaunchSearchArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", err)
 	}
 
-	// Parse tags from advanced args
-	tagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	launch := getLaunchClosure(pl, &env)
+	tagFilters := args.Tags
 
 	query = strings.ToLower(query)
 	query = strings.TrimSpace(query)
@@ -553,9 +533,9 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, fmt.Errorf("invalid search format: %s", query)
 	}
 
-	systemID, query := ps[0], ps[1]
+	systemID, searchQuery := ps[0], ps[1]
 
-	if query == "" {
+	if searchQuery == "" {
 		return platforms.CmdResult{}, errors.New("no query specified")
 	}
 
@@ -574,18 +554,18 @@ func cmdSearch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 
 	searchFilters := database.SearchFilters{
 		Systems: systems,
-		Query:   query,
+		Query:   searchQuery,
 		Tags:    tagFilters,
 		Limit:   1,
 	}
 	// TODO: context should come from service state
 	res, searchErr := gamesdb.SearchMediaWithFilters(context.Background(), &searchFilters)
 	if searchErr != nil {
-		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", query, searchErr)
+		return platforms.CmdResult{}, fmt.Errorf("failed to search systems for '%s': %w", searchQuery, searchErr)
 	}
 
 	if len(res) == 0 {
-		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", query)
+		return platforms.CmdResult{}, fmt.Errorf("no results found for: %s", searchQuery)
 	}
 
 	return platforms.CmdResult{

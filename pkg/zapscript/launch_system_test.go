@@ -45,7 +45,7 @@ func TestCmdSystem_Menu(t *testing.T) {
 		Cmd: parser.Command{
 			Name:    "launch.system",
 			Args:    []string{"menu"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -73,7 +73,7 @@ func TestCmdSystem_MenuReturnFails(t *testing.T) {
 		Cmd: parser.Command{
 			Name:    "launch.system",
 			Args:    []string{"menu"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -101,7 +101,7 @@ func TestCmdSystem_RegularSystem(t *testing.T) {
 		Cmd: parser.Command{
 			Name:    "launch.system",
 			Args:    []string{"NES"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -127,7 +127,7 @@ func TestCmdSystem_InvalidArgCount(t *testing.T) {
 		Cmd: parser.Command{
 			Name:    "launch.system",
 			Args:    []string{}, // No args
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		},
 		Cfg: cfg,
 	}
@@ -156,7 +156,7 @@ func TestCmdSystem_MenuCaseInsensitive(t *testing.T) {
 				Cmd: parser.Command{
 					Name:    "launch.system",
 					Args:    []string{menuVariant},
-					AdvArgs: map[string]string{},
+					AdvArgs: parser.NewAdvArgs(map[string]string{}),
 				},
 				Cfg: cfg,
 			}

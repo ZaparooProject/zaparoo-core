@@ -26,10 +26,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -87,7 +87,7 @@ func (c *Client) Launch(
 
 	// Build the appropriate Steam URL based on the action
 	var steamURL string
-	if strings.EqualFold(action, "details") {
+	if advargs.IsActionDetails(action) {
 		steamURL = BuildSteamDetailsURL(id)
 	} else {
 		steamURL = BuildSteamURL(id)

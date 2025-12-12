@@ -35,6 +35,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newPlaylistTestPlatform creates a mock platform with Launchers configured for playlist tests.
+func newPlaylistTestPlatform() *mocks.MockPlatform {
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	return mp
+}
+
 func TestReadPlsFile(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -158,7 +165,7 @@ func TestCmdPlaylistOpen_NoArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform := newPlaylistTestPlatform()
 			cfg := &config.Instance{}
 
 			// Mock ShowPicker if we expect it to be called
@@ -227,7 +234,7 @@ Title3=Item 3`
 	err := os.WriteFile(plsFile, []byte(plsContent), 0o600)
 	require.NoError(t, err)
 
-	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform := newPlaylistTestPlatform()
 	cfg := &config.Instance{}
 
 	// Active playlist at index 2 (third item)

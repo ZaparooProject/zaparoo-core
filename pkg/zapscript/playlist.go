@@ -35,6 +35,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/rs/zerolog/log"
 )
 
@@ -248,6 +250,11 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 		return nil, ErrRequiredArgs
 	}
 
+	var args advargtypes.PlaylistArgs
+	if err := ParseAdvArgs(pl, &env, &args); err != nil {
+		return nil, fmt.Errorf("invalid advanced arguments: %w", err)
+	}
+
 	if helpers.MaybeJSON([]byte(env.Cmd.Args[0])) {
 		var plsArg ArgPlaylist
 		if err := json.Unmarshal([]byte(env.Cmd.Args[0]), &plsArg); err != nil {
@@ -286,7 +293,7 @@ func loadPlaylist(pl platforms.Platform, env platforms.CmdEnv) (*playlists.Playl
 	name := filepath.Base(path)
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 
-	if v, ok := env.Cmd.AdvArgs["mode"]; ok && strings.EqualFold(v, "shuffle") {
+	if advargs.IsModeShuffle(args.Mode) {
 		log.Info().Msgf("shuffling playlist: %s", env.Cmd.Args[0])
 		if len(items) == 0 {
 			log.Warn().Msgf("playlist is empty: %s", path)

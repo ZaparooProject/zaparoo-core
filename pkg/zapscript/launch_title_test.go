@@ -38,6 +38,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newMockPlatformWithLaunchers creates a mock platform with Launchers already configured.
+func newMockPlatformWithLaunchers() *mocks.MockPlatform {
+	mp := mocks.NewMockPlatform()
+	mp.On("Launchers", mock.Anything).Return([]platforms.Launcher{}).Maybe()
+	return mp
+}
+
 func TestCmdTitle(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -98,7 +105,7 @@ func TestCmdTitle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
-			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform := newMockPlatformWithLaunchers()
 			mockPlaylistController := playlists.PlaylistController{}
 			mockConfig := &config.Instance{}
 
@@ -109,7 +116,7 @@ func TestCmdTitle(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -272,7 +279,7 @@ func TestExtractCanonicalTagsFromParens(t *testing.T) {
 
 func TestCmdTitleWithTags(t *testing.T) {
 	mockMediaDB := helpers.NewMockMediaDBI()
-	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform := newMockPlatformWithLaunchers()
 	mockPlaylistController := playlists.PlaylistController{}
 	mockConfig := &config.Instance{}
 
@@ -291,7 +298,7 @@ func TestCmdTitleWithTags(t *testing.T) {
 	cmd := parser.Command{
 		Name:    "launch.title",
 		Args:    []string{input},
-		AdvArgs: map[string]string{"tags": "region:usa,type:game"},
+		AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa,type:game"}),
 	}
 
 	env := platforms.CmdEnv{
@@ -416,7 +423,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
-			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform := newMockPlatformWithLaunchers()
 			mockPlaylistController := playlists.PlaylistController{}
 			mockConfig := &config.Instance{}
 
@@ -427,7 +434,7 @@ func TestCmdTitleWithSubtitleFallback(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -557,7 +564,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
-			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform := newMockPlatformWithLaunchers()
 			mockPlaylistController := playlists.PlaylistController{}
 			mockConfig := &config.Instance{}
 
@@ -568,7 +575,7 @@ func TestCmdTitleJaroWinklerFuzzy(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    []string{tt.input},
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -693,7 +700,7 @@ func TestCmdTitleEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockMediaDB := helpers.NewMockMediaDBI()
-			mockPlatform := mocks.NewMockPlatform()
+			mockPlatform := newMockPlatformWithLaunchers()
 			mockPlaylistController := playlists.PlaylistController{}
 			mockConfig := &config.Instance{}
 
@@ -704,7 +711,7 @@ func TestCmdTitleEdgeCases(t *testing.T) {
 			cmd := parser.Command{
 				Name:    "launch.title",
 				Args:    tt.args,
-				AdvArgs: map[string]string{},
+				AdvArgs: parser.NewAdvArgs(map[string]string{}),
 			}
 
 			env := platforms.CmdEnv{
@@ -1382,7 +1389,7 @@ func TestConfigDefaults(t *testing.T) {
 func TestCmdTitleCacheBehavior(t *testing.T) {
 	t.Run("Cache hit - should not search database", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1396,7 +1403,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1436,7 +1443,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 	t.Run("Cache miss - should search and update cache", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1450,7 +1457,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1499,7 +1506,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 
 	t.Run("Cache with different tag filters", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1516,7 +1523,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd1 := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "region:usa"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:usa"}),
 		}
 
 		env1 := platforms.CmdEnv{
@@ -1552,7 +1559,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 		cmd2 := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "region:jp"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "region:jp"}),
 		}
 
 		env2 := platforms.CmdEnv{
@@ -1592,7 +1599,7 @@ func TestCmdTitleCacheBehavior(t *testing.T) {
 func TestCmdTitleErrorHandling(t *testing.T) {
 	t.Run("Database search error", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1603,7 +1610,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1629,7 +1636,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 
 	t.Run("Platform launch error", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1640,7 +1647,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1679,63 +1686,33 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 	})
 
 	t.Run("Invalid tag filter format", func(t *testing.T) {
-		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
-
-		db := &database.Database{
-			MediaDB: mockMediaDB,
-		}
 
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/Super Mario World"},
-			AdvArgs: map[string]string{"tags": "invalid_format"},
+			AdvArgs: parser.NewAdvArgs(map[string]string{"tags": "invalid_format"}),
 		}
 
 		env := platforms.CmdEnv{
 			Playlist: mockPlaylistController,
 			Cfg:      mockConfig,
-			Database: db,
+			Database: &database.Database{},
 			Cmd:      cmd,
 		}
 
-		// Cache check happens before tag parsing
-		mockMediaDB.On("GetCachedSlugResolution",
-			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
-			Return(int64(0), "", false).Maybe()
-
-		// Tag parsing fails but code continues with search anyway
-		// Also subtitle fallback will kick in
-		mockMediaDB.On("SearchMediaBySlug",
-			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
-			Return([]database.SearchResultWithCursor{}, nil).Maybe()
-		mockMediaDB.On("SearchMediaBySecondarySlug",
-			mock.Anything, "SNES", mock.AnythingOfType("string"), []database.TagFilter(nil)).
-			Return([]database.SearchResultWithCursor{}, nil).Maybe()
-		mockMediaDB.On("SearchMediaBySlugPrefix",
-			mock.Anything, "SNES", mock.AnythingOfType("string"), mock.Anything).
-			Return([]database.SearchResultWithCursor{}, nil).Maybe()
-		mockMediaDB.On("SearchMediaBySlugIn",
-			mock.Anything, "SNES", mock.Anything, mock.Anything).
-			Return([]database.SearchResultWithCursor{}, nil).Maybe()
-		mockMediaDB.On("GetTitlesWithPreFilter",
-			mock.Anything, "SNES", mock.AnythingOfType("int"), mock.AnythingOfType("int"),
-			mock.AnythingOfType("int"), mock.AnythingOfType("int")).
-			Return([]database.MediaTitle{}, nil).Maybe()
-
+		// With hard-fail validation, invalid tags should fail immediately
 		_, err := cmdTitle(mockPlatform, env)
 
-		// Tag parsing logs a warning but doesn't fail the command, so no error expected from invalid format
-		// The command will fail because no results are found
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no results found")
+		assert.Contains(t, err.Error(), "invalid advanced arguments")
 	})
 
 	t.Run("No results found", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1746,7 +1723,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/NonexistentGame12345"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{
@@ -1794,7 +1771,7 @@ func TestCmdTitleErrorHandling(t *testing.T) {
 func TestCmdTitlePerformance(t *testing.T) {
 	t.Run("Large result set filtering", func(t *testing.T) {
 		mockMediaDB := helpers.NewMockMediaDBI()
-		mockPlatform := mocks.NewMockPlatform()
+		mockPlatform := newMockPlatformWithLaunchers()
 		mockPlaylistController := playlists.PlaylistController{}
 		mockConfig := &config.Instance{}
 
@@ -1805,7 +1782,7 @@ func TestCmdTitlePerformance(t *testing.T) {
 		cmd := parser.Command{
 			Name:    "launch.title",
 			Args:    []string{"snes/mario"},
-			AdvArgs: map[string]string{},
+			AdvArgs: parser.NewAdvArgs(map[string]string{}),
 		}
 
 		env := platforms.CmdEnv{

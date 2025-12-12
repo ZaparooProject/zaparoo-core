@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/titles"
 	"github.com/rs/zerolog/log"
 )
@@ -64,40 +65,33 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 		return platforms.CmdResult{}, fmt.Errorf("system not found: %s", systemID)
 	}
 
-	// Check system defaults for launcher if not already specified
-	if env.Cmd.AdvArgs["launcher"] == "" {
-		if systemDefaults, ok := env.Cfg.LookupSystemDefaults(system.ID); ok && systemDefaults.Launcher != "" {
-			log.Info().Msgf("using system default launcher for %s: %s", system.ID, systemDefaults.Launcher)
-			if env.Cmd.AdvArgs == nil {
-				env.Cmd.AdvArgs = make(map[string]string)
-			}
-			env.Cmd.AdvArgs["launcher"] = systemDefaults.Launcher
-		}
+	var args advargtypes.LaunchTitleArgs
+	if parseErr := ParseAdvArgs(pl, &env, &args); parseErr != nil {
+		return platforms.CmdResult{}, fmt.Errorf("invalid advanced arguments: %w", parseErr)
 	}
 
-	launch, err := getAltLauncher(pl, env)
-	if err != nil {
-		return platforms.CmdResult{}, err
-	}
+	args.Launcher = applySystemDefaultLauncher(&env, system.ID)
+	launch := getLaunchClosure(pl, &env)
 
 	// Collect all launchers for this system to enable file type prioritization
 	// during result selection. If user specified an alt launcher explicitly,
 	// use only that one. Otherwise, get all launchers for the system.
 	var launchersForSystem []platforms.Launcher
-	if env.Cmd.AdvArgs["launcher"] != "" {
+	if args.Launcher != "" {
 		// User specified launcher explicitly via advanced args
 		// Find the specific launcher by ID
 		allLaunchers := pl.Launchers(env.Cfg)
 		for i := range allLaunchers {
-			if allLaunchers[i].ID == env.Cmd.AdvArgs["launcher"] {
+			if allLaunchers[i].ID == args.Launcher {
 				launchersForSystem = []platforms.Launcher{allLaunchers[i]}
 				log.Debug().Msgf("using explicitly specified launcher: %s", allLaunchers[i].ID)
 				break
 			}
 		}
 		if len(launchersForSystem) == 0 {
+			// This shouldn't happen since validation already checked the launcher
 			log.Warn().Msgf("explicitly specified launcher not found: %s, using all system launchers",
-				env.Cmd.AdvArgs["launcher"])
+				args.Launcher)
 			launchersForSystem = helpers.GlobalLauncherCache.GetLaunchersBySystem(system.ID)
 		}
 	} else {
@@ -133,8 +127,8 @@ func cmdTitle(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult,
 	// Keep auto-extracted tags separate for fallback strategy
 	autoExtractedTags := titles.MergeTagFilters(filenameTagFilters, canonicalTagFilters)
 
-	// Parse tags from advanced args (these are explicit user requirements)
-	advArgsTagFilters := parseTagsAdvArg(env.Cmd.AdvArgs["tags"])
+	// Use tags from validated advanced args (these are explicit user requirements)
+	advArgsTagFilters := args.Tags
 
 	// Merge all tags for initial search attempt
 	// Priority: advanced args > canonical tags > filename tags
