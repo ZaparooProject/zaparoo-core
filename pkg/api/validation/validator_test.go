@@ -202,6 +202,8 @@ func TestValidateSystem(t *testing.T) {
 		{name: "valid system SNES", value: "SNES", wantError: false},
 		{name: "valid system Genesis", value: "Genesis", wantError: false},
 		{name: "invalid system", value: "NotASystem", wantError: true},
+		{name: "wrong case nes", value: "nes", wantError: true},
+		{name: "wrong case Nes", value: "Nes", wantError: true},
 	}
 
 	v := NewValidator()
@@ -319,7 +321,8 @@ func TestValidateLauncher(t *testing.T) {
 		{name: "empty is valid", value: "", launcherIDs: nil, wantError: false},
 		{name: "no context skips validation", value: "anything", launcherIDs: nil, wantError: false},
 		{name: "valid launcher in list", value: "steam", launcherIDs: []string{"steam", "retroarch"}, wantError: false},
-		{name: "case insensitive match", value: "STEAM", launcherIDs: []string{"steam"}, wantError: false},
+		{name: "case sensitive mismatch", value: "STEAM", launcherIDs: []string{"steam"}, wantError: true},
+		{name: "case sensitive match", value: "Steam", launcherIDs: []string{"Steam"}, wantError: false},
 		{name: "invalid launcher not in list", value: "unknown", launcherIDs: []string{"steam"}, wantError: true},
 	}
 

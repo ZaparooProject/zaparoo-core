@@ -98,11 +98,6 @@ func (v *Validator) ValidateCtx(ctx context.Context, params any, vctx *Context) 
 	return nil
 }
 
-// RegisterStructValidation registers a struct-level validation function.
-func (v *Validator) RegisterStructValidation(fn validator.StructLevelFunc, types ...any) {
-	v.validate.RegisterStructValidation(fn, types...)
-}
-
 // ValidateAndUnmarshal unmarshals JSON params and validates them.
 // Returns ErrMissingParams if params is empty, ErrInvalidParams if unmarshal fails,
 // or an Error if validation fails.
@@ -157,13 +152,13 @@ func validateRegex(fl validator.FieldLevel) bool {
 	return err == nil
 }
 
-// validateSystem checks if system ID exists in systemdefs.
+// validateSystem checks if system ID exists in systemdefs (case-sensitive).
 func validateSystem(fl validator.FieldLevel) bool {
 	val := fl.Field().String()
 	if val == "" {
 		return true
 	}
-	_, err := systemdefs.LookupSystem(val)
+	_, err := systemdefs.GetSystem(val)
 	return err == nil
 }
 
@@ -185,7 +180,7 @@ func validateHexData(fl validator.FieldLevel) bool {
 	return err == nil
 }
 
-// validateLauncher checks if launcher ID exists (context-aware).
+// validateLauncher checks if launcher ID exists (context-aware, case-sensitive).
 func validateLauncher(ctx context.Context, fl validator.FieldLevel) bool {
 	val := fl.Field().String()
 	if val == "" {
@@ -196,7 +191,7 @@ func validateLauncher(ctx context.Context, fl validator.FieldLevel) bool {
 		return true // No context means skip validation
 	}
 	for _, id := range vctx.LauncherIDs {
-		if strings.EqualFold(id, val) {
+		if id == val {
 			return true
 		}
 	}
