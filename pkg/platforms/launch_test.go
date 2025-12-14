@@ -335,3 +335,138 @@ func TestDoLaunch_LifecycleModes(t *testing.T) {
 		})
 	}
 }
+
+func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "Steam",
+		SystemID:  "pc",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		activeMedia = media
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: setActiveMedia,
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "steam://12345/Game",
+		Options:        &platforms.LaunchOptions{Action: "details"},
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "Game" })
+
+	require.NoError(t, err)
+	assert.Nil(t, activeMedia, "ActiveMedia should NOT be set for details action")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_LaunchError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, assert.AnError
+		},
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "", // No SystemID
+		Lifecycle: platforms.LifecycleFireAndForget,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, nil
+		},
+	}
+
+	var activeMedia *models.ActiveMedia
+	setActiveMedia := func(media *models.ActiveMedia) {
+		activeMedia = media
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: setActiveMedia,
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.NoError(t, err)
+	assert.Nil(t, activeMedia, "ActiveMedia should NOT be set when no SystemID")
+	mockPlatform.AssertExpectations(t)
+}
+
+func TestDoLaunch_TrackedLauncherError(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("StopActiveLauncher", platforms.StopForPreemption).Return(nil).Once()
+
+	launcher := &platforms.Launcher{
+		ID:        "test-launcher",
+		SystemID:  "test-system",
+		Lifecycle: platforms.LifecycleTracked,
+		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
+			return nil, assert.AnError
+		},
+	}
+
+	params := &platforms.LaunchParams{
+		Platform:       mockPlatform,
+		Config:         &config.Instance{},
+		SetActiveMedia: func(*models.ActiveMedia) {},
+		Launcher:       launcher,
+		DB:             nil,
+		Path:           "/test/path.rom",
+	}
+
+	err := platforms.DoLaunch(params, func(_ string) string { return "path" })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to launch")
+	mockPlatform.AssertExpectations(t)
+}
