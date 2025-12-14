@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -39,6 +38,7 @@ import (
 	widgetmodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/widgets/models"
 	"github.com/jonboulle/clockwork"
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 // Timeout constants for process termination.
@@ -119,10 +119,9 @@ func (b *Base) SetTrackedProcess(proc *os.Process) {
 	log.Debug().Msgf("set tracked process: %v", proc)
 }
 
-// StopActiveLauncher kills tracked process and clears active media.
+// StopActiveLauncher kills tracked process and all its children, then clears active media.
 // Uses SIGTERM first for graceful shutdown, then SIGKILL after timeout.
 func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
-	// Invalidate old launcher context - signals cleanup goroutines they're stale
 	if b.launcherManager != nil {
 		b.launcherManager.NewContext()
 	}
@@ -130,41 +129,33 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 	b.processMu.Lock()
 	defer b.processMu.Unlock()
 
-	// Kill tracked process if exists
 	if b.trackedProcess != nil {
-		proc := b.trackedProcess // Capture locally to avoid race
+		proc := b.trackedProcess // Capture to avoid race with Wait goroutine
+		pid := int32(proc.Pid)   //nolint:gosec // PID fits in int32
 		done := make(chan struct{})
 		go func() {
 			_, _ = proc.Wait()
 			close(done)
 		}()
 
-		// Try SIGTERM first for graceful shutdown
-		if err := proc.Signal(syscall.SIGTERM); err != nil {
-			log.Debug().Err(err).Msg("SIGTERM failed, trying SIGKILL")
-			if killErr := proc.Kill(); killErr != nil {
-				log.Warn().Err(killErr).Msg("failed to kill tracked process")
-			}
+		procs := getProcessTree(pid)
+		if len(procs) == 0 {
+			log.Debug().Int32("pid", pid).Msg("process not found, may have already exited")
 		} else {
-			// Wait for graceful exit or timeout
-			select {
-			case <-done:
-				log.Debug().Msg("tracked process exited gracefully")
-				b.trackedProcess = nil
-				b.setActiveMedia(nil)
-				return nil
-			case <-b.clock.After(SIGTERMTimeout):
+			log.Debug().Int("count", len(procs)).Int32("rootPid", pid).Msg("terminating process tree")
+
+			// Children are terminated before parent to avoid orphaning
+			terminateProcessTree(procs)
+
+			if !b.waitForExit(done, SIGTERMTimeout) {
 				log.Debug().Msg("SIGTERM timeout, sending SIGKILL")
-				if err := proc.Kill(); err != nil {
-					log.Warn().Err(err).Msg("failed to kill tracked process after timeout")
-				}
+				killProcessTree(procs)
 			}
 		}
 
-		// Wait briefly for SIGKILL to take effect before moving on
 		select {
 		case <-done:
-			log.Debug().Msg("tracked process exited after SIGKILL")
+			log.Debug().Msg("tracked process exited")
 		case <-b.clock.After(SIGKILLTimeout):
 			log.Debug().Msg("process cleanup timeout, proceeding anyway")
 		}
@@ -172,8 +163,71 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 		b.trackedProcess = nil
 	}
 
-	b.setActiveMedia(nil)
+	if b.setActiveMedia != nil {
+		b.setActiveMedia(nil)
+	}
 	return nil
+}
+
+// waitForExit waits for the done channel or timeout, returns true if exited.
+func (b *Base) waitForExit(done <-chan struct{}, timeout time.Duration) bool {
+	select {
+	case <-done:
+		log.Debug().Msg("tracked process exited gracefully")
+		return true
+	case <-b.clock.After(timeout):
+		return false
+	}
+}
+
+// getProcessTree returns the process and all its descendants.
+// Descendants are ordered before their parents for proper termination order.
+func getProcessTree(pid int32) []*process.Process {
+	proc, err := process.NewProcess(pid)
+	if err != nil {
+		return nil
+	}
+
+	var result []*process.Process
+	result = append(result, getAllDescendants(proc)...)
+	result = append(result, proc)
+	return result
+}
+
+// getAllDescendants recursively finds all descendant processes (depth-first).
+func getAllDescendants(proc *process.Process) []*process.Process {
+	children, err := proc.Children()
+	if err != nil || len(children) == 0 {
+		return nil
+	}
+	descendants := make([]*process.Process, 0, len(children))
+	for _, child := range children {
+		descendants = append(descendants, getAllDescendants(child)...)
+		descendants = append(descendants, child)
+	}
+	return descendants
+}
+
+// terminateProcessTree sends SIGTERM to all processes in the tree.
+func terminateProcessTree(procs []*process.Process) {
+	for _, proc := range procs {
+		if err := proc.Terminate(); err != nil {
+			log.Debug().Err(err).Int32("pid", proc.Pid).Msg("failed to terminate process")
+		} else {
+			log.Debug().Int32("pid", proc.Pid).Msg("sent SIGTERM to process")
+		}
+	}
+}
+
+// killProcessTree sends SIGKILL to all processes in the tree.
+func killProcessTree(procs []*process.Process) {
+	for _, proc := range procs {
+		if err := proc.Kill(); err != nil {
+			log.Debug().Err(err).Int32("pid", proc.Pid).Msg("failed to kill process")
+		} else {
+			log.Debug().Int32("pid", proc.Pid).Msg("sent SIGKILL to process")
+		}
+	}
 }
 
 // ScanHook is a no-op for Linux platforms.
@@ -186,7 +240,8 @@ func (*Base) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-// ReturnToMenu is a no-op (no menu concept on Linux platforms).
+// ReturnToMenu is a no-op for the base Linux implementation.
+// Platforms with a menu concept (like SteamOS) should override this method.
 func (*Base) ReturnToMenu() error {
 	return nil
 }
@@ -221,7 +276,7 @@ func (b *Base) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(&helpers.LaunchParams{
+	err = platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: b.setActiveMedia,
@@ -229,7 +284,7 @@ func (b *Base) LaunchMedia(
 		Path:           path,
 		DB:             db,
 		Options:        opts,
-	})
+	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}

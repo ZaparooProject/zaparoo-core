@@ -21,9 +21,11 @@ package steam
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
@@ -54,6 +56,17 @@ func NewClientWithExecutor(opts Options, cmd command.Executor) *Client {
 
 // Compile-time interface implementation check.
 var _ SteamClient = (*Client)(nil)
+
+// IsSteamInstalled checks if Steam is installed by verifying the Steam directory exists.
+// Uses FindSteamDir to locate the directory, respecting config overrides.
+func (c *Client) IsSteamInstalled(cfg *config.Instance) bool {
+	steamDir := c.FindSteamDir(cfg)
+	if steamDir == "" {
+		return false
+	}
+	_, err := os.Stat(steamDir)
+	return err == nil
+}
 
 // NormalizePath normalizes Steam URL formats to the standard virtual path format.
 // Converts "steam://rungameid/123" to "steam://123".

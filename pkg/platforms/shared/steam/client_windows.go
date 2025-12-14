@@ -29,7 +29,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows/registry"
 )
@@ -78,26 +77,22 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 
 // Launch launches a Steam game on Windows using the start command.
 func (c *Client) Launch(
-	cfg *config.Instance, path string, launchOpts *platforms.LaunchOptions,
+	_ *config.Instance, path string, launchOpts *platforms.LaunchOptions,
 ) (*os.Process, error) {
 	id, err := ExtractAndValidateID(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine action: check opts first, then config default
+	// Get action from opts (already resolved by DoLaunch from advargs or config)
 	action := ""
-	if launchOpts != nil && launchOpts.Action != "" {
+	if launchOpts != nil {
 		action = launchOpts.Action
-	} else if cfg != nil {
-		if def, ok := cfg.LookupLauncherDefaults("Steam"); ok {
-			action = def.Action
-		}
 	}
 
 	// Build the appropriate Steam URL based on the action
 	var steamURL string
-	if advargs.IsActionDetails(action) {
+	if platforms.IsActionDetails(action) {
 		steamURL = BuildSteamDetailsURL(id)
 	} else {
 		steamURL = BuildSteamURL(id)

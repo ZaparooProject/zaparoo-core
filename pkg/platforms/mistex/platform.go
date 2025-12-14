@@ -313,7 +313,7 @@ func (p *Platform) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(&helpers.LaunchParams{
+	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: p.setActiveMedia,
@@ -321,7 +321,7 @@ func (p *Platform) LaunchMedia(
 		Path:           path,
 		DB:             db,
 		Options:        opts,
-	})
+	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}

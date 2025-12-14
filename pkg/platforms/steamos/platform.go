@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamos
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -30,13 +31,16 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/rs/zerolog/log"
 )
 
 // Platform implements the SteamOS platform (Steam Deck and compatible handhelds).
 // Uses console-first approach with direct steam command for Game Mode integration.
 type Platform struct {
 	*linuxbase.Base
+	steamTracker *steamtracker.PlatformIntegration
 }
 
 // NewPlatform creates a new SteamOS platform instance.
@@ -54,6 +58,39 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 // Settings returns XDG-based settings for SteamOS.
 func (*Platform) Settings() platforms.Settings {
 	return linuxbase.Settings()
+}
+
+// StartPost initializes the platform after service startup.
+// Starts the game tracker to monitor Steam game lifecycle.
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
+) error {
+	// Initialize base platform
+	//nolint:wrapcheck // Pass-through to base implementation
+	if err := p.Base.StartPost(cfg, launcherManager, activeMedia, setActiveMedia, db); err != nil {
+		return err
+	}
+
+	// Start Steam tracker for external Steam game detection
+	p.steamTracker = steamtracker.NewPlatformIntegration(p.Base, activeMedia, setActiveMedia)
+	if err := p.steamTracker.Start(); err != nil {
+		log.Warn().Err(err).Msg("steam game tracker failed to start")
+	}
+
+	return nil
+}
+
+// Stop stops the platform and cleans up resources.
+func (p *Platform) Stop() error {
+	if p.steamTracker != nil {
+		p.steamTracker.Stop()
+	}
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.Base.Stop()
 }
 
 // LaunchMedia launches media using the appropriate launcher.

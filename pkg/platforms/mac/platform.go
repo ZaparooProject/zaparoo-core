@@ -17,6 +17,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/file"
@@ -35,6 +37,7 @@ type Platform struct {
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
+	steamTracker   *steamtracker.DarwinPlatformIntegration
 	processMu      syncutil.RWMutex
 }
 
@@ -76,10 +79,24 @@ func (p *Platform) StartPost(
 ) error {
 	p.activeMedia = activeMedia
 	p.setActiveMedia = setActiveMedia
+
+	// Start Steam game tracker
+	p.steamTracker = steamtracker.NewDarwinPlatformIntegration(
+		p.SetTrackedProcess,
+		activeMedia,
+		setActiveMedia,
+	)
+	if err := p.steamTracker.Start(); err != nil {
+		log.Warn().Err(err).Msg("failed to start Steam game tracker")
+	}
+
 	return nil
 }
 
-func (*Platform) Stop() error {
+func (p *Platform) Stop() error {
+	if p.steamTracker != nil {
+		p.steamTracker.Stop()
+	}
 	return nil
 }
 
@@ -148,7 +165,7 @@ func (p *Platform) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(&helpers.LaunchParams{
+	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: p.setActiveMedia,
@@ -156,7 +173,7 @@ func (p *Platform) LaunchMedia(
 		Path:           path,
 		DB:             db,
 		Options:        opts,
-	})
+	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
@@ -182,6 +199,7 @@ func (*Platform) LookupMapping(_ *tokens.Token) (string, bool) {
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	launchers := []platforms.Launcher{
+		steam.NewSteamLauncher(steam.DefaultDarwinOptions()),
 		{
 			ID:            "Generic",
 			Extensions:    []string{".sh"},

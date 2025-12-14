@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/acr122pcsc"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -64,6 +65,7 @@ type Platform struct {
 	setActiveMedia    func(*models.ActiveMedia)
 	trackedProcess    *os.Process
 	launchBoxPipe     *LaunchBoxPipeServer
+	steamTracker      *steamtracker.WindowsPlatformIntegration
 	processMu         syncutil.RWMutex
 	launchBoxPipeLock syncutil.Mutex
 }
@@ -112,10 +114,25 @@ func (p *Platform) StartPost(
 	// Initialize LaunchBox pipe server if LaunchBox is installed
 	p.initLaunchBoxPipe(cfg)
 
+	// Start Steam tracker for external Steam game detection
+	p.steamTracker = steamtracker.NewWindowsPlatformIntegration(
+		p.SetTrackedProcess,
+		activeMedia,
+		setActiveMedia,
+	)
+	if err := p.steamTracker.Start(); err != nil {
+		log.Warn().Err(err).Msg("steam game tracker failed to start")
+	}
+
 	return nil
 }
 
 func (p *Platform) Stop() error {
+	// Stop Steam tracker
+	if p.steamTracker != nil {
+		p.steamTracker.Stop()
+	}
+
 	// Stop LaunchBox named pipe server
 	p.launchBoxPipeLock.Lock()
 	if p.launchBoxPipe != nil {
@@ -201,7 +218,7 @@ func (p *Platform) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err := helpers.DoLaunch(&helpers.LaunchParams{
+	err := platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: p.setActiveMedia,
@@ -209,7 +226,7 @@ func (p *Platform) LaunchMedia(
 		Path:           path,
 		DB:             db,
 		Options:        opts,
-	})
+	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
