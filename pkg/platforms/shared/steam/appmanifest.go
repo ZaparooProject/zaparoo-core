@@ -32,8 +32,9 @@ import (
 
 // AppInfo contains metadata for a Steam app from its manifest.
 type AppInfo struct {
-	Name  string
-	AppID int
+	Name       string
+	InstallDir string
+	AppID      int
 }
 
 // LookupAppName finds the name of a Steam app by its AppID.
@@ -83,9 +84,12 @@ func ReadAppManifest(steamAppsDir string, appID int) (AppInfo, bool) {
 		return AppInfo{}, false
 	}
 
+	installDir, _ := appState["installdir"].(string) //nolint:revive // installdir is optional
+
 	return AppInfo{
-		AppID: appID,
-		Name:  name,
+		AppID:      appID,
+		Name:       name,
+		InstallDir: installDir,
 	}, true
 }
 
@@ -110,22 +114,23 @@ func FindSteamAppsDir(steamDir string) string {
 	return filepath.Join(steamDir, "steamapps")
 }
 
-// LookupAppNameInLibraries searches all Steam library folders for an app.
-// steamAppsDir should point to the main steamapps directory.
-func LookupAppNameInLibraries(steamAppsDir string, appID int) (string, bool) {
-	// First try the main steamapps directory
-	if name, ok := LookupAppName(steamAppsDir, appID); ok {
-		return name, true
+// forEachSteamLibrary iterates through all Steam libraries that contain an app.
+// It calls the callback with each library's steamapps directory, starting with
+// the main steamapps directory. Iteration stops when the callback returns true.
+func forEachSteamLibrary(mainSteamAppsDir string, appID int, callback func(steamAppsDir string) bool) {
+	// Try main library first
+	if callback(mainSteamAppsDir) {
+		return
 	}
 
-	// Then check libraryfolders.vdf for additional libraries
-	libraryFoldersPath := filepath.Join(steamAppsDir, "libraryfolders.vdf")
+	// Parse libraryfolders.vdf for additional libraries
+	libraryFoldersPath := filepath.Join(mainSteamAppsDir, "libraryfolders.vdf")
 
 	//nolint:gosec // Safe: reads Steam config files
 	f, err := os.Open(libraryFoldersPath)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to open libraryfolders.vdf")
-		return "", false
+		return
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil {
@@ -137,12 +142,12 @@ func LookupAppNameInLibraries(steamAppsDir string, appID int) (string, bool) {
 	m, err := p.Parse()
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to parse libraryfolders.vdf")
-		return "", false
+		return
 	}
 
 	lfs, ok := m["libraryfolders"].(map[string]any)
 	if !ok {
-		return "", false
+		return
 	}
 
 	appIDStr := strconv.Itoa(appID)
@@ -166,12 +171,24 @@ func LookupAppNameInLibraries(steamAppsDir string, appID int) (string, bool) {
 		}
 
 		librarySteamApps := filepath.Join(libraryPath, "steamapps")
-		if name, ok := LookupAppName(librarySteamApps, appID); ok {
-			return name, true
+		if callback(librarySteamApps) {
+			return
 		}
 	}
+}
 
-	return "", false
+// LookupAppNameInLibraries searches all Steam library folders for an app.
+// steamAppsDir should point to the main steamapps directory.
+func LookupAppNameInLibraries(steamAppsDir string, appID int) (string, bool) {
+	var result string
+	forEachSteamLibrary(steamAppsDir, appID, func(dir string) bool {
+		if name, ok := LookupAppName(dir, appID); ok {
+			result = name
+			return true
+		}
+		return false
+	})
+	return result, result != ""
 }
 
 // DefaultSteamAppsDirs returns default locations for Steam's steamapps directory.
@@ -203,6 +220,30 @@ func FindAppNameByAppID(appID int) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// FindInstallDirByAppID searches common Steam locations for an app's install directory.
+// Returns the full path to the game's install directory (e.g., /path/to/steamapps/common/GameName).
+func FindInstallDirByAppID(appID int) (string, bool) {
+	for _, steamAppsDir := range DefaultSteamAppsDirs() {
+		if path, ok := lookupInstallDirInLibraries(steamAppsDir, appID); ok {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// lookupInstallDirInLibraries searches all Steam library folders for an app's install directory.
+func lookupInstallDirInLibraries(steamAppsDir string, appID int) (string, bool) {
+	var result string
+	forEachSteamLibrary(steamAppsDir, appID, func(dir string) bool {
+		if info, ok := ReadAppManifest(dir, appID); ok && info.InstallDir != "" {
+			result = filepath.Join(dir, "common", info.InstallDir)
+			return true
+		}
+		return false
+	})
+	return result, result != ""
 }
 
 // FormatGameName returns a formatted game name for display.

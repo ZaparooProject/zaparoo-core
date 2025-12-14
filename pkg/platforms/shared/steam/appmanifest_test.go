@@ -80,6 +80,7 @@ func TestReadAppManifest(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, 250900, info.AppID)
 		assert.Equal(t, "The Binding of Isaac: Rebirth", info.Name)
+		assert.Equal(t, "The Binding of Isaac: Rebirth", info.InstallDir)
 	})
 
 	t.Run("handles_invalid_vdf", func(t *testing.T) {
@@ -356,6 +357,80 @@ func TestLookupAppNameInLibraries(t *testing.T) {
 
 		assert.False(t, ok)
 		assert.Empty(t, name)
+	})
+}
+
+func TestLookupInstallDirInLibraries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("finds_in_main_library", func(t *testing.T) {
+		t.Parallel()
+
+		steamAppsDir := t.TempDir()
+		createMockManifest(t, steamAppsDir, 12345, "TestGame")
+
+		path, ok := lookupInstallDirInLibraries(steamAppsDir, 12345)
+
+		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(steamAppsDir, "common", "TestGame"), path)
+	})
+
+	t.Run("searches_library_folders", func(t *testing.T) {
+		t.Parallel()
+
+		// Create main steamapps dir with libraryfolders.vdf
+		steamAppsDir := t.TempDir()
+
+		// Create a secondary library
+		secondLib := t.TempDir()
+		secondLibSteamApps := filepath.Join(secondLib, "steamapps")
+		//nolint:gosec // G301: test directory permissions are fine
+		require.NoError(t, os.MkdirAll(secondLibSteamApps, 0o755))
+		createMockManifest(t, secondLibSteamApps, 99999, "SecondaryGame")
+
+		// Create libraryfolders.vdf pointing to both libraries
+		escapedSteamAppsDir := escapeVDFPath(steamAppsDir)
+		escapedSecondLib := escapeVDFPath(secondLib)
+		libFoldersContent := `"libraryfolders"
+{
+	"0"
+	{
+		"path"		"` + escapedSteamAppsDir + `"
+		"apps"
+		{
+		}
+	}
+	"1"
+	{
+		"path"		"` + escapedSecondLib + `"
+		"apps"
+		{
+			"99999"		"0"
+		}
+	}
+}`
+		//nolint:gosec // G306: test file permissions are fine
+		require.NoError(t, os.WriteFile(
+			filepath.Join(steamAppsDir, "libraryfolders.vdf"),
+			[]byte(libFoldersContent),
+			0o644,
+		))
+
+		path, ok := lookupInstallDirInLibraries(steamAppsDir, 99999)
+
+		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(secondLibSteamApps, "common", "SecondaryGame"), path)
+	})
+
+	t.Run("returns_false_when_not_found", func(t *testing.T) {
+		t.Parallel()
+
+		steamAppsDir := t.TempDir()
+
+		path, ok := lookupInstallDirInLibraries(steamAppsDir, 999999)
+
+		assert.False(t, ok)
+		assert.Empty(t, path)
 	})
 }
 

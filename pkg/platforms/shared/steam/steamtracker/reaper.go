@@ -162,18 +162,21 @@ func FindGamePID(gamePath string) (int, bool) {
 }
 
 // FindGamePIDWithProcPath finds a running process matching the game path using a custom proc path.
-// It searches for processes whose executable is within the game's install directory.
+// It first tries to find an exact match for the game executable, then falls back to
+// searching for any process in the game's install directory.
 func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
 	if gamePath == "" {
 		return 0, false
 	}
 
-	gameDir := filepath.Dir(gamePath)
-
 	entries, err := os.ReadDir(procPath)
 	if err != nil {
 		return 0, false
 	}
+
+	gameDir := filepath.Dir(gamePath)
+	var fallbackPID int
+	foundFallback := false
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -199,9 +202,22 @@ func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
 
 		cmdline := string(cmdlineData)
 		firstArg := strings.SplitN(cmdline, "\x00", 2)[0]
-		if strings.HasPrefix(firstArg, gameDir) {
+
+		// Exact match - return immediately
+		if firstArg == gamePath {
 			return pid, true
 		}
+
+		// Track first process in game directory as fallback
+		if !foundFallback && strings.HasPrefix(firstArg, gameDir) {
+			fallbackPID = pid
+			foundFallback = true
+		}
+	}
+
+	// Return fallback if no exact match found
+	if foundFallback {
+		return fallbackPID, true
 	}
 
 	return 0, false

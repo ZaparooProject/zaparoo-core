@@ -31,26 +31,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// DefaultPollInterval is the default interval for scanning reaper processes.
-const DefaultPollInterval = 2 * time.Second
-
-// GameStartCallback is called when a Steam game starts.
-// appID is the Steam App ID, pid is the reaper process ID, gamePath is the game executable.
-type GameStartCallback func(appID int, pid int, gamePath string)
-
-// GameStopCallback is called when a Steam game exits.
-// appID is the Steam App ID that was running.
-type GameStopCallback func(appID int)
-
-// TrackedGame represents a currently tracked Steam game.
-type TrackedGame struct {
-	StartTime time.Time
-	GamePath  string
-	AppID     int
-	PID       int
-}
-
-// Tracker monitors Steam game lifecycle events.
+// Tracker monitors Steam game lifecycle events on Linux.
 type Tracker struct {
 	onGameStart  GameStartCallback
 	onGameStop   GameStopCallback
