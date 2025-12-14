@@ -83,18 +83,16 @@ func TestTracker_DetectsNewGame(t *testing.T) {
 	require.NoError(t, tracker.Start())
 	defer tracker.Stop()
 
-	// Give it time for initial scan (should find nothing)
-	time.Sleep(100 * time.Millisecond)
+	// Initial scan should find nothing (no mock processes yet)
 	assert.False(t, startCalled.Load())
 
 	// Add a reaper process
 	createMockProcess(t, procDir, 12345, "reaper",
 		"/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=348550\x00--\x00game.exe")
 
-	// Wait for next poll cycle
-	time.Sleep(100 * time.Millisecond)
+	// Wait for poll cycle to detect the game
+	require.Eventually(t, startCalled.Load, time.Second, 10*time.Millisecond, "callback should be called")
 
-	assert.True(t, startCalled.Load())
 	assert.Equal(t, int32(348550), gotAppID.Load())
 	assert.Equal(t, int32(12345), gotPID.Load())
 }
@@ -118,11 +116,12 @@ func TestTracker_TrackedGames(t *testing.T) {
 	require.NoError(t, tracker.Start())
 	defer tracker.Stop()
 
-	// Wait for initial scan
-	time.Sleep(100 * time.Millisecond)
+	// Wait for initial scan to detect games
+	require.Eventually(t, func() bool {
+		return len(tracker.TrackedGames()) == 2
+	}, time.Second, 10*time.Millisecond, "should detect 2 games")
 
 	games := tracker.TrackedGames()
-	assert.Len(t, games, 2)
 
 	appIDs := make(map[int]bool)
 	for _, g := range games {
@@ -155,16 +154,20 @@ func TestTracker_DeduplicatesByAppID(t *testing.T) {
 	createMockProcess(t, procDir, 12345, "reaper",
 		"/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game")
 
-	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, int32(1), startCount.Load())
+	// Wait for first detection
+	require.Eventually(t, func() bool {
+		return startCount.Load() == 1
+	}, time.Second, 10*time.Millisecond, "first game should be detected")
 
 	// Add another process with same AppID
 	createMockProcess(t, procDir, 12346, "reaper",
 		"/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game")
 
-	time.Sleep(100 * time.Millisecond)
-	// Should still be 1 - deduped by AppID
-	assert.Equal(t, int32(1), startCount.Load())
+	// Verify dedup: callback count should NOT increase (stays at 1)
+	// Use Never to assert the count doesn't go above 1
+	require.Never(t, func() bool {
+		return startCount.Load() > 1
+	}, 150*time.Millisecond, 10*time.Millisecond, "should dedupe by AppID")
 }
 
 func TestTracker_StopCallback(t *testing.T) {
@@ -175,9 +178,18 @@ func TestTracker_StopCallback(t *testing.T) {
 
 	procDir := t.TempDir()
 
+	// Create mock reaper BEFORE starting tracker so initial scan finds it
+	pidDir := filepath.Join(procDir, "12345")
+	//nolint:gosec // G301: test directory permissions are fine
+	require.NoError(t, os.Mkdir(pidDir, 0o755))
+	//nolint:gosec // G306: test file permissions are fine
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte("reaper\n"), 0o644))
+	//nolint:gosec // G306: test file permissions are fine
+	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "cmdline"),
+		[]byte("/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game"), 0o644))
+
 	stopCalled := make(chan int, 1)
 
-	// Use a longer poll interval to avoid race conditions
 	tracker := New(
 		nil,
 		func(appID int) {
@@ -190,22 +202,10 @@ func TestTracker_StopCallback(t *testing.T) {
 	require.NoError(t, tracker.Start())
 	defer tracker.Stop()
 
-	// Add a reaper
-	pidDir := filepath.Join(procDir, "12345")
-	//nolint:gosec // G301: test directory permissions are fine
-	require.NoError(t, os.Mkdir(pidDir, 0o755))
-	//nolint:gosec // G306: test file permissions are fine
-	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte("reaper\n"), 0o644))
-	//nolint:gosec // G306: test file permissions are fine
-	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "cmdline"),
-		[]byte("/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game"), 0o644))
-
-	// Wait for initial scan to detect the game
-	time.Sleep(100 * time.Millisecond)
-
-	// Verify game is tracked
-	games := tracker.TrackedGames()
-	require.Len(t, games, 1)
+	// Wait for tracker to detect the game (polls until true or timeout)
+	require.Eventually(t, func() bool {
+		return len(tracker.TrackedGames()) == 1
+	}, time.Second, 10*time.Millisecond, "tracker should detect the game")
 
 	// "Kill" the process by removing its /proc entry before handleGameExit
 	require.NoError(t, os.RemoveAll(pidDir))
@@ -222,7 +222,7 @@ func TestTracker_StopCallback(t *testing.T) {
 	}
 
 	// Should be removed from tracked (procDir entry deleted, no re-add)
-	games = tracker.TrackedGames()
+	games := tracker.TrackedGames()
 	assert.Empty(t, games)
 }
 
@@ -279,7 +279,10 @@ func TestTracker_NilCallbacks(t *testing.T) {
 	createMockProcess(t, procDir, 12345, "reaper",
 		"/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game")
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for game to be tracked
+	require.Eventually(t, func() bool {
+		return len(tracker.TrackedGames()) == 1
+	}, time.Second, 10*time.Millisecond, "game should be tracked")
 
 	// Trigger exit callback path
 	tracker.handleGameExit(12345, 100)
