@@ -290,3 +290,185 @@ func TestAppIDRegex(t *testing.T) {
 		})
 	}
 }
+
+func TestParseGamePathFromCmdline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cmdline string
+		want    string
+	}{
+		{
+			name: "standard_steam_cmdline",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=348550\x00--\x00" +
+				"/home/user/.steam/steam/steamapps/common/BatmanAK/BatmanAK.exe",
+			want: "/home/user/.steam/steam/steamapps/common/BatmanAK/BatmanAK.exe",
+		},
+		{
+			name: "proton_with_multiple_dashes",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=12345\x00--\x00" +
+				"/proton/waitforexitandrun\x00--\x00/games/game.exe",
+			want: "/games/game.exe",
+		},
+		{
+			name:    "no_double_dash",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=12345\x00game.exe",
+			want:    "",
+		},
+		{
+			name:    "double_dash_at_end",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00--",
+			want:    "",
+		},
+		{
+			name:    "empty_cmdline",
+			cmdline: "",
+			want:    "",
+		},
+		{
+			name: "game_path_with_spaces",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=12345\x00--\x00" +
+				"/home/user/games/My Game/game.exe",
+			want: "/home/user/games/My Game/game.exe",
+		},
+		{
+			name: "trailing_null",
+			cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=12345\x00--\x00" +
+				"/path/to/game.exe\x00",
+			want: "/path/to/game.exe",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := parseGamePathFromCmdline(tc.cmdline)
+			assert.Equal(t, tc.want, result)
+		})
+	}
+}
+
+func TestFindGamePIDWithProcPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("finds_exact_match", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create a process with exact path match
+		createMockProcess(t, procDir, 12345, "game", gamePath)
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.True(t, found)
+		assert.Equal(t, 12345, pid)
+	})
+
+	t.Run("falls_back_to_directory_match", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create a process with different executable in same directory
+		createMockProcess(t, procDir, 12345, "launcher", "/home/user/games/launcher.bin")
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.True(t, found)
+		assert.Equal(t, 12345, pid)
+	})
+
+	t.Run("prefers_exact_match_over_fallback", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create fallback process first
+		createMockProcess(t, procDir, 11111, "launcher", "/home/user/games/launcher.bin")
+		// Create exact match
+		createMockProcess(t, procDir, 22222, "game", gamePath)
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.True(t, found)
+		assert.Equal(t, 22222, pid)
+	})
+
+	t.Run("ignores_reaper_processes", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create a reaper process
+		createMockProcess(t, procDir, 12345, "reaper", gamePath)
+		// Create actual game process
+		createMockProcess(t, procDir, 12346, "game", gamePath)
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.True(t, found)
+		assert.Equal(t, 12346, pid) // Should find the non-reaper process
+	})
+
+	t.Run("returns_false_for_empty_path", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+
+		pid, found := FindGamePIDWithProcPath(procDir, "")
+
+		assert.False(t, found)
+		assert.Equal(t, 0, pid)
+	})
+
+	t.Run("returns_false_when_not_found", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create unrelated process
+		createMockProcess(t, procDir, 12345, "bash", "/bin/bash")
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.False(t, found)
+		assert.Equal(t, 0, pid)
+	})
+
+	t.Run("handles_nonexistent_proc", func(t *testing.T) {
+		t.Parallel()
+
+		pid, found := FindGamePIDWithProcPath("/nonexistent/path", "/some/game.exe")
+
+		assert.False(t, found)
+		assert.Equal(t, 0, pid)
+	})
+
+	t.Run("handles_missing_cmdline_file", func(t *testing.T) {
+		t.Parallel()
+
+		procDir := t.TempDir()
+		gamePath := "/home/user/games/game.exe"
+
+		// Create a process directory with comm but no cmdline
+		pidDir := filepath.Join(procDir, "12345")
+		//nolint:gosec // G301: test directory permissions are fine
+		require.NoError(t, os.Mkdir(pidDir, 0o755))
+		//nolint:gosec // G306: test file permissions are fine
+		require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte("game\n"), 0o644))
+		// No cmdline file
+
+		pid, found := FindGamePIDWithProcPath(procDir, gamePath)
+
+		assert.False(t, found)
+		assert.Equal(t, 0, pid)
+	})
+}
