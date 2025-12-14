@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -262,18 +263,21 @@ func TestLookupAppNameInLibraries(t *testing.T) {
 		createMockManifest(t, secondLibSteamApps, 99999, "Game In Secondary Library")
 
 		// Create libraryfolders.vdf pointing to both libraries
+		// Escape backslashes for Windows paths in VDF content
+		escapedSteamAppsDir := escapeVDFPath(steamAppsDir)
+		escapedSecondLib := escapeVDFPath(secondLib)
 		libFoldersContent := `"libraryfolders"
 {
 	"0"
 	{
-		"path"		"` + steamAppsDir + `"
+		"path"		"` + escapedSteamAppsDir + `"
 		"apps"
 		{
 		}
 	}
 	"1"
 	{
-		"path"		"` + secondLib + `"
+		"path"		"` + escapedSecondLib + `"
 		"apps"
 		{
 			"99999"		"0"
@@ -320,4 +324,10 @@ func createMockManifest(t *testing.T, steamAppsDir string, appID int, name strin
 }`
 	//nolint:gosec // G306: test file permissions are fine
 	require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o644))
+}
+
+// escapeVDFPath escapes backslashes in paths for embedding in VDF content.
+// This is needed on Windows where paths contain backslashes.
+func escapeVDFPath(path string) string {
+	return strings.ReplaceAll(path, `\`, `\\`)
 }
