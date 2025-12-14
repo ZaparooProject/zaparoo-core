@@ -347,7 +347,9 @@ func TestDoLaunch_DetailsActionSkipsActiveMedia(t *testing.T) {
 		SystemID:  "pc",
 		Lifecycle: platforms.LifecycleFireAndForget,
 		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-			return nil, nil
+			// Fire-and-forget launcher returns no process handle
+			var noProcess *os.Process
+			return noProcess, nil
 		},
 	}
 
@@ -415,7 +417,9 @@ func TestDoLaunch_NoSystemIDSkipsActiveMedia(t *testing.T) {
 		SystemID:  "", // No SystemID
 		Lifecycle: platforms.LifecycleFireAndForget,
 		Launch: func(*config.Instance, string, *platforms.LaunchOptions) (*os.Process, error) {
-			return nil, nil
+			// Fire-and-forget launcher returns no process handle
+			var noProcess *os.Process
+			return noProcess, nil
 		},
 	}
 

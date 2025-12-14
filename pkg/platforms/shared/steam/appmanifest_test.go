@@ -111,6 +111,24 @@ func TestReadAppManifest(t *testing.T) {
 
 		assert.False(t, ok)
 	})
+
+	t.Run("handles_missing_AppState", func(t *testing.T) {
+		t.Parallel()
+
+		steamAppsDir := t.TempDir()
+		manifestPath := filepath.Join(steamAppsDir, "appmanifest_12345.acf")
+		content := `"SomeOtherRoot"
+{
+	"appid"		"12345"
+	"name"		"Test Game"
+}`
+		//nolint:gosec // G306: test file permissions are fine
+		require.NoError(t, os.WriteFile(manifestPath, []byte(content), 0o644))
+
+		_, ok := ReadAppManifest(steamAppsDir, 12345)
+
+		assert.False(t, ok)
+	})
 }
 
 func TestFindSteamAppsDir(t *testing.T) {
@@ -126,6 +144,30 @@ func TestFindSteamAppsDir(t *testing.T) {
 		result := FindSteamAppsDir(steamDir)
 
 		assert.Equal(t, filepath.Join(steamDir, "steamapps"), result)
+	})
+
+	t.Run("finds_mixed_case_SteamApps", func(t *testing.T) {
+		t.Parallel()
+
+		steamDir := t.TempDir()
+		//nolint:gosec // G301: test directory permissions are fine
+		require.NoError(t, os.MkdirAll(filepath.Join(steamDir, "SteamApps"), 0o755))
+
+		result := FindSteamAppsDir(steamDir)
+
+		assert.Equal(t, filepath.Join(steamDir, "SteamApps"), result)
+	})
+
+	t.Run("finds_nested_steam_steamapps", func(t *testing.T) {
+		t.Parallel()
+
+		steamDir := t.TempDir()
+		//nolint:gosec // G301: test directory permissions are fine
+		require.NoError(t, os.MkdirAll(filepath.Join(steamDir, "steam", "steamapps"), 0o755))
+
+		result := FindSteamAppsDir(steamDir)
+
+		assert.Equal(t, filepath.Join(steamDir, "steam", "steamapps"), result)
 	})
 
 	t.Run("returns_default_if_not_found", func(t *testing.T) {
