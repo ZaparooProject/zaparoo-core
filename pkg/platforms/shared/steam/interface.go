@@ -33,6 +33,10 @@ type SteamClient interface {
 	// Returns the path to the Steam root directory or the fallback path.
 	FindSteamDir(cfg *config.Instance) string
 
+	// IsSteamInstalled checks if Steam is installed by verifying the Steam directory exists.
+	// Uses FindSteamDir to locate the directory, respecting config overrides.
+	IsSteamInstalled(cfg *config.Instance) bool
+
 	// Launch launches a Steam game by its virtual path.
 	// Path format: "steam://[id]/[name]" or "steam://rungameid/[id]"
 	// Returns nil for fire-and-forget launches (Steam handles the process).

@@ -29,7 +29,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -102,26 +101,20 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 
 // Launch launches a Steam game on Linux using xdg-open or the direct steam command.
 func (c *Client) Launch(
-	cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+	_ *config.Instance, path string, opts *platforms.LaunchOptions,
 ) (*os.Process, error) {
 	id, err := ExtractAndValidateID(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine action: check opts first, then config default
 	action := ""
-	if opts != nil && opts.Action != "" {
+	if opts != nil {
 		action = opts.Action
-	} else if cfg != nil {
-		if def, ok := cfg.LookupLauncherDefaults("Steam"); ok {
-			action = def.Action
-		}
 	}
 
-	// Build the appropriate Steam URL based on the action
 	var steamURL string
-	if advargs.IsActionDetails(action) {
+	if platforms.IsActionDetails(action) {
 		steamURL = BuildSteamDetailsURL(id)
 	} else {
 		steamURL = BuildSteamURL(id)
@@ -136,6 +129,7 @@ func (c *Client) Launch(
 		cmdName = "steam"
 	}
 
+	log.Debug().Str("cmd", cmdName).Str("url", steamURL).Msg("launching Steam game")
 	if err := c.cmd.Start(context.Background(), cmdName, steamURL); err != nil {
 		return nil, fmt.Errorf("failed to launch Steam: %w", err)
 	}

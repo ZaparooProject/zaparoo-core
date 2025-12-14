@@ -29,7 +29,6 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -68,26 +67,21 @@ func (c *Client) FindSteamDir(cfg *config.Instance) string {
 
 // Launch launches a Steam game on macOS using the open command.
 func (c *Client) Launch(
-	cfg *config.Instance, path string, opts *platforms.LaunchOptions,
+	_ *config.Instance, path string, opts *platforms.LaunchOptions,
 ) (*os.Process, error) {
 	id, err := ExtractAndValidateID(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Determine action: check opts first, then config default
 	action := ""
-	if opts != nil && opts.Action != "" {
+	if opts != nil {
 		action = opts.Action
-	} else if cfg != nil {
-		if def, ok := cfg.LookupLauncherDefaults("Steam"); ok {
-			action = def.Action
-		}
 	}
 
 	// Build the appropriate Steam URL based on the action
 	var steamURL string
-	if advargs.IsActionDetails(action) {
+	if platforms.IsActionDetails(action) {
 		steamURL = BuildSteamDetailsURL(id)
 	} else {
 		steamURL = BuildSteamURL(id)

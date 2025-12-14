@@ -20,26 +20,16 @@
 package helpers
 
 import (
-	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 
-	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/tags"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/virtualpath"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	platformsshared "github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
-	"github.com/andygrunwald/vdf"
-	"github.com/rs/zerolog/log"
 )
 
 // NormalizePathForComparison normalizes a path for cross-platform case-insensitive comparison.
@@ -215,161 +205,6 @@ func ExeDir() string {
 	return filepath.Dir(exe)
 }
 
-func ScanSteamApps(steamDir string) ([]platforms.ScanResult, error) {
-	var results []platforms.ScanResult
-
-	//nolint:gosec // Safe: reads Steam config files for game library scanning
-	f, err := os.Open(filepath.Join(steamDir, "libraryfolders.vdf"))
-	if err != nil {
-		log.Error().Err(err).Msg("error opening libraryfolders.vdf")
-		return results, nil
-	}
-
-	p := vdf.NewParser(f)
-	m, err := p.Parse()
-	if err != nil {
-		log.Error().Err(err).Msg("error parsing libraryfolders.vdf")
-		return results, nil
-	}
-
-	lfs, ok := m["libraryfolders"].(map[string]any)
-	if !ok {
-		log.Error().Msg("libraryfolders is not a map")
-		return results, nil
-	}
-	for l, v := range lfs {
-		log.Debug().Msgf("library id: %s", l)
-		ls, ok := v.(map[string]any)
-		if !ok {
-			log.Error().Msgf("library %s is not a map", l)
-			continue
-		}
-
-		libraryPath, ok := ls["path"].(string)
-		if !ok {
-			log.Error().Msgf("library %s path is not a string", l)
-			continue
-		}
-		steamApps, err := os.ReadDir(filepath.Join(libraryPath, "steamapps"))
-		if err != nil {
-			log.Error().Err(err).Msg("error listing steamapps folder")
-			continue
-		}
-
-		var manifestFiles []string
-		for _, mf := range steamApps {
-			if strings.HasPrefix(mf.Name(), "appmanifest_") {
-				manifestFiles = append(manifestFiles, filepath.Join(libraryPath, "steamapps", mf.Name()))
-			}
-		}
-
-		for _, mf := range manifestFiles {
-			log.Debug().Msgf("manifest file: %s", mf)
-
-			//nolint:gosec // Safe: reads Steam manifest files for game library scanning
-			af, err := os.Open(mf)
-			if err != nil {
-				log.Error().Err(err).Msgf("error opening manifest: %s", mf)
-				return results, nil
-			}
-
-			ap := vdf.NewParser(af)
-			am, err := ap.Parse()
-			if err != nil {
-				log.Error().Err(err).Msgf("error parsing manifest: %s", mf)
-				return results, nil
-			}
-
-			appState, ok := am["AppState"].(map[string]any)
-			if !ok {
-				log.Error().Msgf("AppState is not a map in manifest: %s", mf)
-				continue
-			}
-
-			appID, ok := appState["appid"].(string)
-			if !ok {
-				log.Error().Msgf("appid is not a string in manifest: %s", mf)
-				continue
-			}
-
-			appName, ok := appState["name"].(string)
-			if !ok {
-				log.Error().Msgf("name is not a string in manifest: %s", mf)
-				continue
-			}
-
-			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", appID, appName),
-				Name:  appName,
-				NoExt: true,
-			})
-		}
-	}
-
-	return results, nil
-}
-
-func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
-	var results []platforms.ScanResult
-
-	userdataDir := filepath.Join(steamDir, "userdata")
-	if _, err := os.Stat(userdataDir); os.IsNotExist(err) {
-		log.Debug().Msg("Steam userdata directory not found")
-		return results, nil
-	}
-
-	userDirs, err := os.ReadDir(userdataDir)
-	if err != nil {
-		log.Error().Err(err).Msg("error reading Steam userdata directory")
-		return results, nil
-	}
-
-	for _, userDir := range userDirs {
-		if !userDir.IsDir() {
-			continue
-		}
-
-		shortcutsPath := filepath.Join(userdataDir, userDir.Name(), "config", "shortcuts.vdf")
-		if _, err := os.Stat(shortcutsPath); os.IsNotExist(err) {
-			continue
-		}
-
-		log.Debug().Msgf("reading shortcuts from: %s", shortcutsPath)
-
-		//nolint:gosec // Safe: reads Steam config files for game library scanning
-		shortcutsData, err := os.ReadFile(shortcutsPath)
-		if err != nil {
-			log.Error().Err(err).Msgf("error reading shortcuts.vdf: %s", shortcutsPath)
-			continue
-		}
-
-		shortcuts, err := valvevdfbinary.ParseShortcuts(bytes.NewReader(shortcutsData))
-		if err != nil {
-			log.Error().Err(err).Msgf("error parsing shortcuts.vdf: %s", shortcutsPath)
-			continue
-		}
-
-		for _, shortcut := range shortcuts {
-			if shortcut.AppName == "" {
-				continue
-			}
-
-			// Non-Steam games require a "Big Picture ID" (BPID) for launching.
-			// BPID = (AppId << 32) | 0x02000000
-			// This converts the 32-bit shortcut AppId to the 64-bit ID Steam uses for shortcuts.
-			bpid := (uint64(shortcut.AppId) << 32) | 0x02000000
-
-			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", bpid), shortcut.AppName),
-				Name:  shortcut.AppName,
-				NoExt: true,
-			})
-		}
-	}
-
-	return results, nil
-}
-
 type PathInfo struct {
 	Path      string
 	Filename  string
@@ -426,6 +261,12 @@ func GetPathInfo(path string) PathInfo {
 	info.Extension = getPathExt(path)
 	info.Name = strings.TrimSuffix(info.Filename, info.Extension)
 	return info
+}
+
+// GetPathName returns just the name portion (filename without extension) from a path.
+// This is a convenience wrapper around GetPathInfo for use with platforms.DoLaunch.
+func GetPathName(path string) string {
+	return GetPathInfo(path).Name
 }
 
 // getPathDir returns the directory portion of a path, preserving the original separator style
@@ -526,131 +367,6 @@ func FindLauncher(
 	}
 
 	return launcher, nil
-}
-
-// LaunchParams contains all dependencies required for launching media.
-type LaunchParams struct {
-	Platform       platforms.Platform
-	Config         *config.Instance
-	SetActiveMedia func(*models.ActiveMedia)
-	Launcher       *platforms.Launcher
-	DB             *database.Database
-	Options        *platforms.LaunchOptions
-	Path           string
-}
-
-// DoLaunch launches the given path and updates the active media with it if
-// it was successful.
-func DoLaunch(params *LaunchParams) error {
-	log.Debug().Msgf("launching with: %v", params.Launcher)
-
-	// Stop any currently running launcher before starting new one
-	// This ensures tracked processes (like videos) are stopped even when
-	// FireAndForget launches (like MGL files) start. UNLESS the new launcher
-	// uses a running instance (e.g., Kodi), in which case the platform's
-	// shouldKeepRunningInstance logic will handle stopping if needed.
-	if params.Launcher.UsesRunningInstance == "" {
-		if stopErr := params.Platform.StopActiveLauncher(platforms.StopForPreemption); stopErr != nil {
-			log.Debug().Err(stopErr).Msg("no active launcher to stop or error stopping")
-		}
-	}
-
-	// Handle different lifecycle modes
-	switch params.Launcher.Lifecycle {
-	case platforms.LifecycleTracked:
-		// Launch and store process handle for future stopping
-		proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
-		if err != nil {
-			return fmt.Errorf("failed to launch: %w", err)
-		}
-		// Store process in platform for tracking and later killing
-		if proc != nil {
-			params.Platform.SetTrackedProcess(proc)
-		}
-		log.Debug().Msgf("launched tracked process for: %s", params.Path)
-	case platforms.LifecycleBlocking:
-		// Launch in goroutine to avoid blocking the service
-		go func() {
-			log.Debug().Msgf("launching blocking process for: %s", params.Path)
-			proc, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
-			if err != nil {
-				log.Error().Err(err).Msgf("blocking launcher failed for: %s", params.Path)
-				params.SetActiveMedia(nil)
-				return
-			}
-
-			// Store process in platform for tracking (blocking processes can also be killed)
-			if proc != nil {
-				params.Platform.SetTrackedProcess(proc)
-
-				// Wait for process to finish naturally
-				_, waitErr := proc.Wait()
-				if waitErr != nil {
-					log.Debug().Err(waitErr).Msgf("blocking process wait error for: %s", params.Path)
-				} else {
-					log.Debug().Msgf("blocking process completed for: %s", params.Path)
-				}
-
-				// Clear active media when process ends (naturally or killed)
-				params.SetActiveMedia(nil)
-				log.Debug().Msgf("cleared active media after blocking process ended: %s", params.Path)
-			}
-		}()
-	case platforms.LifecycleFireAndForget:
-		// Default behavior - just launch and forget (ignore process)
-		_, err := params.Launcher.Launch(params.Config, params.Path, params.Options)
-		if err != nil {
-			return fmt.Errorf("failed to launch: %w", err)
-		}
-	}
-
-	// For launchers without SystemID (e.g., LaunchBox), try to look it up from MediaDB
-	systemID := params.Launcher.SystemID
-	displayName := tags.ParseTitleFromFilename(GetPathInfo(params.Path).Name, false)
-
-	if params.DB != nil && params.DB.MediaDB != nil {
-		// Search without system filter to find what system this path belongs to
-		results, searchErr := params.DB.MediaDB.SearchMediaPathExact(nil, params.Path)
-		if searchErr == nil && len(results) > 0 {
-			// Use the system from indexed media if Launcher.SystemID is empty
-			if systemID == "" && results[0].SystemID != "" {
-				systemID = results[0].SystemID
-			}
-			// Use the indexed display name if available
-			if results[0].Name != "" {
-				displayName = results[0].Name
-			}
-		}
-	}
-
-	// If we still don't have a SystemID, skip setting ActiveMedia
-	if systemID == "" {
-		log.Debug().Msg("skipping DoLaunch ActiveMedia - no SystemID available")
-		return nil
-	}
-
-	systemMeta, err := assets.GetSystemMetadata(systemID)
-	if err != nil {
-		log.Debug().Err(err).Msgf("no system metadata for: %s", systemID)
-	}
-
-	// Set active media immediately (non-blocking for all lifecycle modes)
-	activeMedia := models.NewActiveMedia(
-		systemID,
-		systemMeta.Name,
-		params.Path,
-		displayName,
-		params.Launcher.ID,
-	)
-
-	log.Info().Msgf(
-		"DoLaunch setting ActiveMedia: SystemID='%s', SystemName='%s', Path='%s', Name='%s', LauncherID='%s'",
-		activeMedia.SystemID, activeMedia.SystemName, activeMedia.Path, activeMedia.Name, activeMedia.LauncherID,
-	)
-
-	params.SetActiveMedia(activeMedia)
-
-	return nil
 }
 
 // userDirCache caches the result of HasUserDir to avoid repeated filesystem checks

@@ -383,49 +383,4 @@ func TestClientLaunch(t *testing.T) {
 		require.NoError(t, err)
 		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
 	})
-
-	t.Run("uses_config_action_when_opts_is_nil", func(t *testing.T) {
-		// Cannot use t.Parallel() due to config modification
-
-		fs := testhelpers.NewMemoryFS()
-		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
-		require.NoError(t, err)
-
-		// Configure Steam launcher with action=details
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
-
-		mockCmd := testhelpers.NewMockCommandExecutor()
-		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
-
-		_, err = client.Launch(cfg, "steam://123/Game", nil)
-
-		require.NoError(t, err)
-		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://nav/games/details/123"})
-	})
-
-	t.Run("opts_action_overrides_config_action", func(t *testing.T) {
-		// Cannot use t.Parallel() due to config modification
-
-		fs := testhelpers.NewMemoryFS()
-		cfg, err := testhelpers.NewTestConfig(fs, t.TempDir())
-		require.NoError(t, err)
-
-		// Configure Steam launcher with action=details
-		cfg.SetLauncherDefaultsForTesting([]config.LaunchersDefault{
-			{Launcher: "Steam", Action: "details"},
-		})
-
-		mockCmd := testhelpers.NewMockCommandExecutor()
-		client := NewClientWithExecutor(Options{UseXdgOpen: true}, mockCmd)
-
-		// Override with action=run from opts
-		opts := &platforms.LaunchOptions{Action: "run"}
-		_, err = client.Launch(cfg, "steam://123/Game", opts)
-
-		require.NoError(t, err)
-		// Should use run URL because opts override config
-		mockCmd.AssertCalled(t, "Start", mock.Anything, "xdg-open", []string{"steam://rungameid/123"})
-	})
 }

@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package linux
 
 import (
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -31,7 +32,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/rs/zerolog/log"
 )
 
 // Platform implements the generic Linux platform.
@@ -39,6 +42,7 @@ import (
 // full launcher support including Kodi, Steam, Lutris, and Heroic.
 type Platform struct {
 	*linuxbase.Base
+	steamTracker *steamtracker.PlatformIntegration
 }
 
 // NewPlatform creates a new Linux platform instance.
@@ -56,6 +60,51 @@ func (p *Platform) SupportedReaders(cfg *config.Instance) []readers.Reader {
 // Settings returns XDG-based settings for Linux.
 func (*Platform) Settings() platforms.Settings {
 	return linuxbase.Settings()
+}
+
+// StartPost initializes the platform after service startup.
+// Starts the Steam tracker if Steam is installed.
+func (p *Platform) StartPost(
+	cfg *config.Instance,
+	launcherManager platforms.LauncherContextManager,
+	activeMedia func() *models.ActiveMedia,
+	setActiveMedia func(*models.ActiveMedia),
+	db *database.Database,
+) error {
+	// Initialize base platform
+	//nolint:wrapcheck // Pass-through to base implementation
+	if err := p.Base.StartPost(cfg, launcherManager, activeMedia, setActiveMedia, db); err != nil {
+		return err
+	}
+
+	// Only start Steam tracker if Steam is installed
+	steamClient := steam.NewClient(steam.DefaultLinuxOptions())
+	if steamClient.IsSteamInstalled(cfg) {
+		p.steamTracker = steamtracker.NewPlatformIntegration(p.Base, activeMedia, setActiveMedia)
+		if err := p.steamTracker.Start(); err != nil {
+			log.Warn().Err(err).Msg("steam game tracker failed to start")
+		}
+	} else {
+		log.Debug().Msg("steam not installed, skipping steam tracker")
+	}
+
+	return nil
+}
+
+// Stop stops the platform and cleans up resources.
+func (p *Platform) Stop() error {
+	if p.steamTracker != nil {
+		p.steamTracker.Stop()
+	}
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.Base.Stop()
+}
+
+// ReturnToMenu stops the active media on desktop Linux.
+// Desktop Linux has no menu concept, so this just stops any running game/media.
+func (p *Platform) ReturnToMenu() error {
+	//nolint:wrapcheck // Pass-through to base implementation
+	return p.StopActiveLauncher(platforms.StopForMenu)
 }
 
 // LaunchMedia launches media using the appropriate launcher.

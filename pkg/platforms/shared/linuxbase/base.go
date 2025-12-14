@@ -151,7 +151,9 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 			case <-done:
 				log.Debug().Msg("tracked process exited gracefully")
 				b.trackedProcess = nil
-				b.setActiveMedia(nil)
+				if b.setActiveMedia != nil {
+					b.setActiveMedia(nil)
+				}
 				return nil
 			case <-b.clock.After(SIGTERMTimeout):
 				log.Debug().Msg("SIGTERM timeout, sending SIGKILL")
@@ -172,7 +174,9 @@ func (b *Base) StopActiveLauncher(_ platforms.StopIntent) error {
 		b.trackedProcess = nil
 	}
 
-	b.setActiveMedia(nil)
+	if b.setActiveMedia != nil {
+		b.setActiveMedia(nil)
+	}
 	return nil
 }
 
@@ -186,7 +190,8 @@ func (*Base) RootDirs(cfg *config.Instance) []string {
 	return cfg.IndexRoots()
 }
 
-// ReturnToMenu is a no-op (no menu concept on Linux platforms).
+// ReturnToMenu is a no-op for the base Linux implementation.
+// Platforms with a menu concept (like SteamOS) should override this method.
 func (*Base) ReturnToMenu() error {
 	return nil
 }
@@ -221,7 +226,7 @@ func (b *Base) LaunchMedia(
 	}
 
 	log.Info().Msgf("launch media: using launcher %s for: %s", launcher.ID, path)
-	err = helpers.DoLaunch(&helpers.LaunchParams{
+	err = platforms.DoLaunch(&platforms.LaunchParams{
 		Config:         cfg,
 		Platform:       p,
 		SetActiveMedia: b.setActiveMedia,
@@ -229,7 +234,7 @@ func (b *Base) LaunchMedia(
 		Path:           path,
 		DB:             db,
 		Options:        opts,
-	})
+	}, helpers.GetPathName)
 	if err != nil {
 		return fmt.Errorf("launch media: error launching: %w", err)
 	}
