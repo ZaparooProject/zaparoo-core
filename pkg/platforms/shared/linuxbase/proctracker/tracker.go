@@ -228,6 +228,11 @@ func (t *Tracker) watchPoll(ctx context.Context, tp *trackedProcess) {
 // handleExit cleans up and calls the exit callback.
 func (t *Tracker) handleExit(tp *trackedProcess) {
 	t.mu.Lock()
+	// Check if still tracking this pid (Untrack might have been called)
+	if _, exists := t.tracked[tp.pid]; !exists {
+		t.mu.Unlock()
+		return
+	}
 	tp.cancel()
 	if tp.pidfd >= 0 {
 		_ = unix.Close(tp.pidfd)

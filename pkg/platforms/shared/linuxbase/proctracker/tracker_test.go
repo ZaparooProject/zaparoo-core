@@ -156,9 +156,9 @@ func TestUntrack(t *testing.T) {
 	// Kill the process
 	require.NoError(t, cmd.Process.Kill())
 
-	// Wait a bit to ensure callback isn't called
-	time.Sleep(200 * time.Millisecond)
-	assert.False(t, callbackCalled.Load(), "callback should not be called after untrack")
+	// Verify callback is never called after untrack
+	require.Never(t, callbackCalled.Load, 200*time.Millisecond, 10*time.Millisecond,
+		"callback should not be called after untrack")
 }
 
 func TestUntrack_NonexistentPid(t *testing.T) {
@@ -256,15 +256,14 @@ func TestTrack_ProcessAlreadyExited(t *testing.T) {
 	require.NoError(t, cmd.Process.Kill())
 	_, _ = cmd.Process.Wait()
 
-	// Small delay to ensure process is fully gone
-	time.Sleep(50 * time.Millisecond)
+	// Wait until process is fully gone (kill(pid, 0) returns ESRCH)
+	require.Eventually(t, func() bool {
+		return syscall.Kill(pid, 0) != nil
+	}, time.Second, 10*time.Millisecond, "process should be gone")
 
 	// Tracking should fail with ErrProcessNotFound
 	err := tracker.Track(pid, func(_ int) {})
-	// Either ErrProcessNotFound or no error (if we caught it just before it died)
-	if err != nil {
-		require.ErrorIs(t, err, ErrProcessNotFound)
-	}
+	require.ErrorIs(t, err, ErrProcessNotFound)
 }
 
 func TestTrack_MultipleCallbacksForSamePid(t *testing.T) {
@@ -291,11 +290,11 @@ func TestTrack_MultipleCallbacksForSamePid(t *testing.T) {
 		callback2Called.Store(true)
 	}))
 
-	// Wait for process to exit
-	time.Sleep(300 * time.Millisecond)
+	// Wait for process to exit and first callback to be called
+	require.Eventually(t, callback1Called.Load, time.Second, 10*time.Millisecond,
+		"first callback should be called")
 
-	// Only the first callback should be called
-	assert.True(t, callback1Called.Load(), "first callback should be called")
+	// Verify second callback was never called
 	assert.False(t, callback2Called.Load(), "second callback should not be called")
 }
 
