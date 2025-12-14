@@ -31,6 +31,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/rs/zerolog/log"
 )
@@ -46,6 +47,7 @@ type PlatformIntegration struct {
 
 // NewPlatformIntegration creates a new platform integration for game tracking.
 func NewPlatformIntegration(
+	scanner *procscanner.Scanner,
 	base *linuxbase.Base,
 	activeMedia func() *models.ActiveMedia,
 	setActiveMedia func(*models.ActiveMedia),
@@ -55,14 +57,13 @@ func NewPlatformIntegration(
 		activeMedia:    activeMedia,
 		setActiveMedia: setActiveMedia,
 	}
-
-	pi.tracker = New(pi.onGameStart, pi.onGameStop)
+	pi.tracker = New(scanner, pi.onGameStart, pi.onGameStop)
 	return pi
 }
 
 // Start begins monitoring for Steam games.
-func (pi *PlatformIntegration) Start() error {
-	return pi.tracker.Start()
+func (pi *PlatformIntegration) Start() {
+	pi.tracker.Start()
 }
 
 // Stop stops the game tracker.

@@ -23,7 +23,9 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package launchers
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
@@ -35,6 +37,12 @@ const (
 	FlatpakLutrisID = "net.lutris.Lutris"
 	FlatpakHeroicID = "com.heroicgameslauncher.hgl"
 )
+
+// IsFlatpakInstalled checks if a Flatpak application is installed by querying flatpak info.
+func IsFlatpakInstalled(appID string) bool {
+	cmd := exec.CommandContext(context.Background(), "flatpak", "info", appID)
+	return cmd.Run() == nil
+}
 
 // FlatpakBasePath returns the base path for Flatpak app data.
 func FlatpakBasePath() string {

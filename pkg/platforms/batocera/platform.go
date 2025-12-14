@@ -21,6 +21,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/kodi"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers/externaldrive"
@@ -554,18 +555,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		},
 	}
 
-	for k, v := range SystemMap {
-		launcherID, ok := LauncherMap[k]
-		if !ok {
-			log.Error().Msgf("unknown batocera launcher: %s", k)
-			continue
-		}
-
+	for folder, info := range esde.SystemMap {
 		launchers = append(launchers, platforms.Launcher{
-			ID:         launcherID,
-			SystemID:   v.SystemID,
-			Extensions: v.Extensions,
-			Folders:    []string{k},
+			ID:         info.GetLauncherID(),
+			SystemID:   info.SystemID,
+			Extensions: info.Extensions,
+			Folders:    []string{folder},
 			// SkipFilesystemScan defaults to false - built-in scanner will find all ROM files
 			// Scanner function adds metadata from gamelist.xml
 			Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {

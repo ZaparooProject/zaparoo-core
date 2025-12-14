@@ -1,83 +1,124 @@
 //go:build linux
 
+// Zaparoo Core
+// Copyright (c) 2025 The Zaparoo Project Contributors.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This file is part of Zaparoo Core.
+//
+// Zaparoo Core is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Zaparoo Core is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
+
 package batocera
 
 import (
-	"strings"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestAllSystemsHaveValidStructure tests that all systems in SystemMap have valid SystemInfo structure
-func TestAllSystemsHaveValidStructure(t *testing.T) {
+// TestFromBatoceraSystem tests the fromBatoceraSystem helper function.
+func TestFromBatoceraSystem(t *testing.T) {
 	t.Parallel()
 
-	for name, system := range SystemMap {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name          string
+		batoceraName  string
+		expectedValue string
+		expectError   bool
+	}{
+		{
+			name:          "valid system - nes",
+			batoceraName:  "nes",
+			expectError:   false,
+			expectedValue: "NES",
+		},
+		{
+			name:          "valid system - snes",
+			batoceraName:  "snes",
+			expectError:   false,
+			expectedValue: "SNES",
+		},
+		{
+			name:          "valid system - psx",
+			batoceraName:  "psx",
+			expectError:   false,
+			expectedValue: "PSX",
+		},
+		{
+			name:         "invalid system",
+			batoceraName: "nonexistent_system",
+			expectError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// Test that SystemInfo has the required fields
-			assert.NotEmpty(t, system.SystemID, "System %s must have non-empty SystemID", name)
-			assert.NotNil(t, system.Extensions, "System %s must have non-nil Extensions", name)
-			assert.NotEmpty(t, system.Extensions, "System %s must have at least one extension", name)
-
-			// Test that all extensions are valid format
-			for _, ext := range system.Extensions {
-				assert.Regexp(t, `^\.[a-zA-Z0-9.]+$`, ext,
-					"Extension %s for system %s should start with dot and contain only alphanumeric characters",
-					ext, name)
-				assert.Greater(t, len(ext), 1, "Extension %s for system %s should be more than just a dot", ext, name)
-				assert.Less(t, len(ext), 20, "Extension %s for system %s should be reasonable length", ext, name)
+			result, err := fromBatoceraSystem(tt.batoceraName)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedValue, result)
 			}
-
-			// Test that SystemID follows expected format (no whitespace, reasonable length)
-			assert.NotRegexp(t, `\s`, system.SystemID,
-				"SystemID %s should not contain whitespace for system %s", system.SystemID, name)
-			assert.Greater(t, len(system.SystemID), 1, "SystemID should be more than 1 character for system %s", name)
-			assert.Less(t, len(system.SystemID), 50, "SystemID should be less than 50 characters for system %s", name)
 		})
 	}
 }
 
-// TestSystemMapIntegrity tests the integrity of the SystemMap as a whole
-func TestSystemMapIntegrity(t *testing.T) {
+// TestToBatoceraSystems tests the toBatoceraSystems helper function.
+func TestToBatoceraSystems(t *testing.T) {
 	t.Parallel()
 
-	// Test that we have a reasonable number of systems
-	assert.GreaterOrEqual(t, len(SystemMap), 50, "Should have at least 50 systems in SystemMap")
-
-	// Test that system names are valid (lowercase, no spaces for batocera compatibility)
-	for name := range SystemMap {
-		assert.Regexp(t, `^[a-z0-9+._-]+$`, name,
-			"System name %s should be lowercase alphanumeric with allowed special chars", name)
-		assert.NotEmpty(t, name, "System name should not be empty")
-		assert.Less(t, len(name), 30, "System name %s should be reasonable length", name)
+	tests := []struct {
+		name           string
+		zaparooSystem  string
+		expectNonEmpty bool
+	}{
+		{
+			name:           "NES maps to folder",
+			zaparooSystem:  "NES",
+			expectNonEmpty: true,
+		},
+		{
+			name:           "Arcade maps to multiple folders",
+			zaparooSystem:  "Arcade",
+			expectNonEmpty: true,
+		},
+		{
+			name:           "nonexistent system returns empty",
+			zaparooSystem:  "NonExistentSystem",
+			expectNonEmpty: false,
+		},
 	}
 
-	// Test that all SystemIDs are valid
-	for name, system := range SystemMap {
-		assert.NotEmpty(t, system.SystemID, "System %s should have non-empty SystemID", name)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := toBatoceraSystems(tt.zaparooSystem)
+			require.NoError(t, err)
+			if tt.expectNonEmpty {
+				assert.NotEmpty(t, result)
+			} else {
+				assert.Empty(t, result)
+			}
+		})
 	}
 }
 
-// TestSystemMapAndLauncherMapConsistency tests that SystemMap and LauncherMap are consistent
-func TestSystemMapAndLauncherMapConsistency(t *testing.T) {
-	t.Parallel()
-
-	// Test that every system in SystemMap has a corresponding launcher
-	for name := range SystemMap {
-		_, hasLauncher := LauncherMap[name]
-		assert.True(t, hasLauncher, "System %s should have corresponding launcher in LauncherMap", name)
-	}
-
-	// Test that every launcher has a corresponding system
-	for launcherName := range LauncherMap {
-		_, hasSystem := SystemMap[launcherName]
-		assert.True(t, hasSystem, "Launcher %s should have corresponding system in SystemMap", launcherName)
-	}
-}
-
-// TestCommonSystemsExist tests that commonly expected systems exist in the SystemMap
+// TestCommonSystemsExist tests that commonly expected systems exist in the shared esde.SystemMap.
 func TestCommonSystemsExist(t *testing.T) {
 	t.Parallel()
 
@@ -90,43 +131,12 @@ func TestCommonSystemsExist(t *testing.T) {
 	for _, systemName := range commonSystems {
 		t.Run(systemName, func(t *testing.T) {
 			t.Parallel()
-			system, exists := SystemMap[systemName]
-			assert.True(t, exists, "Common system %s should exist in SystemMap", systemName)
+			info, exists := esde.LookupByFolderName(systemName)
+			assert.True(t, exists, "Common system %s should exist in esde.SystemMap", systemName)
 			if exists {
-				assert.NotEmpty(t, system.SystemID, "Common system %s should have SystemID", systemName)
-				assert.NotEmpty(t, system.Extensions, "Common system %s should have extensions", systemName)
-			}
-		})
-	}
-}
-
-// TestExtensionFormatConsistency tests that all extensions follow consistent format rules
-func TestExtensionFormatConsistency(t *testing.T) {
-	t.Parallel()
-
-	for systemName, system := range SystemMap {
-		t.Run(systemName, func(t *testing.T) {
-			t.Parallel()
-			for _, ext := range system.Extensions {
-				// Extensions should start with dot
-				assert.True(t, strings.HasPrefix(ext, "."),
-					"Extension %s should start with dot for system %s", ext, systemName)
-
-				// Extensions should be lowercase (batocera convention)
-				assert.Equal(t, strings.ToLower(ext), ext,
-					"Extension %s should be lowercase for system %s", ext, systemName)
-
-				// Extensions should not contain spaces or invalid characters
-				assert.NotContains(t, ext, " ", "Extension %s should not contain spaces for system %s", ext, systemName)
-				assert.Regexp(t, `^\.[a-z0-9.]+$`, ext,
-					"Extension %s should only contain lowercase alphanumeric chars and dots for system %s",
-					ext, systemName)
-
-				// Extensions should be reasonable length
-				assert.LessOrEqual(t, len(ext), 15,
-					"Extension %s should be reasonable length for system %s", ext, systemName)
-				assert.GreaterOrEqual(t, len(ext), 2,
-					"Extension %s should be at least 2 characters for system %s", ext, systemName)
+				assert.NotEmpty(t, info.SystemID, "Common system %s should have SystemID", systemName)
+				assert.NotEmpty(t, info.Extensions, "Common system %s should have extensions", systemName)
+				assert.NotEmpty(t, info.GetLauncherID(), "Common system %s should have LauncherID", systemName)
 			}
 		})
 	}
@@ -178,8 +188,8 @@ func TestBatoceraOfficialExtensions(t *testing.T) {
 		t.Run(systemName, func(t *testing.T) {
 			t.Parallel()
 
-			system, exists := SystemMap[systemName]
-			assert.True(t, exists, "System %s should exist in SystemMap", systemName)
+			info, exists := esde.LookupByFolderName(systemName)
+			assert.True(t, exists, "System %s should exist in esde.SystemMap", systemName)
 
 			if !exists {
 				return
@@ -187,20 +197,20 @@ func TestBatoceraOfficialExtensions(t *testing.T) {
 
 			// Verify all expected extensions are present
 			for _, expectedExt := range expectedExts {
-				assert.Contains(t, system.Extensions, expectedExt,
+				assert.Contains(t, info.Extensions, expectedExt,
 					"System %s should have extension %s according to Batocera official config",
 					systemName, expectedExt)
 			}
 
 			// Verify no unexpected extensions are present
-			for _, actualExt := range system.Extensions {
+			for _, actualExt := range info.Extensions {
 				assert.Contains(t, expectedExts, actualExt,
 					"System %s has unexpected extension %s (not in Batocera official config)",
 					systemName, actualExt)
 			}
 
 			// Verify exact match (same count and content)
-			assert.ElementsMatch(t, expectedExts, system.Extensions,
+			assert.ElementsMatch(t, expectedExts, info.Extensions,
 				"System %s extensions should exactly match Batocera official config", systemName)
 		})
 	}
