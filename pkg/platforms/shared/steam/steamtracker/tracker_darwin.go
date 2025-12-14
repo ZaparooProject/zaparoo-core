@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
 )
@@ -35,10 +36,10 @@ const pollInterval = DefaultPollInterval
 
 // trackedGameDarwin represents a game being tracked for exit detection.
 type trackedGameDarwin struct {
-	AppID    int
-	PID      int
 	GamePath string
 	GameName string
+	AppID    int
+	PID      int
 }
 
 // Tracker monitors for Steam game starts and stops on macOS.
@@ -47,10 +48,10 @@ type trackedGameDarwin struct {
 type Tracker struct {
 	onGameStart GameStartCallback
 	onGameStop  GameStopCallback
-	done        chan struct{}
-	wg          sync.WaitGroup
 	tracked     map[int]*trackedGameDarwin // appID -> game info
-	trackedMu   sync.Mutex
+	done        chan struct{}
+	trackedMu   syncutil.Mutex
+	wg          sync.WaitGroup
 }
 
 // New creates a new macOS Steam game tracker.
@@ -167,7 +168,7 @@ func (t *Tracker) scanForGames() {
 
 // isProcessRunning checks if a process with the given PID is still running.
 func isProcessRunning(pid int) bool {
-	exists, err := process.PidExists(int32(pid))
+	exists, err := process.PidExists(int32(pid)) //nolint:gosec // PID fits in int32
 	if err != nil {
 		return false
 	}

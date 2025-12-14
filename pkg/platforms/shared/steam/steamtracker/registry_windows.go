@@ -32,6 +32,10 @@ import (
 
 const steamRegistryPath = `SOFTWARE\Valve\Steam`
 
+// keyNotify is the KEY_NOTIFY access right (0x10) for registry change notifications.
+// Not exported by golang.org/x/sys/windows/registry, so we define it here.
+const keyNotify = 0x10
+
 // RegistryWatcher monitors Steam's registry for game state changes using
 // event-driven notifications (RegNotifyChangeKeyValue).
 type RegistryWatcher struct {
@@ -61,7 +65,7 @@ func (w *RegistryWatcher) Start() error {
 	key, err := registry.OpenKey(
 		registry.CURRENT_USER,
 		steamRegistryPath,
-		registry.QUERY_VALUE|registry.KEY_NOTIFY,
+		registry.QUERY_VALUE|keyNotify,
 	)
 	if err != nil {
 		windows.CloseHandle(w.stopEvent)

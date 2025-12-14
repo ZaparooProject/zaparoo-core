@@ -23,14 +23,25 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamtracker
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v4/process"
 )
+
+// SteamProcess represents a running process that may be a Steam game.
+type SteamProcess struct {
+	Exe        string
+	InstallDir string
+	GameName   string
+	PID        int
+	AppID      int
+}
 
 // FindGameProcess finds the running Steam game process by appID.
 // It first tries to find the exact executable from appinfo.vdf,
@@ -93,14 +104,17 @@ func findByInstallDir(appID int) (*os.Process, int, error) {
 	installDir, found := steam.FindInstallDirByAppID(appID)
 	if !found {
 		log.Debug().Int("appID", appID).Msg("could not find install directory for appID")
-		return nil, 0, nil //nolint:nilnil // No install dir means can't find process
+		return nil, 0, nil
 	}
 
-	log.Debug().Int("appID", appID).Str("installDir", installDir).Msg("searching for game process by install dir (fallback)")
+	log.Debug().
+		Int("appID", appID).
+		Str("installDir", installDir).
+		Msg("searching for game process by install dir (fallback)")
 
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("enumerate processes: %w", err)
 	}
 
 	for _, p := range procs {
@@ -120,7 +134,7 @@ func findByInstallDir(appID int) (*os.Process, int, error) {
 		}
 	}
 
-	return nil, 0, nil //nolint:nilnil // No matching process found
+	return nil, 0, nil
 }
 
 // findSteamDir returns the Steam installation directory on macOS.
@@ -136,15 +150,6 @@ func findSteamDir() string {
 	}
 
 	return ""
-}
-
-// SteamProcess represents a running process that may be a Steam game.
-type SteamProcess struct {
-	PID         int
-	Exe         string
-	InstallDir  string
-	AppID       int
-	GameName    string
 }
 
 // FindSteamGameProcesses finds all running processes that appear to be Steam games.
@@ -167,7 +172,7 @@ func FindSteamGameProcesses() ([]SteamProcess, error) {
 
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("enumerate processes: %w", err)
 	}
 
 	var results []SteamProcess
@@ -209,7 +214,7 @@ func buildInstallDirMap(steamAppsDir string) (map[string]int, error) {
 	// Scan for appmanifest files
 	entries, err := os.ReadDir(steamAppsDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read steamapps dir: %w", err)
 	}
 
 	commonDir := filepath.Join(steamAppsDir, "common")
@@ -228,28 +233,8 @@ func buildInstallDirMap(steamAppsDir string) (map[string]int, error) {
 		appIDStr := strings.TrimPrefix(name, "appmanifest_")
 		appIDStr = strings.TrimSuffix(appIDStr, ".acf")
 
-		var appID int
-		if _, err := strings.CutPrefix(appIDStr, ""); err || appIDStr == "" {
-			continue
-		}
-
-		for i := 0; i < len(appIDStr); i++ {
-			if appIDStr[i] < '0' || appIDStr[i] > '9' {
-				continue
-			}
-		}
-
-		// Parse appID
-		appID = 0
-		for _, c := range appIDStr {
-			if c < '0' || c > '9' {
-				appID = 0
-				break
-			}
-			appID = appID*10 + int(c-'0')
-		}
-
-		if appID == 0 {
+		appID, err := strconv.Atoi(appIDStr)
+		if err != nil || appID == 0 {
 			continue
 		}
 
