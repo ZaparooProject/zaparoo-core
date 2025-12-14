@@ -34,11 +34,11 @@ import (
 )
 
 type Platform struct {
-	processMu      syncutil.RWMutex
 	activeMedia    func() *models.ActiveMedia
 	setActiveMedia func(*models.ActiveMedia)
 	trackedProcess *os.Process
 	steamTracker   *steamtracker.DarwinPlatformIntegration
+	processMu      syncutil.RWMutex
 }
 
 func (*Platform) ID() string {

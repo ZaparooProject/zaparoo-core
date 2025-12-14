@@ -23,7 +23,6 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamtracker
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,13 +50,11 @@ func TestTracker_TrackedGames_Windows(t *testing.T) {
 func TestTracker_OnAppIDChange_GameStart(t *testing.T) {
 	t.Parallel()
 
-	var startCalled atomic.Bool
-	var gotAppID atomic.Int32
+	startCalled := make(chan int, 1)
 
 	tracker := New(
 		func(appID int, _ int, _ string) {
-			gotAppID.Store(int32(appID)) //nolint:gosec // G115: appID is always small
-			startCalled.Store(true)
+			startCalled <- appID
 		},
 		nil,
 	)
@@ -65,8 +62,13 @@ func TestTracker_OnAppIDChange_GameStart(t *testing.T) {
 	// Simulate registry callback for game start
 	tracker.onAppIDChange(12345)
 
-	assert.True(t, startCalled.Load())
-	assert.Equal(t, int32(12345), gotAppID.Load())
+	// Wait for async callback
+	select {
+	case appID := <-startCalled:
+		assert.Equal(t, 12345, appID)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for start callback")
+	}
 
 	// Verify game is tracked
 	games := tracker.TrackedGames()
@@ -112,22 +114,35 @@ func TestTracker_OnAppIDChange_GameStop(t *testing.T) {
 func TestTracker_OnAppIDChange_DeduplicatesByAppID(t *testing.T) {
 	t.Parallel()
 
-	startCount := atomic.Int32{}
+	startCalled := make(chan int, 2)
 
 	tracker := New(
-		func(_ int, _ int, _ string) {
-			startCount.Add(1)
+		func(appID int, _ int, _ string) {
+			startCalled <- appID
 		},
 		nil,
 	)
 
 	// Simulate game start
 	tracker.onAppIDChange(12345)
-	assert.Equal(t, int32(1), startCount.Load())
+
+	// Wait for first callback
+	select {
+	case <-startCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for first start callback")
+	}
 
 	// Simulate same game again (shouldn't trigger callback)
 	tracker.onAppIDChange(12345)
-	assert.Equal(t, int32(1), startCount.Load())
+
+	// Brief wait to ensure no second callback
+	select {
+	case <-startCalled:
+		t.Fatal("callback should not be called for duplicate appID")
+	case <-time.After(100 * time.Millisecond):
+		// Expected - no callback for duplicate
+	}
 }
 
 func TestTracker_OnAppIDChange_NilCallbacks(t *testing.T) {

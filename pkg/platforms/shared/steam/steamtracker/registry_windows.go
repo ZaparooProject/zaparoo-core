@@ -111,7 +111,7 @@ func (w *RegistryWatcher) watchLoop(key registry.Key) {
 		// Register for notification on value changes
 		err := windows.RegNotifyChangeKeyValue(
 			windows.Handle(key),
-			false, // don't watch subtree
+			false,                              // don't watch subtree
 			windows.REG_NOTIFY_CHANGE_LAST_SET, // notify on value changes
 			regEvent,
 			true, // async
