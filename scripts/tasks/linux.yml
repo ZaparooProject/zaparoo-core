@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  dev:
+    desc: Start air for live reload development using current architecture
+    cmds:
+      - air --build.cmd "task linux:build-{{ARCH}}" --build.bin "_build/linux_{{ARCH}}/zaparoo" -- -daemon
+
   build-amd64:
     desc: Build Linux AMD64 binary
     cmds:

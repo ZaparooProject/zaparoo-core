@@ -25,6 +25,7 @@ package steamtracker
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/assets"
@@ -72,22 +73,26 @@ func (pi *PlatformIntegration) Stop() {
 }
 
 // onGameStart is called when a Steam game starts (detected via reaper process).
-func (pi *PlatformIntegration) onGameStart(appID, pid int) {
-	// Check if we're already tracking this game (launched via Zaparoo)
+func (pi *PlatformIntegration) onGameStart(appID, reaperPID int, gamePath string) {
+	alreadyTracked := false
 	current := pi.activeMedia()
 	if current != nil {
-		// Check if current media is this Steam game
 		if existingAppID, ok := steam.ExtractAppIDFromPath(current.Path); ok {
 			if existingAppID == appID {
-				log.Debug().
-					Int("appID", appID).
-					Msg("game already tracked via Zaparoo launch")
-				return
+				log.Debug().Int("appID", appID).Msg("game already tracked via Zaparoo launch")
+				alreadyTracked = true
 			}
 		}
 	}
 
-	// Look up game name from appmanifest
+	// Find and track the actual game process for killing.
+	// Run in goroutine with retries since game may not have started yet.
+	go pi.findAndTrackGameProcess(gamePath)
+
+	if alreadyTracked {
+		return
+	}
+
 	gameName, found := steam.FindAppNameByAppID(appID)
 	if !found {
 		gameName = steam.FormatGameName(appID, "")
@@ -95,17 +100,16 @@ func (pi *PlatformIntegration) onGameStart(appID, pid int) {
 
 	log.Info().
 		Int("appID", appID).
-		Int("pid", pid).
+		Int("reaperPID", reaperPID).
+		Str("gamePath", gamePath).
 		Str("name", gameName).
 		Msg("detected external Steam game start")
 
-	// Get PC system metadata for display name
 	systemMeta, err := assets.GetSystemMetadata(systemdefs.SystemPC)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get PC system metadata")
 	}
 
-	// Set active media
 	activeMedia := models.NewActiveMedia(
 		systemdefs.SystemPC,
 		systemMeta.Name,
@@ -114,11 +118,24 @@ func (pi *PlatformIntegration) onGameStart(appID, pid int) {
 		"Steam",
 	)
 	pi.setActiveMedia(activeMedia)
+}
 
-	// Store process for potential killing via StopActiveLauncher
-	if proc, err := os.FindProcess(pid); err == nil {
-		pi.base.SetTrackedProcess(proc)
+// findAndTrackGameProcess attempts to find the game process with retries.
+func (pi *PlatformIntegration) findAndTrackGameProcess(gamePath string) {
+	const maxRetries = 10
+	const retryDelay = 500 * time.Millisecond
+
+	for i := range maxRetries {
+		if gamePID, ok := FindGamePID(gamePath); ok {
+			log.Debug().Int("gamePID", gamePID).Int("attempt", i+1).Msg("found game process")
+			if proc, err := os.FindProcess(gamePID); err == nil {
+				pi.base.SetTrackedProcess(proc)
+			}
+			return
+		}
+		time.Sleep(retryDelay)
 	}
+	log.Warn().Str("gamePath", gamePath).Msg("could not find game process after retries")
 }
 
 // onGameStop is called when a Steam game exits (reaper process terminated).

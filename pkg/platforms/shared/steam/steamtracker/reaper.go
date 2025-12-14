@@ -36,8 +36,9 @@ import (
 
 // ReaperProcess represents a running Steam game detected via its reaper process.
 type ReaperProcess struct {
-	PID   int
-	AppID int
+	GamePath string
+	PID      int
+	AppID    int
 }
 
 // appIDRegex matches "AppId=XXXXX" in process command line.
@@ -71,57 +72,52 @@ func ScanReaperProcessesWithProcPath(procPath string) ([]ReaperProcess, error) {
 		}
 
 		// Check if this is a reaper process
-		appID, ok := checkReaperProcess(procPath, pid)
+		appID, gamePath, ok := checkReaperProcess(procPath, pid)
 		if ok {
-			results = append(results, ReaperProcess{PID: pid, AppID: appID})
+			results = append(results, ReaperProcess{PID: pid, AppID: appID, GamePath: gamePath})
 		}
 	}
 
 	return results, nil
 }
 
-// checkReaperProcess checks if a process is a Steam reaper and extracts its AppID.
-func checkReaperProcess(procPath string, pid int) (int, bool) {
+// checkReaperProcess checks if a process is a Steam reaper and extracts its AppID and game path.
+func checkReaperProcess(procPath string, pid int) (appID int, gamePath string, ok bool) {
 	pidStr := strconv.Itoa(pid)
 
-	// Read process name from /proc/{pid}/comm
 	commPath := filepath.Join(procPath, pidStr, "comm")
-	commData, err := os.ReadFile(commPath) //nolint:gosec // G304: procPath is controlled by caller
+	commData, err := os.ReadFile(commPath) //nolint:gosec // G304: procPath is controlled
 	if err != nil {
-		return 0, false
+		return 0, "", false
 	}
 
 	comm := strings.TrimSpace(string(commData))
 	if comm != "reaper" {
-		return 0, false
+		return 0, "", false
 	}
 
-	// Read command line from /proc/{pid}/cmdline
 	cmdlinePath := filepath.Join(procPath, pidStr, "cmdline")
-	cmdlineData, err := os.ReadFile(cmdlinePath) //nolint:gosec // G304: procPath is controlled by caller
+	cmdlineData, err := os.ReadFile(cmdlinePath) //nolint:gosec // G304: procPath is controlled
 	if err != nil {
-		// Process may have exited between reading comm and cmdline
-		return 0, false
+		return 0, "", false
 	}
 
-	// cmdline is null-separated
 	cmdline := string(cmdlineData)
-	appID, ok := parseAppIDFromCmdline(cmdline)
+	appID, ok = parseAppIDFromCmdline(cmdline)
 	if !ok {
-		return 0, false
+		return 0, "", false
 	}
 
-	// Verify it's a Steam reaper by checking for SteamLaunch in cmdline
 	if !strings.Contains(cmdline, "SteamLaunch") {
-		return 0, false
+		return 0, "", false
 	}
 
-	return appID, true
+	gamePath = parseGamePathFromCmdline(cmdline)
+	return appID, gamePath, true
 }
 
 // parseAppIDFromCmdline extracts AppId=XXXXX from a process command line.
 func parseAppIDFromCmdline(cmdline string) (int, bool) {
-	// Replace null bytes with spaces for easier matching
 	cmdline = strings.ReplaceAll(cmdline, "\x00", " ")
 
 	matches := appIDRegex.FindStringSubmatch(cmdline)
@@ -135,4 +131,78 @@ func parseAppIDFromCmdline(cmdline string) (int, bool) {
 	}
 
 	return appID, true
+}
+
+// parseGamePathFromCmdline extracts the game executable path from a reaper cmdline.
+// Format: reaper SteamLaunch AppId=XXX -- [runtime args] -- ... -- /path/to/game
+func parseGamePathFromCmdline(cmdline string) string {
+	args := strings.Split(cmdline, "\x00")
+
+	lastDashIndex := -1
+	for i, arg := range args {
+		if arg == "--" {
+			lastDashIndex = i
+		}
+	}
+
+	if lastDashIndex == -1 || lastDashIndex >= len(args)-1 {
+		return ""
+	}
+
+	gamePath := args[lastDashIndex+1]
+	gamePath = strings.TrimSpace(gamePath)
+	gamePath = strings.TrimRight(gamePath, "\x00")
+
+	return gamePath
+}
+
+// FindGamePID finds a running process that matches the game executable path.
+func FindGamePID(gamePath string) (int, bool) {
+	return FindGamePIDWithProcPath("/proc", gamePath)
+}
+
+// FindGamePIDWithProcPath finds a running process matching the game path using a custom proc path.
+// It searches for processes whose executable is within the game's install directory.
+func FindGamePIDWithProcPath(procPath, gamePath string) (int, bool) {
+	if gamePath == "" {
+		return 0, false
+	}
+
+	gameDir := filepath.Dir(gamePath)
+
+	entries, err := os.ReadDir(procPath)
+	if err != nil {
+		return 0, false
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+
+		commPath := filepath.Join(procPath, entry.Name(), "comm")
+		commData, _ := os.ReadFile(commPath) //nolint:gosec // G304
+		if strings.TrimSpace(string(commData)) == "reaper" {
+			continue
+		}
+
+		cmdlinePath := filepath.Join(procPath, entry.Name(), "cmdline")
+		cmdlineData, err := os.ReadFile(cmdlinePath) //nolint:gosec // G304: procPath is controlled
+		if err != nil {
+			continue
+		}
+
+		cmdline := string(cmdlineData)
+		firstArg := strings.SplitN(cmdline, "\x00", 2)[0]
+		if strings.HasPrefix(firstArg, gameDir) {
+			return pid, true
+		}
+	}
+
+	return 0, false
 }

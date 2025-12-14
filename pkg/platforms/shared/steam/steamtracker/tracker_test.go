@@ -69,7 +69,7 @@ func TestTracker_DetectsNewGame(t *testing.T) {
 	var gotAppID, gotPID atomic.Int32
 
 	tracker := New(
-		func(appID int, pid int) {
+		func(appID int, pid int, _ string) {
 			gotAppID.Store(int32(appID)) //nolint:gosec // G115: appID is always small
 			gotPID.Store(int32(pid))     //nolint:gosec // G115: pid is always small
 			startCalled.Store(true)
@@ -139,7 +139,7 @@ func TestTracker_DeduplicatesByAppID(t *testing.T) {
 	startCount := atomic.Int32{}
 
 	tracker := New(
-		func(_ int, _ int) {
+		func(_ int, _ int, _ string) {
 			startCount.Add(1)
 		},
 		nil,

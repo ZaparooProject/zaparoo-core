@@ -35,8 +35,8 @@ import (
 const DefaultPollInterval = 2 * time.Second
 
 // GameStartCallback is called when a Steam game starts.
-// appID is the Steam App ID, pid is the reaper process ID.
-type GameStartCallback func(appID int, pid int)
+// appID is the Steam App ID, pid is the reaper process ID, gamePath is the game executable.
+type GameStartCallback func(appID int, pid int, gamePath string)
 
 // GameStopCallback is called when a Steam game exits.
 // appID is the Steam App ID that was running.
@@ -45,6 +45,7 @@ type GameStopCallback func(appID int)
 // TrackedGame represents a currently tracked Steam game.
 type TrackedGame struct {
 	StartTime time.Time
+	GamePath  string
 	AppID     int
 	PID       int
 }
@@ -188,6 +189,7 @@ func (t *Tracker) trackGame(r ReaperProcess) {
 	game := &TrackedGame{
 		AppID:     r.AppID,
 		PID:       r.PID,
+		GamePath:  r.GamePath,
 		StartTime: time.Now(),
 	}
 
@@ -197,9 +199,9 @@ func (t *Tracker) trackGame(r ReaperProcess) {
 	log.Info().
 		Int("appID", r.AppID).
 		Int("pid", r.PID).
+		Str("gamePath", r.GamePath).
 		Msg("detected Steam game start")
 
-	// Set up exit tracking
 	appID := r.AppID
 	pid := r.PID
 	err := t.procTracker.Track(pid, func(_ int) {
@@ -207,12 +209,10 @@ func (t *Tracker) trackGame(r ReaperProcess) {
 	})
 	if err != nil {
 		log.Warn().Err(err).Int("pid", pid).Msg("failed to track process exit")
-		// Still call onGameStart - game is running, we just won't detect exit
 	}
 
-	// Call start callback (outside mutex)
 	if t.onGameStart != nil {
-		go t.onGameStart(r.AppID, r.PID)
+		go t.onGameStart(r.AppID, r.PID, r.GamePath)
 	}
 }
 
