@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamtracker
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -63,8 +64,6 @@ func findByExactExecutable(appID int) (*os.Process, int, bool) {
 
 	log.Debug().Int("appID", appID).Str("exe", exePath).Msg("looking for exact executable")
 
-	exePathLower := strings.ToLower(exePath)
-
 	procs, err := process.Processes()
 	if err != nil {
 		return nil, 0, false
@@ -76,7 +75,7 @@ func findByExactExecutable(appID int) (*os.Process, int, bool) {
 			continue
 		}
 
-		if strings.ToLower(exe) == exePathLower {
+		if strings.EqualFold(exe, exePath) {
 			pid := int(p.Pid)
 			proc, err := os.FindProcess(pid)
 			if err != nil {
@@ -96,14 +95,17 @@ func findByInstallDir(appID int) (*os.Process, int, error) {
 	installDir, found := steam.FindInstallDirByAppID(appID)
 	if !found {
 		log.Debug().Int("appID", appID).Msg("could not find install directory for appID")
-		return nil, 0, nil //nolint:nilnil // No install dir means can't find process
+		return nil, 0, nil
 	}
 
-	log.Debug().Int("appID", appID).Str("installDir", installDir).Msg("searching for game process by install dir (fallback)")
+	log.Debug().
+		Int("appID", appID).
+		Str("installDir", installDir).
+		Msg("searching for game process by install dir (fallback)")
 
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("enumerate processes: %w", err)
 	}
 
 	installDirLower := strings.ToLower(installDir)
@@ -124,7 +126,7 @@ func findByInstallDir(appID int) (*os.Process, int, error) {
 		}
 	}
 
-	return nil, 0, nil //nolint:nilnil // No matching process found
+	return nil, 0, nil
 }
 
 // findSteamDir returns the Steam installation directory.

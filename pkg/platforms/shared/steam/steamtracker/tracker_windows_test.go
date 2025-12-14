@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew_Windows(t *testing.T) {
@@ -163,11 +164,11 @@ func TestGetRunningAppID_NoSteam(t *testing.T) {
 	}
 
 	appID, err := GetRunningAppID()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 0, appID)
 }
 
-func TestIsSteamInstalled(t *testing.T) {
+func TestIsSteamInstalled(_ *testing.T) {
 	// This just verifies the function doesn't panic
 	// The actual result depends on whether Steam is installed
 	_ = IsSteamInstalled()

@@ -23,6 +23,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamtracker
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -58,7 +59,7 @@ func (w *RegistryWatcher) Start() error {
 	// Create manual-reset stop event (signaled by Stop() for instant shutdown)
 	stopEvent, err := windows.CreateEvent(nil, 1, 0, nil) // manual-reset, initially non-signaled
 	if err != nil {
-		return err
+		return fmt.Errorf("create stop event: %w", err)
 	}
 	w.stopEvent = stopEvent
 
@@ -68,8 +69,8 @@ func (w *RegistryWatcher) Start() error {
 		registry.QUERY_VALUE|keyNotify,
 	)
 	if err != nil {
-		windows.CloseHandle(w.stopEvent)
-		return err
+		_ = windows.CloseHandle(w.stopEvent)
+		return fmt.Errorf("open Steam registry key: %w", err)
 	}
 
 	w.wg.Add(1)
@@ -82,12 +83,12 @@ func (w *RegistryWatcher) Stop() {
 	close(w.done)
 	_ = windows.SetEvent(w.stopEvent) // Signal immediately for instant shutdown
 	w.wg.Wait()
-	windows.CloseHandle(w.stopEvent)
+	_ = windows.CloseHandle(w.stopEvent)
 }
 
 func (w *RegistryWatcher) watchLoop(key registry.Key) {
 	defer w.wg.Done()
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	// Create event for registry notifications
 	regEvent, err := windows.CreateEvent(nil, 0, 0, nil)
@@ -95,7 +96,7 @@ func (w *RegistryWatcher) watchLoop(key registry.Key) {
 		log.Error().Err(err).Msg("failed to create event for registry watcher")
 		return
 	}
-	defer windows.CloseHandle(regEvent)
+	defer func() { _ = windows.CloseHandle(regEvent) }()
 
 	// Wait on both registry event and stop event
 	handles := []windows.Handle{regEvent, w.stopEvent}
@@ -150,7 +151,7 @@ func readAppID(key registry.Key) int {
 	if err != nil {
 		return 0
 	}
-	return int(appID)
+	return int(appID) //nolint:gosec // AppID won't overflow int
 }
 
 // GetRunningAppID reads the currently running Steam game AppID from the registry.
@@ -162,9 +163,10 @@ func GetRunningAppID() (int, error) {
 		registry.QUERY_VALUE,
 	)
 	if err != nil {
-		return 0, nil //nolint:nilerr // Key not existing means no game running
+		// Key not existing means no game running
+		return 0, nil
 	}
-	defer key.Close()
+	defer func() { _ = key.Close() }()
 
 	return readAppID(key), nil
 }
@@ -179,6 +181,6 @@ func IsSteamInstalled() bool {
 	if err != nil {
 		return false
 	}
-	key.Close()
+	_ = key.Close()
 	return true
 }
