@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -136,12 +137,20 @@ func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, pa
 		},
 
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			return LaunchViaRetroDECK(context.Background(), path)
+			proc, err := LaunchViaRetroDECK(context.Background(), path)
+			if err != nil {
+				return nil, err
+			}
+			// Set up gamescope focus management in Gaming Mode
+			if proc != nil {
+				go gamescope.ManageFocus(proc)
+			}
+			return proc, nil
 		},
 
 		Kill: func(_ *config.Instance) error {
-			// RetroDECK doesn't have a specific kill API
-			// The emulator process will be tracked separately
+			// Revert gamescope focus properties
+			gamescope.RevertFocus()
 			log.Debug().Msg("kill requested for RetroDECK launcher")
 			return nil
 		},

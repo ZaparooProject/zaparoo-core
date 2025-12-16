@@ -32,6 +32,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos/gamescope"
 	"github.com/rs/zerolog/log"
 )
 
@@ -477,12 +478,20 @@ func createEmuDeckLauncher(systemFolder string, systemInfo esde.SystemInfo, path
 		},
 
 		Launch: func(_ *config.Instance, path string, _ *platforms.LaunchOptions) (*os.Process, error) {
-			return LaunchViaEmuDeck(context.Background(), path, systemFolder)
+			proc, err := LaunchViaEmuDeck(context.Background(), path, systemFolder)
+			if err != nil {
+				return nil, err
+			}
+			// Set up gamescope focus management in Gaming Mode
+			if proc != nil {
+				go gamescope.ManageFocus(proc)
+			}
+			return proc, nil
 		},
 
 		Kill: func(_ *config.Instance) error {
-			// Direct emulator launching doesn't have a specific kill API
-			// The emulator process will be tracked separately via emutracker
+			// Revert gamescope focus properties
+			gamescope.RevertFocus()
 			log.Debug().Msg("kill requested for EmuDeck launcher")
 			return nil
 		},
