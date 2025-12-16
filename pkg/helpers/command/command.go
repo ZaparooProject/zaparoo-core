@@ -39,6 +39,10 @@ type Executor interface {
 	// Returns an error if the command fails to start or exits with non-zero status.
 	Run(ctx context.Context, name string, args ...string) error
 
+	// Output runs a command and returns its standard output.
+	// Returns the output bytes and an error if the command fails.
+	Output(ctx context.Context, name string, args ...string) ([]byte, error)
+
 	// Start starts a command without waiting for it to complete (fire-and-forget).
 	// Returns an error if the command fails to start.
 	Start(ctx context.Context, name string, args ...string) error
@@ -57,6 +61,13 @@ type RealExecutor struct{}
 //nolint:wrapcheck // Wrapping exec errors loses important context
 func (*RealExecutor) Run(ctx context.Context, name string, args ...string) error {
 	return exec.CommandContext(ctx, name, args...).Run()
+}
+
+// Output runs a command and returns its standard output.
+//
+//nolint:wrapcheck // Wrapping exec errors loses important context
+func (*RealExecutor) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 // Start starts a command without waiting for it to complete.

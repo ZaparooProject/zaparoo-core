@@ -45,6 +45,23 @@ func (m *MockCommandExecutor) Run(ctx context.Context, name string, args ...stri
 	return called.Error(0)
 }
 
+// Output mocks command execution that returns output.
+// Use On() to set expectations and Return() to control the mock behavior.
+//
+// Example:
+//
+//	mockCmd := &MockCommandExecutor{}
+//	mockCmd.On("Output", mock.Anything, "xprop", mock.Anything).Return([]byte("output"), nil)
+func (m *MockCommandExecutor) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	called := m.Called(ctx, name, args)
+	var output []byte
+	if v := called.Get(0); v != nil {
+		output = v.([]byte) //nolint:revive // type assertion is safe, mock always returns []byte
+	}
+	//nolint:wrapcheck // Mock returns are already wrapped by caller
+	return output, called.Error(1)
+}
+
 // Start mocks starting a command without waiting for completion.
 // Use On() to set expectations and Return() to control the mock behavior.
 //

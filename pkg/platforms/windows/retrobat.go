@@ -31,10 +31,10 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/mediascanner"
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/rs/zerolog/log"
 )
 
@@ -85,132 +85,12 @@ func isRetroBatRunning() bool {
 	return esapi.IsAvailable()
 }
 
-// getRetroBatSystemMapping maps RetroBat system folder names to Zaparoo system IDs
-// Based on RetroBat's es_systems.cfg: https://github.com/RetroBat-Official/retrobat-setup
-func getRetroBatSystemMapping() map[string]string {
-	return map[string]string{
-		// Arcade Systems
-		"mame":       systemdefs.SystemArcade,
-		"fbneo":      systemdefs.SystemArcade,
-		"atomiswave": systemdefs.SystemAtomiswave,
-		"naomi":      systemdefs.SystemNAOMI,
-		"naomi2":     systemdefs.SystemNAOMI2,
-		"model2":     systemdefs.SystemModel2,
-		"model3":     systemdefs.SystemModel3,
-		"triforce":   systemdefs.SystemTriforce,
-		"chihiro":    systemdefs.SystemChihiro,
-		"hikaru":     systemdefs.SystemHikaru,
-		"gaelco":     systemdefs.SystemGaelco,
-		"cps1":       systemdefs.SystemCPS1,
-		"cps2":       systemdefs.SystemCPS2,
-		"cps3":       systemdefs.SystemCPS3,
-		"daphne":     systemdefs.SystemDAPHNE,
-		"singe":      systemdefs.SystemSinge,
-		"dice":       systemdefs.SystemDICE,
-
-		// Sega Consoles
-		"sg1000":       systemdefs.SystemSG1000,
-		"mastersystem": systemdefs.SystemMasterSystem,
-		"megadrive":    systemdefs.SystemGenesis,
-		"megacd":       systemdefs.SystemMegaCD,
-		"sega32x":      systemdefs.SystemSega32X,
-		"saturn":       systemdefs.SystemSaturn,
-		"dreamcast":    systemdefs.SystemDreamcast,
-		"gamegear":     systemdefs.SystemGameGear,
-
-		// Nintendo Consoles
-		"nes":         systemdefs.SystemNES,
-		"fds":         systemdefs.SystemFDS,
-		"snes":        systemdefs.SystemSNES,
-		"snes-msu1":   systemdefs.SystemSNESMSU1,
-		"satellaview": systemdefs.SystemSNES, // Satellaview uses SNES hardware
-		"sufami":      systemdefs.SystemSufami,
-		"n64":         systemdefs.SystemNintendo64,
-		"gamecube":    systemdefs.SystemGameCube,
-		"wii":         systemdefs.SystemWii,
-		"wiiu":        systemdefs.SystemWiiU,
-		"switch":      systemdefs.SystemSwitch,
-		"virtualboy":  systemdefs.SystemVirtualBoy,
-
-		// Nintendo Handhelds
-		"gb":          systemdefs.SystemGameboy,
-		"gb2players":  systemdefs.SystemGameboy2P,
-		"gb-msu":      systemdefs.SystemSGBMSU1,
-		"gbc":         systemdefs.SystemGameboyColor,
-		"gbc2players": systemdefs.SystemGameboyColor, // Uses same system
-		"gba":         systemdefs.SystemGBA,
-		"gba2players": systemdefs.SystemGBA2P,
-		"nds":         systemdefs.SystemNDS,
-		"pokemini":    systemdefs.SystemPokemonMini,
-		"gw":          systemdefs.SystemGameNWatch,
-
-		// Sony Consoles
-		"psx": systemdefs.SystemPSX,
-		"ps2": systemdefs.SystemPS2,
-		"ps3": systemdefs.SystemPS3,
-		"ps4": systemdefs.SystemPS4,
-
-		// Microsoft Consoles
-		"xbox":    systemdefs.SystemXbox,
-		"xbox360": systemdefs.SystemXbox360,
-
-		// NEC Consoles
-		"pcengine":   systemdefs.SystemTurboGrafx16,
-		"pcenginecd": systemdefs.SystemTurboGrafx16CD,
-		"supergrafx": systemdefs.SystemSuperGrafx,
-		"pcfx":       systemdefs.SystemPCFX,
-
-		// SNK Consoles
-		"neogeo":   systemdefs.SystemNeoGeo,
-		"neogeocd": systemdefs.SystemNeoGeoCD,
-
-		// Atari Consoles
-		"atari2600": systemdefs.SystemAtari2600,
-		"atari5200": systemdefs.SystemAtari5200,
-		"atari7800": systemdefs.SystemAtari7800,
-		"lynx":      systemdefs.SystemAtariLynx,
-		"jaguar":    systemdefs.SystemJaguar,
-		"jaguarcd":  systemdefs.SystemJaguarCD,
-
-		// Other Consoles
-		"3do":           systemdefs.System3DO,
-		"colecovision":  systemdefs.SystemColecoVision,
-		"intellivision": systemdefs.SystemIntellivision,
-		"channelf":      systemdefs.SystemChannelF,
-		"vectrex":       systemdefs.SystemVectrex,
-		"odyssey2":      systemdefs.SystemOdyssey2,
-		"multivision":   systemdefs.SystemMultivision,
-
-		// Computer Systems
-		"amiga500":     systemdefs.SystemAmiga500,
-		"amiga1200":    systemdefs.SystemAmiga1200,
-		"amigacd32":    systemdefs.SystemAmigaCD32,
-		"amstradcpc":   systemdefs.SystemAmstrad,
-		"atari800":     systemdefs.SystemAtari800,
-		"atarist":      systemdefs.SystemAtariST,
-		"xegs":         systemdefs.SystemAtariXEGS,
-		"c64":          systemdefs.SystemC64,
-		"msx1":         systemdefs.SystemMSX1,
-		"msx2":         systemdefs.SystemMSX2,
-		"msx2+":        systemdefs.SystemMSX2Plus,
-		"zxspectrum":   systemdefs.SystemZXSpectrum,
-		"zx81":         systemdefs.SystemZX81,
-		"x68000":       systemdefs.SystemX68000,
-		"x1":           systemdefs.SystemX1,
-		"pc88":         systemdefs.SystemPC88,
-		"pc98":         systemdefs.SystemPC98,
-		"aquarius":     systemdefs.SystemAquarius,
-		"samcoupe":     systemdefs.SystemSAMCoupe,
-		"thomson":      systemdefs.SystemThomson,
-		"spectravideo": systemdefs.SystemSpectravideo,
-		"oricatmos":    systemdefs.SystemOric,
-	}
-}
-
-// createRetroBatLauncher creates a launcher for a specific RetroBat system
-func createRetroBatLauncher(systemFolder, systemID, _ string) platforms.Launcher {
+// createRetroBatLauncher creates a launcher for a specific RetroBat system.
+func createRetroBatLauncher(systemFolder string, info esde.SystemInfo, _ string) platforms.Launcher {
+	launcherID := info.GetLauncherID()
+	systemID := info.SystemID
 	return platforms.Launcher{
-		ID:                 fmt.Sprintf("RetroBat%s", systemID),
+		ID:                 fmt.Sprintf("RetroBat%s", launcherID),
 		SystemID:           systemID,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 		Test: func(cfg *config.Instance, path string) bool {
@@ -321,7 +201,6 @@ func getRetroBatLaunchers(cfg *config.Instance) []platforms.Launcher {
 	// Always register launchers if RetroBat directory is found
 	log.Info().Msgf("found RetroBat at %s, registering launchers", retroBatDir)
 
-	systemMapping := getRetroBatSystemMapping()
 	var launchers []platforms.Launcher
 
 	romsDir := filepath.Join(retroBatDir, "roms")
@@ -336,9 +215,12 @@ func getRetroBatLaunchers(cfg *config.Instance) []platforms.Launcher {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			systemFolder := entry.Name()
-			if systemID, exists := systemMapping[systemFolder]; exists {
-				log.Info().Msgf("registering RetroBat launcher for system: %s (mapped to %s)", systemFolder, systemID)
-				launcher := createRetroBatLauncher(systemFolder, systemID, retroBatDir)
+			if info, exists := esde.LookupByFolderName(systemFolder); exists {
+				log.Info().
+					Str("folder", systemFolder).
+					Str("systemID", info.SystemID).
+					Msg("registering RetroBat launcher")
+				launcher := createRetroBatLauncher(systemFolder, info, retroBatDir)
 				launchers = append(launchers, launcher)
 			} else {
 				log.Debug().Msgf("unmapped RetroBat system folder: %s", systemFolder)

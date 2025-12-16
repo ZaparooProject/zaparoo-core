@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -40,7 +41,9 @@ import (
 // Uses console-first approach with direct steam command for Game Mode integration.
 type Platform struct {
 	*linuxbase.Base
+	procScanner  *procscanner.Scanner
 	steamTracker *steamtracker.PlatformIntegration
+	emuTracker   *EmulatorTracker
 }
 
 // NewPlatform creates a new SteamOS platform instance.
@@ -75,20 +78,68 @@ func (p *Platform) StartPost(
 		return err
 	}
 
-	// Start Steam tracker for external Steam game detection
-	p.steamTracker = steamtracker.NewPlatformIntegration(p.Base, activeMedia, setActiveMedia)
-	if err := p.steamTracker.Start(); err != nil {
-		log.Warn().Err(err).Msg("steam game tracker failed to start")
+	// Create shared process scanner for both Steam and emulator tracking
+	p.procScanner = procscanner.New()
+	if err := p.procScanner.Start(); err != nil {
+		log.Warn().Err(err).Msg("process scanner failed to start")
+		return nil
 	}
+
+	// Start Steam tracker for external Steam game detection
+	p.steamTracker = steamtracker.NewPlatformIntegration(
+		p.procScanner,
+		p.Base,
+		activeMedia,
+		setActiveMedia,
+	)
+	p.steamTracker.Start()
+
+	// Start emulator tracker for EmuDeck/RetroDECK game detection
+	p.emuTracker = NewEmulatorTracker(
+		p.procScanner,
+		p.onEmulatorStart,
+		p.onEmulatorStop,
+	)
+	p.emuTracker.Start()
 
 	return nil
 }
 
+// onEmulatorStart is called when an emulator process is detected.
+func (*Platform) onEmulatorStart(name string, pid int, cmdline string) {
+	log.Debug().
+		Str("name", name).
+		Int("pid", pid).
+		Str("cmdline", cmdline).
+		Msg("emulator started (external to Zaparoo)")
+	// Note: We don't set ActiveMedia here because we don't know what game is running.
+	// The emulator tracker is primarily for process lifecycle tracking, not game detection.
+	// Games launched via Zaparoo will have ActiveMedia set by the launcher.
+}
+
+// onEmulatorStop is called when an emulator process exits.
+func (*Platform) onEmulatorStop(name string, pid int) {
+	log.Debug().
+		Str("name", name).
+		Int("pid", pid).
+		Msg("emulator stopped")
+}
+
 // Stop stops the platform and cleans up resources.
 func (p *Platform) Stop() error {
+	// Stop trackers first (they reference the scanner)
+	if p.emuTracker != nil {
+		p.emuTracker.Stop()
+	}
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
 	}
+
+	// Stop shared scanner last
+	if p.procScanner != nil {
+		p.procScanner.Stop()
+	}
+
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()
 }
@@ -112,8 +163,18 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 		// Steam with Steam Deck optimizations
 		steam.NewSteamLauncher(steam.DefaultSteamOSOptions()),
 
-		// Generic for EmuDeck and custom scripts
+		// Generic for custom scripts
 		launchers.NewGenericLauncher(),
+	}
+
+	// Add RetroDECK launchers if available
+	if retrodeckLaunchers := GetRetroDECKLaunchers(cfg); len(retrodeckLaunchers) > 0 {
+		ls = append(ls, retrodeckLaunchers...)
+	}
+
+	// Add EmuDeck launchers if available
+	if emudeckLaunchers := GetEmuDeckLaunchers(cfg); len(emudeckLaunchers) > 0 {
+		ls = append(ls, emudeckLaunchers...)
 	}
 
 	return append(helpers.ParseCustomLaunchers(p, cfg.CustomLaunchers()), ls...)

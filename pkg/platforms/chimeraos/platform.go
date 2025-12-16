@@ -30,6 +30,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/launchers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/steam/steamtracker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
@@ -41,6 +42,7 @@ import (
 // controller-first UI booting directly into Steam Gamepad UI.
 type Platform struct {
 	*linuxbase.Base
+	procScanner  *procscanner.Scanner
 	steamTracker *steamtracker.PlatformIntegration
 }
 
@@ -76,11 +78,21 @@ func (p *Platform) StartPost(
 		return err
 	}
 
-	// Start Steam tracker for external Steam game detection
-	p.steamTracker = steamtracker.NewPlatformIntegration(p.Base, activeMedia, setActiveMedia)
-	if err := p.steamTracker.Start(); err != nil {
-		log.Warn().Err(err).Msg("steam game tracker failed to start")
+	// Create process scanner for Steam game tracking
+	p.procScanner = procscanner.New()
+	if err := p.procScanner.Start(); err != nil {
+		log.Warn().Err(err).Msg("process scanner failed to start")
+		return nil
 	}
+
+	// Start Steam tracker for external Steam game detection
+	p.steamTracker = steamtracker.NewPlatformIntegration(
+		p.procScanner,
+		p.Base,
+		activeMedia,
+		setActiveMedia,
+	)
+	p.steamTracker.Start()
 
 	return nil
 }
@@ -89,6 +101,9 @@ func (p *Platform) StartPost(
 func (p *Platform) Stop() error {
 	if p.steamTracker != nil {
 		p.steamTracker.Stop()
+	}
+	if p.procScanner != nil {
+		p.procScanner.Stop()
 	}
 	//nolint:wrapcheck // Pass-through to base implementation
 	return p.Base.Stop()

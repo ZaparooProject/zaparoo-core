@@ -24,11 +24,10 @@ package windows
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esapi"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/esde"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,34 +48,14 @@ func TestFindRetroBatDir(t *testing.T) {
 	})
 }
 
-func TestGetRetroBatSystemMapping(t *testing.T) {
-	t.Parallel()
-	mapping := getRetroBatSystemMapping()
-
-	// Test some common systems with correct folder names and system IDs
-	assert.Equal(t, systemdefs.SystemSNES, mapping["snes"])
-	assert.Equal(t, systemdefs.SystemNES, mapping["nes"])
-	assert.Equal(t, systemdefs.SystemGenesis, mapping["megadrive"]) // RetroBat uses "megadrive" folder
-	assert.Equal(t, systemdefs.SystemPSX, mapping["psx"])
-	assert.Equal(t, systemdefs.SystemGameCube, mapping["gamecube"]) // Not "gc"
-	assert.Equal(t, systemdefs.SystemAtariLynx, mapping["lynx"])    // Not "atarilynx"
-	assert.Equal(t, systemdefs.SystemWii, mapping["wii"])
-	assert.Equal(t, systemdefs.SystemSwitch, mapping["switch"])
-	assert.Equal(t, systemdefs.SystemPS3, mapping["ps3"])
-	assert.Equal(t, systemdefs.SystemXbox, mapping["xbox"])
-
-	// Ensure we have comprehensive system mappings (60+ systems)
-	assert.Greater(t, len(mapping), 60, "Should have more than 60 system mappings")
-}
-
 func TestCreateRetroBatLauncher(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	systemFolder := "snes"
-	mapping := getRetroBatSystemMapping()
-	systemID := mapping[systemFolder] // Get the correct system ID from the mapping
+	info, exists := esde.LookupByFolderName(systemFolder)
+	require.True(t, exists, "snes should exist in esde.SystemMap")
 
-	launcher := createRetroBatLauncher(systemFolder, systemID, tempDir)
+	launcher := createRetroBatLauncher(systemFolder, info, tempDir)
 
 	assert.Equal(t, "RetroBatSNES", launcher.ID)
 	assert.Equal(t, "SNES", launcher.SystemID)
@@ -94,8 +73,8 @@ func TestRetroBatLauncherTest(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
 	systemFolder := "snes"
-	mapping := getRetroBatSystemMapping()
-	systemID := mapping[systemFolder] // Get the correct system ID from the mapping
+	info, exists := esde.LookupByFolderName(systemFolder)
+	require.True(t, exists, "snes should exist in esde.SystemMap")
 
 	// Create mock RetroBat directory structure
 	romsDir := filepath.Join(tempDir, "roms", "snes")
@@ -107,7 +86,7 @@ func TestRetroBatLauncherTest(t *testing.T) {
 	err = os.WriteFile(retroBatExe, []byte("mock"), 0o600)
 	require.NoError(t, err)
 
-	launcher := createRetroBatLauncher(systemFolder, systemID, tempDir)
+	launcher := createRetroBatLauncher(systemFolder, info, tempDir)
 
 	// Test the launcher creation itself
 	assert.Equal(t, "RetroBatSNES", launcher.ID)
@@ -147,44 +126,9 @@ func TestRetroBatLauncherScanner(t *testing.T) {
 	assert.Equal(t, "./zelda.sfc", gameList.Games[1].Path)
 }
 
-// TestRetroBatSystemMappingIntegrity tests that all system mappings are valid
-func TestRetroBatSystemMappingIntegrity(t *testing.T) {
-	t.Parallel()
-	mapping := getRetroBatSystemMapping()
-
-	// Test that we have a comprehensive number of systems
-	assert.GreaterOrEqual(t, len(mapping), 60, "Should have at least 60 systems in RetroBat mapping")
-
-	// Test that system folder names are valid (lowercase, no spaces for RetroBat compatibility)
-	for systemFolder := range mapping {
-		assert.Regexp(t, `^[a-z0-9+._-]+$`, systemFolder,
-			"System folder name %s should be lowercase alphanumeric with allowed special chars", systemFolder)
-		assert.NotEmpty(t, systemFolder, "System folder name should not be empty")
-		assert.Less(t, len(systemFolder), 30, "System folder name %s should be reasonable length", systemFolder)
-	}
-
-	// Test that all SystemIDs are valid and exist in systemdefs
-	for systemFolder, systemID := range mapping {
-		assert.NotEmpty(t, systemID, "System folder %s should have non-empty SystemID", systemFolder)
-		assert.NotRegexp(t, `\s`, systemID,
-			"SystemID %s should not contain whitespace for system folder %s", systemID, systemFolder)
-		assert.Greater(t, len(systemID), 1,
-			"SystemID should be more than 1 character for system folder %s", systemFolder)
-		assert.Less(t, len(systemID), 50,
-			"SystemID should be less than 50 characters for system folder %s", systemFolder)
-
-		// Verify the SystemID exists in systemdefs by checking if it's a known system
-		// This ensures we're not using invalid or typo'd system IDs
-		validSystemID := isValidSystemID(systemID)
-		assert.True(t, validSystemID,
-			"SystemID %s for folder %s should be a valid system defined in systemdefs", systemID, systemFolder)
-	}
-}
-
-// TestRetroBatCommonSystemsExist tests that commonly expected systems exist in the mapping
+// TestRetroBatCommonSystemsExist tests that commonly expected systems exist in esde.SystemMap.
 func TestRetroBatCommonSystemsExist(t *testing.T) {
 	t.Parallel()
-	mapping := getRetroBatSystemMapping()
 
 	// Test that common gaming systems are mapped (using actual RetroBat folder names)
 	commonSystems := []string{
@@ -204,57 +148,47 @@ func TestRetroBatCommonSystemsExist(t *testing.T) {
 	}
 
 	for _, system := range commonSystems {
-		systemID, exists := mapping[system]
-		assert.True(t, exists, "Common system %s should exist in RetroBat mapping", system)
+		info, exists := esde.LookupByFolderName(system)
+		assert.True(t, exists, "Common system %s should exist in esde.SystemMap", system)
 		if exists {
-			assert.NotEmpty(t, systemID, "Common system %s should have non-empty SystemID", system)
+			assert.NotEmpty(t, info.SystemID, "Common system %s should have non-empty SystemID", system)
+			assert.NotEmpty(t, info.GetLauncherID(), "Common system %s should have non-empty LauncherID", system)
 		}
 	}
 }
 
-// TestAllRetroBatSystemsHaveValidStructure tests each system in the mapping
-func TestAllRetroBatSystemsHaveValidStructure(t *testing.T) {
+// TestRetroBatLauncherCreation tests that launchers can be created for common systems.
+func TestRetroBatLauncherCreation(t *testing.T) {
 	t.Parallel()
-	mapping := getRetroBatSystemMapping()
 
-	for systemFolder, systemID := range mapping {
-		t.Run(systemFolder, func(t *testing.T) {
+	// Test creating launchers for some common systems
+	testCases := []struct {
+		folder      string
+		expectID    string
+		expectSysID string
+	}{
+		{"snes", "RetroBatSNES", "SNES"},
+		{"nes", "RetroBatNES", "NES"},
+		{"psx", "RetroBatPSX", "PSX"},
+		{"n64", "RetroBatN64", "Nintendo64"},
+		{"megadrive", "RetroBatMegaDrive", "Genesis"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.folder, func(t *testing.T) {
 			t.Parallel()
+			info, exists := esde.LookupByFolderName(tc.folder)
+			require.True(t, exists, "System %s should exist in esde.SystemMap", tc.folder)
 
-			// Test that systemFolder is a valid RetroBat system folder name
-			assert.NotEmpty(t, systemFolder, "System folder name must not be empty")
-			assert.Equal(t, strings.ToLower(systemFolder), systemFolder,
-				"System folder %s should be lowercase for RetroBat compatibility", systemFolder)
+			launcher := createRetroBatLauncher(tc.folder, info, "/tmp")
 
-			// Test that systemID is a valid Zaparoo system ID
-			assert.NotEmpty(t, systemID, "SystemID must not be empty for folder %s", systemFolder)
-			assert.True(t, isValidSystemID(systemID),
-				"SystemID %s for folder %s should be a valid system defined in systemdefs", systemID, systemFolder)
-
-			// Test that the launcher can be created without errors
-			launcher := createRetroBatLauncher(systemFolder, systemID, "/tmp")
-			assert.NotEmpty(t, launcher.ID, "Launcher ID should not be empty for system %s", systemFolder)
-			assert.Equal(t, systemID, launcher.SystemID,
-				"Launcher SystemID should match mapping for folder %s", systemFolder)
-			assert.Contains(t, launcher.ID, systemID,
-				"Launcher ID should contain SystemID for folder %s", systemFolder)
-			assert.True(t, launcher.SkipFilesystemScan,
-				"RetroBat launchers should skip filesystem scan for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Test,
-				"Launcher Test function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Launch,
-				"Launcher Launch function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Kill,
-				"Launcher Kill function should not be nil for folder %s", systemFolder)
-			assert.NotNil(t, launcher.Scanner,
-				"Launcher Scanner function should not be nil for folder %s", systemFolder)
+			assert.Equal(t, tc.expectID, launcher.ID, "Launcher ID mismatch for %s", tc.folder)
+			assert.Equal(t, tc.expectSysID, launcher.SystemID, "SystemID mismatch for %s", tc.folder)
+			assert.True(t, launcher.SkipFilesystemScan)
+			assert.NotNil(t, launcher.Test)
+			assert.NotNil(t, launcher.Launch)
+			assert.NotNil(t, launcher.Kill)
+			assert.NotNil(t, launcher.Scanner)
 		})
 	}
-}
-
-// isValidSystemID checks if a system ID exists in the systemdefs package
-func isValidSystemID(systemID string) bool {
-	// Use systemdefs.GetSystem to check if the system exists
-	_, err := systemdefs.GetSystem(systemID)
-	return err == nil
 }

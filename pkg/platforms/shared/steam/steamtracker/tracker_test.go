@@ -23,13 +23,12 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package steamtracker
 
 import (
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/shared/linuxbase/procscanner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,27 +36,13 @@ import (
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	tracker := New(nil, nil)
+	scanner := procscanner.New()
+	tracker := New(scanner, nil, nil)
 	defer tracker.Stop()
 
 	assert.NotNil(t, tracker.tracked)
 	assert.NotNil(t, tracker.appIDToPID)
-	assert.NotNil(t, tracker.procTracker)
-	assert.Equal(t, DefaultPollInterval, tracker.pollInterval)
-	assert.Equal(t, "/proc", tracker.procPath)
-}
-
-func TestNew_WithOptions(t *testing.T) {
-	t.Parallel()
-
-	tracker := New(nil, nil,
-		WithPollInterval(5*time.Second),
-		WithProcPath("/custom/proc"),
-	)
-	defer tracker.Stop()
-
-	assert.Equal(t, 5*time.Second, tracker.pollInterval)
-	assert.Equal(t, "/custom/proc", tracker.procPath)
+	assert.Same(t, scanner, tracker.scanner)
 }
 
 func TestTracker_DetectsNewGame(t *testing.T) {
@@ -68,19 +53,25 @@ func TestTracker_DetectsNewGame(t *testing.T) {
 	var startCalled atomic.Bool
 	var gotAppID, gotPID atomic.Int32
 
+	scanner := procscanner.New(
+		procscanner.WithProcPath(procDir),
+		procscanner.WithPollInterval(50*time.Millisecond),
+	)
+
 	tracker := New(
+		scanner,
 		func(appID int, pid int, _ string) {
 			gotAppID.Store(int32(appID)) //nolint:gosec // G115: appID is always small
 			gotPID.Store(int32(pid))     //nolint:gosec // G115: pid is always small
 			startCalled.Store(true)
 		},
 		nil,
-		WithProcPath(procDir),
-		WithPollInterval(50*time.Millisecond),
 	)
 
-	// Start tracker (it will do an initial scan)
-	require.NoError(t, tracker.Start())
+	require.NoError(t, scanner.Start())
+	defer scanner.Stop()
+
+	tracker.Start()
 	defer tracker.Stop()
 
 	// Initial scan should find nothing (no mock processes yet)
@@ -108,12 +99,17 @@ func TestTracker_TrackedGames(t *testing.T) {
 	createMockProcess(t, procDir, 12346, "reaper",
 		"/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=200\x00--\x00game")
 
-	tracker := New(nil, nil,
-		WithProcPath(procDir),
-		WithPollInterval(50*time.Millisecond),
+	scanner := procscanner.New(
+		procscanner.WithProcPath(procDir),
+		procscanner.WithPollInterval(50*time.Millisecond),
 	)
 
-	require.NoError(t, tracker.Start())
+	tracker := New(scanner, nil, nil)
+
+	require.NoError(t, scanner.Start())
+	defer scanner.Stop()
+
+	tracker.Start()
 	defer tracker.Stop()
 
 	// Wait for initial scan to detect games
@@ -138,16 +134,23 @@ func TestTracker_DeduplicatesByAppID(t *testing.T) {
 
 	startCount := atomic.Int32{}
 
+	scanner := procscanner.New(
+		procscanner.WithProcPath(procDir),
+		procscanner.WithPollInterval(50*time.Millisecond),
+	)
+
 	tracker := New(
+		scanner,
 		func(_ int, _ int, _ string) {
 			startCount.Add(1)
 		},
 		nil,
-		WithProcPath(procDir),
-		WithPollInterval(50*time.Millisecond),
 	)
 
-	require.NoError(t, tracker.Start())
+	require.NoError(t, scanner.Start())
+	defer scanner.Stop()
+
+	tracker.Start()
 	defer tracker.Stop()
 
 	// Add same AppID with different PIDs (shouldn't happen in real life, but test dedup)
@@ -170,73 +173,22 @@ func TestTracker_DeduplicatesByAppID(t *testing.T) {
 	}, 150*time.Millisecond, 10*time.Millisecond, "should dedupe by AppID")
 }
 
-func TestTracker_StopCallback(t *testing.T) {
-	t.Parallel()
-
-	// This test is tricky because we can't easily simulate process exit
-	// with a mock /proc filesystem. We'll test that the callback plumbing works.
-
-	procDir := t.TempDir()
-
-	// Create mock reaper BEFORE starting tracker so initial scan finds it
-	pidDir := filepath.Join(procDir, "12345")
-	//nolint:gosec // G301: test directory permissions are fine
-	require.NoError(t, os.Mkdir(pidDir, 0o755))
-	//nolint:gosec // G306: test file permissions are fine
-	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "comm"), []byte("reaper\n"), 0o644))
-	//nolint:gosec // G306: test file permissions are fine
-	require.NoError(t, os.WriteFile(filepath.Join(pidDir, "cmdline"),
-		[]byte("/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game"), 0o644))
-
-	stopCalled := make(chan int, 1)
-
-	tracker := New(
-		nil,
-		func(appID int) {
-			stopCalled <- appID
-		},
-		WithProcPath(procDir),
-		WithPollInterval(500*time.Millisecond),
-	)
-
-	require.NoError(t, tracker.Start())
-	defer tracker.Stop()
-
-	// Wait for tracker to detect the game (polls until true or timeout)
-	require.Eventually(t, func() bool {
-		return len(tracker.TrackedGames()) == 1
-	}, time.Second, 10*time.Millisecond, "tracker should detect the game")
-
-	// "Kill" the process by removing its /proc entry before handleGameExit
-	require.NoError(t, os.RemoveAll(pidDir))
-
-	// Call handleGameExit directly to test the callback path
-	tracker.handleGameExit(12345, 100)
-
-	// Wait for callback (it's called in a goroutine)
-	select {
-	case appID := <-stopCalled:
-		assert.Equal(t, 100, appID)
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for stop callback")
-	}
-
-	// Should be removed from tracked (procDir entry deleted, no re-add)
-	games := tracker.TrackedGames()
-	assert.Empty(t, games)
-}
-
 func TestTracker_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 
 	procDir := t.TempDir()
 
-	tracker := New(nil, nil,
-		WithProcPath(procDir),
-		WithPollInterval(10*time.Millisecond),
+	scanner := procscanner.New(
+		procscanner.WithProcPath(procDir),
+		procscanner.WithPollInterval(10*time.Millisecond),
 	)
 
-	require.NoError(t, tracker.Start())
+	tracker := New(scanner, nil, nil)
+
+	require.NoError(t, scanner.Start())
+	defer scanner.Stop()
+
+	tracker.Start()
 	defer tracker.Stop()
 
 	// Pre-create mock processes (must be done in main goroutine due to require)
@@ -267,13 +219,18 @@ func TestTracker_NilCallbacks(t *testing.T) {
 
 	procDir := t.TempDir()
 
-	// Should not panic with nil callbacks
-	tracker := New(nil, nil,
-		WithProcPath(procDir),
-		WithPollInterval(50*time.Millisecond),
+	scanner := procscanner.New(
+		procscanner.WithProcPath(procDir),
+		procscanner.WithPollInterval(50*time.Millisecond),
 	)
 
-	require.NoError(t, tracker.Start())
+	// Should not panic with nil callbacks
+	tracker := New(scanner, nil, nil)
+
+	require.NoError(t, scanner.Start())
+	defer scanner.Stop()
+
+	tracker.Start()
 
 	// Add a reaper
 	createMockProcess(t, procDir, 12345, "reaper",
@@ -284,8 +241,61 @@ func TestTracker_NilCallbacks(t *testing.T) {
 		return len(tracker.TrackedGames()) == 1
 	}, time.Second, 10*time.Millisecond, "game should be tracked")
 
-	// Trigger exit callback path
-	tracker.handleGameExit(12345, 100)
-
 	tracker.Stop()
+}
+
+func TestSteamReaperMatcher(t *testing.T) {
+	t.Parallel()
+
+	matcher := &steamReaperMatcher{}
+
+	tests := []struct {
+		name    string
+		proc    procscanner.ProcessInfo
+		matches bool
+	}{
+		{
+			name: "valid reaper process",
+			proc: procscanner.ProcessInfo{
+				PID:     12345,
+				Comm:    "reaper",
+				Cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00AppId=100\x00--\x00game",
+			},
+			matches: true,
+		},
+		{
+			name: "non-reaper process",
+			proc: procscanner.ProcessInfo{
+				PID:     12345,
+				Comm:    "bash",
+				Cmdline: "/bin/bash",
+			},
+			matches: false,
+		},
+		{
+			name: "reaper without SteamLaunch",
+			proc: procscanner.ProcessInfo{
+				PID:     12345,
+				Comm:    "reaper",
+				Cmdline: "/some/other/reaper\x00--flag",
+			},
+			matches: false,
+		},
+		{
+			name: "reaper without AppId",
+			proc: procscanner.ProcessInfo{
+				PID:     12345,
+				Comm:    "reaper",
+				Cmdline: "/home/user/.steam/ubuntu12_32/reaper\x00SteamLaunch\x00--\x00game",
+			},
+			matches: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.matches, matcher.Match(tt.proc))
+		})
+	}
 }
