@@ -32,51 +32,43 @@ import (
 func TestResolveGamePath(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name         string
-		gamePath     string
-		romsBasePath string
-		systemFolder string
-		want         string
-	}{
-		{
-			name:         "relative with dot prefix",
-			gamePath:     "./game.rom",
-			romsBasePath: "/home/user/roms",
-			systemFolder: "nes",
-			want:         "/home/user/roms/nes/game.rom",
-		},
-		{
-			name:         "relative without prefix",
-			gamePath:     "game.rom",
-			romsBasePath: "/home/user/roms",
-			systemFolder: "nes",
-			want:         "/home/user/roms/nes/game.rom",
-		},
-		{
-			name:         "absolute path",
-			gamePath:     "/different/path/game.rom",
-			romsBasePath: "/home/user/roms",
-			systemFolder: "nes",
-			want:         "/different/path/game.rom",
-		},
-		{
-			name:         "nested relative path",
-			gamePath:     "./subdir/game.rom",
-			romsBasePath: "/home/user/roms",
-			systemFolder: "snes",
-			want:         "/home/user/roms/snes/subdir/game.rom",
-		},
-	}
+	// Use a temp directory to get a platform-appropriate base path
+	tmpDir := t.TempDir()
+	romsBase := filepath.Join(tmpDir, "roms")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("relative with dot prefix", func(t *testing.T) {
+		t.Parallel()
 
-			got := ResolveGamePath(tt.gamePath, tt.romsBasePath, tt.systemFolder)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+		got := ResolveGamePath("./game.rom", romsBase, "nes")
+		want := filepath.Join(romsBase, "nes", "game.rom")
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("relative without prefix", func(t *testing.T) {
+		t.Parallel()
+
+		got := ResolveGamePath("game.rom", romsBase, "nes")
+		want := filepath.Join(romsBase, "nes", "game.rom")
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("absolute path", func(t *testing.T) {
+		t.Parallel()
+
+		// Use the temp directory to create a platform-appropriate absolute path
+		absolutePath := filepath.Join(tmpDir, "different", "path", "game.rom")
+		got := ResolveGamePath(absolutePath, romsBase, "nes")
+		// Absolute paths should be returned cleaned but unchanged
+		assert.Equal(t, filepath.Clean(absolutePath), got)
+	})
+
+	t.Run("nested relative path", func(t *testing.T) {
+		t.Parallel()
+
+		got := ResolveGamePath("./subdir/game.rom", romsBase, "snes")
+		want := filepath.Join(romsBase, "snes", "subdir", "game.rom")
+		assert.Equal(t, want, got)
+	})
 }
 
 func TestReadGameList(t *testing.T) {
