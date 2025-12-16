@@ -25,12 +25,12 @@ package gamescope
 
 import (
 	"context"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/command"
 	"github.com/rs/zerolog/log"
 )
 
@@ -51,6 +51,10 @@ var (
 	cachedGamingModeOnce sync.Once
 	// gamescopeDisplay stores the display where gamescope was detected.
 	gamescopeDisplay string
+
+	// cmdExecutor is the command executor used by this package.
+	// It can be replaced for testing.
+	cmdExecutor command.Executor = &command.RealExecutor{}
 )
 
 // IsGamingMode returns true if running in a gamescope session (Steam Gaming Mode).
@@ -110,8 +114,7 @@ func hasGamescopeAtom(display string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "xprop", "-display", display, "-root", gamescopeAtom)
-	output, err := cmd.Output()
+	output, err := cmdExecutor.Output(ctx, "xprop", "-display", display, "-root", gamescopeAtom)
 	if err != nil {
 		// Expected to fail on non-gamescope displays
 		log.Debug().
@@ -138,4 +141,16 @@ func ResetCache() {
 	cachedGamingModeOnce = sync.Once{}
 	cachedGamingMode = false
 	gamescopeDisplay = ""
+}
+
+// SetExecutor sets the command executor used by this package.
+// This is intended for testing purposes only.
+func SetExecutor(exec command.Executor) {
+	cmdExecutor = exec
+}
+
+// ResetExecutor restores the default command executor.
+// This should be called after tests that use SetExecutor.
+func ResetExecutor() {
+	cmdExecutor = &command.RealExecutor{}
 }

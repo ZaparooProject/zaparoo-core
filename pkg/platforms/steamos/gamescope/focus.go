@@ -26,7 +26,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -180,15 +179,13 @@ func (fm *FocusManager) Revert() {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	//nolint:gosec // G204: display and originalLayer are validated internal values
-	cmd := exec.CommandContext(ctx,
+	err := cmdExecutor.Run(ctx,
 		"xprop", "-display", fm.display,
 		"-root",
 		"-format", baselayerAtom, "32co",
 		"-set", baselayerAtom, fm.originalLayer,
 	)
-
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		log.Warn().
 			Err(err).
 			Str("display", fm.display).
@@ -232,13 +229,18 @@ func findNonSteamWindow(display string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "xwininfo", "-display", display, "-root", "-tree")
-	output, err := cmd.Output()
+	output, err := cmdExecutor.Output(ctx, "xwininfo", "-display", display, "-root", "-tree")
 	if err != nil {
 		return "", fmt.Errorf("xwininfo failed: %w", err)
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	return parseWindowOutput(string(output))
+}
+
+// parseWindowOutput parses xwininfo output to find a non-Steam window.
+// Exported for testing.
+func parseWindowOutput(output string) (string, error) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -283,19 +285,24 @@ func getBaselayerValue(display string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "xprop", "-display", display, "-root", baselayerAtom)
-	output, err := cmd.Output()
+	output, err := cmdExecutor.Output(ctx, "xprop", "-display", display, "-root", baselayerAtom)
 	if err != nil {
 		return "", fmt.Errorf("failed to get baselayer: %w", err)
 	}
 
+	return ParseBaselayerOutput(string(output)), nil
+}
+
+// ParseBaselayerOutput extracts the value from xprop baselayer output.
+// Exported for testing.
+func ParseBaselayerOutput(output string) string {
 	// Parse output like: GAMESCOPECTRL_BASELAYER_APPID(CARDINAL) = 769, 0
-	parts := strings.SplitN(string(output), "=", 2)
+	parts := strings.SplitN(output, "=", 2)
 	if len(parts) < 2 {
-		return "", nil // Property not set
+		return "" // Property not set
 	}
 
-	return strings.TrimSpace(parts[1]), nil
+	return strings.TrimSpace(parts[1])
 }
 
 // setSteamGameProperty sets the STEAM_GAME property on a window.
@@ -303,14 +310,13 @@ func setSteamGameProperty(display, windowID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx,
+	err := cmdExecutor.Run(ctx,
 		"xprop", "-display", display,
 		"-id", windowID,
 		"-f", steamGameAtom, "32c",
 		"-set", steamGameAtom, "1",
 	)
-
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return fmt.Errorf("failed to set STEAM_GAME: %w", err)
 	}
 
@@ -326,21 +332,15 @@ func setBaselayerValue(display, appID, original string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), detectTimeout)
 	defer cancel()
 
-	// Prepend our app ID to give it priority
-	value := appID
-	if original != "" {
-		value = appID + ", " + original
-	}
+	value := BuildBaselayerValue(appID, original)
 
-	//nolint:gosec // G204: display and value are validated internal values
-	cmd := exec.CommandContext(ctx,
+	err := cmdExecutor.Run(ctx,
 		"xprop", "-display", display,
 		"-root",
 		"-format", baselayerAtom, "32co",
 		"-set", baselayerAtom, value,
 	)
-
-	if err := cmd.Run(); err != nil {
+	if err != nil {
 		return fmt.Errorf("failed to set baselayer: %w", err)
 	}
 
@@ -349,4 +349,14 @@ func setBaselayerValue(display, appID, original string) error {
 		Msg("set baselayer property")
 
 	return nil
+}
+
+// BuildBaselayerValue constructs the baselayer property value.
+// Prepends appID to give it priority over existing values.
+// Exported for testing.
+func BuildBaselayerValue(appID, original string) string {
+	if original != "" {
+		return appID + ", " + original
+	}
+	return appID
 }

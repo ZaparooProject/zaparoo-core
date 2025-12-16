@@ -25,7 +25,7 @@ import (
 )
 
 // NewMockCommandExecutor creates a MockCommandExecutor that succeeds by default.
-// All Run() and Start() calls will return nil (success) unless explicitly overridden with On().
+// All Run(), Output(), and Start() calls will return success unless explicitly overridden with On().
 //
 // This provides sensible defaults for tests where command execution details don't matter.
 // Override specific commands in tests that need to verify exact behavior:
@@ -35,10 +35,12 @@ import (
 //	cmd.ExpectedCalls = nil
 //	// Set specific expectations (note: args is []string not variadic in mock)
 //	cmd.On("Run", mock.Anything, "systemctl", []string{"--user", "daemon-reload"}).Return(nil)
+//	cmd.On("Output", mock.Anything, "xprop", mock.Anything).Return([]byte("output"), nil)
 func NewMockCommandExecutor() *mocks.MockCommandExecutor {
 	cmd := &mocks.MockCommandExecutor{}
 	// Match any command with any arguments - all succeed by default
 	cmd.On("Run", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
+	cmd.On("Output", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return([]byte{}, nil).Maybe()
 	cmd.On("Start", mock.Anything, mock.AnythingOfType("string"), mock.Anything).Return(nil).Maybe()
 	cmd.On(
 		"StartWithOptions", mock.Anything, mock.Anything, mock.AnythingOfType("string"), mock.Anything,
