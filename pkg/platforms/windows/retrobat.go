@@ -216,7 +216,10 @@ func getRetroBatLaunchers(cfg *config.Instance) []platforms.Launcher {
 		if entry.IsDir() {
 			systemFolder := entry.Name()
 			if info, exists := esde.LookupByFolderName(systemFolder); exists {
-				log.Info().Msgf("registering RetroBat launcher for system: %s (mapped to %s)", systemFolder, info.SystemID)
+				log.Info().
+					Str("folder", systemFolder).
+					Str("systemID", info.SystemID).
+					Msg("registering RetroBat launcher")
 				launcher := createRetroBatLauncher(systemFolder, info, retroBatDir)
 				launchers = append(launchers, launcher)
 			} else {
