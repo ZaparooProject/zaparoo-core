@@ -21,6 +21,7 @@ package zapscript
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"runtime"
 	"testing"
@@ -111,4 +112,73 @@ func TestAcceptedMimeTypes(t *testing.T) {
 
 	assert.Contains(t, AcceptedMimeTypes, MIMEZaparooZapScript)
 	assert.Equal(t, "application/vnd.zaparoo.zapscript", MIMEZaparooZapScript)
+}
+
+func TestIsOfflineError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err      error
+		name     string
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "generic error",
+			err:      errors.New("some random error"),
+			expected: false,
+		},
+		{
+			name:     "connection refused",
+			err:      errors.New("connection refused"),
+			expected: true,
+		},
+		{
+			name:     "no such host",
+			err:      errors.New("no such host"),
+			expected: true,
+		},
+		{
+			name:     "network is unreachable",
+			err:      errors.New("network is unreachable"),
+			expected: true,
+		},
+		{
+			name:     "host is down",
+			err:      errors.New("host is down"),
+			expected: true,
+		},
+		{
+			name:     "i/o timeout",
+			err:      errors.New("i/o timeout"),
+			expected: true,
+		},
+		{
+			name:     "tls handshake timeout",
+			err:      errors.New("tls handshake timeout"),
+			expected: true,
+		},
+		{
+			name:     "case insensitive - NO SUCH HOST",
+			err:      errors.New("NO SUCH HOST"),
+			expected: true,
+		},
+		{
+			name:     "wrapped connection refused",
+			err:      errors.New("dial tcp: connection refused"),
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isOfflineError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

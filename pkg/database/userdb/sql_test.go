@@ -897,6 +897,46 @@ func TestSqlGetSupportedZapLinkHosts_DatabaseError(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestSqlGetSupportedZapLinkHosts_ScanError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	// Return a row with wrong column type to trigger scan error
+	rows := sqlmock.NewRows([]string{"Host"}).
+		AddRow(nil) // NULL value will cause scan error for string
+
+	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
+		WillReturnRows(rows)
+
+	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to scan zap link host row")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetSupportedZapLinkHosts_RowsError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{"Host"}).
+		AddRow("https://example.com").
+		RowError(0, sqlmock.ErrCancelled)
+
+	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
+		WillReturnRows(rows)
+
+	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "error iterating zap link host rows")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // PruneExpiredZapLinkHosts Tests
 
 func TestSqlPruneExpiredZapLinkHosts_Success(t *testing.T) {
