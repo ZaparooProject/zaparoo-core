@@ -77,9 +77,11 @@ func runTokenZapScript(
 	for i := 0; i < len(cmds); i++ {
 		cmd := cmds[i]
 
-		// Run before_media_start hook; errors block the launch
+		// Run before_media_start hook; errors block the launch.
+		// Skip if already in hook context to prevent infinite recursion.
+		inHookContext := exprOpts != nil && exprOpts.InHookContext
 		beforeMediaStartScript := cfg.LaunchersBeforeMediaStart()
-		if beforeMediaStartScript != "" && zapscript.IsMediaLaunchingCommand(cmd.Name) {
+		if !inHookContext && beforeMediaStartScript != "" && zapscript.IsMediaLaunchingCommand(cmd.Name) {
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
 				Active: pls,
@@ -89,9 +91,9 @@ func runTokenZapScript(
 				ScanTime: time.Now(),
 				Text:     beforeMediaStartScript,
 			}
-			// Provide launching context: path from first arg, system/launcher from advanced args
 			launchingOpts := &zapscript.ExprEnvOptions{
-				Launching: &parser.ExprEnvLaunching{},
+				Launching:     &parser.ExprEnvLaunching{},
+				InHookContext: true,
 			}
 			if len(cmd.Args) > 0 {
 				launchingOpts.Launching.Path = cmd.Args[0]

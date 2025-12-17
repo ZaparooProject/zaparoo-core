@@ -57,5 +57,12 @@ func runHook(
 		Text:     script,
 	}
 
-	return runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, exprOpts)
+	// Ensure InHookContext is set to prevent recursive hook execution
+	hookOpts := &zapscript.ExprEnvOptions{InHookContext: true}
+	if exprOpts != nil {
+		hookOpts.Scanned = exprOpts.Scanned
+		hookOpts.Launching = exprOpts.Launching
+	}
+
+	return runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, hookOpts)
 }

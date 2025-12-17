@@ -197,8 +197,9 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 
 // ExprEnvOptions provides optional context for expression environment.
 type ExprEnvOptions struct {
-	Scanned   *parser.ExprEnvScanned
-	Launching *parser.ExprEnvLaunching
+	Scanned       *parser.ExprEnvScanned
+	Launching     *parser.ExprEnvLaunching
+	InHookContext bool // prevents recursive hook execution
 }
 
 func getExprEnv(

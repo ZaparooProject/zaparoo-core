@@ -264,7 +264,6 @@ func readerManager(
 ) {
 	scanQueue := make(chan readers.Scan)
 
-	var err error
 	var lastError time.Time
 
 	var prevToken *tokens.Token
@@ -364,7 +363,7 @@ preprocessing:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
 			if t.Error != nil {
-				log.Error().Msgf("error reading card: %s", err)
+				log.Error().Err(t.Error).Msg("error reading card")
 				playFail()
 				lastError = time.Now()
 				continue preprocessing
