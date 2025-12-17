@@ -27,10 +27,11 @@ import (
 const DefaultAPIPort = 7497
 
 type Service struct {
-	APIPort        *int     `toml:"api_port,omitempty"`
-	DeviceID       string   `toml:"device_id"`
-	APIListen      string   `toml:"api_listen,omitempty"`
-	AllowRun       []string `toml:"allow_run,omitempty,multiline"`
+	APIPort        *int      `toml:"api_port,omitempty"`
+	Discovery      Discovery `toml:"discovery,omitempty"`
+	DeviceID       string    `toml:"device_id"`
+	APIListen      string    `toml:"api_listen,omitempty"`
+	AllowRun       []string  `toml:"allow_run,omitempty,multiline"`
 	allowRunRe     []*regexp.Regexp
 	AllowedOrigins []string   `toml:"allowed_origins,omitempty"`
 	AllowedIPs     []string   `toml:"allowed_ips,omitempty"`
@@ -46,6 +47,11 @@ type MQTTPublisher struct {
 	Broker  string   `toml:"broker"`
 	Topic   string   `toml:"topic"`
 	Filter  []string `toml:"filter,omitempty,multiline"`
+}
+
+type Discovery struct {
+	Enabled      *bool  `toml:"enabled,omitempty"`
+	InstanceName string `toml:"instance_name,omitempty"`
 }
 
 func (c *Instance) APIPort() int {
@@ -99,4 +105,25 @@ func (c *Instance) AllowedIPs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.AllowedIPs
+}
+
+func (c *Instance) DeviceID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.DeviceID
+}
+
+func (c *Instance) DiscoveryEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.vals.Service.Discovery.Enabled == nil {
+		return true
+	}
+	return *c.vals.Service.Discovery.Enabled
+}
+
+func (c *Instance) DiscoveryInstanceName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.Service.Discovery.InstanceName
 }

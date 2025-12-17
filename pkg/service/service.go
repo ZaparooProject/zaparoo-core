@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
@@ -278,6 +279,12 @@ func Start(
 	publisherNotifications, _ := notifBroker.Subscribe(100)
 	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
+	log.Info().Msg("starting mDNS discovery service")
+	discoveryService := discovery.New(cfg, pl.ID())
+	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
+		log.Error().Err(discoveryErr).Msg("mDNS discovery failed to start (continuing without discovery)")
+	}
+
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")
 	historyTracker := &mediaHistoryTracker{
@@ -314,6 +321,7 @@ func Start(
 	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return func() error {
+		discoveryService.Stop()
 		cancelPublisherFanOut()
 		for _, publisher := range activePublishers {
 			publisher.Stop()
