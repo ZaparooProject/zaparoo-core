@@ -205,3 +205,95 @@ func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 func boolPtr(b bool) *bool {
 	return &b
 }
+
+func TestIsHoldModeIgnoredSystemFuzzyMatching(t *testing.T) {
+	t.Parallel()
+
+	// Create instance with system IDs using aliases in the ignore list
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					// Use aliases and different case variations
+					IgnoreSystem: []string{
+						"megadrive",     // Alias for Genesis (lowercase)
+						"N64",           // Alias for Nintendo64
+						"playstation",   // Alias for PSX
+						"SuperNintendo", // Alias for SNES
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		systemID string
+		expected bool
+	}{
+		{
+			name:     "canonical ID matches alias in config (Genesis via megadrive)",
+			systemID: "Genesis",
+			expected: true,
+		},
+		{
+			name:     "canonical ID matches alias in config (Nintendo64 via N64)",
+			systemID: "Nintendo64",
+			expected: true,
+		},
+		{
+			name:     "canonical ID matches alias in config (PSX via playstation)",
+			systemID: "PSX",
+			expected: true,
+		},
+		{
+			name:     "canonical ID matches alias in config (SNES via SuperNintendo)",
+			systemID: "SNES",
+			expected: true,
+		},
+		{
+			name:     "system not in ignore list returns false",
+			systemID: "NES",
+			expected: false,
+		},
+		{
+			name:     "unknown system ID returns false",
+			systemID: "UnknownSystem",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := cfg.IsHoldModeIgnoredSystem(tt.systemID)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsHoldModeIgnoredSystemWithInvalidConfig(t *testing.T) {
+	t.Parallel()
+
+	// Create instance with invalid system IDs in the ignore list
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Scan: ReadersScan{
+					IgnoreSystem: []string{
+						"InvalidSystemID",
+						"AnotherBadID",
+						"Genesis", // One valid entry
+					},
+				},
+			},
+		},
+	}
+
+	// Should still match Genesis despite invalid entries
+	assert.True(t, cfg.IsHoldModeIgnoredSystem("Genesis"))
+
+	// Invalid entries should not cause matches
+	assert.False(t, cfg.IsHoldModeIgnoredSystem("InvalidSystemID"))
+}

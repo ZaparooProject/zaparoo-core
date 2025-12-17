@@ -19,7 +19,11 @@
 
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
+)
 
 type Systems struct {
 	Default []SystemsDefault `toml:"default,omitempty"`
@@ -41,7 +45,11 @@ func (c *Instance) LookupSystemDefaults(systemID string) (SystemsDefault, bool) 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, defaultSystem := range c.vals.Systems.Default {
-		if strings.EqualFold(defaultSystem.System, systemID) {
+		configSystem, err := systemdefs.LookupSystem(defaultSystem.System)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(configSystem.ID, systemID) {
 			return defaultSystem, true
 		}
 	}
