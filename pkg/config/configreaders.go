@@ -21,8 +21,9 @@ package config
 
 import (
 	"fmt"
-	"slices"
 	"strings"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database/systemdefs"
 )
 
 type Readers struct {
@@ -72,11 +73,16 @@ func (c *Instance) ReadersScan() ReadersScan {
 func (c *Instance) IsHoldModeIgnoredSystem(systemID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	blocklist := make([]string, 0, len(c.vals.Readers.Scan.IgnoreSystem))
-	for _, v := range c.vals.Readers.Scan.IgnoreSystem {
-		blocklist = append(blocklist, strings.ToLower(v))
+	for _, ignoredSystem := range c.vals.Readers.Scan.IgnoreSystem {
+		configSystem, err := systemdefs.LookupSystem(ignoredSystem)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(configSystem.ID, systemID) {
+			return true
+		}
 	}
-	return slices.Contains(blocklist, strings.ToLower(systemID))
+	return false
 }
 
 func (c *Instance) TapModeEnabled() bool {

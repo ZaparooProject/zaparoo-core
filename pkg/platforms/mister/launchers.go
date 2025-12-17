@@ -939,7 +939,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "80MHzNintendo64",
 			SystemID: systemdefs.SystemNintendo64,
-			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_Console/N64_80MHz"),
+			Launch:   launchAltCore(systemdefs.SystemNintendo64, "_Other/N64_80MHz"),
 		},
 		{
 			ID:       "PWMNintendo64",
@@ -992,7 +992,7 @@ func CreateLaunchers(pl platforms.Platform) []platforms.Launcher {
 		{
 			ID:       "2XPSX",
 			SystemID: systemdefs.SystemPSX,
-			Launch:   launchAltCore(systemdefs.SystemPSX, "_Console/PSX2XCPU"),
+			Launch:   launchAltCore(systemdefs.SystemPSX, "_Other/PSX2XCPU"),
 		},
 		{
 			ID:       "PWMPSX",
