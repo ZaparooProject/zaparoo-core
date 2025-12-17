@@ -35,7 +35,6 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
-	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
@@ -78,10 +77,8 @@ func runTokenZapScript(
 		cmd := cmds[i]
 
 		// Run before_media_start hook; errors block the launch.
-		// Skip if already in hook context to prevent infinite recursion.
-		inHookContext := exprOpts != nil && exprOpts.InHookContext
 		beforeMediaStartScript := cfg.LaunchersBeforeMediaStart()
-		if !inHookContext && beforeMediaStartScript != "" && zapscript.IsMediaLaunchingCommand(cmd.Name) {
+		if shouldRunBeforeMediaStartHook(exprOpts, beforeMediaStartScript, cmd.Name) {
 			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
 			hookPlsc := playlists.PlaylistController{
 				Active: pls,
@@ -91,19 +88,7 @@ func runTokenZapScript(
 				ScanTime: time.Now(),
 				Text:     beforeMediaStartScript,
 			}
-			launchingOpts := &zapscript.ExprEnvOptions{
-				Launching:     &parser.ExprEnvLaunching{},
-				InHookContext: true,
-			}
-			if len(cmd.Args) > 0 {
-				launchingOpts.Launching.Path = cmd.Args[0]
-			}
-			if sysID := cmd.AdvArgs.Get(advargtypes.KeySystem); sysID != "" {
-				launchingOpts.Launching.SystemID = sysID
-			}
-			if launcherID := cmd.AdvArgs.Get(advargtypes.KeyLauncher); launcherID != "" {
-				launchingOpts.Launching.LauncherID = launcherID
-			}
+			launchingOpts := buildLaunchingExprOpts(cmd)
 			hookErr := runTokenZapScript(platform, cfg, st, hookToken, db, lsq, hookPlsc, launchingOpts)
 			if hookErr != nil {
 				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
@@ -147,11 +132,7 @@ func runTokenZapScript(
 		// remote query) inject them to be run immediately after this command
 		if len(result.NewCommands) > 0 {
 			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
-			before := cmds[:i+1]
-			after := cmds[i+1:]
-			before = append(before, result.NewCommands...)
-			cmds = before
-			cmds = append(cmds, after...)
+			cmds = injectCommands(cmds, i, result.NewCommands)
 		}
 	}
 
@@ -241,8 +222,7 @@ func handlePlaylist(
 		return
 	default:
 		// active playlist updated
-		if pls.Current() == activePlaylist.Current() &&
-			pls.Playing == activePlaylist.Playing {
+		if !playlistNeedsUpdate(pls, activePlaylist) {
 			log.Debug().Msg("playlist current token unchanged, skipping")
 			return
 		}
@@ -328,15 +308,7 @@ func processTokenQueue(
 			}
 
 			// Check if any command in the script launches media
-			hasMediaLaunchCmd := false
-			if parseErr == nil {
-				for _, cmd := range script.Cmds {
-					if zapscript.IsMediaLaunchingCommand(cmd.Name) {
-						hasMediaLaunchCmd = true
-						break
-					}
-				}
-			}
+			hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
 
 			// Only check playtime limits if the script contains media-launching commands
 			if hasMediaLaunchCmd {
