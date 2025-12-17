@@ -367,6 +367,60 @@ topic = "zaparoo/events"
 	assert.Empty(t, publishers, "should not include publishers that fail to start")
 }
 
+func TestPruneExpiredZapLinkHosts_Success(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	mockUserDB.On("PruneExpiredZapLinkHosts", zapLinkHostExpiration).Return(int64(5), nil)
+
+	pruneExpiredZapLinkHosts(db)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestPruneExpiredZapLinkHosts_NoRowsDeleted(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	mockUserDB.On("PruneExpiredZapLinkHosts", zapLinkHostExpiration).Return(int64(0), nil)
+
+	pruneExpiredZapLinkHosts(db)
+
+	mockUserDB.AssertExpectations(t)
+}
+
+func TestPruneExpiredZapLinkHosts_DatabaseError(t *testing.T) {
+	t.Parallel()
+
+	mockUserDB := &testhelpers.MockUserDBI{}
+	mockMediaDB := &testhelpers.MockMediaDBI{}
+
+	db := &database.Database{
+		UserDB:  mockUserDB,
+		MediaDB: mockMediaDB,
+	}
+
+	mockUserDB.On("PruneExpiredZapLinkHosts", zapLinkHostExpiration).Return(int64(0), assert.AnError)
+
+	pruneExpiredZapLinkHosts(db)
+
+	mockUserDB.AssertExpectations(t)
+}
+
 // TestCheckAndResumeIndexing_WaitGroupRace is a regression test for a race condition
 // where WaitGroup.Add() was called after WaitGroup.Wait() had already returned.
 // The bug occurred when optimization was started as a separate goroutine with its own
