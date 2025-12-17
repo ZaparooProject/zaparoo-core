@@ -221,23 +221,10 @@ func Start(
 
 	// Set up the OnMediaStart hook
 	st.SetOnMediaStartHook(func(_ *models.ActiveMedia) {
-		onMediaStartScript := cfg.LaunchersOnMediaStart()
-		if onMediaStartScript == "" {
-			return
-		}
-
-		log.Info().Msgf("running on_media_start script: %s", onMediaStartScript)
-		plsc := playlists.PlaylistController{
-			Active: st.GetActivePlaylist(),
-			Queue:  plq,
-		}
-		t := tokens.Token{
-			ScanTime: time.Now(),
-			Text:     onMediaStartScript,
-		}
-
-		if scriptErr := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc); scriptErr != nil {
-			log.Error().Err(scriptErr).Msg("Error running on_media_start script")
+		if script := cfg.LaunchersOnMediaStart(); script != "" {
+			if hookErr := runHook(pl, cfg, st, db, lsq, plq, "on_media_start", script, nil); hookErr != nil {
+				log.Error().Err(hookErr).Msg("error running on_media_start script")
+			}
 		}
 	})
 

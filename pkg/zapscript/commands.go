@@ -195,10 +195,18 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 	return path, fmt.Errorf("file not found: %s", path)
 }
 
+// ExprEnvOptions provides optional context for expression environment.
+type ExprEnvOptions struct {
+	Scanned       *parser.ExprEnvScanned
+	Launching     *parser.ExprEnvLaunching
+	InHookContext bool // prevents recursive hook execution
+}
+
 func getExprEnv(
 	pl platforms.Platform,
 	cfg *config.Instance,
 	st *state.State,
+	opts *ExprEnvOptions,
 ) parser.ArgExprEnv {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -234,6 +242,15 @@ func getExprEnv(
 		env.ActiveMedia.Name = activeMedia.Name
 	}
 
+	if opts != nil {
+		if opts.Scanned != nil {
+			env.Scanned = *opts.Scanned
+		}
+		if opts.Launching != nil {
+			env.Launching = *opts.Launching
+		}
+	}
+
 	return env
 }
 
@@ -248,6 +265,7 @@ func RunCommand(
 	currentIndex int,
 	db *database.Database,
 	st *state.State,
+	exprOpts *ExprEnvOptions,
 ) (platforms.CmdResult, error) {
 	unsafe := token.Unsafe
 	newCmds := make([]parser.Command, 0)
@@ -274,7 +292,7 @@ func RunCommand(
 		unsafe = true
 	}
 
-	exprEnv := getExprEnv(pl, cfg, st)
+	exprEnv := getExprEnv(pl, cfg, st, exprOpts)
 
 	for i, arg := range cmd.Args {
 		reader := parser.NewParser(arg)
@@ -316,6 +334,7 @@ func RunCommand(
 		CurrentIndex:  currentIndex,
 		Unsafe:        unsafe,
 		Database:      db,
+		ExprEnv:       &exprEnv,
 	}
 
 	cmdFunc, ok := cmdMap[cmd.Name]

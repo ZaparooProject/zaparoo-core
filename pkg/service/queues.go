@@ -49,6 +49,7 @@ func runTokenZapScript(
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,
+	exprOpts *zapscript.ExprEnvOptions,
 ) error {
 	if !st.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
@@ -75,6 +76,25 @@ func runTokenZapScript(
 	for i := 0; i < len(cmds); i++ {
 		cmd := cmds[i]
 
+		// Run before_media_start hook; errors block the launch.
+		beforeMediaStartScript := cfg.LaunchersBeforeMediaStart()
+		if shouldRunBeforeMediaStartHook(exprOpts, beforeMediaStartScript, cmd.Name) {
+			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
+			hookPlsc := playlists.PlaylistController{
+				Active: pls,
+				Queue:  plsc.Queue,
+			}
+			hookToken := tokens.Token{
+				ScanTime: time.Now(),
+				Text:     beforeMediaStartScript,
+			}
+			launchingOpts := buildLaunchingExprOpts(cmd)
+			hookErr := runTokenZapScript(platform, cfg, st, hookToken, db, lsq, hookPlsc, launchingOpts)
+			if hookErr != nil {
+				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
+			}
+		}
+
 		result, err := zapscript.RunCommand(
 			platform, cfg,
 			playlists.PlaylistController{
@@ -87,6 +107,7 @@ func runTokenZapScript(
 			i,
 			db,
 			st,
+			exprOpts,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to run zapscript command: %w", err)
@@ -111,11 +132,7 @@ func runTokenZapScript(
 		// remote query) inject them to be run immediately after this command
 		if len(result.NewCommands) > 0 {
 			log.Info().Msgf("injecting %d new commands: %v", len(result.NewCommands), result.NewCommands)
-			before := cmds[:i+1]
-			after := cmds[i+1:]
-			before = append(before, result.NewCommands...)
-			cmds = before
-			cmds = append(cmds, after...)
+			cmds = injectCommands(cmds, i, result.NewCommands)
 		}
 	}
 
@@ -142,7 +159,7 @@ func launchPlaylistMedia(
 		Queue:  plq,
 	}
 
-	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
+	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
 	}
@@ -205,8 +222,7 @@ func handlePlaylist(
 		return
 	default:
 		// active playlist updated
-		if pls.Current() == activePlaylist.Current() &&
-			pls.Playing == activePlaylist.Playing {
+		if !playlistNeedsUpdate(pls, activePlaylist) {
 			log.Debug().Msg("playlist current token unchanged, skipping")
 			return
 		}
@@ -292,15 +308,7 @@ func processTokenQueue(
 			}
 
 			// Check if any command in the script launches media
-			hasMediaLaunchCmd := false
-			if parseErr == nil {
-				for _, cmd := range script.Cmds {
-					if zapscript.IsMediaLaunchingCommand(cmd.Name) {
-						hasMediaLaunchCmd = true
-						break
-					}
-				}
-			}
+			hasMediaLaunchCmd := parseErr == nil && scriptHasMediaLaunchingCommand(&script)
 
 			// Only check playtime limits if the script contains media-launching commands
 			if hasMediaLaunchCmd {
@@ -336,7 +344,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
+				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}

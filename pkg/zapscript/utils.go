@@ -20,9 +20,12 @@
 package zapscript
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -31,6 +34,9 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/rs/zerolog/log"
 )
+
+// ExecuteTimeout is the maximum duration for execute commands.
+const ExecuteTimeout = 2 * time.Second
 
 //nolint:gocritic // single-use parameter in command handler
 func cmdEcho(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult, error) {
@@ -109,18 +115,43 @@ func cmdExecute(_ platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		return platforms.CmdResult{}, errors.New("execute command is empty")
 	}
 
-	cmd := tokenArgs[0]
+	cmdPath := tokenArgs[0]
 	var cmdArgs []string
 
 	if len(tokenArgs) > 1 {
 		cmdArgs = tokenArgs[1:]
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ExecuteTimeout)
 	defer cancel()
+
 	//nolint:gosec // Safe: cmd validated through IsExecuteAllowed allowlist, args properly separated
-	if err := exec.CommandContext(ctx, cmd, cmdArgs...).Run(); err != nil {
-		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", cmd, err)
+	execCmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
+
+	var stderr bytes.Buffer
+	execCmd.Stderr = &stderr
+
+	if env.ExprEnv != nil {
+		envJSON, err := json.Marshal(env.ExprEnv)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to marshal expression env to JSON")
+		} else {
+			execCmd.Env = append(os.Environ(), "ZAPAROO_ENVIRONMENT="+string(envJSON))
+		}
+	}
+
+	if err := execCmd.Run(); err != nil {
+		stderrStr := strings.TrimSpace(stderr.String())
+		if stderrStr != "" {
+			log.Debug().Str("stderr", stderrStr).Msg("execute command stderr")
+			return platforms.CmdResult{},
+				fmt.Errorf("failed to execute command '%s': %w (stderr: %s)", cmdPath, err, stderrStr)
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return platforms.CmdResult{},
+				fmt.Errorf("execute command '%s' timed out after %v", cmdPath, ExecuteTimeout)
+		}
+		return platforms.CmdResult{}, fmt.Errorf("failed to execute command '%s': %w", cmdPath, err)
 	}
 	return platforms.CmdResult{}, nil
 }

@@ -512,6 +512,20 @@ func ClearAuthCfgForTesting() {
 	authCfg.Store(Auth{})
 }
 
+// SetExecuteAllowListForTesting configures the execute allow list for tests.
+func (c *Instance) SetExecuteAllowListForTesting(allowList []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ZapScript.AllowExecute = allowList
+	c.vals.ZapScript.allowExecuteRe = make([]*regexp.Regexp, len(allowList))
+	for i, pattern := range allowList {
+		re, err := regexp.Compile(pattern)
+		if err == nil {
+			c.vals.ZapScript.allowExecuteRe[i] = re
+		}
+	}
+}
+
 // VirtualGamepadEnabled returns whether virtual gamepad emulation is enabled.
 // The defaultEnabled parameter allows platforms to specify their own default.
 func (c *Instance) VirtualGamepadEnabled(defaultEnabled bool) bool {

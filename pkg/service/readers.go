@@ -35,6 +35,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -170,18 +172,8 @@ func runBeforeExitHook(
 				continue
 			}
 
-			log.Info().Msgf("running before_exit script: %s", defaults.BeforeExit)
-			plsc := playlists.PlaylistController{
-				Active: st.GetActivePlaylist(),
-				Queue:  plq,
-			}
-			t := tokens.Token{
-				ScanTime: time.Now(),
-				Text:     defaults.BeforeExit,
-			}
-			err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
-			if err != nil {
-				log.Error().Msgf("error running before_exit script: %s", err)
+			if err := runHook(pl, cfg, st, db, lsq, plq, "before_exit", defaults.BeforeExit, nil); err != nil {
+				log.Error().Err(err).Msg("error running before_exit script")
 			}
 
 			break
@@ -272,7 +264,6 @@ func readerManager(
 ) {
 	scanQueue := make(chan readers.Scan)
 
-	var err error
 	var lastError time.Time
 
 	var prevToken *tokens.Token
@@ -372,7 +363,7 @@ preprocessing:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
 			if t.Error != nil {
-				log.Error().Msgf("error reading card: %s", err)
+				log.Error().Err(t.Error).Msg("error reading card")
 				playFail()
 				lastError = time.Now()
 				continue preprocessing
@@ -400,24 +391,23 @@ preprocessing:
 
 		if scan != nil {
 			log.Info().Msgf("new token scanned: %v", scan)
-			st.SetActiveCard(*scan)
 
-			onScanScript := cfg.ReadersScan().OnScan
-			if onScanScript != "" {
-				log.Info().Msgf("running on_scan script: %s", onScanScript)
-				plsc := playlists.PlaylistController{
-					Active: st.GetActivePlaylist(),
-					Queue:  plq,
+			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
+			if onScanScript := cfg.ReadersScan().OnScan; onScanScript != "" {
+				scannedOpts := &zapscript.ExprEnvOptions{
+					Scanned: &parser.ExprEnvScanned{
+						ID:    scan.UID,
+						Value: scan.Text,
+						Data:  scan.Data,
+					},
 				}
-				t := tokens.Token{
-					ScanTime: time.Now(),
-					Text:     onScanScript,
-				}
-				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
-				if err != nil {
-					log.Error().Msgf("error running on_scan script: %s", err)
+				if err := runHook(pl, cfg, st, db, lsq, plq, "on_scan", onScanScript, scannedOpts); err != nil {
+					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
+					continue preprocessing
 				}
 			}
+
+			st.SetActiveCard(*scan)
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
@@ -454,24 +444,17 @@ preprocessing:
 				continue preprocessing
 			}
 
-			onRemoveScript := cfg.ReadersScan().OnRemove
-			if cfg.HoldModeEnabled() && onRemoveScript != "" {
-				log.Info().Msgf("running on_remove script: %s", onRemoveScript)
-				plsc := playlists.PlaylistController{
-					Active: st.GetActivePlaylist(),
-					Queue:  plq,
-				}
-				t := tokens.Token{
-					ScanTime: time.Now(),
-					Text:     onRemoveScript,
-				}
-				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
-				if err != nil {
-					log.Error().Msgf("error running on_remove script: %s", err)
+			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
+			st.SetActiveCard(tokens.Token{})
+
+			// Run on_remove hook; errors skip exit timer but card state is already cleared
+			if onRemoveScript := cfg.ReadersScan().OnRemove; cfg.HoldModeEnabled() && onRemoveScript != "" {
+				if err := runHook(pl, cfg, st, db, lsq, plq, "on_remove", onRemoveScript, nil); err != nil {
+					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
+					continue preprocessing
 				}
 			}
 
-			st.SetActiveCard(tokens.Token{})
 			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 		}
 	}

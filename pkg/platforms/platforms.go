@@ -99,6 +99,7 @@ type CmdEnv struct {
 	Playlist      playlists.PlaylistController
 	Cfg           *config.Instance
 	Database      *database.Database
+	ExprEnv       *parser.ArgExprEnv
 	Cmd           parser.Command
 	TotalCommands int
 	CurrentIndex  int
