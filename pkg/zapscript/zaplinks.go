@@ -70,6 +70,11 @@ type WellKnown struct {
 	ZapScript int `json:"zapscript"`
 }
 
+// httpDoer is an interface for making HTTP requests for testing.
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 var zapFetchTransport = &http.Transport{
 	DialContext: (&net.Dialer{
 		Timeout:   1 * time.Second,
@@ -323,8 +328,8 @@ func checkZapLink(
 // PreWarmZapLinkHosts pre-warms the DNS and TLS cache for known zaplink hosts.
 // This is called during startup to reduce latency on first zaplink access.
 // It makes HEAD requests to /.well-known/zaparoo for each supported base URL.
-func PreWarmZapLinkHosts(db *database.Database, platform string) {
-	if !helpers.WaitForInternet(3) {
+func PreWarmZapLinkHosts(db *database.Database, platform string, checkInternet func(int) bool) {
+	if !checkInternet(3) {
 		log.Debug().Msg("no internet connectivity, skipping zaplink pre-warming")
 		return
 	}
@@ -352,7 +357,7 @@ func PreWarmZapLinkHosts(db *database.Database, platform string) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			preWarmHost(u, db, platform)
+			preWarmHost(u, db, platform, zapFetchClient)
 		}(baseURL)
 	}
 
@@ -361,7 +366,7 @@ func PreWarmZapLinkHosts(db *database.Database, platform string) {
 }
 
 // preWarmHost makes a HEAD request to a base URL's well-known endpoint to warm caches.
-func preWarmHost(baseURL string, db *database.Database, platform string) {
+func preWarmHost(baseURL string, db *database.Database, platform string, client httpDoer) {
 	wellKnownURL := baseURL + WellKnownPath
 
 	ctx, cancel := context.WithTimeout(context.Background(), preWarmTimeout)
@@ -374,7 +379,7 @@ func preWarmHost(baseURL string, db *database.Database, platform string) {
 	}
 	setZapLinkHeaders(req, platform)
 
-	resp, err := zapFetchClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Debug().Err(err).Msgf("pre-warm request failed for %s", baseURL)
 		return

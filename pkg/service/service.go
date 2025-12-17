@@ -230,7 +230,7 @@ func Start(
 	cleanupHistoryOnStartup(cfg, db)
 
 	pruneExpiredZapLinkHosts(db)
-	go zapscript.PreWarmZapLinkHosts(db, pl.ID())
+	go zapscript.PreWarmZapLinkHosts(db, pl.ID(), helpers.WaitForInternet)
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")
