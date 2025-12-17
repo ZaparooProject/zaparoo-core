@@ -22,6 +22,7 @@ package zapscript
 import (
 	"testing"
 
+	apimodels "github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
@@ -423,4 +424,51 @@ func TestGetExprEnv_BothContexts(t *testing.T) {
 	assert.Equal(t, "/path/to/game", env.Launching.Path)
 	assert.Equal(t, "snes", env.Launching.SystemID)
 	assert.Equal(t, "mister", env.Launching.LauncherID)
+}
+
+// TestGetExprEnv_ActiveMedia verifies ActiveMedia fields are populated when media is playing.
+func TestGetExprEnv_ActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	// Set active media on state
+	st.SetActiveMedia(&apimodels.ActiveMedia{
+		LauncherID: "retroarch",
+		SystemID:   "snes",
+		SystemName: "Super Nintendo",
+		Path:       "/games/snes/mario.sfc",
+		Name:       "Super Mario World",
+	})
+
+	env := getExprEnv(mockPlatform, cfg, st, nil)
+
+	assert.True(t, env.MediaPlaying, "MediaPlaying should be true when media is active")
+	assert.Equal(t, "retroarch", env.ActiveMedia.LauncherID)
+	assert.Equal(t, "snes", env.ActiveMedia.SystemID)
+	assert.Equal(t, "Super Nintendo", env.ActiveMedia.SystemName)
+	assert.Equal(t, "/games/snes/mario.sfc", env.ActiveMedia.Path)
+	assert.Equal(t, "Super Mario World", env.ActiveMedia.Name)
+}
+
+// TestGetExprEnv_NoActiveMedia verifies MediaPlaying is false when no media is active.
+func TestGetExprEnv_NoActiveMedia(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := getExprEnv(mockPlatform, cfg, st, nil)
+
+	assert.False(t, env.MediaPlaying, "MediaPlaying should be false when no media is active")
+	assert.Empty(t, env.ActiveMedia.LauncherID)
+	assert.Empty(t, env.ActiveMedia.SystemID)
+	assert.Empty(t, env.ActiveMedia.Path)
 }
