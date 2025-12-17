@@ -35,6 +35,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	advargtypes "github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/advargs/types"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/google/uuid"
 	"github.com/mackerelio/go-osstat/uptime"
@@ -49,6 +50,7 @@ func runTokenZapScript(
 	db *database.Database,
 	lsq chan<- *tokens.Token,
 	plsc playlists.PlaylistController,
+	exprOpts *zapscript.ExprEnvOptions,
 ) error {
 	if !st.RunZapScriptEnabled() {
 		log.Warn().Msg("ignoring ZapScript, run ZapScript is disabled")
@@ -75,6 +77,37 @@ func runTokenZapScript(
 	for i := 0; i < len(cmds); i++ {
 		cmd := cmds[i]
 
+		// Run before_media_start hook; errors block the launch
+		beforeMediaStartScript := cfg.LaunchersBeforeMediaStart()
+		if beforeMediaStartScript != "" && zapscript.IsMediaLaunchingCommand(cmd.Name) {
+			log.Info().Msgf("running before_media_start hook: %s", beforeMediaStartScript)
+			hookPlsc := playlists.PlaylistController{
+				Active: pls,
+				Queue:  plsc.Queue,
+			}
+			hookToken := tokens.Token{
+				ScanTime: time.Now(),
+				Text:     beforeMediaStartScript,
+			}
+			// Provide launching context: path from first arg, system/launcher from advanced args
+			launchingOpts := &zapscript.ExprEnvOptions{
+				Launching: &parser.ExprEnvLaunching{},
+			}
+			if len(cmd.Args) > 0 {
+				launchingOpts.Launching.Path = cmd.Args[0]
+			}
+			if sysID := cmd.AdvArgs.Get(advargtypes.KeySystem); sysID != "" {
+				launchingOpts.Launching.SystemID = sysID
+			}
+			if launcherID := cmd.AdvArgs.Get(advargtypes.KeyLauncher); launcherID != "" {
+				launchingOpts.Launching.LauncherID = launcherID
+			}
+			hookErr := runTokenZapScript(platform, cfg, st, hookToken, db, lsq, hookPlsc, launchingOpts)
+			if hookErr != nil {
+				return fmt.Errorf("before_media_start hook blocked launch: %w", hookErr)
+			}
+		}
+
 		result, err := zapscript.RunCommand(
 			platform, cfg,
 			playlists.PlaylistController{
@@ -87,6 +120,7 @@ func runTokenZapScript(
 			i,
 			db,
 			st,
+			exprOpts,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to run zapscript command: %w", err)
@@ -142,7 +176,7 @@ func launchPlaylistMedia(
 		Queue:  plq,
 	}
 
-	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
+	err := runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 	if err != nil {
 		log.Error().Err(err).Msgf("error launching token")
 	}
@@ -336,7 +370,7 @@ func processTokenQueue(
 					Queue:  plq,
 				}
 
-				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc)
+				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 				if err != nil {
 					log.Error().Err(err).Msgf("error launching token")
 				}

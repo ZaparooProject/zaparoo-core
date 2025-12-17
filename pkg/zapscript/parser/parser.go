@@ -999,33 +999,53 @@ func (sr *ScriptReader) ParseScript() (Script, error) {
 }
 
 type ExprEnvDevice struct {
-	Hostname string `expr:"hostname"`
-	OS       string `expr:"os"`
-	Arch     string `expr:"arch"`
+	Hostname string `expr:"hostname" json:"hostname"`
+	OS       string `expr:"os" json:"os"`
+	Arch     string `expr:"arch" json:"arch"`
 }
 
 type ExprEnvLastScanned struct {
-	ID    string `expr:"id"`
-	Value string `expr:"value"`
-	Data  string `expr:"data"`
+	ID    string `expr:"id" json:"id"`
+	Value string `expr:"value" json:"value"`
+	Data  string `expr:"data" json:"data"`
 }
 
+//nolint:tagliatelle // JSON uses snake_case to match expression env naming
 type ExprEnvActiveMedia struct {
-	LauncherID string `expr:"launcher_id"`
-	SystemID   string `expr:"system_id"`
-	SystemName string `expr:"system_name"`
-	Path       string `expr:"path"`
-	Name       string `expr:"name"`
+	LauncherID string `expr:"launcher_id" json:"launcher_id"`
+	SystemID   string `expr:"system_id" json:"system_id"`
+	SystemName string `expr:"system_name" json:"system_name"`
+	Path       string `expr:"path" json:"path"`
+	Name       string `expr:"name" json:"name"`
 }
 
+// ExprEnvScanned represents the token currently being processed.
+type ExprEnvScanned struct {
+	ID    string `expr:"id" json:"id"`
+	Value string `expr:"value" json:"value"`
+	Data  string `expr:"data" json:"data"`
+}
+
+// ExprEnvLaunching represents the media about to launch.
+//
+//nolint:tagliatelle // JSON uses snake_case to match expression env naming
+type ExprEnvLaunching struct {
+	Path       string `expr:"path" json:"path"`
+	SystemID   string `expr:"system_id" json:"system_id"`
+	LauncherID string `expr:"launcher_id" json:"launcher_id"`
+}
+
+//nolint:tagliatelle // JSON uses snake_case to match expression env naming
 type ArgExprEnv struct {
-	ActiveMedia  ExprEnvActiveMedia `expr:"active_media"`
-	Device       ExprEnvDevice      `expr:"device"`
-	LastScanned  ExprEnvLastScanned `expr:"last_scanned"`
-	Platform     string             `expr:"platform"`
-	Version      string             `expr:"version"`
-	ScanMode     string             `expr:"scan_mode"`
-	MediaPlaying bool               `expr:"media_playing"`
+	ActiveMedia  ExprEnvActiveMedia `expr:"active_media" json:"active_media"`
+	Device       ExprEnvDevice      `expr:"device" json:"device"`
+	LastScanned  ExprEnvLastScanned `expr:"last_scanned" json:"last_scanned"`
+	Scanned      ExprEnvScanned     `expr:"scanned" json:"scanned,omitempty"`
+	Launching    ExprEnvLaunching   `expr:"launching" json:"launching,omitempty"`
+	Platform     string             `expr:"platform" json:"platform"`
+	Version      string             `expr:"version" json:"version"`
+	ScanMode     string             `expr:"scan_mode" json:"scan_mode"`
+	MediaPlaying bool               `expr:"media_playing" json:"media_playing"`
 }
 
 type CustomLauncherExprEnv struct {

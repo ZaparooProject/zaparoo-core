@@ -22,7 +22,11 @@ package zapscript
 import (
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/mocks"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/models"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -313,4 +317,110 @@ func TestIsMediaLaunchingCommand_ComprehensiveCoverage(t *testing.T) {
 		assert.False(t, IsMediaLaunchingCommand(cmd),
 			"Command %q should NOT be blocked by playtime limits", cmd)
 	}
+}
+
+// TestGetExprEnv_ScannedContext verifies that Scanned fields are populated from ExprEnvOptions.
+func TestGetExprEnv_ScannedContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	opts := &ExprEnvOptions{
+		Scanned: &parser.ExprEnvScanned{
+			ID:    "scanned-token-id",
+			Value: "**launch:/games/sonic.bin",
+			Data:  "NDEF-record-data",
+		},
+	}
+
+	env := getExprEnv(mockPlatform, cfg, st, opts)
+
+	assert.Equal(t, "scanned-token-id", env.Scanned.ID, "Scanned.ID should be populated")
+	assert.Equal(t, "**launch:/games/sonic.bin", env.Scanned.Value, "Scanned.Value should be populated")
+	assert.Equal(t, "NDEF-record-data", env.Scanned.Data, "Scanned.Data should be populated")
+}
+
+// TestGetExprEnv_LaunchingContext verifies that Launching fields are populated from ExprEnvOptions.
+func TestGetExprEnv_LaunchingContext(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	opts := &ExprEnvOptions{
+		Launching: &parser.ExprEnvLaunching{
+			Path:       "/games/genesis/sonic.bin",
+			SystemID:   "genesis",
+			LauncherID: "retroarch",
+		},
+	}
+
+	env := getExprEnv(mockPlatform, cfg, st, opts)
+
+	assert.Equal(t, "/games/genesis/sonic.bin", env.Launching.Path, "Launching.Path should be populated")
+	assert.Equal(t, "genesis", env.Launching.SystemID, "Launching.SystemID should be populated")
+	assert.Equal(t, "retroarch", env.Launching.LauncherID, "Launching.LauncherID should be populated")
+}
+
+// TestGetExprEnv_NilOpts verifies that nil ExprEnvOptions leaves Scanned/Launching empty.
+func TestGetExprEnv_NilOpts(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	env := getExprEnv(mockPlatform, cfg, st, nil)
+
+	assert.Empty(t, env.Scanned.ID, "Scanned.ID should be empty with nil opts")
+	assert.Empty(t, env.Scanned.Value, "Scanned.Value should be empty with nil opts")
+	assert.Empty(t, env.Scanned.Data, "Scanned.Data should be empty with nil opts")
+	assert.Empty(t, env.Launching.Path, "Launching.Path should be empty with nil opts")
+	assert.Empty(t, env.Launching.SystemID, "Launching.SystemID should be empty with nil opts")
+	assert.Empty(t, env.Launching.LauncherID, "Launching.LauncherID should be empty with nil opts")
+}
+
+// TestGetExprEnv_BothContexts verifies both Scanned and Launching can be set simultaneously.
+func TestGetExprEnv_BothContexts(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	mockPlatform.On("ID").Return("test")
+
+	cfg := &config.Instance{}
+	st, _ := state.NewState(mockPlatform, "test-boot-uuid")
+
+	opts := &ExprEnvOptions{
+		Scanned: &parser.ExprEnvScanned{
+			ID:    "token-123",
+			Value: "test-value",
+			Data:  "test-data",
+		},
+		Launching: &parser.ExprEnvLaunching{
+			Path:       "/path/to/game",
+			SystemID:   "snes",
+			LauncherID: "mister",
+		},
+	}
+
+	env := getExprEnv(mockPlatform, cfg, st, opts)
+
+	// Verify Scanned
+	assert.Equal(t, "token-123", env.Scanned.ID)
+	assert.Equal(t, "test-value", env.Scanned.Value)
+	assert.Equal(t, "test-data", env.Scanned.Data)
+
+	// Verify Launching
+	assert.Equal(t, "/path/to/game", env.Launching.Path)
+	assert.Equal(t, "snes", env.Launching.SystemID)
+	assert.Equal(t, "mister", env.Launching.LauncherID)
 }

@@ -35,6 +35,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript/parser"
 	"github.com/rs/zerolog/log"
 )
 
@@ -179,7 +181,7 @@ func runBeforeExitHook(
 				ScanTime: time.Now(),
 				Text:     defaults.BeforeExit,
 			}
-			err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
+			err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, nil)
 			if err != nil {
 				log.Error().Msgf("error running before_exit script: %s", err)
 			}
@@ -400,8 +402,8 @@ preprocessing:
 
 		if scan != nil {
 			log.Info().Msgf("new token scanned: %v", scan)
-			st.SetActiveCard(*scan)
 
+			// Run on_scan hook before SetActiveCard so last_scanned refers to previous token
 			onScanScript := cfg.ReadersScan().OnScan
 			if onScanScript != "" {
 				log.Info().Msgf("running on_scan script: %s", onScanScript)
@@ -413,11 +415,21 @@ preprocessing:
 					ScanTime: time.Now(),
 					Text:     onScanScript,
 				}
-				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
+				scannedOpts := &zapscript.ExprEnvOptions{
+					Scanned: &parser.ExprEnvScanned{
+						ID:    scan.UID,
+						Value: scan.Text,
+						Data:  scan.Data,
+					},
+				}
+				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, scannedOpts)
 				if err != nil {
-					log.Error().Msgf("error running on_scan script: %s", err)
+					log.Warn().Err(err).Msg("on_scan hook blocked token processing")
+					continue preprocessing
 				}
 			}
+
+			st.SetActiveCard(*scan)
 
 			if exitTimer != nil {
 				stopped := exitTimer.Stop()
@@ -454,6 +466,10 @@ preprocessing:
 				continue preprocessing
 			}
 
+			// Clear ActiveCard before hook to prevent blocked removals from affecting new scans
+			st.SetActiveCard(tokens.Token{})
+
+			// Run on_remove hook; errors skip exit timer but card state is already cleared
 			onRemoveScript := cfg.ReadersScan().OnRemove
 			if cfg.HoldModeEnabled() && onRemoveScript != "" {
 				log.Info().Msgf("running on_remove script: %s", onRemoveScript)
@@ -465,13 +481,13 @@ preprocessing:
 					ScanTime: time.Now(),
 					Text:     onRemoveScript,
 				}
-				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc)
+				err := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, nil)
 				if err != nil {
-					log.Error().Msgf("error running on_remove script: %s", err)
+					log.Warn().Err(err).Msg("on_remove hook blocked exit, media will keep running")
+					continue preprocessing
 				}
 			}
 
-			st.SetActiveCard(tokens.Token{})
 			exitTimer = timedExit(pl, cfg, st, db, lsq, plq, exitTimer)
 		}
 	}

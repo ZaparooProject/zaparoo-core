@@ -236,7 +236,7 @@ func Start(
 			Text:     onMediaStartScript,
 		}
 
-		if scriptErr := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc); scriptErr != nil {
+		if scriptErr := runTokenZapScript(pl, cfg, st, t, db, lsq, plsc, nil); scriptErr != nil {
 			log.Error().Err(scriptErr).Msg("Error running on_media_start script")
 		}
 	})
