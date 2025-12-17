@@ -522,3 +522,48 @@ func sqlGetZapLinkCache(ctx context.Context, db *sql.DB, url string) (string, er
 	}
 	return zapscript, nil
 }
+
+func sqlGetSupportedZapLinkHosts(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0;`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query supported zap link hosts: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close rows")
+		}
+	}()
+
+	hosts := make([]string, 0)
+	for rows.Next() {
+		var host string
+		if scanErr := rows.Scan(&host); scanErr != nil {
+			return nil, fmt.Errorf("failed to scan zap link host row: %w", scanErr)
+		}
+		hosts = append(hosts, host)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating zap link host rows: %w", err)
+	}
+
+	return hosts, nil
+}
+
+func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan).Format(time.RFC3339)
+	result, err := db.ExecContext(ctx,
+		`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime(CheckedAt) < datetime(?);`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune expired zap link hosts: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rowsAffected, nil
+}

@@ -290,6 +290,8 @@ type UserDBI interface {
 	GetEnabledMappings() ([]Mapping, error)
 	UpdateZapLinkHost(host string, zapscript int) error
 	GetZapLinkHost(host string) (bool, bool, error)
+	GetSupportedZapLinkHosts() ([]string, error)
+	PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
 }

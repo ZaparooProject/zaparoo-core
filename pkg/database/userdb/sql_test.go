@@ -834,3 +834,123 @@ func TestSqlCleanupHistory_VacuumError(t *testing.T) {
 	assert.Equal(t, rowsDeleted, rowsAffected) // Still returns rows deleted even if vacuum fails
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// GetSupportedZapLinkHosts Tests
+
+func TestSqlGetSupportedZapLinkHosts_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	expectedHosts := []string{
+		"https://example.com",
+		"https://zaplink.io",
+		"http://localhost:8080",
+	}
+
+	rows := sqlmock.NewRows([]string{"Host"})
+	for _, host := range expectedHosts {
+		rows.AddRow(host)
+	}
+
+	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
+		WillReturnRows(rows)
+
+	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
+	require.NoError(t, err)
+	assert.Len(t, result, 3)
+	assert.Equal(t, expectedHosts, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetSupportedZapLinkHosts_Empty(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{"Host"})
+
+	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
+		WillReturnRows(rows)
+
+	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetSupportedZapLinkHosts_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT Host FROM ZapLinkHosts WHERE ZapScript > 0`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	result, err := sqlGetSupportedZapLinkHosts(context.Background(), db)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to query supported zap link hosts")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// PruneExpiredZapLinkHosts Tests
+
+func TestSqlPruneExpiredZapLinkHosts_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rowsDeleted := int64(5)
+	olderThan := 30 * 24 * time.Hour
+
+	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, rowsDeleted))
+
+	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
+	require.NoError(t, err)
+	assert.Equal(t, rowsDeleted, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPruneExpiredZapLinkHosts_NoRowsToDelete(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	olderThan := 30 * 24 * time.Hour
+
+	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlPruneExpiredZapLinkHosts_DatabaseError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	olderThan := 30 * 24 * time.Hour
+
+	mock.ExpectExec(`DELETE FROM ZapLinkHosts WHERE ZapScript = 0 AND datetime\(CheckedAt\) < datetime\(\?\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	result, err := sqlPruneExpiredZapLinkHosts(context.Background(), db, olderThan)
+	require.Error(t, err)
+	assert.Equal(t, int64(0), result)
+	assert.Contains(t, err.Error(), "failed to prune expired zap link hosts")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

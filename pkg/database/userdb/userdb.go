@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -166,6 +167,14 @@ func (db *UserDB) UpdateZapLinkHost(host string, zapscript int) error {
 
 func (db *UserDB) GetZapLinkHost(host string) (found, zapScript bool, err error) {
 	return sqlGetZapLinkHost(db.ctx, db.sql, host)
+}
+
+func (db *UserDB) GetSupportedZapLinkHosts() ([]string, error) {
+	return sqlGetSupportedZapLinkHosts(db.ctx, db.sql)
+}
+
+func (db *UserDB) PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error) {
+	return sqlPruneExpiredZapLinkHosts(db.ctx, db.sql, olderThan)
 }
 
 func (db *UserDB) UpdateZapLinkCache(url, zapscript string) error {

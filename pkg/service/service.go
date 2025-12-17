@@ -48,11 +48,14 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/state"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/zapscript"
 	"github.com/google/uuid"
 	"github.com/jonboulle/clockwork"
 	"github.com/mackerelio/go-osstat/uptime"
 	"github.com/rs/zerolog/log"
 )
+
+const zapLinkHostExpiration = 30 * 24 * time.Hour
 
 func setupEnvironment(pl platforms.Platform) error {
 	if _, ok := helpers.HasUserDir(); ok {
@@ -166,6 +169,21 @@ func cleanupHistoryOnStartup(cfg *config.Instance, db *database.Database) {
 	}
 }
 
+// pruneExpiredZapLinkHosts removes non-supporting zaplink hosts older than 30 days.
+// This allows hosts that may have added zaplink support to be re-checked.
+func pruneExpiredZapLinkHosts(db *database.Database) {
+	log.Info().Msg("pruning expired non-supporting zaplink hosts")
+	rowsDeleted, err := db.UserDB.PruneExpiredZapLinkHosts(zapLinkHostExpiration)
+	switch {
+	case err != nil:
+		log.Error().Err(err).Msg("error pruning expired zaplink hosts")
+	case rowsDeleted > 0:
+		log.Info().Msgf("pruned %d expired non-supporting zaplink hosts", rowsDeleted)
+	default:
+		log.Debug().Msg("no expired zaplink hosts to prune")
+	}
+}
+
 func Start(
 	pl platforms.Platform,
 	cfg *config.Instance,
@@ -210,6 +228,9 @@ func Start(
 
 	// Perform all history cleanup operations
 	cleanupHistoryOnStartup(cfg, db)
+
+	pruneExpiredZapLinkHosts(db)
+	go zapscript.PreWarmZapLinkHosts(db, pl.ID())
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")

@@ -239,6 +239,32 @@ func (m *MockUserDBI) GetZapLinkHost(host string) (found, zapScript bool, err er
 	return args.Bool(0), args.Bool(1), args.Error(2)
 }
 
+func (m *MockUserDBI) GetSupportedZapLinkHosts() ([]string, error) {
+	args := m.Called()
+	if hosts, ok := args.Get(0).([]string); ok {
+		if err := args.Error(1); err != nil {
+			return hosts, fmt.Errorf("mock operation failed: %w", err)
+		}
+		return hosts, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error) {
+	args := m.Called(olderThan)
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock operation failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
 func (m *MockUserDBI) UpdateZapLinkCache(url, zapscript string) error {
 	args := m.Called(url, zapscript)
 	if err := args.Error(0); err != nil {
