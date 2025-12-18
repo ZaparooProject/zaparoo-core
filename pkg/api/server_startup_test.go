@@ -291,6 +291,7 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		"https://localhost",
 		"http://localhost:7497",
 		"http://192.168.1.100:7497",
+		"http://MiSTer.local:7497", // Mixed case hostname
 	}
 	apiPort := 7497
 
@@ -342,6 +343,11 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		{
 			name:     "explicit_allowed_origin",
 			origin:   "http://localhost:7497",
+			expected: true,
+		},
+		{
+			name:     "case_insensitive_hostname_match",
+			origin:   "http://mister.local:7497", // lowercase, but allowed list has MiSTer.local
 			expected: true,
 		},
 	}

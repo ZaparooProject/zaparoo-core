@@ -429,9 +429,9 @@ func checkWebSocketOrigin(origin string, allowedOrigins []string, apiPort int) b
 		return true
 	}
 
-	// Check explicit allowed origins first
+	// Check explicit allowed origins first (case-insensitive for hostnames)
 	for _, allowed := range allowedOrigins {
-		if origin == allowed {
+		if strings.EqualFold(origin, allowed) {
 			log.Debug().Msgf("websocket origin: %s allowed (explicit match)", origin)
 			return true
 		}
