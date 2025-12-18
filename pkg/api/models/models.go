@@ -78,6 +78,9 @@ const (
 	MethodReadersWriteCancel   = "readers.write.cancel"
 	MethodVersion              = "version"
 	MethodHealthCheck          = "health"
+	MethodInbox                = "inbox"
+	MethodInboxDelete          = "inbox.delete"
+	MethodInboxClear           = "inbox.clear"
 )
 
 type Notification struct {

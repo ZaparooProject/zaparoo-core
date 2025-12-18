@@ -567,3 +567,108 @@ func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time
 	}
 	return rowsAffected, nil
 }
+
+func sqlAddInboxEntry(ctx context.Context, db *sql.DB, entry *database.InboxEntry) error {
+	stmt, err := db.PrepareContext(ctx, `
+		INSERT INTO Inbox (Title, Body) VALUES (?, ?);
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare inbox insert statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	_, err = stmt.ExecContext(ctx, entry.Title, entry.Body)
+	if err != nil {
+		return fmt.Errorf("failed to execute inbox insert: %w", err)
+	}
+	return nil
+}
+
+func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry, error) {
+	list := make([]database.InboxEntry, 0)
+
+	q, err := db.PrepareContext(ctx, `
+		SELECT DBID, Title, Body, CreatedAt
+		FROM Inbox
+		ORDER BY CreatedAt DESC
+		LIMIT 100;
+	`)
+	if err != nil {
+		return list, fmt.Errorf("failed to prepare inbox query statement: %w", err)
+	}
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := q.QueryContext(ctx)
+	if err != nil {
+		return list, fmt.Errorf("failed to execute inbox query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		row := database.InboxEntry{}
+		var createdAtMs int64
+		var body sql.NullString
+
+		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &createdAtMs)
+		if scanErr != nil {
+			return list, fmt.Errorf("failed to scan inbox row: %w", scanErr)
+		}
+
+		if body.Valid {
+			row.Body = body.String
+		}
+		row.CreatedAt = time.UnixMilli(createdAtMs)
+		list = append(list, row)
+	}
+
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating inbox rows: %w", err)
+	}
+
+	return list, nil
+}
+
+func sqlDeleteInboxEntry(ctx context.Context, db *sql.DB, id int64) error {
+	stmt, err := db.PrepareContext(ctx, `DELETE FROM Inbox WHERE DBID = ?;`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare inbox delete statement: %w", err)
+	}
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	_, err = stmt.ExecContext(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to execute inbox delete: %w", err)
+	}
+	return nil
+}
+
+//goland:noinspection SqlWithoutWhere
+func sqlDeleteAllInboxEntries(ctx context.Context, db *sql.DB) (int64, error) {
+	result, err := db.ExecContext(ctx, `DELETE FROM Inbox;`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete all inbox entries: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}

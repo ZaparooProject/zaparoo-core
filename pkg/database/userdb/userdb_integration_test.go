@@ -267,3 +267,103 @@ func TestUserDB_CleanupHistory_ZeroRetention_Integration(t *testing.T) {
 	// Since our entry is from the past, it should be deleted
 	assert.Positive(t, rowsDeleted, "Should delete entry with 0 retention")
 }
+
+func TestInboxCRUD_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Test empty inbox
+	entries, err := userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "Inbox should be empty initially")
+
+	// Test AddInboxEntry
+	entry1 := database.InboxEntry{
+		Title: "Test Notification",
+		Body:  "This is the body",
+	}
+	err = userDB.AddInboxEntry(&entry1)
+	require.NoError(t, err, "Should be able to add inbox entry")
+
+	entry2 := database.InboxEntry{
+		Title: "Second Notification",
+		Body:  "", // Empty body is valid
+	}
+	err = userDB.AddInboxEntry(&entry2)
+	require.NoError(t, err, "Should be able to add second inbox entry")
+
+	// Test GetInboxEntries
+	entries, err = userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 2, "Should have 2 inbox entries")
+
+	// Entries should be ordered by CreatedAt DESC (newest first)
+	assert.Equal(t, "Second Notification", entries[0].Title, "Newest entry should be first")
+	assert.Equal(t, "Test Notification", entries[1].Title, "Older entry should be second")
+	assert.Equal(t, "This is the body", entries[1].Body)
+	assert.Empty(t, entries[0].Body, "Empty body should remain empty")
+
+	// Verify DBID was assigned
+	assert.Positive(t, entries[0].DBID, "Should have assigned a DBID")
+	assert.Positive(t, entries[1].DBID, "Should have assigned a DBID")
+
+	// Verify CreatedAt was set
+	assert.False(t, entries[0].CreatedAt.IsZero(), "CreatedAt should be set")
+	assert.False(t, entries[1].CreatedAt.IsZero(), "CreatedAt should be set")
+
+	// Test DeleteInboxEntry
+	err = userDB.DeleteInboxEntry(entries[1].DBID)
+	require.NoError(t, err, "Should be able to delete inbox entry")
+
+	entries, err = userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "Should have 1 inbox entry after deletion")
+	assert.Equal(t, "Second Notification", entries[0].Title)
+
+	// Test DeleteInboxEntry on non-existent ID (should not error)
+	err = userDB.DeleteInboxEntry(99999)
+	require.NoError(t, err, "Deleting non-existent entry should not error")
+
+	// Test DeleteAllInboxEntries
+	// Add another entry first
+	entry3 := database.InboxEntry{Title: "Third"}
+	err = userDB.AddInboxEntry(&entry3)
+	require.NoError(t, err)
+
+	entries, err = userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 2, "Should have 2 entries before clear")
+
+	rowsDeleted, err := userDB.DeleteAllInboxEntries()
+	require.NoError(t, err, "Should be able to clear inbox")
+	assert.Equal(t, int64(2), rowsDeleted, "Should report 2 rows deleted")
+
+	entries, err = userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Empty(t, entries, "Inbox should be empty after clear")
+}
+
+func TestInbox_Limit_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	userDB, cleanup := setupTempUserDB(t)
+	defer cleanup()
+
+	// Add more than 100 entries to test the LIMIT
+	for range 110 {
+		entry := database.InboxEntry{
+			Title: "Entry",
+		}
+		err := userDB.AddInboxEntry(&entry)
+		require.NoError(t, err)
+	}
+
+	// GetInboxEntries should return at most 100
+	entries, err := userDB.GetInboxEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 100, "Should return at most 100 entries due to LIMIT")
+}

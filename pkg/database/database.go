@@ -97,6 +97,13 @@ type Mapping struct {
 	Enabled  bool  `json:"enabled"`
 }
 
+type InboxEntry struct {
+	CreatedAt time.Time `json:"createdAt"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body,omitempty"`
+	DBID      int64     `json:"id"`
+}
+
 type System struct {
 	SystemID string
 	Name     string
@@ -294,6 +301,10 @@ type UserDBI interface {
 	PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
+	AddInboxEntry(entry *InboxEntry) error
+	GetInboxEntries() ([]InboxEntry, error)
+	DeleteInboxEntry(id int64) error
+	DeleteAllInboxEntries() (int64, error)
 }
 
 type MediaDBI interface {

@@ -225,6 +225,10 @@ func NewMethodMap() *MethodMap {
 		// utils
 		models.MethodVersion:     methods.HandleVersion,
 		models.MethodHealthCheck: methods.HandleHealthCheck,
+		// inbox
+		models.MethodInbox:       methods.HandleInbox,
+		models.MethodInboxDelete: methods.HandleInboxDelete,
+		models.MethodInboxClear:  methods.HandleInboxClear,
 	}
 
 	for name, fn := range defaultMethods {
