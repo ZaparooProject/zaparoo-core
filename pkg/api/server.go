@@ -385,14 +385,24 @@ func serveIndex(w http.ResponseWriter, r *http.Request, root http.FileSystem) {
 	http.ServeContent(w, r, "index.html", stat.ModTime(), index)
 }
 
+const errMsgAppNotFound = "Zaparoo App files not found. " +
+	"Copy the built zaparoo-app files to pkg/assets/_app/dist/"
+
 // handleApp serves the embedded Zaparoo App web build to the client.
 func handleApp(w http.ResponseWriter, r *http.Request) {
 	appFs, err := fs.Sub(assets.App, "_app/dist")
 	if err != nil {
 		log.Error().Err(err).Msg("error opening app dist")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
 	}
+
+	if _, err := appFs.Open("index.html"); err != nil {
+		log.Warn().Msg("zaparoo-app files not found in embedded filesystem")
+		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
+		return
+	}
+
 	http.StripPrefix("/app", fsCustom404(http.FS(appFs))).ServeHTTP(w, r)
 }
 
@@ -938,6 +948,11 @@ func Start(
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
+	})
+
+	// Redirect root to app for users who forget /app/
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/app/", http.StatusFound)
 	})
 
 	server := &http.Server{
