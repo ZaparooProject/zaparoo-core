@@ -44,6 +44,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
@@ -232,6 +233,10 @@ func Start(
 
 	pruneExpiredZapLinkHosts(db)
 	go zapscript.PreWarmZapLinkHosts(db, pl.ID(), helpers.WaitForInternet)
+
+	// Initialize inbox service for system notifications
+	log.Info().Msg("initializing inbox service")
+	st.SetInbox(inbox.NewService(db.UserDB, st.Notifications))
 
 	// Initialize playtime limits system (always create for runtime enable/disable)
 	log.Info().Msg("initializing playtime limits")

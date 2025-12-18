@@ -301,7 +301,7 @@ type UserDBI interface {
 	PruneExpiredZapLinkHosts(olderThan time.Duration) (int64, error)
 	UpdateZapLinkCache(url string, zapscript string) error
 	GetZapLinkCache(url string) (string, error)
-	AddInboxEntry(entry *InboxEntry) error
+	AddInboxEntry(entry *InboxEntry) (*InboxEntry, error)
 	GetInboxEntries() ([]InboxEntry, error)
 	DeleteInboxEntry(id int64) error
 	DeleteAllInboxEntries() (int64, error)

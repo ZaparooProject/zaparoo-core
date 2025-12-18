@@ -6,7 +6,7 @@ create table Inbox
     DBID      INTEGER PRIMARY KEY,
     Title     text    not null,
     Body      text,
-    CreatedAt integer not null default (cast((julianday('now') - 2440587.5)*86400000 as INTEGER))
+    CreatedAt integer not null
 );
 
 create index idx_inbox_created_at on Inbox (CreatedAt);

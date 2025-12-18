@@ -107,3 +107,7 @@ func PlaytimeLimitReached(ns chan<- models.Notification, payload models.Playtime
 func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.PlaytimeLimitWarningParams) {
 	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
 }
+
+func InboxAdded(ns chan<- models.Notification, payload models.InboxEntry) {
+	sendNotification(ns, models.NotificationInboxAdded, payload)
+}

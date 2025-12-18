@@ -568,12 +568,12 @@ func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time
 	return rowsAffected, nil
 }
 
-func sqlAddInboxEntry(ctx context.Context, db *sql.DB, entry *database.InboxEntry) error {
+func sqlAddInboxEntry(ctx context.Context, db *sql.DB, entry *database.InboxEntry) (*database.InboxEntry, error) {
 	stmt, err := db.PrepareContext(ctx, `
-		INSERT INTO Inbox (Title, Body) VALUES (?, ?);
+		INSERT INTO Inbox (Title, Body, CreatedAt) VALUES (?, ?, ?);
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to prepare inbox insert statement: %w", err)
+		return nil, fmt.Errorf("failed to prepare inbox insert statement: %w", err)
 	}
 	defer func() {
 		if closeErr := stmt.Close(); closeErr != nil {
@@ -581,11 +581,22 @@ func sqlAddInboxEntry(ctx context.Context, db *sql.DB, entry *database.InboxEntr
 		}
 	}()
 
-	_, err = stmt.ExecContext(ctx, entry.Title, entry.Body)
+	result, err := stmt.ExecContext(ctx, entry.Title, entry.Body, entry.CreatedAt.Unix())
 	if err != nil {
-		return fmt.Errorf("failed to execute inbox insert: %w", err)
+		return nil, fmt.Errorf("failed to execute inbox insert: %w", err)
 	}
-	return nil
+
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last insert id: %w", err)
+	}
+
+	return &database.InboxEntry{
+		DBID:      lastID,
+		Title:     entry.Title,
+		Body:      entry.Body,
+		CreatedAt: entry.CreatedAt,
+	}, nil
 }
 
 func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry, error) {
@@ -618,10 +629,10 @@ func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry,
 
 	for rows.Next() {
 		row := database.InboxEntry{}
-		var createdAtMs int64
+		var createdAtSec int64
 		var body sql.NullString
 
-		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &createdAtMs)
+		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &createdAtSec)
 		if scanErr != nil {
 			return list, fmt.Errorf("failed to scan inbox row: %w", scanErr)
 		}
@@ -629,7 +640,7 @@ func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry,
 		if body.Valid {
 			row.Body = body.String
 		}
-		row.CreatedAt = time.UnixMilli(createdAtMs)
+		row.CreatedAt = time.Unix(createdAtSec, 0)
 		list = append(list, row)
 	}
 

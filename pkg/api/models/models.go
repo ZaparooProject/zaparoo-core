@@ -34,6 +34,7 @@ const (
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+	NotificationInboxAdded           = "inbox.added"
 )
 
 const (

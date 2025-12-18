@@ -350,12 +350,18 @@ func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (i
 	return rowsHealed, nil
 }
 
-func (m *MockUserDBI) AddInboxEntry(entry *database.InboxEntry) error {
+func (m *MockUserDBI) AddInboxEntry(entry *database.InboxEntry) (*database.InboxEntry, error) {
 	args := m.Called(entry)
-	if err := args.Error(0); err != nil {
-		return fmt.Errorf("mock UserDBI add inbox entry failed: %w", err)
+	if result, ok := args.Get(0).(*database.InboxEntry); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI add inbox entry failed: %w", err)
+		}
+		return result, nil
 	}
-	return nil
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI add inbox entry failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no entry is configured
 }
 
 func (m *MockUserDBI) GetInboxEntries() ([]database.InboxEntry, error) {

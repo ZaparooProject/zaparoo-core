@@ -281,19 +281,27 @@ func TestInboxCRUD_Integration(t *testing.T) {
 	assert.Empty(t, entries, "Inbox should be empty initially")
 
 	// Test AddInboxEntry
+	now := time.Now()
 	entry1 := database.InboxEntry{
-		Title: "Test Notification",
-		Body:  "This is the body",
+		Title:     "Test Notification",
+		Body:      "This is the body",
+		CreatedAt: now,
 	}
-	err = userDB.AddInboxEntry(&entry1)
+	inserted1, err := userDB.AddInboxEntry(&entry1)
 	require.NoError(t, err, "Should be able to add inbox entry")
+	require.NotNil(t, inserted1)
+	assert.Positive(t, inserted1.DBID, "Returned entry should have DBID")
+	assert.Equal(t, "Test Notification", inserted1.Title)
+	assert.False(t, inserted1.CreatedAt.IsZero(), "Returned entry should have CreatedAt")
 
 	entry2 := database.InboxEntry{
-		Title: "Second Notification",
-		Body:  "", // Empty body is valid
+		Title:     "Second Notification",
+		Body:      "",
+		CreatedAt: now.Add(time.Second), // Different timestamp for ordering test
 	}
-	err = userDB.AddInboxEntry(&entry2)
+	inserted2, err := userDB.AddInboxEntry(&entry2)
 	require.NoError(t, err, "Should be able to add second inbox entry")
+	require.NotNil(t, inserted2)
 
 	// Test GetInboxEntries
 	entries, err = userDB.GetInboxEntries()
@@ -329,8 +337,8 @@ func TestInboxCRUD_Integration(t *testing.T) {
 
 	// Test DeleteAllInboxEntries
 	// Add another entry first
-	entry3 := database.InboxEntry{Title: "Third"}
-	err = userDB.AddInboxEntry(&entry3)
+	entry3 := database.InboxEntry{Title: "Third", CreatedAt: time.Now()}
+	_, err = userDB.AddInboxEntry(&entry3)
 	require.NoError(t, err)
 
 	entries, err = userDB.GetInboxEntries()
@@ -354,11 +362,13 @@ func TestInbox_Limit_Integration(t *testing.T) {
 	defer cleanup()
 
 	// Add more than 100 entries to test the LIMIT
-	for range 110 {
+	now := time.Now()
+	for i := range 110 {
 		entry := database.InboxEntry{
-			Title: "Entry",
+			Title:     "Entry",
+			CreatedAt: now.Add(time.Duration(i) * time.Second),
 		}
-		err := userDB.AddInboxEntry(&entry)
+		_, err := userDB.AddInboxEntry(&entry)
 		require.NoError(t, err)
 	}
 

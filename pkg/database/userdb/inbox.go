@@ -23,7 +23,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
-func (db *UserDB) AddInboxEntry(entry *database.InboxEntry) error {
+func (db *UserDB) AddInboxEntry(entry *database.InboxEntry) (*database.InboxEntry, error) {
 	return sqlAddInboxEntry(db.ctx, db.sql, entry)
 }
 
