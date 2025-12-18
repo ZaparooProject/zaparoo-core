@@ -630,6 +630,28 @@ func readRomsets(filePath string) ([]Romset, error) {
 	return romsets.Romsets, nil
 }
 
+// filterNeoGeoZipContents filters out scan results that are inside zip files
+// which are themselves games (matching entries in the romsets map).
+// Zips that match romsets.xml are games - their contents should not appear as separate entries.
+// Zips that don't match romsets.xml are folders - their contents are valid games.
+func filterNeoGeoZipContents(results []platforms.ScanResult, romsetNames map[string]string) []platforms.ScanResult {
+	filtered := make([]platforms.ScanResult, 0, len(results))
+	for _, r := range results {
+		lowerPath := strings.ToLower(r.Path)
+		if idx := strings.Index(lowerPath, ".zip/"); idx != -1 {
+			// Extract zip name to check against romsets
+			zipPath := r.Path[:idx+4]
+			zipName := strings.TrimSuffix(filepath.Base(zipPath), filepath.Ext(zipPath))
+			if _, isGame := romsetNames[strings.ToLower(zipName)]; isGame {
+				// This path is inside a zip that IS a game - skip it
+				continue
+			}
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
@@ -752,6 +774,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
 
+			// First pass: load all romsets from all directories
 			for _, sf := range sfs {
 				select {
 				case <-ctx.Done():
@@ -768,8 +791,21 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					}
 
 					for _, romset := range romsets {
-						names[romset.Name] = romset.AltName
+						names[strings.ToLower(romset.Name)] = romset.AltName
 					}
+				}
+			}
+
+			// Filter out paths inside zips that are games (match romsets.xml)
+			// Keep paths inside zips that are just folders (don't match romsets.xml)
+			results = filterNeoGeoZipContents(results, names)
+
+			// Second pass: read directories and add games
+			for _, sf := range sfs {
+				select {
+				case <-ctx.Done():
+					return results, ctx.Err()
+				default:
 				}
 
 				// read directory
@@ -793,7 +829,7 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 						id = strings.TrimSuffix(f, filepath.Ext(f))
 					}
 
-					if altName, ok := names[id]; ok {
+					if altName, ok := names[strings.ToLower(id)]; ok {
 						results = append(results, platforms.ScanResult{
 							Path:  filepath.Join(sf.Path, f),
 							Name:  altName,
