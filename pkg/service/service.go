@@ -43,6 +43,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/broker"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/discovery"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playtime"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/publishers"
@@ -270,9 +271,15 @@ func Start(
 	log.Info().Msg("checking for interrupted media optimization")
 	go checkAndResumeOptimization(db, st.Notifications)
 
+	log.Info().Msg("starting mDNS discovery service")
+	discoveryService := discovery.New(cfg, pl.ID())
+	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
+		log.Error().Err(discoveryErr).Msg("mDNS discovery failed to start (continuing without discovery)")
+	}
+
 	log.Info().Msg("starting API service")
 	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications)
+	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName())
 
 	log.Info().Msg("starting publishers")
 	publisherNotifications, _ := notifBroker.Subscribe(100)
@@ -314,6 +321,7 @@ func Start(
 	log.Info().Msg("platform post start completed, service fully initialized")
 
 	return func() error {
+		discoveryService.Stop()
 		cancelPublisherFanOut()
 		for _, publisher := range activePublishers {
 			publisher.Stop()

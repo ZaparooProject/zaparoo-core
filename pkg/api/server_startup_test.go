@@ -73,7 +73,7 @@ func TestServerStartupConcurrency(t *testing.T) {
 
 			// Start server in a separate goroutine
 			go func() {
-				Start(platform, cfg, st, tokenQueue, db, nil, notifications)
+				Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -136,7 +136,7 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 
 	// Start both server and connection attempt simultaneously
 	go func() {
-		Start(platform, cfg, st, tokenQueue, db, nil, notifications)
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
 	}()
 
 	// Immediately try to connect (no delay)
@@ -205,7 +205,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	go func() {
 		defer close(done)
-		Start(platform, cfg, st, tokenQueue, db, nil, notifications)
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
 	}()
 
 	// Wait for completion or timeout
@@ -291,6 +291,7 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		"https://localhost",
 		"http://localhost:7497",
 		"http://192.168.1.100:7497",
+		"http://MiSTer.local:7497", // Mixed case hostname
 	}
 	apiPort := 7497
 
@@ -342,6 +343,11 @@ func TestCheckWebSocketOrigin(t *testing.T) {
 		{
 			name:     "explicit_allowed_origin",
 			origin:   "http://localhost:7497",
+			expected: true,
+		},
+		{
+			name:     "case_insensitive_hostname_match",
+			origin:   "http://mister.local:7497", // lowercase, but allowed list has MiSTer.local
 			expected: true,
 		},
 	}
