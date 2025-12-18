@@ -130,6 +130,77 @@ func TestRBFCacheGetBySystemID(t *testing.T) {
 	assert.False(t, found, "unknown system should not be found")
 }
 
+func TestRBFCacheGetBySystemID_CacheHit(t *testing.T) {
+	t.Parallel()
+
+	cache := &RBFCache{
+		bySystemID: map[string]RBFInfo{
+			"NES": {
+				Path:      "/media/fat/_Console/NES_20231212.rbf",
+				Filename:  "NES_20231212.rbf",
+				ShortName: "NES",
+				MglName:   "_Console/NES",
+			},
+		},
+		byShortName: map[string]RBFInfo{
+			"nes": {
+				Path:      "/media/fat/_Console/NES_20231212.rbf",
+				Filename:  "NES_20231212.rbf",
+				ShortName: "NES",
+				MglName:   "_Console/NES",
+			},
+		},
+	}
+
+	// Test cache hit by system ID
+	rbf, found := cache.GetBySystemID("NES")
+	assert.True(t, found, "NES should be found in cache")
+	assert.Equal(t, "_Console/NES", rbf.MglName)
+	assert.Equal(t, "NES", rbf.ShortName)
+
+	// Test cache hit by short name
+	rbf, found = cache.GetByShortName("nes")
+	assert.True(t, found, "nes should be found in cache")
+	assert.Equal(t, "_Console/NES", rbf.MglName)
+
+	// Verify count
+	systems, rbfs := cache.Count()
+	assert.Equal(t, 1, systems)
+	assert.Equal(t, 1, rbfs)
+}
+
+func TestResolveRBFPath_CacheHit(t *testing.T) {
+	// Save and restore GlobalRBFCache state
+	originalBySystemID := GlobalRBFCache.bySystemID
+	originalByShortName := GlobalRBFCache.byShortName
+	defer func() {
+		GlobalRBFCache.mu.Lock()
+		GlobalRBFCache.bySystemID = originalBySystemID
+		GlobalRBFCache.byShortName = originalByShortName
+		GlobalRBFCache.mu.Unlock()
+	}()
+
+	// Populate cache with test data
+	GlobalRBFCache.mu.Lock()
+	GlobalRBFCache.bySystemID = map[string]RBFInfo{
+		"SNES": {
+			Path:      "/media/fat/_Console/SNES_20240101.rbf",
+			Filename:  "SNES_20240101.rbf",
+			ShortName: "SNES",
+			MglName:   "_Console/SNES",
+		},
+	}
+	GlobalRBFCache.mu.Unlock()
+
+	// Test cache hit returns cached path, not hardcoded
+	result := ResolveRBFPath("SNES", "_OldPath/SNES")
+	assert.Equal(t, "_Console/SNES", result, "should return cached path, not hardcoded")
+
+	// Test cache miss still returns hardcoded
+	result = ResolveRBFPath("Genesis", "_Console/Genesis")
+	assert.Equal(t, "_Console/Genesis", result, "should return hardcoded for cache miss")
+}
+
 func TestRBFCacheThreadSafety(t *testing.T) {
 	t.Parallel()
 
