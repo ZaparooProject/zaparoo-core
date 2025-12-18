@@ -75,7 +75,8 @@ func GenerateMgl(core *cores.Core, path, override string) (string, error) {
 		return "", errors.New("no core supplied for MGL generation")
 	}
 
-	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", core.RBF)
+	rbfPath := cores.ResolveRBFPath(core.ID, core.RBF)
+	mgl := fmt.Sprintf("<mistergamedescription>\n\t<rbf>%s</rbf>\n", rbfPath)
 
 	if core.SetName != "" {
 		sameDir := ""
@@ -244,11 +245,11 @@ func LaunchCore(cfg *config.Instance, _ platforms.Platform, system *cores.Core) 
 		return LaunchGame(cfg, system, "")
 	}
 
-	rbfs := cores.SystemsWithRBF()
-	if _, ok := rbfs[system.ID]; !ok {
-		return fmt.Errorf("no core found for system %s", system.ID)
+	rbfInfo, ok := cores.GlobalRBFCache.GetBySystemID(system.ID)
+	if !ok {
+		return fmt.Errorf("no core found for system %s (not in cache)", system.ID)
 	}
-	path := rbfs[system.ID].Path
+	path := rbfInfo.Path
 
 	cmd, err := os.OpenFile(misterconfig.CmdInterface, os.O_RDWR, 0)
 	if err != nil {

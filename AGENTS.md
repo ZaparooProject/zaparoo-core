@@ -375,6 +375,12 @@ task vulncheck
 - [ ] No commented-out code or debug prints
 - [ ] Documentation updated if needed
 
+### Pull request descriptions
+
+- **Do NOT include test plans** in PR descriptions - just summarize what the PR does
+- Keep descriptions concise with bullet points
+- Reference related issues if applicable
+
 ## Safety & Permissions
 
 ### Allowed without asking:

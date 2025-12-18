@@ -653,6 +653,8 @@ func filterNeoGeoZipContents(results []platforms.ScanResult, romsetNames map[str
 }
 
 func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
+	cores.GlobalRBFCache.Refresh()
+
 	aGamesPath := "listings/games.txt"
 	aDemosPath := "listings/demos.txt"
 	amiga := platforms.Launcher{
