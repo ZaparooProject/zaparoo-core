@@ -271,19 +271,19 @@ func Start(
 	log.Info().Msg("checking for interrupted media optimization")
 	go checkAndResumeOptimization(db, st.Notifications)
 
-	log.Info().Msg("starting API service")
-	apiNotifications, _ := notifBroker.Subscribe(100)
-	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications)
-
-	log.Info().Msg("starting publishers")
-	publisherNotifications, _ := notifBroker.Subscribe(100)
-	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
-
 	log.Info().Msg("starting mDNS discovery service")
 	discoveryService := discovery.New(cfg, pl.ID())
 	if discoveryErr := discoveryService.Start(); discoveryErr != nil {
 		log.Error().Err(discoveryErr).Msg("mDNS discovery failed to start (continuing without discovery)")
 	}
+
+	log.Info().Msg("starting API service")
+	apiNotifications, _ := notifBroker.Subscribe(100)
+	go api.Start(pl, cfg, st, itq, db, limitsManager, apiNotifications, discoveryService.InstanceName())
+
+	log.Info().Msg("starting publishers")
+	publisherNotifications, _ := notifBroker.Subscribe(100)
+	activePublishers, cancelPublisherFanOut := startPublishers(st, cfg, publisherNotifications)
 
 	// Start media history tracking
 	log.Info().Msg("starting media history listener")

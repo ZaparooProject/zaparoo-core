@@ -35,9 +35,10 @@ const ServiceType = "_zaparoo._tcp"
 // It allows mobile apps to discover Zaparoo Core instances without
 // manual IP configuration.
 type Service struct {
-	server     *zeroconf.Server
-	cfg        *config.Instance
-	platformID string
+	server       *zeroconf.Server
+	cfg          *config.Instance
+	platformID   string
+	instanceName string // resolved instance name after Start()
 }
 
 // New creates a new discovery service.
@@ -60,6 +61,7 @@ func (s *Service) Start() error {
 	if err != nil {
 		return fmt.Errorf("resolve instance name: %w", err)
 	}
+	s.instanceName = instanceName
 
 	port := s.cfg.APIPort()
 
@@ -98,6 +100,12 @@ func (s *Service) Stop() {
 		s.server.Shutdown()
 		s.server = nil
 	}
+}
+
+// InstanceName returns the resolved mDNS instance name.
+// Returns empty string if Start() has not been called.
+func (s *Service) InstanceName() string {
+	return s.instanceName
 }
 
 // resolveInstanceName determines the instance name to advertise.

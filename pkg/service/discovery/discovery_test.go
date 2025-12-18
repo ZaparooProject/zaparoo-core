@@ -20,9 +20,12 @@
 package discovery
 
 import (
+	"os"
 	"testing"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -68,4 +71,71 @@ func TestStopIdempotent(t *testing.T) {
 
 	// No panic means success
 	assert.Nil(t, svc.server)
+}
+
+func TestInstanceNameBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	svc := New(nil, "test")
+
+	// InstanceName should return empty string before Start() is called
+	assert.Empty(t, svc.InstanceName())
+}
+
+func TestInstanceNameWhenDiscoveryDisabled(t *testing.T) {
+	t.Parallel()
+
+	// Create a test config with discovery disabled
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+
+	// Disable discovery
+	cfg.SetDiscoveryEnabled(false)
+
+	svc := New(cfg, "test")
+	err = svc.Start()
+	require.NoError(t, err)
+
+	// InstanceName should be empty when discovery is disabled
+	assert.Empty(t, svc.InstanceName())
+}
+
+func TestInstanceNameUsesHostname(t *testing.T) {
+	t.Parallel()
+
+	// Create a test config with discovery enabled (default)
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+
+	// Get expected hostname
+	expectedHostname, err := os.Hostname()
+	require.NoError(t, err)
+
+	svc := New(cfg, "test")
+
+	// Start will fail at zeroconf.Register, but instanceName is set
+	// before Register is called, so we can still verify the resolution
+	_ = svc.Start() // Ignore error - Register may fail without network
+
+	// instanceName should be set to the hostname (since no config override)
+	assert.Equal(t, expectedHostname, svc.InstanceName())
+}
+
+func TestInstanceNameUsesConfigOverride(t *testing.T) {
+	t.Parallel()
+
+	configDir := t.TempDir()
+	cfg, err := config.NewConfig(configDir, config.BaseDefaults)
+	require.NoError(t, err)
+
+	// Set a custom instance name in config
+	cfg.SetDiscoveryInstanceName("my-custom-name")
+
+	svc := New(cfg, "test")
+	_ = svc.Start() // Ignore error - Register may fail without network
+
+	// instanceName should use the config override, not hostname
+	assert.Equal(t, "my-custom-name", svc.InstanceName())
 }

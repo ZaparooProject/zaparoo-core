@@ -122,8 +122,20 @@ func (c *Instance) DiscoveryEnabled() bool {
 	return *c.vals.Service.Discovery.Enabled
 }
 
+func (c *Instance) SetDiscoveryEnabled(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.Discovery.Enabled = &enabled
+}
+
 func (c *Instance) DiscoveryInstanceName() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.vals.Service.Discovery.InstanceName
+}
+
+func (c *Instance) SetDiscoveryInstanceName(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.Service.Discovery.InstanceName = name
 }

@@ -796,6 +796,7 @@ func Start(
 	db *database.Database,
 	limitsManager *playtime.LimitsManager,
 	notifications <-chan models.Notification,
+	mdnsHostname string,
 ) {
 	// Extract port from listen address or use default
 	port := cfg.APIPort()
@@ -822,6 +823,29 @@ func Start(
 
 	customOrigins := cfg.AllowedOrigins()
 	dynamicAllowedOrigins := buildDynamicAllowedOrigins(baseOrigins, localIPs, port, customOrigins)
+
+	// Add mDNS hostname.local if discovery resolved an instance name
+	if mdnsHostname != "" {
+		mdnsLocal := mdnsHostname + ".local"
+		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+			fmt.Sprintf("http://%s", mdnsLocal),
+			fmt.Sprintf("https://%s", mdnsLocal),
+			fmt.Sprintf("http://%s:%d", mdnsLocal, port),
+			fmt.Sprintf("https://%s:%d", mdnsLocal, port),
+		)
+		log.Debug().Str("hostname", mdnsLocal).Msg("added mDNS hostname to allowed origins")
+	}
+
+	// Add raw hostname for users with hostname resolution on their network
+	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
+			fmt.Sprintf("http://%s", hostname),
+			fmt.Sprintf("https://%s", hostname),
+			fmt.Sprintf("http://%s:%d", hostname, port),
+			fmt.Sprintf("https://%s:%d", hostname, port),
+		)
+		log.Debug().Str("hostname", hostname).Msg("added OS hostname to allowed origins")
+	}
 
 	log.Debug().Msgf("dynamicAllowedOrigins: %v", dynamicAllowedOrigins)
 
