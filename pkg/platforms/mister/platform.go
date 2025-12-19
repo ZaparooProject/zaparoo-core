@@ -630,23 +630,101 @@ func readRomsets(filePath string) ([]Romset, error) {
 	return romsets.Romsets, nil
 }
 
-// filterNeoGeoZipContents filters out scan results that are inside zip files
-// which are themselves games (matching entries in the romsets map).
-// Zips that match romsets.xml are games - their contents should not appear as separate entries.
-// Zips that don't match romsets.xml are folders - their contents are valid games.
-func filterNeoGeoZipContents(results []platforms.ScanResult, romsetNames map[string]string) []platforms.ScanResult {
+// isInsideGameFolder checks if a path is a file inside a game folder.
+// A game folder is an immediate child directory of a NEOGEO path that matches romsets.xml.
+//
+// Example: /media/fat/games/NEOGEO/ct2k3sa/crom0
+//   - NEOGEO path: /media/fat/games/NEOGEO
+//   - First child: ct2k3sa (matches romsets -> game folder)
+//   - File inside: crom0
+//   - Returns true
+//
+// Example: /media/fat/games/NEOGEO/collection/game.neo
+//   - NEOGEO path: /media/fat/games/NEOGEO
+//   - First child: collection (not in romsets -> not a game folder)
+//   - Returns false
+func isInsideGameFolder(
+	lowerPath string,
+	romsetNames map[string]string,
+	normalizedNeogeoPaths []string,
+) bool {
+	for _, neoPath := range normalizedNeogeoPaths {
+		// Ensure neoPath ends with separator for correct prefix matching
+		neoPathWithSep := neoPath
+		if !strings.HasSuffix(neoPathWithSep, string(filepath.Separator)) {
+			neoPathWithSep += string(filepath.Separator)
+		}
+
+		if !strings.HasPrefix(lowerPath, neoPathWithSep) {
+			continue
+		}
+
+		// Get the relative path after NEOGEO folder
+		relPath := lowerPath[len(neoPathWithSep):]
+		if relPath == "" {
+			continue // Path is the NEOGEO folder itself
+		}
+
+		// Split into components
+		parts := strings.Split(relPath, string(filepath.Separator))
+		if len(parts) < 2 {
+			continue // Not deep enough to be inside a folder
+		}
+
+		// First component is the potential game folder name
+		firstDir := parts[0]
+
+		if _, isGame := romsetNames[firstDir]; isGame {
+			return true
+		}
+	}
+	return false
+}
+
+// filterNeoGeoGameContents filters out scan results that are inside games
+// (matching entries in the romsets map), whether those games are:
+// - Zip files: paths containing ".zip/" where zip name matches romsets
+// - Extracted folders: paths where immediate child of NEOGEO folder matches romsets
+//
+// Examples of filtered paths:
+//   - /NEOGEO/mslug.zip/internal -> filtered (zip game)
+//   - /NEOGEO/mslug/crom0 -> filtered (folder game)
+//
+// Examples of kept paths:
+//   - /NEOGEO/mslug.zip -> kept (zip file itself)
+//   - /NEOGEO/mslug/ -> kept (folder itself, if indexed)
+//   - /NEOGEO/collection.zip/game.neo -> kept (zip is not a game)
+//   - /NEOGEO/collection/game.neo -> kept (folder is not a game)
+func filterNeoGeoGameContents(
+	results []platforms.ScanResult,
+	romsetNames map[string]string,
+	neogeoPaths []string,
+) []platforms.ScanResult {
 	filtered := make([]platforms.ScanResult, 0, len(results))
+
+	// Normalize NEOGEO paths for case-insensitive comparison
+	normalizedNeogeoPaths := make([]string, len(neogeoPaths))
+	for i, p := range neogeoPaths {
+		normalizedNeogeoPaths[i] = strings.ToLower(filepath.Clean(p))
+	}
+
 	for _, r := range results {
 		lowerPath := strings.ToLower(r.Path)
+
+		// Filter paths inside game zips
 		if idx := strings.Index(lowerPath, ".zip/"); idx != -1 {
-			// Extract zip name to check against romsets
 			zipPath := r.Path[:idx+4]
 			zipName := strings.TrimSuffix(filepath.Base(zipPath), filepath.Ext(zipPath))
 			if _, isGame := romsetNames[strings.ToLower(zipName)]; isGame {
-				// This path is inside a zip that IS a game - skip it
 				continue
 			}
 		}
+
+		// Filter paths inside game folders
+		if isInsideGameFolder(lowerPath, romsetNames, normalizedNeogeoPaths) {
+			continue
+		}
+
 		filtered = append(filtered, r)
 	}
 	return filtered
@@ -776,6 +854,12 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 			sfs := mediascanner.GetSystemPaths(cfg, p, p.RootDirs(cfg), []systemdefs.System{*s})
 			log.Debug().Int("paths", len(sfs)).Msg("neogeo scan paths found")
 
+			// Collect NEOGEO paths for filtering
+			neogeoPaths := make([]string, len(sfs))
+			for i, sf := range sfs {
+				neogeoPaths[i] = sf.Path
+			}
+
 			// First pass: load all romsets from all directories
 			for _, sf := range sfs {
 				select {
@@ -793,14 +877,16 @@ func (p *Platform) Launchers(cfg *config.Instance) []platforms.Launcher {
 					}
 
 					for _, romset := range romsets {
-						names[strings.ToLower(romset.Name)] = romset.AltName
+						// Handle comma-separated romset name aliases
+						for _, name := range strings.Split(romset.Name, ",") {
+							names[strings.ToLower(strings.TrimSpace(name))] = romset.AltName
+						}
 					}
 				}
 			}
 
-			// Filter out paths inside zips that are games (match romsets.xml)
-			// Keep paths inside zips that are just folders (don't match romsets.xml)
-			results = filterNeoGeoZipContents(results, names)
+			// Filter out paths inside games that match romsets.xml
+			results = filterNeoGeoGameContents(results, names, neogeoPaths)
 
 			// Second pass: read directories and add games
 			for _, sf := range sfs {
