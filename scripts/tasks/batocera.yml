@@ -180,9 +180,27 @@ tasks:
       - echo "Universal package created at {{.BUILD_DIR}}/{{.PACKAGE_NAME}}.pkg.tar.zst"
 
   deploy:
+    desc: "Build and deploy binary directly to Batocera system"
+    vars:
+      ARCH: "{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}amd64{{end}}"
+      BATOCERA_HOST: '{{.BATOCERA_HOST | default "root@${BATOCERA_IP}"}}'
+    cmds:
+      - task: build-{{.ARCH}}
+      - echo "Stopping zaparoo service..."
+      - ssh {{.BATOCERA_HOST}} "batocera-services stop zaparoo_service || true"
+      - echo "Copying binary..."
+      - scp _build/batocera_{{.ARCH}}/zaparoo {{.BATOCERA_HOST}}:/userdata/system/zaparoo
+      - ssh {{.BATOCERA_HOST}} "chmod +x /userdata/system/zaparoo"
+      - echo "Starting zaparoo service..."
+      - ssh {{.BATOCERA_HOST}} "batocera-services start zaparoo_service"
+      - echo "Deploy complete!"
+
+  deploy-package:
     desc: Build universal package and deploy to Batocera system
+    vars:
+      BATOCERA_HOST: '{{.BATOCERA_HOST | default "root@${BATOCERA_IP}"}}'
     cmds:
       - task: package-any
-      - scp _build/packages/batocera/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst root@${BATOCERA_IP}:/tmp/
-      - ssh root@${BATOCERA_IP} "pacman -R --noconfirm zaparoo-core || true"
-      - ssh root@${BATOCERA_IP} "pacman -U --noconfirm /tmp/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst"
+      - scp _build/packages/batocera/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst {{.BATOCERA_HOST}}:/tmp/
+      - ssh {{.BATOCERA_HOST}} "pacman -R --noconfirm zaparoo-core || true"
+      - ssh {{.BATOCERA_HOST}} "pacman -U --noconfirm /tmp/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst"
