@@ -29,6 +29,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/inbox"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/playlists"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
 	"github.com/rs/zerolog/log"
@@ -45,15 +46,16 @@ import (
 type State struct {
 	platform         platforms.Platform
 	ctx              context.Context
-	onMediaStartHook func(*models.ActiveMedia)
-	launcherManager  *LauncherManager
+	activePlaylist   *playlists.Playlist
+	softwareToken    *tokens.Token
 	wroteToken       *tokens.Token
 	readers          map[string]readers.Reader
 	ctxCancelFunc    context.CancelFunc
 	activeMedia      *models.ActiveMedia
-	activePlaylist   *playlists.Playlist
-	softwareToken    *tokens.Token
+	onMediaStartHook func(*models.ActiveMedia)
+	launcherManager  *LauncherManager
 	Notifications    chan<- models.Notification
+	inbox            *inbox.Service
 	bootUUID         string
 	lastScanned      tokens.Token
 	activeToken      tokens.Token
@@ -418,4 +420,18 @@ func (s *State) BootUUID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.bootUUID
+}
+
+// SetInbox sets the inbox service. Called during service startup after database is ready.
+func (s *State) SetInbox(svc *inbox.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inbox = svc
+}
+
+// Inbox returns the inbox service for adding system notifications.
+func (s *State) Inbox() *inbox.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.inbox
 }

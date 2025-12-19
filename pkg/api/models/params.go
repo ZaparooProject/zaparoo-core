@@ -116,3 +116,7 @@ type UpdateActiveMediaParams struct {
 	MediaPath string `json:"mediaPath" validate:"required"`
 	MediaName string `json:"mediaName" validate:"required"`
 }
+
+type DeleteInboxParams struct {
+	ID int64 `json:"id" validate:"gt=0"`
+}

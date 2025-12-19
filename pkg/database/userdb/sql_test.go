@@ -994,3 +994,282 @@ func TestSqlPruneExpiredZapLinkHosts_DatabaseError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to prune expired zap link hosts")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// Inbox Operation Tests
+
+func TestSqlAddInboxMessage_WithoutCategory(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	msg := &database.InboxMessage{
+		Title:     "Test Notification",
+		Body:      "Test Body",
+		Severity:  1,
+		ProfileID: 0,
+		CreatedAt: now,
+	}
+
+	rows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
+	mock.ExpectQuery(`INSERT INTO Inbox.*VALUES.*NULL.*RETURNING DBID`).
+		WithArgs(msg.Title, msg.Body, msg.Severity, msg.ProfileID, now.Unix()).
+		WillReturnRows(rows)
+
+	result, err := sqlAddInboxMessage(context.Background(), db, msg)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.DBID)
+	assert.Equal(t, msg.Title, result.Title)
+	assert.Equal(t, msg.Body, result.Body)
+	assert.Equal(t, msg.Severity, result.Severity)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlAddInboxMessage_WithCategory_Insert(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	msg := &database.InboxMessage{
+		Title:     "Test Notification",
+		Body:      "Test Body",
+		Severity:  2,
+		Category:  "test-category",
+		ProfileID: 1,
+		CreatedAt: now,
+	}
+
+	// Expect transaction begin
+	mock.ExpectBegin()
+
+	// First, expect the SELECT to check for existing message - no rows found
+	mock.ExpectQuery(`SELECT DBID FROM Inbox WHERE Category = \? AND ProfileID = \?`).
+		WithArgs(msg.Category, msg.ProfileID).
+		WillReturnError(sql.ErrNoRows)
+
+	// Then expect the INSERT
+	rows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
+	mock.ExpectQuery(`INSERT INTO Inbox.*RETURNING DBID`).
+		WithArgs(msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, now.Unix()).
+		WillReturnRows(rows)
+
+	// Expect transaction commit
+	mock.ExpectCommit()
+
+	result, err := sqlAddInboxMessage(context.Background(), db, msg)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.DBID)
+	assert.Equal(t, msg.Title, result.Title)
+	assert.Equal(t, msg.Category, result.Category)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlAddInboxMessage_WithCategory_Update(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	msg := &database.InboxMessage{
+		Title:     "Updated Notification",
+		Body:      "Updated Body",
+		Severity:  2,
+		Category:  "test-category",
+		ProfileID: 1,
+		CreatedAt: now,
+	}
+
+	// Expect transaction begin
+	mock.ExpectBegin()
+
+	// First, expect the SELECT to find existing message
+	existingRows := sqlmock.NewRows([]string{"DBID"}).AddRow(42)
+	mock.ExpectQuery(`SELECT DBID FROM Inbox WHERE Category = \? AND ProfileID = \?`).
+		WithArgs(msg.Category, msg.ProfileID).
+		WillReturnRows(existingRows)
+
+	// Then expect the UPDATE
+	mock.ExpectExec(`UPDATE Inbox SET Title = \?, Body = \?, Severity = \?, CreatedAt = \? WHERE DBID = \?`).
+		WithArgs(msg.Title, msg.Body, msg.Severity, now.Unix(), int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Expect transaction commit
+	mock.ExpectCommit()
+
+	result, err := sqlAddInboxMessage(context.Background(), db, msg)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), result.DBID)
+	assert.Equal(t, msg.Title, result.Title)
+	assert.Equal(t, msg.Category, result.Category)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlAddInboxMessage_Error(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	msg := &database.InboxMessage{
+		Title:     "Test Notification",
+		Body:      "Test Body",
+		CreatedAt: now,
+	}
+
+	mock.ExpectQuery(`INSERT INTO Inbox.*RETURNING DBID`).
+		WithArgs(msg.Title, msg.Body, msg.Severity, msg.ProfileID, now.Unix()).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	result, err := sqlAddInboxMessage(context.Background(), db, msg)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to insert inbox message")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetInboxMessages_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{"DBID", "Title", "Body", "Severity", "Category", "ProfileID", "CreatedAt"}).
+		AddRow(2, "Second", "Body 2", 1, "cat1", int64(0), now.Unix()).
+		AddRow(1, "First", nil, 0, nil, int64(1), now.Add(-time.Hour).Unix())
+
+	mock.ExpectPrepare(`SELECT.*FROM Inbox.*ORDER BY CreatedAt DESC.*LIMIT 100`).
+		ExpectQuery().
+		WillReturnRows(rows)
+
+	result, err := sqlGetInboxMessages(context.Background(), db)
+	require.NoError(t, err)
+	assert.Len(t, result, 2)
+	assert.Equal(t, int64(2), result[0].DBID)
+	assert.Equal(t, "Second", result[0].Title)
+	assert.Equal(t, "Body 2", result[0].Body)
+	assert.Equal(t, 1, result[0].Severity)
+	assert.Equal(t, "cat1", result[0].Category)
+	assert.Equal(t, int64(1), result[1].DBID)
+	assert.Empty(t, result[1].Body)
+	assert.Empty(t, result[1].Category)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetInboxMessages_Empty(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	rows := sqlmock.NewRows([]string{"DBID", "Title", "Body", "Severity", "Category", "ProfileID", "CreatedAt"})
+
+	mock.ExpectPrepare(`SELECT.*FROM Inbox.*ORDER BY CreatedAt DESC.*LIMIT 100`).
+		ExpectQuery().
+		WillReturnRows(rows)
+
+	result, err := sqlGetInboxMessages(context.Background(), db)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlGetInboxMessages_QueryError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectPrepare(`SELECT.*FROM Inbox.*ORDER BY CreatedAt DESC.*LIMIT 100`).
+		ExpectQuery().
+		WillReturnError(sqlmock.ErrCancelled)
+
+	result, err := sqlGetInboxMessages(context.Background(), db)
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "failed to execute inbox query")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteInboxMessage_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox WHERE DBID`).
+		WithArgs(int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = sqlDeleteInboxMessage(context.Background(), db, 42)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteInboxMessage_NotFound(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox WHERE DBID`).
+		WithArgs(int64(99999)).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+
+	err = sqlDeleteInboxMessage(context.Background(), db, 99999)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbox message not found")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteInboxMessage_ExecError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox WHERE DBID`).
+		WithArgs(int64(42)).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	err = sqlDeleteInboxMessage(context.Background(), db, 42)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute inbox delete")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteAllInboxMessages_Success(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox`).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+
+	rowsAffected, err := sqlDeleteAllInboxMessages(context.Background(), db)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), rowsAffected)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestSqlDeleteAllInboxMessages_ExecError(t *testing.T) {
+	t.Parallel()
+	db, mock, err := testsqlmock.NewSQLMock()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectExec(`DELETE FROM Inbox`).
+		WillReturnError(sqlmock.ErrCancelled)
+
+	rowsAffected, err := sqlDeleteAllInboxMessages(context.Background(), db)
+	require.Error(t, err)
+	assert.Equal(t, int64(0), rowsAffected)
+	assert.Contains(t, err.Error(), "failed to delete all inbox messages")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

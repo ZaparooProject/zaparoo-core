@@ -350,6 +350,54 @@ func (m *MockUserDBI) HealTimestamps(bootUUID string, trueBootTime time.Time) (i
 	return rowsHealed, nil
 }
 
+func (m *MockUserDBI) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
+	args := m.Called(msg)
+	if result, ok := args.Get(0).(*database.InboxMessage); ok {
+		if err := args.Error(1); err != nil {
+			return nil, fmt.Errorf("mock UserDBI add inbox message failed: %w", err)
+		}
+		return result, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI add inbox message failed: %w", err)
+	}
+	return nil, nil //nolint:nilnil // mock returns nil when no message is configured
+}
+
+func (m *MockUserDBI) GetInboxMessages() ([]database.InboxMessage, error) {
+	args := m.Called()
+	if messages, ok := args.Get(0).([]database.InboxMessage); ok {
+		if err := args.Error(1); err != nil {
+			return messages, fmt.Errorf("mock UserDBI get inbox messages failed: %w", err)
+		}
+		return messages, nil
+	}
+	if err := args.Error(1); err != nil {
+		return nil, fmt.Errorf("mock UserDBI get inbox messages failed: %w", err)
+	}
+	return nil, nil
+}
+
+func (m *MockUserDBI) DeleteInboxMessage(id int64) error {
+	args := m.Called(id)
+	if err := args.Error(0); err != nil {
+		return fmt.Errorf("mock UserDBI delete inbox message failed: %w", err)
+	}
+	return nil
+}
+
+func (m *MockUserDBI) DeleteAllInboxMessages() (int64, error) {
+	args := m.Called()
+	rowsDeleted, ok := args.Get(0).(int64)
+	if !ok {
+		rowsDeleted = 0
+	}
+	if err := args.Error(1); err != nil {
+		return rowsDeleted, fmt.Errorf("mock UserDBI delete all inbox messages failed: %w", err)
+	}
+	return rowsDeleted, nil
+}
+
 // MockMediaDBI is a mock implementation of the MediaDBI interface using testify/mock
 type MockMediaDBI struct {
 	mock.Mock

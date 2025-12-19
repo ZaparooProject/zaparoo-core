@@ -34,6 +34,7 @@ const (
 	NotificationMediaIndexing        = "media.indexing" // TODO: rename to generating
 	NotificationPlaytimeLimitReached = "playtime.limit.reached"
 	NotificationPlaytimeLimitWarning = "playtime.limit.warning"
+	NotificationInboxAdded           = "inbox.added"
 )
 
 const (
@@ -78,6 +79,9 @@ const (
 	MethodReadersWriteCancel   = "readers.write.cancel"
 	MethodVersion              = "version"
 	MethodHealthCheck          = "health"
+	MethodInbox                = "inbox"
+	MethodInboxDelete          = "inbox.delete"
+	MethodInboxClear           = "inbox.clear"
 )
 
 type Notification struct {

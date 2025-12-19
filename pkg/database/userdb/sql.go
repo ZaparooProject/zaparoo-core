@@ -567,3 +567,163 @@ func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time
 	}
 	return rowsAffected, nil
 }
+
+func sqlAddInboxMessage(ctx context.Context, db *sql.DB, msg *database.InboxMessage) (*database.InboxMessage, error) {
+	var dbid int64
+
+	if msg.Category != "" {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		defer func() {
+			if err != nil {
+				_ = tx.Rollback()
+			}
+		}()
+
+		// Check if a message with this category+profile already exists
+		var existingID int64
+		err = tx.QueryRowContext(ctx,
+			`SELECT DBID FROM Inbox WHERE Category = ? AND ProfileID = ?`,
+			msg.Category, msg.ProfileID,
+		).Scan(&existingID)
+
+		switch {
+		case err == nil:
+			// Message exists, update it
+			_, err = tx.ExecContext(ctx, `
+				UPDATE Inbox SET Title = ?, Body = ?, Severity = ?, CreatedAt = ?
+				WHERE DBID = ?
+			`, msg.Title, msg.Body, msg.Severity, msg.CreatedAt.Unix(), existingID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update inbox message: %w", err)
+			}
+			dbid = existingID
+		case errors.Is(err, sql.ErrNoRows):
+			// Message doesn't exist, insert new
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
+				VALUES (?, ?, ?, ?, ?, ?)
+				RETURNING DBID;
+			`, msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
+			if err != nil {
+				return nil, fmt.Errorf("failed to insert inbox message: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("failed to check existing inbox message: %w", err)
+		}
+
+		if err = tx.Commit(); err != nil {
+			return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+	} else {
+		// No category: always insert new message
+		err := db.QueryRowContext(ctx, `
+			INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
+			VALUES (?, ?, ?, NULL, ?, ?)
+			RETURNING DBID;
+		`, msg.Title, msg.Body, msg.Severity, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert inbox message: %w", err)
+		}
+	}
+
+	return &database.InboxMessage{
+		DBID:      dbid,
+		Title:     msg.Title,
+		Body:      msg.Body,
+		Severity:  msg.Severity,
+		Category:  msg.Category,
+		ProfileID: msg.ProfileID,
+		CreatedAt: msg.CreatedAt,
+	}, nil
+}
+
+func sqlGetInboxMessages(ctx context.Context, db *sql.DB) ([]database.InboxMessage, error) {
+	list := make([]database.InboxMessage, 0)
+
+	q, err := db.PrepareContext(ctx, `
+		SELECT DBID, Title, Body, Severity, Category, ProfileID, CreatedAt
+		FROM Inbox
+		ORDER BY CreatedAt DESC
+		LIMIT 100;
+	`)
+	if err != nil {
+		return list, fmt.Errorf("failed to prepare inbox query statement: %w", err)
+	}
+	defer func() {
+		if closeErr := q.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+		}
+	}()
+
+	rows, err := q.QueryContext(ctx)
+	if err != nil {
+		return list, fmt.Errorf("failed to execute inbox query: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Msg("failed to close sql rows")
+		}
+	}()
+
+	for rows.Next() {
+		row := database.InboxMessage{}
+		var createdAtSec int64
+		var body, category sql.NullString
+
+		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &row.Severity, &category, &row.ProfileID, &createdAtSec)
+		if scanErr != nil {
+			return list, fmt.Errorf("failed to scan inbox row: %w", scanErr)
+		}
+
+		if body.Valid {
+			row.Body = body.String
+		}
+		if category.Valid {
+			row.Category = category.String
+		}
+		row.CreatedAt = time.Unix(createdAtSec, 0)
+		list = append(list, row)
+	}
+
+	if err = rows.Err(); err != nil {
+		return list, fmt.Errorf("error iterating inbox rows: %w", err)
+	}
+
+	return list, nil
+}
+
+func sqlDeleteInboxMessage(ctx context.Context, db *sql.DB, id int64) error {
+	result, err := db.ExecContext(ctx, `DELETE FROM Inbox WHERE DBID = ?;`, id)
+	if err != nil {
+		return fmt.Errorf("failed to execute inbox delete: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("inbox message not found: %d", id)
+	}
+
+	return nil
+}
+
+//goland:noinspection SqlWithoutWhere
+func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
+	result, err := db.ExecContext(ctx, `DELETE FROM Inbox;`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete all inbox messages: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	return rowsAffected, nil
+}
