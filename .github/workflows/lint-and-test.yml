@@ -61,12 +61,14 @@ jobs:
 
       - name: Configure Go paths for Windows
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          {
-            echo "GOCACHE=D:\go-cache"
-            echo "GOMODCACHE=D:\go-mod-cache"
-            echo "GOTMPDIR=D:\go-tmp"
-          } >> "$GITHUB_ENV"
+          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows-latest'
@@ -135,12 +137,14 @@ jobs:
 
       - name: Configure Go paths for Windows
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          {
-            echo "GOCACHE=D:\go-cache"
-            echo "GOMODCACHE=D:\go-mod-cache"
-            echo "GOTMPDIR=D:\go-tmp"
-          } >> "$GITHUB_ENV"
+          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows-latest'
@@ -230,12 +234,14 @@ jobs:
 
       - name: Configure Go paths for Windows
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          {
-            echo "GOCACHE=D:\go-cache"
-            echo "GOMODCACHE=D:\go-mod-cache"
-            echo "GOTMPDIR=D:\go-tmp"
-          } >> "$GITHUB_ENV"
+          New-Item -ItemType Directory -Force -Path "D:\go-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-mod-cache" | Out-Null
+          New-Item -ItemType Directory -Force -Path "D:\go-tmp" | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "GOCACHE=D:\go-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOMODCACHE=D:\go-mod-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "GOTMPDIR=D:\go-tmp"
 
       - name: Restore Go cache (Unix)
         if: matrix.os != 'windows-latest'
