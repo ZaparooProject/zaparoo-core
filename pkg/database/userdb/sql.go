@@ -568,42 +568,83 @@ func sqlPruneExpiredZapLinkHosts(ctx context.Context, db *sql.DB, olderThan time
 	return rowsAffected, nil
 }
 
-func sqlAddInboxEntry(ctx context.Context, db *sql.DB, entry *database.InboxEntry) (*database.InboxEntry, error) {
-	stmt, err := db.PrepareContext(ctx, `
-		INSERT INTO Inbox (Title, Body, CreatedAt) VALUES (?, ?, ?);
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to prepare inbox insert statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
+func sqlAddInboxMessage(ctx context.Context, db *sql.DB, msg *database.InboxMessage) (*database.InboxMessage, error) {
+	var dbid int64
+
+	if msg.Category != "" {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to begin transaction: %w", err)
 		}
-	}()
+		defer func() {
+			if err != nil {
+				_ = tx.Rollback()
+			}
+		}()
 
-	result, err := stmt.ExecContext(ctx, entry.Title, entry.Body, entry.CreatedAt.Unix())
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute inbox insert: %w", err)
+		// Check if a message with this category+profile already exists
+		var existingID int64
+		err = tx.QueryRowContext(ctx,
+			`SELECT DBID FROM Inbox WHERE Category = ? AND ProfileID = ?`,
+			msg.Category, msg.ProfileID,
+		).Scan(&existingID)
+
+		switch {
+		case err == nil:
+			// Message exists, update it
+			_, err = tx.ExecContext(ctx, `
+				UPDATE Inbox SET Title = ?, Body = ?, Severity = ?, CreatedAt = ?
+				WHERE DBID = ?
+			`, msg.Title, msg.Body, msg.Severity, msg.CreatedAt.Unix(), existingID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update inbox message: %w", err)
+			}
+			dbid = existingID
+		case errors.Is(err, sql.ErrNoRows):
+			// Message doesn't exist, insert new
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
+				VALUES (?, ?, ?, ?, ?, ?)
+				RETURNING DBID;
+			`, msg.Title, msg.Body, msg.Severity, msg.Category, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
+			if err != nil {
+				return nil, fmt.Errorf("failed to insert inbox message: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("failed to check existing inbox message: %w", err)
+		}
+
+		if err = tx.Commit(); err != nil {
+			return nil, fmt.Errorf("failed to commit transaction: %w", err)
+		}
+	} else {
+		// No category: always insert new message
+		err := db.QueryRowContext(ctx, `
+			INSERT INTO Inbox (Title, Body, Severity, Category, ProfileID, CreatedAt)
+			VALUES (?, ?, ?, NULL, ?, ?)
+			RETURNING DBID;
+		`, msg.Title, msg.Body, msg.Severity, msg.ProfileID, msg.CreatedAt.Unix()).Scan(&dbid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert inbox message: %w", err)
+		}
 	}
 
-	lastID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get last insert id: %w", err)
-	}
-
-	return &database.InboxEntry{
-		DBID:      lastID,
-		Title:     entry.Title,
-		Body:      entry.Body,
-		CreatedAt: entry.CreatedAt,
+	return &database.InboxMessage{
+		DBID:      dbid,
+		Title:     msg.Title,
+		Body:      msg.Body,
+		Severity:  msg.Severity,
+		Category:  msg.Category,
+		ProfileID: msg.ProfileID,
+		CreatedAt: msg.CreatedAt,
 	}, nil
 }
 
-func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry, error) {
-	list := make([]database.InboxEntry, 0)
+func sqlGetInboxMessages(ctx context.Context, db *sql.DB) ([]database.InboxMessage, error) {
+	list := make([]database.InboxMessage, 0)
 
 	q, err := db.PrepareContext(ctx, `
-		SELECT DBID, Title, Body, CreatedAt
+		SELECT DBID, Title, Body, Severity, Category, ProfileID, CreatedAt
 		FROM Inbox
 		ORDER BY CreatedAt DESC
 		LIMIT 100;
@@ -628,17 +669,20 @@ func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry,
 	}()
 
 	for rows.Next() {
-		row := database.InboxEntry{}
+		row := database.InboxMessage{}
 		var createdAtSec int64
-		var body sql.NullString
+		var body, category sql.NullString
 
-		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &createdAtSec)
+		scanErr := rows.Scan(&row.DBID, &row.Title, &body, &row.Severity, &category, &row.ProfileID, &createdAtSec)
 		if scanErr != nil {
 			return list, fmt.Errorf("failed to scan inbox row: %w", scanErr)
 		}
 
 		if body.Valid {
 			row.Body = body.String
+		}
+		if category.Valid {
+			row.Category = category.String
 		}
 		row.CreatedAt = time.Unix(createdAtSec, 0)
 		list = append(list, row)
@@ -651,29 +695,29 @@ func sqlGetInboxEntries(ctx context.Context, db *sql.DB) ([]database.InboxEntry,
 	return list, nil
 }
 
-func sqlDeleteInboxEntry(ctx context.Context, db *sql.DB, id int64) error {
-	stmt, err := db.PrepareContext(ctx, `DELETE FROM Inbox WHERE DBID = ?;`)
-	if err != nil {
-		return fmt.Errorf("failed to prepare inbox delete statement: %w", err)
-	}
-	defer func() {
-		if closeErr := stmt.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Msg("failed to close sql statement")
-		}
-	}()
-
-	_, err = stmt.ExecContext(ctx, id)
+func sqlDeleteInboxMessage(ctx context.Context, db *sql.DB, id int64) error {
+	result, err := db.ExecContext(ctx, `DELETE FROM Inbox WHERE DBID = ?;`, id)
 	if err != nil {
 		return fmt.Errorf("failed to execute inbox delete: %w", err)
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("inbox message not found: %d", id)
+	}
+
 	return nil
 }
 
 //goland:noinspection SqlWithoutWhere
-func sqlDeleteAllInboxEntries(ctx context.Context, db *sql.DB) (int64, error) {
+func sqlDeleteAllInboxMessages(ctx context.Context, db *sql.DB) (int64, error) {
 	result, err := db.ExecContext(ctx, `DELETE FROM Inbox;`)
 	if err != nil {
-		return 0, fmt.Errorf("failed to delete all inbox entries: %w", err)
+		return 0, fmt.Errorf("failed to delete all inbox messages: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()

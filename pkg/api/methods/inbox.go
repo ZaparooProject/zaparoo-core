@@ -32,22 +32,25 @@ import (
 func HandleInbox(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received inbox request")
 
-	entries, err := env.Database.UserDB.GetInboxEntries()
+	messages, err := env.Database.UserDB.GetInboxMessages()
 	if err != nil {
-		log.Error().Err(err).Msg("error getting inbox entries")
-		return nil, errors.New("error getting inbox entries")
+		log.Error().Err(err).Msg("error getting inbox messages")
+		return nil, errors.New("error getting inbox messages")
 	}
 
 	resp := models.InboxResponse{
-		Entries: make([]models.InboxEntry, len(entries)),
+		Messages: make([]models.InboxMessage, len(messages)),
 	}
 
-	for i, entry := range entries {
-		resp.Entries[i] = models.InboxEntry{
-			ID:        entry.DBID,
-			Title:     entry.Title,
-			Body:      entry.Body,
-			CreatedAt: entry.CreatedAt,
+	for i, msg := range messages {
+		resp.Messages[i] = models.InboxMessage{
+			ID:        msg.DBID,
+			Title:     msg.Title,
+			Body:      msg.Body,
+			Severity:  msg.Severity,
+			Category:  msg.Category,
+			ProfileID: msg.ProfileID,
+			CreatedAt: msg.CreatedAt,
 		}
 	}
 
@@ -63,9 +66,9 @@ func HandleInboxDelete(env requests.RequestEnv) (any, error) { //nolint:gocritic
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
-	err := env.Database.UserDB.DeleteInboxEntry(params.ID)
+	err := env.Database.UserDB.DeleteInboxMessage(params.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to delete inbox entry: %w", err)
+		return nil, fmt.Errorf("failed to delete inbox message: %w", err)
 	}
 
 	return NoContent{}, nil
@@ -74,7 +77,7 @@ func HandleInboxDelete(env requests.RequestEnv) (any, error) { //nolint:gocritic
 func HandleInboxClear(env requests.RequestEnv) (any, error) { //nolint:gocritic // single-use parameter in API handler
 	log.Info().Msg("received inbox clear request")
 
-	_, err := env.Database.UserDB.DeleteAllInboxEntries()
+	_, err := env.Database.UserDB.DeleteAllInboxMessages()
 	if err != nil {
 		return nil, fmt.Errorf("failed to clear inbox: %w", err)
 	}

@@ -108,6 +108,6 @@ func PlaytimeLimitWarning(ns chan<- models.Notification, payload models.Playtime
 	sendNotification(ns, models.NotificationPlaytimeLimitWarning, payload)
 }
 
-func InboxAdded(ns chan<- models.Notification, payload models.InboxEntry) {
+func InboxAdded(ns chan<- models.Notification, payload *models.InboxMessage) {
 	sendNotification(ns, models.NotificationInboxAdded, payload)
 }

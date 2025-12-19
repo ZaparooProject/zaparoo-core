@@ -23,18 +23,18 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
 )
 
-func (db *UserDB) AddInboxEntry(entry *database.InboxEntry) (*database.InboxEntry, error) {
-	return sqlAddInboxEntry(db.ctx, db.sql, entry)
+func (db *UserDB) AddInboxMessage(msg *database.InboxMessage) (*database.InboxMessage, error) {
+	return sqlAddInboxMessage(db.ctx, db.sql, msg)
 }
 
-func (db *UserDB) GetInboxEntries() ([]database.InboxEntry, error) {
-	return sqlGetInboxEntries(db.ctx, db.sql)
+func (db *UserDB) GetInboxMessages() ([]database.InboxMessage, error) {
+	return sqlGetInboxMessages(db.ctx, db.sql)
 }
 
-func (db *UserDB) DeleteInboxEntry(id int64) error {
-	return sqlDeleteInboxEntry(db.ctx, db.sql, id)
+func (db *UserDB) DeleteInboxMessage(id int64) error {
+	return sqlDeleteInboxMessage(db.ctx, db.sql, id)
 }
 
-func (db *UserDB) DeleteAllInboxEntries() (int64, error) {
-	return sqlDeleteAllInboxEntries(db.ctx, db.sql)
+func (db *UserDB) DeleteAllInboxMessages() (int64, error) {
+	return sqlDeleteAllInboxMessages(db.ctx, db.sql)
 }

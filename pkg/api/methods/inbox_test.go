@@ -39,12 +39,12 @@ func TestHandleInbox_Success(t *testing.T) {
 	mockUserDB := helpers.NewMockUserDBI()
 	now := time.Now()
 
-	entries := []database.InboxEntry{
-		{DBID: 1, Title: "First Message", Body: "Body 1", CreatedAt: now},
-		{DBID: 2, Title: "Second Message", Body: "", CreatedAt: now.Add(-time.Hour)},
+	messages := []database.InboxMessage{
+		{DBID: 1, Title: "First Message", Body: "Body 1", Severity: 1, Category: "cat1", CreatedAt: now},
+		{DBID: 2, Title: "Second Message", Body: "", Severity: 0, CreatedAt: now.Add(-time.Hour)},
 	}
 
-	mockUserDB.On("GetInboxEntries").Return(entries, nil)
+	mockUserDB.On("GetInboxMessages").Return(messages, nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -55,13 +55,15 @@ func TestHandleInbox_Success(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.InboxResponse)
 	require.True(t, ok)
-	assert.Len(t, resp.Entries, 2)
-	assert.Equal(t, int64(1), resp.Entries[0].ID)
-	assert.Equal(t, "First Message", resp.Entries[0].Title)
-	assert.Equal(t, "Body 1", resp.Entries[0].Body)
-	assert.Equal(t, int64(2), resp.Entries[1].ID)
-	assert.Equal(t, "Second Message", resp.Entries[1].Title)
-	assert.Empty(t, resp.Entries[1].Body)
+	assert.Len(t, resp.Messages, 2)
+	assert.Equal(t, int64(1), resp.Messages[0].ID)
+	assert.Equal(t, "First Message", resp.Messages[0].Title)
+	assert.Equal(t, "Body 1", resp.Messages[0].Body)
+	assert.Equal(t, 1, resp.Messages[0].Severity)
+	assert.Equal(t, "cat1", resp.Messages[0].Category)
+	assert.Equal(t, int64(2), resp.Messages[1].ID)
+	assert.Equal(t, "Second Message", resp.Messages[1].Title)
+	assert.Empty(t, resp.Messages[1].Body)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -70,7 +72,7 @@ func TestHandleInbox_Empty(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("GetInboxEntries").Return([]database.InboxEntry{}, nil)
+	mockUserDB.On("GetInboxMessages").Return([]database.InboxMessage{}, nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -81,7 +83,7 @@ func TestHandleInbox_Empty(t *testing.T) {
 	require.NoError(t, err)
 	resp, ok := result.(models.InboxResponse)
 	require.True(t, ok)
-	assert.Empty(t, resp.Entries)
+	assert.Empty(t, resp.Messages)
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -90,7 +92,7 @@ func TestHandleInbox_DatabaseError(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("GetInboxEntries").Return([]database.InboxEntry{}, errors.New("db error"))
+	mockUserDB.On("GetInboxMessages").Return([]database.InboxMessage{}, errors.New("db error"))
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -100,7 +102,7 @@ func TestHandleInbox_DatabaseError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "error getting inbox entries")
+	assert.Contains(t, err.Error(), "error getting inbox messages")
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -109,7 +111,7 @@ func TestHandleInboxDelete_Success(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("DeleteInboxEntry", int64(42)).Return(nil)
+	mockUserDB.On("DeleteInboxMessage", int64(42)).Return(nil)
 
 	params := models.DeleteInboxParams{ID: 42}
 	paramsJSON, err := json.Marshal(params)
@@ -150,14 +152,14 @@ func TestHandleInboxDelete_InvalidParams(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid params")
 
-	mockUserDB.AssertNotCalled(t, "DeleteInboxEntry")
+	mockUserDB.AssertNotCalled(t, "DeleteInboxMessage")
 }
 
 func TestHandleInboxDelete_DatabaseError(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("DeleteInboxEntry", int64(1)).Return(errors.New("db error"))
+	mockUserDB.On("DeleteInboxMessage", int64(1)).Return(errors.New("db error"))
 
 	params := models.DeleteInboxParams{ID: 1}
 	paramsJSON, err := json.Marshal(params)
@@ -172,7 +174,7 @@ func TestHandleInboxDelete_DatabaseError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "failed to delete inbox entry")
+	assert.Contains(t, err.Error(), "failed to delete inbox message")
 
 	mockUserDB.AssertExpectations(t)
 }
@@ -181,7 +183,7 @@ func TestHandleInboxClear_Success(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("DeleteAllInboxEntries").Return(int64(5), nil)
+	mockUserDB.On("DeleteAllInboxMessages").Return(int64(5), nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -200,7 +202,7 @@ func TestHandleInboxClear_EmptyInbox(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("DeleteAllInboxEntries").Return(int64(0), nil)
+	mockUserDB.On("DeleteAllInboxMessages").Return(int64(0), nil)
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},
@@ -219,7 +221,7 @@ func TestHandleInboxClear_DatabaseError(t *testing.T) {
 	t.Parallel()
 
 	mockUserDB := helpers.NewMockUserDBI()
-	mockUserDB.On("DeleteAllInboxEntries").Return(int64(0), errors.New("db error"))
+	mockUserDB.On("DeleteAllInboxMessages").Return(int64(0), errors.New("db error"))
 
 	env := requests.RequestEnv{
 		Database: &database.Database{UserDB: mockUserDB},

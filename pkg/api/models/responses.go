@@ -269,13 +269,16 @@ type ReadersResponse struct {
 	Readers []ReaderInfo `json:"readers"`
 }
 
-type InboxEntry struct {
+type InboxMessage struct {
 	CreatedAt time.Time `json:"createdAt"`
 	Title     string    `json:"title"`
 	Body      string    `json:"body,omitempty"`
+	Category  string    `json:"category,omitempty"`
 	ID        int64     `json:"id"`
+	Severity  int       `json:"severity"`
+	ProfileID int64     `json:"profileId,omitempty"`
 }
 
 type InboxResponse struct {
-	Entries []InboxEntry `json:"entries"`
+	Messages []InboxMessage `json:"messages"`
 }
