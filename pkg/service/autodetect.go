@@ -66,6 +66,16 @@ func (ad *AutoDetector) DetectReaders(
 
 	for _, reader := range supportedReaders {
 		metadata := reader.Metadata()
+		driver := config.DriverInfo{
+			ID:                metadata.ID,
+			DefaultEnabled:    metadata.DefaultEnabled,
+			DefaultAutoDetect: metadata.DefaultAutoDetect,
+		}
+
+		// Check if driver is enabled (explicit config or default)
+		if !cfg.IsDriverEnabledForAutoDetect(driver) {
+			continue
+		}
 
 		if !cfg.IsDriverAutoDetectEnabled(metadata.ID, metadata.DefaultAutoDetect) {
 			continue

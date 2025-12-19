@@ -95,9 +95,15 @@ func connectReaders(
 			rt := readers.NormalizeDriverID(device.device.Driver)
 			for _, r := range pl.SupportedReaders(cfg) {
 				metadata := r.Metadata()
+				driver := config.DriverInfo{
+					ID:                metadata.ID,
+					DefaultEnabled:    metadata.DefaultEnabled,
+					DefaultAutoDetect: metadata.DefaultAutoDetect,
+				}
 
-				// Check if this driver is enabled
-				if !cfg.IsDriverEnabled(metadata.ID, metadata.DefaultEnabled) {
+				// For user-defined connect entries, driver is implicitly enabled
+				// unless explicitly disabled in config.
+				if !cfg.IsDriverEnabledForConnect(driver) {
 					continue
 				}
 
