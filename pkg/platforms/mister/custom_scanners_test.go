@@ -196,8 +196,11 @@ func TestAmigaScanner_HandlesNoPaths(t *testing.T) {
 	})
 }
 
-func TestFilterNeoGeoZipContents(t *testing.T) {
+func TestFilterNeoGeoGameContents(t *testing.T) {
 	t.Parallel()
+
+	// Default NEOGEO paths used in most tests
+	defaultNeogeoPaths := []string{"/media/fat/NEOGEO"}
 
 	t.Run("filters out paths inside zips that are games", func(t *testing.T) {
 		t.Parallel()
@@ -221,7 +224,7 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 			{Path: "/media/fat/NEOGEO/somegame.neo", Name: ""},
 		}
 
-		result := filterNeoGeoZipContents(input, romsets)
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
 		// Should keep: mslug.zip, kof98.zip, somegame.neo
 		// Should filter: mslug.zip/*, kof98.zip/*
@@ -229,6 +232,56 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 		assert.Equal(t, "/media/fat/NEOGEO/mslug.zip", result[0].Path)
 		assert.Equal(t, "/media/fat/NEOGEO/kof98.zip", result[1].Path)
 		assert.Equal(t, "/media/fat/NEOGEO/somegame.neo", result[2].Path)
+	})
+
+	t.Run("filters out paths inside game folders", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug":   "Metal Slug",
+			"ct2k3sa": "Crouching Tiger Hidden Dragon 2003 Super Plus",
+		}
+
+		input := []platforms.ScanResult{
+			// Files inside game folders - should be filtered
+			{Path: "/media/fat/NEOGEO/ct2k3sa/crom0", Name: ""},
+			{Path: "/media/fat/NEOGEO/ct2k3sa/prom", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug/mslug.rom", Name: ""},
+			// Regular .neo file - should be kept
+			{Path: "/media/fat/NEOGEO/somegame.neo", Name: ""},
+			// File inside non-game folder - should be kept
+			{Path: "/media/fat/NEOGEO/collection/game1.neo", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
+
+		// Should keep: somegame.neo, collection/game1.neo
+		// Should filter: ct2k3sa/*, mslug/*
+		assert.Len(t, result, 2)
+		assert.Equal(t, "/media/fat/NEOGEO/somegame.neo", result[0].Path)
+		assert.Equal(t, "/media/fat/NEOGEO/collection/game1.neo", result[1].Path)
+	})
+
+	t.Run("filters both zip contents and folder contents", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+
+		input := []platforms.ScanResult{
+			// Inside game zip - filtered
+			{Path: "/media/fat/NEOGEO/mslug.zip/mslug.rom", Name: ""},
+			// Inside game folder - filtered
+			{Path: "/media/fat/NEOGEO/mslug/mslug.rom", Name: ""},
+			// Game zip itself - kept
+			{Path: "/media/fat/NEOGEO/mslug.zip", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
+
+		assert.Len(t, result, 1)
+		assert.Equal(t, "/media/fat/NEOGEO/mslug.zip", result[0].Path)
 	})
 
 	t.Run("keeps paths inside zips that are folders (not in romsets)", func(t *testing.T) {
@@ -247,7 +300,7 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 			{Path: "/media/fat/NEOGEO/mslug.zip/mslug.rom", Name: ""},
 		}
 
-		result := filterNeoGeoZipContents(input, romsets)
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
 		// Should keep the folder zip contents, filter the game zip contents
 		assert.Len(t, result, 2)
@@ -255,7 +308,7 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 		assert.Equal(t, "/media/fat/NEOGEO/collection.zip/game2.neo", result[1].Path)
 	})
 
-	t.Run("handles case insensitive matching", func(t *testing.T) {
+	t.Run("handles case insensitive matching for zips", func(t *testing.T) {
 		t.Parallel()
 
 		romsets := map[string]string{
@@ -268,7 +321,25 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 			{Path: "/media/fat/NEOGEO/MsLuG.zip/internal", Name: ""},
 		}
 
-		result := filterNeoGeoZipContents(input, romsets)
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
+
+		// Both should be filtered (case insensitive match)
+		assert.Empty(t, result)
+	})
+
+	t.Run("handles case insensitive matching for folders", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug", // lowercase in romsets
+		}
+
+		input := []platforms.ScanResult{
+			{Path: "/media/fat/NEOGEO/MSLUG/crom0", Name: ""},
+			{Path: "/media/fat/NEOGEO/MsLuG/prom", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
 		// Both should be filtered (case insensitive match)
 		assert.Empty(t, result)
@@ -278,21 +349,29 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 		t.Parallel()
 
 		// Empty romsets
-		result1 := filterNeoGeoZipContents([]platforms.ScanResult{
+		result1 := filterNeoGeoGameContents([]platforms.ScanResult{
 			{Path: "/media/fat/NEOGEO/mslug.zip/mslug.rom", Name: ""},
-		}, map[string]string{})
+		}, map[string]string{}, defaultNeogeoPaths)
 
 		// With empty romsets, nothing matches, so all are kept
 		assert.Len(t, result1, 1)
 
 		// Empty input
-		result2 := filterNeoGeoZipContents([]platforms.ScanResult{}, map[string]string{
+		result2 := filterNeoGeoGameContents([]platforms.ScanResult{}, map[string]string{
 			"mslug": "Metal Slug",
-		})
+		}, defaultNeogeoPaths)
 		assert.Empty(t, result2)
+
+		// Empty NEOGEO paths - folder filtering requires paths to compare against
+		result3 := filterNeoGeoGameContents([]platforms.ScanResult{
+			{Path: "/media/fat/NEOGEO/mslug/crom0", Name: ""},
+		}, map[string]string{
+			"mslug": "Metal Slug",
+		}, []string{})
+		assert.Len(t, result3, 1)
 	})
 
-	t.Run("handles paths without .zip/ pattern", func(t *testing.T) {
+	t.Run("handles direct children of NEOGEO", func(t *testing.T) {
 		t.Parallel()
 
 		romsets := map[string]string{
@@ -300,16 +379,77 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 		}
 
 		input := []platforms.ScanResult{
-			// Regular paths - no .zip/ pattern
-			{Path: "/media/fat/NEOGEO/mslug.zip", Name: ""},
+			// Direct children - should be kept
 			{Path: "/media/fat/NEOGEO/game.neo", Name: ""},
-			{Path: "/media/fat/NEOGEO/subfolder/game.neo", Name: ""},
+			{Path: "/media/fat/NEOGEO/mslug.zip", Name: ""},
 		}
 
-		result := filterNeoGeoZipContents(input, romsets)
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
-		// All should be kept (no filtering needed)
-		assert.Len(t, result, 3)
+		// Both should be kept - they're direct children, not inside folders
+		assert.Len(t, result, 2)
+	})
+
+	t.Run("keeps files in nested non-game folders", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+
+		input := []platforms.ScanResult{
+			// Nested inside a non-game folder - should be kept
+			{Path: "/media/fat/NEOGEO/collection/subfolder/game.neo", Name: ""},
+			// First level inside non-game folder - should be kept
+			{Path: "/media/fat/NEOGEO/collection/game.neo", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
+
+		assert.Len(t, result, 2)
+	})
+
+	t.Run("handles multiple NEOGEO paths", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+
+		neogeoPaths := []string{
+			"/media/fat/NEOGEO",
+			"/media/usb0/NEOGEO",
+		}
+
+		input := []platforms.ScanResult{
+			{Path: "/media/fat/NEOGEO/mslug/crom0", Name: ""},
+			{Path: "/media/usb0/NEOGEO/mslug/prom", Name: ""},
+			{Path: "/media/fat/NEOGEO/other.neo", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, neogeoPaths)
+
+		assert.Len(t, result, 1)
+		assert.Equal(t, "/media/fat/NEOGEO/other.neo", result[0].Path)
+	})
+
+	t.Run("handles paths with trailing slashes", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+
+		// Path with trailing slash
+		neogeoPaths := []string{"/media/fat/NEOGEO/"}
+
+		input := []platforms.ScanResult{
+			{Path: "/media/fat/NEOGEO/mslug/crom0", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, neogeoPaths)
+
+		assert.Empty(t, result)
 	})
 
 	t.Run("handles nested zip paths", func(t *testing.T) {
@@ -324,9 +464,97 @@ func TestFilterNeoGeoZipContents(t *testing.T) {
 			{Path: "/media/fat/NEOGEO/mslug.zip/subdir/file.rom", Name: ""},
 		}
 
-		result := filterNeoGeoZipContents(input, romsets)
+		result := filterNeoGeoGameContents(input, romsets, defaultNeogeoPaths)
 
 		// Should be filtered (mslug is a game)
 		assert.Empty(t, result)
+	})
+}
+
+func TestIsInsideGameFolder(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns true for path inside game folder", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+		neogeoPaths := []string{"/media/fat/neogeo"}
+
+		result := isInsideGameFolder("/media/fat/neogeo/mslug/crom0", romsets, neogeoPaths)
+		assert.True(t, result)
+	})
+
+	t.Run("returns false for direct child of NEOGEO", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+		neogeoPaths := []string{"/media/fat/neogeo"}
+
+		result := isInsideGameFolder("/media/fat/neogeo/mslug.zip", romsets, neogeoPaths)
+		assert.False(t, result)
+	})
+
+	t.Run("returns false for path in non-game folder", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+		neogeoPaths := []string{"/media/fat/neogeo"}
+
+		result := isInsideGameFolder("/media/fat/neogeo/collection/game.neo", romsets, neogeoPaths)
+		assert.False(t, result)
+	})
+
+	t.Run("returns false for path not under NEOGEO", func(t *testing.T) {
+		t.Parallel()
+
+		romsets := map[string]string{
+			"mslug": "Metal Slug",
+		}
+		neogeoPaths := []string{"/media/fat/neogeo"}
+
+		result := isInsideGameFolder("/media/fat/other/mslug/crom0", romsets, neogeoPaths)
+		assert.False(t, result)
+	})
+}
+
+func TestFilterNeoGeoGameContents_CommaSeparatedRomsets(t *testing.T) {
+	t.Parallel()
+
+	t.Run("filters folder matching any alias from comma-separated name", func(t *testing.T) {
+		t.Parallel()
+
+		// Simulates how romsets would be parsed after splitting comma-separated names
+		// e.g., romsets.xml has: name="samsh5spho,smsh5spo"
+		// Both aliases should be in the map pointing to the same alt name
+		romsets := map[string]string{
+			"samsh5spho": "Samurai Shodown V Special",
+			"smsh5spo":   "Samurai Shodown V Special",
+		}
+
+		neogeoPaths := []string{"/media/fat/games/NEOGEO"}
+
+		input := []platforms.ScanResult{
+			// Folder using the short alias
+			{Path: "/media/fat/games/NEOGEO/smsh5spo/crom0", Name: ""},
+			{Path: "/media/fat/games/NEOGEO/smsh5spo/prom", Name: ""},
+			// Folder using the long alias
+			{Path: "/media/fat/games/NEOGEO/samsh5spho/crom0", Name: ""},
+			// Game files that should be kept
+			{Path: "/media/fat/games/NEOGEO/smsh5spo.zip", Name: ""},
+			{Path: "/media/fat/games/NEOGEO/game.neo", Name: ""},
+		}
+
+		result := filterNeoGeoGameContents(input, romsets, neogeoPaths)
+
+		// Only the .zip and .neo should remain
+		assert.Len(t, result, 2)
+		assert.Equal(t, "/media/fat/games/NEOGEO/smsh5spo.zip", result[0].Path)
+		assert.Equal(t, "/media/fat/games/NEOGEO/game.neo", result[1].Path)
 	})
 }
