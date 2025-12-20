@@ -93,6 +93,8 @@ jobs:
           - windows
           - mac
           - batocera
+          - bazzite
+          - chimeraos
           - linux
           - libreelec
         arch:
