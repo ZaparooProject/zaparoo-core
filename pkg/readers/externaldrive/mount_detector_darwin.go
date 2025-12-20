@@ -108,6 +108,12 @@ func (d *darwinMountDetector) Stop() {
 	})
 }
 
+func (d *darwinMountDetector) Forget(deviceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.mountedDevs, deviceID)
+}
+
 func (d *darwinMountDetector) watchFileSystemEvents() {
 	defer d.wg.Done()
 

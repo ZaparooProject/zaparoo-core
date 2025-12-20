@@ -87,6 +87,12 @@ func (d *windowsMountDetector) Stop() {
 	})
 }
 
+func (d *windowsMountDetector) Forget(deviceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.mountedDevs, deviceID)
+}
+
 func (d *windowsMountDetector) watchVolumeChanges() {
 	defer d.wg.Done()
 

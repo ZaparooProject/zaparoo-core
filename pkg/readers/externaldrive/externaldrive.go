@@ -83,7 +83,7 @@ func isBlockDevicePresent(deviceNode string) bool {
 	baseDev := partitionSuffixRegex.ReplaceAllString(devName, "")
 
 	// Check if block device exists in sysfs
-	sysPath := sysBlockPath + "/" + baseDev
+	sysPath := filepath.Join(sysBlockPath, baseDev)
 	_, err := os.Stat(sysPath)
 	return err == nil
 }
