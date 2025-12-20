@@ -52,7 +52,7 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "text/plain")
-		log.Debug().
+		log.Trace().
 			Str("method", "POST").
 			Str("url", apiURL+path).
 			Str("contentType", "text/plain").
@@ -63,7 +63,7 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-		log.Debug().
+		log.Trace().
 			Str("method", "GET").
 			Str("url", apiURL+path).
 			Msg("ES API request")
@@ -87,7 +87,7 @@ func APIRequest(path, body string, timeout time.Duration) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	log.Debug().
+	log.Trace().
 		Str("path", path).
 		Int("statusCode", resp.StatusCode).
 		Str("status", resp.Status).

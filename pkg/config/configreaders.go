@@ -158,6 +158,27 @@ func (c *Instance) IsDriverEnabled(driverID string, defaultEnabled bool) bool {
 	return defaultEnabled
 }
 
+// DriverInfo contains driver metadata needed for enabled/auto-detect checks.
+// This is a subset of reader metadata to avoid circular imports.
+type DriverInfo struct {
+	ID                string
+	DefaultEnabled    bool
+	DefaultAutoDetect bool
+}
+
+// IsDriverEnabledForConnect checks if a driver should be enabled for a
+// user-defined [[readers.connect]] entry. Returns true unless explicitly disabled.
+// Having a connect entry implicitly enables the driver.
+func (c *Instance) IsDriverEnabledForConnect(driver DriverInfo) bool {
+	return c.IsDriverEnabled(driver.ID, true)
+}
+
+// IsDriverEnabledForAutoDetect checks if a driver should be enabled for
+// auto-detection. Uses the driver's DefaultEnabled if not explicitly configured.
+func (c *Instance) IsDriverEnabledForAutoDetect(driver DriverInfo) bool {
+	return c.IsDriverEnabled(driver.ID, driver.DefaultEnabled)
+}
+
 func (c *Instance) IsDriverAutoDetectEnabled(driverID string, defaultAutoDetect bool) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

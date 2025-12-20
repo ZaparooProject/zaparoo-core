@@ -84,7 +84,7 @@ func (p *Platform) checkKodiPlaybackStatus() *models.ActiveMedia {
 	players, err := client.GetActivePlayers(ctx)
 	if err != nil {
 		// Kodi is not running or not reachable
-		log.Debug().Err(err).Msg("Kodi not reachable, clearing kodiActive flag")
+		log.Trace().Err(err).Msg("Kodi not reachable, clearing kodiActive flag")
 		p.trackerMu.Lock()
 		p.kodiActive = false
 		p.trackerMu.Unlock()

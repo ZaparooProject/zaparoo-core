@@ -140,6 +140,155 @@ func TestIsDriverEnabledNormalization(t *testing.T) {
 	}
 }
 
+// TestIsDriverEnabledForConnect tests the behavior when a driver has a
+// [[readers.connect]] entry. The driver is implicitly enabled unless
+// explicitly disabled in config.
+func TestIsDriverEnabledForConnect(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Drivers: map[string]DriverConfig{
+					"externaldrive": {
+						Enabled: boolPtr(false), // explicitly disabled
+					},
+					"simpleserial": {
+						Enabled: boolPtr(true), // explicitly enabled
+					},
+					// pn532 has no config - not explicitly set (nil)
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		driver   DriverInfo
+		expected bool
+	}{
+		{
+			name: "explicitly disabled driver is blocked",
+			driver: DriverInfo{
+				ID:             "externaldrive",
+				DefaultEnabled: false, // matches real externaldrive
+			},
+			expected: false,
+		},
+		{
+			name: "explicitly enabled driver is allowed",
+			driver: DriverInfo{
+				ID:             "simpleserial",
+				DefaultEnabled: true,
+			},
+			expected: true,
+		},
+		{
+			name: "driver with no config is implicitly enabled",
+			driver: DriverInfo{
+				ID:             "pn532",
+				DefaultEnabled: true,
+			},
+			expected: true,
+		},
+		{
+			name: "driver with DefaultEnabled=false but no config is still enabled for connect",
+			driver: DriverInfo{
+				ID:             "newdriver",
+				DefaultEnabled: false, // would be disabled for auto-detect
+			},
+			expected: true, // but enabled for connect entries
+		},
+		{
+			name: "normalized ID matches explicit disable",
+			driver: DriverInfo{
+				ID:             "external_drive",
+				DefaultEnabled: false,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := cfg.IsDriverEnabledForConnect(tt.driver)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestIsDriverEnabledForAutoDetect tests the behavior for auto-detection.
+// The driver's DefaultEnabled is used when not explicitly configured.
+func TestIsDriverEnabledForAutoDetect(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Instance{
+		vals: Values{
+			Readers: Readers{
+				Drivers: map[string]DriverConfig{
+					"externaldrive": {
+						Enabled: boolPtr(true), // explicitly enabled (overrides default)
+					},
+					"simpleserial": {
+						Enabled: boolPtr(false), // explicitly disabled
+					},
+					// pn532 has no config - uses DefaultEnabled
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		driver   DriverInfo
+		expected bool
+	}{
+		{
+			name: "explicitly enabled overrides DefaultEnabled=false",
+			driver: DriverInfo{
+				ID:             "externaldrive",
+				DefaultEnabled: false,
+			},
+			expected: true,
+		},
+		{
+			name: "explicitly disabled overrides DefaultEnabled=true",
+			driver: DriverInfo{
+				ID:             "simpleserial",
+				DefaultEnabled: true,
+			},
+			expected: false,
+		},
+		{
+			name: "no config with DefaultEnabled=true is enabled",
+			driver: DriverInfo{
+				ID:             "pn532",
+				DefaultEnabled: true,
+			},
+			expected: true,
+		},
+		{
+			name: "no config with DefaultEnabled=false is disabled",
+			driver: DriverInfo{
+				ID:             "newdriver",
+				DefaultEnabled: false,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := cfg.IsDriverEnabledForAutoDetect(tt.driver)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestIsDriverAutoDetectEnabledNormalization(t *testing.T) {
 	t.Parallel()
 
