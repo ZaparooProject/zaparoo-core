@@ -25,6 +25,10 @@ type MountEvent struct {
 	// or serial number. This is used to track the device across mount/unmount cycles.
 	DeviceID string
 
+	// DeviceNode is the block device path (e.g., "/dev/sda1", "/dev/mmcblk0p1").
+	// Used for safety checks when detecting stale mounts. May be empty if unavailable.
+	DeviceNode string
+
 	// MountPath is the filesystem path where the volume is mounted.
 	// Examples: "E:\", "/media/user/USB_DRIVE", "/Volumes/MyUSB"
 	MountPath string
@@ -57,4 +61,9 @@ type MountDetector interface {
 	// Stop terminates the mount detector and releases all resources.
 	// After Stop() is called, the Events() and Unmounts() channels are closed.
 	Stop()
+
+	// Forget removes a device from internal tracking, allowing it to be
+	// re-detected on the next scan. Used when a mount is detected as stale
+	// (e.g., block device no longer exists after USB was yanked).
+	Forget(deviceID string)
 }

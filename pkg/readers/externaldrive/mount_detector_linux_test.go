@@ -26,6 +26,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetDeviceID_UUID_Priority(t *testing.T) {
@@ -224,4 +225,47 @@ func TestGetDeviceType_NoProperties(t *testing.T) {
 
 	deviceType := detector.getDeviceType(props)
 	assert.Equal(t, "unknown", deviceType, "No properties should return unknown")
+}
+
+func TestFallbackRescanInterval_IsReasonable(t *testing.T) {
+	t.Parallel()
+
+	// Verify the rescan interval is within acceptable bounds
+	// Too short = high CPU usage, too long = poor UX
+	assert.GreaterOrEqual(t, fallbackRescanInterval.Seconds(), 1.0,
+		"Rescan interval should be at least 1 second to avoid CPU overhead")
+	assert.LessOrEqual(t, fallbackRescanInterval.Seconds(), 10.0,
+		"Rescan interval should be at most 10 seconds for reasonable UX")
+}
+
+func TestFallbackDetector_HasLastScanField(t *testing.T) {
+	t.Parallel()
+
+	// Verify the detector struct has the lastScan field by creating one
+	detector := &linuxMountDetectorFallback{}
+
+	// The lastScan field should be zero-valued on creation
+	assert.True(t, detector.lastScan.IsZero(),
+		"lastScan should be zero-valued on new detector")
+}
+
+func TestNewLinuxMountDetectorFallback_InitializesCorrectly(t *testing.T) {
+	t.Parallel()
+
+	detector, err := newLinuxMountDetectorFallback()
+	require.NoError(t, err)
+	require.NotNil(t, detector)
+
+	// Cast to access internal fields
+	fallback, ok := detector.(*linuxMountDetectorFallback)
+	assert.True(t, ok, "Should return linuxMountDetectorFallback")
+
+	// Verify channels are initialized
+	assert.NotNil(t, fallback.events)
+	assert.NotNil(t, fallback.unmounts)
+	assert.NotNil(t, fallback.stopChan)
+	assert.NotNil(t, fallback.mountedDevs)
+
+	// lastScan should be zero initially (set when Start() is called)
+	assert.True(t, fallback.lastScan.IsZero())
 }

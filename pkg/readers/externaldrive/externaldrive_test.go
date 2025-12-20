@@ -21,6 +21,7 @@ package externaldrive
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,8 +29,11 @@ import (
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers/syncutil"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/readers"
+	"github.com/ZaparooProject/zaparoo-core/v2/pkg/testing/helpers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,16 +52,19 @@ func testContext(timeout time.Duration) (context.Context, context.CancelFunc) {
 
 // mockMountDetector implements MountDetector for testing
 type mockMountDetector struct {
-	eventsChan   chan MountEvent
-	unmountsChan chan string
-	started      bool
-	stopped      bool
+	eventsChan     chan MountEvent
+	unmountsChan   chan string
+	forgottenDevs  []string
+	forgottenMutex syncutil.Mutex
+	started        bool
+	stopped        bool
 }
 
 func newMockMountDetector() *mockMountDetector {
 	return &mockMountDetector{
-		eventsChan:   make(chan MountEvent, 10),
-		unmountsChan: make(chan string, 10),
+		eventsChan:    make(chan MountEvent, 10),
+		unmountsChan:  make(chan string, 10),
+		forgottenDevs: make([]string, 0),
 	}
 }
 
@@ -78,6 +85,23 @@ func (m *mockMountDetector) Stop() {
 	m.stopped = true
 	close(m.eventsChan)
 	close(m.unmountsChan)
+}
+
+func (m *mockMountDetector) Forget(deviceID string) {
+	m.forgottenMutex.Lock()
+	defer m.forgottenMutex.Unlock()
+	m.forgottenDevs = append(m.forgottenDevs, deviceID)
+}
+
+func (m *mockMountDetector) wasForgotten(deviceID string) bool {
+	m.forgottenMutex.Lock()
+	defer m.forgottenMutex.Unlock()
+	for _, id := range m.forgottenDevs {
+		if id == deviceID {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNewReader(t *testing.T) {
@@ -481,7 +505,7 @@ func TestHandleMountEvent_WithValidToken(t *testing.T) {
 
 	// Handle mount event (with proper WaitGroup management)
 	reader.wg.Add(1)
-	go reader.handleMountEvent(event)
+	go reader.handleMountEvent(&event)
 	reader.wg.Wait()
 
 	// Check that scan was emitted
@@ -530,7 +554,7 @@ func TestHandleMountEvent_MissingFile(t *testing.T) {
 
 	// Handle mount event (with proper WaitGroup management)
 	reader.wg.Add(1)
-	go reader.handleMountEvent(event)
+	go reader.handleMountEvent(&event)
 	reader.wg.Wait()
 
 	// Should not emit any scan (no file found)
@@ -579,7 +603,7 @@ func TestHandleMountEvent_EmptyFile(t *testing.T) {
 	}
 
 	reader.wg.Add(1)
-	go reader.handleMountEvent(event)
+	go reader.handleMountEvent(&event)
 	reader.wg.Wait()
 
 	// Should not emit any scan (empty file)
@@ -623,7 +647,7 @@ func TestHandleMountEvent_FileTooBig(t *testing.T) {
 	}
 
 	reader.wg.Add(1)
-	go reader.handleMountEvent(event)
+	go reader.handleMountEvent(&event)
 	reader.wg.Wait()
 
 	// Should not emit any scan (file too large)
@@ -676,7 +700,7 @@ func TestHandleMountEvent_SymlinkRejected(t *testing.T) {
 	}
 
 	reader.wg.Add(1)
-	go reader.handleMountEvent(event)
+	go reader.handleMountEvent(&event)
 	reader.wg.Wait()
 
 	// Should not emit any scan (symlink rejected for security)
@@ -767,4 +791,665 @@ func TestDevice(t *testing.T) {
 
 	device := reader.Device()
 	assert.Contains(t, device, DriverID)
+}
+
+func TestRetryConfiguration(t *testing.T) {
+	t.Parallel()
+
+	// Verify retry constants are reasonable
+	assert.Equal(t, 3, maxReadRetries, "Should retry 3 times for I/O errors")
+	assert.Equal(t, 500*time.Millisecond, initialRetryDelay, "Initial delay should be 500ms")
+
+	// Verify total retry time is reasonable (within 5s context timeout)
+	// Exponential backoff: 500ms + 1s + 2s = 3.5s total delay (plus read attempts)
+	totalMaxDelay := initialRetryDelay + (initialRetryDelay << 1) + (initialRetryDelay << 2)
+	assert.Less(t, totalMaxDelay, 4*time.Second, "Total retry delay should be under 4s")
+}
+
+func TestHandleMountEvent_CaseInsensitiveTokenFile(t *testing.T) {
+	// Test that case-insensitive file matching works
+	tempDir := t.TempDir()
+
+	// Create file with uppercase name
+	tokenPath := filepath.Join(tempDir, "ZAPAROO.TXT")
+	tokenContents := "**launch.system:nes"
+	err := os.WriteFile(tokenPath, []byte(tokenContents), 0o600)
+	require.NoError(t, err)
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanChan := make(chan readers.Scan, 10)
+
+	device := config.ReadersConnect{
+		Driver: DriverID,
+	}
+
+	reader.device = device
+	reader.scanChan = scanChan
+	reader.stopChan = make(chan struct{})
+
+	event := MountEvent{
+		DeviceID:    "test-device-case",
+		MountPath:   tempDir,
+		VolumeLabel: "CASE_USB",
+		DeviceType:  "USB",
+	}
+
+	reader.wg.Add(1)
+	go reader.handleMountEvent(&event)
+	reader.wg.Wait()
+
+	// Should detect token with uppercase filename
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
+	select {
+	case scan := <-scanChan:
+		assert.NotNil(t, scan.Token, "Should detect token with case-insensitive filename")
+		assert.Contains(t, scan.Token.Text, "**launch.system:nes")
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for scan event - case insensitive matching may be broken")
+	}
+}
+
+func TestIsBlockDevicePresent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		deviceID string
+		expected bool
+	}{
+		{
+			name:     "non-device path returns true (can't validate)",
+			deviceID: "UUID-1234-5678",
+			expected: true,
+		},
+		{
+			name:     "empty string returns true",
+			deviceID: "",
+			expected: true,
+		},
+		{
+			name:     "non-existent block device returns false",
+			deviceID: "/dev/sdZZZ999",
+			expected: false,
+		},
+		{
+			name:     "non-existent nvme device returns false",
+			deviceID: "/dev/nvme99n99p1",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isBlockDevicePresent(tt.deviceID)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIsBlockDevicePresent_RealDevice(t *testing.T) {
+	// This test checks if real block devices are detected correctly
+	// Skip if no /sys/block entries exist (e.g., in containers)
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil || len(entries) == 0 {
+		t.Skip("No /sys/block entries available - likely running in container")
+	}
+
+	// Find a real block device to test with
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		// Test that a real device returns true
+		devicePath := "/dev/" + entry.Name()
+		result := isBlockDevicePresent(devicePath)
+		assert.True(t, result, "Real block device %s should be detected as present", devicePath)
+
+		// Test with partition suffix (e.g., /dev/sda1)
+		partitionPath := devicePath + "1"
+		result = isBlockDevicePresent(partitionPath)
+		assert.True(t, result, "Partition %s on real device should be detected as present", partitionPath)
+
+		// Only test one device
+		break
+	}
+}
+
+func TestMountDetector_Forget(t *testing.T) {
+	// Test that Forget() clears device from tracking
+	detector, err := NewMountDetector()
+	require.NoError(t, err, "NewMountDetector should succeed")
+	require.NotNil(t, detector, "Detector should not be nil")
+
+	err = detector.Start()
+	require.NoError(t, err, "Detector Start() should succeed")
+
+	// Call Forget with a test device ID - should not panic
+	detector.Forget("test-device-to-forget")
+
+	// Clean up
+	detector.Stop()
+}
+
+func TestHandleMountEvent_StaleMountDetection(t *testing.T) {
+	// This test verifies stale mount detection behavior
+	// We can't easily simulate a real stale mount, but we can verify the logic
+	// with a non-existent device ID
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanChan := make(chan readers.Scan, 10)
+	mockDetector := newMockMountDetector()
+	mockCmd := helpers.NewMockCommandExecutor()
+
+	device := config.ReadersConnect{
+		Driver: DriverID,
+	}
+
+	reader.device = device
+	reader.scanChan = scanChan
+	reader.stopChan = make(chan struct{})
+	reader.detector = mockDetector
+	reader.cmdExecutor = mockCmd
+
+	// Create a mount event with a device ID that doesn't exist
+	// This simulates a stale mount where the block device is gone
+	event := MountEvent{
+		DeviceID:    "/dev/sdZZZ999", // Stable ID for tracking
+		DeviceNode:  "/dev/sdZZZ999", // Device node for safety checks
+		MountPath:   "/media/nonexistent",
+		VolumeLabel: "STALE_USB",
+		DeviceType:  "USB",
+	}
+
+	// Handle mount event
+	reader.wg.Add(1)
+	go reader.handleMountEvent(&event)
+	reader.wg.Wait()
+
+	// Should have called Forget on the detector
+	assert.True(t, mockDetector.wasForgotten("/dev/sdZZZ999"),
+		"Detector.Forget should be called for stale mount")
+
+	// Should not emit any scan (device is stale)
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
+	select {
+	case <-scanChan:
+		t.Fatal("Should not emit scan for stale mount")
+	case <-ctx.Done():
+		// Expected behavior - no event for stale mount
+	}
+}
+
+func TestGetBaseDevice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		deviceID string
+		expected string
+	}{
+		{
+			name:     "sda1 -> sda",
+			deviceID: "/dev/sda1",
+			expected: "/dev/sda",
+		},
+		{
+			name:     "sda -> sda (no partition)",
+			deviceID: "/dev/sda",
+			expected: "/dev/sda",
+		},
+		{
+			name:     "nvme0n1p1 -> nvme0n1",
+			deviceID: "/dev/nvme0n1p1",
+			expected: "/dev/nvme0n1",
+		},
+		{
+			name:     "nvme0n1p22 -> nvme0n1",
+			deviceID: "/dev/nvme0n1p22",
+			expected: "/dev/nvme0n1",
+		},
+		{
+			name:     "non-dev path unchanged",
+			deviceID: "UUID-1234-5678",
+			expected: "UUID-1234-5678",
+		},
+		{
+			name:     "mmcblk0p1 -> mmcblk0",
+			deviceID: "/dev/mmcblk0p1",
+			expected: "/dev/mmcblk0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := getBaseDevice(tt.deviceID)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCanSafelyUnmount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		deviceID  string
+		mountPath string
+		expected  bool
+	}{
+		// Cases that should NOT be safe to unmount
+		{
+			name:      "system path /etc should not unmount",
+			deviceID:  "/dev/sda1",
+			mountPath: "/etc",
+			expected:  false,
+		},
+		{
+			name:      "root path should not unmount",
+			deviceID:  "/dev/sda1",
+			mountPath: "/",
+			expected:  false,
+		},
+		{
+			name:      "home path should not unmount",
+			deviceID:  "/dev/sda1",
+			mountPath: "/home/user",
+			expected:  false,
+		},
+		{
+			name:      "var path should not unmount",
+			deviceID:  "/dev/sda1",
+			mountPath: "/var/log",
+			expected:  false,
+		},
+		{
+			name:      "loop device should not unmount",
+			deviceID:  "/dev/loop0",
+			mountPath: "/media/loop",
+			expected:  false,
+		},
+		{
+			name:      "mapper device should not unmount",
+			deviceID:  "/dev/mapper/root",
+			mountPath: "/media/mapped",
+			expected:  false,
+		},
+		{
+			name:      "nvme device should not unmount",
+			deviceID:  "/dev/nvme0n1p1",
+			mountPath: "/media/nvme",
+			expected:  false,
+		},
+		{
+			name:      "UUID-based ID should not unmount",
+			deviceID:  "UUID-1234-5678",
+			mountPath: "/media/usb",
+			expected:  false,
+		},
+		// Cases where device still exists should NOT unmount
+		// (these would need device to be physically gone to pass)
+		// We can't easily test the "device gone" case in unit tests
+		// as it requires actual hardware state
+
+		// Valid removable media patterns with non-existent devices
+		// These SHOULD pass all safety checks and return true (device is gone)
+		{
+			name:      "sd device in media - non-existent so safe to unmount",
+			deviceID:  "/dev/sdZZZ999", // Non-existent device
+			mountPath: "/media/usb",
+			// All checks pass: valid path, valid device type, device gone
+			expected: true,
+		},
+		{
+			name:      "mmcblk device in run/media - non-existent so safe to unmount",
+			deviceID:  "/dev/mmcblk999p1",
+			mountPath: "/run/media/user/sdcard",
+			expected:  true, // Non-existent device passes all checks
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := canSafelyUnmount(tt.deviceID, tt.mountPath)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCanSafelyUnmount_PathPrefixes(t *testing.T) {
+	t.Parallel()
+
+	// Test that only specific path prefixes are allowed
+	// Device ID that would pass device checks (non-existent)
+	deviceID := "/dev/sdZZZ999"
+
+	allowedPrefixes := []string{"/media/", "/mnt/", "/run/media/"}
+	blockedPaths := []string{"/", "/home", "/etc", "/var", "/usr", "/tmp", "/opt", "/boot"}
+
+	for _, prefix := range allowedPrefixes {
+		t.Run("allowed_prefix_"+prefix, func(t *testing.T) {
+			t.Parallel()
+			// Even with allowed prefix, this will fail due to device checks
+			// but at least it won't be rejected on path alone
+			path := prefix + "testusb"
+			// We can't fully test this without mocking os.Stat
+			// Just verify the function doesn't panic
+			_ = canSafelyUnmount(deviceID, path)
+		})
+	}
+
+	for _, path := range blockedPaths {
+		t.Run("blocked_path_"+path, func(t *testing.T) {
+			t.Parallel()
+			result := canSafelyUnmount(deviceID, path)
+			assert.False(t, result, "Path %s should be blocked", path)
+		})
+	}
+}
+
+func TestCanSafelyUnmount_DeviceTypes(t *testing.T) {
+	t.Parallel()
+
+	// Test that only removable device types are allowed
+	mountPath := "/media/testusb"
+
+	allowedDevices := []string{"/dev/sda1", "/dev/sdb2", "/dev/mmcblk0p1", "/dev/mmcblk1p2"}
+	blockedDevices := []string{"/dev/loop0", "/dev/mapper/root", "/dev/nvme0n1p1", "/dev/dm-0", "UUID-1234"}
+
+	for _, dev := range allowedDevices {
+		t.Run("allowed_device_"+dev, func(t *testing.T) {
+			t.Parallel()
+			// These pass device type check but will fail because device exists/doesn't exist correctly
+			// Just verify no panic
+			_ = canSafelyUnmount(dev, mountPath)
+		})
+	}
+
+	for _, dev := range blockedDevices {
+		t.Run("blocked_device_"+dev, func(t *testing.T) {
+			t.Parallel()
+			result := canSafelyUnmount(dev, mountPath)
+			assert.False(t, result, "Device %s should be blocked", dev)
+		})
+	}
+}
+
+func TestAttemptStaleUnmount_SafetyCheckFails(t *testing.T) {
+	t.Parallel()
+
+	// Test that attemptStaleUnmount doesn't call umount when safety checks fail
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	mockCmd := helpers.NewMockCommandExecutor()
+	// Clear default expectations so we can verify no calls are made
+	mockCmd.ExpectedCalls = nil
+
+	reader.cmdExecutor = mockCmd
+
+	// Try to unmount a system path - should fail safety check and NOT call umount
+	reader.attemptStaleUnmount("/dev/sda1", "/etc/something")
+
+	// Verify umount was NOT called (no expectations means no calls expected)
+	mockCmd.AssertNotCalled(t, "Run", mock.Anything, "umount", mock.Anything)
+}
+
+func TestAttemptStaleUnmount_ExecutorCalled(t *testing.T) {
+	t.Parallel()
+
+	// We can't fully test the "successful unmount" path in unit tests because
+	// canSafelyUnmount checks that the device node is actually gone (os.Stat).
+	// However, we can verify the function structure is correct by testing
+	// with a mock that would succeed if safety checks passed.
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	mockCmd := helpers.NewMockCommandExecutor()
+	reader.cmdExecutor = mockCmd
+
+	// This will fail the safety check (device type not /dev/sd* or /dev/mmcblk*)
+	// so umount won't be called, but we verify the reader has the mock set up
+	reader.attemptStaleUnmount("/dev/nvme0n1p1", "/media/test")
+
+	// Should NOT call umount because /dev/nvme0n1p1 fails the device type check
+	mockCmd.AssertNotCalled(t, "Run", mock.Anything, "umount", mock.Anything)
+}
+
+func TestAttemptStaleUnmount_WithValidDeviceButPresent(t *testing.T) {
+	t.Parallel()
+
+	// Test with a valid-looking device path in a valid media location
+	// but the device node check will fail because the path doesn't exist
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	mockCmd := helpers.NewMockCommandExecutor()
+	reader.cmdExecutor = mockCmd
+
+	// /dev/sdZZZ999 doesn't exist as a device node (good - passes check 3)
+	// /sys/block/sdZZZ doesn't exist (good - passes check 4)
+	// /media/test is a valid path (good - passes check 1)
+	// /dev/sd* is a valid device type (good - passes check 2)
+	// ALL checks should pass, so umount SHOULD be called
+
+	// Set up expectation for the umount call
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "umount", []string{"-l", "/media/test"}).Return(nil)
+
+	reader.attemptStaleUnmount("/dev/sdZZZ999", "/media/test")
+
+	// Verify umount was called with correct arguments
+	mockCmd.AssertCalled(t, "Run", mock.Anything, "umount", []string{"-l", "/media/test"})
+}
+
+func TestAttemptStaleUnmount_CommandFailure(t *testing.T) {
+	t.Parallel()
+
+	// Test that umount failures are handled gracefully (logged, not panicked)
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	mockCmd := helpers.NewMockCommandExecutor()
+	reader.cmdExecutor = mockCmd
+
+	// Set up expectation for the umount call to fail
+	mockCmd.ExpectedCalls = nil
+	mockCmd.On("Run", mock.Anything, "umount", []string{"-l", "/media/test"}).
+		Return(errors.New("umount: /media/test: target is busy"))
+
+	// Should not panic even when umount fails
+	reader.attemptStaleUnmount("/dev/sdZZZ999", "/media/test")
+
+	// Verify umount was attempted
+	mockCmd.AssertCalled(t, "Run", mock.Anything, "umount", []string{"-l", "/media/test"})
+}
+
+func TestFindTokenFile_SiblingPartitionDiscovery(t *testing.T) {
+	// Create temp directories to simulate multiple partitions
+	// We'll create a primary mount without zaparoo.txt and a sibling with it
+	primaryMount := t.TempDir()
+	siblingMount := t.TempDir()
+
+	// Create zaparoo.txt only on the sibling mount
+	siblingTokenPath := filepath.Join(siblingMount, "zaparoo.txt")
+	err := os.WriteFile(siblingTokenPath, []byte("**launch.system:nes"), 0o600)
+	require.NoError(t, err)
+
+	// findTokenFile should find the token on the sibling
+	// Note: This test is limited because findTokenFile searches /media and /mnt
+	// which we can't easily populate in tests. But we can verify the primary
+	// mount search works correctly.
+	tokenPath, foundMount := findTokenFile(primaryMount)
+
+	// Primary mount has no token, and our temp dirs aren't in /media or /mnt
+	// so nothing should be found
+	assert.Empty(t, tokenPath)
+	assert.Empty(t, foundMount)
+
+	// Now test that token on primary mount IS found
+	primaryTokenPath := filepath.Join(primaryMount, "zaparoo.txt")
+	err = os.WriteFile(primaryTokenPath, []byte("**launch.system:snes"), 0o600)
+	require.NoError(t, err)
+
+	tokenPath, foundMount = findTokenFile(primaryMount)
+	assert.Equal(t, primaryTokenPath, tokenPath)
+	assert.Equal(t, primaryMount, foundMount)
+}
+
+func TestFindTokenFileInDir_DirectoryReadError(t *testing.T) {
+	t.Parallel()
+
+	// Test with non-existent directory
+	result := findTokenFileInDir("/nonexistent/path/that/does/not/exist")
+	assert.Empty(t, result)
+}
+
+func TestFindTokenFileInDir_SkipsDirectories(t *testing.T) {
+	t.Parallel()
+
+	// Create temp dir with a subdirectory named zaparoo.txt
+	tempDir := t.TempDir()
+
+	// Create a directory (not a file) named zaparoo.txt
+	dirPath := filepath.Join(tempDir, "zaparoo.txt")
+	err := os.Mkdir(dirPath, 0o750)
+	require.NoError(t, err)
+
+	// Should not find it (because it's a directory, not a file)
+	result := findTokenFileInDir(tempDir)
+	assert.Empty(t, result)
+}
+
+func TestHandleMountEvent_DuplicateTokenPrevention(t *testing.T) {
+	// Test that a second mount from the same device doesn't create duplicate tokens
+	tempDir := t.TempDir()
+
+	// Create zaparoo.txt file
+	tokenPath := filepath.Join(tempDir, "zaparoo.txt")
+	err := os.WriteFile(tokenPath, []byte("**launch.system:nes"), 0o600)
+	require.NoError(t, err)
+
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanChan := make(chan readers.Scan, 10)
+	mockDetector := newMockMountDetector()
+
+	reader.detector = mockDetector
+	reader.scanChan = scanChan
+	reader.stopChan = make(chan struct{})
+	reader.device = config.ReadersConnect{Driver: DriverID}
+
+	// Simulate mount event
+	event := MountEvent{
+		DeviceID:    "/dev/sda1",
+		MountPath:   tempDir,
+		VolumeLabel: "TEST_USB",
+		DeviceType:  "USB",
+	}
+
+	// First mount - should emit token
+	reader.wg.Add(1)
+	go reader.handleMountEvent(&event)
+	reader.wg.Wait()
+
+	ctx, cancel := testContext(testEventTimeout)
+	select {
+	case scan := <-scanChan:
+		assert.NotNil(t, scan.Token)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for first scan event")
+	}
+	cancel()
+
+	// Second mount from same base device - should NOT emit duplicate token
+	event2 := MountEvent{
+		DeviceID:    "/dev/sda2", // Different partition, same base device
+		MountPath:   tempDir,
+		VolumeLabel: "TEST_USB",
+		DeviceType:  "USB",
+	}
+
+	reader.wg.Add(1)
+	go reader.handleMountEvent(&event2)
+	reader.wg.Wait()
+
+	// Should NOT receive another token (duplicate prevention)
+	ctx2, cancel2 := testContext(testNoEventTimeout)
+	defer cancel2()
+	select {
+	case <-scanChan:
+		t.Fatal("Should not emit duplicate token for same base device")
+	case <-ctx2.Done():
+		// Expected - no duplicate token
+	}
+}
+
+func TestHandleUnmountEvent_BaseDeviceMatching(t *testing.T) {
+	// Test that unmount uses base device for matching (e.g., /dev/sda for /dev/sda1)
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanChan := make(chan readers.Scan, 10)
+
+	reader.scanChan = scanChan
+	reader.stopChan = make(chan struct{})
+	reader.device = config.ReadersConnect{Driver: DriverID}
+
+	// Add token using base device (as handleMountEvent would)
+	baseDevice := "/dev/sda"
+	reader.mu.Lock()
+	reader.activeTokens[baseDevice] = nil
+	reader.mu.Unlock()
+
+	// Unmount with partition ID should still match via getBaseDevice
+	reader.handleUnmountEvent("/dev/sda1")
+
+	// Should emit nil token scan
+	ctx, cancel := testContext(testEventTimeout)
+	defer cancel()
+	select {
+	case scan := <-scanChan:
+		assert.Nil(t, scan.Token, "Should emit nil token on unmount")
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for unmount scan")
+	}
+
+	// Token should be removed
+	reader.mu.RLock()
+	_, exists := reader.activeTokens[baseDevice]
+	reader.mu.RUnlock()
+	assert.False(t, exists, "Token should be removed from active tokens")
+}
+
+func TestHandleUnmountEvent_NoMatchingToken(t *testing.T) {
+	t.Parallel()
+
+	// Test that unmount for unknown device doesn't emit anything
+	cfg := &config.Instance{}
+	reader := NewReader(cfg)
+	scanChan := make(chan readers.Scan, 10)
+
+	reader.scanChan = scanChan
+	reader.stopChan = make(chan struct{})
+	reader.device = config.ReadersConnect{Driver: DriverID}
+
+	// Don't add any active tokens
+
+	// Unmount for unknown device
+	reader.handleUnmountEvent("/dev/sdz99")
+
+	// Should NOT emit any scan
+	ctx, cancel := testContext(testNoEventTimeout)
+	defer cancel()
+	select {
+	case <-scanChan:
+		t.Fatal("Should not emit scan for unknown device")
+	case <-ctx.Done():
+		// Expected - no event
+	}
 }

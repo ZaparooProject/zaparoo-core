@@ -44,6 +44,11 @@ const (
 	udisks2BlockInterface = "org.freedesktop.UDisks2.Block"
 	udisks2FSInterface    = "org.freedesktop.UDisks2.Filesystem"
 	dbusObjectManager     = "org.freedesktop.DBus.ObjectManager"
+
+	// fallbackRescanInterval is the maximum time between mount rescans.
+	// This ensures mounts are detected even when poll() doesn't fire events
+	// on some minimal Linux systems (like Batocera).
+	fallbackRescanInterval = 1 * time.Second
 )
 
 // linuxMountDetector implements MountDetector for Linux using D-Bus/UDisks2.
@@ -198,6 +203,24 @@ func (d *linuxMountDetector) Stop() {
 	})
 }
 
+func (d *linuxMountDetector) Forget(deviceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Remove from mounted devices
+	delete(d.mountedDevs, deviceID)
+
+	// Also remove from path mappings if present
+	for path, id := range d.pathMappings {
+		if id == deviceID {
+			delete(d.pathMappings, path)
+			break
+		}
+	}
+
+	log.Debug().Str("device_id", deviceID).Msg("forgot stale mount from D-Bus tracking")
+}
+
 func (d *linuxMountDetector) listenForSignals(signalChan chan *dbus.Signal) {
 	defer d.wg.Done()
 
@@ -269,12 +292,14 @@ func (d *linuxMountDetector) handleInterfacesAdded(signal *dbus.Signal) {
 		return
 	}
 
+	deviceNode := d.getDeviceNode(blockProps)
 	volumeLabel := d.getVolumeLabel(blockProps)
 	deviceType := d.getDeviceType(blockProps)
 
 	// Create mount event
 	event := MountEvent{
 		DeviceID:    deviceID,
+		DeviceNode:  deviceNode,
 		MountPath:   mountPoints[0], // Use first mount point
 		VolumeLabel: volumeLabel,
 		DeviceType:  deviceType,
@@ -393,6 +418,18 @@ func (*linuxMountDetector) getDeviceID(props map[string]dbus.Variant) string {
 	return ""
 }
 
+// getDeviceNode extracts the block device path (e.g., "/dev/sda1") from D-Bus properties.
+func (*linuxMountDetector) getDeviceNode(props map[string]dbus.Variant) string {
+	if device, ok := props["Device"]; ok {
+		if devicePath, ok := device.Value().([]byte); ok && len(devicePath) > 0 {
+			// Remove trailing null byte if present
+			path := string(devicePath)
+			return strings.TrimRight(path, "\x00")
+		}
+	}
+	return ""
+}
+
 func (*linuxMountDetector) getVolumeLabel(props map[string]dbus.Variant) string {
 	if idLabel, ok := props["IdLabel"]; ok {
 		if label, ok := idLabel.Value().(string); ok {
@@ -430,6 +467,7 @@ func (*linuxMountDetector) getDeviceType(props map[string]dbus.Variant) string {
 // linuxMountDetectorFallback implements MountDetector for Linux using poll() on /proc/mounts.
 // This is used when D-Bus/UDisks2 is not available (minimal Linux systems like MiSTer).
 type linuxMountDetectorFallback struct {
+	lastScan    time.Time
 	mountsFile  *os.File
 	events      chan MountEvent
 	unmounts    chan string
@@ -487,11 +525,25 @@ func (d *linuxMountDetectorFallback) Stop() {
 	})
 }
 
+func (d *linuxMountDetectorFallback) Forget(deviceID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.mountedDevs, deviceID)
+	log.Debug().Str("device_id", deviceID).Msg("forgot stale mount from poll tracking")
+}
+
 func (d *linuxMountDetectorFallback) pollMountChanges() {
 	defer d.wg.Done()
 
 	// Initial scan of mounts
 	d.scanMounts()
+	d.mu.Lock()
+	d.lastScan = time.Now()
+	d.mu.Unlock()
+
+	log.Debug().
+		Dur("rescan_interval", fallbackRescanInterval).
+		Msg("fallback mount detector started with periodic rescan")
 
 	// Set up poll for /proc/mounts with POLLPRI (priority event) and POLLERR
 	pollFds := []unix.PollFd{
@@ -519,28 +571,42 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 			return
 		}
 
-		// Check if stop was requested
 		select {
 		case <-d.stopChan:
 			return
 		default:
 		}
 
-		// If poll returned 0, it was a timeout - continue waiting
-		if n == 0 {
-			continue
+		shouldRescan := false
+		rescanReason := ""
+
+		if n > 0 && pollFds[0].Revents&(unix.POLLPRI|unix.POLLERR) != 0 {
+			shouldRescan = true
+			rescanReason = "poll event"
+		} else {
+			// Periodic rescan handles systems where poll() doesn't fire events
+			d.mu.RLock()
+			elapsed := time.Since(d.lastScan)
+			d.mu.RUnlock()
+
+			if elapsed >= fallbackRescanInterval {
+				shouldRescan = true
+				rescanReason = "periodic interval"
+			}
 		}
 
-		// Mount change detected (POLLPRI or POLLERR)
-		if pollFds[0].Revents&(unix.POLLPRI|unix.POLLERR) != 0 {
-			// Seek back to beginning of file and re-read
+		if shouldRescan {
 			if _, err := d.mountsFile.Seek(0, io.SeekStart); err != nil {
 				log.Error().Err(err).Msg("failed to seek /proc/mounts")
 				continue
 			}
 
-			// Scan mounts and detect changes
+			log.Debug().Str("reason", rescanReason).Msg("rescanning mounts")
 			d.scanMounts()
+
+			d.mu.Lock()
+			d.lastScan = time.Now()
+			d.mu.Unlock()
 		}
 	}
 }
@@ -608,6 +674,7 @@ func (d *linuxMountDetectorFallback) scanMounts() {
 		volumeLabel := filepath.Base(mountPath)
 		event := MountEvent{
 			DeviceID:    deviceID,
+			DeviceNode:  device, // The actual block device path from /proc/mounts
 			MountPath:   mountPath,
 			VolumeLabel: volumeLabel,
 			DeviceType:  deviceType,
@@ -615,6 +682,10 @@ func (d *linuxMountDetectorFallback) scanMounts() {
 
 		currentMounts[deviceID] = event
 	}
+
+	log.Debug().
+		Int("matched_mounts", len(currentMounts)).
+		Msg("mount scan completed")
 
 	// Compare with previously tracked mounts
 	d.mu.Lock()
