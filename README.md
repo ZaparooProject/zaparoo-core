@@ -156,6 +156,10 @@ See the [Contributors](https://zaparoo.org/docs/community/contributors/) page fo
 </table>
 <!-- readme: contributors -end -->
 
+## Sponsors
+
+Free code signing on Windows provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org)
+
 ## Trademarks
 
 This repository contains Zaparoo trademarks which are explicitly licensed to the project in this location by the trademark owner. These trademarks must be removed from the project or replaced if you intend to redistribute or adapt the project in any form. See the Zaparoo [Terms of Use](https://zaparoo.org/terms/) for further details.
