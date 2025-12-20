@@ -261,14 +261,14 @@ jobs:
           tag: ${{ env.BUILD_TAG }}
         if: matrix.platform == 'windows' && !inputs.test_build
         run: |
-          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip"
+          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.zip" --clobber
       - name: Add unsigned Windows installer to release (TEMPORARY - unsigned)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
         if: matrix.platform == 'windows' && !inputs.test_build
         run: |
-          gh release upload "$tag" "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe"
+          gh release upload "$tag" "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" --clobber
       # --- END TEMPORARY ---
       - name: Add release (non-Windows)
         env:
@@ -285,7 +285,7 @@ jobs:
               EXT="tar.gz"
               ;;
           esac
-          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.${EXT}"
+          gh release upload "$tag" "_build/${{matrix.platform}}_${{matrix.arch}}/zaparoo-${{matrix.platform}}_${{matrix.arch}}-${VERSION}.${EXT}" --clobber
       - name: Add Batocera package
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -300,7 +300,7 @@ jobs:
           esac
           mkdir -p _build/packages/batocera
           BUILD_ARCH=${{matrix.arch}} PKG_ARCH=${PKG_ARCH} VERSION=${VERSION} task batocera:package-arch
-          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-${PKG_ARCH}.pkg.tar.zst"
+          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-${PKG_ARCH}.pkg.tar.zst" --clobber
       - name: Upload Batocera binary as artifact
         if: matrix.platform == 'batocera'
         uses: actions/upload-artifact@v4
@@ -366,7 +366,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
         run: |
-          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-any.pkg.tar.zst"
+          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-any.pkg.tar.zst" --clobber
 
 #  build_mac_app:
 #    runs-on: macos-12
