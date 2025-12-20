@@ -60,7 +60,9 @@ tasks:
     vars:
       BUILD_DIR: '{{.BUILD_DIR | default "_build/packages/batocera"}}'
       TEMPLATE_DIR: '{{.TEMPLATE_DIR | default "scripts/batocera/template"}}'
-      PACKAGE_NAME: zaparoo-core-{{.VERSION}}-1-{{.PKG_ARCH}}
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      PKG_VERSION: '{{.VERSION | replace "-" "_"}}'
+      PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-{{.PKG_ARCH}}
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating package for {{.PKG_ARCH}}..."
@@ -71,7 +73,7 @@ tasks:
       - cp cmd/batocera/scripts/ports/Zaparoo.sh {{.PACKAGE_DIR}}/userdata/roms/ports/Zaparoo.sh
       - cp _build/batocera_{{.BUILD_ARCH}}/zaparoo {{.PACKAGE_DIR}}/userdata/system/
       - cp cmd/batocera/scripts/zaparoo_write_game.sh {{.PACKAGE_DIR}}/userdata/system/
-      - sed -i "s/__VERSION__/{{.VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__VERSION__/{{.PKG_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - sed -i "s/__ARCH__/{{.PKG_ARCH}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
@@ -108,7 +110,9 @@ tasks:
     vars:
       TEMPLATE_DIR: scripts/batocera/template
       BUILD_DIR: _build/packages/batocera
-      PACKAGE_NAME: zaparoo-core-{{.APP_VERSION}}-1-any
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
+      PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-any
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating universal 'any' architecture package..."
@@ -123,7 +127,7 @@ tasks:
       - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
       - cp _build/batocera_arm64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
       - cp _build/batocera_arm/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
-      - sed -i "s/__VERSION__/{{.APP_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__VERSION__/{{.PKG_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - sed -i "s/__ARCH__/any/g" {{.PACKAGE_DIR}}/.PKGINFO
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
@@ -148,7 +152,9 @@ tasks:
     vars:
       TEMPLATE_DIR: scripts/batocera/template
       BUILD_DIR: _build/packages/batocera
-      PACKAGE_NAME: zaparoo-core-{{.APP_VERSION}}-1-any
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
+      PACKAGE_NAME: zaparoo-core-{{.PKG_VERSION}}-1-any
       PACKAGE_DIR: "{{.BUILD_DIR}}/{{.PACKAGE_NAME}}"
     cmds:
       - echo "Creating universal 'any' architecture package from artifacts..."
@@ -163,7 +169,7 @@ tasks:
       - cp _build/batocera_amd64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-x86_64
       - cp _build/batocera_arm64/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-aarch64
       - cp _build/batocera_arm/zaparoo {{.PACKAGE_DIR}}/userdata/system/zaparoo-armv7l
-      - sed -i "s/__VERSION__/{{.APP_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
+      - sed -i "s/__VERSION__/{{.PKG_VERSION}}/g" {{.PACKAGE_DIR}}/.PKGINFO
       - sed -i "s/__ARCH__/any/g" {{.PACKAGE_DIR}}/.PKGINFO
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo
       - chmod +x {{.PACKAGE_DIR}}/userdata/system/zaparoo_write_game.sh
@@ -199,8 +205,10 @@ tasks:
     desc: Build universal package and deploy to Batocera system
     vars:
       BATOCERA_HOST: '{{.BATOCERA_HOST | default "root@${BATOCERA_IP}"}}'
+      # Sanitize version for pacman: replace dashes with underscores (e.g., 2.8.0-beta1 -> 2.8.0_beta1)
+      PKG_VERSION: '{{.APP_VERSION | replace "-" "_"}}'
     cmds:
       - task: package-any
-      - scp _build/packages/batocera/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst {{.BATOCERA_HOST}}:/tmp/
+      - scp _build/packages/batocera/zaparoo-core-{{.PKG_VERSION}}-1-any.pkg.tar.zst {{.BATOCERA_HOST}}:/tmp/
       - ssh {{.BATOCERA_HOST}} "pacman -R --noconfirm zaparoo-core || true"
-      - ssh {{.BATOCERA_HOST}} "pacman -U --noconfirm /tmp/zaparoo-core-{{.APP_VERSION}}-1-any.pkg.tar.zst"
+      - ssh {{.BATOCERA_HOST}} "pacman -U --noconfirm /tmp/zaparoo-core-{{.PKG_VERSION}}-1-any.pkg.tar.zst"

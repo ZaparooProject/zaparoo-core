@@ -274,9 +274,11 @@ jobs:
             arm64) PKG_ARCH="aarch64" ;;
             arm) PKG_ARCH="armv7l" ;;
           esac
+          # Sanitize version for pacman: replace dashes with underscores
+          PKG_VERSION="${VERSION//-/_}"
           mkdir -p _build/packages/batocera
           BUILD_ARCH=${{matrix.arch}} PKG_ARCH=${PKG_ARCH} VERSION=${VERSION} task batocera:package-arch
-          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-${PKG_ARCH}.pkg.tar.zst" --clobber
+          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-${PKG_ARCH}.pkg.tar.zst" --clobber
       - name: Upload Batocera binary as artifact
         if: matrix.platform == 'batocera'
         uses: actions/upload-artifact@v4
@@ -342,7 +344,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ env.BUILD_TAG }}
         run: |
-          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${VERSION}-1-any.pkg.tar.zst" --clobber
+          # Sanitize version for pacman: replace dashes with underscores
+          PKG_VERSION="${VERSION//-/_}"
+          gh release upload "$tag" "_build/packages/batocera/zaparoo-core-${PKG_VERSION}-1-any.pkg.tar.zst" --clobber
 
 #  build_mac_app:
 #    runs-on: macos-12
