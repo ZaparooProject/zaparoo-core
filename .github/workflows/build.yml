@@ -181,19 +181,19 @@ jobs:
           name: unsigned-exe-${{matrix.arch}}
           path: _build/${{matrix.platform}}_${{matrix.arch}}/Zaparoo.exe
           retention-days: 30
+      - name: Copy installer to consistent name for signing
+        if: matrix.platform == 'windows'
+        run: |
+          cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
+             "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Upload unsigned installer artifact
         if: matrix.platform == 'windows'
         id: upload-unsigned-installer
         uses: actions/upload-artifact@v4
         with:
           name: unsigned-installer-${{matrix.arch}}
-          path: _build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe
+          path: _build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe
           retention-days: 30
-      - name: Copy installer to consistent name for signing
-        if: matrix.platform == 'windows'
-        run: |
-          cp "_build/windows_${{matrix.arch}}/Output/zaparoo-${{matrix.arch}}-${VERSION}-setup.exe" \
-             "_build/windows_${{matrix.arch}}/Output/zaparoo-setup.exe"
       - name: Sign exe file
         if: matrix.platform == 'windows'
         uses: signpath/github-action-submit-signing-request@v2
