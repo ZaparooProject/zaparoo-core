@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/database"
@@ -311,6 +312,10 @@ func GetFiles(
 		return nil, fmt.Errorf("failed to get system %s: %w", systemID, err)
 	}
 
+	entriesScanned := 0
+	walkStartTime := time.Now()
+	lastProgressLog := time.Now()
+
 	var scanner func(path string, file fs.DirEntry, err error) error
 	scanner = func(path string, file fs.DirEntry, _ error) error {
 		// Check for cancellation
@@ -318,6 +323,17 @@ func GetFiles(
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+
+		entriesScanned++
+		if entriesScanned%5000 == 0 || time.Since(lastProgressLog) > 10*time.Second {
+			log.Debug().
+				Str("system", systemID).
+				Str("path", path).
+				Int("entriesScanned", entriesScanned).
+				Dur("elapsed", time.Since(walkStartTime)).
+				Msg("directory walk progress")
+			lastProgressLog = time.Now()
 		}
 
 		// avoid recursive symlinks
@@ -446,11 +462,23 @@ func GetFiles(
 	if err != nil {
 		return nil, fmt.Errorf("failed to walk directory %s: %w", realPath, err)
 	}
+	walkElapsed := time.Since(walkStartTime)
 	log.Debug().
 		Str("system", systemID).
 		Str("path", realPath).
-		Int("files", len(allResults)).
+		Int("entriesScanned", entriesScanned).
+		Int("filesFound", len(allResults)).
+		Dur("elapsed", walkElapsed).
 		Msg("completed directory walk")
+
+	if walkElapsed > 15*time.Second {
+		log.Warn().
+			Str("system", systemID).
+			Str("path", realPath).
+			Int("entriesScanned", entriesScanned).
+			Dur("elapsed", walkElapsed).
+			Msg("directory walk took longer than expected - large directory or slow storage")
+	}
 
 	results, err := stack.get()
 	if err != nil {
@@ -515,6 +543,11 @@ func NewNamesIndex(
 	update func(IndexStatus),
 ) (int, error) {
 	db := fdb.MediaDB
+	indexStartTime := time.Now()
+
+	log.Info().
+		Int("systemCount", len(systems)).
+		Msg("starting media indexing")
 
 	var indexedFiles int
 	var err error
@@ -836,6 +869,7 @@ func NewNamesIndex(
 		}
 
 		files := make([]platforms.ScanResult, 0)
+		systemStartTime := time.Now()
 
 		status.SystemID = systemID
 		status.Step++
@@ -937,8 +971,21 @@ func NewNamesIndex(
 
 			// Commit if we hit file limit (memory safety - even mid-system)
 			if filesInBatch >= maxFilesPerTransaction {
+				commitStart := time.Now()
 				if commitErr := db.CommitTransaction(); commitErr != nil {
 					return 0, fmt.Errorf("failed to commit batch transaction (file limit): %w", commitErr)
+				}
+				commitElapsed := time.Since(commitStart)
+				log.Debug().
+					Str("system", systemID).
+					Int("files", filesInBatch).
+					Dur("commitTime", commitElapsed).
+					Msg("committed batch (file limit)")
+				if commitElapsed > 5*time.Second {
+					log.Warn().
+						Int("files", filesInBatch).
+						Dur("commitTime", commitElapsed).
+						Msg("database commit took longer than expected")
 				}
 				// Update progress after successful commit
 				if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
@@ -960,10 +1007,38 @@ func NewNamesIndex(
 		// Mark system as processed (even if split across multiple commits)
 		completedSystems[systemID] = true
 
+		systemElapsed := time.Since(systemStartTime)
+		log.Info().
+			Str("system", systemID).
+			Int("files", len(files)).
+			Dur("elapsed", systemElapsed).
+			Msg("completed system indexing")
+
+		if systemElapsed > 30*time.Second {
+			log.Warn().
+				Str("system", systemID).
+				Int("files", len(files)).
+				Dur("elapsed", systemElapsed).
+				Msg("system indexing took longer than expected - check for slow storage or large directories")
+		}
+
 		// Commit after N small systems OR when file limit forces it
 		if batchStarted && systemsInBatch >= maxSystemsPerTransaction {
+			commitStart := time.Now()
 			if commitErr := db.CommitTransaction(); commitErr != nil {
 				return 0, fmt.Errorf("failed to commit batch transaction (system limit): %w", commitErr)
+			}
+			commitElapsed := time.Since(commitStart)
+			log.Debug().
+				Int("systems", systemsInBatch).
+				Int("files", filesInBatch).
+				Dur("commitTime", commitElapsed).
+				Msg("committed batch (system limit)")
+			if commitElapsed > 5*time.Second {
+				log.Warn().
+					Int("files", filesInBatch).
+					Dur("commitTime", commitElapsed).
+					Msg("database commit took longer than expected")
 			}
 			// Update progress after successful commit
 			if setErr := db.SetLastIndexedSystem(systemID); setErr != nil {
@@ -1281,5 +1356,22 @@ func NewNamesIndex(
 	log.Debug().Msgf("indexed systems: %v", indexedSystems)
 
 	indexedFiles = status.Files
+	indexElapsed := time.Since(indexStartTime)
+
+	if err != nil {
+		log.Error().
+			Err(err).
+			Int("files", indexedFiles).
+			Int("systemsCompleted", len(indexedSystems)).
+			Dur("elapsed", indexElapsed).
+			Msg("media indexing completed with error")
+	} else {
+		log.Info().
+			Int("files", indexedFiles).
+			Int("systemsCompleted", len(indexedSystems)).
+			Dur("elapsed", indexElapsed).
+			Msg("media indexing completed successfully")
+	}
+
 	return indexedFiles, err
 }

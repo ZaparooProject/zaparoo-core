@@ -63,29 +63,56 @@ func (r *Reader) readNDEFData(detectedTag *pn532.DetectedTag) (uid string, data 
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.DetectTag")
 	if err := tagOps.DetectTag(ctx); err != nil {
 		logTraceableError(err, "detect tag for NDEF")
-		log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("failed to detect tag for NDEF reading")
+		log.Warn().Err(err).
+			Str("uid", detectedTag.UID).
+			Str("tagType", string(detectedTag.Type)).
+			Msg("failed to detect tag for NDEF reading")
 		return "", detectedTag.TargetData
 	}
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: tagOps.DetectTag completed")
 
-	// Read NDEF message
 	log.Debug().Str("uid", detectedTag.UID).Msg("NDEF: starting tagOps.ReadNDEF")
 	ndefMessage, err := tagOps.ReadNDEF(ctx)
 	log.Debug().Err(err).Str("uid", detectedTag.UID).Msg("NDEF: tagOps.ReadNDEF completed")
 	if err != nil {
 		logTraceableError(err, "read NDEF")
-		log.Debug().Err(err).Msg("failed to read NDEF data")
+		log.Warn().Err(err).
+			Str("uid", detectedTag.UID).
+			Str("tagType", string(detectedTag.Type)).
+			Msg("failed to read NDEF data from tag")
 		return "", detectedTag.TargetData
 	}
 
 	if ndefMessage == nil || len(ndefMessage.Records) == 0 {
+		log.Warn().
+			Str("uid", detectedTag.UID).
+			Str("tagType", string(detectedTag.Type)).
+			Bool("messageNil", ndefMessage == nil).
+			Msg("tag has no NDEF records - may be blank or incompatible format")
 		return "", detectedTag.TargetData
 	}
 
-	// Process NDEF records and convert to token text
+	record := ndefMessage.Records[0]
+	log.Debug().
+		Str("uid", detectedTag.UID).
+		Int("recordCount", len(ndefMessage.Records)).
+		Str("recordType", string(record.Type)).
+		Bool("hasText", record.Text != "").
+		Bool("hasURI", record.URI != "").
+		Int("payloadLen", len(record.Payload)).
+		Msg("NDEF: processing records")
+
 	tokenText := convertNDEFToTokenText(ndefMessage)
 
-	// Return the token text and original target data
+	if tokenText == "" {
+		log.Warn().
+			Str("uid", detectedTag.UID).
+			Str("tagType", string(detectedTag.Type)).
+			Str("recordType", string(record.Type)).
+			Int("payloadLen", len(record.Payload)).
+			Msg("NDEF records found but no text/URI could be extracted - unsupported format")
+	}
+
 	return tokenText, detectedTag.TargetData
 }
 
@@ -98,35 +125,29 @@ func convertNDEFToTokenText(ndefMessage *pn532.NDEFMessage) string {
 		return ""
 	}
 
-	// Process first record (primary content)
+	// Only first record is used (NDEF standard primary payload)
 	record := ndefMessage.Records[0]
 
-	// Handle text records - pass through directly
 	if record.Text != "" {
 		return record.Text
 	}
 
-	// Handle URI records - pass through directly
 	if record.URI != "" {
 		return record.URI
 	}
 
-	// Handle WiFi credentials - convert to JSON
 	if record.WiFi != nil {
 		return convertWiFiToJSON(record.WiFi)
 	}
 
-	// Handle VCard records - convert to JSON
 	if record.VCard != nil {
 		return convertVCardToJSON(record.VCard)
 	}
 
-	// Handle Smart Poster records - convert to JSON
 	if record.Type == pn532.NDEFTypeSmartPoster {
 		return convertSmartPosterToJSON(record.Payload)
 	}
 
-	// For any other types with payload, convert to generic JSON
 	if len(record.Payload) > 0 {
 		return convertGenericRecordToJSON(string(record.Type), record.Payload)
 	}
