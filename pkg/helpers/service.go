@@ -53,7 +53,7 @@ func NewService(args ServiceArgs) (*Service, error) {
 func (s *Service) createPidFile() error {
 	pidPath := filepath.Join(s.pl.Settings().TempDir, config.PidFile)
 	pid := os.Getpid()
-	err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", pid)), 0o600)
+	err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}

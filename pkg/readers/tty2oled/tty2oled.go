@@ -565,7 +565,7 @@ func (r *Reader) initializeDeviceOnPort(port serial.Port) error {
 
 	// sendrotation: if rotation is enabled, send CMDROT,1 then CMDSORG
 	if DefaultRotation {
-		if err := r.sendCommandOnPort(port, fmt.Sprintf("%s,1", CmdRotate)); err != nil {
+		if err := r.sendCommandOnPort(port, CmdRotate+",1"); err != nil {
 			return fmt.Errorf("failed to send rotation command: %w", err)
 		}
 

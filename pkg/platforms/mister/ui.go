@@ -68,9 +68,9 @@ func showNotice(
 		if err != nil {
 			return "", fmt.Errorf("error writing notice args: %w", err)
 		}
-		text := fmt.Sprintf("**mister.script:zaparoo.sh -show-notice %s", argsPath)
+		text := "**mister.script:zaparoo.sh -show-notice " + argsPath
 		if loader {
-			text = fmt.Sprintf("**mister.script:zaparoo.sh -show-loader %s", argsPath)
+			text = "**mister.script:zaparoo.sh -show-loader " + argsPath
 		}
 		log.Debug().Msgf("running script notice: %s", text)
 		apiArgs := models.RunParams{
@@ -174,7 +174,7 @@ func showPicker(
 		return fmt.Errorf("failed to write picker args file: %w", err)
 	}
 
-	text := fmt.Sprintf("**mister.script:zaparoo.sh -show-picker %s", argsPath)
+	text := "**mister.script:zaparoo.sh -show-picker " + argsPath
 	apiArgs := models.RunParams{
 		Text: &text,
 	}

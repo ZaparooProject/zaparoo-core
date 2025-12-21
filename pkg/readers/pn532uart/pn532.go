@@ -21,8 +21,10 @@ package pn532uart
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service/tokens"
@@ -269,7 +271,8 @@ retry:
 			log.Debug().Msg("invalid TFI, sending NACK")
 			goto retry
 		}
-		return []byte{}, errors.New("invalid TFI, expected PN532 to host, got: " + fmt.Sprintf("%x", buf[off]))
+		got := strconv.FormatUint(uint64(buf[off]), 16)
+		return []byte{}, errors.New("invalid TFI, expected PN532 to host, got: " + got)
 	}
 
 	// get frame data
@@ -403,7 +406,7 @@ func InListPassiveTarget(port serial.Port) (*Target, error) {
 	}
 
 	uid := res[7 : 7+uidLen]
-	uidStr := fmt.Sprintf("%x", uid)
+	uidStr := hex.EncodeToString(uid)
 
 	tagType := ""
 	if bytes.Equal(res[3:6], []byte{0x00, 0x04, 0x08}) {

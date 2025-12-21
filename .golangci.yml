@@ -54,6 +54,7 @@ linters:
     - intrange
     - nakedret
     - forbidigo
+    - perfsprint
     # Note: For Go 1.21+ min/max modernization, run:
     # go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -fix -test ./...
   settings:

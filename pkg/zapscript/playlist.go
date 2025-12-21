@@ -402,7 +402,7 @@ func cmdPlaylistOpen(pl platforms.Platform, env platforms.CmdEnv) (platforms.Cmd
 		}
 
 		if i == pls.Index {
-			name = fmt.Sprintf("> %s", name)
+			name = "> " + name
 		}
 
 		zapscript := "**playlist.goto:" + strconv.Itoa(i+1) + "||**playlist.play"

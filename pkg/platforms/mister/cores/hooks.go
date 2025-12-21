@@ -24,6 +24,7 @@ along with Zaparoo Core.  If not, see <http://www.gnu.org/licenses/>.
 package cores
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -139,19 +140,21 @@ func hookAo486(_ *config.Instance, system *Core, path string) (string, error) {
 	}
 
 	// if there's an iso in the same folder, mount it too
+	var isoMgl strings.Builder
 	for _, file := range files {
 		fileName := strings.ToLower(file.Name())
 		if (strings.HasSuffix(fileName, ".iso") || strings.HasSuffix(fileName, ".chd")) && file.Name() != filename {
-			mgl += fmt.Sprintf(
+			_, _ = isoMgl.WriteString(fmt.Sprintf(
 				"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
 				mglDef.Delay,
 				mglDef.Method,
 				4,
 				"../../../../.."+filepath.Join(dir, file.Name()),
-			)
+			))
 			break
 		}
 	}
+	mgl += isoMgl.String()
 
 	mgl += fmt.Sprintf(
 		"\t<file delay=\"%d\" type=%q index=\"%d\" path=%q/>\n",
@@ -228,7 +231,7 @@ func hookAmigaCD32(_ *config.Instance, _ *Core, path string) (string, error) {
 	}
 
 	// Convert to hex
-	gameHex := fmt.Sprintf("%x", []byte(gamePath))
+	gameHex := hex.EncodeToString([]byte(gamePath))
 
 	// Pad to 108 bytes (216 hex characters)
 	const maxPathLength = 108

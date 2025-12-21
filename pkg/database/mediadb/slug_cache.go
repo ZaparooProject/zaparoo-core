@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,7 +69,7 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []database.TagFilter
 
 	// Generate SHA256 hash
 	hash := sha256.Sum256(keyBytes)
-	return fmt.Sprintf("%x", hash), nil
+	return hex.EncodeToString(hash[:]), nil
 }
 
 // GetCachedSlugResolution retrieves a cached slug resolution result.

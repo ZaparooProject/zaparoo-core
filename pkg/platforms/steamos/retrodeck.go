@@ -108,7 +108,7 @@ func LaunchViaRetroDECK(ctx context.Context, romPath string) (*os.Process, error
 // createRetroDECKLauncher creates a launcher for a specific RetroDECK system.
 func createRetroDECKLauncher(systemFolder string, systemInfo esde.SystemInfo, paths RetroDECKPaths) platforms.Launcher {
 	return platforms.Launcher{
-		ID:                 fmt.Sprintf("RetroDECK%s", systemInfo.GetLauncherID()),
+		ID:                 "RetroDECK" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
 		Lifecycle:          platforms.LifecycleTracked,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner

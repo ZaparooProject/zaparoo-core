@@ -21,9 +21,9 @@ package steam
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	valvevdfbinary "github.com/TimDeve/valve-vdf-binary"
@@ -224,7 +224,7 @@ func ScanSteamShortcuts(steamDir string) ([]platforms.ScanResult, error) {
 			bpid := (uint64(shortcut.AppId) << 32) | 0x02000000
 
 			results = append(results, platforms.ScanResult{
-				Path:  virtualpath.CreateVirtualPath("steam", fmt.Sprintf("%d", bpid), shortcut.AppName),
+				Path:  virtualpath.CreateVirtualPath("steam", strconv.FormatUint(bpid, 10), shortcut.AppName),
 				Name:  shortcut.AppName,
 				NoExt: true,
 			})

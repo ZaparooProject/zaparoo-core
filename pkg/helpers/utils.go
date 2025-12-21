@@ -27,6 +27,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // Used for game file hashing/matching against existing retro gaming databases
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -66,7 +67,7 @@ func GetMd5Hash(filePath string) (string, error) {
 	hash := md5.New()
 	_, _ = io.Copy(hash, file)
 	_ = file.Close()
-	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func GetFileSize(filePath string) (int64, error) {

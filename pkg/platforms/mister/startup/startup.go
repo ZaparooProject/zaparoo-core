@@ -109,18 +109,19 @@ func (s *Startup) Save() error {
 		return errors.New("no startup entries to save")
 	}
 
-	contents := "#!/bin/sh\n\n"
+	var contents strings.Builder
+	_, _ = contents.WriteString("#!/bin/sh\n\n")
 
 	for _, entry := range s.Entries {
 		if entry.Name != "" {
-			contents += "# " + entry.Name + "\n"
+			_, _ = contents.WriteString("# " + entry.Name + "\n")
 		}
 
 		for _, cmd := range entry.Cmds {
-			contents += cmd + "\n"
+			_, _ = contents.WriteString(cmd + "\n")
 		}
 
-		contents += "\n"
+		_, _ = contents.WriteString("\n")
 	}
 
 	// Ensure parent directory exists before writing
@@ -130,7 +131,8 @@ func (s *Startup) Save() error {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	err = os.WriteFile(config.StartupFile, []byte(contents), 0o644) //nolint:gosec // shared system startup script
+	//nolint:gosec // shared system startup script
+	err = os.WriteFile(config.StartupFile, []byte(contents.String()), 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to write startup file %s: %w", config.StartupFile, err)
 	}
