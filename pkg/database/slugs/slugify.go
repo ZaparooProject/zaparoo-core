@@ -69,8 +69,7 @@ const (
 //     Stage 8: Lowercasing
 //     Stage 9: Final character filtering (multi-script aware)
 //
-// This function is deterministic and idempotent:
-//   Slugify(mt, Slugify(mt, x)) == Slugify(mt, x)
+// This function is deterministic: the same input always produces the same output.
 //
 // Examples:
 //   Slugify(MediaTypeGame, "The Legend of Zelda: Ocarina of Time (USA) [!]")

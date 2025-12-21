@@ -91,7 +91,7 @@ func TestSlugify_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "German umlauts",
 			input:    "Fußball Manager",
-			expected: "fuballmanager",
+			expected: "fussballmanager", // ß → ss
 		},
 		{
 			name:     "Spanish accents",
@@ -106,7 +106,7 @@ func TestSlugify_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Nordic characters",
 			input:    "Åben Køkken",
-			expected: "abenkkken",
+			expected: "abenkokken", // Å → A, Ø → O
 		},
 		{
 			name:     "Turkish characters",
@@ -121,7 +121,7 @@ func TestSlugify_NonLatinCharacters(t *testing.T) {
 		{
 			name:     "Polish characters",
 			input:    "Łódź Śląsk",
-			expected: "odzslask",
+			expected: "lodzslask", // Ł → L
 		},
 		{
 			name:     "Czech characters",
