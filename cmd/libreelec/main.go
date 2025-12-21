@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"runtime/debug"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
@@ -41,6 +42,18 @@ import (
 )
 
 func run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
+			log.Error().
+				Interface("panic", r).
+				Bytes("stack", stack).
+				Msg("recovered from panic")
+			os.Exit(1)
+		}
+	}()
+
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",
@@ -52,13 +65,6 @@ func run() error {
 	flags.Pre(pl)
 
 	cfg := cli.Setup(pl, config.BaseDefaults, nil)
-
-	defer func() {
-		if err := recover(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n", err)
-			log.Fatal().Msgf("panic: %v", err)
-		}
-	}()
 
 	svc, err := helpers.NewService(helpers.ServiceArgs{
 		Entry: func() (func() error, error) {

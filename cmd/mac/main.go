@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
@@ -55,6 +56,18 @@ func main() {
 }
 
 func run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
+			log.Error().
+				Interface("panic", r).
+				Bytes("stack", stack).
+				Msg("recovered from panic")
+			os.Exit(1)
+		}
+	}()
+
 	if os.Geteuid() == 0 {
 		return errors.New("zaparoo cannot be run as root")
 	}
@@ -85,13 +98,6 @@ func run() error {
 		config.BaseDefaults,
 		logWriters,
 	)
-
-	defer func() {
-		if err := recover(); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "Panic: %s\n", err)
-			log.Fatal().Msgf("panic: %v", err)
-		}
-	}()
 
 	flags.Post(cfg, pl)
 
