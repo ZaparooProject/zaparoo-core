@@ -159,7 +159,7 @@ func (r *Reader) Connected() bool {
 }
 
 func (r *Reader) Info() string {
-	return fmt.Sprintf("MQTT: %s", r.topic)
+	return "MQTT: " + r.topic
 }
 
 func (*Reader) Write(_ string) (*tokens.Token, error) {

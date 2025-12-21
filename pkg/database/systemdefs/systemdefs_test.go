@@ -145,7 +145,7 @@ func TestAllSystemsHaveMetadataJSON(t *testing.T) {
 			t.Parallel()
 
 			// Build the expected JSON file path
-			jsonFilePath := filepath.Join(metadataDir, fmt.Sprintf("%s.json", system.ID))
+			jsonFilePath := filepath.Join(metadataDir, system.ID+".json")
 
 			// Check if the file exists
 			fileInfo, err := os.Stat(jsonFilePath)

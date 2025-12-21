@@ -117,7 +117,8 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 			return platforms.CmdResult{}, runScript(plm, script, "", hidden)
 		}
 
-		cleaned := "'"
+		var cleaned strings.Builder
+		_ = cleaned.WriteByte('\'')
 		inQuote := false
 		for _, arg := range strings.Join(args, " ") {
 			if arg == '"' {
@@ -125,21 +126,21 @@ func cmdMisterScript(plm *Platform) func(platforms.Platform, *platforms.CmdEnv) 
 			}
 
 			if arg == ' ' && !inQuote {
-				cleaned += "' '"
+				_, _ = cleaned.WriteString("' '")
 				continue
 			}
 
 			if arg == '\'' {
-				cleaned += "'\\''"
+				_, _ = cleaned.WriteString("'\\''")
 				continue
 			}
 
-			cleaned += string(arg)
+			_, _ = cleaned.WriteRune(arg)
 		}
-		cleaned += "'"
+		_ = cleaned.WriteByte('\'')
 
-		log.Info().Msgf("running script: %s", script+" "+cleaned)
-		return platforms.CmdResult{}, runScript(plm, script, cleaned, hidden)
+		log.Info().Msgf("running script: %s", script+" "+cleaned.String())
+		return platforms.CmdResult{}, runScript(plm, script, cleaned.String(), hidden)
 	}
 }
 

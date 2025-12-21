@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1305,7 +1306,7 @@ func (*MediaDB) generateQueryHash(query *database.MediaQuery) (string, error) {
 
 	// Generate SHA256 hash
 	hash := sha256.Sum256(queryBytes)
-	return fmt.Sprintf("%x", hash), nil
+	return hex.EncodeToString(hash[:]), nil
 }
 
 func (db *MediaDB) FindSystem(row database.System) (database.System, error) {

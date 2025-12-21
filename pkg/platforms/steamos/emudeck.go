@@ -449,7 +449,7 @@ func LaunchViaEmuDeck(ctx context.Context, romPath, systemFolder string) (*os.Pr
 // createEmuDeckLauncher creates a launcher for a specific EmuDeck system.
 func createEmuDeckLauncher(systemFolder string, systemInfo esde.SystemInfo, paths EmuDeckPaths) platforms.Launcher {
 	return platforms.Launcher{
-		ID:                 fmt.Sprintf("EmuDeck%s", systemInfo.GetLauncherID()),
+		ID:                 "EmuDeck" + systemInfo.GetLauncherID(),
 		SystemID:           systemInfo.SystemID,
 		Lifecycle:          platforms.LifecycleTracked,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner

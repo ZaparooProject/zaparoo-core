@@ -401,6 +401,7 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 	inString := false
 	escaped := false
 
+	var jsonBuilder strings.Builder
 	for braceCount > 0 {
 		ch, err := sr.read()
 		if err != nil {
@@ -409,7 +410,7 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 			return "", ErrInvalidJSON
 		}
 
-		jsonStr += string(ch)
+		_, _ = jsonBuilder.WriteString(string(ch))
 
 		if escaped {
 			escaped = false
@@ -435,6 +436,7 @@ func (sr *ScriptReader) parseJSONArg() (string, error) {
 			}
 		}
 	}
+	jsonStr += jsonBuilder.String()
 
 	// validate json
 	var jsonObj any
@@ -484,6 +486,7 @@ func (sr *ScriptReader) parseInputMacroArg() (args []string, advArgs map[string]
 
 		if ch == SymInputMacroExtStart {
 			extName := string(ch)
+			var extBuilder strings.Builder
 			for {
 				next, err := sr.read()
 				if err != nil {
@@ -492,12 +495,13 @@ func (sr *ScriptReader) parseInputMacroArg() (args []string, advArgs map[string]
 					return args, advArgs, ErrUnmatchedInputMacroExt
 				}
 
-				extName += string(next)
+				_, _ = extBuilder.WriteString(string(next))
 
 				if next == SymInputMacroExtEnd {
 					break
 				}
 			}
+			extName += extBuilder.String()
 			args = append(args, extName)
 			continue
 		} else if ch == SymAdvArgStart {
@@ -729,6 +733,7 @@ func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) 
 	}
 	rawContent := ""
 
+	var contentBuilder strings.Builder
 	for {
 		ch, readErr := sr.read()
 		if readErr != nil {
@@ -746,9 +751,9 @@ func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) 
 				return nil, escapeErr
 			}
 			if next == "" {
-				rawContent += string(SymEscapeSeq)
+				_, _ = contentBuilder.WriteString(string(SymEscapeSeq))
 			} else {
-				rawContent += next
+				_, _ = contentBuilder.WriteString(next)
 			}
 			continue
 		}
@@ -767,7 +772,7 @@ func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) 
 			parsedAdvArgs, buf, err := sr.parseAdvArgs()
 			if errors.Is(err, ErrInvalidAdvArgName) {
 				// Fallback: treat as part of content
-				rawContent += string(SymAdvArgStart) + buf
+				_, _ = contentBuilder.WriteString(string(SymAdvArgStart) + buf)
 				continue
 			} else if err != nil {
 				return nil, err
@@ -777,8 +782,9 @@ func (sr *ScriptReader) parseMediaTitleSyntax() (*mediaTitleParseResult, error) 
 			break
 		}
 
-		rawContent += string(ch)
+		_, _ = contentBuilder.WriteString(string(ch))
 	}
+	rawContent += contentBuilder.String()
 
 	result.rawContent = strings.TrimSpace(rawContent)
 
@@ -1135,7 +1141,7 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 		parts = append(parts, currentPart)
 	}
 
-	arg := ""
+	var result strings.Builder
 	for _, part := range parts {
 		if part.Type == ArgPartTypeExpression {
 			output, err := expr.Eval(part.Value, exprEnv)
@@ -1145,20 +1151,20 @@ func (sr *ScriptReader) EvalExpressions(exprEnv any) (string, error) {
 
 			switch v := output.(type) {
 			case string:
-				arg += v
+				_, _ = result.WriteString(v)
 			case bool:
-				arg += strconv.FormatBool(v)
+				_, _ = result.WriteString(strconv.FormatBool(v))
 			case int:
-				arg += strconv.Itoa(v)
+				_, _ = result.WriteString(strconv.Itoa(v))
 			case float64:
-				arg += strconv.FormatFloat(v, 'f', -1, 64)
+				_, _ = result.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
 			default:
 				return "", fmt.Errorf("%w: %v (%T)", ErrBadExpressionReturn, v, v)
 			}
 		} else {
-			arg += part.Value
+			_, _ = result.WriteString(part.Value)
 		}
 	}
 
-	return arg, nil
+	return result.String(), nil
 }

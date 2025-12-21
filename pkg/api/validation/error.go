@@ -71,21 +71,21 @@ func formatValidationError(fe validator.FieldError) string {
 	field := strings.ToLower(fe.Field())
 	switch fe.Tag() {
 	case "required":
-		return fmt.Sprintf("%s is required", field)
+		return field + " is required"
 	case "letter":
-		return fmt.Sprintf("%s must be A-Z, 0-9, or #", field)
+		return field + " must be A-Z, 0-9, or #"
 	case "duration":
-		return fmt.Sprintf("%s must be a valid duration (e.g., 1h30m)", field)
+		return field + " must be a valid duration (e.g., 1h30m)"
 	case "regex":
-		return fmt.Sprintf("%s must be a valid regex pattern", field)
+		return field + " must be a valid regex pattern"
 	case "system":
 		return fmt.Sprintf("system %q not found", fe.Value())
 	case "launcher":
 		return fmt.Sprintf("launcher %q not found", fe.Value())
 	case "hexadecimal":
-		return fmt.Sprintf("%s must be a valid hexadecimal string", field)
+		return field + " must be a valid hexadecimal string"
 	case "hexdata":
-		return fmt.Sprintf("%s must be valid hex data (e.g., \"AABBCC\" or \"AA BB CC\")", field)
+		return field + " must be valid hex data (e.g., \"AABBCC\" or \"AA BB CC\")"
 	case "oneof":
 		return fmt.Sprintf("%s must be one of: %s", field, fe.Param())
 	case "min":

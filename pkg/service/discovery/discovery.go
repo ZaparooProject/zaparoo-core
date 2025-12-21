@@ -66,9 +66,9 @@ func (s *Service) Start() error {
 	port := s.cfg.APIPort()
 
 	txtRecords := []string{
-		fmt.Sprintf("id=%s", s.cfg.DeviceID()),
-		fmt.Sprintf("version=%s", config.AppVersion),
-		fmt.Sprintf("platform=%s", s.platformID),
+		"id=" + s.cfg.DeviceID(),
+		"version=" + config.AppVersion,
+		"platform=" + s.platformID,
 	}
 
 	server, err := zeroconf.Register(
@@ -120,7 +120,7 @@ func (s *Service) resolveInstanceName() (string, error) {
 		log.Warn().Err(err).Msg("failed to get hostname, using fallback")
 		deviceID := s.cfg.DeviceID()
 		if len(deviceID) >= 8 {
-			return fmt.Sprintf("zaparoo-%s", deviceID[:8]), nil
+			return "zaparoo-" + deviceID[:8], nil
 		}
 		return "zaparoo", nil
 	}

@@ -522,8 +522,8 @@ func buildDynamicAllowedOrigins(baseOrigins, localIPs []string, port int, custom
 		} else {
 			// Hostname only - add both protocols, with and without port
 			result = append(result,
-				fmt.Sprintf("http://%s", origin),
-				fmt.Sprintf("https://%s", origin),
+				"http://"+origin,
+				"https://"+origin,
 				fmt.Sprintf("http://%s:%d", origin, port),
 				fmt.Sprintf("https://%s:%d", origin, port),
 			)
@@ -842,8 +842,8 @@ func Start(
 	if mdnsHostname != "" {
 		mdnsLocal := mdnsHostname + ".local"
 		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
-			fmt.Sprintf("http://%s", mdnsLocal),
-			fmt.Sprintf("https://%s", mdnsLocal),
+			"http://"+mdnsLocal,
+			"https://"+mdnsLocal,
 			fmt.Sprintf("http://%s:%d", mdnsLocal, port),
 			fmt.Sprintf("https://%s:%d", mdnsLocal, port),
 		)
@@ -853,8 +853,8 @@ func Start(
 	// Add raw hostname for users with hostname resolution on their network
 	if hostname, err := os.Hostname(); err == nil && hostname != "" {
 		dynamicAllowedOrigins = append(dynamicAllowedOrigins,
-			fmt.Sprintf("http://%s", hostname),
-			fmt.Sprintf("https://%s", hostname),
+			"http://"+hostname,
+			"https://"+hostname,
 			fmt.Sprintf("http://%s:%d", hostname, port),
 			fmt.Sprintf("https://%s:%d", hostname, port),
 		)
