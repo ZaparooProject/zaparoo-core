@@ -402,3 +402,122 @@ func TestValidateNDEFMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateNDEFRecordHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		wantErr string
+		payload []byte
+	}{
+		{
+			name: "Valid short text record",
+			// flags=0xD1 (MB=1,ME=1,CF=0,SR=1,IL=0,TNF=1), typeLen=1, payloadLen=5, type='T', payload
+			payload: []byte{0xD1, 0x01, 0x05, 'T', 0x02, 'e', 'n', 'H', 'i'},
+			wantErr: "",
+		},
+		{
+			name: "Valid short URI record",
+			// flags=0xD1 (MB=1,ME=1,CF=0,SR=1,IL=0,TNF=1), typeLen=1, payloadLen=4, type='U', payload
+			payload: []byte{0xD1, 0x01, 0x04, 'U', 0x03, 'a', '.', 'b'},
+			wantErr: "",
+		},
+		{
+			name:    "Too short",
+			payload: []byte{0xD1, 0x01},
+			wantErr: "record too short",
+		},
+		{
+			name: "Invalid TNF (7 is reserved)",
+			// flags=0xD7 (TNF=7)
+			payload: []byte{0xD7, 0x01, 0x01, 'T', 'x'},
+			wantErr: "invalid TNF value 7",
+		},
+		{
+			name: "MB flag not set",
+			// flags=0x51 (MB=0,ME=1,CF=0,SR=1,IL=0,TNF=1)
+			payload: []byte{0x51, 0x01, 0x01, 'T', 'x'},
+			wantErr: "MB flag not set",
+		},
+		{
+			name: "ME flag not set (multi-record)",
+			// flags=0x91 (MB=1,ME=0,CF=0,SR=1,IL=0,TNF=1)
+			payload: []byte{0x91, 0x01, 0x01, 'T', 'x'},
+			wantErr: "ME flag not set",
+		},
+		{
+			name: "Chunked record (CF set)",
+			// flags=0xF1 (MB=1,ME=1,CF=1,SR=1,IL=0,TNF=1)
+			payload: []byte{0xF1, 0x01, 0x01, 'T', 'x'},
+			wantErr: "chunked records not supported",
+		},
+		{
+			name: "Long record (SR not set)",
+			// flags=0xC1 (MB=1,ME=1,CF=0,SR=0,IL=0,TNF=1)
+			payload: []byte{0xC1, 0x01, 0x00, 0x00, 0x00, 0x01, 'T', 'x'},
+			wantErr: "long records not supported",
+		},
+		{
+			name: "Record with ID (IL set)",
+			// flags=0xD9 (MB=1,ME=1,CF=0,SR=1,IL=1,TNF=1)
+			payload: []byte{0xD9, 0x01, 0x01, 0x02, 'T', 'x', 'i', 'd'},
+			wantErr: "records with ID not supported",
+		},
+		{
+			name: "Truncated header (typeLen exceeds)",
+			// flags=0xD1, typeLen=10, but only 2 more bytes
+			payload: []byte{0xD1, 0x0A, 0x01, 'T', 'x'},
+			wantErr: "truncated record header",
+		},
+		{
+			name: "Truncated payload",
+			// flags=0xD1, typeLen=1, payloadLen=10, but only 1 payload byte
+			payload: []byte{0xD1, 0x01, 0x0A, 'T', 'x'},
+			wantErr: "truncated payload",
+		},
+		{
+			name: "Empty record with non-zero type length",
+			// flags=0xD0 (TNF=0 empty), typeLen=1 (invalid for empty)
+			payload: []byte{0xD0, 0x01, 0x00, 'T'},
+			wantErr: "empty record must have zero lengths",
+		},
+		{
+			name: "Empty record with non-zero payload length",
+			// flags=0xD0 (TNF=0 empty), typeLen=0, payloadLen=1 (invalid)
+			payload: []byte{0xD0, 0x00, 0x01, 'x'},
+			wantErr: "empty record must have zero lengths",
+		},
+		{
+			name: "Well-known record missing type",
+			// flags=0xD1 (TNF=1), typeLen=0 (invalid for well-known)
+			payload: []byte{0xD1, 0x00, 0x01, 'x'},
+			wantErr: "well-known record must have type",
+		},
+		{
+			name: "Valid empty record (TNF=0)",
+			// flags=0xD0 (MB=1,ME=1,CF=0,SR=1,IL=0,TNF=0), typeLen=0, payloadLen=0
+			payload: []byte{0xD0, 0x00, 0x00},
+			wantErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateNDEFRecordHeader(tt.payload)
+
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("validateNDEFRecordHeader() unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("validateNDEFRecordHeader() expected error containing %q but got none", tt.wantErr)
+				} else if !bytes.Contains([]byte(err.Error()), []byte(tt.wantErr)) {
+					t.Errorf("validateNDEFRecordHeader() error = %v, want error containing %q", err, tt.wantErr)
+				}
+			}
+		})
+	}
+}
