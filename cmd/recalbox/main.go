@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
@@ -55,6 +56,18 @@ func main() {
 }
 
 func run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
+			log.Error().
+				Interface("panic", r).
+				Bytes("stack", stack).
+				Msg("recovered from panic")
+			os.Exit(1)
+		}
+	}()
+
 	sigs := make(chan os.Signal, 1)
 	defer close(sigs)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

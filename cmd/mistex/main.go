@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
@@ -87,6 +88,18 @@ WantedBy=multi-user.target
 }
 
 func run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
+			log.Error().
+				Interface("panic", r).
+				Bytes("stack", stack).
+				Msg("recovered from panic")
+			os.Exit(1)
+		}
+	}()
+
 	flags := cli.SetupFlags()
 	serviceFlag := flag.String(
 		"service",

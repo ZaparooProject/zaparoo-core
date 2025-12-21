@@ -30,12 +30,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config/migrate"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/steamos"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -46,6 +48,18 @@ func main() {
 }
 
 func run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			_, _ = fmt.Fprintf(os.Stderr, "Panic: %v\n%s\n", r, stack)
+			log.Error().
+				Interface("panic", r).
+				Bytes("stack", stack).
+				Msg("recovered from panic")
+			os.Exit(1)
+		}
+	}()
+
 	install := flag.String(
 		"install",
 		"",
