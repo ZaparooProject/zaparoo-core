@@ -42,6 +42,12 @@ func ParseToText(data []byte) (string, error) {
 		return "", ErrNoNDEF
 	}
 
+	// Validate NDEF record header before calling go-ndef to avoid
+	// algorithmic complexity issues with malformed input
+	if err := validateNDEFRecordHeader(payload); err != nil {
+		return "", fmt.Errorf("invalid NDEF record: %w", err)
+	}
+
 	// Parse using go-ndef
 	msg := &ndef.Message{}
 	_, err := msg.Unmarshal(payload)
@@ -78,6 +84,76 @@ func ValidateNDEFMessage(data []byte) error {
 
 	if !found {
 		return fmt.Errorf("%w: no NDEF TLV found", ErrInvalidNDEF)
+	}
+
+	return nil
+}
+
+// validateNDEFRecordHeader performs strict validation of NDEF record structure
+// to reject malformed data before passing to go-ndef library.
+// go-ndef has algorithmic complexity bugs that can cause hangs with malformed input,
+// so we only accept the common case: short records without chunking or IDs.
+func validateNDEFRecordHeader(payload []byte) error {
+	if len(payload) < 3 {
+		return fmt.Errorf("%w: record too short", ErrInvalidNDEF)
+	}
+
+	// First byte is flags: MB|ME|CF|SR|IL|TNF(3 bits)
+	flags := payload[0]
+	tnf := flags & 0x07 // Type Name Format (bits 0-2)
+
+	// TNF must be 0-6 (0x00-0x06), value 7 is reserved
+	if tnf > 6 {
+		return fmt.Errorf("%w: invalid TNF value %d", ErrInvalidNDEF, tnf)
+	}
+
+	// MB (Message Begin) must be set for first record
+	if (flags & 0x80) == 0 {
+		return fmt.Errorf("%w: MB flag not set on first record", ErrInvalidNDEF)
+	}
+
+	// ME (Message End) should be set for single-record messages (common case)
+	// We require this to avoid multi-record parsing complexity in go-ndef
+	if (flags & 0x40) == 0 {
+		return fmt.Errorf("%w: ME flag not set (multi-record messages not supported)", ErrInvalidNDEF)
+	}
+
+	// CF (Chunk Flag) must NOT be set - chunked records trigger go-ndef bugs
+	if (flags & 0x20) != 0 {
+		return fmt.Errorf("%w: chunked records not supported", ErrInvalidNDEF)
+	}
+
+	// SR (Short Record) must be set - long records can trigger go-ndef bugs
+	if (flags & 0x10) == 0 {
+		return fmt.Errorf("%w: long records not supported", ErrInvalidNDEF)
+	}
+
+	// IL (ID Length) must NOT be set - records with IDs can trigger go-ndef bugs
+	if (flags & 0x08) != 0 {
+		return fmt.Errorf("%w: records with ID not supported", ErrInvalidNDEF)
+	}
+
+	// For short records without ID: header is flags(1) + typeLen(1) + payloadLen(1) + type
+	typeLen := int(payload[1])
+	if len(payload) < 3+typeLen {
+		return fmt.Errorf("%w: truncated record header", ErrInvalidNDEF)
+	}
+
+	// Get payload length and validate total size
+	payloadLen := int(payload[2])
+	totalLen := 3 + typeLen + payloadLen
+	if len(payload) < totalLen {
+		return fmt.Errorf("%w: truncated payload (need %d, have %d)", ErrInvalidNDEF, totalLen, len(payload))
+	}
+
+	// For TNF 0x00 (Empty), type and payload length must be 0
+	if tnf == 0 && (typeLen != 0 || payloadLen != 0) {
+		return fmt.Errorf("%w: empty record must have zero lengths", ErrInvalidNDEF)
+	}
+
+	// For TNF 0x01 (Well-Known), type must be present
+	if tnf == 1 && typeLen == 0 {
+		return fmt.Errorf("%w: well-known record must have type", ErrInvalidNDEF)
 	}
 
 	return nil
