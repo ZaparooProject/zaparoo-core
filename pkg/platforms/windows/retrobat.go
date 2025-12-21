@@ -90,7 +90,7 @@ func createRetroBatLauncher(systemFolder string, info esde.SystemInfo, _ string)
 	launcherID := info.GetLauncherID()
 	systemID := info.SystemID
 	return platforms.Launcher{
-		ID:                 fmt.Sprintf("RetroBat%s", launcherID),
+		ID:                 "RetroBat" + launcherID,
 		SystemID:           systemID,
 		SkipFilesystemScan: true, // Use gamelist.xml via Scanner
 		Test: func(cfg *config.Instance, path string) bool {
