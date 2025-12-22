@@ -46,19 +46,20 @@ const (
 )
 
 type Values struct {
-	Audio        Audio     `toml:"audio"`
-	Input        Input     `toml:"input,omitempty"`
-	Launchers    Launchers `toml:"launchers,omitempty"`
-	Media        Media     `toml:"media,omitempty"`
-	Playtime     Playtime  `toml:"playtime,omitempty"`
-	ZapScript    ZapScript `toml:"zapscript,omitempty"`
-	Systems      Systems   `toml:"systems,omitempty"`
-	Mappings     Mappings  `toml:"mappings,omitempty"`
-	Service      Service   `toml:"service,omitempty"`
-	Groovy       Groovy    `toml:"groovy,omitempty"`
-	Readers      Readers   `toml:"readers,omitempty"`
-	ConfigSchema int       `toml:"config_schema"`
-	DebugLogging bool      `toml:"debug_logging"`
+	Audio          Audio     `toml:"audio"`
+	Input          Input     `toml:"input,omitempty"`
+	Launchers      Launchers `toml:"launchers,omitempty"`
+	Media          Media     `toml:"media,omitempty"`
+	Playtime       Playtime  `toml:"playtime,omitempty"`
+	ZapScript      ZapScript `toml:"zapscript,omitempty"`
+	Systems        Systems   `toml:"systems,omitempty"`
+	Mappings       Mappings  `toml:"mappings,omitempty"`
+	Service        Service   `toml:"service,omitempty"`
+	Groovy         Groovy    `toml:"groovy,omitempty"`
+	Readers        Readers   `toml:"readers,omitempty"`
+	ConfigSchema   int       `toml:"config_schema"`
+	DebugLogging   bool      `toml:"debug_logging"`
+	ErrorReporting bool      `toml:"error_reporting"`
 }
 
 type Audio struct {
@@ -542,4 +543,19 @@ func (c *Instance) SetVirtualGamepadEnabled(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.vals.Input.GamepadEnabled = &enabled
+}
+
+// ErrorReporting returns whether error reporting is enabled.
+// Defaults to false (opt-in).
+func (c *Instance) ErrorReporting() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.vals.ErrorReporting
+}
+
+// SetErrorReporting sets whether error reporting is enabled.
+func (c *Instance) SetErrorReporting(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vals.ErrorReporting = enabled
 }

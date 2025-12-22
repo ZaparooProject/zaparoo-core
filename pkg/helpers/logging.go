@@ -51,6 +51,8 @@ func EnsureDirectories(pl platforms.Platform) error {
 	return nil
 }
 
+var logWriter io.Writer
+
 func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 	logWriters := []io.Writer{&lumberjack.Logger{
 		Filename:   filepath.Join(pl.Settings().LogDir, config.LogFile),
@@ -64,8 +66,14 @@ func InitLogging(pl platforms.Platform, writers []io.Writer) error {
 
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
-	log.Logger = log.Output(io.MultiWriter(logWriters...)).
-		With().Caller().Logger()
+	logWriter = io.MultiWriter(logWriters...)
+	log.Logger = log.Output(logWriter).With().Caller().Logger()
 
 	return nil
+}
+
+// LogWriter returns the underlying io.Writer used by the logger.
+// This is useful for adding additional writers (e.g., telemetry) after initialization.
+func LogWriter() io.Writer {
+	return logWriter
 }

@@ -31,6 +31,7 @@ import (
 	"path"
 	"runtime/debug"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
@@ -56,6 +57,7 @@ func main() {
 }
 
 func run() error {
+	defer telemetry.Close()
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -64,6 +66,7 @@ func run() error {
 				Interface("panic", r).
 				Bytes("stack", stack).
 				Msg("recovered from panic")
+			telemetry.Flush()
 			os.Exit(1)
 		}
 	}()

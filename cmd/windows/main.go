@@ -40,6 +40,7 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/rs/zerolog/log"
 	syswindows "golang.org/x/sys/windows"
@@ -101,6 +102,7 @@ func main() {
 }
 
 func run() error {
+	defer telemetry.Close()
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
@@ -109,6 +111,7 @@ func run() error {
 				Interface("panic", r).
 				Bytes("stack", stack).
 				Msg("recovered from panic")
+			telemetry.Flush()
 			os.Exit(1)
 		}
 	}()

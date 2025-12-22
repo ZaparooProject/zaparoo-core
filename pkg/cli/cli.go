@@ -30,6 +30,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/client"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -280,6 +281,16 @@ func Setup(
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+
+	// Initialize error reporting (opt-in)
+	if err := telemetry.Init(
+		cfg.ErrorReporting(),
+		cfg.DeviceID(),
+		config.AppVersion,
+		pl.ID(),
+	); err != nil {
+		log.Warn().Err(err).Msg("failed to initialize error reporting")
 	}
 
 	return cfg
