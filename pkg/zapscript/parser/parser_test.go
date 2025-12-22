@@ -2410,10 +2410,8 @@ func TestPostProcess(t *testing.T) {
 	}
 }
 
-// TestAdvArgs_WithMustAssignReturn verifies that AdvArgs.With() return value must be assigned
-// when the underlying map is nil. This test documents a subtle value receiver behavior:
-// - When raw map exists: changes persist (map is reference type, shared between copies)
-// - When raw map is nil: changes are lost (make() creates map in copy only)
+// TestAdvArgs_WithMustAssignReturn verifies that AdvArgs.With() returns a new instance
+// without mutating the original. The return value must always be assigned.
 func TestAdvArgs_WithMustAssignReturn(t *testing.T) {
 	t.Parallel()
 
@@ -2423,17 +2421,15 @@ func TestAdvArgs_WithMustAssignReturn(t *testing.T) {
 		t.Parallel()
 
 		advArgs := parser.NewAdvArgs(nil)
-
-		// BUG PATTERN: Calling With without assigning return value on nil map
 		advArgs.With(testKey, "new_value")
 
 		got := advArgs.Get(testKey)
 		if got != "" {
-			t.Errorf("Expected empty string (change lost with nil map), got %q", got)
+			t.Errorf("Expected empty string (change lost without assign), got %q", got)
 		}
 	})
 
-	t.Run("With without assign on existing map preserves changes", func(t *testing.T) {
+	t.Run("With without assign on existing map loses changes", func(t *testing.T) {
 		t.Parallel()
 
 		advArgs := parser.NewAdvArgs(map[string]string{
@@ -2443,8 +2439,30 @@ func TestAdvArgs_WithMustAssignReturn(t *testing.T) {
 		advArgs.With(testKey, "new_value")
 
 		got := advArgs.Get(testKey)
-		if got != "new_value" {
-			t.Errorf("Expected %q (map is shared), got %q", "new_value", got)
+		if got != "" {
+			t.Errorf("Expected empty string (change lost without assign), got %q", got)
+		}
+	})
+
+	t.Run("With does not mutate original", func(t *testing.T) {
+		t.Parallel()
+
+		original := parser.NewAdvArgs(map[string]string{
+			"existing": "value",
+		})
+		modified := original.With(testKey, "new_value")
+
+		// Original should not have the new key
+		if original.Get(testKey) != "" {
+			t.Error("Original should not have new key")
+		}
+
+		// Modified should have both keys
+		if modified.Get(testKey) != "new_value" {
+			t.Errorf("Modified should have new key, got %q", modified.Get(testKey))
+		}
+		if modified.Get("existing") != "value" {
+			t.Errorf("Modified should preserve existing keys, got %q", modified.Get("existing"))
 		}
 	})
 
