@@ -52,13 +52,16 @@ func generateSlugCacheKey(systemID, slug string, tagFilters []database.TagFilter
 		Tags:     make([]database.TagFilter, len(tagFilters)),
 	}
 
-	// Copy and sort tags for consistent ordering
+	// Copy and sort tags for consistent ordering (by Type, then Value, then Operator)
 	copy(normalized.Tags, tagFilters)
 	sort.Slice(normalized.Tags, func(i, j int) bool {
 		if normalized.Tags[i].Type != normalized.Tags[j].Type {
 			return normalized.Tags[i].Type < normalized.Tags[j].Type
 		}
-		return normalized.Tags[i].Value < normalized.Tags[j].Value
+		if normalized.Tags[i].Value != normalized.Tags[j].Value {
+			return normalized.Tags[i].Value < normalized.Tags[j].Value
+		}
+		return normalized.Tags[i].Operator < normalized.Tags[j].Operator
 	})
 
 	// Marshal to JSON with consistent ordering

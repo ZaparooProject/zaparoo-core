@@ -56,6 +56,7 @@ require (
 	golang.org/x/time v0.12.0
 	gopkg.in/ini.v1 v1.67.0
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
+	pgregory.net/rapid v1.2.0
 )
 
 require (

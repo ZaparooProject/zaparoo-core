@@ -118,10 +118,53 @@ func normalizeTurkishCharacters(s string) string {
 	return s
 }
 
+// transliterateSpecialLatin converts Latin characters that don't decompose via NFKD.
+// These are distinct letters in their respective alphabets that need explicit mapping
+// for consistent ASCII slug generation.
+//
+
+func transliterateSpecialLatin(s string) string {
+	// Polish
+	s = strings.ReplaceAll(s, "Ł", "L")
+	s = strings.ReplaceAll(s, "ł", "l")
+
+	// Scandinavian/Danish/Norwegian
+	s = strings.ReplaceAll(s, "Ø", "O")
+	s = strings.ReplaceAll(s, "ø", "o")
+	s = strings.ReplaceAll(s, "Å", "A")
+	s = strings.ReplaceAll(s, "å", "a")
+
+	// German
+	s = strings.ReplaceAll(s, "ß", "ss")
+	s = strings.ReplaceAll(s, "ẞ", "SS") // Capital eszett
+
+	// Ligatures
+	s = strings.ReplaceAll(s, "Æ", "AE")
+	s = strings.ReplaceAll(s, "æ", "ae")
+	s = strings.ReplaceAll(s, "Œ", "OE")
+	s = strings.ReplaceAll(s, "œ", "oe")
+
+	// Icelandic
+	s = strings.ReplaceAll(s, "Þ", "TH")
+	s = strings.ReplaceAll(s, "þ", "th")
+	s = strings.ReplaceAll(s, "Ð", "D")
+	s = strings.ReplaceAll(s, "ð", "d")
+
+	// Croatian/Serbian/Vietnamese
+	s = strings.ReplaceAll(s, "Đ", "D")
+	s = strings.ReplaceAll(s, "đ", "d")
+
+	return s
+}
+
 // normalizeLatinExtended handles special cases for Latin-based scripts with unique requirements.
-// This includes Vietnamese (tone diacritics) and Turkish (dotted/dotless I).
+// This includes Vietnamese (tone diacritics), Turkish (dotted/dotless I), and special Latin
+// characters that don't decompose via NFKD (Ł, Ø, ß, Æ, Œ, Þ, Đ, etc.).
 // Note: Case folding happens later in the pipeline (final slugification stage).
 func normalizeLatinExtended(s string, preserveVietnamese bool) string {
+	// Transliterate special Latin characters before diacritic removal (they don't decompose via NFKD)
+	s = transliterateSpecialLatin(s)
+
 	// Vietnamese: optionally preserve tone diacritics for dual-slug generation
 	if !preserveVietnamese {
 		s = removeDiacritics(s)

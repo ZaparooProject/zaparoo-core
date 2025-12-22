@@ -94,11 +94,12 @@ func (a AdvArgs) Get(key advargtypes.Key) string {
 
 // With returns a new AdvArgs with the key set to value. Does not mutate the receiver.
 func (a AdvArgs) With(key advargtypes.Key, value string) AdvArgs {
-	if a.raw == nil {
-		a.raw = make(map[string]string)
+	newMap := make(map[string]string, len(a.raw)+1)
+	for k, v := range a.raw {
+		newMap[k] = v
 	}
-	a.raw[string(key)] = value
-	return a
+	newMap[string(key)] = value
+	return AdvArgs{raw: newMap}
 }
 
 func (a AdvArgs) GetWhen() (string, bool) {
