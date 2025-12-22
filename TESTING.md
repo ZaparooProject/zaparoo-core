@@ -1084,6 +1084,8 @@ When rapid finds a failing input, it saves it to `testdata/rapid/TestName/`:
 3. They ensure the bug stays fixed across the team and CI
 4. They're small files (just seeds, not full inputs)
 
+**Shrinking**: When rapid finds a failing input, it automatically "shrinks" the input to find the smallest possible example that still fails. This makes debugging much easier - instead of a complex 50-element slice, you might get a minimal 2-element case that exposes the bug.
+
 ### Property Test Best Practices
 
 1. **Use `t.Parallel()`**: Property tests are independent and can run concurrently
@@ -1104,6 +1106,17 @@ When rapid finds a failing input, it saves it to `testdata/rapid/TestName/`:
 
 **Best practice**: Use rapid for testing invariants and properties; use Go fuzzing for security-critical parsing of untrusted input.
 
+### CI Integration
+
+Property tests run automatically with `go test` - no special configuration needed. Each test runs 100 iterations by default, completing in under 1 second. Unlike fuzz tests, property tests are fast enough for regular CI.
+
+On CI failure, `.fail` files are uploaded as artifacts so developers can reproduce locally:
+
+```bash
+# Download the .fail file from CI artifacts, then:
+go test -run TestPropertyCacheKeyOrderIndependent -rapid.failfile=path/to/downloaded.fail ./pkg/...
+```
+
 ### Example Property Tests
 
 See these files for complete examples:
@@ -1112,6 +1125,7 @@ See these files for complete examples:
 - `pkg/database/mediadb/slug_cache_property_test.go` - Cache key determinism
 - `pkg/database/matcher/fuzzy_property_test.go` - Fuzzy matching properties
 - `pkg/database/filters/parser_property_test.go` - Tag filter parsing
+- `pkg/helpers/paths_property_test.go` - Path normalization and comparison
 
 ## Best Practices
 

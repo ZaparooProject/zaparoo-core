@@ -296,6 +296,8 @@ jobs:
           }
           scoop install pkg-config
 
+      # Tests include property-based tests (rapid) which run ~100 iterations each.
+      # On failure, rapid generates .fail files which are uploaded as artifacts.
       - name: Run full tests (Windows)
         if: matrix.os == 'windows-latest'
         shell: bash
@@ -306,6 +308,14 @@ jobs:
       - name: Run full tests (Unix)
         if: matrix.os != 'windows-latest'
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload rapid failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapid-failures-${{ matrix.os }}
+          path: '**/testdata/rapid/**/*.fail'
+          if-no-files-found: ignore
 
       - name: Run deadlock detection tests
         if: matrix.os == 'ubuntu-latest'
