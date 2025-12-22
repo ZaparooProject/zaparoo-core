@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -64,9 +65,10 @@ type Reader struct {
 	deviceConfig          config.ReadersConnect
 	path                  string
 	mu                    syncutil.RWMutex
+	wg                    sync.WaitGroup // tracks operationWorker goroutine
 	connected             bool
 	operationInProgress   bool
-	originalReadTimeout   time.Duration // Store original timeout for restoration
+	originalReadTimeout   time.Duration
 }
 
 func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
@@ -80,12 +82,12 @@ func NewReader(cfg *config.Instance, pl platforms.Platform) *Reader {
 		healthCheckCtx:        ctx,
 		healthCheckCancel:     cancel,
 		stateManager:          NewStateManager(),
-		operationQueue:        make(chan MediaOperation, 10), // Buffer up to 10 operations
+		operationQueue:        make(chan MediaOperation, 10),
 		operationWorkerCtx:    operationCtx,
 		operationWorkerCancel: operationCancel,
 	}
 
-	// Start the operation worker goroutine
+	r.wg.Add(1)
 	go r.operationWorker()
 
 	return r
@@ -144,6 +146,7 @@ func (r *Reader) getDevicePath() string {
 
 // operationWorker processes media operations sequentially from the queue
 func (r *Reader) operationWorker() {
+	defer r.wg.Done()
 	log.Trace().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker started")
 	defer log.Trace().Str("device", r.getDevicePath()).Msg("TTY2OLED operation worker stopped")
 
@@ -363,29 +366,30 @@ func (r *Reader) Open(device config.ReadersConnect, _ chan<- readers.Scan) error
 }
 
 func (r *Reader) Close() error {
-	// Transition to disconnected state
 	r.setState(StateDisconnected)
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Stop operation worker goroutine
 	if r.operationWorkerCancel != nil {
 		r.operationWorkerCancel()
 	}
-
-	// Stop health check goroutine
 	if r.healthCheckCancel != nil {
 		r.healthCheckCancel()
 	}
+	r.mu.Unlock()
 
+	// Wait outside mutex to avoid deadlock with operationWorker
+	r.wg.Wait()
+
+	r.mu.Lock()
+	path := r.path
 	if r.port != nil {
 		_ = r.port.Close()
 		r.port = nil
 	}
-
 	r.connected = false
-	log.Info().Str("device", r.getDevicePath()).Msg("tty2oled display disconnected")
+	r.mu.Unlock()
+
+	log.Info().Str("device", path).Msg("tty2oled display disconnected")
 
 	return nil
 }

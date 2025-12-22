@@ -132,9 +132,10 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 							ReaderError: true,
 						}
 					}
-					if closeErr := r.Close(); closeErr != nil {
-						log.Warn().Err(closeErr).Msg("error closing reader after consecutive failures")
-					}
+					// Stop polling directly instead of calling Close() to avoid deadlock
+					r.mu.Lock()
+					r.polling = false
+					r.mu.Unlock()
 					break
 				}
 				iq <- readers.Scan{

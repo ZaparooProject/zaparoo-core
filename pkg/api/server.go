@@ -893,6 +893,11 @@ func Start(
 	methodMap := NewMethodMap()
 
 	session := melody.New()
+	defer func() {
+		if err := session.Close(); err != nil {
+			log.Error().Err(err).Msg("WebSocket session close error")
+		}
+	}()
 	session.Upgrader.CheckOrigin = func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Debug().Msgf("websocket origin: %s", origin)

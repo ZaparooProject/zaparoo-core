@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/api/models"
@@ -86,6 +87,7 @@ type FileReader struct {
 	path          string
 	polling       bool
 	mu            syncutil.RWMutex // protects polling
+	wg            sync.WaitGroup   // tracks polling goroutine
 }
 
 func NewReader(cfg *config.Instance) *FileReader {
@@ -158,7 +160,9 @@ func (r *FileReader) Open(
 		}
 	}
 
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		var token *tokens.Token
 
 		for {
@@ -263,6 +267,7 @@ func (r *FileReader) Close() error {
 	r.mu.Lock()
 	r.polling = false
 	r.mu.Unlock()
+	r.wg.Wait()
 	return nil
 }
 
