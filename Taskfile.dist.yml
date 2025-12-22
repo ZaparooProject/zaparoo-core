@@ -117,6 +117,11 @@ tasks:
     cmds:
       - go test -tags=deadlock -race -count=1 ./...
 
+  mutesting:
+    desc: Run mutation testing on a package
+    cmds:
+      - go-mutesting {{.CLI_ARGS}}
+
   get-logs:
     desc: Download and decode logs from Zaparoo API
     vars:

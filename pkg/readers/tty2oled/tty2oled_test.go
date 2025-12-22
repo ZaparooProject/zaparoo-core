@@ -44,6 +44,7 @@ func TestNewReader(t *testing.T) {
 	})
 
 	reader := NewReader(cfg, mockPlatform)
+	defer func() { _ = reader.Close() }()
 
 	assert.NotNil(t, reader)
 	assert.Equal(t, cfg, reader.cfg)
