@@ -162,8 +162,7 @@ func transliterateSpecialLatin(s string) string {
 // characters that don't decompose via NFKD (Ł, Ø, ß, Æ, Œ, Þ, Đ, etc.).
 // Note: Case folding happens later in the pipeline (final slugification stage).
 func normalizeLatinExtended(s string, preserveVietnamese bool) string {
-	// First, transliterate special Latin characters that don't decompose
-	// Must happen BEFORE diacritic removal
+	// Transliterate special Latin characters before diacritic removal (they don't decompose via NFKD)
 	s = transliterateSpecialLatin(s)
 
 	// Vietnamese: optionally preserve tone diacritics for dual-slug generation
