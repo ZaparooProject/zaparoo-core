@@ -156,7 +156,7 @@ func ApplyDamerauLevenshteinTieBreaker(query string, matches []FuzzyMatch, topN 
 
 	// Limit to top N candidates to keep performance fast
 	candidates := matches
-	if len(matches) > topN {
+	if topN > 0 && len(matches) > topN {
 		candidates = matches[:topN]
 	}
 
