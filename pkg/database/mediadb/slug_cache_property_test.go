@@ -130,7 +130,7 @@ func TestPropertySlugCacheKeyIsHex(t *testing.T) {
 
 		// All characters should be hex
 		for _, c := range key {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 				t.Fatalf("Invalid hex character %q in key: %s", c, key)
 			}
 		}
@@ -233,8 +233,7 @@ func TestPropertySlugCacheKeyDifferentSystemsDifferentKeys(t *testing.T) {
 		systemID2 := systemIDGen().Draw(t, "systemID2")
 
 		// Skip if systems are the same after normalization
-		if strings.ToLower(strings.TrimSpace(systemID1)) ==
-			strings.ToLower(strings.TrimSpace(systemID2)) {
+		if strings.EqualFold(strings.TrimSpace(systemID1), strings.TrimSpace(systemID2)) {
 			return
 		}
 
@@ -263,8 +262,7 @@ func TestPropertySlugCacheKeyDifferentSlugsDifferentKeys(t *testing.T) {
 		slug2 := slugGen().Draw(t, "slug2")
 
 		// Skip if slugs are the same after normalization
-		if strings.ToLower(strings.TrimSpace(slug1)) ==
-			strings.ToLower(strings.TrimSpace(slug2)) {
+		if strings.EqualFold(strings.TrimSpace(slug1), strings.TrimSpace(slug2)) {
 			return
 		}
 
