@@ -73,6 +73,7 @@ Zaparoo Core is a hardware-agnostic game launcher that bridges physical tokens (
 - **Write sqlmock tests** for all direct SQL operations
 - **Use `t.Parallel()`** in tests when safe to run concurrently
 - **Run file-scoped tests** for faster feedback (see Commands section below)
+- **Commit regression files** - both rapid `.fail` files and fuzz corpus entries are valuable regression tests
 
 #### Test Quality Checklist
 - Would this test catch a real bug?
