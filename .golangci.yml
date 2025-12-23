@@ -20,7 +20,7 @@ linters:
     - rowserrcheck
     - revive
     - gocritic
-    - nolintlint
+    # - nolintlint # disabled due to false positives: https://github.com/golangci/golangci-lint/issues/3228
     # - gocyclo
     # - funlen
     - bodyclose
