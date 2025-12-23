@@ -1,6 +1,6 @@
 module github.com/ZaparooProject/zaparoo-core/v2
 
-go 1.24.11
+go 1.25.5
 
 require (
 	fyne.io/systray v1.11.0
@@ -15,7 +15,7 @@ require (
 	github.com/cloudsoda/go-smb2 v0.0.0-20250228001242-d4c70e6251cc
 	github.com/ebfe/scard v0.0.0-20230420082256-7db3f9b7c8a7
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/expr-lang/expr v1.17.5
+	github.com/expr-lang/expr v1.17.7
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gdamore/tcell/v2 v2.8.1
 	github.com/gen2brain/malgo v0.11.24

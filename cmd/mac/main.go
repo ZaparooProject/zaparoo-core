@@ -35,15 +35,16 @@ import (
 	"runtime/debug"
 	"syscall"
 
+	"github.com/rs/zerolog/log"
+
+	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/helpers"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/mac"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
-	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/tui"
-	"github.com/rs/zerolog/log"
 )
 
 //go:embed app/systrayicon.png
