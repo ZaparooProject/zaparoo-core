@@ -124,7 +124,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 			if err != nil {
 				consecutiveErrors++
 				if consecutiveErrors > maxConsecutiveErrors {
-					log.Error().Err(err).Msg("too many consecutive file read errors, stopping reader")
+					log.Warn().Err(err).Msg("too many consecutive file read errors, stopping reader")
 					// Send ReaderError scan if there was an active token
 					if token != nil {
 						iq <- readers.Scan{

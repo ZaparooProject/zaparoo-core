@@ -176,7 +176,7 @@ func (r *FileReader) Open(
 
 			// Validate device path to prevent command injection
 			if !strings.HasPrefix(r.path, "/dev/") {
-				log.Error().Str("path", r.path).Msg("invalid optical drive device path")
+				log.Warn().Str("path", r.path).Msg("invalid optical drive device path")
 				continue
 			}
 

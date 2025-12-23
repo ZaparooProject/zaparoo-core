@@ -185,7 +185,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 				break
 			}
 			if errCount >= maxErrors {
-				log.Error().Msg("too many errors, exiting")
+				log.Warn().Msg("too many errors, exiting")
 
 				// Send reader error notification to prevent triggering on_remove/exit
 				if r.lastToken != nil {
@@ -209,7 +209,7 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 			tgt, err := r.commander.InListPassiveTarget(r.port)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to read passive target")
+				log.Warn().Err(err).Msg("failed to read passive target")
 				errCount++
 				continue
 			} else if tgt == nil {
@@ -267,11 +267,11 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 					blockRetry++
 					continue readLoop
 				case exchangeErr != nil:
-					log.Error().Err(exchangeErr).Msg("failed to run indataexchange")
+					log.Warn().Err(exchangeErr).Msg("failed to run indataexchange")
 					errCount++
 					break readLoop
 				case len(res) < 2:
-					log.Error().Msg("unexpected data response length")
+					log.Warn().Msg("unexpected data response length")
 					errCount++
 					break readLoop
 				case res[0] != 0x41 || res[1] != 0x00:
@@ -294,11 +294,11 @@ func (r *PN532UARTReader) Open(device config.ReadersConnect, iq chan<- readers.S
 
 			tagText, err := ndef.ParseToText(data)
 			if err != nil && ndefRetry < ndefRetryMax {
-				log.Error().Err(err).Msgf("no NDEF found, retrying data exchange")
+				log.Warn().Err(err).Msgf("no NDEF found, retrying data exchange")
 				ndefRetry++
 				goto ndefRetry
 			} else if err != nil {
-				log.Error().Err(err).Msgf("no NDEF records")
+				log.Warn().Err(err).Msgf("no NDEF records")
 				tagText = ""
 			}
 
@@ -351,7 +351,7 @@ var (
 func (*PN532UARTReader) Detect(connected []string) string {
 	ports, err := helpers.GetSerialDeviceList()
 	if err != nil {
-		log.Error().Err(err).Msg("failed to get serial ports")
+		log.Warn().Err(err).Msg("failed to get serial ports")
 	}
 
 	for _, name := range ports {

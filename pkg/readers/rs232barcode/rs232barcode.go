@@ -168,7 +168,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 							t, parseErr := r.parseLine(line)
 							if parseErr != nil {
-								log.Error().Err(parseErr).Msg("failed to parse barcode data")
+								log.Warn().Err(parseErr).Msg("failed to parse barcode data")
 								continue
 							}
 
@@ -200,11 +200,11 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 			// Handle errors after processing any valid data
 			if err != nil {
-				log.Error().Err(err).Msg("failed to read from RS232 barcode reader")
+				log.Warn().Err(err).Msg("failed to read from RS232 barcode reader")
 
 				err = r.Close()
 				if err != nil {
-					log.Error().Err(err).Msg("failed to close RS232 barcode reader")
+					log.Warn().Err(err).Msg("failed to close RS232 barcode reader")
 				}
 				break
 			}

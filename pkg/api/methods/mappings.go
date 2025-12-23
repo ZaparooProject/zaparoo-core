@@ -86,7 +86,7 @@ func HandleAddMapping(env requests.RequestEnv) (any, error) { //nolint:gocritic 
 
 	var params models.AddMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
@@ -128,7 +128,7 @@ func HandleDeleteMapping(env requests.RequestEnv) (any, error) {
 
 	var params models.DeleteMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
@@ -154,7 +154,7 @@ func HandleUpdateMapping(env requests.RequestEnv) (any, error) {
 
 	var params models.UpdateMappingParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 

@@ -567,7 +567,7 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 				// Interrupted by signal, retry
 				continue
 			}
-			log.Error().Err(err).Msg("poll() on /proc/mounts failed")
+			log.Warn().Err(err).Msg("poll() on /proc/mounts failed")
 			return
 		}
 
@@ -597,7 +597,7 @@ func (d *linuxMountDetectorFallback) pollMountChanges() {
 
 		if shouldRescan {
 			if _, err := d.mountsFile.Seek(0, io.SeekStart); err != nil {
-				log.Error().Err(err).Msg("failed to seek /proc/mounts")
+				log.Warn().Err(err).Msg("failed to seek /proc/mounts")
 				continue
 			}
 

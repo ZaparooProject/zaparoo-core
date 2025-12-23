@@ -186,16 +186,20 @@ func DefaultSessionFactory(device PN532Device, sessionConfig *polling.Config) Po
 	return nil
 }
 
-// logTraceableError logs detailed transport trace data if available in the error.
+// logTraceableError logs PN532 errors with wire trace data if available.
 // This helps with debugging hardware communication issues by showing TX/RX data.
+// Logs at Error level so traces are captured by Sentry for remote debugging.
 func logTraceableError(err error, operation string) {
+	event := log.Error().Err(err).Str("operation", operation)
+
 	if trace := pn532.GetTrace(err); trace != nil {
-		log.Debug().
-			Str("operation", operation).
+		event = event.
 			Str("transport", trace.Transport).
 			Str("port", trace.Port).
-			Msg("transport trace:\n" + trace.FormatTrace())
+			Str("wire_trace", trace.FormatTrace())
 	}
+
+	event.Msg("PN532 error")
 }
 
 func createVIDPIDBlocklist() []string {
@@ -367,7 +371,6 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 		if err := r.session.Start(r.ctx); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				logTraceableError(err, "session polling")
-				log.Error().Err(err).Msg("PN532 session ended with error")
 
 				// Send reader error notification to prevent triggering on_remove/exit
 				r.mutex.Lock()

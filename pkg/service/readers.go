@@ -117,7 +117,7 @@ func connectReaders(
 					log.Debug().Msgf("connecting to reader: %s", device)
 					err := r.Open(device.device, iq)
 					if err != nil {
-						log.Error().Msgf("error opening reader: %s", err)
+						log.Warn().Msgf("error opening reader: %s", err)
 						continue
 					}
 					st.SetReader(device.connectionString, r)
@@ -307,7 +307,7 @@ func readerManager(
 					for _, device := range st.ListReaders() {
 						if r, ok := st.GetReader(device); ok && r != nil {
 							if closeErr := r.Close(); closeErr != nil {
-								log.Debug().Err(closeErr).Str("device", device).Msg("error closing reader after sleep")
+								log.Error().Err(closeErr).Str("device", device).Msg("error closing reader after sleep")
 							}
 						}
 						st.RemoveReader(device)
@@ -346,7 +346,7 @@ func readerManager(
 				}
 
 				if connectErr := connectReaders(pl, cfg, st, scanQueue, autoDetector); connectErr != nil {
-					log.Error().Msgf("error connecting rs: %s", connectErr)
+					log.Warn().Msgf("error connecting rs: %s", connectErr)
 				}
 				// Reset monitor after potentially blocking operations to avoid
 				// counting USB enumeration/connection time as sleep
@@ -369,7 +369,7 @@ preprocessing:
 			// a reader has sent a token for pre-processing
 			log.Debug().Msgf("pre-processing token: %v", t)
 			if t.Error != nil {
-				log.Error().Err(t.Error).Msg("error reading card")
+				log.Warn().Err(t.Error).Msg("error reading card")
 				playFail()
 				lastError = time.Now()
 				continue preprocessing

@@ -83,7 +83,7 @@ func HandleSettingsUpdate(env requests.RequestEnv) (any, error) {
 
 	var params models.UpdateSettingsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
@@ -185,7 +185,7 @@ func HandlePlaytimeLimitsUpdate(env requests.RequestEnv) (any, error) {
 
 	var params models.UpdatePlaytimeLimitsParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 

@@ -157,7 +157,7 @@ func StartCsvMappingsWatcher(
 				if !ok {
 					return
 				}
-				log.Error().Msgf("watcher error: %s", err)
+				log.Warn().Msgf("watcher error: %s", err)
 			}
 		}
 	}()

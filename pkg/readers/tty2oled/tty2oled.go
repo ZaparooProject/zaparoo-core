@@ -397,7 +397,7 @@ func (r *Reader) Close() error {
 func (r *Reader) Detect(connected []string) string {
 	ports, err := helpers.GetSerialDeviceList()
 	if err != nil {
-		log.Error().Err(err).Msg("failed to get serial ports")
+		log.Warn().Err(err).Msg("failed to get serial ports")
 		return ""
 	}
 
