@@ -35,7 +35,7 @@ func HandleReaderWrite(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	var params models.ReaderWriteParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 

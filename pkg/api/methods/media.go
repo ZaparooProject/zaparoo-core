@@ -340,7 +340,7 @@ func HandleGenerateMedia(env requests.RequestEnv) (any, error) {
 
 		// Validate params (systems are validated by struct tags)
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			log.Error().Err(err).Msg("invalid params")
+			log.Warn().Err(err).Msg("invalid params")
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
@@ -417,7 +417,7 @@ func HandleMediaSearch(env requests.RequestEnv) (any, error) { //nolint:gocritic
 
 	var params models.SearchParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 
@@ -584,7 +584,7 @@ func HandleMediaTags(env requests.RequestEnv) (any, error) { //nolint:gocritic /
 
 		// Validate params (systems are validated by struct tags)
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			log.Error().Err(err).Msg("invalid params")
+			log.Warn().Err(err).Msg("invalid params")
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 	}
@@ -715,7 +715,7 @@ func HandleUpdateActiveMedia(env requests.RequestEnv) (any, error) {
 
 	var params models.UpdateActiveMediaParams
 	if err := validation.ValidateAndUnmarshal(env.Params, &params); err != nil {
-		log.Error().Err(err).Msg("invalid params")
+		log.Warn().Err(err).Msg("invalid params")
 		return nil, fmt.Errorf("invalid params: %w", err)
 	}
 

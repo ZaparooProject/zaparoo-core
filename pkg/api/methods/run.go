@@ -60,7 +60,7 @@ func HandleRun(env requests.RequestEnv) (any, error) { //nolint:gocritic // sing
 	if err == nil {
 		// Validate the params
 		if err := validation.DefaultValidator.Validate(&params); err != nil {
-			log.Error().Err(err).Msg("invalid params")
+			log.Warn().Err(err).Msg("invalid params")
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
@@ -151,7 +151,7 @@ func HandleRunRest(
 		text := chi.URLParam(r, "*")
 
 		if !isLocalRequest(r) && !cfg.IsRunAllowed(text) {
-			log.Error().Msgf("run not allowed: %s", text)
+			log.Warn().Msgf("run not allowed: %s", text)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		}

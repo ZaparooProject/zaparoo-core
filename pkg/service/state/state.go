@@ -388,7 +388,7 @@ func (*State) safeNotifyReader(reader readers.Reader, media *models.ActiveMedia)
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Warn().Interface("panic", r).Msg("panic in reader OnMediaChange (reader may have been closed)")
+			log.Error().Interface("panic", r).Msg("panic in reader OnMediaChange (reader may have been closed)")
 		}
 	}()
 

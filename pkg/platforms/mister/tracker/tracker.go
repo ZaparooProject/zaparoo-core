@@ -492,7 +492,7 @@ func StartFileWatch(tr *Tracker) (*fsnotify.Watcher, error) {
 				if !ok {
 					return
 				}
-				log.Error().Msgf("error in watcher: %s", watchErr)
+				log.Warn().Msgf("error in watcher: %s", watchErr)
 			}
 		}
 	}()

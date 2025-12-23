@@ -81,7 +81,7 @@ func Start(
 				buf := make([]byte, 1024)
 				_, addr, readErr := proxyConn.ReadFrom(buf)
 				if addr == nil || readErr != nil {
-					log.Error().Err(readErr).Msg("error reading GMC proxy beacon")
+					log.Warn().Err(readErr).Msg("error reading GMC proxy beacon")
 					continue
 				}
 				if errors.Is(readErr, net.ErrClosed) {
@@ -104,7 +104,7 @@ func Start(
 				buf := make([]byte, 1024)
 				rlen, _, readErr := coreConn.ReadFrom(buf)
 				if rlen > 0 && readErr != nil {
-					log.Error().Err(readErr).Msg("error reading GMC command packet from Groovy core")
+					log.Warn().Err(readErr).Msg("error reading GMC command packet from Groovy core")
 					continue
 				}
 				if errors.Is(readErr, net.ErrClosed) {
@@ -122,7 +122,7 @@ func Start(
 		case <-beaconTicker.C:
 			_, writeErr := coreConn.WriteTo([]byte{0}, coreAddr)
 			if writeErr != nil {
-				log.Error().Err(writeErr).Msg("error sending GMC beacon to Groovy core")
+				log.Warn().Err(writeErr).Msg("error sending GMC beacon to Groovy core")
 			}
 		case addr := <-proxyAddrChan:
 			proxyAddr = &addr
@@ -142,10 +142,10 @@ func Start(
 			case proxyAddr != nil:
 				_, writeErr := proxyConn.WriteTo(gmcBytes, *proxyAddr)
 				if writeErr != nil {
-					log.Error().Err(writeErr).Msg("error forwarding GMC from Groovy core to proxy")
+					log.Warn().Err(writeErr).Msg("error forwarding GMC from Groovy core to proxy")
 				}
 			default:
-				log.Error().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
+				log.Warn().Err(err).Msg("error forwarding GMC from Groovy core to proxy")
 			}
 		case <-ctx.Done():
 			log.Debug().Msg("Closing GMC Proxy via context cancellation")

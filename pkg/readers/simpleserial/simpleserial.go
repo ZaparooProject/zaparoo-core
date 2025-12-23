@@ -165,7 +165,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 			buf := make([]byte, 1024)
 			n, err := port.Read(buf)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to read from serial port")
+				log.Warn().Err(err).Msg("failed to read from serial port")
 
 				// Send reader error notification to prevent triggering on_remove/exit
 				if r.lastToken != nil {
@@ -180,7 +180,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 				err = r.Close()
 				if err != nil {
-					log.Error().Err(err).Msg("failed to close serial port")
+					log.Warn().Err(err).Msg("failed to close serial port")
 				}
 				break
 			}
@@ -192,7 +192,7 @@ func (r *SimpleSerialReader) Open(device config.ReadersConnect, iq chan<- reader
 
 					t, err := r.parseLine(line)
 					if err != nil {
-						log.Error().Err(err).Msg("failed to parse line")
+						log.Warn().Err(err).Msg("failed to parse line")
 						continue
 					}
 

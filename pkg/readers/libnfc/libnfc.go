@@ -234,8 +234,8 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 			token, removed, err := r.pollDevice(r.pnd, r.prevToken, timesToPoll, periodBetweenPolls)
 			if errors.Is(err, nfc.Error(nfc.EIO)) {
-				log.Error().Msgf("error during poll: %s", err)
-				log.Error().Msg("fatal IO error, device was possibly unplugged")
+				log.Warn().Msgf("error during poll: %s", err)
+				log.Warn().Msg("fatal IO error, device was possibly unplugged")
 
 				// Send reader error notification to prevent triggering on_remove/exit
 				if r.prevToken != nil {
@@ -255,7 +255,7 @@ func (r *Reader) Open(device config.ReadersConnect, iq chan<- readers.Scan) erro
 
 				continue
 			} else if err != nil {
-				log.Error().Msgf("error polling device: %s", err)
+				log.Warn().Msgf("error polling device: %s", err)
 				continue
 			}
 
@@ -486,7 +486,7 @@ func GetSerialBlockListCount() int {
 func detectSerialReaders(connected []string) string {
 	devices, err := helpers.GetSerialDeviceList()
 	if err != nil {
-		log.Error().Msgf("error getting serial devices: %s", err)
+		log.Warn().Msgf("error getting serial devices: %s", err)
 		return ""
 	}
 
@@ -637,7 +637,7 @@ func openDeviceWithRetries(device string) (nfc.Device, error) {
 			log.Info().Msgf("device name: %s", deviceName)
 
 			if initErr := pnd.InitiatorInit(); initErr != nil {
-				log.Error().Msgf("could not init initiator: %s", initErr)
+				log.Warn().Msgf("could not init initiator: %s", initErr)
 				continue
 			}
 
@@ -731,7 +731,7 @@ func (r *Reader) pollDevice(
 	log.Debug().Msgf("record bytes: %s", hex.EncodeToString(record.Bytes))
 	tagText, err := ndef.ParseToText(record.Bytes)
 	if err != nil {
-		log.Error().Err(err).Msgf("error parsing NDEF record")
+		log.Warn().Err(err).Msgf("error parsing NDEF record")
 		tagText = ""
 	}
 
@@ -758,7 +758,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 
 	r.activeWriteMu.Lock()
 	if r.activeWrite != nil {
-		log.Error().Msgf("write already in progress")
+		log.Warn().Msgf("write already in progress")
 		req.Result <- WriteRequestResult{
 			Err: errors.New("write already in progress"),
 		}
@@ -803,7 +803,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 		)
 
 		if err != nil && !errors.Is(err, nfc.Error(nfc.ETIMEOUT)) {
-			log.Error().Msgf("could not poll: %s", err)
+			log.Warn().Msgf("could not poll: %s", err)
 		}
 
 		if count > 0 {
@@ -814,7 +814,7 @@ func (r *Reader) writeTag(req WriteRequest) {
 	}
 
 	if count == 0 {
-		log.Error().Msgf("could not detect a tag")
+		log.Warn().Msgf("could not detect a tag")
 		req.Result <- WriteRequestResult{
 			Err: errors.New("could not detect a tag"),
 		}

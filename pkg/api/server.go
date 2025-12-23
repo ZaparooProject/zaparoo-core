@@ -254,7 +254,7 @@ func handleRequest(
 
 	fn, ok := methodMap.GetMethod(req.Method)
 	if !ok {
-		log.Error().Str("method", req.Method).Msg("unknown method")
+		log.Warn().Str("method", req.Method).Msg("unknown method")
 		return nil, &JSONRPCErrorMethodNotFound
 	}
 
@@ -402,7 +402,7 @@ func handleApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := appFs.Open("index.html"); err != nil {
-		log.Warn().Msg("zaparoo-app files not found in embedded filesystem")
+		log.Error().Msg("zaparoo-app files not found in embedded filesystem")
 		http.Error(w, errMsgAppNotFound, http.StatusInternalServerError)
 		return
 	}
@@ -605,7 +605,7 @@ func processRequestObject(
 	msg []byte,
 ) requestResult {
 	if !json.Valid(msg) {
-		log.Error().Msg("request payload is not valid JSON")
+		log.Warn().Msg("request payload is not valid JSON")
 		return requestResult{ID: models.NullRPCID, Error: &JSONRPCErrorParseError, ShouldReply: true}
 	}
 
@@ -614,7 +614,7 @@ func processRequestObject(
 	err := json.Unmarshal(msg, &req)
 
 	if err == nil && req.JSONRPC != "2.0" {
-		log.Error().Str("version", req.JSONRPC).Msg("unsupported JSON-RPC version")
+		log.Warn().Str("version", req.JSONRPC).Msg("unsupported JSON-RPC version")
 		return requestResult{ID: req.ID, Error: &JSONRPCErrorInvalidRequest, ShouldReply: true}
 	}
 
