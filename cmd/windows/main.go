@@ -34,9 +34,6 @@ import (
 	"runtime/debug"
 	"syscall"
 
-	"github.com/rs/zerolog/log"
-	syswindows "golang.org/x/sys/windows"
-
 	"github.com/ZaparooProject/zaparoo-core/v2/internal/telemetry"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/cli"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/config"
@@ -45,6 +42,8 @@ import (
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/platforms/windows"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/service"
 	"github.com/ZaparooProject/zaparoo-core/v2/pkg/ui/systray"
+	"github.com/rs/zerolog/log"
+	syswindows "golang.org/x/sys/windows"
 )
 
 //go:embed winres/icon.ico
