@@ -26,5 +26,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m,
+		// melody's hub goroutine is managed by the library and Close() is async
+		goleak.IgnoreTopFunction("github.com/olahol/melody.(*hub).run"),
+	)
 }

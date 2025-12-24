@@ -311,3 +311,42 @@ func TestCmdLaunch_SystemPathFormatUsesDefaultLauncher(t *testing.T) {
 	assert.True(t, result.MediaChanged, "MediaChanged should be true")
 	mockPlatform.AssertExpectations(t)
 }
+
+// TestCmdLaunch_FileNotFound verifies that ErrFileNotFound is returned when file doesn't exist
+func TestCmdLaunch_FileNotFound(t *testing.T) {
+	t.Parallel()
+
+	mockPlatform := mocks.NewMockPlatform()
+	cfg := &config.Instance{}
+
+	// Use empty folders so file lookup fails
+	mockPlatform.On("Launchers", cfg).Return([]platforms.Launcher{
+		{
+			ID:       "snes-launcher",
+			SystemID: "SNES",
+			Folders:  []string{}, // No folders = can't find files
+		},
+	})
+	mockPlatform.On("RootDirs", cfg).Return([]string{})
+
+	mockMediaDB := helpers.NewMockMediaDBI()
+	// Return empty results for the media search
+	mockMediaDB.On("SearchMediaPathExact", mock.Anything, mock.Anything).
+		Return([]database.SearchResult{}, nil)
+
+	env := platforms.CmdEnv{
+		Cmd: parser.Command{
+			Name: "launch",
+			// Use system/path.ext format with file extension to skip title search
+			Args: []string{"snes/nonexistent_game.sfc"},
+		},
+		Cfg:      cfg,
+		Database: &database.Database{MediaDB: mockMediaDB},
+	}
+
+	_, err := cmdLaunch(mockPlatform, env)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrFileNotFound, "should return ErrFileNotFound for missing file")
+	mockPlatform.AssertExpectations(t)
+}

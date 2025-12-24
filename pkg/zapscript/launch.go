@@ -477,7 +477,7 @@ func cmdLaunch(pl platforms.Platform, env platforms.CmdEnv) (platforms.CmdResult
 		}, launch(game.Path)
 	}
 
-	return platforms.CmdResult{}, fmt.Errorf("file not found: %s", path)
+	return platforms.CmdResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, path)
 }
 
 //nolint:gocritic // single-use parameter in command handler

@@ -47,6 +47,7 @@ var (
 	ErrArgCount     = errors.New("invalid number of arguments")
 	ErrRequiredArgs = errors.New("arguments are required")
 	ErrRemoteSource = errors.New("cannot run from remote source")
+	ErrFileNotFound = errors.New("file not found")
 )
 
 // getLauncherIDs extracts launcher IDs from the platform for validation context.
@@ -192,7 +193,7 @@ func findFile(pl platforms.Platform, cfg *config.Instance, path string) (string,
 		}
 	}
 
-	return path, fmt.Errorf("file not found: %s", path)
+	return path, fmt.Errorf("%w: %s", ErrFileNotFound, path)
 }
 
 // ExprEnvOptions provides optional context for expression environment.
@@ -345,7 +346,11 @@ func RunCommand(
 	log.Info().Msgf("running command: %s", cmd)
 	res, err := cmdFunc(pl, env)
 	if err != nil {
-		log.Error().Err(err).Msgf("error running command: %s", cmd)
+		if errors.Is(err, ErrFileNotFound) {
+			log.Warn().Err(err).Msgf("error running command: %s", cmd)
+		} else {
+			log.Error().Err(err).Msgf("error running command: %s", cmd)
+		}
 		return platforms.CmdResult{}, err
 	}
 

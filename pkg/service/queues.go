@@ -20,6 +20,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -346,7 +347,11 @@ func processTokenQueue(
 
 				err = runTokenZapScript(platform, cfg, st, t, db, lsq, plsc, nil)
 				if err != nil {
-					log.Error().Err(err).Msgf("error launching token")
+					if errors.Is(err, zapscript.ErrFileNotFound) {
+						log.Warn().Err(err).Msgf("error launching token")
+					} else {
+						log.Error().Err(err).Msgf("error launching token")
+					}
 				}
 
 				// Play fail sound only if ZapScript fails

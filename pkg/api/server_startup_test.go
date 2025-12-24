@@ -61,7 +61,6 @@ func TestServerStartupConcurrency(t *testing.T) {
 			require.NoError(t, err)
 
 			st, notifications := state.NewState(platform, "test-boot-uuid")
-			defer st.StopService()
 
 			db := &database.Database{
 				UserDB:  helpers.NewMockUserDBI(),
@@ -69,11 +68,18 @@ func TestServerStartupConcurrency(t *testing.T) {
 			}
 
 			tokenQueue := make(chan tokens.Token, 1)
-			defer close(tokenQueue)
 
 			// Start server in a separate goroutine
+			serverDone := make(chan struct{})
 			go func() {
+				defer close(serverDone)
 				Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
+			}()
+			// Cleanup: stop service first, then wait for server goroutine to fully exit
+			defer func() {
+				st.StopService()
+				close(tokenQueue)
+				<-serverDone
 			}()
 
 			// Test that server becomes available and responds correctly
@@ -121,7 +127,6 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	require.NoError(t, err)
 
 	st, notifications := state.NewState(platform, "test-boot-uuid")
-	defer st.StopService()
 
 	db := &database.Database{
 		UserDB:  helpers.NewMockUserDBI(),
@@ -129,15 +134,22 @@ func TestServerStartupImmediateConnection(t *testing.T) {
 	}
 
 	tokenQueue := make(chan tokens.Token, 1)
-	defer close(tokenQueue)
+
+	// Start server in a separate goroutine
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
+	}()
+	// Cleanup: stop service first, then wait for server goroutine to fully exit
+	defer func() {
+		st.StopService()
+		close(tokenQueue)
+		<-serverDone
+	}()
 
 	// Create connection attempt channel
 	connectionResult := make(chan error, 1)
-
-	// Start both server and connection attempt simultaneously
-	go func() {
-		Start(platform, cfg, st, tokenQueue, db, nil, notifications, "")
-	}()
 
 	// Immediately try to connect (no delay)
 	go func() {
@@ -184,7 +196,6 @@ func TestServerListenContextCancellation(t *testing.T) {
 
 	// Create a state with a context that we can cancel
 	st, notifications := state.NewState(platform, "test-boot-uuid")
-	defer st.StopService()
 
 	// Cancel the state context immediately to test context cancellation during listen
 	st.StopService()
@@ -195,7 +206,7 @@ func TestServerListenContextCancellation(t *testing.T) {
 	}
 
 	tokenQueue := make(chan tokens.Token, 1)
-	defer close(tokenQueue)
+	defer close(tokenQueue) // Safe here since context is already cancelled
 
 	// This should fail quickly because the context is already cancelled
 	// If net.Listen is used (not context-aware), it will succeed in binding
